@@ -15,7 +15,7 @@ import json
 
 from shared import (
     CSS, DEEP_INK, STEEL_BLUE, GRAPHITE_GREY, SOFT_CONCRETE,
-    CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR, COD_COLOR,
+    CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR, COD_COLOR, simple_bar,
 )
 from db import get_conn
 import shopify_scheduler as scheduler
@@ -323,12 +323,12 @@ with tab3:
         with cg2:
             ciud = df_cli["ciudad"].value_counts().head(5)
             st.markdown("<div class='sec-title' style='font-size:0.75rem'>Ciudades top</div>", unsafe_allow_html=True)
-            st.bar_chart(ciud, height=200, color=STEEL_BLUE)
+            simple_bar(ciud, color=STEEL_BLUE, height=200)
         with cg3:
             mktg = df_cli["acepta_marketing"].value_counts()
             mktg.index = mktg.index.map({1:"Acepta marketing", 0:"No acepta"})
             st.markdown("<div class='sec-title' style='font-size:0.75rem'>Marketing</div>", unsafe_allow_html=True)
-            st.bar_chart(mktg, height=200, color=COD_COLOR)
+            simple_bar(mktg, color=COD_COLOR, height=200)
 
         st.markdown("<br>", unsafe_allow_html=True)
         df_cli["acepta_marketing"] = df_cli["acepta_marketing"].map({1:"✓", 0:"—"})
@@ -407,6 +407,6 @@ with tab4:
         conteo_mes = df_timeline.groupby("mes").size().reset_index(name="lanzamientos")
         conteo_mes = conteo_mes.sort_values("mes").tail(12)
         if not conteo_mes.empty:
-            st.bar_chart(conteo_mes.set_index("mes")["lanzamientos"], height=180, color=STEEL_BLUE)
+            simple_bar(conteo_mes.set_index("mes")["lanzamientos"], color=STEEL_BLUE, height=180)
 
 

@@ -15,7 +15,7 @@ from datetime import date
 from shared import (
     CSS, DEEP_INK, STEEL_BLUE, GRAPHITE_GREY, SOFT_CONCRETE,
     CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR, COD_COLOR,
-    cargar_datos, render_sidebar, _parse_cod, bar_chart_zona_nivel,
+    cargar_datos, render_sidebar, _parse_cod, bar_chart_zona_nivel, simple_bar,
 )
 
 st.set_page_config(
@@ -123,7 +123,7 @@ with cg2:
     if not df_filt.empty:
         transp = df_filt[df_filt["Nivel"].isin(["CRITICO","RIESGO"])]["Transportadora"].value_counts()
         if not transp.empty:
-            st.bar_chart(transp, height=220, color=RIESGO_COLOR)
+            simple_bar(transp, color=RIESGO_COLOR, height=220)
         else:
             st.success("Sin excepciones en transportadoras.")
     else:
@@ -161,6 +161,6 @@ st.markdown("<div class='sec-title'>Novedades más frecuentes</div>", unsafe_all
 if not df_all.empty:
     novedades = df_all[df_all["Novedad"] != "NINGUNO"]["Novedad"].value_counts().head(8)
     if not novedades.empty:
-        st.bar_chart(novedades, height=180, color=CRITICO_COLOR)
+        simple_bar(novedades, color=CRITICO_COLOR, height=180)
     else:
         st.info("Sin novedades registradas.")

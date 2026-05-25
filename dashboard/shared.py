@@ -308,6 +308,21 @@ def render_detalle(df_tab: pd.DataFrame, tab_key: str):
 
 
 # ── Helper de gráficos — compatible con todas las versiones de Altair ─────────
+def simple_bar(serie: pd.Series, color: str = "#87a6b8", height: int = 200) -> None:
+    """Bar chart de una serie simple usando plotly (compatible Python 3.14)."""
+    import plotly.express as px
+    df_p = serie.reset_index()
+    df_p.columns = ["x", "y"]
+    fig = px.bar(df_p, x="x", y="y", color_discrete_sequence=[color], height=height)
+    fig.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=0, r=0, t=0, b=0), showlegend=False,
+        xaxis_title="", yaxis_title="",
+    )
+    fig.update_xaxes(tickangle=-20)
+    st.plotly_chart(fig, use_container_width=True)
+
+
 def render_tabla(df: pd.DataFrame, cols: list, key: str, height: int = 440):
     """
     Renderiza la tabla de pedidos con selección de fila y colores de nivel.
@@ -354,9 +369,9 @@ def render_tabla(df: pd.DataFrame, cols: list, key: str, height: int = 440):
 def bar_chart_zona_nivel(df: pd.DataFrame, height: int = 220) -> None:
     """
     Bar chart apilado por Zona × Nivel con colores de marca.
-    Import de altair es lazy para aislar errores de compatibilidad.
+    Usa plotly (compatible con Python 3.14, sin el bug de altair TypedDict).
     """
-    import altair as alt  # lazy — no rompe el módulo si altair falla al cargar
+    import plotly.express as px
 
     data = (
         df.groupby(["Zona", "Nivel"])
@@ -368,21 +383,28 @@ def bar_chart_zona_nivel(df: pd.DataFrame, height: int = 220) -> None:
         return
 
     orden_nivel = ["CRITICO", "RIESGO", "NORMAL"]
-    colores     = [CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR]
+    color_map   = {
+        "CRITICO": CRITICO_COLOR,
+        "RIESGO":  RIESGO_COLOR,
+        "NORMAL":  NORMAL_COLOR,
+    }
+    data["Nivel"] = pd.Categorical(data["Nivel"], categories=orden_nivel, ordered=True)
+    data = data.sort_values(["Zona", "Nivel"])
 
-    chart = (
-        alt.Chart(data)
-        .mark_bar()
-        .encode(
-            x=alt.X("Zona:N", sort="-y", axis=alt.Axis(labelAngle=-30)),
-            y=alt.Y("Pedidos:Q"),
-            color=alt.Color(
-                "Nivel:N",
-                scale=alt.Scale(domain=orden_nivel, range=colores),
-                legend=alt.Legend(title="Nivel"),
-            ),
-            tooltip=["Zona:N", "Nivel:N", "Pedidos:Q"],
-        )
-        .properties(height=height)
+    fig = px.bar(
+        data,
+        x="Zona", y="Pedidos", color="Nivel",
+        color_discrete_map=color_map,
+        barmode="stack",
+        height=height,
+        labels={"Pedidos": "Pedidos", "Zona": ""},
     )
-    st.altair_chart(chart, use_container_width=True)
+    fig.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=0, r=0, t=0, b=0),
+        legend=dict(orientation="h", y=1.05, x=0),
+        font=dict(size=11),
+    )
+    fig.update_xaxes(tickangle=-20)
+    st.plotly_chart(fig, use_container_width=True)

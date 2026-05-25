@@ -16,7 +16,7 @@ from shared import (
     CSS, DEEP_INK, STEEL_BLUE, GRAPHITE_GREY, SOFT_CONCRETE,
     CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR, COD_COLOR,
     cargar_datos, color_nivel, render_sidebar, render_detalle,
-    bar_chart_zona_nivel,
+    bar_chart_zona_nivel, simple_bar,
 )
 
 st.set_page_config(
@@ -115,7 +115,7 @@ with cg2:
     df_exc = df[df["Nivel"].isin(["CRITICO","RIESGO"])]
     if not df_exc.empty:
         transp_counts = df_exc["Transportadora"].value_counts()
-        st.bar_chart(transp_counts, height=200, color=RIESGO_COLOR)
+        simple_bar(transp_counts, color=RIESGO_COLOR, height=200)
     else:
         st.info("Sin excepciones.")
 

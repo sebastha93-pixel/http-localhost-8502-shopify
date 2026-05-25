@@ -16,7 +16,7 @@ from shared import (
     CSS, DEEP_INK, STEEL_BLUE, GRAPHITE_GREY, SOFT_CONCRETE,
     CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR, COD_COLOR,
     cargar_datos, color_nivel, render_sidebar, render_detalle, _parse_cod,
-    bar_chart_zona_nivel, render_tabla,
+    bar_chart_zona_nivel, render_tabla, simple_bar,
 )
 
 st.set_page_config(
@@ -96,7 +96,7 @@ with cg2:
     if not df_exc.empty:
         bins = pd.cut(df_exc["Días"], bins=[0,2,4,7,10,15,30],
                       labels=["1-2d","3-4d","5-7d","8-10d","11-15d","16d+"])
-        st.bar_chart(bins.value_counts().sort_index(), height=200, color=CRITICO_COLOR)
+        simple_bar(bins.value_counts().sort_index(), color=CRITICO_COLOR, height=200)
     else:
         st.info("Sin excepciones.")
 
