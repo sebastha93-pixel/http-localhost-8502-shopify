@@ -5,8 +5,11 @@ Usa st.navigation() para organizar los módulos en secciones.
 
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+# Asegurar que dashboard/ y src/ estén en el path
+_HERE = Path(__file__).parent
+sys.path.insert(0, str(_HERE))
+sys.path.insert(0, str(_HERE.parent / "src"))
 
 import streamlit as st
 
@@ -17,19 +20,17 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-BASE = Path(__file__).parent / "pages"
-
 pg = st.navigation({
     "📦 Logística": [
-        st.Page(str(BASE / "logistica" / "0_insights.py"),       title="Insights",         icon="📊"),
-        st.Page(str(BASE / "logistica" / "1_contraentregas.py"), title="Contraentregas",   icon="💰"),
-        st.Page(str(BASE / "logistica" / "2_pago_previo.py"),    title="Pago Previo",      icon="✅"),
+        st.Page("pages/logistica/0_insights.py",       title="Insights",       icon="📊"),
+        st.Page("pages/logistica/1_contraentregas.py", title="Contraentregas", icon="💰"),
+        st.Page("pages/logistica/2_pago_previo.py",    title="Pago Previo",    icon="✅"),
     ],
     "💼 Conciliación": [
-        st.Page(str(BASE / "3_conciliacion.py"),                  title="Conciliación",     icon="💼"),
+        st.Page("pages/3_conciliacion.py",             title="Conciliación",   icon="💼"),
     ],
     "🛍️ Comercial": [
-        st.Page(str(BASE / "4_shopify.py"),                       title="Shopify",          icon="🛍️"),
+        st.Page("pages/4_shopify.py",                  title="Shopify",        icon="🛍️"),
     ],
 })
 
