@@ -9,7 +9,6 @@ import streamlit as st
 import pandas as pd
 from datetime import date, datetime
 import streamlit.components.v1 as components
-import altair as alt
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from ingest import leer_csv_melonn
@@ -312,8 +311,10 @@ def render_detalle(df_tab: pd.DataFrame, tab_key: str):
 def bar_chart_zona_nivel(df: pd.DataFrame, height: int = 220) -> None:
     """
     Bar chart apilado por Zona × Nivel con colores de marca.
-    Usa Altair directamente para evitar incompatibilidades de st.bar_chart().
+    Import de altair es lazy para aislar errores de compatibilidad.
     """
+    import altair as alt  # lazy — no rompe el módulo si altair falla al cargar
+
     data = (
         df.groupby(["Zona", "Nivel"])
         .size()
@@ -336,10 +337,6 @@ def bar_chart_zona_nivel(df: pd.DataFrame, height: int = 220) -> None:
                 "Nivel:N",
                 scale=alt.Scale(domain=orden_nivel, range=colores),
                 legend=alt.Legend(title="Nivel"),
-            ),
-            order=alt.Order(
-                "color_Nivel_sort_index:Q",
-                sort="ascending",
             ),
             tooltip=["Zona:N", "Nivel:N", "Pedidos:Q"],
         )
