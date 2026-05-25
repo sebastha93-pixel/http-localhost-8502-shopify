@@ -387,8 +387,15 @@ def stats_db() -> dict:
     }
 
 
-if __name__ == "__main__":
+# ── Auto-inicializar al importar ──────────────────────────────────────────────
+# Crea las tablas si no existen (IF NOT EXISTS — seguro llamar siempre)
+try:
     init_db()
+except Exception as _e:
+    print(f"[db] Advertencia al init: {_e}")
+
+
+if __name__ == "__main__":
     s = stats_db()
     print("\nEstado de la base de datos:")
     for k, v in s.items():

@@ -149,13 +149,17 @@ with col_ts:
 st.markdown("<hr style='margin:10px 0;'>", unsafe_allow_html=True)
 
 # ── KPIs de la DB ─────────────────────────────────────────────────────────────
-with get_conn() as conn:
-    n_pedidos   = conn.execute("SELECT COUNT(*) FROM pedidos WHERE fuente='shopify_api'").fetchone()[0]
-    n_productos = conn.execute("SELECT COUNT(*) FROM productos").fetchone()[0]
-    n_activos   = conn.execute("SELECT COUNT(*) FROM productos WHERE estado='active'").fetchone()[0]
-    n_borradores= conn.execute("SELECT COUNT(*) FROM productos WHERE estado='draft'").fetchone()[0]
-    n_clientes  = conn.execute("SELECT COUNT(*) FROM clientes").fetchone()[0]
-    val_pedidos = conn.execute("SELECT COALESCE(SUM(precio_venta),0) FROM pedidos WHERE fuente='shopify_api'").fetchone()[0]
+try:
+    with get_conn() as conn:
+        n_pedidos   = conn.execute("SELECT COUNT(*) FROM pedidos WHERE fuente='shopify_api'").fetchone()[0]
+        n_productos = conn.execute("SELECT COUNT(*) FROM productos").fetchone()[0]
+        n_activos   = conn.execute("SELECT COUNT(*) FROM productos WHERE estado='active'").fetchone()[0]
+        n_borradores= conn.execute("SELECT COUNT(*) FROM productos WHERE estado='draft'").fetchone()[0]
+        n_clientes  = conn.execute("SELECT COUNT(*) FROM clientes").fetchone()[0]
+        val_pedidos = conn.execute("SELECT COALESCE(SUM(precio_venta),0) FROM pedidos WHERE fuente='shopify_api'").fetchone()[0]
+except Exception as _dbe:
+    n_pedidos = n_productos = n_activos = n_borradores = n_clientes = 0
+    val_pedidos = 0.0
 
 k1, k2, k3, k4, k5 = st.columns(5)
 with k1:

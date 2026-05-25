@@ -29,6 +29,10 @@ st.markdown(CSS, unsafe_allow_html=True)
 
 ruta_csv, ts, filtro_nivel, filtro_zona = render_sidebar("Contraentregas")
 
+if not ruta_csv:
+    st.info("📂 Sube el reporte CSV de Melonn en el sidebar para ver las contraentregas.")
+    st.stop()
+
 try:
     with st.spinner("Procesando pedidos..."):
         df_all, _ = cargar_datos(ruta_csv, ts)

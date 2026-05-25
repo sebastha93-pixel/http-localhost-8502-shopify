@@ -29,6 +29,10 @@ st.markdown(CSS, unsafe_allow_html=True)
 
 ruta_csv, ts, filtro_nivel, filtro_zona = render_sidebar("Pago Previo")
 
+if not ruta_csv:
+    st.info("📂 Sube el reporte CSV de Melonn en el sidebar para ver los pedidos de pago previo.")
+    st.stop()
+
 try:
     with st.spinner("Procesando pedidos..."):
         df_all, _ = cargar_datos(ruta_csv, ts)

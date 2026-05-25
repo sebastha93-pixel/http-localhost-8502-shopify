@@ -28,6 +28,10 @@ st.markdown(CSS, unsafe_allow_html=True)
 
 ruta_csv, ts, filtro_nivel, filtro_zona = render_sidebar("Insights Logísticos")
 
+if not ruta_csv:
+    st.info("📂 Sube el reporte CSV de Melonn en el sidebar para ver los insights.")
+    st.stop()
+
 try:
     with st.spinner("Procesando..."):
         df_all, omitidos = cargar_datos(ruta_csv, ts)
