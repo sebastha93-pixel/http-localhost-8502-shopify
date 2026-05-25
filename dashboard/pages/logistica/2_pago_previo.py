@@ -19,12 +19,6 @@ from shared import (
     bar_chart_zona_nivel, render_tabla, simple_bar,
 )
 
-st.set_page_config(
-    page_title="MALE'DENIM · Pago Previo",
-    page_icon="✅",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
 st.markdown(CSS, unsafe_allow_html=True)
 
 ruta_csv, ts, filtro_nivel, filtro_zona = render_sidebar("Pago Previo")

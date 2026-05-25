@@ -18,12 +18,6 @@ from shared import (
     cargar_datos, render_sidebar, _parse_cod, bar_chart_zona_nivel, simple_bar,
 )
 
-st.set_page_config(
-    page_title="MALE'DENIM · Logística",
-    page_icon="📦",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
 st.markdown(CSS, unsafe_allow_html=True)
 
 ruta_csv, ts, filtro_nivel, filtro_zona = render_sidebar("Insights Logísticos")

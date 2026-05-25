@@ -30,13 +30,6 @@ from conciliacion import (
 )
 from db import get_conn
 
-# ─────────────────────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="MALE'DENIM · Conciliación",
-    page_icon="💼",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
 st.markdown(CSS, unsafe_allow_html=True)
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
