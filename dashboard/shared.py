@@ -45,7 +45,7 @@ ESTADOS_ES = {
     "on stand by - not able to fulfil - no stock": "Sin stock",
 }
 
-DEFAULT_CSV = str(Path(__file__).parent.parent / "data" / "raw" / "melonn_2026-05-12.csv")
+DEFAULT_CSV = str(Path(__file__).parent.parent / "data" / "logistica" / "raw" / "melonn_2026-05-12.csv")
 
 # ── CSS global ────────────────────────────────────────────────────────────────
 CSS = f"""
@@ -308,6 +308,49 @@ def render_detalle(df_tab: pd.DataFrame, tab_key: str):
 
 
 # ── Helper de gráficos — compatible con todas las versiones de Altair ─────────
+def render_tabla(df: pd.DataFrame, cols: list, key: str, height: int = 440):
+    """
+    Renderiza la tabla de pedidos con selección de fila y colores de nivel.
+    Separa styling de on_select para compatibilidad con Streamlit Cloud.
+    Retorna el índice de fila seleccionada (o None).
+    """
+    NIVEL_COLORES = {"CRITICO": CRITICO_COLOR, "RIESGO": RIESGO_COLOR, "NORMAL": NORMAL_COLOR}
+
+    # Columnas numéricas que formateamos
+    fmt = {}
+    for c in ["Score", "Días", "Días sobre SLA"]:
+        if c in cols:
+            fmt[c] = "{:.0f}"
+
+    # Styler solo para colorear — sin on_select
+    styled = df[cols].style
+    if "Nivel" in cols:
+        styled = styled.map(color_nivel, subset=["Nivel"])
+    if fmt:
+        styled = styled.format(fmt)
+
+    # Tabla con selección (sin Styler — incompatible con on_select en Cloud)
+    event = st.dataframe(
+        df[cols],
+        use_container_width=True,
+        height=height,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key=key,
+        column_config={
+            "Nivel": st.column_config.Column("Nivel", help="🔴 Crítico  🟠 Riesgo  🟢 Normal"),
+            "Score": st.column_config.NumberColumn("Score", format="%d"),
+            "Días":  st.column_config.NumberColumn("Días", format="%d"),
+            "Días sobre SLA": st.column_config.NumberColumn("Días s/SLA", format="%d"),
+            "Link Melonn": st.column_config.LinkColumn("Link", display_text="Ver"),
+        } if any(c in cols for c in ["Nivel","Score","Días","Link Melonn"]) else None,
+    )
+
+    sel_rows = event.selection.rows if hasattr(event, "selection") else []
+    return sel_rows[0] if sel_rows else None
+
+
 def bar_chart_zona_nivel(df: pd.DataFrame, height: int = 220) -> None:
     """
     Bar chart apilado por Zona × Nivel con colores de marca.
