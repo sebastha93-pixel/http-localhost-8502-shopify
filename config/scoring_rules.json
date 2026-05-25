@@ -1,0 +1,21 @@
+{
+  "pesos": {
+    "es_contraentrega": 40,
+    "incidencia_critica": 35,
+    "tiempo_critico": 25,
+    "tiempo_riesgo": 15,
+    "incidencia_transportadora": 30,
+    "incidencia_cliente": 20,
+    "incidencia_seguimiento": 10,
+    "sin_actualizacion_24h": 5
+  },
+  "niveles": {
+    "NORMAL": { "min": 0,  "max": 29 },
+    "RIESGO": { "min": 30, "max": 59 },
+    "CRITICO": { "min": 60, "max": 999 }
+  },
+  "overrides_criticos": [
+    "PAQUETE EXTRAVIADO",
+    "NO CANCELA RECAUDO"
+  ]
+}

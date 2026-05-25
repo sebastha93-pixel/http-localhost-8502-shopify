@@ -1,0 +1,19 @@
+# Credenciales — NUNCA al repositorio
+.env
+
+# Base de datos local
+data/db/
+
+# Archivos temporales Python
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# Reportes generados
+data/logistica/reportes/
+data/conciliacion/reportes/
+
+# Imágenes del manual de marca (archivos grandes)
+data/marca/*.jpg
+.vercel

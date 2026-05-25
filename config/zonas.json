@@ -1,0 +1,62 @@
+{
+  "zonas": {
+    "MEDELLIN": {
+      "descripcion": "Medellín y área metropolitana",
+      "sla_normal_max": 1,
+      "sla_riesgo": 1,
+      "sla_critico": 2,
+      "ciudades": [
+        "MEDELLÍN", "MEDELLIN", "BELLO", "ITAGÜÍ", "ITAGUÍ", "ITAGUI",
+        "ENVIGADO", "SABANETA", "LA ESTRELLA", "CALDAS", "COPACABANA",
+        "GIRARDOTA", "BARBOSA"
+      ]
+    },
+    "BOGOTA_RAPIDAS": {
+      "descripcion": "Bogotá y zonas rápidas Antioquia",
+      "sla_normal_max": 2,
+      "sla_riesgo": 3,
+      "sla_critico": 4,
+      "ciudades": [
+        "BOGOTÁ", "BOGOTA", "BOGOTA D.C.", "BOGOTÁ D.C.",
+        "RIONEGRO", "LA CEJA", "MARINILLA", "GUARNE", "EL RETIRO",
+        "EL CARMEN DE VIBORAL", "SAN VICENTE FERRER", "SANTUARIO",
+        "APARTADÓ", "APARTADO"
+      ]
+    },
+    "PRINCIPALES": {
+      "descripcion": "Ciudades principales Colombia",
+      "sla_normal_max": 4,
+      "sla_riesgo": 5,
+      "sla_critico": 6,
+      "ciudades": [
+        "CALI", "BARRANQUILLA", "CARTAGENA", "BUCARAMANGA",
+        "PEREIRA", "MANIZALES", "ARMENIA", "SANTA MARTA", "IBAGUÉ",
+        "CÚCUTA", "CUCUTA", "VILLAVICENCIO", "PASTO", "NEIVA",
+        "MONTERÍA", "MONTERIA", "SINCELEJO", "VALLEDUPAR",
+        "TUNJA", "POPAYÁN", "POPAYAN", "FLORENCIA", "QUIBDÓ", "QUIBDO",
+        "MOCOA", "LETICIA", "MITÚ", "MITU", "ARAUCA", "YOPAL",
+        "RIOHACHA", "SAN ANDRÉS", "SAN ANDRES", "PALMIRA",
+        "BUENAVENTURA", "BUGA", "TULÚA", "TULUÁ", "CARTAGO",
+        "DOSQUEBRADAS", "ZIPAQUIRÁ", "ZIPAQUIRA", "FACATATIVÁ", "FACATATIVA",
+        "CHÍA", "CHIA", "SOACHA", "FUSAGASUGÁ", "FUSAGASUGA",
+        "GIRARDOT", "DUITAMA", "SOGAMOSO", "BARRANCABERMEJA",
+        "FLORIDABLANCA", "PIEDECUESTA", "GIRÓN"
+      ]
+    },
+    "SECUNDARIAS": {
+      "descripcion": "Municipios secundarios y pueblos",
+      "sla_normal_max": 5,
+      "sla_riesgo": 6,
+      "sla_critico": 7,
+      "ciudades": []
+    },
+    "REEXPEDIDO": {
+      "descripcion": "Pedidos reexpedidos o relanzados",
+      "sla_normal_max": 12,
+      "sla_riesgo": 13,
+      "sla_critico": 14,
+      "ciudades": []
+    }
+  },
+  "zona_default": "SECUNDARIAS"
+}

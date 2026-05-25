@@ -1,0 +1,43 @@
+{
+  "categorias": {
+    "CLIENTE": {
+      "descripcion": "Problema atribuible al cliente o su información",
+      "peso_riesgo": 20,
+      "incidencias": [
+        "NO SE LOGRARON COMUNICAR",
+        "DIRECCION INCORRECTA",
+        "NO CANCELA RECAUDO"
+      ]
+    },
+    "TRANSPORTADORA": {
+      "descripcion": "Problema atribuible a la transportadora o el despacho",
+      "peso_riesgo": 30,
+      "incidencias": [
+        "DESTINO",
+        "TRANSPORTADORA",
+        "PAQUETE EXTRAVIADO"
+      ]
+    },
+    "SEGUIMIENTO": {
+      "descripcion": "Novedad de proceso que requiere monitoreo",
+      "peso_riesgo": 10,
+      "incidencias": [
+        "1 ENTREGA"
+      ]
+    },
+    "OK": {
+      "descripcion": "Sin novedad",
+      "peso_riesgo": 0,
+      "incidencias": [
+        "NINGUNO",
+        ""
+      ]
+    }
+  },
+  "incidencias_criticas": [
+    "PAQUETE EXTRAVIADO",
+    "NO CANCELA RECAUDO"
+  ],
+  "categoria_default": "SEGUIMIENTO",
+  "peso_default": 10
+}
