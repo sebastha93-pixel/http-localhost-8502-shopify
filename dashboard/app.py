@@ -17,6 +17,7 @@ from shared import (
     CSS, DEEP_INK, STEEL_BLUE, GRAPHITE_GREY, SOFT_CONCRETE,
     CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR, COD_COLOR,
     cargar_datos, color_nivel, render_sidebar, _parse_cod,
+    bar_chart_zona_nivel,
 )
 
 # DB stats (puede fallar si el DB no está inicializado aún)
@@ -206,12 +207,7 @@ if filtro_nivel: df_filt = df_filt[df_filt["Nivel"].isin(filtro_nivel)]
 if filtro_zona:  df_filt = df_filt[df_filt["Zona"].isin(filtro_zona)]
 
 if not df_filt.empty:
-    zona_c = df_filt.groupby(["Zona","Nivel"]).size().unstack(fill_value=0)
-    cols_o = [c for c in ["CRITICO","RIESGO","NORMAL"] if c in zona_c.columns]
-    if cols_o:
-        st.bar_chart(zona_c[cols_o],
-            color=[{"CRITICO":CRITICO_COLOR,"RIESGO":RIESGO_COLOR,"NORMAL":NORMAL_COLOR}[c] for c in cols_o],
-            height=220)
+    bar_chart_zona_nivel(df_filt, height=220)
 else:
     st.info("Sin datos con los filtros actuales.")
 

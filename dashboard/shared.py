@@ -9,6 +9,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date, datetime
 import streamlit.components.v1 as components
+import altair as alt
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from ingest import leer_csv_melonn
@@ -305,3 +306,43 @@ def render_detalle(df_tab: pd.DataFrame, tab_key: str):
         """, height=48)
     else:
         st.warning("Sin link de seguimiento para este pedido.")
+
+
+# ── Helper de gráficos — compatible con todas las versiones de Altair ─────────
+def bar_chart_zona_nivel(df: pd.DataFrame, height: int = 220) -> None:
+    """
+    Bar chart apilado por Zona × Nivel con colores de marca.
+    Usa Altair directamente para evitar incompatibilidades de st.bar_chart().
+    """
+    data = (
+        df.groupby(["Zona", "Nivel"])
+        .size()
+        .reset_index(name="Pedidos")
+    )
+    if data.empty:
+        st.info("Sin datos para graficar.")
+        return
+
+    orden_nivel = ["CRITICO", "RIESGO", "NORMAL"]
+    colores     = [CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR]
+
+    chart = (
+        alt.Chart(data)
+        .mark_bar()
+        .encode(
+            x=alt.X("Zona:N", sort="-y", axis=alt.Axis(labelAngle=-30)),
+            y=alt.Y("Pedidos:Q"),
+            color=alt.Color(
+                "Nivel:N",
+                scale=alt.Scale(domain=orden_nivel, range=colores),
+                legend=alt.Legend(title="Nivel"),
+            ),
+            order=alt.Order(
+                "color_Nivel_sort_index:Q",
+                sort="ascending",
+            ),
+            tooltip=["Zona:N", "Nivel:N", "Pedidos:Q"],
+        )
+        .properties(height=height)
+    )
+    st.altair_chart(chart, use_container_width=True)
