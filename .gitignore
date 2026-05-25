@@ -17,3 +17,7 @@ data/conciliacion/reportes/
 # Imágenes del manual de marca (archivos grandes)
 data/marca/*.jpg
 .vercel
+
+# Archivos grandes (manual de marca)
+data/marca/*.pdf
+data/marca/*.jpg
