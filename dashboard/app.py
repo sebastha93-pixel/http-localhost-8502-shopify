@@ -49,7 +49,6 @@ st.markdown("""
 
 pg = st.navigation([
     st.Page("pages/logistica.py",      title="LOGÍSTICA"),
-    st.Page("pages/analisis.py",       title="ANÁLISIS"),
     st.Page("pages/3_conciliacion.py", title="CONCILIACIÓN"),
     st.Page("pages/4_shopify.py",      title="COMERCIAL"),
 ])
