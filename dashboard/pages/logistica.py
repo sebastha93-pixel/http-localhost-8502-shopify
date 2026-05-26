@@ -128,6 +128,7 @@ riesgo_n   = len(df_all[df_all["Nivel"] == "RIESGO"])
 normales   = len(df_all[df_all["Nivel"] == "NORMAL"])
 pct_exc    = round((criticos + riesgo_n) / total * 100) if total else 0
 valor_cod_riesgo = df_cod[df_cod["Nivel"].isin(["CRITICO","RIESGO"])]["Valor COD"].apply(_parse_cod).sum()
+omit_total = sum(omitidos.values()) if isinstance(omitidos, dict) else int(omitidos or 0)
 
 # ── Encabezado ─────────────────────────────────────────────────────────────────
 st.markdown(f"""
@@ -141,24 +142,24 @@ k1, k2, k3, k4, k5 = st.columns(5)
 color_pct = CRITICO_COLOR if pct_exc > 40 else (RIESGO_COLOR if pct_exc > 20 else NORMAL_COLOR)
 with k1:
     st.markdown(f"""<div class="kpi-card kpi-crit">
-        <p class="kpi-num">{criticos}</p><p class="kpi-label">🔴 Críticos</p>
+        <p class="kpi-num">{criticos}</p><p class="kpi-label">CRÍTICOS</p>
         <p class="kpi-sub">Acción inmediata</p></div>""", unsafe_allow_html=True)
 with k2:
     st.markdown(f"""<div class="kpi-card kpi-ries">
-        <p class="kpi-num">{riesgo_n}</p><p class="kpi-label">🟠 En riesgo</p>
+        <p class="kpi-num">{riesgo_n}</p><p class="kpi-label">EN RIESGO</p>
         <p class="kpi-sub">Monitorear hoy</p></div>""", unsafe_allow_html=True)
 with k3:
     st.markdown(f"""<div class="kpi-card kpi-norm">
-        <p class="kpi-num">{normales}</p><p class="kpi-label">🟢 Normal</p>
+        <p class="kpi-num">{normales}</p><p class="kpi-label">NORMAL</p>
         <p class="kpi-sub">Sin acción</p></div>""", unsafe_allow_html=True)
 with k4:
     st.markdown(f"""<div class="kpi-card kpi-extra">
-        <p class="kpi-num" style="font-size:1.2rem;">${valor_cod_riesgo:,.0f}</p>
-        <p class="kpi-label">💸 COD en riesgo</p>
+        <p class="kpi-num" style="font-size:1.3rem;">${valor_cod_riesgo:,.0f}</p>
+        <p class="kpi-label">COD EN RIESGO</p>
         <p class="kpi-sub">Recaudo comprometido</p></div>""", unsafe_allow_html=True)
 with k5:
     st.markdown(f"""<div class="kpi-card" style="background:{color_pct};border-left:4px solid {STEEL_BLUE};">
-        <p class="kpi-num">{pct_exc}%</p><p class="kpi-label">En excepción</p>
+        <p class="kpi-num">{pct_exc}%</p><p class="kpi-label">EN EXCEPCIÓN</p>
         <p class="kpi-sub">{criticos+riesgo_n} de {total} pedidos</p></div>""", unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
@@ -181,21 +182,21 @@ with tab_ins:
     dias_prom = df_all["Días"].mean() if not df_all.empty else 0
     with c1:
         st.markdown(f"""<div class="kpi-card kpi-extra">
-            <p class="kpi-num">{len(df_cod)}</p><p class="kpi-label">Pedidos COD</p>
+            <p class="kpi-num">{len(df_cod)}</p><p class="kpi-label">PEDIDOS COD</p>
             <p class="kpi-sub">{round(len(df_cod)/total*100) if total else 0}% del total</p></div>""",
             unsafe_allow_html=True)
     with c2:
         st.markdown(f"""<div class="kpi-card" style="background:{DEEP_INK};border-left:4px solid {STEEL_BLUE};">
-            <p class="kpi-num">{len(df_prepago)}</p><p class="kpi-label">Pago previo</p>
+            <p class="kpi-num">{len(df_prepago)}</p><p class="kpi-label">PAGO PREVIO</p>
             <p class="kpi-sub">{round(len(df_prepago)/total*100) if total else 0}% del total</p></div>""",
             unsafe_allow_html=True)
     with c3:
         st.markdown(f"""<div class="kpi-card" style="background:{DEEP_INK};border-left:4px solid {STEEL_BLUE};">
-            <p class="kpi-num">{dias_prom:.1f}</p><p class="kpi-label">Días promedio</p>
+            <p class="kpi-num">{dias_prom:.1f}</p><p class="kpi-label">DÍAS PROMEDIO</p>
             <p class="kpi-sub">Tiempo en tránsito</p></div>""", unsafe_allow_html=True)
     with c4:
         st.markdown(f"""<div class="kpi-card" style="background:{DEEP_INK};border-left:4px solid {STEEL_BLUE};">
-            <p class="kpi-num">{omitidos}</p><p class="kpi-label">Omitidos</p>
+            <p class="kpi-num">{omit_total}</p><p class="kpi-label">OMITIDOS</p>
             <p class="kpi-sub">Entregados / sin estado</p></div>""", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -259,24 +260,24 @@ with tab_cod:
     k1,k2,k3,k4,k5 = st.columns(5)
     with k1:
         st.markdown(f"""<div class="kpi-card kpi-crit">
-            <p class="kpi-num">{n_crit_c}</p><p class="kpi-label">🔴 Crítico</p>
+            <p class="kpi-num">{n_crit_c}</p><p class="kpi-label">CRÍTICO</p>
             <p class="kpi-sub">Acción inmediata</p></div>""", unsafe_allow_html=True)
     with k2:
         st.markdown(f"""<div class="kpi-card kpi-ries">
-            <p class="kpi-num">{n_ries_c}</p><p class="kpi-label">🟠 En riesgo</p>
+            <p class="kpi-num">{n_ries_c}</p><p class="kpi-label">EN RIESGO</p>
             <p class="kpi-sub">Monitorear hoy</p></div>""", unsafe_allow_html=True)
     with k3:
         st.markdown(f"""<div class="kpi-card kpi-norm">
-            <p class="kpi-num">{n_norm_c}</p><p class="kpi-label">🟢 Normal</p>
+            <p class="kpi-num">{n_norm_c}</p><p class="kpi-label">NORMAL</p>
             <p class="kpi-sub">Sin acción</p></div>""", unsafe_allow_html=True)
     with k4:
         st.markdown(f"""<div class="kpi-card kpi-extra">
             <p class="kpi-num" style="font-size:1.1rem;">${val_riesgo:,.0f}</p>
-            <p class="kpi-label">💸 En riesgo</p>
+            <p class="kpi-label">COD EN RIESGO</p>
             <p class="kpi-sub">Recaudo comprometido</p></div>""", unsafe_allow_html=True)
     with k5:
         st.markdown(f"""<div class="kpi-card" style="background:{DEEP_INK};border-left:4px solid {STEEL_BLUE};">
-            <p class="kpi-num">{len(df_cod)}</p><p class="kpi-label">Total COD</p>
+            <p class="kpi-num">{len(df_cod)}</p><p class="kpi-label">TOTAL COD</p>
             <p class="kpi-sub">${val_total:,.0f} portafolio</p></div>""", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -334,23 +335,23 @@ with tab_pre:
     k1,k2,k3,k4,k5 = st.columns(5)
     with k1:
         st.markdown(f"""<div class="kpi-card kpi-crit">
-            <p class="kpi-num">{n_crit_p}</p><p class="kpi-label">🔴 Crítico</p>
+            <p class="kpi-num">{n_crit_p}</p><p class="kpi-label">CRÍTICO</p>
             <p class="kpi-sub">Acción inmediata</p></div>""", unsafe_allow_html=True)
     with k2:
         st.markdown(f"""<div class="kpi-card kpi-ries">
-            <p class="kpi-num">{n_ries_p}</p><p class="kpi-label">🟠 En riesgo</p>
+            <p class="kpi-num">{n_ries_p}</p><p class="kpi-label">EN RIESGO</p>
             <p class="kpi-sub">Monitorear hoy</p></div>""", unsafe_allow_html=True)
     with k3:
         st.markdown(f"""<div class="kpi-card kpi-norm">
-            <p class="kpi-num">{n_norm_p}</p><p class="kpi-label">🟢 Normal</p>
+            <p class="kpi-num">{n_norm_p}</p><p class="kpi-label">NORMAL</p>
             <p class="kpi-sub">Sin acción</p></div>""", unsafe_allow_html=True)
     with k4:
         st.markdown(f"""<div class="kpi-card kpi-extra">
-            <p class="kpi-num">{n_prom}</p><p class="kpi-label">⏰ Promesa vencida</p>
+            <p class="kpi-num">{n_prom}</p><p class="kpi-label">PROMESA VENCIDA</p>
             <p class="kpi-sub">Cliente esperó demasiado</p></div>""", unsafe_allow_html=True)
     with k5:
         st.markdown(f"""<div class="kpi-card" style="background:{DEEP_INK};border-left:4px solid {STEEL_BLUE};">
-            <p class="kpi-num">{len(df_prepago)}</p><p class="kpi-label">Total prepago</p>
+            <p class="kpi-num">{len(df_prepago)}</p><p class="kpi-label">TOTAL PREPAGO</p>
             <p class="kpi-sub">{pct_p}% en excepción</p></div>""", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)

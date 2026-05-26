@@ -48,14 +48,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 pg = st.navigation({
-    "📦  Logística": [
-        st.Page("pages/logistica.py",       title="Pedidos & Operaciones", icon="📦"),
+    "LOGÍSTICA": [
+        st.Page("pages/logistica.py",      title="PEDIDOS & OPERACIONES"),
     ],
-    "💼  Conciliación": [
-        st.Page("pages/3_conciliacion.py",  title="Conciliación Financiera", icon="💼"),
+    "CONCILIACIÓN": [
+        st.Page("pages/3_conciliacion.py", title="CONCILIACIÓN FINANCIERA"),
     ],
-    "🛍️  Comercial": [
-        st.Page("pages/4_shopify.py",       title="Shopify & Productos",     icon="🛍️"),
+    "COMERCIAL": [
+        st.Page("pages/4_shopify.py",      title="SHOPIFY & PRODUCTOS"),
     ],
 })
 
