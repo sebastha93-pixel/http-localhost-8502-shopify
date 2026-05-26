@@ -47,16 +47,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-pg = st.navigation({
-    "LOGÍSTICA": [
-        st.Page("pages/logistica.py",      title="PEDIDOS & OPERACIONES"),
-    ],
-    "CONCILIACIÓN": [
-        st.Page("pages/3_conciliacion.py", title="CONCILIACIÓN FINANCIERA"),
-    ],
-    "COMERCIAL": [
-        st.Page("pages/4_shopify.py",      title="SHOPIFY & PRODUCTOS"),
-    ],
-})
+pg = st.navigation([
+    st.Page("pages/logistica.py",      title="LOGÍSTICA"),
+    st.Page("pages/3_conciliacion.py", title="CONCILIACIÓN"),
+    st.Page("pages/4_shopify.py",      title="COMERCIAL"),
+])
 
 pg.run()
