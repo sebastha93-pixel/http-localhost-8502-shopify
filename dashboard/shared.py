@@ -64,9 +64,9 @@ CSS = f"""
   .kpi-extra {{ background:{COD_COLOR};     border-left:4px solid {STEEL_BLUE}; }}
   .kpi-num   {{ font-size:2rem; font-weight:900; color:white; margin:0;
                 line-height:1; font-family:'Arial Black',sans-serif; }}
-  .kpi-label {{ font-size:0.68rem; color:rgba(255,255,255,0.8); margin:3px 0 0;
-                letter-spacing:2px; text-transform:uppercase; }}
-  .kpi-sub   {{ font-size:0.62rem; color:rgba(255,255,255,0.5); margin:2px 0 0; }}
+  .kpi-label {{ font-size:0.68rem; color:rgba(255,255,255,0.95); margin:3px 0 0;
+                letter-spacing:2px; text-transform:uppercase; font-weight:600; }}
+  .kpi-sub   {{ font-size:0.63rem; color:rgba(255,255,255,0.85); margin:2px 0 0; }}
   .sec-title {{ font-size:0.68rem; font-weight:700; letter-spacing:3px;
                 text-transform:uppercase; color:{GRAPHITE_GREY};
                 margin:18px 0 6px; padding-bottom:3px;
@@ -321,10 +321,12 @@ def simple_bar(serie: pd.Series, color: str = "#87a6b8", height: int = 200) -> N
     fig = px.bar(df_p, x="x", y="y", color_discrete_sequence=[color], height=height)
     fig.update_layout(
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=0, r=0, t=0, b=0), showlegend=False,
+        margin=dict(l=0, r=0, t=10, b=0), showlegend=False,
         xaxis_title="", yaxis_title="",
+        font=dict(color=GRAPHITE_GREY, size=11),
     )
-    fig.update_xaxes(tickangle=-20)
+    fig.update_xaxes(tickangle=-20, tickfont=dict(color=GRAPHITE_GREY))
+    fig.update_yaxes(tickfont=dict(color=GRAPHITE_GREY))
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -407,9 +409,11 @@ def bar_chart_zona_nivel(df: pd.DataFrame, height: int = 220) -> None:
     fig.update_layout(
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=0, r=0, t=0, b=0),
-        legend=dict(orientation="h", y=1.05, x=0),
-        font=dict(size=11),
+        margin=dict(l=0, r=0, t=10, b=0),
+        legend=dict(orientation="h", y=1.05, x=0,
+                    font=dict(color=GRAPHITE_GREY)),
+        font=dict(size=11, color=GRAPHITE_GREY),
     )
-    fig.update_xaxes(tickangle=-20)
+    fig.update_xaxes(tickangle=-20, tickfont=dict(color=GRAPHITE_GREY))
+    fig.update_yaxes(tickfont=dict(color=GRAPHITE_GREY))
     st.plotly_chart(fig, use_container_width=True)
