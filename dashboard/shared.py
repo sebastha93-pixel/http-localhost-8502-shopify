@@ -57,16 +57,21 @@ CSS = f"""
   .logo-sidebar {{ font-family:'Arial Black',sans-serif; font-size:1.3rem;
                    font-weight:900; color:white !important; line-height:1; }}
   .logo-tagline  {{ font-size:0.62rem; letter-spacing:4px; color:{STEEL_BLUE} !important; }}
-  .kpi-card  {{ border-radius:4px; padding:16px 18px; margin-bottom:4px; }}
+  .kpi-card  {{ border-radius:4px; padding:16px 18px; margin-bottom:4px;
+                height:116px; box-sizing:border-box; overflow:hidden;
+                display:flex; flex-direction:column; justify-content:center; }}
   .kpi-crit  {{ background:{CRITICO_COLOR}; border-left:4px solid #ff0022; }}
   .kpi-ries  {{ background:{RIESGO_COLOR};  border-left:4px solid #f5a623; }}
   .kpi-norm  {{ background:{NORMAL_COLOR};  border-left:4px solid {STEEL_BLUE}; }}
   .kpi-extra {{ background:{COD_COLOR};     border-left:4px solid {STEEL_BLUE}; }}
-  .kpi-num   {{ font-size:2rem; font-weight:900; color:white; margin:0;
-                line-height:1; font-family:'Arial Black',sans-serif; }}
-  .kpi-label {{ font-size:0.68rem; color:rgba(255,255,255,0.95); margin:3px 0 0;
-                letter-spacing:2px; text-transform:uppercase; font-weight:600; }}
-  .kpi-sub   {{ font-size:0.63rem; color:rgba(255,255,255,0.85); margin:2px 0 0; }}
+  .kpi-num   {{ font-size:1.9rem; font-weight:900; color:white; margin:0;
+                line-height:1; font-family:'Arial Black',sans-serif;
+                white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+  .kpi-label {{ font-size:0.68rem; color:rgba(255,255,255,0.95); margin:4px 0 0;
+                letter-spacing:2px; text-transform:uppercase; font-weight:600;
+                white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+  .kpi-sub   {{ font-size:0.63rem; color:rgba(255,255,255,0.85); margin:2px 0 0;
+                white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
   .sec-title {{ font-size:0.68rem; font-weight:700; letter-spacing:3px;
                 text-transform:uppercase; color:{GRAPHITE_GREY};
                 margin:18px 0 6px; padding-bottom:3px;

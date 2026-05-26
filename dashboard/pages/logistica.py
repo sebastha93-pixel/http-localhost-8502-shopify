@@ -125,6 +125,12 @@ riesgo_n = len(df_all[df_all["Nivel"] == "RIESGO"])
 normales = len(df_all[df_all["Nivel"] == "NORMAL"])
 pct_exc  = round((criticos + riesgo_n) / total * 100) if total else 0
 valor_cod_riesgo = df_cod[df_cod["Nivel"].isin(["CRITICO","RIESGO"])]["Valor COD"].apply(_parse_cod).sum()
+
+def _fmt_m(v):
+    """Formatea montos: 15.1M, 897K, etc."""
+    if v >= 1_000_000: return f"${v/1_000_000:.1f}M"
+    if v >= 1_000:     return f"${v/1_000:.0f}K"
+    return f"${v:,.0f}"
 omit_total = sum(omitidos.values()) if isinstance(omitidos, dict) else int(omitidos or 0)
 
 # ── Encabezado + KPIs globales ─────────────────────────────────────────────────
@@ -150,7 +156,7 @@ with k3:
         <p class="kpi-sub">Sin acción</p></div>""", unsafe_allow_html=True)
 with k4:
     st.markdown(f"""<div class="kpi-card kpi-extra">
-        <p class="kpi-num" style="font-size:1.3rem;">${valor_cod_riesgo:,.0f}</p>
+        <p class="kpi-num">{_fmt_m(valor_cod_riesgo)}</p>
         <p class="kpi-label">COD EN RIESGO</p>
         <p class="kpi-sub">Recaudo comprometido</p></div>""", unsafe_allow_html=True)
 with k5:
