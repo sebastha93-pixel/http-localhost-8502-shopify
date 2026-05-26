@@ -205,16 +205,45 @@ with tab_ins:
     with st.expander("📊 Distribución por zona y transportadora", expanded=True):
         cg1, cg2 = st.columns(2)
         with cg1:
-            st.markdown("<div class='sec-title'>Por zona</div>", unsafe_allow_html=True)
+            st.markdown("<div class='sec-title'>Pedidos por zona</div>", unsafe_allow_html=True)
             if not df_filt.empty:
-                bar_chart_zona_nivel(df_filt, height=200)
+                import plotly.express as px
+                zona_data = (df_filt.groupby(["Zona","Nivel"]).size()
+                             .reset_index(name="Pedidos"))
+                zona_data["Nivel"] = pd.Categorical(
+                    zona_data["Nivel"], ["CRITICO","RIESGO","NORMAL"], ordered=True)
+                fig = px.bar(zona_data, y="Zona", x="Pedidos", color="Nivel",
+                             color_discrete_map={"CRITICO":CRITICO_COLOR,"RIESGO":RIESGO_COLOR,"NORMAL":NORMAL_COLOR},
+                             orientation="h", barmode="stack", height=220)
+                fig.update_layout(plot_bgcolor="white", paper_bgcolor="white",
+                                  margin=dict(l=0,r=0,t=10,b=0),
+                                  font=dict(color=GRAPHITE_GREY, size=11),
+                                  legend=dict(orientation="h", y=1.1,
+                                              font=dict(color=GRAPHITE_GREY)))
+                fig.update_xaxes(tickfont=dict(color=GRAPHITE_GREY))
+                fig.update_yaxes(tickfont=dict(color=GRAPHITE_GREY))
+                st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("Sin datos con los filtros actuales.")
         with cg2:
-            st.markdown("<div class='sec-title'>Transportadora — excepciones</div>", unsafe_allow_html=True)
-            transp = df_filt[df_filt["Nivel"].isin(["CRITICO","RIESGO"])]["Transportadora"].value_counts()
+            st.markdown("<div class='sec-title'>Excepciones por transportadora</div>", unsafe_allow_html=True)
+            transp = (df_filt[df_filt["Nivel"].isin(["CRITICO","RIESGO"])]
+                      ["Transportadora"].value_counts().reset_index())
+            transp.columns = ["Transportadora","Pedidos"]
             if not transp.empty:
-                simple_bar(transp, color=RIESGO_COLOR, height=200)
+                import plotly.express as px
+                fig2 = px.bar(transp, y="Transportadora", x="Pedidos",
+                              orientation="h", height=220,
+                              color_discrete_sequence=[RIESGO_COLOR],
+                              text="Pedidos")
+                fig2.update_traces(textposition="outside",
+                                   textfont=dict(color=GRAPHITE_GREY, size=11))
+                fig2.update_layout(plot_bgcolor="white", paper_bgcolor="white",
+                                   margin=dict(l=0,r=0,t=10,b=0), showlegend=False,
+                                   font=dict(color=GRAPHITE_GREY, size=11))
+                fig2.update_xaxes(tickfont=dict(color=GRAPHITE_GREY))
+                fig2.update_yaxes(tickfont=dict(color=GRAPHITE_GREY))
+                st.plotly_chart(fig2, use_container_width=True)
             else:
                 st.success("✅ Sin excepciones en transportadoras.")
 
