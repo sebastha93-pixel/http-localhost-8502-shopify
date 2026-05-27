@@ -10,6 +10,7 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE))
 sys.path.insert(0, str(_HERE.parent / "src"))
 
+import base64, io
 import streamlit as st
 from PIL import Image
 
@@ -22,6 +23,17 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Inyectar favicon vía HTML para que el browser tab lo tome correctamente
+if _FAVICON.exists():
+    _buf = io.BytesIO()
+    Image.open(_FAVICON).save(_buf, format="PNG")
+    _b64 = base64.b64encode(_buf.getvalue()).decode()
+    st.markdown(
+        f'<link rel="shortcut icon" href="data:image/png;base64,{_b64}" type="image/png">'
+        f'<link rel="icon" href="data:image/png;base64,{_b64}" type="image/png">',
+        unsafe_allow_html=True,
+    )
 
 # Estilo del sidebar global — compacto y de marca
 st.markdown("""
