@@ -14,11 +14,24 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import date
 
+# Cargar .env localmente (en Streamlit Cloud usa Secrets)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent.parent / ".env")
+except Exception:
+    pass
+
 from shared import (
     CSS, DEEP_INK, STEEL_BLUE, GRAPHITE_GREY, SOFT_CONCRETE,
     CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR, COD_COLOR,
     cargar_datos, render_sidebar, render_detalle, _parse_cod,
     render_tabla,
+)
+from memoria import (
+    disponible as mem_ok, guardar_snapshot,
+    cargar_snapshots, historial_pedido,
+    cargar_notas, agregar_nota,
+    cargar_acciones, agregar_accion, TIPOS_ACCION,
 )
 
 st.markdown(CSS, unsafe_allow_html=True)
@@ -46,6 +59,84 @@ def _hbar(df_in, y, x, color, h=260, text_col=None):
     fig = _lay(fig, h=h)
     fig.update_layout(showlegend=False)
     return fig
+
+
+def _render_memoria(orden: str):
+    """Sección de trazabilidad dentro del detalle de un pedido."""
+    if not mem_ok():
+        st.caption("ℹ️ Conecta Supabase para activar la memoria.")
+        return
+
+    st.markdown(f"<div class='sec-title' style='margin-top:16px;'>🧠 TRAZABILIDAD — {orden}</div>",
+                unsafe_allow_html=True)
+
+    col_h, col_acc, col_nota = st.columns([1.4, 1.3, 1.3])
+
+    # ── Historial del pedido ────────────────────────────────────────────────────
+    with col_h:
+        st.markdown("**📅 Historial en cargas anteriores**")
+        df_h = historial_pedido(orden)
+        if df_h.empty:
+            st.caption("Sin registros anteriores.")
+        else:
+            df_h["Fecha"] = df_h["Fecha"].dt.strftime("%d/%m %H:%M")
+            st.dataframe(
+                df_h[["Fecha","Nivel","Score","Días","Novedad"]],
+                use_container_width=True, hide_index=True, height=160,
+            )
+
+    # ── Acciones ────────────────────────────────────────────────────────────────
+    with col_acc:
+        st.markdown("**⚡ Acciones registradas**")
+        df_ac = cargar_acciones(orden)
+        if not df_ac.empty:
+            for _, r in df_ac.iterrows():
+                ts_str = r["creada_en"].strftime("%d/%m %H:%M") if pd.notna(r["creada_en"]) else ""
+                st.markdown(
+                    f"<div style='background:white;border-left:3px solid {STEEL_BLUE};"
+                    f"padding:6px 10px;margin-bottom:4px;border-radius:3px;font-size:0.8rem;'>"
+                    f"<b>{r['tipo']}</b> · {r['autor']} · {ts_str}<br>"
+                    f"<span style='color:{GRAPHITE_GREY};'>{r['descripcion']}</span></div>",
+                    unsafe_allow_html=True)
+        else:
+            st.caption("Sin acciones registradas.")
+
+        with st.form(key=f"form_accion_{orden}", clear_on_submit=True):
+            tipo_ac = st.selectbox("Tipo", TIPOS_ACCION, label_visibility="collapsed")
+            desc_ac = st.text_input("Descripción", placeholder="Descripción de la acción...",
+                                    label_visibility="collapsed")
+            autor_ac = st.text_input("Quién", placeholder="Tu nombre",
+                                     label_visibility="collapsed")
+            if st.form_submit_button("➕ Registrar acción", use_container_width=True):
+                if desc_ac.strip():
+                    agregar_accion(orden, tipo_ac, desc_ac, autor_ac)
+                    st.rerun()
+
+    # ── Notas ────────────────────────────────────────────────────────────────────
+    with col_nota:
+        st.markdown("**📝 Notas del equipo**")
+        df_n = cargar_notas(orden)
+        if not df_n.empty:
+            for _, r in df_n.iterrows():
+                ts_str = r["creada_en"].strftime("%d/%m %H:%M") if pd.notna(r["creada_en"]) else ""
+                st.markdown(
+                    f"<div style='background:white;border-left:3px solid {NORMAL_COLOR};"
+                    f"padding:6px 10px;margin-bottom:4px;border-radius:3px;font-size:0.8rem;'>"
+                    f"<b>{r['autor']}</b> · {ts_str}<br>"
+                    f"<span style='color:{GRAPHITE_GREY};'>{r['nota']}</span></div>",
+                    unsafe_allow_html=True)
+        else:
+            st.caption("Sin notas aún.")
+
+        with st.form(key=f"form_nota_{orden}", clear_on_submit=True):
+            nota_txt = st.text_area("Nueva nota", placeholder="Escribe una nota...",
+                                    height=68, label_visibility="collapsed")
+            autor_n  = st.text_input("Quién", placeholder="Tu nombre",
+                                     label_visibility="collapsed")
+            if st.form_submit_button("💬 Agregar nota", use_container_width=True):
+                if nota_txt.strip():
+                    agregar_nota(orden, autor_n, nota_txt)
+                    st.rerun()
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 ruta_csv, ts, filtro_nivel, filtro_zona = render_sidebar("Logística")
@@ -108,6 +199,14 @@ try:
 except Exception as e:
     st.error(f"❌ Error al cargar: {e}")
     st.stop()
+
+# ── Auto-guardar snapshot en Supabase (una vez por CSV) ────────────────────────
+_snap_key = f"snap_guardado_{ts}"
+if mem_ok() and not st.session_state.get(_snap_key):
+    with st.spinner("Guardando snapshot en memoria..."):
+        snap_id = guardar_snapshot(df_all, ts, omitidos if isinstance(omitidos, int) else sum(omitidos.values()) if isinstance(omitidos, dict) else 0)
+    if snap_id:
+        st.session_state[_snap_key] = snap_id
 
 df_cod     = df_all[df_all["COD"] == "SÍ"]
 df_prepago = df_all[df_all["COD"] == "—"]
@@ -325,6 +424,11 @@ with tab_cod:
                 st.info("👆 Toca cualquier fila de la lista para ver el detalle completo del pedido y el tracking de la guía.")
             else:
                 render_detalle(df_c, tab_key="cod")
+                # Obtener número de orden del pedido seleccionado
+                _rows_cod = st.session_state.get("tabla_cod", {}).get("selection", {}).get("rows", [])
+                if _rows_cod:
+                    _orden_cod = str(df_c.iloc[_rows_cod[0]]["Orden"])
+                    _render_memoria(_orden_cod)
 
         st.markdown("<br>", unsafe_allow_html=True)
         st.download_button(
@@ -392,6 +496,10 @@ with tab_pre:
                 st.info("👆 Toca cualquier fila de la lista para ver el detalle completo del pedido y el tracking de la guía.")
             else:
                 render_detalle(df_p, tab_key="prepago")
+                _rows_pre = st.session_state.get("tabla_prepago", {}).get("selection", {}).get("rows", [])
+                if _rows_pre:
+                    _orden_pre = str(df_p.iloc[_rows_pre[0]]["Orden"])
+                    _render_memoria(_orden_pre)
 
         st.markdown("<br>", unsafe_allow_html=True)
         st.download_button(
@@ -408,6 +516,60 @@ with tab_pre:
 with tab_ana:
     st.markdown("<div class='sec-title' style='margin-top:0;'>Visualizaciones avanzadas del estado logístico</div>",
                 unsafe_allow_html=True)
+
+    # ── Tendencias históricas (Supabase) ────────────────────────────────────────
+    with st.expander("📈 Tendencias históricas — Evolución de cargas", expanded=mem_ok()):
+        if not mem_ok():
+            st.info("Conecta Supabase para ver la evolución a lo largo del tiempo.")
+        else:
+            df_snaps = cargar_snapshots(30)
+            if df_snaps.empty:
+                st.caption("Aún no hay snapshots guardados. Carga un CSV para comenzar.")
+            else:
+                df_snaps = df_snaps.sort_values("cargado_en")
+                df_snaps["Fecha"] = df_snaps["cargado_en"].dt.strftime("%d/%m")
+
+                tc1, tc2 = st.columns(2)
+                with tc1:
+                    st.markdown("<div class='sec-title'>Pedidos críticos y en riesgo</div>", unsafe_allow_html=True)
+                    fig_t = go.Figure()
+                    fig_t.add_trace(go.Scatter(
+                        x=df_snaps["Fecha"], y=df_snaps["criticos"],
+                        name="Crítico", line=dict(color=CRITICO_COLOR, width=2.5),
+                        mode="lines+markers"))
+                    fig_t.add_trace(go.Scatter(
+                        x=df_snaps["Fecha"], y=df_snaps["en_riesgo"],
+                        name="En riesgo", line=dict(color=RIESGO_COLOR, width=2.5),
+                        mode="lines+markers"))
+                    fig_t.add_trace(go.Scatter(
+                        x=df_snaps["Fecha"], y=df_snaps["normales"],
+                        name="Normal", line=dict(color=NORMAL_COLOR, width=2),
+                        mode="lines+markers"))
+                    fig_t = _lay(fig_t, 240)
+                    fig_t.update_layout(legend=dict(
+                        orientation="h", y=1.1, font=dict(color=GRAPHITE_GREY, size=11)))
+                    st.plotly_chart(fig_t, use_container_width=True)
+
+                with tc2:
+                    st.markdown("<div class='sec-title'>Valor COD en riesgo ($)</div>", unsafe_allow_html=True)
+                    fig_v = go.Figure(go.Bar(
+                        x=df_snaps["Fecha"], y=df_snaps["valor_cod_riesgo"],
+                        marker_color=COD_COLOR,
+                        text=df_snaps["valor_cod_riesgo"].apply(lambda v: f"${v/1e6:.1f}M" if v>=1e6 else f"${v/1e3:.0f}K"),
+                        textposition="outside",
+                        textfont=dict(color=GRAPHITE_GREY, size=11),
+                    ))
+                    fig_v = _lay(fig_v, 240)
+                    fig_v.update_layout(showlegend=False)
+                    st.plotly_chart(fig_v, use_container_width=True)
+
+                st.markdown("<div class='sec-title'>Detalle de snapshots</div>", unsafe_allow_html=True)
+                st.dataframe(
+                    df_snaps[["Fecha","nombre_csv","total","criticos","en_riesgo","normales","valor_cod_riesgo"]]
+                    .rename(columns={"nombre_csv":"CSV","total":"Total","criticos":"Críticos",
+                                     "en_riesgo":"En riesgo","normales":"Normales","valor_cod_riesgo":"COD $"}),
+                    use_container_width=True, hide_index=True, height=200,
+                )
 
     # ── Fila 1: Donuts ──────────────────────────────────────────────────────────
     with st.expander("🎯 Resumen de riesgo", expanded=True):
