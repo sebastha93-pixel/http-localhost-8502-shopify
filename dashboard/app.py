@@ -11,10 +11,14 @@ sys.path.insert(0, str(_HERE))
 sys.path.insert(0, str(_HERE.parent / "src"))
 
 import streamlit as st
+from PIL import Image
+
+_FAVICON = _HERE / "assets" / "favicon.png"
+_icon = Image.open(_FAVICON) if _FAVICON.exists() else "📦"
 
 st.set_page_config(
     page_title="MALE'DENIM OS",
-    page_icon="📦",
+    page_icon=_icon,
     layout="wide",
     initial_sidebar_state="expanded",
 )
