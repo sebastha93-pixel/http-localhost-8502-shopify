@@ -10,7 +10,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 import streamlit as st
 import pandas as pd
-from datetime import date
+import io
+from datetime import date, datetime, timedelta
 import json
 
 from shared import (
@@ -147,7 +148,7 @@ try:
     with get_conn() as conn:
         n_pedidos   = conn.execute("SELECT COUNT(*) FROM pedidos WHERE fuente='shopify_api'").fetchone()[0]
         n_productos = conn.execute("SELECT COUNT(*) FROM productos").fetchone()[0]
-        n_activos   = conn.execute("SELECT COUNT(*) FROM productos WHERE estado='active'").fetchone()[0]
+        n_activos   = conn.execute("SELECT COUNT(*) FROM productos WHERE estado='active' AND inventario_total > 0").fetchone()[0]
         n_borradores= conn.execute("SELECT COUNT(*) FROM productos WHERE estado='draft'").fetchone()[0]
         n_clientes  = conn.execute("SELECT COUNT(*) FROM clientes").fetchone()[0]
         val_pedidos = conn.execute("SELECT COALESCE(SUM(precio_venta),0) FROM pedidos WHERE fuente='shopify_api'").fetchone()[0]
@@ -165,7 +166,7 @@ with k2:
     st.markdown(f"""<div class="kpi-card" style="background:{DEEP_INK};border-left:4px solid {STEEL_BLUE};">
         <p class="kpi-num">{n_productos:,}</p>
         <p class="kpi-label">Productos</p>
-        <p class="kpi-sub">{n_activos} activos · {n_borradores} borradores</p></div>""", unsafe_allow_html=True)
+        <p class="kpi-sub">{n_activos} c/stock · {n_borradores} borradores</p></div>""", unsafe_allow_html=True)
 with k3:
     st.markdown(f"""<div class="kpi-card" style="background:{DEEP_INK};border-left:4px solid {STEEL_BLUE};">
         <p class="kpi-num">{n_clientes:,}</p>
@@ -211,11 +212,12 @@ with k5:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🛒 Pedidos",
     "👕 Productos",
     "👥 Clientes",
     "📅 Lanzamientos",
+    "📥 Informes",
 ])
 
 # ── TAB 1: Pedidos Shopify ────────────────────────────────────────────────────
@@ -408,3 +410,209 @@ with tab4:
             simple_bar(conteo_mes.set_index("mes")["lanzamientos"], color=STEEL_BLUE, height=180)
 
 
+# ── TAB 5: INFORMES ───────────────────────────────────────────────────────────
+with tab5:
+    st.markdown("<div class='sec-title'>Generador de informes personalizados</div>", unsafe_allow_html=True)
+    st.caption("Configura los filtros, elige las columnas y descarga el informe en CSV o Excel.")
+
+    INFORMES = {
+        "Pedidos":   "pedidos",
+        "Productos": "productos",
+        "Clientes":  "clientes",
+    }
+
+    COLS_PEDIDOS = {
+        "Orden":           "orden_shopify",
+        "Fecha":           "fecha_pedido",
+        "Cliente":         "nombre_cliente",
+        "Email":           "email_cliente",
+        "Teléfono":        "telefono_cliente",
+        "Ciudad":          "ciudad_destino",
+        "Región":          "region_destino",
+        "Producto":        "producto",
+        "SKU":             "sku",
+        "Cantidad":        "cantidad",
+        "Precio venta":    "precio_venta",
+        "Método pago":     "metodo_pago",
+        "Estado pago":     "estado_pago",
+        "Contraentrega":   "es_contraentrega",
+        "Valor COD":       "valor_cod",
+        "Transportadora":  "transportadora",
+        "Estado Melonn":   "estado_melonn",
+        "Nivel riesgo":    "nivel_riesgo",
+        "Zona":            "zona_logistica",
+        "Días tránsito":   "dias_en_transito",
+        "Canal":           "canal",
+    }
+
+    COLS_PRODUCTOS = {
+        "Título":         "titulo",
+        "Estado":         "estado",
+        "Tipo":           "tipo",
+        "Proveedor":      "proveedor",
+        "Precio mín":     "precio_min",
+        "Precio máx":     "precio_max",
+        "Inventario":     "inventario_total",
+        "Tags":           "tags",
+        "Publicación":    "fecha_publicacion",
+        "Creación":       "fecha_creacion",
+    }
+
+    COLS_CLIENTES = {
+        "Nombre":          "nombre",
+        "Email":           "email",
+        "Teléfono":        "telefono",
+        "Ciudad":          "ciudad",
+        "Región":          "region",
+        "Pedidos":         "total_pedidos",
+        "Total gastado":   "total_gastado",
+        "Marketing":       "acepta_marketing",
+        "Primer pedido":   "fecha_primer_pedido",
+        "Último pedido":   "fecha_ultimo_pedido",
+    }
+
+    # ── Configuración del informe ──────────────────────────────────────────────
+    cfg1, cfg2 = st.columns([1, 2])
+
+    with cfg1:
+        tipo_informe = st.selectbox("📋 Tipo de informe", list(INFORMES.keys()), key="inf_tipo")
+
+        if tipo_informe == "Pedidos":
+            # Rango de fechas
+            st.markdown("**Período**")
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                fecha_desde = st.date_input("Desde", value=date.today() - timedelta(days=30), key="inf_desde")
+            with fc2:
+                fecha_hasta = st.date_input("Hasta", value=date.today(), key="inf_hasta")
+
+            # Filtros adicionales
+            st.markdown("**Filtros**")
+            f_estado_inf = st.multiselect("Estado pago", ["pagado","pendiente","devuelto","fallido"],
+                                          default=[], key="inf_est_pago")
+            f_cod_inf = st.selectbox("Tipo pago", ["Todos","Solo COD","Solo prepago"], key="inf_cod")
+            f_nivel_inf = st.multiselect("Nivel riesgo", ["CRITICO","RIESGO","NORMAL"],
+                                         default=[], key="inf_nivel")
+            COLS_DISP = COLS_PEDIDOS
+
+        elif tipo_informe == "Productos":
+            f_estado_prod_inf = st.multiselect("Estado", ["active","draft","archived"],
+                                               default=["active"], key="inf_est_prod")
+            f_stock_inf = st.checkbox("Solo con inventario > 0", value=True, key="inf_stock")
+            COLS_DISP = COLS_PRODUCTOS
+
+        else:  # Clientes
+            f_mktg_inf = st.selectbox("Marketing", ["Todos","Acepta","No acepta"], key="inf_mktg")
+            f_ciu_inf  = st.text_input("Ciudad (contiene)", key="inf_ciudad", placeholder="Medellín...")
+            COLS_DISP = COLS_CLIENTES
+
+    with cfg2:
+        st.markdown("**Columnas a incluir**")
+        cols_sel = st.multiselect(
+            "Selecciona columnas",
+            list(COLS_DISP.keys()),
+            default=list(COLS_DISP.keys()),
+            key="inf_cols",
+        )
+
+    st.markdown("---")
+
+    # ── Generar informe ────────────────────────────────────────────────────────
+    if st.button("⚙️ Generar informe", type="primary", use_container_width=False):
+        try:
+            with get_conn() as conn:
+                if tipo_informe == "Pedidos":
+                    q = "SELECT * FROM pedidos WHERE fuente='shopify_api' AND fecha_pedido BETWEEN ? AND ?"
+                    params = [str(fecha_desde), str(fecha_hasta)]
+                    df_inf = pd.DataFrame([dict(r) for r in conn.execute(q, params).fetchall()])
+
+                    if not df_inf.empty:
+                        if f_estado_inf:
+                            df_inf = df_inf[df_inf["estado_pago"].isin(f_estado_inf)]
+                        if f_cod_inf == "Solo COD":
+                            df_inf = df_inf[df_inf["es_contraentrega"] == 1]
+                        elif f_cod_inf == "Solo prepago":
+                            df_inf = df_inf[df_inf["es_contraentrega"] == 0]
+                        if f_nivel_inf:
+                            df_inf = df_inf[df_inf["nivel_riesgo"].isin(f_nivel_inf)]
+                        df_inf["es_contraentrega"] = df_inf["es_contraentrega"].map({1:"SÍ", 0:"—"})
+
+                elif tipo_informe == "Productos":
+                    q = "SELECT * FROM productos"
+                    df_inf = pd.DataFrame([dict(r) for r in conn.execute(q).fetchall()])
+                    if not df_inf.empty:
+                        if f_estado_prod_inf:
+                            df_inf = df_inf[df_inf["estado"].isin(f_estado_prod_inf)]
+                        if f_stock_inf:
+                            df_inf = df_inf[df_inf["inventario_total"] > 0]
+
+                else:  # Clientes
+                    q = "SELECT * FROM clientes"
+                    df_inf = pd.DataFrame([dict(r) for r in conn.execute(q).fetchall()])
+                    if not df_inf.empty:
+                        if f_mktg_inf == "Acepta":
+                            df_inf = df_inf[df_inf["acepta_marketing"] == 1]
+                        elif f_mktg_inf == "No acepta":
+                            df_inf = df_inf[df_inf["acepta_marketing"] == 0]
+                        if f_ciu_inf:
+                            df_inf = df_inf[df_inf["ciudad"].str.contains(f_ciu_inf, case=False, na=False)]
+                        df_inf["acepta_marketing"] = df_inf["acepta_marketing"].map({1:"Sí", 0:"No"})
+
+            if df_inf.empty:
+                st.warning("Sin registros con los filtros seleccionados.")
+            else:
+                # Seleccionar y renombrar columnas
+                cols_db   = [COLS_DISP[c] for c in cols_sel if c in COLS_DISP and COLS_DISP[c] in df_inf.columns]
+                cols_name = [c for c in cols_sel if c in COLS_DISP and COLS_DISP[c] in df_inf.columns]
+                df_export = df_inf[cols_db].copy()
+                df_export.columns = cols_name
+
+                st.session_state["informe_df"]     = df_export
+                st.session_state["informe_nombre"] = tipo_informe
+                st.rerun()
+
+        except Exception as e:
+            st.error(f"Error generando informe: {e}")
+
+    # ── Mostrar y descargar ────────────────────────────────────────────────────
+    if "informe_df" in st.session_state and st.session_state["informe_df"] is not None:
+        df_show = st.session_state["informe_df"]
+        nombre  = st.session_state.get("informe_nombre", "informe")
+        hoy_str = date.today().strftime("%Y%m%d")
+
+        st.markdown(f"<div class='sec-title'>{len(df_show):,} registros — listo para descargar</div>",
+                    unsafe_allow_html=True)
+
+        # Preview
+        st.dataframe(df_show.head(200), use_container_width=True, height=360, hide_index=True)
+
+        # Botones de descarga
+        dc1, dc2, dc3 = st.columns([1, 1, 3])
+
+        with dc1:
+            csv_bytes = df_show.to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                "⬇️ Descargar CSV",
+                data=csv_bytes,
+                file_name=f"maledenim_{nombre.lower()}_{hoy_str}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+        with dc2:
+            buf = io.BytesIO()
+            with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+                df_show.to_excel(writer, index=False, sheet_name=nombre)
+            buf.seek(0)
+            st.download_button(
+                "⬇️ Descargar Excel",
+                data=buf.getvalue(),
+                file_name=f"maledenim_{nombre.lower()}_{hoy_str}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+        with dc3:
+            if st.button("🗑 Limpiar", use_container_width=False):
+                st.session_state["informe_df"] = None
+                st.rerun()
