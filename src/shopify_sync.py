@@ -203,22 +203,57 @@ def sincronizar_pedidos(dias: int = 30) -> Dict:
 
     total_api = insertados = actualizados = errores = 0
 
+    sql_update = """
+    UPDATE pedidos SET
+        estado_pago      = :estado_pago,
+        valor_pagado     = :valor_pagado,
+        fecha_entrega    = :fecha_entrega,
+        nombre_cliente   = :nombre_cliente,
+        email_cliente    = :email_cliente,
+        telefono_cliente = :telefono_cliente,
+        ciudad_destino   = :ciudad_destino,
+        precio_venta     = :precio_venta,
+        fuente           = 'shopify_api',
+        actualizado_en   = CURRENT_TIMESTAMP
+    WHERE orden_shopify  = :orden_shopify
+    """
+
+    sql_insert = """
+    INSERT OR IGNORE INTO pedidos (
+        orden_shopify, orden_melonn, fecha_pedido, canal,
+        nombre_cliente, telefono_cliente, email_cliente, ciudad_destino, region_destino,
+        sku, producto, cantidad, precio_venta, costo_producto,
+        metodo_pago, plataforma_pago, valor_pagado, estado_pago,
+        es_contraentrega, valor_cod,
+        transportadora, fecha_despacho, fecha_promesa, fecha_entrega,
+        estado_melonn, zona_logistica, dias_en_transito,
+        score_riesgo, nivel_riesgo, incidencia, categoria_incidencia,
+        link_melonn, fuente, actualizado_en
+    ) VALUES (
+        :orden_shopify, :orden_melonn, :fecha_pedido, :canal,
+        :nombre_cliente, :telefono_cliente, :email_cliente, :ciudad_destino, :region_destino,
+        :sku, :producto, :cantidad, :precio_venta, :costo_producto,
+        :metodo_pago, :plataforma_pago, :valor_pagado, :estado_pago,
+        :es_contraentrega, :valor_cod,
+        :transportadora, :fecha_despacho, :fecha_promesa, :fecha_entrega,
+        :estado_melonn, :zona_logistica, :dias_en_transito,
+        :score_riesgo, :nivel_riesgo, :incidencia, :categoria_incidencia,
+        :link_melonn, 'shopify_api', CURRENT_TIMESTAMP
+    )
+    """
+
     for pagina in paginar("/orders.json", "orders", params):
         total_api += len(pagina)
         for orden in pagina:
             try:
                 p = _mapear_pedido_shopify(orden)
                 with get_conn() as conn:
-                    # Verificar si ya existe
-                    existe = conn.execute(
-                        "SELECT id FROM pedidos WHERE orden_shopify=?",
-                        (p["orden_shopify"],)
-                    ).fetchone()
-                    conn.execute(sql_upsert, p)
-                    if existe:
-                        actualizados += 1
-                    else:
+                    cur = conn.execute(sql_insert, p)
+                    if cur.rowcount > 0:
                         insertados += 1
+                    else:
+                        conn.execute(sql_update, p)
+                        actualizados += 1
             except Exception as e:
                 errores += 1
                 print(f"    ⚠ Orden {orden.get('order_number','?')}: {e}")
