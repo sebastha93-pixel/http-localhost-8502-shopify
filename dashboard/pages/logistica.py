@@ -170,7 +170,13 @@ def _render_memoria(orden: str):
                     st.warning("Escribe una nota antes de guardar.")
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
-activo, filtro_nivel, filtro_zona = render_sidebar("Logística")
+_sidebar_result = render_sidebar("Logística")
+if len(_sidebar_result) == 4:
+    # Retrocompatibilidad con shared.py anterior (ruta_csv, ts, filtro_nivel, filtro_zona)
+    _ruta, _ts, filtro_nivel, filtro_zona = _sidebar_result
+    activo = _ruta is not None
+else:
+    activo, filtro_nivel, filtro_zona = _sidebar_result
 
 # ── Cargar datos desde Melonn (API → caché → bootstrap) ───────────────────────
 with st.spinner("Cargando pedidos de Melonn..."):

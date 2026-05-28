@@ -1,6 +1,7 @@
 """
 Módulo compartido: colores, estilos, carga de datos y helpers.
 Importado por cada página del dashboard.
+v2 — render_sidebar retorna (activo, filtro_nivel, filtro_zona)
 """
 
 import sys
