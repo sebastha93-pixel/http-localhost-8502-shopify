@@ -261,27 +261,83 @@ def _listar_paginas(params_extra: dict = None) -> list[dict]:
     return todos
 
 
+def _init_cache_db():
+    """Crea la tabla de cache de detalles si no existe."""
+    try:
+        from db import get_conn
+        with get_conn() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS melonn_detail_cache (
+                    order_number      TEXT PRIMARY KEY,
+                    state_code        INTEGER,
+                    detail_json       TEXT,
+                    cached_at         TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            conn.commit()
+    except Exception as e:
+        log.warning(f"No se pudo inicializar cache de detalles: {e}")
+
+
+def _leer_cache() -> dict:
+    """Retorna dict {order_number: {state_code, detail}} desde SQLite."""
+    try:
+        from db import get_conn
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT order_number, state_code, detail_json FROM melonn_detail_cache"
+            ).fetchall()
+            return {
+                r[0]: {"state_code": r[1], "detail": __import__("json").loads(r[2])}
+                for r in rows
+            }
+    except Exception:
+        return {}
+
+
+def _guardar_cache(items: list[tuple]):
+    """Guarda lista de (order_number, state_code, detail_dict) en SQLite."""
+    if not items:
+        return
+    try:
+        import json as _json
+        from db import get_conn
+        with get_conn() as conn:
+            conn.executemany(
+                """INSERT OR REPLACE INTO melonn_detail_cache
+                   (order_number, state_code, detail_json, cached_at)
+                   VALUES (?, ?, ?, datetime('now'))""",
+                [(num, code, _json.dumps(det)) for num, code, det in items]
+            )
+            conn.commit()
+    except Exception as e:
+        log.warning(f"No se pudo guardar cache: {e}")
+
+
 def obtener_pedidos_activos(dias: int = 30) -> tuple[list, dict]:
     """
-    Descarga todos los pedidos activos con detalle completo.
+    Descarga pedidos activos con cache SQLite de detalles.
 
-    Estrategia 2 pasos + paralelismo:
-    1. GET /sell-orders?per_page=500  → listado completo en 1-2 llamadas
-    2. GET /sell-orders/{id} ×N       → detalles en paralelo (_WORKERS hilos)
-       Solo para órdenes NO resueltas (buyer + shipping_info.city)
-
-    ~100 órdenes: de ~20s secuencial → ~2s paralelo
+    Flujo:
+    1. GET /sell-orders  → listado en 1-2 llamadas (rápido)
+    2. Compara state_code con cache SQLite
+    3. Solo fetcha detalle de órdenes NUEVAS o que CAMBIARON de estado
+    4. Guarda nuevos detalles en SQLite
+    → En cargas sucesivas: 1 llamada de listado + 0-5 detalles nuevos = <1s
     """
+    import json as _json
+
+    _init_cache_db()
     omitidos = {"resuelto": 0, "sin_despacho": 0}
 
-    # ── Paso 1: listado paginado (1-2 llamadas) ───────────────────────────────
+    # ── Paso 1: listado (1-2 llamadas HTTP) ───────────────────────────────────
     items_lista = _listar_paginas()
     if not items_lista:
         log.warning("sell-orders listado vacío")
         return [], omitidos
 
-    # Separar activos de resueltos antes de hacer llamadas de detalle
-    activos  = []
+    # ── Paso 2: separar activos y cargar cache ────────────────────────────────
+    activos = []
     for item in items_lista:
         estado = str((item.get("sell_order_state") or {}).get("name") or "")
         if estado in ESTADOS_RESUELTOS:
@@ -289,31 +345,56 @@ def obtener_pedidos_activos(dias: int = 30) -> tuple[list, dict]:
         else:
             activos.append(item)
 
-    log.info(f"Listado: {len(items_lista)} total, {len(activos)} activos, "
-             f"{omitidos['resuelto']} resueltos")
+    cache = _leer_cache()
 
-    # ── Paso 2: detalle en paralelo ───────────────────────────────────────────
-    def _fetch_one(item: dict) -> Optional[dict]:
-        """Obtiene detalle de una orden y normaliza. Fallback al item del listado."""
-        order_id = str(item.get("external_order_number") or "").lstrip("#") or \
-                   str(item.get("id", ""))
-        detalle = _get(f"sell-orders/{order_id}")
-        raw = detalle if isinstance(detalle, dict) and "buyer" in detalle else item
-        return _normalizar_pedido(raw)
+    # Clasificar: cache válido vs necesita fetch
+    con_cache  = []   # (item, detail_cached)
+    sin_cache  = []   # item → necesita llamada HTTP
 
+    for item in activos:
+        num        = str(item.get("external_order_number") or "").lstrip("#")
+        state_code = (item.get("sell_order_state") or {}).get("code")
+        cached     = cache.get(num)
+
+        if cached and cached["state_code"] == state_code:
+            con_cache.append((item, cached["detail"]))
+        else:
+            sin_cache.append(item)
+
+    log.info(f"Cache: {len(con_cache)} hits, {len(sin_cache)} fetch necesarios")
+
+    # ── Paso 3: fetch solo lo que falta (paralelo) ────────────────────────────
+    nuevos_cache = []
+
+    def _fetch_one(item: dict) -> tuple[dict, dict]:
+        num      = str(item.get("external_order_number") or "").lstrip("#")
+        state_code = (item.get("sell_order_state") or {}).get("code")
+        detalle  = _get(f"sell-orders/{num}")
+        raw      = detalle if isinstance(detalle, dict) and "buyer" in detalle else item
+        return item, raw, num, state_code
+
+    if sin_cache:
+        with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
+            futures = [pool.submit(_fetch_one, item) for item in sin_cache]
+            for future in as_completed(futures):
+                try:
+                    item, raw, num, state_code = future.result()
+                    con_cache.append((item, raw))
+                    nuevos_cache.append((num, state_code, raw))
+                except Exception as e:
+                    log.warning(f"Error fetch detalle: {e}")
+
+    # ── Paso 4: guardar nuevos en cache ───────────────────────────────────────
+    _guardar_cache(nuevos_cache)
+
+    # ── Paso 5: normalizar ────────────────────────────────────────────────────
     pedidos = []
-    with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
-        futures = {pool.submit(_fetch_one, item): item for item in activos}
-        for future in as_completed(futures):
-            try:
-                p = future.result()
-                if p is not None:
-                    pedidos.append(p)
-                else:
-                    omitidos["sin_despacho"] += 1
-            except Exception as e:
-                log.warning(f"Error en detalle: {e}")
-                omitidos["sin_despacho"] += 1
+    for item, raw in con_cache:
+        p = _normalizar_pedido(raw)
+        if p is not None:
+            pedidos.append(p)
+        else:
+            omitidos["sin_despacho"] += 1
 
     log.info(f"Normalizados: {len(pedidos)} pedidos activos")
     return pedidos, omitidos

@@ -563,9 +563,9 @@ def cargar_datos(ruta: str, ts: str):
     df = _procesar_df(pedidos)
     return df, omitidos
 
-@st.cache_data(show_spinner=False, ttl=7200)   # cache 2 horas
-def cargar_datos_api(ts: str, dias: int = 30):
-    """Carga pedidos directamente desde la API de Melonn."""
+@st.cache_data(show_spinner=False, ttl=300)   # cache 5 min — SQLite hace el trabajo pesado
+def cargar_datos_api(dias: int = 30):
+    """Carga pedidos desde API Melonn (detalles cacheados en SQLite)."""
     if not _MELONN_API_DISPONIBLE:
         return pd.DataFrame(), {}
     pedidos, omitidos = melonn_client.obtener_pedidos_activos(dias=dias)
@@ -653,8 +653,8 @@ def render_sidebar(page_label: str):
     # ── Determinar fuente de datos ─────────────────────────────────────────────
     _api_ok = _MELONN_API_DISPONIBLE and melonn_client.credenciales_ok()
     if _api_ok:
-        ruta_csv = "__API__"       # señal especial: usar API
-        ts = datetime.now().strftime("API · %d/%m/%Y %H:%M")
+        ruta_csv = "__API__"
+        ts = "api"                 # clave estable — el cache no se invalida por tiempo
     elif archivo:
         import tempfile
         with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:

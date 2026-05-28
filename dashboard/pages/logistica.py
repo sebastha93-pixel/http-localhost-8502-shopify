@@ -200,7 +200,7 @@ if not ruta_csv:
 try:
     with st.spinner("Cargando pedidos..."):
         if ruta_csv == "__API__":
-            df_all, omitidos = cargar_datos_api(ts)
+            df_all, omitidos = cargar_datos_api()
             if df_all.empty:
                 st.info("📭 No hay pedidos activos en Melonn en este momento.")
                 st.stop()
