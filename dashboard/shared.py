@@ -127,11 +127,10 @@ html, body, [class*="css"], .stMarkdown, .stText,
 /* ── KPI Cards ─────────────────────────────────────────────────────────────── */
 .kpi-card {{
   border-radius: 10px;
-  padding: 18px 20px;
+  padding: 16px 18px;
   margin-bottom: 4px;
-  height: 116px;
+  min-height: 106px;
   box-sizing: border-box;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -162,22 +161,22 @@ html, body, [class*="css"], .stMarkdown, .stText,
   font-family: 'Inter', sans-serif;
   font-size: 0.58rem;
   color: rgba(255,255,255,0.92);
-  margin: 6px 0 0;
-  letter-spacing: 2.5px;
+  margin: 5px 0 0;
+  letter-spacing: 2px;
   text-transform: uppercase;
   font-weight: 700;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  line-height: 1.35;
+  word-break: break-word;
 }}
 .kpi-sub {{
   font-size: 0.62rem;
   color: rgba(255,255,255,0.82);
   margin: 3px 0 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  line-height: 1.35;
   font-weight: 400;
+  word-break: break-word;
 }}
 
 /* ── Section titles ────────────────────────────────────────────────────────── */
