@@ -12,7 +12,7 @@ import requests
 import streamlit as st
 from datetime import datetime, timedelta
 from typing import Optional
-from src.db import get_conn
+from db import get_conn
 
 MP_BASE = "https://api.mercadopago.com"
 
