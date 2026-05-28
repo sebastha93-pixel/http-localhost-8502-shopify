@@ -42,11 +42,11 @@ FONT = dict(family="Arial, sans-serif", size=12, color=GRAPHITE_GREY)
 
 def _lay(fig, h=280):
     fig.update_layout(
-        plot_bgcolor="white", paper_bgcolor="white",
+        plot_bgcolor="white", paper_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=0, r=10, t=30, b=0), font=FONT, height=h,
     )
-    fig.update_xaxes(tickfont=dict(color=GRAPHITE_GREY), gridcolor="#eeeeee")
-    fig.update_yaxes(tickfont=dict(color=GRAPHITE_GREY), gridcolor="#eeeeee")
+    fig.update_xaxes(tickfont=dict(color=GRAPHITE_GREY), gridcolor="#f0ede8", zeroline=False)
+    fig.update_yaxes(tickfont=dict(color=GRAPHITE_GREY), gridcolor="#f0ede8", zeroline=False)
     return fig
 
 def _hbar(df_in, y, x, color, h=260, text_col=None):

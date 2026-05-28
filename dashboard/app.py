@@ -35,31 +35,60 @@ if _FAVICON.exists():
         unsafe_allow_html=True,
     )
 
-# Estilo del sidebar global — compacto y de marca
+# Estilo del sidebar global — refinado, editorial
 st.markdown("""
 <style>
-/* Ocultar decoración por defecto de la navegación */
-[data-testid="stSidebarNavItems"] { padding-top: 0 !important; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+
+/* Fondo sidebar */
+[data-testid="stSidebar"] { background-color: #213033 !important; }
+
+/* Logo en el header del sidebar (nombre de la app) */
+[data-testid="stSidebarHeader"] {
+  padding: 20px 20px 12px !important;
+  border-bottom: 1px solid rgba(135,166,184,0.12) !important;
+}
+
+/* Nav items */
+[data-testid="stSidebarNavItems"] { padding: 10px 8px 0 !important; }
 [data-testid="stSidebarNavLink"] {
-    border-radius: 3px !important;
-    font-size: 0.82rem !important;
-    letter-spacing: 0.5px !important;
-    padding: 8px 14px !important;
-    margin: 1px 0 !important;
+  font-family: 'Inter', sans-serif !important;
+  border-radius: 6px !important;
+  font-size: 0.65rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 2.5px !important;
+  text-transform: uppercase !important;
+  padding: 10px 14px !important;
+  margin: 2px 0 !important;
+  color: rgba(216,215,212,0.6) !important;
+  transition: all 0.15s ease !important;
 }
 [data-testid="stSidebarNavLink"]:hover {
-    background: rgba(135,166,184,0.15) !important;
+  background: rgba(135,166,184,0.12) !important;
+  color: white !important;
 }
 [data-testid="stSidebarNavLink"][aria-selected="true"] {
-    background: rgba(135,166,184,0.25) !important;
-    border-left: 3px solid #87a6b8 !important;
+  background: rgba(135,166,184,0.18) !important;
+  border-left: 3px solid #87a6b8 !important;
+  color: white !important;
+  padding-left: 11px !important;
 }
-/* Cabecera de sección */
+
+/* Separador entre secciones nav */
 [data-testid="stSidebarNavSeparator"] {
-    font-size: 0.6rem !important;
-    letter-spacing: 3px !important;
-    opacity: 0.6 !important;
+  font-family: 'Inter', sans-serif !important;
+  font-size: 0.52rem !important;
+  letter-spacing: 3px !important;
+  opacity: 0.45 !important;
+  padding: 14px 14px 4px !important;
+  color: #87a6b8 !important;
 }
+
+/* Ocultar chrome */
+#MainMenu { visibility: hidden !important; }
+footer { visibility: hidden !important; }
+[data-testid="stDeployButton"] { display: none !important; }
+[data-testid="stToolbar"] { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 

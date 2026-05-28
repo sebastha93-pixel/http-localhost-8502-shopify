@@ -50,44 +50,333 @@ DEFAULT_CSV = str(Path(__file__).parent.parent / "data" / "logistica" / "raw" / 
 # ── CSS global ────────────────────────────────────────────────────────────────
 CSS = f"""
 <style>
-  .stApp {{ background-color: {SOFT_CONCRETE}; }}
-  [data-testid="stSidebar"] {{ background-color: {DEEP_INK} !important; }}
-  [data-testid="stSidebar"] * {{ color: {SOFT_CONCRETE} !important; }}
-  [data-testid="stSidebar"] hr {{ border-color: {STEEL_BLUE}44 !important; }}
-  .logo-sidebar {{ font-family:'Arial Black',sans-serif; font-size:1.3rem;
-                   font-weight:900; color:white !important; line-height:1; }}
-  .logo-tagline  {{ font-size:0.62rem; letter-spacing:4px; color:{STEEL_BLUE} !important; }}
-  .kpi-card  {{ border-radius:4px; padding:16px 18px; margin-bottom:4px;
-                height:116px; box-sizing:border-box; overflow:hidden;
-                display:flex; flex-direction:column; justify-content:center; }}
-  .kpi-crit  {{ background:{CRITICO_COLOR}; border-left:4px solid #ff0022; }}
-  .kpi-ries  {{ background:{RIESGO_COLOR};  border-left:4px solid #f5a623; }}
-  .kpi-norm  {{ background:{NORMAL_COLOR};  border-left:4px solid {STEEL_BLUE}; }}
-  .kpi-extra {{ background:{COD_COLOR};     border-left:4px solid {STEEL_BLUE}; }}
-  .kpi-num   {{ font-size:1.9rem; font-weight:900; color:white; margin:0;
-                line-height:1; font-family:'Arial Black',sans-serif;
-                white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-  .kpi-label {{ font-size:0.68rem; color:rgba(255,255,255,0.95); margin:4px 0 0;
-                letter-spacing:2px; text-transform:uppercase; font-weight:600;
-                white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-  .kpi-sub   {{ font-size:0.63rem; color:rgba(255,255,255,0.85); margin:2px 0 0;
-                white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-  .sec-title {{ font-size:0.68rem; font-weight:700; letter-spacing:3px;
-                text-transform:uppercase; color:{GRAPHITE_GREY};
-                margin:18px 0 6px; padding-bottom:3px;
-                border-bottom:1px solid {STEEL_BLUE}44; }}
-  .titulo-panel {{ font-family:'Arial Black',sans-serif; font-size:1.5rem;
-                   font-weight:900; color:{DEEP_INK}; letter-spacing:-0.5px; margin:0; }}
-  .subtitulo    {{ font-size:0.72rem; color:{GRAPHITE_GREY}; letter-spacing:2px;
-                   text-transform:uppercase; margin-top:2px; }}
-  h1,h2,h3,h4,h5 {{ color:{DEEP_INK} !important; }}
-  hr {{ border-color:{STEEL_BLUE}33 !important; }}
-  .stDownloadButton button {{
-    background:{DEEP_INK} !important; color:{SOFT_CONCRETE} !important;
-    border:none !important; border-radius:2px !important;
-    letter-spacing:1.5px; font-size:0.72rem; text-transform:uppercase;
-  }}
-  .stDownloadButton button:hover {{ background:{STEEL_BLUE} !important; color:{DEEP_INK} !important; }}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+/* ── Base ──────────────────────────────────────────────────────────────────── */
+html, body, [class*="css"], .stMarkdown, .stText,
+[data-testid="stMarkdownContainer"] * {{
+  font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif !important;
+}}
+.stApp {{ background-color: #f0ede8 !important; }}
+.main .block-container {{
+  padding: 2rem 2.5rem 3rem !important;
+  max-width: 1500px !important;
+}}
+
+/* ── Sidebar ───────────────────────────────────────────────────────────────── */
+[data-testid="stSidebar"] {{
+  background-color: {DEEP_INK} !important;
+  border-right: 1px solid rgba(135,166,184,0.12) !important;
+}}
+[data-testid="stSidebar"] * {{ color: #d8d7d4 !important; }}
+[data-testid="stSidebar"] hr {{ border-color: rgba(135,166,184,0.18) !important; margin: 12px 0 !important; }}
+[data-testid="stSidebar"] label {{ font-size:0.7rem !important; letter-spacing:1px !important; text-transform:uppercase !important; font-weight:600 !important; opacity:0.8 !important; }}
+[data-testid="stSidebarNavItems"] {{ padding-top:0 !important; }}
+[data-testid="stSidebarNavLink"] {{
+  border-radius: 5px !important;
+  font-size: 0.68rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 2.5px !important;
+  text-transform: uppercase !important;
+  padding: 10px 14px !important;
+  margin: 2px 4px !important;
+  color: rgba(216,215,212,0.65) !important;
+  transition: all 0.15s ease !important;
+}}
+[data-testid="stSidebarNavLink"]:hover {{
+  background: rgba(135,166,184,0.12) !important;
+  color: white !important;
+}}
+[data-testid="stSidebarNavLink"][aria-selected="true"] {{
+  background: rgba(135,166,184,0.18) !important;
+  border-left: 3px solid {STEEL_BLUE} !important;
+  color: white !important;
+}}
+
+/* ── Tabs ──────────────────────────────────────────────────────────────────── */
+[data-testid="stTabs"] [data-baseweb="tab-list"] {{
+  background: transparent !important;
+  border-bottom: 1px solid rgba(33,48,51,0.12) !important;
+  gap: 0 !important;
+  padding: 0 !important;
+}}
+[data-baseweb="tab"] {{
+  font-family: 'Inter', sans-serif !important;
+  font-size: 0.67rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 2px !important;
+  text-transform: uppercase !important;
+  color: #909090 !important;
+  padding: 10px 20px 12px !important;
+  background: transparent !important;
+  border: none !important;
+  border-bottom: 2px solid transparent !important;
+  margin-bottom: -1px !important;
+  transition: color 0.15s ease !important;
+}}
+[data-baseweb="tab"][aria-selected="true"] {{
+  color: {DEEP_INK} !important;
+  border-bottom: 2px solid {DEEP_INK} !important;
+  background: transparent !important;
+}}
+[data-baseweb="tab"]:hover {{ color: {DEEP_INK} !important; }}
+[data-testid="stTabPanel"] {{ padding-top: 20px !important; background: transparent !important; }}
+[data-baseweb="tab-highlight"] {{ display: none !important; }}
+[data-baseweb="tab-border"] {{ display: none !important; }}
+
+/* ── KPI Cards ─────────────────────────────────────────────────────────────── */
+.kpi-card {{
+  border-radius: 10px;
+  padding: 18px 20px;
+  margin-bottom: 4px;
+  height: 116px;
+  box-sizing: border-box;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.14), 0 1px 3px rgba(0,0,0,0.08);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}}
+.kpi-card:hover {{
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.18), 0 2px 6px rgba(0,0,0,0.1);
+}}
+.kpi-crit  {{ background: linear-gradient(135deg, #990012 0%, #7a0010 100%); border-left: 3px solid #ff2244; }}
+.kpi-ries  {{ background: linear-gradient(135deg, #b95902 0%, #9a4a00 100%); border-left: 3px solid #f5a623; }}
+.kpi-norm  {{ background: linear-gradient(135deg, #036a73 0%, #025560 100%); border-left: 3px solid {STEEL_BLUE}; }}
+.kpi-extra {{ background: linear-gradient(135deg, #59204d 0%, #451840 100%); border-left: 3px solid {STEEL_BLUE}; }}
+.kpi-num   {{
+  font-family: 'Inter', 'Arial Black', sans-serif;
+  font-size: 1.85rem;
+  font-weight: 800;
+  color: white;
+  margin: 0;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.5px;
+}}
+.kpi-label {{
+  font-family: 'Inter', sans-serif;
+  font-size: 0.58rem;
+  color: rgba(255,255,255,0.8);
+  margin: 6px 0 0;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}}
+.kpi-sub {{
+  font-size: 0.62rem;
+  color: rgba(255,255,255,0.65);
+  margin: 3px 0 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 400;
+}}
+
+/* ── Section titles ────────────────────────────────────────────────────────── */
+.sec-title {{
+  font-family: 'Inter', sans-serif;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: {STEEL_BLUE};
+  margin: 20px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(135,166,184,0.25);
+}}
+
+/* ── Panel header ──────────────────────────────────────────────────────────── */
+.titulo-panel {{
+  font-family: 'Inter', 'Arial Black', sans-serif;
+  font-size: 1.55rem;
+  font-weight: 800;
+  color: {DEEP_INK};
+  letter-spacing: -0.8px;
+  margin: 0;
+  line-height: 1.1;
+}}
+.subtitulo {{
+  font-size: 0.62rem;
+  color: #909090;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  margin-top: 4px;
+  font-weight: 500;
+}}
+
+/* ── Sidebar brand ─────────────────────────────────────────────────────────── */
+.logo-sidebar {{
+  font-family: 'Inter', 'Arial Black', sans-serif;
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: white !important;
+  line-height: 1;
+  letter-spacing: 1px;
+}}
+.logo-tagline {{
+  font-size: 0.55rem;
+  letter-spacing: 5px;
+  color: {STEEL_BLUE} !important;
+  margin-top: 3px;
+  font-weight: 600;
+}}
+
+/* ── Expanders como cards ──────────────────────────────────────────────────── */
+[data-testid="stExpander"] {{
+  background: white !important;
+  border: 1px solid rgba(33,48,51,0.07) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.05) !important;
+  overflow: hidden !important;
+  margin-bottom: 12px !important;
+}}
+[data-testid="stExpander"] details summary {{
+  font-family: 'Inter', sans-serif !important;
+  font-size: 0.68rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 1.5px !important;
+  text-transform: uppercase !important;
+  color: {DEEP_INK} !important;
+  padding: 14px 18px !important;
+  user-select: none;
+}}
+[data-testid="stExpander"] details summary:hover {{
+  background: rgba(33,48,51,0.02) !important;
+}}
+[data-testid="stExpander"] [data-testid="stExpanderDetails"] {{
+  padding: 4px 18px 18px !important;
+}}
+
+/* ── DataFrames ────────────────────────────────────────────────────────────── */
+[data-testid="stDataFrame"] > div {{
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.06) !important;
+  border: 1px solid rgba(33,48,51,0.07) !important;
+}}
+
+/* ── Botones ───────────────────────────────────────────────────────────────── */
+.stButton > button {{
+  font-family: 'Inter', sans-serif !important;
+  font-size: 0.65rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 2px !important;
+  text-transform: uppercase !important;
+  border-radius: 5px !important;
+  border: 1.5px solid {DEEP_INK} !important;
+  background: transparent !important;
+  color: {DEEP_INK} !important;
+  padding: 8px 18px !important;
+  transition: all 0.15s ease !important;
+}}
+.stButton > button:hover {{
+  background: {DEEP_INK} !important;
+  color: #f0ede8 !important;
+  border-color: {DEEP_INK} !important;
+}}
+.stButton > button[kind="primary"] {{
+  background: {DEEP_INK} !important;
+  color: #f0ede8 !important;
+}}
+.stButton > button[kind="primary"]:hover {{
+  background: {STEEL_BLUE} !important;
+  border-color: {STEEL_BLUE} !important;
+  color: {DEEP_INK} !important;
+}}
+.stButton > button:disabled {{
+  opacity: 0.35 !important;
+  cursor: not-allowed !important;
+}}
+
+/* ── Download button ───────────────────────────────────────────────────────── */
+.stDownloadButton button {{
+  background: {DEEP_INK} !important;
+  color: #f0ede8 !important;
+  border: none !important;
+  border-radius: 5px !important;
+  letter-spacing: 2px;
+  font-size: 0.65rem;
+  font-weight: 700 !important;
+  text-transform: uppercase;
+  transition: all 0.15s ease !important;
+}}
+.stDownloadButton button:hover {{
+  background: {STEEL_BLUE} !important;
+  color: {DEEP_INK} !important;
+}}
+
+/* ── Inputs y selects ──────────────────────────────────────────────────────── */
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea {{
+  border-radius: 5px !important;
+  border: 1.5px solid rgba(33,48,51,0.18) !important;
+  font-family: 'Inter', sans-serif !important;
+  font-size: 0.82rem !important;
+  background: white !important;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
+}}
+[data-testid="stTextInput"] input:focus,
+[data-testid="stTextArea"] textarea:focus {{
+  border-color: {STEEL_BLUE} !important;
+  box-shadow: 0 0 0 3px rgba(135,166,184,0.18) !important;
+}}
+[data-baseweb="select"] > div:first-child {{
+  border-radius: 5px !important;
+  border: 1.5px solid rgba(33,48,51,0.18) !important;
+  background: white !important;
+  font-size: 0.82rem !important;
+}}
+
+/* ── Alerts ────────────────────────────────────────────────────────────────── */
+[data-testid="stAlert"] {{
+  border-radius: 7px !important;
+  font-size: 0.8rem !important;
+  font-family: 'Inter', sans-serif !important;
+}}
+
+/* ── Captions ──────────────────────────────────────────────────────────────── */
+.stCaption, [data-testid="stCaptionContainer"] p {{
+  font-size: 0.67rem !important;
+  letter-spacing: 0.5px !important;
+  color: #909090 !important;
+  font-family: 'Inter', sans-serif !important;
+}}
+
+/* ── Headings ──────────────────────────────────────────────────────────────── */
+h1,h2,h3,h4,h5 {{
+  font-family: 'Inter', sans-serif !important;
+  color: {DEEP_INK} !important;
+  font-weight: 700 !important;
+}}
+hr {{ border-color: rgba(33,48,51,0.1) !important; margin: 14px 0 !important; }}
+
+/* ── Spinner ───────────────────────────────────────────────────────────────── */
+[data-testid="stSpinner"] p {{
+  font-size: 0.75rem !important;
+  letter-spacing: 1px !important;
+  color: {GRAPHITE_GREY} !important;
+}}
+
+/* ── Scrollbar ─────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {{ width: 4px; height: 4px; }}
+::-webkit-scrollbar-track {{ background: transparent; }}
+::-webkit-scrollbar-thumb {{ background: rgba(135,166,184,0.35); border-radius: 2px; }}
+::-webkit-scrollbar-thumb:hover {{ background: rgba(135,166,184,0.6); }}
+
+/* ── Ocultar chrome Streamlit ──────────────────────────────────────────────── */
+#MainMenu {{ visibility: hidden !important; }}
+footer {{ visibility: hidden !important; }}
+[data-testid="stDeployButton"] {{ display: none !important; }}
+[data-testid="stStatusWidget"] {{ display: none !important; }}
+[data-testid="stToolbar"] {{ display: none !important; }}
 </style>
 """
 
@@ -231,52 +520,65 @@ def render_detalle(df_tab: pd.DataFrame, tab_key: str):
     nc   = {"CRITICO":CRITICO_COLOR,"RIESGO":RIESGO_COLOR,"NORMAL":NORMAL_COLOR}.get(fila["Nivel"], GRAPHITE_GREY)
     link = fila.get("Link Melonn","") or ""
 
+    _badge_bg  = f"{nc}18"
+    _badge_txt = nc
     st.markdown(f"""
-    <div style="background:white;border-radius:4px;border-left:4px solid {nc};padding:18px 22px;margin-top:8px;">
-        <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:14px;">
-            <div>
-                <div style="font-size:0.62rem;letter-spacing:2px;color:{GRAPHITE_GREY};text-transform:uppercase;">Cliente</div>
-                <div style="font-size:1.05rem;font-weight:700;color:{DEEP_INK};">{fila['Cliente']}</div>
-                <div style="font-size:0.82rem;color:{GRAPHITE_GREY};">{fila['Teléfono']}</div>
-            </div>
-            <div style="text-align:center;">
-                <div style="font-size:0.62rem;letter-spacing:2px;color:{GRAPHITE_GREY};text-transform:uppercase;">Nivel · Score</div>
-                <div style="font-size:1.3rem;font-weight:900;color:{nc};">{fila['Nivel']}</div>
-                <div style="font-size:0.9rem;color:{GRAPHITE_GREY};">{int(fila['Score'])}/100</div>
-            </div>
-            <div style="text-align:right;">
-                <div style="font-size:0.62rem;letter-spacing:2px;color:{GRAPHITE_GREY};text-transform:uppercase;">Orden · Transportadora</div>
-                <div style="font-size:0.95rem;font-weight:700;color:{DEEP_INK};">{fila['Orden']}</div>
-                <div style="font-size:0.82rem;color:{GRAPHITE_GREY};">{fila['Transportadora']}</div>
-            </div>
+    <div style="background:white;border-radius:10px;border:1px solid rgba(33,48,51,0.07);
+                border-left:4px solid {nc};padding:20px 24px;margin-top:10px;
+                box-shadow:0 2px 12px rgba(0,0,0,0.06);">
+      <!-- fila 1: cliente / nivel / orden -->
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:16px;align-items:flex-start;">
+        <div>
+          <div style="font-size:0.58rem;letter-spacing:2.5px;color:#909090;text-transform:uppercase;margin-bottom:3px;">Cliente</div>
+          <div style="font-size:1.05rem;font-weight:700;color:{DEEP_INK};line-height:1.2;">{fila['Cliente']}</div>
+          <div style="font-size:0.78rem;color:#909090;margin-top:2px;">{fila['Teléfono']}</div>
         </div>
-        <hr style="border-color:{SOFT_CONCRETE};margin:10px 0;">
-        <div style="display:flex;gap:28px;flex-wrap:wrap;">
-            <div>
-                <span style="font-size:0.65rem;color:{GRAPHITE_GREY};letter-spacing:1px;">CIUDAD</span><br>
-                <span style="font-weight:600;color:{DEEP_INK};">{fila['Ciudad']}</span>
-                <span style="font-size:0.78rem;color:{GRAPHITE_GREY};"> · {fila['Zona']}</span>
-            </div>
-            <div>
-                <span style="font-size:0.65rem;color:{GRAPHITE_GREY};letter-spacing:1px;">DÍAS EN TRÁNSITO</span><br>
-                <span style="font-weight:600;color:{nc};">{int(fila['Días'])} días</span>
-                <span style="font-size:0.78rem;color:{GRAPHITE_GREY};"> · SLA crítico: {int(fila['SLA Crítico'])}d</span>
-            </div>
-            <div>
-                <span style="font-size:0.65rem;color:{GRAPHITE_GREY};letter-spacing:1px;">PAGO</span><br>
-                <span style="font-weight:600;color:{DEEP_INK};">{fila['COD']}</span>
-                <span style="font-size:0.78rem;color:{GRAPHITE_GREY};"> {fila['Valor COD']}</span>
-            </div>
-            <div>
-                <span style="font-size:0.65rem;color:{GRAPHITE_GREY};letter-spacing:1px;">NOVEDAD</span><br>
-                <span style="font-weight:600;color:{DEEP_INK};">{fila['Novedad']}</span>
-                <span style="font-size:0.78rem;color:{GRAPHITE_GREY};"> ({fila['Categoría']})</span>
-            </div>
+        <div style="text-align:center;">
+          <div style="font-size:0.58rem;letter-spacing:2.5px;color:#909090;text-transform:uppercase;margin-bottom:6px;">Nivel riesgo</div>
+          <div style="display:inline-block;background:{_badge_bg};color:{_badge_txt};
+                      font-size:0.7rem;font-weight:700;letter-spacing:2px;
+                      text-transform:uppercase;padding:5px 12px;border-radius:20px;">
+            {fila['Nivel']}
+          </div>
+          <div style="font-size:0.8rem;color:#909090;margin-top:5px;font-weight:500;">{int(fila['Score'])}/100</div>
         </div>
-        <div style="margin-top:10px;padding:8px 12px;background:{SOFT_CONCRETE};border-radius:2px;">
-            <span style="font-size:0.65rem;color:{GRAPHITE_GREY};letter-spacing:1px;">MOTIVO · </span>
-            <span style="font-size:0.82rem;font-weight:600;color:{DEEP_INK};">{fila['Motivo riesgo']}</span>
+        <div style="text-align:right;">
+          <div style="font-size:0.58rem;letter-spacing:2.5px;color:#909090;text-transform:uppercase;margin-bottom:3px;">Orden</div>
+          <div style="font-size:0.95rem;font-weight:700;color:{DEEP_INK};">{fila['Orden']}</div>
+          <div style="font-size:0.78rem;color:#909090;margin-top:2px;">{fila['Transportadora']}</div>
         </div>
+      </div>
+      <!-- separador -->
+      <div style="height:1px;background:rgba(33,48,51,0.07);margin:14px 0;"></div>
+      <!-- fila 2: datos operativos -->
+      <div style="display:flex;gap:32px;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:0.58rem;letter-spacing:2px;color:#909090;text-transform:uppercase;margin-bottom:3px;">Ciudad · Zona</div>
+          <div style="font-weight:600;color:{DEEP_INK};font-size:0.85rem;">{fila['Ciudad']}</div>
+          <div style="font-size:0.73rem;color:#909090;">{fila['Zona']}</div>
+        </div>
+        <div>
+          <div style="font-size:0.58rem;letter-spacing:2px;color:#909090;text-transform:uppercase;margin-bottom:3px;">Tránsito · SLA</div>
+          <div style="font-weight:700;color:{nc};font-size:0.85rem;">{int(fila['Días'])} días</div>
+          <div style="font-size:0.73rem;color:#909090;">SLA crítico: {int(fila['SLA Crítico'])}d</div>
+        </div>
+        <div>
+          <div style="font-size:0.58rem;letter-spacing:2px;color:#909090;text-transform:uppercase;margin-bottom:3px;">Modalidad pago</div>
+          <div style="font-weight:600;color:{DEEP_INK};font-size:0.85rem;">{fila['COD']}</div>
+          <div style="font-size:0.73rem;color:#909090;">{fila['Valor COD']}</div>
+        </div>
+        <div>
+          <div style="font-size:0.58rem;letter-spacing:2px;color:#909090;text-transform:uppercase;margin-bottom:3px;">Novedad</div>
+          <div style="font-weight:600;color:{DEEP_INK};font-size:0.85rem;">{fila['Novedad']}</div>
+          <div style="font-size:0.73rem;color:#909090;">{fila['Categoría']}</div>
+        </div>
+      </div>
+      <!-- motivo riesgo -->
+      <div style="margin-top:12px;padding:10px 14px;background:#f8f7f4;border-radius:6px;
+                  border-left:3px solid {nc}22;">
+        <span style="font-size:0.58rem;color:#909090;letter-spacing:2px;text-transform:uppercase;">Motivo · </span>
+        <span style="font-size:0.8rem;font-weight:600;color:{DEEP_INK};">{fila['Motivo riesgo']}</span>
+      </div>
     </div>
     """, unsafe_allow_html=True)
 
