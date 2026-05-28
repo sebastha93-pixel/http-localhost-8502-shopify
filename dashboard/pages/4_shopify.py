@@ -39,8 +39,18 @@ def _msg_vacio(entidad: str, emoji: str) -> None:
     </div>
     """, unsafe_allow_html=True)
 
-# ── Arrancar scheduler si hay credenciales ────────────────────────────────────
-scheduler.iniciar()
+# ── Auto-sync al inicio de cada sesión nueva ─────────────────────────────────
+# Se ejecuta UNA sola vez por sesión (session_state actúa de guardia).
+# Si los datos tienen más de INTERVALO_HORAS, sincroniza automáticamente.
+scheduler.iniciar()   # arranca hilo de fondo si no estaba activo
+
+if not st.session_state.get("_sync_session_ok"):
+    st.session_state["_sync_session_ok"] = True  # marcar antes por si hay rerun
+    _est0 = scheduler.estado()
+    if _est0["credenciales_ok"] and _est0["desactualizado"]:
+        with st.spinner("♻️ Actualizando datos de Shopify..."):
+            scheduler.sincronizar_si_necesario()
+        st.rerun()
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -59,56 +69,54 @@ with st.sidebar:
 
     # Estado de conexión
     if est["credenciales_ok"]:
+        _h = est.get("horas_desde_sync")
+        _prox = f"próx. en {max(0, round(est['intervalo_horas'] - _h, 1))}h" if _h is not None else ""
         st.markdown(f"""
         <div style="background:#1a3a2a;border:1px solid #2d6a4f;border-radius:4px;
-                    padding:10px 12px;margin-bottom:12px;">
-            <div style="font-size:0.65rem;color:#52b788;letter-spacing:1px;">✓ CONECTADO</div>
+                    padding:10px 12px;margin-bottom:8px;">
+            <div style="font-size:0.65rem;color:#52b788;letter-spacing:1px;">✓ CONECTADO · AUTO-SYNC</div>
             <div style="font-size:0.75rem;color:white;margin-top:2px;">{est['store']}</div>
+            <div style="font-size:0.65rem;color:#52b788;margin-top:4px;">
+                ⏱ cada {est['intervalo_horas']:.0f}h · {_prox}
+            </div>
         </div>
         """, unsafe_allow_html=True)
+        if est["ultima_sync"]:
+            st.caption(f"Última actualización: {est['ultima_sync']}")
     else:
         st.markdown(f"""
         <div style="background:#3a1a1a;border:1px solid {CRITICO_COLOR};border-radius:4px;
                     padding:10px 12px;margin-bottom:12px;">
             <div style="font-size:0.65rem;color:#ff6b6b;letter-spacing:1px;">✗ SIN CREDENCIALES</div>
             <div style="font-size:0.7rem;color:{GRAPHITE_GREY};margin-top:4px;">
-                Edita el archivo .env con tu token de Shopify
+                Agrega SHOPIFY_STORE y SHOPIFY_ACCESS_TOKEN en Streamlit Cloud → Secrets
             </div>
         </div>
         """, unsafe_allow_html=True)
 
-        with st.expander("¿Cómo configurarlo?"):
-            st.code("""# En el archivo .env:
-SHOPIFY_STORE=maledenim.myshopify.com
-SHOPIFY_ACCESS_TOKEN=shpat_...""")
-            st.caption("Crea la app en: Shopify Admin → Configuración → Apps → Desarrollar apps")
-
     st.markdown("---")
-    st.markdown("#### Sincronización manual")
 
-    dias_sync = st.slider("Días hacia atrás", 1, 180, 30, key="dias_sync")
-    col_b1, col_b2 = st.columns(2)
-    with col_b1:
-        btn_sync_todo  = st.button("🔄 Todo", use_container_width=True,
-                                   disabled=not est["credenciales_ok"])
-    with col_b2:
-        btn_sync_prod  = st.button("📦 Productos", use_container_width=True,
-                                   disabled=not est["credenciales_ok"])
+    # Forzar sync manual (en expander para no ocupar espacio)
+    with st.expander("🔧 Forzar actualización manual"):
+        dias_sync = st.slider("Días hacia atrás", 1, 180, 30, key="dias_sync")
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            btn_sync_todo = st.button("🔄 Todo", use_container_width=True,
+                                      disabled=not est["credenciales_ok"])
+        with col_b2:
+            btn_sync_prod = st.button("📦 Productos", use_container_width=True,
+                                      disabled=not est["credenciales_ok"])
+        btn_sync_cli = st.button("👥 Solo clientes", use_container_width=True,
+                                 disabled=not est["credenciales_ok"])
+        st.caption("Útil para traer datos históricos más atrás.")
 
-    btn_sync_cli = st.button("👥 Solo clientes", use_container_width=True,
-                             disabled=not est["credenciales_ok"])
-
-    if est["ultima_sync"]:
-        st.caption(f"Última sync: {est['ultima_sync']}")
-    if est["activo"]:
-        st.caption(f"⏱ Auto-sync cada {est['intervalo_horas']:.0f}h activo")
-
-# ── Sincronización desde botones ──────────────────────────────────────────────
+# ── Sincronización manual desde botones ───────────────────────────────────────
 if btn_sync_todo:
     from shopify_sync import sincronizar_todo
     with st.spinner("Sincronizando todo desde Shopify..."):
-        r = sincronizar_todo(dias_pedidos=dias_sync)
-    st.success("Sincronización completa.")
+        sincronizar_todo(dias_pedidos=dias_sync)
+    # Resetear guardia para que la próxima sesión también auto-sincronice
+    st.session_state["_sync_session_ok"] = True
     st.rerun()
 
 if btn_sync_prod:
