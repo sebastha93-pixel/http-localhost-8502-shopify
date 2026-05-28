@@ -202,7 +202,7 @@ try:
         if ruta_csv == "__API__":
             df_all, omitidos = cargar_datos_api()
             if df_all.empty:
-                st.info("📭 No hay pedidos activos en Melonn en este momento.")
+                st.warning("⚠️ No se obtuvieron pedidos de Melonn. La API puede estar en rate limit — espera unos minutos y usa '↻ Actualizar datos' en el sidebar.")
                 st.stop()
         else:
             df_all, omitidos = cargar_datos(ruta_csv, ts)

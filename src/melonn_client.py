@@ -1,17 +1,21 @@
 """
 Cliente Melonn API — MALE'DENIM
-Reemplaza la carga manual de CSV por datos en tiempo real.
 
-Endpoint:  GET https://api.melonn.com/prod/api/sell-orders
-Auth:      x-api-key header
+Estrategia definitiva anti-rate-limit:
+  • Solo el endpoint de listado GET /sell-orders (1-3 requests totales)
+  • Cache SQLite persistente con TTL configurable
+  • En reinicios de Streamlit: datos desde disco en <100ms
+  • En caché vencida: 1-3 requests HTTP, luego guarda en disco
+  • Nunca hace fetches individuales por orden
 """
 
-import os
-import time
-import threading
+import json
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
+import sqlite3
+import time
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 import requests
@@ -19,18 +23,15 @@ import requests
 log = logging.getLogger(__name__)
 
 # ── Configuración ──────────────────────────────────────────────────────────────
-_BASE_URL      = "https://api.orbita.melonn.com"
-_TIMEOUT       = 15          # segundos por request (reducido)
-_MAX_RETRIES   = 2           # reintentos (reducido)
-_RETRY_WAIT    = 1           # segundos entre reintentos
-_INTERVALO_H   = 2           # horas entre auto-syncs
-_PAGE_SIZE     = 500         # pedidos por página (máximo posible)
-_WORKERS       = 15          # hilos paralelos para detalle de órdenes
+_BASE_URL    = "https://api.orbita.melonn.com"
+_TIMEOUT     = 30
+_MAX_RETRIES = 3
+_RETRY_WAIT  = 3          # segundos base entre reintentos
+_PAGE_SIZE   = 50         # conservador — evita límites de la API
+_CACHE_TTL   = 600        # segundos (10 min) antes de re-fetch
 
-# ── Estado global ──────────────────────────────────────────────────────────────
-_lock          = threading.Lock()
-_ultima_sync:  Optional[datetime] = None
-_sync_en_curso = False
+# Ruta del SQLite (misma BD que el resto de la app)
+_DB_PATH = Path(__file__).parent.parent / "data" / "db" / "maledenim.db"
 
 # ── Estados Melonn ─────────────────────────────────────────────────────────────
 ESTADOS_EN_TRANSITO = {
@@ -52,7 +53,6 @@ ESTADOS_RESUELTOS = {
 
 # ── Credenciales ───────────────────────────────────────────────────────────────
 def _api_key() -> Optional[str]:
-    """Lee el API key desde Streamlit Secrets o variable de entorno."""
     try:
         import streamlit as st
         return st.secrets.get("MELONN_API_KEY") or os.getenv("MELONN_API_KEY")
@@ -72,30 +72,146 @@ def _headers() -> dict:
     }
 
 
+# ── Cache SQLite ───────────────────────────────────────────────────────────────
+def _get_conn() -> sqlite3.Connection:
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(_DB_PATH), timeout=10)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _init_cache():
+    with _get_conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS melonn_pedidos_cache (
+                id          INTEGER PRIMARY KEY CHECK (id = 1),
+                fetched_at  TEXT NOT NULL,
+                pedidos_json TEXT NOT NULL,
+                total        INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.commit()
+
+
+def _leer_cache() -> Optional[tuple]:
+    """
+    Retorna (pedidos: list, fetched_at: datetime) si el cache está fresco.
+    Retorna None si no existe o está vencido.
+    """
+    try:
+        _init_cache()
+        with _get_conn() as conn:
+            row = conn.execute(
+                "SELECT fetched_at, pedidos_json FROM melonn_pedidos_cache WHERE id = 1"
+            ).fetchone()
+        if not row:
+            return None
+        fetched_at = datetime.fromisoformat(row["fetched_at"])
+        age = (datetime.now() - fetched_at).total_seconds()
+        if age > _CACHE_TTL:
+            log.info(f"Cache vencido ({age:.0f}s > {_CACHE_TTL}s)")
+            return None
+        pedidos = json.loads(row["pedidos_json"])
+        log.info(f"Cache hit: {len(pedidos)} pedidos ({age:.0f}s de antigüedad)")
+        return pedidos, fetched_at
+    except Exception as e:
+        log.warning(f"Error leyendo cache: {e}")
+        return None
+
+
+def _guardar_cache(pedidos: list):
+    try:
+        _init_cache()
+        with _get_conn() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO melonn_pedidos_cache (id, fetched_at, pedidos_json, total)
+                VALUES (1, ?, ?, ?)
+            """, (datetime.now().isoformat(), json.dumps(pedidos, default=str), len(pedidos)))
+            conn.commit()
+        log.info(f"Cache guardado: {len(pedidos)} pedidos")
+    except Exception as e:
+        log.warning(f"Error guardando cache: {e}")
+
+
+def limpiar_cache():
+    """Fuerza re-fetch en la próxima llamada. Llama esto desde el botón de refresh."""
+    try:
+        _init_cache()
+        with _get_conn() as conn:
+            conn.execute("DELETE FROM melonn_pedidos_cache WHERE id = 1")
+            conn.commit()
+        log.info("Cache Melonn limpiado — próxima carga hará re-fetch")
+    except Exception as e:
+        log.warning(f"Error limpiando cache: {e}")
+
+
+def cache_info() -> Optional[dict]:
+    """Retorna metadata del cache para mostrar en el sidebar."""
+    try:
+        _init_cache()
+        with _get_conn() as conn:
+            row = conn.execute(
+                "SELECT fetched_at, total FROM melonn_pedidos_cache WHERE id = 1"
+            ).fetchone()
+        if not row:
+            return None
+        fetched_at = datetime.fromisoformat(row["fetched_at"])
+        age = (datetime.now() - fetched_at).total_seconds()
+        return {
+            "fetched_at": fetched_at,
+            "age_s": age,
+            "total": row["total"],
+            "fresco": age <= _CACHE_TTL,
+        }
+    except Exception:
+        return None
+
+
 # ── HTTP helper ────────────────────────────────────────────────────────────────
-def _get(path: str, params: dict = None) -> dict | list | None:
-    """GET con reintentos. Retorna el JSON o None si falla."""
+def _get(path: str, params: dict = None) -> Optional[dict]:
+    """GET con reintentos y backoff exponencial."""
     url = f"{_BASE_URL}/{path.lstrip('/')}"
     for intento in range(_MAX_RETRIES):
         try:
             r = requests.get(url, headers=_headers(), params=params, timeout=_TIMEOUT)
+
+            # Rate limit — esperar y reintentar
+            if r.status_code in (429, 503):
+                wait = _RETRY_WAIT * (2 ** intento)
+                log.warning(f"Rate limit HTTP {r.status_code} — esperando {wait}s...")
+                time.sleep(wait)
+                continue
+
             r.raise_for_status()
-            return r.json()
+            data = r.json()
+
+            # Detectar "Limit Exceeded" en el cuerpo (patrón de Melonn)
+            if isinstance(data, dict) and data.get("message") == "Limit Exceeded":
+                wait = _RETRY_WAIT * (2 ** intento)
+                log.warning(f"Limit Exceeded en {path} — esperando {wait}s...")
+                time.sleep(wait)
+                continue
+
+            return data
+
         except requests.HTTPError as e:
-            log.warning(f"Melonn HTTP {e.response.status_code} en {url} (intento {intento+1})")
-            if e.response.status_code in (401, 403):
+            status = e.response.status_code
+            log.warning(f"HTTP {status} en {url} (intento {intento+1})")
+            if status in (401, 403):
                 log.error("API key inválido o sin permisos — verifica MELONN_API_KEY")
-                return None          # no reintentar en errores de auth
+                return None   # no reintentar en auth errors
         except requests.RequestException as e:
-            log.warning(f"Melonn request error: {e} (intento {intento+1})")
+            log.warning(f"Request error: {e} (intento {intento+1})")
+
         if intento < _MAX_RETRIES - 1:
-            time.sleep(_RETRY_WAIT * (intento + 1))
+            time.sleep(_RETRY_WAIT)
+
+    log.error(f"Fallaron {_MAX_RETRIES} intentos para {path}")
     return None
 
 
-# ── Normalización de campos ────────────────────────────────────────────────────
+# ── Normalización ──────────────────────────────────────────────────────────────
 def _parsear_fecha(valor) -> Optional[date]:
-    """Convierte string ISO o timestamp a date. Retorna None si vacío."""
     if not valor:
         return None
     if isinstance(valor, date) and not isinstance(valor, datetime):
@@ -103,13 +219,6 @@ def _parsear_fecha(valor) -> Optional[date]:
     if isinstance(valor, datetime):
         return valor.date()
     texto = str(valor).strip()
-    for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ",
-                "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(texto[:len(fmt.replace('%', 'XX').replace('X', '00'))], fmt).date()
-        except ValueError:
-            pass
-    # Fallback: tomar los primeros 10 chars
     try:
         return datetime.strptime(texto[:10], "%Y-%m-%d").date()
     except ValueError:
@@ -117,7 +226,6 @@ def _parsear_fecha(valor) -> Optional[date]:
 
 
 def _es_contraentrega(valor) -> bool:
-    """True si el valor COD es un número positivo."""
     if valor is None:
         return False
     try:
@@ -134,82 +242,59 @@ def _calcular_dias(fecha_despacho: Optional[date], fecha_entrega: Optional[date]
 
 
 def _normalizar_pedido(raw: dict) -> Optional[dict]:
-    """
-    Convierte un pedido JSON de la API Melonn (orbita) al esquema interno.
-
-    Estructura confirmada 2026-05-28 con api.orbita.melonn.com:
-      sell_order_state.name  → estado
-      buyer.full_name / phone_number
-      shipping_info.city / region  → destino (NO warehouse, que es origen)
-      payment_on_delivery_amount   → COD
-      creation_date                → única fecha disponible en la API
-      line_items[].sku / quantity
-      melonn_tracking_link
-      external_order_number (sin #) → orden_tienda
-      internal_order_number         → orden_melonn
-    """
+    """Convierte un item del listado Melonn al esquema interno de la app."""
     estado = str((raw.get("sell_order_state") or {}).get("name") or "")
 
-    # Comprador
     buyer  = raw.get("buyer") or {}
     nombre = str(buyer.get("full_name") or "")
     tel    = str(buyer.get("phone_number") or "")
 
-    # Destino (shipping_info = dirección del comprador, warehouse = bodega origen)
     dest   = raw.get("shipping_info") or {}
     ciudad = str(dest.get("city") or "").upper().strip()
     region = str(dest.get("region") or "")
 
-    # Método de envío como proxy de transportadora (Melonn no expone carrier directo)
     metodo = str((raw.get("shipping_method") or {}).get("name") or "")
 
-    # Line items
     items      = raw.get("line_items") or []
     first_item = items[0] if items else {}
     sku        = str(first_item.get("sku") or "")
     cantidad   = int(first_item.get("quantity") or 1)
     producto   = ", ".join(str(i.get("sku", "")) for i in items if i.get("sku"))
 
-    # Fechas — la API solo provee creation_date
     fecha_creacion = _parsear_fecha(raw.get("creation_date"))
-    fecha_despacho = fecha_creacion   # proxy: días desde creación
-    fecha_entrega  = None
-    fecha_promesa  = None
+    fecha_despacho = _parsear_fecha(raw.get("dispatch_date")) or fecha_creacion
+    fecha_entrega  = _parsear_fecha(raw.get("delivery_date"))
+    fecha_promesa  = _parsear_fecha(raw.get("promise_date"))
 
-    # COD
     valor_cod = raw.get("payment_on_delivery_amount")
-    tipo_recaudo = str((raw.get("payment_on_delivery_type") or {}).get("name") or
-                       ("Contraentrega" if valor_cod else "Prepago"))
+    tipo_recaudo = str(
+        (raw.get("payment_on_delivery_type") or {}).get("name") or
+        ("Contraentrega" if valor_cod else "Prepago")
+    )
 
-    p = {
+    return {
         "orden_melonn":       str(raw.get("internal_order_number") or raw.get("id") or ""),
         "orden_tienda":       str(raw.get("external_order_number") or "").lstrip("#"),
         "estado_melonn":      estado,
         "tienda":             "",
         "canal_venta":        str((raw.get("fulfillment_type") or {}).get("order_type") or "D2C"),
-
         "nombre_comprador":   nombre,
         "telefono_comprador": tel,
         "ciudad_destino":     ciudad,
         "region_destino":     region,
-
         "transportadora":     metodo,
         "link_guia":          str(raw.get("melonn_tracking_link") or ""),
-
         "fecha_despacho":     fecha_despacho,
         "fecha_entrega":      fecha_entrega,
         "fecha_promesa":      fecha_promesa,
         "fecha_creacion":     fecha_creacion,
-
         "sku":                sku,
         "producto":           producto,
         "variante":           "",
         "cantidad":           cantidad,
         "precio_unitario":    0.0,
-
         "valor_cod_raw":      str(valor_cod or 0),
         "tipo_recaudo":       tipo_recaudo,
-
         "es_contraentrega":   _es_contraentrega(valor_cod),
         "dias_en_transito":   _calcular_dias(fecha_despacho, fecha_entrega),
         "esta_en_transito":   estado in ESTADOS_EN_TRANSITO,
@@ -218,236 +303,98 @@ def _normalizar_pedido(raw: dict) -> Optional[dict]:
         "promesa_vencida":    False,
     }
 
-    return p
 
-
-# ── Fetch de pedidos ───────────────────────────────────────────────────────────
-def obtener_pedido(order_id: str) -> Optional[dict]:
-    """Obtiene un pedido individual. Retorna dict normalizado o None."""
-    raw = _get(f"sell-orders/{order_id}")
-    if raw is None:
-        return None
-    return _normalizar_pedido(raw)
-
-
-def _listar_paginas(params_extra: dict = None) -> list[dict]:
+# ── Fetch desde API ────────────────────────────────────────────────────────────
+def _fetch_de_api() -> tuple:
     """
-    Descarga todas las páginas de sell-orders.
-    Paginación confirmada: page 0-indexed, per_page, wrapper {data:[], meta_data:{total_count}}
+    Descarga todos los pedidos activos desde la API.
+    Solo usa el endpoint de listado — nunca fetches individuales.
+    Retorna (pedidos_normalizados, omitidos_dict).
     """
-    todos  = []
-    page   = 0
-    params_base = {"per_page": _PAGE_SIZE, **(params_extra or {})}
+    omitidos = {"resuelto": 0, "sin_datos": 0}
+    todos    = []
+    page     = 0
 
     while True:
-        resp = _get("sell-orders", params={**params_base, "page": page})
+        resp = _get("sell-orders", params={"per_page": _PAGE_SIZE, "page": page})
         if resp is None:
-            log.error("Error en sell-orders — verifica el API key")
+            log.error("API no disponible — abortando fetch")
             break
 
-        # Estructura confirmada: {data: [...], meta_data: {page, per_page, total_count}}
         items       = resp.get("data") or []
         meta        = resp.get("meta_data") or {}
         total_count = meta.get("total_count") or 0
 
         todos.extend(items)
-        log.info(f"Página {page}: {len(items)} items (total: {total_count})")
+        log.info(f"Página {page}: {len(items)} items (total_count={total_count}, acumulado={len(todos)})")
 
-        # ¿Hay más páginas?
-        if not items or len(todos) >= total_count:
+        if not items or (total_count > 0 and len(todos) >= total_count):
             break
+
         page += 1
+        time.sleep(0.3)   # pausa mínima entre páginas
 
-    return todos
-
-
-def _init_cache_db():
-    """Crea la tabla de cache de detalles si no existe."""
-    try:
-        from db import get_conn
-        with get_conn() as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS melonn_detail_cache (
-                    order_number      TEXT PRIMARY KEY,
-                    state_code        INTEGER,
-                    detail_json       TEXT,
-                    cached_at         TEXT DEFAULT (datetime('now'))
-                )
-            """)
-            conn.commit()
-    except Exception as e:
-        log.warning(f"No se pudo inicializar cache de detalles: {e}")
-
-
-def _leer_cache() -> dict:
-    """Retorna dict {order_number: {state_code, detail}} desde SQLite."""
-    try:
-        from db import get_conn
-        with get_conn() as conn:
-            rows = conn.execute(
-                "SELECT order_number, state_code, detail_json FROM melonn_detail_cache"
-            ).fetchall()
-            return {
-                r[0]: {"state_code": r[1], "detail": __import__("json").loads(r[2])}
-                for r in rows
-            }
-    except Exception:
-        return {}
-
-
-def _guardar_cache(items: list[tuple]):
-    """Guarda lista de (order_number, state_code, detail_dict) en SQLite."""
-    if not items:
-        return
-    try:
-        import json as _json
-        from db import get_conn
-        with get_conn() as conn:
-            conn.executemany(
-                """INSERT OR REPLACE INTO melonn_detail_cache
-                   (order_number, state_code, detail_json, cached_at)
-                   VALUES (?, ?, ?, datetime('now'))""",
-                [(num, code, _json.dumps(det)) for num, code, det in items]
-            )
-            conn.commit()
-    except Exception as e:
-        log.warning(f"No se pudo guardar cache: {e}")
-
-
-def obtener_pedidos_activos(dias: int = 30) -> tuple[list, dict]:
-    """
-    Descarga pedidos activos con cache SQLite de detalles.
-
-    Flujo:
-    1. GET /sell-orders  → listado en 1-2 llamadas (rápido)
-    2. Compara state_code con cache SQLite
-    3. Solo fetcha detalle de órdenes NUEVAS o que CAMBIARON de estado
-    4. Guarda nuevos detalles en SQLite
-    → En cargas sucesivas: 1 llamada de listado + 0-5 detalles nuevos = <1s
-    """
-    import json as _json
-
-    _init_cache_db()
-    omitidos = {"resuelto": 0, "sin_despacho": 0}
-
-    # ── Paso 1: listado (1-2 llamadas HTTP) ───────────────────────────────────
-    items_lista = _listar_paginas()
-    if not items_lista:
-        log.warning("sell-orders listado vacío")
-        return [], omitidos
-
-    # ── Paso 2: separar activos y cargar cache ────────────────────────────────
-    activos = []
-    for item in items_lista:
+    pedidos = []
+    for item in todos:
         estado = str((item.get("sell_order_state") or {}).get("name") or "")
         if estado in ESTADOS_RESUELTOS:
             omitidos["resuelto"] += 1
-        else:
-            activos.append(item)
-
-    cache = _leer_cache()
-
-    # Clasificar: cache válido vs necesita fetch
-    con_cache  = []   # (item, detail_cached)
-    sin_cache  = []   # item → necesita llamada HTTP
-
-    for item in activos:
-        num        = str(item.get("external_order_number") or "").lstrip("#")
-        state_code = (item.get("sell_order_state") or {}).get("code")
-        cached     = cache.get(num)
-
-        if cached and cached["state_code"] == state_code:
-            con_cache.append((item, cached["detail"]))
-        else:
-            sin_cache.append(item)
-
-    log.info(f"Cache: {len(con_cache)} hits, {len(sin_cache)} fetch necesarios")
-
-    # ── Paso 3: fetch solo lo que falta (paralelo) ────────────────────────────
-    nuevos_cache = []
-
-    def _fetch_one(item: dict) -> tuple[dict, dict]:
-        num      = str(item.get("external_order_number") or "").lstrip("#")
-        state_code = (item.get("sell_order_state") or {}).get("code")
-        detalle  = _get(f"sell-orders/{num}")
-        raw      = detalle if isinstance(detalle, dict) and "buyer" in detalle else item
-        return item, raw, num, state_code
-
-    if sin_cache:
-        with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
-            futures = [pool.submit(_fetch_one, item) for item in sin_cache]
-            for future in as_completed(futures):
-                try:
-                    item, raw, num, state_code = future.result()
-                    con_cache.append((item, raw))
-                    nuevos_cache.append((num, state_code, raw))
-                except Exception as e:
-                    log.warning(f"Error fetch detalle: {e}")
-
-    # ── Paso 4: guardar nuevos en cache ───────────────────────────────────────
-    _guardar_cache(nuevos_cache)
-
-    # ── Paso 5: normalizar ────────────────────────────────────────────────────
-    pedidos = []
-    for item, raw in con_cache:
-        p = _normalizar_pedido(raw)
-        if p is not None:
+            continue
+        p = _normalizar_pedido(item)
+        if p:
             pedidos.append(p)
         else:
-            omitidos["sin_despacho"] += 1
+            omitidos["sin_datos"] += 1
 
-    log.info(f"Normalizados: {len(pedidos)} pedidos activos")
+    log.info(f"Fetch completado: {len(pedidos)} activos, {omitidos} omitidos")
     return pedidos, omitidos
 
 
-# ── Auto-sync (igual patrón que shopify_scheduler) ─────────────────────────────
-def datos_desactualizados() -> bool:
-    with _lock:
-        if _ultima_sync is None:
-            return True
-        return (datetime.now() - _ultima_sync).total_seconds() / 3600 >= _INTERVALO_H
-
-
-def sincronizar_si_necesario(dias: int = 30) -> tuple[bool, str]:
+# ── Punto de entrada principal ─────────────────────────────────────────────────
+def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tuple:
     """
-    Sync-on-load: llama esto al inicio de la página de Logística.
-    Retorna (ok, mensaje).
+    Retorna (pedidos: list[dict], omitidos: dict).
+
+    Flujo:
+    1. Si cache SQLite fresco (< 10 min) → retorna desde disco (instantáneo)
+    2. Si forzar_refresh=True → limpia cache y re-fetch
+    3. Si cache vencido → fetch desde API, guarda en SQLite, retorna
+
+    En cargas normales: 0 requests HTTP si el cache está fresco.
     """
-    global _sync_en_curso, _ultima_sync
+    if forzar_refresh:
+        limpiar_cache()
 
-    if not credenciales_ok():
-        return False, "MELONN_API_KEY no configurado"
+    resultado = _leer_cache()
+    if resultado is not None:
+        pedidos, _ = resultado
+        # Los omitidos no se guardan en cache — no son críticos para el dashboard
+        return pedidos, {"resuelto": 0, "sin_datos": 0}
 
-    if not datos_desactualizados():
-        return True, "Datos actualizados"
+    # Cache vencido o inexistente → fetch desde API
+    pedidos, omitidos = _fetch_de_api()
 
-    with _lock:
-        if _sync_en_curso:
-            return False, "Sync en curso"
-        _sync_en_curso = True
+    if pedidos:
+        _guardar_cache(pedidos)
 
-    try:
-        pedidos, omitidos = obtener_pedidos_activos(dias=dias)
-        if not pedidos:
-            return False, "Sin pedidos activos o error de API"
-
-        with _lock:
-            _ultima_sync = datetime.now()
-
-        return True, f"{len(pedidos)} pedidos sincronizados"
-    except Exception as e:
-        log.exception("Error en sync Melonn")
-        return False, str(e)
-    finally:
-        with _lock:
-            _sync_en_curso = False
+    return pedidos, omitidos
 
 
 def estado() -> dict:
-    """Estado actual del cliente para mostrar en el sidebar."""
+    info = cache_info()
+    if info:
+        ultima = info["fetched_at"].strftime("%d/%m/%Y %H:%M")
+        age_min = int(info["age_s"] / 60)
+        prox_min = max(0, int((_CACHE_TTL - info["age_s"]) / 60))
+    else:
+        ultima    = None
+        age_min   = None
+        prox_min  = 0
     return {
         "credenciales_ok": credenciales_ok(),
-        "ultima_sync":     _ultima_sync.strftime("%d/%m/%Y %H:%M") if _ultima_sync else None,
-        "desactualizado":  datos_desactualizados(),
-        "intervalo_horas": _INTERVALO_H,
+        "ultima_sync":     ultima,
+        "age_min":         age_min,
+        "prox_refresh_min": prox_min,
+        "intervalo_horas": _CACHE_TTL // 3600 or f"{_CACHE_TTL//60}min",
+        "desactualizado":  info is None or not info["fresco"],
     }

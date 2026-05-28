@@ -563,12 +563,14 @@ def cargar_datos(ruta: str, ts: str):
     df = _procesar_df(pedidos)
     return df, omitidos
 
-@st.cache_data(show_spinner=False, ttl=300)   # cache 5 min — SQLite hace el trabajo pesado
-def cargar_datos_api(dias: int = 30):
-    """Carga pedidos desde API Melonn (detalles cacheados en SQLite)."""
+def cargar_datos_api(forzar_refresh: bool = False):
+    """
+    Carga pedidos desde Melonn.
+    Cache SQLite maneja la persistencia — no necesitamos @st.cache_data aquí.
+    """
     if not _MELONN_API_DISPONIBLE:
         return pd.DataFrame(), {}
-    pedidos, omitidos = melonn_client.obtener_pedidos_activos(dias=dias)
+    pedidos, omitidos = melonn_client.obtener_pedidos_activos(forzar_refresh=forzar_refresh)
     if not pedidos:
         return pd.DataFrame(), omitidos
     df = _procesar_df(pedidos)
@@ -611,23 +613,33 @@ def render_sidebar(page_label: str):
         # ── Estado API Melonn ──────────────────────────────────────────────────
         _api_ok = _MELONN_API_DISPONIBLE and melonn_client.credenciales_ok()
         if _api_ok:
-            _est = melonn_client.estado()
+            _info = melonn_client.cache_info()
+            if _info:
+                _age_txt = f"hace {int(_info['age_s']//60)}min" if _info['age_s'] >= 60 else "ahora mismo"
+                _color   = "#52b788" if _info["fresco"] else "#f5a623"
+                _estado_txt = f"✓ {_info['total']} pedidos · {_age_txt}"
+            else:
+                _color   = "#f5a623"
+                _estado_txt = "Sin datos — cargando..."
             st.markdown(f"""
             <div style="background:#1a3a2a;border:1px solid #2d6a4f;border-radius:6px;
-                        padding:10px 12px;margin-bottom:10px;">
+                        padding:10px 12px;margin-bottom:8px;">
                 <div style="font-size:0.62rem;color:#52b788;letter-spacing:1px;font-weight:700;">
                     ✓ API MELONN ACTIVA
                 </div>
-                <div style="font-size:0.65rem;color:rgba(224,222,221,0.75);margin-top:3px;">
-                    Auto-sync cada {_est['intervalo_horas']}h
-                    {"· Última: " + _est['ultima_sync'] if _est['ultima_sync'] else "· Pendiente primera sync"}
+                <div style="font-size:0.65rem;color:{_color};margin-top:3px;">
+                    {_estado_txt}
                 </div>
             </div>
             """, unsafe_allow_html=True)
-            archivo = None   # no necesitamos CSV
+            if st.button("↻ Actualizar datos", key="btn_refresh_melonn", use_container_width=True):
+                melonn_client.limpiar_cache()
+                st.cache_data.clear()
+                st.rerun()
+            archivo = None
         else:
             archivo = st.file_uploader("Cargar reporte Melonn (CSV)", type=["csv"])
-            if not _MELONN_API_DISPONIBLE or True:   # siempre mostrar hint hasta activar
+            if not _MELONN_API_DISPONIBLE or True:
                 st.markdown(f"""
                 <div style="background:rgba(33,48,51,0.35);border:1px dashed rgba(135,166,184,0.3);
                             border-radius:6px;padding:8px 10px;margin-top:6px;">

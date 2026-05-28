@@ -18,6 +18,7 @@ import threading
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -57,7 +58,7 @@ def _credenciales_ok() -> bool:
 
 
 # ── Última sync desde la DB (persiste aunque el proceso se haya reiniciado) ───
-def _ultima_sync_db() -> datetime | None:
+def _ultima_sync_db() -> Optional[datetime]:
     try:
         from db import get_conn
         with get_conn() as conn:

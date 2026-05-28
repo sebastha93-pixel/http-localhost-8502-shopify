@@ -8,6 +8,7 @@ import json
 import pandas as pd
 from datetime import datetime, timezone
 from functools import lru_cache
+from typing import Optional
 
 # ── Cliente ────────────────────────────────────────────────────────────────────
 @lru_cache(maxsize=1)
@@ -29,7 +30,7 @@ def disponible() -> bool:
 
 
 # ── Snapshots ──────────────────────────────────────────────────────────────────
-def guardar_snapshot(df: pd.DataFrame, nombre_csv: str, omitidos: int = 0) -> int | None:
+def guardar_snapshot(df: pd.DataFrame, nombre_csv: str, omitidos: int = 0) -> Optional[int]:
     """
     Guarda un snapshot completo del CSV cargado.
     Retorna el snapshot_id o None si falla.
