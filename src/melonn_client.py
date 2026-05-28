@@ -274,70 +274,84 @@ def obtener_pedido(order_id: str) -> Optional[dict]:
     return _normalizar_pedido(raw)
 
 
-def obtener_pedidos_activos(dias: int = 30) -> tuple[list, dict]:
+def _listar_paginas(params_extra: dict = None) -> list[dict]:
     """
-    Descarga todos los pedidos activos de los últimos `dias` días.
-    Retorna (lista_pedidos_normalizados, dict_omitidos).
-
-    Maneja paginación automáticamente.
+    Descarga todas las páginas de sell-orders.
+    Paginación confirmada: page 0-indexed, per_page, wrapper {data:[], meta_data:{total_count}}
     """
-    pedidos  = []
-    omitidos = {"resuelto": 0, "sin_despacho": 0, "error_parse": 0}
-
-    fecha_desde = (date.today() - timedelta(days=dias)).isoformat()
-
-    page   = 1
-    total  = None
+    todos  = []
+    page   = 0
+    params_base = {"per_page": _PAGE_SIZE, **(params_extra or {})}
 
     while True:
-        params = {
-            "page":      page,
-            "pageSize":  _PAGE_SIZE,
-            "limit":     _PAGE_SIZE,    # algunos APIs usan limit
-            "from":      fecha_desde,
-            "dateFrom":  fecha_desde,   # variante camelCase
-            "status":    "active",      # solo activos (ajustar si la API no lo soporta)
-        }
-
-        data = _get("sell-orders", params=params)
-        if data is None:
-            log.error("Error obteniendo sell-orders — verifica el API key")
+        resp = _get("sell-orders", params={**params_base, "page": page})
+        if resp is None:
+            log.error("Error en sell-orders — verifica el API key")
             break
 
-        # Normalizar respuesta: puede ser lista directa o paginada {data:[...], total:N}
-        if isinstance(data, list):
-            items = data
-            total = len(data)
-        elif isinstance(data, dict):
-            items = (data.get("data") or data.get("orders") or
-                     data.get("sellOrders") or data.get("items") or [])
-            total = data.get("total") or data.get("totalItems") or len(items)
-        else:
-            log.error(f"Respuesta inesperada de sell-orders: {type(data)}")
-            break
+        # Estructura confirmada: {data: [...], meta_data: {page, per_page, total_count}}
+        items       = resp.get("data") or []
+        meta        = resp.get("meta_data") or {}
+        total_count = meta.get("total_count") or 0
 
-        for raw in items:
-            estado = str(raw.get("orderStatus") or raw.get("order_status") or
-                         raw.get("status") or raw.get("estado_orden") or "")
+        todos.extend(items)
+        log.info(f"Página {page}: {len(items)} items (total: {total_count})")
 
-            if estado in ESTADOS_RESUELTOS:
-                omitidos["resuelto"] += 1
-                continue
-
-            p = _normalizar_pedido(raw)
-            if p is None:
-                omitidos["sin_despacho"] += 1
-                continue
-
-            pedidos.append(p)
-
-        log.info(f"Página {page}: {len(items)} pedidos, acumulado {len(pedidos)}")
-
-        # Cortar si no hay más páginas
-        if len(items) < _PAGE_SIZE or (total and len(pedidos) >= total):
+        # ¿Hay más páginas?
+        if not items or len(todos) >= total_count:
             break
         page += 1
 
+    return todos
+
+
+def obtener_pedidos_activos(dias: int = 30) -> tuple[list, dict]:
+    """
+    Descarga todos los pedidos activos.
+
+    Estrategia en 2 pasos:
+    1. GET /sell-orders?page=N  → listado paginado (campos básicos)
+    2. GET /sell-orders/{id}     → detalle completo por cada pedido
+       (buyer, fechas de despacho, dirección destino, transportadora)
+
+    Retorna (lista_pedidos_normalizados, dict_omitidos).
+    """
+    pedidos  = []
+    omitidos = {"resuelto": 0, "sin_despacho": 0, "error_detalle": 0}
+
+    # ── Paso 1: listar todos los IDs ──────────────────────────────────────────
+    items_lista = _listar_paginas()
+
+    if not items_lista:
+        log.warning("sell-orders listado vacío")
+        return [], omitidos
+
+    # ── Paso 2: enriquecer con detalle individual ──────────────────────────────
+    for item in items_lista:
+        estado = str((item.get("sell_order_state") or {}).get("name") or "")
+
+        # Saltar resueltos sin llamar al detalle
+        if estado in ESTADOS_RESUELTOS:
+            omitidos["resuelto"] += 1
+            continue
+
+        # Usar external_order_number o internal_order_number como ID
+        order_id = (item.get("external_order_number")
+                    or item.get("internal_order_number")
+                    or str(item.get("id", "")))
+
+        # Intentar enriquecer con detalle (buyer, fechas, dirección)
+        detalle = _get(f"sell-orders/{order_id}")
+        raw = detalle if detalle else item   # fallback al item del listado
+
+        p = _normalizar_pedido(raw)
+        if p is None:
+            omitidos["sin_despacho"] += 1
+            continue
+
+        pedidos.append(p)
+
+    log.info(f"Total normalizado: {len(pedidos)} pedidos activos")
     return pedidos, omitidos
 
 
