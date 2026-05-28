@@ -60,7 +60,7 @@ st.markdown("""
   text-transform: uppercase !important;
   padding: 10px 14px !important;
   margin: 2px 0 !important;
-  color: rgba(216,215,212,0.6) !important;
+  color: rgba(224,222,221,0.88) !important;
   transition: all 0.15s ease !important;
 }
 [data-testid="stSidebarNavLink"]:hover {

@@ -68,9 +68,9 @@ html, body, [class*="css"], .stMarkdown, .stText,
   background-color: {DEEP_INK} !important;
   border-right: 1px solid rgba(135,166,184,0.12) !important;
 }}
-[data-testid="stSidebar"] * {{ color: #d8d7d4 !important; }}
+[data-testid="stSidebar"] * {{ color: #e0dedd !important; }}
 [data-testid="stSidebar"] hr {{ border-color: rgba(135,166,184,0.18) !important; margin: 12px 0 !important; }}
-[data-testid="stSidebar"] label {{ font-size:0.7rem !important; letter-spacing:1px !important; text-transform:uppercase !important; font-weight:600 !important; opacity:0.8 !important; }}
+[data-testid="stSidebar"] label {{ font-size:0.7rem !important; letter-spacing:1px !important; text-transform:uppercase !important; font-weight:600 !important; color: #c8cdd0 !important; }}
 [data-testid="stSidebarNavItems"] {{ padding-top:0 !important; }}
 [data-testid="stSidebarNavLink"] {{
   border-radius: 5px !important;
@@ -80,7 +80,7 @@ html, body, [class*="css"], .stMarkdown, .stText,
   text-transform: uppercase !important;
   padding: 10px 14px !important;
   margin: 2px 4px !important;
-  color: rgba(216,215,212,0.65) !important;
+  color: rgba(224,222,221,0.88) !important;
   transition: all 0.15s ease !important;
 }}
 [data-testid="stSidebarNavLink"]:hover {{
@@ -161,7 +161,7 @@ html, body, [class*="css"], .stMarkdown, .stText,
 .kpi-label {{
   font-family: 'Inter', sans-serif;
   font-size: 0.58rem;
-  color: rgba(255,255,255,0.8);
+  color: rgba(255,255,255,0.92);
   margin: 6px 0 0;
   letter-spacing: 2.5px;
   text-transform: uppercase;
@@ -172,7 +172,7 @@ html, body, [class*="css"], .stMarkdown, .stText,
 }}
 .kpi-sub {{
   font-size: 0.62rem;
-  color: rgba(255,255,255,0.65);
+  color: rgba(255,255,255,0.82);
   margin: 3px 0 0;
   white-space: nowrap;
   overflow: hidden;
@@ -187,10 +187,10 @@ html, body, [class*="css"], .stMarkdown, .stText,
   font-weight: 700;
   letter-spacing: 3px;
   text-transform: uppercase;
-  color: {STEEL_BLUE};
+  color: #3a5f6a;
   margin: 20px 0 10px;
   padding-bottom: 6px;
-  border-bottom: 1px solid rgba(135,166,184,0.25);
+  border-bottom: 1px solid rgba(58,95,106,0.18);
 }}
 
 /* ── Panel header ──────────────────────────────────────────────────────────── */
@@ -205,7 +205,7 @@ html, body, [class*="css"], .stMarkdown, .stText,
 }}
 .subtitulo {{
   font-size: 0.62rem;
-  color: #909090;
+  color: #505050;
   letter-spacing: 3px;
   text-transform: uppercase;
   margin-top: 4px;
@@ -224,7 +224,7 @@ html, body, [class*="css"], .stMarkdown, .stText,
 .logo-tagline {{
   font-size: 0.55rem;
   letter-spacing: 5px;
-  color: {STEEL_BLUE} !important;
+  color: #a8c8d8 !important;
   margin-top: 3px;
   font-weight: 600;
 }}
@@ -346,7 +346,7 @@ html, body, [class*="css"], .stMarkdown, .stText,
 .stCaption, [data-testid="stCaptionContainer"] p {{
   font-size: 0.67rem !important;
   letter-spacing: 0.5px !important;
-  color: #909090 !important;
+  color: #555555 !important;
   font-family: 'Inter', sans-serif !important;
 }}
 

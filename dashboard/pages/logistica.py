@@ -178,47 +178,19 @@ if not ruta_csv:
     st.markdown(f"""
         <p class="titulo-panel">📦 LOGÍSTICA</p>
         <p class="subtitulo">Gestión operativa · MALE'DENIM</p>
-        <hr style='margin:10px 0 24px;'>
+        <hr style='margin:10px 0 28px;'>
     """, unsafe_allow_html=True)
     st.markdown(f"""
-    <div style="background:white;border-radius:6px;border-left:4px solid {STEEL_BLUE};
-                padding:28px 32px;max-width:580px;margin:0 auto;">
-        <div style="font-size:0.65rem;letter-spacing:3px;color:{STEEL_BLUE};
-                    text-transform:uppercase;margin-bottom:14px;">CÓMO EMPEZAR</div>
-        <div style="display:flex;flex-direction:column;gap:18px;">
-            <div style="display:flex;gap:14px;align-items:flex-start;">
-                <div style="background:{DEEP_INK};color:white;border-radius:50%;min-width:28px;
-                            height:28px;display:flex;align-items:center;justify-content:center;
-                            font-weight:900;font-size:0.85rem;">1</div>
-                <div>
-                    <div style="font-weight:700;color:{DEEP_INK};">Exporta el reporte de Melonn</div>
-                    <div style="color:{GRAPHITE_GREY};font-size:0.82rem;margin-top:2px;">
-                        Reportes → Pedidos activos → Exportar CSV
-                    </div>
-                </div>
-            </div>
-            <div style="display:flex;gap:14px;align-items:flex-start;">
-                <div style="background:{STEEL_BLUE};color:white;border-radius:50%;min-width:28px;
-                            height:28px;display:flex;align-items:center;justify-content:center;
-                            font-weight:900;font-size:0.85rem;">2</div>
-                <div>
-                    <div style="font-weight:700;color:{DEEP_INK};">Sube el CSV en el panel izquierdo</div>
-                    <div style="color:{GRAPHITE_GREY};font-size:0.82rem;margin-top:2px;">
-                        Usa <strong>Browse files</strong> o arrastra el archivo
-                    </div>
-                </div>
-            </div>
-            <div style="display:flex;gap:14px;align-items:flex-start;">
-                <div style="background:{NORMAL_COLOR};color:white;border-radius:50%;min-width:28px;
-                            height:28px;display:flex;align-items:center;justify-content:center;
-                            font-weight:900;font-size:0.85rem;">3</div>
-                <div>
-                    <div style="font-weight:700;color:{DEEP_INK};">Toca cualquier pedido para ver su detalle</div>
-                    <div style="color:{GRAPHITE_GREY};font-size:0.82rem;margin-top:2px;">
-                        Críticos primero · el sistema prioriza automáticamente
-                    </div>
-                </div>
-            </div>
+    <div style="background:white;border-radius:10px;border:1px solid rgba(33,48,51,0.07);
+                padding:36px 40px;max-width:480px;margin:0 auto;
+                box-shadow:0 2px 12px rgba(0,0,0,0.06);text-align:center;">
+        <div style="font-size:2rem;margin-bottom:14px;">📂</div>
+        <div style="font-size:1rem;font-weight:700;color:{DEEP_INK};margin-bottom:6px;">
+            Sube el reporte de Melonn
+        </div>
+        <div style="font-size:0.8rem;color:#505050;line-height:1.6;">
+            Usa el panel izquierdo para cargar el CSV.<br>
+            El sistema prioriza los pedidos críticos automáticamente.
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -408,7 +380,7 @@ with tab_cod:
     val_riesgo = df_c[df_c["Nivel"].isin(["CRITICO","RIESGO"])]["Valor COD"].apply(_parse_cod).sum()
     val_total  = df_cod["Valor COD"].apply(_parse_cod).sum()
 
-    st.caption("Pedidos con recaudo pendiente. Toca cualquier fila para ver el detalle del pedido.")
+    st.caption("Pedidos con recaudo pendiente · COD activo")
 
     k1,k2,k3,k4,k5 = st.columns(5)
     with k1:
@@ -443,17 +415,15 @@ with tab_cod:
                   "Transportadora","Novedad","Motivo riesgo"]
         COLS_C = [c for c in COLS_C if c in df_c.columns]
 
-        st.markdown("<div class='sec-title'>Lista de trabajo — toca una fila para ver el detalle</div>",
-                    unsafe_allow_html=True)
+        st.markdown("<div class='sec-title'>Lista de trabajo</div>", unsafe_allow_html=True)
         render_tabla(df_c, COLS_C, key="tabla_cod", height=420)
 
-        # Detalle: se expande automáticamente cuando hay selección
         hay_sel_cod = bool(
             st.session_state.get("tabla_cod", {}).get("selection", {}).get("rows")
         )
-        with st.expander("🔍 Detalle del pedido seleccionado", expanded=hay_sel_cod):
+        with st.expander("Detalle del pedido", expanded=hay_sel_cod):
             if not hay_sel_cod:
-                st.info("👆 Toca cualquier fila de la lista para ver el detalle completo del pedido y el tracking de la guía.")
+                st.caption("Selecciona una fila para ver el detalle.")
             else:
                 render_detalle(df_c, tab_key="cod")
                 # Obtener número de orden del pedido seleccionado
@@ -482,7 +452,7 @@ with tab_pre:
     n_prom   = len(df_p[df_p["Promesa vencida"] == "SÍ"]) if "Promesa vencida" in df_p.columns else 0
     pct_p    = round((n_crit_p+n_ries_p)/len(df_prepago)*100) if len(df_prepago) > 0 else 0
 
-    st.caption("Pedidos ya cobrados. Toca cualquier fila para ver el detalle y el tracking.")
+    st.caption("Pedidos con pago confirmado · prepago")
 
     k1,k2,k3,k4,k5 = st.columns(5)
     with k1:
@@ -516,16 +486,15 @@ with tab_pre:
                   "Transportadora","Novedad","Motivo riesgo"]
         COLS_P = [c for c in COLS_P if c in df_p.columns]
 
-        st.markdown("<div class='sec-title'>Lista de trabajo — toca una fila para ver el detalle</div>",
-                    unsafe_allow_html=True)
+        st.markdown("<div class='sec-title'>Lista de trabajo</div>", unsafe_allow_html=True)
         render_tabla(df_p, COLS_P, key="tabla_prepago", height=420)
 
         hay_sel_pre = bool(
             st.session_state.get("tabla_prepago", {}).get("selection", {}).get("rows")
         )
-        with st.expander("🔍 Detalle del pedido seleccionado", expanded=hay_sel_pre):
+        with st.expander("Detalle del pedido", expanded=hay_sel_pre):
             if not hay_sel_pre:
-                st.info("👆 Toca cualquier fila de la lista para ver el detalle completo del pedido y el tracking de la guía.")
+                st.caption("Selecciona una fila para ver el detalle.")
             else:
                 render_detalle(df_p, tab_key="prepago")
                 _rows_pre = st.session_state.get("tabla_prepago", {}).get("selection", {}).get("rows", [])
