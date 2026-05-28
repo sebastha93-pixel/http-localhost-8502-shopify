@@ -1,21 +1,19 @@
 """
 Cliente Melonn API — MALE'DENIM
 
-Estrategia definitiva anti-rate-limit:
-  • Solo el endpoint de listado GET /sell-orders (1-3 requests totales)
-  • Cache SQLite persistente con TTL configurable
-  • En reinicios de Streamlit: datos desde disco en <100ms
-  • En caché vencida: 1-3 requests HTTP, luego guarda en disco
-  • Nunca hace fetches individuales por orden
+Estrategia de caché en 3 capas (anti-rate-limit + anti-cold-start):
+  1. st.session_state    → instantáneo, dura toda la sesión del usuario
+  2. Supabase            → persistente en la nube, sobrevive reinicios de Streamlit Cloud
+  3. Melonn API          → solo cuando el caché de Supabase tiene >4h o el usuario fuerza refresh
+
+Nunca hace fetches individuales por orden — solo el endpoint de listado.
 """
 
 import json
 import logging
 import os
-import sqlite3
 import time
 from datetime import date, datetime, timedelta
-from pathlib import Path
 from typing import Optional
 
 import requests
@@ -26,12 +24,9 @@ log = logging.getLogger(__name__)
 _BASE_URL    = "https://api.orbita.melonn.com"
 _TIMEOUT     = 30
 _MAX_RETRIES = 3
-_RETRY_WAIT  = 3          # segundos base entre reintentos
-_PAGE_SIZE   = 50         # conservador — evita límites de la API
-_CACHE_TTL   = 14400      # segundos (4 horas) — el cache nunca se invalida solo; refresh es manual
-
-# Ruta del SQLite (misma BD que el resto de la app)
-_DB_PATH = Path(__file__).parent.parent / "data" / "db" / "maledenim.db"
+_RETRY_WAIT  = 5           # segundos base entre reintentos
+_PAGE_SIZE   = 50          # conservador — evita límites de la API
+_CACHE_TTL   = 14400       # 4 horas en segundos
 
 # ── Estados Melonn ─────────────────────────────────────────────────────────────
 ESTADOS_EN_TRANSITO = {
@@ -72,105 +67,113 @@ def _headers() -> dict:
     }
 
 
-# ── Cache SQLite ───────────────────────────────────────────────────────────────
-def _get_conn() -> sqlite3.Connection:
-    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH), timeout=10)
-    conn.row_factory = sqlite3.Row
-    return conn
+# ── Capa 1: session_state (instantánea, dura la sesión) ───────────────────────
+_SESSION_KEY = "_melonn_cache"
 
-
-def _init_cache():
-    with _get_conn() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS melonn_pedidos_cache (
-                id          INTEGER PRIMARY KEY CHECK (id = 1),
-                fetched_at  TEXT NOT NULL,
-                pedidos_json TEXT NOT NULL,
-                total        INTEGER NOT NULL DEFAULT 0
-            )
-        """)
-        conn.commit()
-
-
-def _leer_cache(ignorar_ttl: bool = False) -> Optional[tuple]:
-    """
-    Retorna (pedidos: list, fetched_at: datetime, fresco: bool).
-    Si ignorar_ttl=True devuelve datos aunque estén vencidos (modo stale fallback).
-    Retorna None solo si no existe ningún dato en cache.
-    """
+def _session_leer() -> Optional[tuple]:
+    """Retorna (pedidos, fetched_at) desde session_state si está fresco."""
     try:
-        _init_cache()
-        with _get_conn() as conn:
-            row = conn.execute(
-                "SELECT fetched_at, pedidos_json FROM melonn_pedidos_cache WHERE id = 1"
-            ).fetchone()
-        if not row:
+        import streamlit as st
+        data = st.session_state.get(_SESSION_KEY)
+        if not data:
             return None
-        fetched_at = datetime.fromisoformat(row["fetched_at"])
+        fetched_at = data["fetched_at"]
         age = (datetime.now() - fetched_at).total_seconds()
-        fresco = age <= _CACHE_TTL
-        if not fresco and not ignorar_ttl:
-            log.info(f"Cache vencido ({age:.0f}s > {_CACHE_TTL}s) — se puede usar stale")
+        if age > _CACHE_TTL:
             return None
-        pedidos = json.loads(row["pedidos_json"])
-        log.info(f"Cache {'hit' if fresco else 'STALE'}: {len(pedidos)} pedidos ({age:.0f}s)")
-        return pedidos, fetched_at, fresco
-    except Exception as e:
-        log.warning(f"Error leyendo cache: {e}")
-        return None
-
-
-def _guardar_cache(pedidos: list):
-    try:
-        _init_cache()
-        with _get_conn() as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO melonn_pedidos_cache (id, fetched_at, pedidos_json, total)
-                VALUES (1, ?, ?, ?)
-            """, (datetime.now().isoformat(), json.dumps(pedidos, default=str), len(pedidos)))
-            conn.commit()
-        log.info(f"Cache guardado: {len(pedidos)} pedidos")
-    except Exception as e:
-        log.warning(f"Error guardando cache: {e}")
-
-
-def limpiar_cache():
-    """Fuerza re-fetch en la próxima llamada. Llama esto desde el botón de refresh."""
-    try:
-        _init_cache()
-        with _get_conn() as conn:
-            conn.execute("DELETE FROM melonn_pedidos_cache WHERE id = 1")
-            conn.commit()
-        log.info("Cache Melonn limpiado — próxima carga hará re-fetch")
-    except Exception as e:
-        log.warning(f"Error limpiando cache: {e}")
-
-
-def cache_info() -> Optional[dict]:
-    """Retorna metadata del cache para mostrar en el sidebar."""
-    try:
-        _init_cache()
-        with _get_conn() as conn:
-            row = conn.execute(
-                "SELECT fetched_at, total FROM melonn_pedidos_cache WHERE id = 1"
-            ).fetchone()
-        if not row:
-            return None
-        fetched_at = datetime.fromisoformat(row["fetched_at"])
-        age = (datetime.now() - fetched_at).total_seconds()
-        return {
-            "fetched_at": fetched_at,
-            "age_s": age,
-            "total": row["total"],
-            "fresco": age <= _CACHE_TTL,
-            "stale": age > _CACHE_TTL,
-        }
+        return data["pedidos"], fetched_at
     except Exception:
         return None
 
 
-# ── HTTP helper ────────────────────────────────────────────────────────────────
+def _session_escribir(pedidos: list, fetched_at: Optional[datetime] = None):
+    try:
+        import streamlit as st
+        st.session_state[_SESSION_KEY] = {
+            "pedidos":    pedidos,
+            "fetched_at": fetched_at or datetime.now(),
+        }
+    except Exception:
+        pass
+
+
+def _session_limpiar():
+    try:
+        import streamlit as st
+        st.session_state.pop(_SESSION_KEY, None)
+    except Exception:
+        pass
+
+
+# ── Capa 2: Supabase (persistente en la nube) ──────────────────────────────────
+def _supabase_client():
+    try:
+        from supabase import create_client
+        import streamlit as st
+        url = st.secrets.get("SUPABASE_URL") or os.getenv("SUPABASE_URL", "")
+        key = st.secrets.get("SUPABASE_KEY") or os.getenv("SUPABASE_KEY", "")
+        if not url or not key:
+            return None
+        return create_client(url, key)
+    except Exception:
+        return None
+
+
+def _supabase_leer() -> Optional[tuple]:
+    """
+    Retorna (pedidos, fetched_at, fresco) desde Supabase.
+    Retorna stale si hay datos aunque estén vencidos.
+    """
+    try:
+        sb = _supabase_client()
+        if sb is None:
+            return None
+        res = sb.table("melonn_cache").select("fetched_at,pedidos_json,total").eq("id", 1).execute()
+        rows = res.data if hasattr(res, "data") else []
+        if not rows:
+            return None
+        row = rows[0]
+        fetched_at = datetime.fromisoformat(row["fetched_at"].replace("Z", "+00:00")).replace(tzinfo=None)
+        age = (datetime.utcnow() - fetched_at).total_seconds()
+        fresco = age <= _CACHE_TTL
+        pedidos = json.loads(row["pedidos_json"])
+        log.info(f"Supabase cache {'fresco' if fresco else 'stale'}: {len(pedidos)} pedidos ({age/3600:.1f}h)")
+        return pedidos, fetched_at, fresco
+    except Exception as e:
+        log.warning(f"Error leyendo Supabase cache: {e}")
+        return None
+
+
+def _supabase_escribir(pedidos: list):
+    """Guarda/actualiza el caché en Supabase (upsert en id=1)."""
+    try:
+        sb = _supabase_client()
+        if sb is None:
+            return
+        payload = {
+            "id":           1,
+            "fetched_at":   datetime.utcnow().isoformat(),
+            "pedidos_json": json.dumps(pedidos, default=str),
+            "total":        len(pedidos),
+        }
+        sb.table("melonn_cache").upsert(payload).execute()
+        log.info(f"Supabase cache guardado: {len(pedidos)} pedidos")
+    except Exception as e:
+        log.warning(f"Error guardando Supabase cache: {e}")
+
+
+def _supabase_limpiar():
+    try:
+        sb = _supabase_client()
+        if sb is None:
+            return
+        # Marcar como muy viejo para forzar re-fetch
+        sb.table("melonn_cache").update({"fetched_at": "2000-01-01T00:00:00"}).eq("id", 1).execute()
+    except Exception as e:
+        log.warning(f"Error limpiando Supabase cache: {e}")
+
+
+# ── Capa 3: Melonn API ─────────────────────────────────────────────────────────
 def _get(path: str, params: dict = None) -> Optional[dict]:
     """GET con reintentos y backoff exponencial."""
     url = f"{_BASE_URL}/{path.lstrip('/')}"
@@ -178,7 +181,6 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
         try:
             r = requests.get(url, headers=_headers(), params=params, timeout=_TIMEOUT)
 
-            # Rate limit — esperar y reintentar
             if r.status_code in (429, 503):
                 wait = _RETRY_WAIT * (2 ** intento)
                 log.warning(f"Rate limit HTTP {r.status_code} — esperando {wait}s...")
@@ -188,7 +190,6 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
             r.raise_for_status()
             data = r.json()
 
-            # Detectar "Limit Exceeded" en el cuerpo (patrón de Melonn)
             if isinstance(data, dict) and data.get("message") == "Limit Exceeded":
                 wait = _RETRY_WAIT * (2 ** intento)
                 log.warning(f"Limit Exceeded en {path} — esperando {wait}s...")
@@ -201,8 +202,8 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
             status = e.response.status_code
             log.warning(f"HTTP {status} en {url} (intento {intento+1})")
             if status in (401, 403):
-                log.error("API key inválido o sin permisos — verifica MELONN_API_KEY")
-                return None   # no reintentar en auth errors
+                log.error("API key inválido — verifica MELONN_API_KEY")
+                return None
         except requests.RequestException as e:
             log.warning(f"Request error: {e} (intento {intento+1})")
 
@@ -307,7 +308,6 @@ def _normalizar_pedido(raw: dict) -> Optional[dict]:
     }
 
 
-# ── Fetch desde API ────────────────────────────────────────────────────────────
 def _fetch_de_api() -> tuple:
     """
     Descarga todos los pedidos activos desde la API.
@@ -329,13 +329,13 @@ def _fetch_de_api() -> tuple:
         total_count = meta.get("total_count") or 0
 
         todos.extend(items)
-        log.info(f"Página {page}: {len(items)} items (total_count={total_count}, acumulado={len(todos)})")
+        log.info(f"Página {page}: {len(items)} items (total={total_count}, acumulado={len(todos)})")
 
         if not items or (total_count > 0 and len(todos) >= total_count):
             break
 
         page += 1
-        time.sleep(0.3)   # pausa mínima entre páginas
+        time.sleep(0.3)
 
     pedidos = []
     for item in todos:
@@ -358,42 +358,100 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
     """
     Retorna (pedidos: list[dict], omitidos: dict, meta: dict).
 
-    Estrategia anti-rate-limit:
-    1. forzar_refresh=True  → limpia cache, intenta fetch; si falla usa datos stale
-    2. Cache fresco (<4h)   → retorna directo desde SQLite (0 requests HTTP)
-    3. Cache vencido        → intenta fetch; si falla retorna stale con advertencia
-    4. Sin cache alguno     → intenta fetch; si falla retorna lista vacía
+    Flujo de 3 capas:
+    1. session_state fresco → retorno instantáneo (0 red, 0 DB)
+    2. Supabase fresco       → carga desde nube, guarda en session
+    3. API Melonn            → solo si caché vencido o forzar_refresh
+       - Si API falla        → retorna datos stale de Supabase con advertencia
     """
-    _VACIO = ([], {"resuelto": 0, "sin_datos": 0}, {"fuente": "sin_datos", "stale": False})
+    _EMPTY_META = {"fuente": "sin_datos", "stale": False}
 
     if forzar_refresh:
-        limpiar_cache()
+        _session_limpiar()
+        _supabase_limpiar()
 
-    # Intentar leer cache fresco
-    resultado = _leer_cache(ignorar_ttl=False)
-    if resultado is not None:
-        pedidos, fetched_at, fresco = resultado
-        return pedidos, {"resuelto": 0, "sin_datos": 0}, {
-            "fuente": "cache", "stale": False, "fetched_at": fetched_at
+    # ── Capa 1: session_state ──────────────────────────────────────────────────
+    if not forzar_refresh:
+        hit = _session_leer()
+        if hit:
+            pedidos, fetched_at = hit
+            return pedidos, {"resuelto": 0, "sin_datos": 0}, {
+                "fuente": "session", "stale": False, "fetched_at": fetched_at
+            }
+
+    # ── Capa 2: Supabase ───────────────────────────────────────────────────────
+    if not forzar_refresh:
+        sb_result = _supabase_leer()
+        if sb_result:
+            pedidos, fetched_at, fresco = sb_result
+            if fresco:
+                _session_escribir(pedidos, fetched_at)
+                return pedidos, {"resuelto": 0, "sin_datos": 0}, {
+                    "fuente": "supabase", "stale": False, "fetched_at": fetched_at
+                }
+            # Supabase tiene datos pero están vencidos → intentar API primero
+            log.info("Supabase cache vencido — intentando refresh de API")
+
+    # ── Capa 3: API Melonn ─────────────────────────────────────────────────────
+    pedidos_api, omitidos = _fetch_de_api()
+
+    if pedidos_api:
+        # Fetch exitoso → actualizar ambas capas
+        _supabase_escribir(pedidos_api)
+        _session_escribir(pedidos_api)
+        return pedidos_api, omitidos, {
+            "fuente": "api_live", "stale": False, "fetched_at": datetime.now()
         }
 
-    # Cache vencido o vacío → fetch desde API
-    pedidos, omitidos = _fetch_de_api()
-
-    if pedidos:
-        _guardar_cache(pedidos)
-        return pedidos, omitidos, {"fuente": "api_live", "stale": False}
-
-    # Fetch fallido → intentar datos stale antes de retornar vacío
-    stale = _leer_cache(ignorar_ttl=True)
-    if stale is not None:
-        pedidos_stale, fetched_at, _ = stale
-        log.warning(f"API no disponible — usando datos stale de {fetched_at}")
+    # API falló → retornar stale de Supabase si hay algo
+    sb_stale = _supabase_leer()
+    if sb_stale:
+        pedidos_stale, fetched_at, _ = sb_stale
+        log.warning(f"API rate-limited — usando datos Supabase del {fetched_at}")
+        _session_escribir(pedidos_stale, fetched_at)
         return pedidos_stale, {"resuelto": 0, "sin_datos": 0}, {
             "fuente": "stale", "stale": True, "fetched_at": fetched_at
         }
 
-    return _VACIO
+    return [], {"resuelto": 0, "sin_datos": 0}, _EMPTY_META
+
+
+def limpiar_cache():
+    """Fuerza re-fetch en la próxima llamada."""
+    _session_limpiar()
+    _supabase_limpiar()
+    log.info("Cache Melonn limpiado — próxima carga hará re-fetch")
+
+
+def cache_info() -> Optional[dict]:
+    """Retorna metadata del caché para mostrar en el sidebar."""
+    # Primero session
+    hit = _session_leer()
+    if hit:
+        pedidos, fetched_at = hit
+        age = (datetime.now() - fetched_at).total_seconds()
+        return {
+            "fetched_at": fetched_at,
+            "age_s": age,
+            "total": len(pedidos),
+            "fresco": True,
+            "stale": False,
+            "fuente": "session",
+        }
+    # Luego Supabase
+    sb_result = _supabase_leer()
+    if sb_result:
+        pedidos, fetched_at, fresco = sb_result
+        age = (datetime.utcnow() - fetched_at).total_seconds()
+        return {
+            "fetched_at": fetched_at,
+            "age_s": age,
+            "total": len(pedidos),
+            "fresco": fresco,
+            "stale": not fresco,
+            "fuente": "supabase",
+        }
+    return None
 
 
 def estado() -> dict:
@@ -407,10 +465,9 @@ def estado() -> dict:
         age_min   = None
         prox_min  = 0
     return {
-        "credenciales_ok": credenciales_ok(),
-        "ultima_sync":     ultima,
-        "age_min":         age_min,
+        "credenciales_ok":  credenciales_ok(),
+        "ultima_sync":      ultima,
+        "age_min":          age_min,
         "prox_refresh_min": prox_min,
-        "intervalo_horas": _CACHE_TTL // 3600 or f"{_CACHE_TTL//60}min",
-        "desactualizado":  info is None or not info["fresco"],
+        "desactualizado":   info is None or info.get("stale", False),
     }

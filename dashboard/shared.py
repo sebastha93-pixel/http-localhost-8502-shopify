@@ -666,12 +666,7 @@ def render_sidebar(page_label: str):
                     melonn_client.limpiar_cache()
                 st.cache_data.clear()
                 st.rerun()
-            # Opción fallback: cargar CSV cuando API está en rate limit
-            archivo = st.file_uploader(
-                "Cargar CSV (fallback si API está caída)",
-                type=["csv"],
-                help="Sube el reporte de Melonn para ver datos mientras la API se recupera."
-            )
+            archivo = None
         else:
             archivo = st.file_uploader("Cargar reporte Melonn (CSV)", type=["csv"])
             st.markdown(f"""
