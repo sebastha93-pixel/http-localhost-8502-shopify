@@ -605,7 +605,11 @@ def _parse_cod(v: str) -> float:
 
 # ── Sidebar compartido ────────────────────────────────────────────────────────
 def render_sidebar(page_label: str):
-    """Renderiza sidebar con logo, uploader y filtros. Retorna (ruta_csv, ts, filtros)."""
+    """
+    Sidebar del módulo logístico.
+    Siempre usa la API / caché — sin carga manual de CSV.
+    Retorna (activo: bool, filtro_nivel: list, filtro_zona: list)
+    """
     with st.sidebar:
         st.markdown(f"""
             <div style="padding:8px 0 14px 0;">
@@ -613,101 +617,82 @@ def render_sidebar(page_label: str):
                 <div class="logo-tagline">THAT FITS</div>
             </div>
         """, unsafe_allow_html=True)
-        st.markdown(f"<div style='font-size:0.68rem;letter-spacing:2px;color:{STEEL_BLUE};text-transform:uppercase;margin-bottom:10px;'>{page_label}</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='font-size:0.68rem;letter-spacing:2px;color:{STEEL_BLUE};"
+            f"text-transform:uppercase;margin-bottom:10px;'>{page_label}</div>",
+            unsafe_allow_html=True,
+        )
         st.divider()
 
-        # ── Estado API Melonn ──────────────────────────────────────────────────
+        # ── Estado del caché ───────────────────────────────────────────────────
         _api_ok = _MELONN_API_DISPONIBLE and melonn_client.credenciales_ok()
         if _api_ok:
             try:
-                _info = melonn_client.cache_info() if hasattr(melonn_client, "cache_info") else None
+                _info = melonn_client.cache_info()
             except Exception:
                 _info = None
+
             if _info:
-                _age_min = int(_info['age_s'] // 60)
-                if _age_min < 60:
-                    _age_txt = f"hace {_age_min}min" if _age_min >= 1 else "ahora mismo"
+                _age_min = int(_info["age_s"] // 60)
+                _age_txt = (
+                    f"hace {_age_min}min" if _age_min >= 1
+                    else f"hace {_age_min//60}h" if _age_min >= 60
+                    else "ahora mismo"
+                )
+                if _info.get("stale"):
+                    _color, _icon, _tag = "#f5a623", "⚠", "DATOS EN CACHÉ"
                 else:
-                    _age_h = _age_min // 60
-                    _age_txt = f"hace {_age_h}h"
-                _fresco  = _info.get("fresco", True)
-                _stale   = _info.get("stale", False)
-                if _stale:
-                    _color = "#f5a623"
-                    _icon  = "⚠️"
-                    _tag   = "DATOS DESACTUALIZADOS"
-                elif not _fresco:
-                    _color = "#f5a623"
-                    _icon  = "⚠️"
-                    _tag   = "ACTUALIZANDO..."
-                else:
-                    _color = "#52b788"
-                    _icon  = "✓"
-                    _tag   = "API MELONN ACTIVA"
-                _estado_txt = f"{_info['total']} pedidos · {_age_txt}"
+                    _color, _icon, _tag = "#52b788", "✓", "MELONN SINCRONIZADO"
+                _sub = f"{_info['total']} pedidos · {_age_txt}"
             else:
-                _color = "#f5a623"
-                _icon  = "⚠️"
-                _tag   = "SIN DATOS EN CACHÉ"
-                _estado_txt = "Usa ↻ para cargar"
+                _color, _icon, _tag = "#f5a623", "↻", "SIN DATOS AÚN"
+                _sub = "Presiona actualizar"
+
             st.markdown(f"""
             <div style="background:#1a3a2a;border:1px solid #2d6a4f;border-radius:6px;
                         padding:10px 12px;margin-bottom:8px;">
                 <div style="font-size:0.62rem;color:{_color};letter-spacing:1px;font-weight:700;">
                     {_icon} {_tag}
                 </div>
-                <div style="font-size:0.65rem;color:{_color};margin-top:3px;">
-                    {_estado_txt}
-                </div>
+                <div style="font-size:0.65rem;color:{_color};margin-top:3px;">{_sub}</div>
             </div>
             """, unsafe_allow_html=True)
+
             if st.button("↻ Actualizar datos", key="btn_refresh_melonn", use_container_width=True):
-                if hasattr(melonn_client, "limpiar_cache"):
-                    melonn_client.limpiar_cache()
+                melonn_client.limpiar_cache()
                 st.cache_data.clear()
                 st.rerun()
-            archivo = None
         else:
-            archivo = st.file_uploader("Cargar reporte Melonn (CSV)", type=["csv"])
             st.markdown(f"""
-            <div style="background:rgba(33,48,51,0.35);border:1px dashed rgba(135,166,184,0.3);
-                        border-radius:6px;padding:8px 10px;margin-top:6px;">
-                <div style="font-size:0.6rem;color:{STEEL_BLUE};letter-spacing:0.5px;">
-                    💡 Configura <code>MELONN_API_KEY</code> en Secrets para auto-sync
+            <div style="background:rgba(153,0,18,0.15);border:1px solid #990012;border-radius:6px;
+                        padding:10px 12px;margin-bottom:8px;">
+                <div style="font-size:0.62rem;color:#ff6b6b;letter-spacing:1px;font-weight:700;">
+                    ✗ API NO CONFIGURADA
+                </div>
+                <div style="font-size:0.62rem;color:#ff6b6b;margin-top:3px;">
+                    Agrega MELONN_API_KEY en Secrets
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
         st.divider()
-        st.markdown(f"<div style='font-size:0.68rem;letter-spacing:2px;color:{STEEL_BLUE};text-transform:uppercase;margin-bottom:6px;'>Filtros</div>", unsafe_allow_html=True)
-
-        filtro_nivel = st.multiselect(
-            "Nivel de riesgo",
-            ["CRITICO","RIESGO","NORMAL"],
-            default=[],
+        st.markdown(
+            f"<div style='font-size:0.68rem;letter-spacing:2px;color:{STEEL_BLUE};"
+            f"text-transform:uppercase;margin-bottom:6px;'>Filtros</div>",
+            unsafe_allow_html=True,
         )
-        filtro_zona = st.multiselect("Zona logística", list(ZONAS_ES.values()), default=[])
+        filtro_nivel = st.multiselect("Nivel de riesgo", ["CRITICO", "RIESGO", "NORMAL"], default=[])
+        filtro_zona  = st.multiselect("Zona logística", list(ZONAS_ES.values()), default=[])
 
         st.divider()
-        st.markdown(f"<div style='font-size:0.68rem;color:{STEEL_BLUE};'>{date.today().strftime('%d / %m / %Y')}</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='font-size:0.68rem;color:{STEEL_BLUE};'>"
+            f"{date.today().strftime('%d / %m / %Y')}</div>",
+            unsafe_allow_html=True,
+        )
 
-    # ── Determinar fuente de datos ─────────────────────────────────────────────
-    _api_ok = _MELONN_API_DISPONIBLE and melonn_client.credenciales_ok()
-    if archivo:
-        # CSV siempre tiene prioridad cuando se sube (fallback manual)
-        import tempfile
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
-            tmp.write(archivo.read())
-            ruta_csv = tmp.name
-        ts = archivo.name
-    elif _api_ok:
-        ruta_csv = "__API__"
-        ts = "api"
-    else:
-        ruta_csv = None
-        ts = ""
-
-    return ruta_csv, ts, filtro_nivel, filtro_zona
+    activo = _MELONN_API_DISPONIBLE and melonn_client.credenciales_ok()
+    return activo, filtro_nivel, filtro_zona
 
 # ── Detalle de pedido + guía ──────────────────────────────────────────────────
 def render_detalle(df_tab: pd.DataFrame, tab_key: str):

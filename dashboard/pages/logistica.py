@@ -24,8 +24,7 @@ except Exception:
 from shared import (
     CSS, DEEP_INK, STEEL_BLUE, GRAPHITE_GREY, SOFT_CONCRETE,
     CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR, COD_COLOR,
-    cargar_datos, cargar_datos_api, api_melonn_activa,
-    render_sidebar, render_detalle, _parse_cod, render_tabla,
+    cargar_datos_api, render_sidebar, render_detalle, _parse_cod, render_tabla,
 )
 from memoria import (
     disponible as mem_ok, guardar_snapshot,
@@ -171,67 +170,44 @@ def _render_memoria(orden: str):
                     st.warning("Escribe una nota antes de guardar.")
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
-ruta_csv, ts, filtro_nivel, filtro_zona = render_sidebar("Logística")
+activo, filtro_nivel, filtro_zona = render_sidebar("Logística")
 
-# ── Pantalla de bienvenida ─────────────────────────────────────────────────────
-if not ruta_csv:
+# ── Cargar datos desde Melonn (API → caché → bootstrap) ───────────────────────
+with st.spinner("Cargando pedidos de Melonn..."):
+    try:
+        df_all, omitidos, _meta = cargar_datos_api()
+    except Exception as e:
+        st.error(f"❌ Error inesperado: {e}")
+        st.stop()
+
+if df_all.empty:
     st.markdown(f"""
-        <p class="titulo-panel">📦 LOGÍSTICA</p>
-        <p class="subtitulo">Gestión operativa · MALE'DENIM</p>
-        <hr style='margin:10px 0 28px;'>
-    """, unsafe_allow_html=True)
-    st.markdown(f"""
-    <div style="background:white;border-radius:10px;border:1px solid rgba(33,48,51,0.07);
-                padding:36px 40px;max-width:480px;margin:0 auto;
-                box-shadow:0 2px 12px rgba(0,0,0,0.06);text-align:center;">
-        <div style="font-size:2rem;margin-bottom:14px;">📂</div>
-        <div style="font-size:1rem;font-weight:700;color:{DEEP_INK};margin-bottom:6px;">
-            Sube el reporte de Melonn
-        </div>
-        <div style="font-size:0.8rem;color:#505050;line-height:1.6;">
-            Usa el panel izquierdo para cargar el CSV.<br>
-            El sistema prioriza los pedidos críticos automáticamente.
+    <div style="background:white;border-radius:10px;padding:40px;text-align:center;
+                max-width:500px;margin:40px auto;box-shadow:0 2px 12px rgba(0,0,0,0.06);">
+        <div style="font-size:2rem;margin-bottom:12px;">📡</div>
+        <div style="font-size:1rem;font-weight:700;color:{DEEP_INK};">Sin datos de Melonn</div>
+        <div style="font-size:0.82rem;color:#606060;margin-top:8px;line-height:1.6;">
+            La API está temporalmente no disponible.<br>
+            Presiona <b>↻ Actualizar datos</b> en el sidebar para reintentar.
         </div>
     </div>
     """, unsafe_allow_html=True)
     st.stop()
 
-# ── Cargar datos (API o CSV) ───────────────────────────────────────────────────
-try:
-    with st.spinner("Cargando pedidos..."):
-        if ruta_csv == "__API__":
-            resultado = cargar_datos_api()
-            if len(resultado) == 3:
-                df_all, omitidos, _meta = resultado
-            else:
-                df_all, omitidos = resultado
-                _meta = {}
-            if df_all.empty:
-                st.error("⚠️ No hay datos de Melonn. La API puede estar en rate limit.")
-                st.info("💡 **Opción 1:** Espera 5 minutos y presiona '↻ Actualizar datos' en el sidebar.\n\n💡 **Opción 2:** Sube un CSV manualmente desde el sidebar.")
-                st.stop()
-            # Mostrar banner según fuente de datos
-            _fuente = _meta.get("fuente", "")
-            _fa = _meta.get("fetched_at")
-            _fa_txt = _fa.strftime("%d/%m/%Y %H:%M") if _fa else ""
-            if _fuente == "csv_bootstrap":
-                st.warning(f"⚠️ Datos del CSV local ({_fa_txt}). La API de Melonn está en rate limit. Presiona **↻ Actualizar datos** cuando esté disponible.")
-            elif _meta.get("stale"):
-                st.warning(f"⚠️ Datos en caché del {_fa_txt}. API en rate limit — presiona **↻ Actualizar datos** para sincronizar.")
-        else:
-            df_all, omitidos = cargar_datos(ruta_csv, ts)
-            _meta = {}
-except Exception as e:
-    st.error(f"❌ Error al cargar: {e}")
-    st.stop()
+# Banner informativo según fuente de datos
+_fuente = _meta.get("fuente", "")
+_fa     = _meta.get("fetched_at")
+_fa_txt = _fa.strftime("%d/%m/%Y %H:%M") if _fa else ""
+if _fuente == "api_live":
+    pass  # datos frescos — sin banner
+elif _fuente in ("csv_bootstrap", "stale"):
+    st.warning(
+        f"⚠️ Mostrando datos del {_fa_txt} (caché). "
+        f"Presiona **↻ Actualizar datos** para sincronizar con Melonn.",
+        icon="⚠️",
+    )
 
-# ── Auto-guardar snapshot en Supabase (una vez por CSV) ────────────────────────
-_snap_key = f"snap_guardado_{ts}"
-if mem_ok() and not st.session_state.get(_snap_key):
-    with st.spinner("Guardando snapshot en memoria..."):
-        snap_id = guardar_snapshot(df_all, ts, omitidos if isinstance(omitidos, int) else sum(omitidos.values()) if isinstance(omitidos, dict) else 0)
-    if snap_id:
-        st.session_state[_snap_key] = snap_id
+ts = _fa_txt or "api"
 
 df_cod     = df_all[df_all["COD"] == "SÍ"]
 df_prepago = df_all[df_all["COD"] == "—"]
