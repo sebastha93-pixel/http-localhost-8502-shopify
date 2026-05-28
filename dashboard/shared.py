@@ -609,13 +609,8 @@ def render_sidebar(page_label: str):
             ruta_csv = tmp.name
         ts = archivo.name
     else:
-        # En Streamlit Cloud el CSV demo puede no existir → None para manejarlo en cada página
-        if Path(DEFAULT_CSV).exists():
-            ruta_csv = DEFAULT_CSV
-            ts = "Demo — melonn_2026-05-12"
-        else:
-            ruta_csv = None
-            ts = "Sin datos — sube un CSV de Melonn"
+        ruta_csv = None
+        ts = ""
 
     return ruta_csv, ts, filtro_nivel, filtro_zona
 
