@@ -422,6 +422,57 @@ hr {{ border-color: rgba(33,48,51,0.1) !important; margin: 14px 0 !important; }}
   color: {GRAPHITE_GREY} !important;
 }}
 
+/* ── File uploader ──────────────────────────────────────────────────────────── */
+/* Streamlit renderiza el dropzone con fondo claro (secondaryBackgroundColor)    */
+/* incluso cuando está dentro del sidebar oscuro → hay que fijar el texto oscuro */
+[data-testid="stFileUploaderDropzone"] {{
+  border-radius: 8px !important;
+  border: 1.5px dashed rgba(33,48,51,0.22) !important;
+}}
+/* Texto de instrucciones: "Drag and drop…" y "Limit 200MB…" */
+[data-testid="stFileUploaderDropzoneInstructions"] span,
+[data-testid="stFileUploaderDropzoneInstructions"] small,
+[data-testid="stFileUploaderDropzoneInstructions"] p,
+[data-testid="stFileUploaderDropzoneInstructions"] * {{
+  color: {DEEP_INK} !important;
+  opacity: 0.78;
+}}
+/* Botón "Browse files" */
+[data-testid="stFileUploaderDropzone"] button {{
+  color: {DEEP_INK} !important;
+  border: 1.5px solid rgba(33,48,51,0.25) !important;
+  background: transparent !important;
+  font-family: 'Inter', sans-serif !important;
+  font-size: 0.75rem !important;
+}}
+[data-testid="stFileUploaderDropzone"] button:hover {{
+  background: rgba(33,48,51,0.06) !important;
+}}
+/* Neutralizar el "*" del sidebar para el interior del dropzone */
+[data-testid="stSidebar"] [data-testid="stFileUploaderDropzoneInstructions"] *,
+[data-testid="stSidebar"] [data-testid="stFileUploaderDropzoneInstructions"] span,
+[data-testid="stSidebar"] [data-testid="stFileUploaderDropzoneInstructions"] small {{
+  color: {DEEP_INK} !important;
+  opacity: 0.78;
+}}
+[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] button {{
+  color: {DEEP_INK} !important;
+  border: 1.5px solid rgba(33,48,51,0.25) !important;
+  background: rgba(255,255,255,0.85) !important;
+}}
+[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] button:hover {{
+  background: rgba(255,255,255,1) !important;
+}}
+/* Nombre del archivo ya subido */
+[data-testid="stFileUploaderFile"] *,
+[data-testid="stFileUploader"] [data-testid="stMarkdownContainer"] * {{
+  color: {DEEP_INK} !important;
+}}
+[data-testid="stSidebar"] [data-testid="stFileUploaderFile"] *,
+[data-testid="stSidebar"] [data-testid="stFileUploader"] [data-testid="stMarkdownContainer"] * {{
+  color: {DEEP_INK} !important;
+}}
+
 /* ── Scrollbar ─────────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar {{ width: 4px; height: 4px; }}
 ::-webkit-scrollbar-track {{ background: transparent; }}
