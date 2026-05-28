@@ -161,20 +161,21 @@ def cargar_notas(orden: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def agregar_nota(orden: str, autor: str, nota: str) -> bool:
+def agregar_nota(orden: str, autor: str, nota: str) -> tuple[bool, str]:
+    """Retorna (True, '') en éxito o (False, mensaje_error)."""
     sb = _client()
     if sb is None:
-        return False
+        return False, "Supabase no está conectado"
     try:
         sb.table("notas").insert({
             "orden": orden,
             "autor": autor.strip() or "Equipo",
             "nota":  nota.strip(),
         }).execute()
-        return True
+        return True, ""
     except Exception as e:
         print(f"[memoria] Error agregar_nota: {e}")
-        return False
+        return False, str(e)
 
 
 # ── Acciones ───────────────────────────────────────────────────────────────────
@@ -200,10 +201,11 @@ def cargar_acciones(orden: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def agregar_accion(orden: str, tipo: str, descripcion: str, autor: str) -> bool:
+def agregar_accion(orden: str, tipo: str, descripcion: str, autor: str) -> tuple[bool, str]:
+    """Retorna (True, '') en éxito o (False, mensaje_error)."""
     sb = _client()
     if sb is None:
-        return False
+        return False, "Supabase no está conectado"
     try:
         sb.table("acciones").insert({
             "orden":       orden,
@@ -211,7 +213,7 @@ def agregar_accion(orden: str, tipo: str, descripcion: str, autor: str) -> bool:
             "descripcion": descripcion.strip(),
             "autor":       autor.strip() or "Equipo",
         }).execute()
-        return True
+        return True, ""
     except Exception as e:
         print(f"[memoria] Error agregar_accion: {e}")
-        return False
+        return False, str(e)

@@ -88,6 +88,16 @@ def _render_memoria(orden: str):
     # ── Acciones ────────────────────────────────────────────────────────────────
     with col_acc:
         st.markdown("**⚡ Acciones registradas**")
+
+        # Mostrar mensaje pendiente de operación anterior
+        _k_ac_msg = f"_msg_accion_{orden}"
+        if _k_ac_msg in st.session_state:
+            _ok, _msg = st.session_state.pop(_k_ac_msg)
+            if _ok:
+                st.success(_msg, icon="✅")
+            else:
+                st.error(_msg, icon="❌")
+
         df_ac = cargar_acciones(orden)
         if not df_ac.empty:
             for _, r in df_ac.iterrows():
@@ -102,19 +112,35 @@ def _render_memoria(orden: str):
             st.caption("Sin acciones registradas.")
 
         with st.form(key=f"form_accion_{orden}", clear_on_submit=True):
-            tipo_ac = st.selectbox("Tipo", TIPOS_ACCION, label_visibility="collapsed")
-            desc_ac = st.text_input("Descripción", placeholder="Descripción de la acción...",
-                                    label_visibility="collapsed")
+            tipo_ac  = st.selectbox("Tipo", TIPOS_ACCION, label_visibility="collapsed")
+            desc_ac  = st.text_input("Descripción", placeholder="Descripción de la acción...",
+                                     label_visibility="collapsed")
             autor_ac = st.text_input("Quién", placeholder="Tu nombre",
                                      label_visibility="collapsed")
             if st.form_submit_button("➕ Registrar acción", use_container_width=True):
                 if desc_ac.strip():
-                    agregar_accion(orden, tipo_ac, desc_ac, autor_ac)
+                    ok, err = agregar_accion(orden, tipo_ac, desc_ac, autor_ac)
+                    if ok:
+                        st.session_state[_k_ac_msg] = (True, "Acción guardada correctamente")
+                    else:
+                        st.session_state[_k_ac_msg] = (False, f"No se pudo guardar: {err}")
                     st.rerun()
+                else:
+                    st.warning("Escribe una descripción antes de registrar.")
 
     # ── Notas ────────────────────────────────────────────────────────────────────
     with col_nota:
         st.markdown("**📝 Notas del equipo**")
+
+        # Mostrar mensaje pendiente de operación anterior
+        _k_n_msg = f"_msg_nota_{orden}"
+        if _k_n_msg in st.session_state:
+            _ok, _msg = st.session_state.pop(_k_n_msg)
+            if _ok:
+                st.success(_msg, icon="✅")
+            else:
+                st.error(_msg, icon="❌")
+
         df_n = cargar_notas(orden)
         if not df_n.empty:
             for _, r in df_n.iterrows():
@@ -135,8 +161,14 @@ def _render_memoria(orden: str):
                                      label_visibility="collapsed")
             if st.form_submit_button("💬 Agregar nota", use_container_width=True):
                 if nota_txt.strip():
-                    agregar_nota(orden, autor_n, nota_txt)
+                    ok, err = agregar_nota(orden, autor_n, nota_txt)
+                    if ok:
+                        st.session_state[_k_n_msg] = (True, "Nota guardada correctamente")
+                    else:
+                        st.session_state[_k_n_msg] = (False, f"No se pudo guardar: {err}")
                     st.rerun()
+                else:
+                    st.warning("Escribe una nota antes de guardar.")
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 ruta_csv, ts, filtro_nivel, filtro_zona = render_sidebar("Logística")
