@@ -92,11 +92,15 @@ footer { visibility: hidden !important; }
 </style>
 """, unsafe_allow_html=True)
 
-pg = st.navigation([
-    st.Page("pages/logistica.py",      title="LOGÍSTICA"),
-    st.Page("pages/mercadopago.py",    title="MERCADOPAGO"),
-    st.Page("pages/3_conciliacion.py", title="CONCILIACIÓN"),
-    st.Page("pages/4_shopify.py",      title="COMERCIAL"),
-])
+pg = st.navigation({
+    "OPERACIONES": [
+        st.Page("pages/logistica.py",   title="LOGÍSTICA"),
+        st.Page("pages/4_shopify.py",   title="COMERCIAL"),
+    ],
+    "FINANZAS": [
+        st.Page("pages/mercadopago.py",    title="MERCADOPAGO"),
+        st.Page("pages/3_conciliacion.py", title="CONCILIACIÓN"),
+    ],
+})
 
 pg.run()
