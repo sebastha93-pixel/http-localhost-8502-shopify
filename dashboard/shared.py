@@ -13,6 +13,11 @@ import streamlit.components.v1 as components
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from ingest import leer_csv_melonn
 from riesgo import calcular_riesgo
+try:
+    import melonn_client
+    _MELONN_API_DISPONIBLE = True
+except Exception:
+    _MELONN_API_DISPONIBLE = False
 
 # ── Paleta de marca MALE'DENIM ────────────────────────────────────────────────
 DEEP_INK      = "#213033"
@@ -553,9 +558,25 @@ def _procesar_df(pedidos: list) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def cargar_datos(ruta: str, ts: str):
+    """Carga desde CSV (fallback cuando no hay API)."""
     pedidos, omitidos = leer_csv_melonn(ruta, solo_activos=True)
     df = _procesar_df(pedidos)
     return df, omitidos
+
+@st.cache_data(show_spinner=False, ttl=7200)   # cache 2 horas
+def cargar_datos_api(ts: str, dias: int = 30):
+    """Carga pedidos directamente desde la API de Melonn."""
+    if not _MELONN_API_DISPONIBLE:
+        return pd.DataFrame(), {}
+    pedidos, omitidos = melonn_client.obtener_pedidos_activos(dias=dias)
+    if not pedidos:
+        return pd.DataFrame(), omitidos
+    df = _procesar_df(pedidos)
+    return df, omitidos
+
+def api_melonn_activa() -> bool:
+    """True si el API key está configurado y el módulo disponible."""
+    return _MELONN_API_DISPONIBLE and melonn_client.credenciales_ok()
 
 def color_nivel(val):
     return {
@@ -587,7 +608,34 @@ def render_sidebar(page_label: str):
         st.markdown(f"<div style='font-size:0.68rem;letter-spacing:2px;color:{STEEL_BLUE};text-transform:uppercase;margin-bottom:10px;'>{page_label}</div>", unsafe_allow_html=True)
         st.divider()
 
-        archivo = st.file_uploader("Cargar reporte Melonn (CSV)", type=["csv"])
+        # ── Estado API Melonn ──────────────────────────────────────────────────
+        _api_ok = _MELONN_API_DISPONIBLE and melonn_client.credenciales_ok()
+        if _api_ok:
+            _est = melonn_client.estado()
+            st.markdown(f"""
+            <div style="background:#1a3a2a;border:1px solid #2d6a4f;border-radius:6px;
+                        padding:10px 12px;margin-bottom:10px;">
+                <div style="font-size:0.62rem;color:#52b788;letter-spacing:1px;font-weight:700;">
+                    ✓ API MELONN ACTIVA
+                </div>
+                <div style="font-size:0.65rem;color:rgba(224,222,221,0.75);margin-top:3px;">
+                    Auto-sync cada {_est['intervalo_horas']}h
+                    {"· Última: " + _est['ultima_sync'] if _est['ultima_sync'] else "· Pendiente primera sync"}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            archivo = None   # no necesitamos CSV
+        else:
+            archivo = st.file_uploader("Cargar reporte Melonn (CSV)", type=["csv"])
+            if not _MELONN_API_DISPONIBLE or True:   # siempre mostrar hint hasta activar
+                st.markdown(f"""
+                <div style="background:rgba(33,48,51,0.35);border:1px dashed rgba(135,166,184,0.3);
+                            border-radius:6px;padding:8px 10px;margin-top:6px;">
+                    <div style="font-size:0.6rem;color:{STEEL_BLUE};letter-spacing:0.5px;">
+                        💡 Configura <code>MELONN_API_KEY</code> en Secrets para auto-sync
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
         st.divider()
         st.markdown(f"<div style='font-size:0.68rem;letter-spacing:2px;color:{STEEL_BLUE};text-transform:uppercase;margin-bottom:6px;'>Filtros</div>", unsafe_allow_html=True)
@@ -602,7 +650,12 @@ def render_sidebar(page_label: str):
         st.divider()
         st.markdown(f"<div style='font-size:0.68rem;color:{STEEL_BLUE};'>{date.today().strftime('%d / %m / %Y')}</div>", unsafe_allow_html=True)
 
-    if archivo:
+    # ── Determinar fuente de datos ─────────────────────────────────────────────
+    _api_ok = _MELONN_API_DISPONIBLE and melonn_client.credenciales_ok()
+    if _api_ok:
+        ruta_csv = "__API__"       # señal especial: usar API
+        ts = datetime.now().strftime("API · %d/%m/%Y %H:%M")
+    elif archivo:
         import tempfile
         with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
             tmp.write(archivo.read())

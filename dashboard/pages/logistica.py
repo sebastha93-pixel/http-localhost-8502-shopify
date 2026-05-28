@@ -24,8 +24,8 @@ except Exception:
 from shared import (
     CSS, DEEP_INK, STEEL_BLUE, GRAPHITE_GREY, SOFT_CONCRETE,
     CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR, COD_COLOR,
-    cargar_datos, render_sidebar, render_detalle, _parse_cod,
-    render_tabla,
+    cargar_datos, cargar_datos_api, api_melonn_activa,
+    render_sidebar, render_detalle, _parse_cod, render_tabla,
 )
 from memoria import (
     disponible as mem_ok, guardar_snapshot,
@@ -196,10 +196,16 @@ if not ruta_csv:
     """, unsafe_allow_html=True)
     st.stop()
 
-# ── Cargar datos ───────────────────────────────────────────────────────────────
+# ── Cargar datos (API o CSV) ───────────────────────────────────────────────────
 try:
-    with st.spinner("Procesando pedidos..."):
-        df_all, omitidos = cargar_datos(ruta_csv, ts)
+    with st.spinner("Cargando pedidos..."):
+        if ruta_csv == "__API__":
+            df_all, omitidos = cargar_datos_api(ts)
+            if df_all.empty:
+                st.warning("⚠️ La API de Melonn no devolvió datos. Verifica que el API key tenga permisos.")
+                st.stop()
+        else:
+            df_all, omitidos = cargar_datos(ruta_csv, ts)
 except Exception as e:
     st.error(f"❌ Error al cargar: {e}")
     st.stop()
