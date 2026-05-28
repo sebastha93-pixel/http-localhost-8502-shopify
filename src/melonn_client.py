@@ -14,9 +14,13 @@ import logging
 import os
 import time
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 import requests
+
+# Ruta al CSV de bootstrap (solo se usa si Supabase está vacío y API está caída)
+_CSV_BOOTSTRAP = Path(__file__).parent.parent / "data" / "logistica" / "raw" / "melonn_2026-05-12.csv"
 
 log = logging.getLogger(__name__)
 
@@ -413,7 +417,37 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
             "fuente": "stale", "stale": True, "fetched_at": fetched_at
         }
 
+    # Capa 4: CSV bootstrap (último recurso — solo si todo lo anterior falla)
+    pedidos_csv = _seed_desde_csv()
+    if pedidos_csv:
+        # Guardar en Supabase para que la próxima carga use eso
+        _supabase_escribir(pedidos_csv)
+        _session_escribir(pedidos_csv)
+        log.info("Bootstrap CSV guardado en Supabase — próximas cargas usarán Supabase")
+        return pedidos_csv, {"resuelto": 0, "sin_datos": 0}, {
+            "fuente": "csv_bootstrap", "stale": True,
+            "fetched_at": datetime.now(),
+        }
+
     return [], {"resuelto": 0, "sin_datos": 0}, _EMPTY_META
+
+
+def _seed_desde_csv() -> list:
+    """
+    Lee el CSV de bootstrap y retorna pedidos normalizados.
+    Solo se usa cuando Supabase está vacío Y la API no responde.
+    """
+    if not _CSV_BOOTSTRAP.exists():
+        return []
+    try:
+        from ingest import leer_csv_melonn
+        pedidos, _ = leer_csv_melonn(str(_CSV_BOOTSTRAP), solo_activos=True)
+        if pedidos:
+            log.info(f"Bootstrap desde CSV: {len(pedidos)} pedidos de {_CSV_BOOTSTRAP.name}")
+        return pedidos
+    except Exception as e:
+        log.warning(f"Error leyendo CSV bootstrap: {e}")
+        return []
 
 
 def limpiar_cache():

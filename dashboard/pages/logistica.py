@@ -210,11 +210,14 @@ try:
                 st.error("⚠️ No hay datos de Melonn. La API puede estar en rate limit.")
                 st.info("💡 **Opción 1:** Espera 5 minutos y presiona '↻ Actualizar datos' en el sidebar.\n\n💡 **Opción 2:** Sube un CSV manualmente desde el sidebar.")
                 st.stop()
-            # Mostrar banner si los datos son stale
-            if _meta.get("stale"):
-                _fa = _meta.get("fetched_at")
-                _fa_txt = _fa.strftime("%d/%m/%Y %H:%M") if _fa else "desconocido"
-                st.warning(f"⚠️ Mostrando datos en caché del {_fa_txt}. La API de Melonn está en rate limit — presiona **↻ Actualizar datos** para intentar sincronizar.")
+            # Mostrar banner según fuente de datos
+            _fuente = _meta.get("fuente", "")
+            _fa = _meta.get("fetched_at")
+            _fa_txt = _fa.strftime("%d/%m/%Y %H:%M") if _fa else ""
+            if _fuente == "csv_bootstrap":
+                st.warning(f"⚠️ Datos del CSV local ({_fa_txt}). La API de Melonn está en rate limit. Presiona **↻ Actualizar datos** cuando esté disponible.")
+            elif _meta.get("stale"):
+                st.warning(f"⚠️ Datos en caché del {_fa_txt}. API en rate limit — presiona **↻ Actualizar datos** para sincronizar.")
         else:
             df_all, omitidos = cargar_datos(ruta_csv, ts)
             _meta = {}
