@@ -28,7 +28,7 @@ _TIMEOUT     = 30
 _MAX_RETRIES = 3
 _RETRY_WAIT  = 3          # segundos base entre reintentos
 _PAGE_SIZE   = 50         # conservador — evita límites de la API
-_CACHE_TTL   = 600        # segundos (10 min) antes de re-fetch
+_CACHE_TTL   = 14400      # segundos (4 horas) — el cache nunca se invalida solo; refresh es manual
 
 # Ruta del SQLite (misma BD que el resto de la app)
 _DB_PATH = Path(__file__).parent.parent / "data" / "db" / "maledenim.db"
@@ -93,10 +93,11 @@ def _init_cache():
         conn.commit()
 
 
-def _leer_cache() -> Optional[tuple]:
+def _leer_cache(ignorar_ttl: bool = False) -> Optional[tuple]:
     """
-    Retorna (pedidos: list, fetched_at: datetime) si el cache está fresco.
-    Retorna None si no existe o está vencido.
+    Retorna (pedidos: list, fetched_at: datetime, fresco: bool).
+    Si ignorar_ttl=True devuelve datos aunque estén vencidos (modo stale fallback).
+    Retorna None solo si no existe ningún dato en cache.
     """
     try:
         _init_cache()
@@ -108,12 +109,13 @@ def _leer_cache() -> Optional[tuple]:
             return None
         fetched_at = datetime.fromisoformat(row["fetched_at"])
         age = (datetime.now() - fetched_at).total_seconds()
-        if age > _CACHE_TTL:
-            log.info(f"Cache vencido ({age:.0f}s > {_CACHE_TTL}s)")
+        fresco = age <= _CACHE_TTL
+        if not fresco and not ignorar_ttl:
+            log.info(f"Cache vencido ({age:.0f}s > {_CACHE_TTL}s) — se puede usar stale")
             return None
         pedidos = json.loads(row["pedidos_json"])
-        log.info(f"Cache hit: {len(pedidos)} pedidos ({age:.0f}s de antigüedad)")
-        return pedidos, fetched_at
+        log.info(f"Cache {'hit' if fresco else 'STALE'}: {len(pedidos)} pedidos ({age:.0f}s)")
+        return pedidos, fetched_at, fresco
     except Exception as e:
         log.warning(f"Error leyendo cache: {e}")
         return None
@@ -162,6 +164,7 @@ def cache_info() -> Optional[dict]:
             "age_s": age,
             "total": row["total"],
             "fresco": age <= _CACHE_TTL,
+            "stale": age > _CACHE_TTL,
         }
     except Exception:
         return None
@@ -353,31 +356,44 @@ def _fetch_de_api() -> tuple:
 # ── Punto de entrada principal ─────────────────────────────────────────────────
 def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tuple:
     """
-    Retorna (pedidos: list[dict], omitidos: dict).
+    Retorna (pedidos: list[dict], omitidos: dict, meta: dict).
 
-    Flujo:
-    1. Si cache SQLite fresco (< 10 min) → retorna desde disco (instantáneo)
-    2. Si forzar_refresh=True → limpia cache y re-fetch
-    3. Si cache vencido → fetch desde API, guarda en SQLite, retorna
-
-    En cargas normales: 0 requests HTTP si el cache está fresco.
+    Estrategia anti-rate-limit:
+    1. forzar_refresh=True  → limpia cache, intenta fetch; si falla usa datos stale
+    2. Cache fresco (<4h)   → retorna directo desde SQLite (0 requests HTTP)
+    3. Cache vencido        → intenta fetch; si falla retorna stale con advertencia
+    4. Sin cache alguno     → intenta fetch; si falla retorna lista vacía
     """
+    _VACIO = ([], {"resuelto": 0, "sin_datos": 0}, {"fuente": "sin_datos", "stale": False})
+
     if forzar_refresh:
         limpiar_cache()
 
-    resultado = _leer_cache()
+    # Intentar leer cache fresco
+    resultado = _leer_cache(ignorar_ttl=False)
     if resultado is not None:
-        pedidos, _ = resultado
-        # Los omitidos no se guardan en cache — no son críticos para el dashboard
-        return pedidos, {"resuelto": 0, "sin_datos": 0}
+        pedidos, fetched_at, fresco = resultado
+        return pedidos, {"resuelto": 0, "sin_datos": 0}, {
+            "fuente": "cache", "stale": False, "fetched_at": fetched_at
+        }
 
-    # Cache vencido o inexistente → fetch desde API
+    # Cache vencido o vacío → fetch desde API
     pedidos, omitidos = _fetch_de_api()
 
     if pedidos:
         _guardar_cache(pedidos)
+        return pedidos, omitidos, {"fuente": "api_live", "stale": False}
 
-    return pedidos, omitidos
+    # Fetch fallido → intentar datos stale antes de retornar vacío
+    stale = _leer_cache(ignorar_ttl=True)
+    if stale is not None:
+        pedidos_stale, fetched_at, _ = stale
+        log.warning(f"API no disponible — usando datos stale de {fetched_at}")
+        return pedidos_stale, {"resuelto": 0, "sin_datos": 0}, {
+            "fuente": "stale", "stale": True, "fetched_at": fetched_at
+        }
+
+    return _VACIO
 
 
 def estado() -> dict:

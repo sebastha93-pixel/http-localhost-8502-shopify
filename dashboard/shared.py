@@ -567,14 +567,20 @@ def cargar_datos_api(forzar_refresh: bool = False):
     """
     Carga pedidos desde Melonn.
     Cache SQLite maneja la persistencia — no necesitamos @st.cache_data aquí.
+    Retorna (df, omitidos, meta) donde meta incluye fuente y si es stale.
     """
     if not _MELONN_API_DISPONIBLE:
-        return pd.DataFrame(), {}
-    pedidos, omitidos = melonn_client.obtener_pedidos_activos(forzar_refresh=forzar_refresh)
+        return pd.DataFrame(), {}, {"fuente": "no_api"}
+    resultado = melonn_client.obtener_pedidos_activos(forzar_refresh=forzar_refresh)
+    if len(resultado) == 3:
+        pedidos, omitidos, meta = resultado
+    else:
+        pedidos, omitidos = resultado
+        meta = {}
     if not pedidos:
-        return pd.DataFrame(), omitidos
+        return pd.DataFrame(), omitidos, meta
     df = _procesar_df(pedidos)
-    return df, omitidos
+    return df, omitidos, meta
 
 def api_melonn_activa() -> bool:
     """True si el API key está configurado y el módulo disponible."""
@@ -618,17 +624,37 @@ def render_sidebar(page_label: str):
             except Exception:
                 _info = None
             if _info:
-                _age_txt = f"hace {int(_info['age_s']//60)}min" if _info['age_s'] >= 60 else "ahora mismo"
-                _color   = "#52b788" if _info["fresco"] else "#f5a623"
-                _estado_txt = f"✓ {_info['total']} pedidos · {_age_txt}"
+                _age_min = int(_info['age_s'] // 60)
+                if _age_min < 60:
+                    _age_txt = f"hace {_age_min}min" if _age_min >= 1 else "ahora mismo"
+                else:
+                    _age_h = _age_min // 60
+                    _age_txt = f"hace {_age_h}h"
+                _fresco  = _info.get("fresco", True)
+                _stale   = _info.get("stale", False)
+                if _stale:
+                    _color = "#f5a623"
+                    _icon  = "⚠️"
+                    _tag   = "DATOS DESACTUALIZADOS"
+                elif not _fresco:
+                    _color = "#f5a623"
+                    _icon  = "⚠️"
+                    _tag   = "ACTUALIZANDO..."
+                else:
+                    _color = "#52b788"
+                    _icon  = "✓"
+                    _tag   = "API MELONN ACTIVA"
+                _estado_txt = f"{_info['total']} pedidos · {_age_txt}"
             else:
-                _color   = "#f5a623"
-                _estado_txt = "Sin datos — cargando..."
+                _color = "#f5a623"
+                _icon  = "⚠️"
+                _tag   = "SIN DATOS EN CACHÉ"
+                _estado_txt = "Usa ↻ para cargar"
             st.markdown(f"""
             <div style="background:#1a3a2a;border:1px solid #2d6a4f;border-radius:6px;
                         padding:10px 12px;margin-bottom:8px;">
-                <div style="font-size:0.62rem;color:#52b788;letter-spacing:1px;font-weight:700;">
-                    ✓ API MELONN ACTIVA
+                <div style="font-size:0.62rem;color:{_color};letter-spacing:1px;font-weight:700;">
+                    {_icon} {_tag}
                 </div>
                 <div style="font-size:0.65rem;color:{_color};margin-top:3px;">
                     {_estado_txt}
@@ -640,18 +666,22 @@ def render_sidebar(page_label: str):
                     melonn_client.limpiar_cache()
                 st.cache_data.clear()
                 st.rerun()
-            archivo = None
+            # Opción fallback: cargar CSV cuando API está en rate limit
+            archivo = st.file_uploader(
+                "Cargar CSV (fallback si API está caída)",
+                type=["csv"],
+                help="Sube el reporte de Melonn para ver datos mientras la API se recupera."
+            )
         else:
             archivo = st.file_uploader("Cargar reporte Melonn (CSV)", type=["csv"])
-            if not _MELONN_API_DISPONIBLE or True:
-                st.markdown(f"""
-                <div style="background:rgba(33,48,51,0.35);border:1px dashed rgba(135,166,184,0.3);
-                            border-radius:6px;padding:8px 10px;margin-top:6px;">
-                    <div style="font-size:0.6rem;color:{STEEL_BLUE};letter-spacing:0.5px;">
-                        💡 Configura <code>MELONN_API_KEY</code> en Secrets para auto-sync
-                    </div>
+            st.markdown(f"""
+            <div style="background:rgba(33,48,51,0.35);border:1px dashed rgba(135,166,184,0.3);
+                        border-radius:6px;padding:8px 10px;margin-top:6px;">
+                <div style="font-size:0.6rem;color:{STEEL_BLUE};letter-spacing:0.5px;">
+                    💡 Configura <code>MELONN_API_KEY</code> en Secrets para auto-sync
                 </div>
-                """, unsafe_allow_html=True)
+            </div>
+            """, unsafe_allow_html=True)
 
         st.divider()
         st.markdown(f"<div style='font-size:0.68rem;letter-spacing:2px;color:{STEEL_BLUE};text-transform:uppercase;margin-bottom:6px;'>Filtros</div>", unsafe_allow_html=True)
@@ -668,15 +698,16 @@ def render_sidebar(page_label: str):
 
     # ── Determinar fuente de datos ─────────────────────────────────────────────
     _api_ok = _MELONN_API_DISPONIBLE and melonn_client.credenciales_ok()
-    if _api_ok:
-        ruta_csv = "__API__"
-        ts = "api"                 # clave estable — el cache no se invalida por tiempo
-    elif archivo:
+    if archivo:
+        # CSV siempre tiene prioridad cuando se sube (fallback manual)
         import tempfile
         with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
             tmp.write(archivo.read())
             ruta_csv = tmp.name
         ts = archivo.name
+    elif _api_ok:
+        ruta_csv = "__API__"
+        ts = "api"
     else:
         ruta_csv = None
         ts = ""

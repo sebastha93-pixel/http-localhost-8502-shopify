@@ -200,12 +200,24 @@ if not ruta_csv:
 try:
     with st.spinner("Cargando pedidos..."):
         if ruta_csv == "__API__":
-            df_all, omitidos = cargar_datos_api()
+            resultado = cargar_datos_api()
+            if len(resultado) == 3:
+                df_all, omitidos, _meta = resultado
+            else:
+                df_all, omitidos = resultado
+                _meta = {}
             if df_all.empty:
-                st.warning("⚠️ No se obtuvieron pedidos de Melonn. La API puede estar en rate limit — espera unos minutos y usa '↻ Actualizar datos' en el sidebar.")
+                st.error("⚠️ No hay datos de Melonn. La API puede estar en rate limit.")
+                st.info("💡 **Opción 1:** Espera 5 minutos y presiona '↻ Actualizar datos' en el sidebar.\n\n💡 **Opción 2:** Sube un CSV manualmente desde el sidebar.")
                 st.stop()
+            # Mostrar banner si los datos son stale
+            if _meta.get("stale"):
+                _fa = _meta.get("fetched_at")
+                _fa_txt = _fa.strftime("%d/%m/%Y %H:%M") if _fa else "desconocido"
+                st.warning(f"⚠️ Mostrando datos en caché del {_fa_txt}. La API de Melonn está en rate limit — presiona **↻ Actualizar datos** para intentar sincronizar.")
         else:
             df_all, omitidos = cargar_datos(ruta_csv, ts)
+            _meta = {}
 except Exception as e:
     st.error(f"❌ Error al cargar: {e}")
     st.stop()
