@@ -133,55 +133,101 @@ def _calcular_dias(fecha_despacho: Optional[date], fecha_entrega: Optional[date]
 
 def _normalizar_pedido(raw: dict) -> Optional[dict]:
     """
-    Convierte un pedido JSON de la API al esquema interno de ingest.py.
-    Los nombres de campo se actualizan cuando Melonn confirme el contrato.
+    Convierte un pedido JSON de la API Melonn al esquema interno de ingest.py.
+
+    Estructura confirmada (2026-05-28):
+    {
+      "id": 1732571663793215,
+      "internal_order_number": "M...",
+      "external_order_number": "SHOPIFY-XXX",
+      "external_order_id": null,
+      "creation_date": "2024-11-25T21:54:25.000Z",
+      "melonn_tracking_link": "https://...",
+      "payment_on_delivery_amount": null | 59900,
+      "is_b2b": false,
+      "sell_order_state": {"id": 2, "name": "All items reserved..."},
+      "buyer": {"full_name": "...", "phone_number": "+57...", "email": "..."},
+      "line_items": [{"quantity": 1, "sku": "S0001"}],
+      "shipping_method": {"code": "MEL-15", "name": "Estándar..."},
+      "warehouse": {"city": "Sabaneta", "region": "ANTIOQUIA", ...},
+      -- campos que aparecen en órdenes despachadas (pendiente confirmar nombres):
+      "delivery_address": {"city": "...", "region": "...", ...},
+      "dispatch_date": "...",
+      "promise_date": "...",
+      "delivery_date": "...",
+      "carrier": {"name": "..."}
+    }
     """
-    # ── Mapeo flexible: acepta camelCase y snake_case ──────────────────────────
-    def g(*keys):
-        """Busca el primer key que exista en raw."""
+    # ── Campos base (confirmados) ──────────────────────────────────────────────
+    estado = str((raw.get("sell_order_state") or {}).get("name") or "")
+
+    buyer  = raw.get("buyer") or {}
+    nombre = str(buyer.get("full_name") or "")
+    tel    = str(buyer.get("phone_number") or "")
+
+    # Primer line_item para SKU / cantidad
+    items      = raw.get("line_items") or []
+    first_item = items[0] if items else {}
+    sku        = str(first_item.get("sku") or "")
+    cantidad   = int(first_item.get("quantity") or 1)
+    # Producto: concatenar todos los SKUs si hay varios
+    producto   = ", ".join(str(i.get("sku", "")) for i in items if i.get("sku"))
+
+    fecha_creacion = _parsear_fecha(raw.get("creation_date"))
+    valor_cod      = raw.get("payment_on_delivery_amount")
+
+    # ── Campos de despacho (aparecen cuando el pedido está enviado) ────────────
+    # Intentar múltiples nombres posibles hasta confirmar con Melonn
+    def _f(*keys):
         for k in keys:
-            if raw.get(k) is not None:
-                return raw[k]
+            v = raw.get(k)
+            if v is not None:
+                return v
         return None
 
-    estado = str(g("orderStatus", "order_status", "estado_orden", "status") or "")
-
     fecha_despacho = _parsear_fecha(
-        g("shippingDate", "shipping_date", "fecha_envio", "fecha_despacho_raw"))
+        _f("dispatch_date", "shipping_date", "shipped_date", "dispatched_at"))
     fecha_entrega  = _parsear_fecha(
-        g("deliveryDate", "delivery_date", "fecha_entrega", "fecha_entrega_raw"))
+        _f("delivery_date", "delivered_date", "actual_delivery_date"))
     fecha_promesa  = _parsear_fecha(
-        g("promisedDeliveryDate", "promised_delivery_date", "fecha_promesa", "fecha_promesa_raw"))
-    fecha_creacion = _parsear_fecha(
-        g("createdAt", "created_at", "fecha_creacion", "fecha_creacion_raw"))
+        _f("promise_date", "promised_delivery_date", "estimated_delivery_date",
+           "max_delivery_date"))
 
-    # Sin fecha de despacho = pedido aún en bodega, no es logística activa
+    # ── Destino (aparece cuando el pedido está creado con dirección real) ──────
+    dest   = (raw.get("delivery_address") or raw.get("destination")
+              or raw.get("shipping_address") or raw.get("buyer_address") or {})
+    ciudad = str(dest.get("city") or dest.get("ciudad") or "").upper().strip()
+    region = str(dest.get("region") or dest.get("state") or "")
+
+    # ── Transportadora ─────────────────────────────────────────────────────────
+    carrier_obj  = raw.get("carrier") or raw.get("courier") or {}
+    transportadora = str(
+        carrier_obj.get("name") or carrier_obj.get("carrier_name") or
+        raw.get("carrier_name") or raw.get("transportadora") or
+        (raw.get("shipping_method") or {}).get("name") or ""
+    )
+
+    # Sin fecha de despacho = aún en bodega, no es logística activa
     if not fecha_despacho:
         return None
 
-    valor_cod_raw = g("codAmount", "cod_amount", "valor_pago_contraentrega",
-                      "valor_cod_raw", "cashOnDelivery") or 0
-
-    ciudad = str(g("destinationCity", "destination_city", "ciudad_destino") or "")
-    ciudad = ciudad.upper().strip()
-
     p = {
         # Identificadores
-        "orden_melonn":       str(g("melonnOrderId", "melonn_order_id", "id", "orden_melonn") or ""),
-        "orden_tienda":       str(g("storeOrderId", "store_order_id", "orden_shopify", "orden_tienda") or ""),
+        "orden_melonn":       str(raw.get("internal_order_number") or raw.get("id") or ""),
+        "orden_tienda":       str(raw.get("external_order_number") or raw.get("external_order_id") or ""),
         "estado_melonn":      estado,
-        "tienda":             str(g("store", "tienda") or ""),
-        "canal_venta":        str(g("salesChannel", "sales_channel", "canal_venta") or ""),
+        "tienda":             "",
+        "canal_venta":        "B2B" if raw.get("is_b2b") else "D2C",
 
-        # Destinatario
-        "nombre_comprador":   str(g("buyerName", "buyer_name", "nombre_comprador") or ""),
-        "telefono_comprador": str(g("buyerPhone", "buyer_phone", "telefono_comprador") or ""),
+        # Comprador
+        "nombre_comprador":   nombre,
+        "telefono_comprador": tel,
         "ciudad_destino":     ciudad,
-        "region_destino":     str(g("destinationRegion", "destination_region", "region_destino") or ""),
+        "region_destino":     region,
 
         # Logística
-        "transportadora":     str(g("carrier", "transportadora") or ""),
-        "link_guia":          str(g("trackingUrl", "tracking_url", "link_guia") or ""),
+        "transportadora":     transportadora,
+        "link_guia":          str(raw.get("melonn_tracking_link") or ""),
 
         # Fechas
         "fecha_despacho":     fecha_despacho,
@@ -190,19 +236,20 @@ def _normalizar_pedido(raw: dict) -> Optional[dict]:
         "fecha_creacion":     fecha_creacion,
 
         # Producto
-        "sku":                str(g("sku", "SKU") or ""),
-        "producto":           str(g("productName", "product_name", "producto") or ""),
-        "variante":           str(g("variant", "variante") or ""),
-        "cantidad":           int(g("quantity", "cantidad") or 1),
-        "precio_unitario":    float(str(g("unitPrice", "unit_price", "precio_unitario") or 0)
-                                    .replace(",", ".")),
+        "sku":                sku,
+        "producto":           producto,
+        "variante":           str(first_item.get("variant") or first_item.get("variante") or ""),
+        "cantidad":           cantidad,
+        "precio_unitario":    float(
+            str(first_item.get("unit_price") or first_item.get("price") or 0)
+            .replace(",", ".")),
 
         # COD
-        "valor_cod_raw":      str(valor_cod_raw),
-        "tipo_recaudo":       str(g("collectionType", "collection_type", "tipo_recaudo") or ""),
+        "valor_cod_raw":      str(valor_cod or 0),
+        "tipo_recaudo":       "contraentrega" if valor_cod else "prepago",
 
         # Calculados
-        "es_contraentrega":   _es_contraentrega(valor_cod_raw),
+        "es_contraentrega":   _es_contraentrega(valor_cod),
         "dias_en_transito":   _calcular_dias(fecha_despacho, fecha_entrega),
         "esta_en_transito":   estado in ESTADOS_EN_TRANSITO,
         "entregado":          estado in ESTADOS_RESUELTOS,
