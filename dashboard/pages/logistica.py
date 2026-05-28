@@ -200,25 +200,6 @@ if not ruta_csv:
 try:
     with st.spinner("Cargando pedidos..."):
         if ruta_csv == "__API__":
-            # ── Diagnóstico visible ────────────────────────────────────────────
-            import melonn_client as _mc
-            _items = _mc._listar_paginas()
-            if not _items:
-                st.error("❌ `GET /sell-orders` devolvió vacío o 403 desde Streamlit Cloud. "
-                         "El API key puede tener restricción de IP. "
-                         "Contacta a Melonn para permitir llamadas desde servidores externos.")
-                st.stop()
-
-            _pedidos_raw, _omitidos = _mc.obtener_pedidos_activos()
-            if not _pedidos_raw:
-                with st.expander("🔍 Debug: primeros 2 items del listado", expanded=True):
-                    st.json(_items[:2])
-                st.warning(f"API retornó {len(_items)} órdenes del listado pero "
-                           f"0 pasaron el normalizado. "
-                           f"Omitidos: {_omitidos}")
-                st.stop()
-
-            # Cache después de validar
             df_all, omitidos = cargar_datos_api(ts)
             if df_all.empty:
                 st.info("📭 No hay pedidos activos en Melonn en este momento.")
