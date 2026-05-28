@@ -595,7 +595,7 @@ def render_sidebar(page_label: str):
         filtro_nivel = st.multiselect(
             "Nivel de riesgo",
             ["CRITICO","RIESGO","NORMAL"],
-            default=["CRITICO","RIESGO"],
+            default=[],
         )
         filtro_zona = st.multiselect("Zona logística", list(ZONAS_ES.values()), default=[])
 
