@@ -363,6 +363,33 @@ input::placeholder, textarea::placeholder {{
   color: #e0dedd !important;
 }}
 
+/* ── Sidebar widget labels — mayor especificidad que la regla global ─────────── */
+/* La regla global [stWidgetLabel] label tiene la misma especificidad que        */
+/* [stSidebar] label y la sobrescribe porque aparece después. Esta regla tiene   */
+/* dos atributos (0,2,1) y gana siempre.                                         */
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p,
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"] span,
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"] label {{
+  color: rgba(224,222,221,0.88) !important;
+  font-size: 0.7rem !important;
+  letter-spacing: 1px !important;
+  text-transform: uppercase !important;
+  font-weight: 600 !important;
+}}
+
+/* Captions del sidebar — #555 sobre #213033 da contraste 1.9:1, invisible */
+[data-testid="stSidebar"] .stCaption,
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {{
+  color: rgba(200,205,208,0.72) !important;
+  font-size: 0.67rem !important;
+}}
+
+/* Texto markdown genérico dentro del sidebar (st.markdown, st.info, etc.) */
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] li {{
+  color: rgba(224,222,221,0.85) !important;
+}}
+
 /* ── Menú desplegable (portal — renderiza fuera del DOM principal) ──────────── */
 [data-baseweb="menu"],
 [data-baseweb="popover"] > div {{
