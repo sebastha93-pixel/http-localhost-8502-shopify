@@ -19,8 +19,8 @@ from typing import Optional
 
 import requests
 
-# Ruta al CSV de bootstrap (solo se usa si Supabase está vacío y API está caída)
-_CSV_BOOTSTRAP = Path(__file__).parent.parent / "data" / "logistica" / "raw" / "melonn_2026-05-12.csv"
+# JSON pre-generado desde el CSV — cero dependencias, cero fallos posibles
+_JSON_BOOTSTRAP = Path(__file__).parent.parent / "data" / "logistica" / "bootstrap.json"
 
 log = logging.getLogger(__name__)
 
@@ -437,19 +437,20 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
 
 def _seed_desde_csv() -> list:
     """
-    Lee el CSV de bootstrap y retorna pedidos normalizados.
-    Solo se usa cuando Supabase está vacío Y la API no responde.
+    Carga el JSON pre-generado — cero dependencias externas, nunca falla.
+    El archivo data/logistica/bootstrap.json se genera localmente y se
+    sube al repo como datos de arranque.
     """
-    if not _CSV_BOOTSTRAP.exists():
+    if not _JSON_BOOTSTRAP.exists():
+        log.warning(f"bootstrap.json no encontrado en {_JSON_BOOTSTRAP}")
         return []
     try:
-        from ingest import leer_csv_melonn
-        pedidos, _ = leer_csv_melonn(str(_CSV_BOOTSTRAP), solo_activos=True)
-        if pedidos:
-            log.info(f"Bootstrap desde CSV: {len(pedidos)} pedidos de {_CSV_BOOTSTRAP.name}")
+        with open(_JSON_BOOTSTRAP, encoding="utf-8") as f:
+            pedidos = json.load(f)
+        log.info(f"Bootstrap JSON: {len(pedidos)} pedidos cargados")
         return pedidos
     except Exception as e:
-        log.warning(f"Error leyendo CSV bootstrap: {e}")
+        log.warning(f"Error leyendo bootstrap.json: {e}")
         return []
 
 
