@@ -207,9 +207,10 @@ def _normalizar_pedido(raw: dict) -> Optional[dict]:
         (raw.get("shipping_method") or {}).get("name") or ""
     )
 
-    # Sin fecha de despacho = aún en bodega, no es logística activa
+    # Si no hay fecha de despacho, usar fecha de creación como proxy
+    # (órdenes en preparación siguen siendo relevantes operativamente)
     if not fecha_despacho:
-        return None
+        fecha_despacho = fecha_creacion
 
     p = {
         # Identificadores
@@ -335,9 +336,9 @@ def obtener_pedidos_activos(dias: int = 30) -> tuple[list, dict]:
             omitidos["resuelto"] += 1
             continue
 
-        # Usar external_order_number o internal_order_number como ID
-        order_id = (item.get("external_order_number")
-                    or item.get("internal_order_number")
+        # Usar internal_order_number (siempre único) para el detalle
+        order_id = (item.get("internal_order_number")
+                    or item.get("external_order_number")
                     or str(item.get("id", "")))
 
         # Intentar enriquecer con detalle (buyer, fechas, dirección)
