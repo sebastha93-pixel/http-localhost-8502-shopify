@@ -313,7 +313,25 @@ html, body, [class*="css"], .stMarkdown, .stText,
   color: {DEEP_INK} !important;
 }}
 
-/* ── Inputs y selects ──────────────────────────────────────────────────────── */
+/* ── Labels de widgets (contenido principal) ───────────────────────────────── */
+.stSelectbox > label p,
+.stMultiSelect > label p,
+.stTextInput > label p,
+.stTextArea > label p,
+.stSlider > label p,
+.stDateInput > label p,
+.stCheckbox > label p,
+.stRadio > label p,
+[data-testid="stWidgetLabel"] p,
+[data-testid="stWidgetLabel"] span {{
+  color: {DEEP_INK} !important;
+  font-family: 'Inter', sans-serif !important;
+  font-size: 0.72rem !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.3px !important;
+}}
+
+/* ── Inputs ────────────────────────────────────────────────────────────────── */
 [data-testid="stTextInput"] input,
 [data-testid="stTextArea"] textarea {{
   border-radius: 5px !important;
@@ -321,6 +339,7 @@ html, body, [class*="css"], .stMarkdown, .stText,
   font-family: 'Inter', sans-serif !important;
   font-size: 0.82rem !important;
   background: white !important;
+  color: {DEEP_INK} !important;
   transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
 }}
 [data-testid="stTextInput"] input:focus,
@@ -328,11 +347,42 @@ html, body, [class*="css"], .stMarkdown, .stText,
   border-color: {STEEL_BLUE} !important;
   box-shadow: 0 0 0 3px rgba(135,166,184,0.18) !important;
 }}
+input::placeholder, textarea::placeholder {{
+  color: #888888 !important;
+  opacity: 1 !important;
+}}
+
+/* ── Select box: contenedor, valor seleccionado, placeholder ───────────────── */
 [data-baseweb="select"] > div:first-child {{
   border-radius: 5px !important;
   border: 1.5px solid rgba(33,48,51,0.18) !important;
   background: white !important;
   font-size: 0.82rem !important;
+}}
+[data-baseweb="select"] span,
+[data-baseweb="select"] div[class*="ValueContainer"] span,
+[data-baseweb="select"] div[class*="singleValue"],
+[data-baseweb="select"] div[class*="placeholder"],
+[data-baseweb="select"] input {{
+  color: {DEEP_INK} !important;
+  font-family: 'Inter', sans-serif !important;
+}}
+[data-baseweb="select"] div[class*="placeholder"] {{
+  color: #888888 !important;
+}}
+
+/* ── Dropdown menu del select ──────────────────────────────────────────────── */
+[data-baseweb="menu"] li,
+[data-baseweb="menu"] li span,
+[data-baseweb="popover"] li span {{
+  color: {DEEP_INK} !important;
+  font-family: 'Inter', sans-serif !important;
+  font-size: 0.82rem !important;
+}}
+
+/* ── Multiselect: tags ─────────────────────────────────────────────────────── */
+[data-baseweb="tag"] span {{
+  color: {DEEP_INK} !important;
 }}
 
 /* ── Alerts ────────────────────────────────────────────────────────────────── */
