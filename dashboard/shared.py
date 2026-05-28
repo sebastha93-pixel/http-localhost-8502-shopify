@@ -313,27 +313,21 @@ html, body, [class*="css"], .stMarkdown, .stText,
   color: {DEEP_INK} !important;
 }}
 
-/* ── Labels de widgets (contenido principal) ───────────────────────────────── */
-.stSelectbox > label p,
-.stMultiSelect > label p,
-.stTextInput > label p,
-.stTextArea > label p,
-.stSlider > label p,
-.stDateInput > label p,
-.stCheckbox > label p,
-.stRadio > label p,
+/* ── Labels de widgets ─────────────────────────────────────────────────────── */
 [data-testid="stWidgetLabel"] p,
-[data-testid="stWidgetLabel"] span {{
+[data-testid="stWidgetLabel"] span,
+[data-testid="stWidgetLabel"] label {{
   color: {DEEP_INK} !important;
   font-family: 'Inter', sans-serif !important;
   font-size: 0.72rem !important;
   font-weight: 600 !important;
-  letter-spacing: 0.3px !important;
 }}
 
-/* ── Inputs ────────────────────────────────────────────────────────────────── */
+/* ── Inputs y textareas ────────────────────────────────────────────────────── */
 [data-testid="stTextInput"] input,
-[data-testid="stTextArea"] textarea {{
+[data-testid="stTextArea"] textarea,
+[data-baseweb="input"] input,
+[data-baseweb="textarea"] textarea {{
   border-radius: 5px !important;
   border: 1.5px solid rgba(33,48,51,0.18) !important;
   font-family: 'Inter', sans-serif !important;
@@ -352,36 +346,49 @@ input::placeholder, textarea::placeholder {{
   opacity: 1 !important;
 }}
 
-/* ── Select box: contenedor, valor seleccionado, placeholder ───────────────── */
+/* ── Select / Multiselect: TODO el árbol interno ───────────────────────────── */
+/* Los selectbox de Streamlit usan BaseWeb con clases hasheadas — usamos * */
+[data-baseweb="select"] * {{
+  color: {DEEP_INK} !important;
+  font-family: 'Inter', sans-serif !important;
+}}
 [data-baseweb="select"] > div:first-child {{
   border-radius: 5px !important;
   border: 1.5px solid rgba(33,48,51,0.18) !important;
   background: white !important;
   font-size: 0.82rem !important;
 }}
-[data-baseweb="select"] span,
-[data-baseweb="select"] div[class*="ValueContainer"] span,
-[data-baseweb="select"] div[class*="singleValue"],
-[data-baseweb="select"] div[class*="placeholder"],
-[data-baseweb="select"] input {{
-  color: {DEEP_INK} !important;
-  font-family: 'Inter', sans-serif !important;
-}}
-[data-baseweb="select"] div[class*="placeholder"] {{
-  color: #888888 !important;
+/* Restore sidebar selects a color claro */
+[data-testid="stSidebar"] [data-baseweb="select"] * {{
+  color: #e0dedd !important;
 }}
 
-/* ── Dropdown menu del select ──────────────────────────────────────────────── */
-[data-baseweb="menu"] li,
-[data-baseweb="menu"] li span,
-[data-baseweb="popover"] li span {{
+/* ── Menú desplegable (portal — renderiza fuera del DOM principal) ──────────── */
+[data-baseweb="menu"],
+[data-baseweb="popover"] > div {{
+  background: white !important;
+  border: 1px solid rgba(33,48,51,0.1) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.12) !important;
+}}
+[data-baseweb="menu"] *,
+[data-baseweb="popover"] * {{
   color: {DEEP_INK} !important;
   font-family: 'Inter', sans-serif !important;
   font-size: 0.82rem !important;
+  background: transparent !important;
+}}
+[data-baseweb="menu"] [aria-selected="true"],
+[data-baseweb="menu"] li:hover {{
+  background: rgba(33,48,51,0.06) !important;
 }}
 
 /* ── Multiselect: tags ─────────────────────────────────────────────────────── */
-[data-baseweb="tag"] span {{
+[data-baseweb="tag"] {{
+  background: rgba(33,48,51,0.08) !important;
+  border-radius: 4px !important;
+}}
+[data-baseweb="tag"] * {{
   color: {DEEP_INK} !important;
 }}
 
