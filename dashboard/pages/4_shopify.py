@@ -11,7 +11,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 import streamlit as st
 import pandas as pd
 import io
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+
+# Zona horaria Colombia (UTC-5, sin horario de verano)
+_COL = timezone(timedelta(hours=-5))
+def _ahora_col() -> datetime:
+    return datetime.now(tz=_COL)
 import json
 
 from shared import (
@@ -144,7 +149,7 @@ with col_ts:
     st.markdown(f"""
         <div style="text-align:right;padding-top:4px;">
             <div style="font-size:0.68rem;color:{GRAPHITE_GREY};letter-spacing:1px;">
-                {__import__('datetime').datetime.now().strftime('%d/%m/%Y %H:%M')}
+                {_ahora_col().strftime('%d/%m/%Y %H:%M')} COL
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -155,9 +160,9 @@ st.markdown("<hr style='margin:10px 0;'>", unsafe_allow_html=True)
 try:
     with get_conn() as conn:
         n_pedidos   = conn.execute("SELECT COUNT(*) FROM pedidos WHERE fuente='shopify_api'").fetchone()[0]
-        n_productos = conn.execute("SELECT COUNT(*) FROM productos").fetchone()[0]
-        n_activos   = conn.execute("SELECT COUNT(*) FROM productos WHERE estado='active' AND inventario_total > 0").fetchone()[0]
-        n_borradores= conn.execute("SELECT COUNT(*) FROM productos WHERE estado='draft'").fetchone()[0]
+        n_activos    = conn.execute("SELECT COUNT(*) FROM productos WHERE estado='active' AND inventario_total > 0").fetchone()[0]
+        n_borradores = conn.execute("SELECT COUNT(*) FROM productos WHERE estado='draft'").fetchone()[0]
+        n_productos  = n_activos + n_borradores   # solo los relevantes (excluye archivados)
         n_clientes  = conn.execute("SELECT COUNT(*) FROM clientes").fetchone()[0]
         val_pedidos = conn.execute("SELECT COALESCE(SUM(precio_venta),0) FROM pedidos WHERE fuente='shopify_api'").fetchone()[0]
 except Exception as _dbe:
@@ -173,8 +178,8 @@ with k1:
 with k2:
     st.markdown(f"""<div class="kpi-card" style="background:{DEEP_INK};border-left:4px solid {STEEL_BLUE};">
         <p class="kpi-num">{n_productos:,}</p>
-        <p class="kpi-label">Productos</p>
-        <p class="kpi-sub">{n_activos} c/stock · {n_borradores} borradores</p></div>""", unsafe_allow_html=True)
+        <p class="kpi-label">Productos activos</p>
+        <p class="kpi-sub">{n_activos} c/stock · {n_borradores} borrador</p></div>""", unsafe_allow_html=True)
 with k3:
     st.markdown(f"""<div class="kpi-card" style="background:{DEEP_INK};border-left:4px solid {STEEL_BLUE};">
         <p class="kpi-num">{n_clientes:,}</p>

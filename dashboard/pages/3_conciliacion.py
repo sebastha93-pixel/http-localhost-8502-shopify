@@ -69,7 +69,7 @@ with col_ts:
     st.markdown(f"""
         <div style="text-align:right;padding-top:4px;">
             <div style="font-size:0.68rem;color:{GRAPHITE_GREY};letter-spacing:1px;">
-                {__import__('datetime').datetime.now().strftime('%d/%m/%Y %H:%M')}
+                {__import__('datetime').datetime.now(__import__('datetime').timezone(__import__('datetime').timedelta(hours=-5))).strftime('%d/%m/%Y %H:%M')} COL
             </div>
         </div>
     """, unsafe_allow_html=True)
