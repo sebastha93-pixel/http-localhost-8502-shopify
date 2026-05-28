@@ -23,8 +23,9 @@ log = logging.getLogger(__name__)
 # ── Config ─────────────────────────────────────────────────────────────────────
 _BASE_URL  = "https://api.orbita.melonn.com"
 _TIMEOUT   = 20
-_PAGE_SIZE = 50
-_CACHE_TTL = 14400   # 4 horas
+_PAGE_SIZE  = 50
+_MAX_PAGES  = 2      # máximo 2 requests por sync (100 pedidos) — cuida la cuota
+_CACHE_TTL  = 14400  # 4 horas
 
 _DB_PATH        = Path(__file__).parent.parent / "data" / "db" / "maledenim.db"
 _JSON_BOOTSTRAP = Path(__file__).parent.parent / "data" / "logistica" / "bootstrap.json"
@@ -227,8 +228,9 @@ def _normalizar(raw: dict) -> dict:
 
 
 def _fetch_api() -> list:
+    """Trae hasta _MAX_PAGES páginas de pedidos para no agotar la cuota de la API."""
     pedidos, page = [], 0
-    while True:
+    while page < _MAX_PAGES:
         resp = _get("sell-orders", params={"per_page": _PAGE_SIZE, "page": page})
         if resp is None:
             break
@@ -236,7 +238,7 @@ def _fetch_api() -> list:
         meta        = resp.get("meta_data") or {}
         total_count = meta.get("total_count") or 0
         pedidos.extend(items)
-        if not items or (total_count > 0 and len(pedidos) >= total_count):
+        if not items or len(pedidos) >= total_count:
             break
         page += 1
         time.sleep(0.3)
