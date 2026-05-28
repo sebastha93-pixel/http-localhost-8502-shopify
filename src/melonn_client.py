@@ -269,41 +269,67 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
     """
     Retorna (pedidos, omitidos, meta).
 
-    Orden:
-    1. SQLite fresco   → instantáneo
-    2. API Melonn      → si cache vencido o forzar_refresh
-    3. SQLite stale    → si API falla pero hay datos en disco
-    4. JSON bootstrap  → si no hay nada en disco
+    Orden normal  (sin forzar_refresh):
+      1. SQLite fresco (<4h)  → instantáneo, 0 requests
+      2. SQLite stale         → datos viejos en disco
+      3. JSON bootstrap       → datos del repo, siempre disponibles
+
+    Cuando forzar_refresh=True (botón ↻):
+      1. API Melonn           → fetch real, guarda en SQLite
+      2. SQLite stale         → si API falla
+      3. JSON bootstrap       → último recurso
+
+    La API solo se llama cuando el usuario presiona ↻ — nunca en carga automática.
+    Esto evita esperas innecesarias cuando la cuota está agotada.
     """
     omitidos = {"resuelto": 0, "sin_datos": 0}
 
     if forzar_refresh:
         limpiar_cache()
 
-    # 1 — SQLite fresco
-    if not forzar_refresh:
-        hit = _cache_leer(ignorar_ttl=False)
-        if hit:
-            pedidos, fetched_at, _ = hit
-            return pedidos, omitidos, {"fuente": "cache", "stale": False, "fetched_at": fetched_at}
+        # — Intentar API real —
+        pedidos_api = _fetch_api()
+        if pedidos_api:
+            _cache_guardar(pedidos_api)
+            return pedidos_api, omitidos, {
+                "fuente": "api_live", "stale": False, "fetched_at": datetime.now()
+            }
 
-    # 2 — API Melonn
-    pedidos_api = _fetch_api()
-    if pedidos_api:
-        _cache_guardar(pedidos_api)
-        return pedidos_api, omitidos, {"fuente": "api_live", "stale": False, "fetched_at": datetime.now()}
+        # API falló → stale o bootstrap
+        stale = _cache_leer(ignorar_ttl=True)
+        if stale:
+            pedidos, fetched_at, _ = stale
+            return pedidos, omitidos, {"fuente": "stale", "stale": True, "fetched_at": fetched_at}
 
-    # 3 — SQLite stale (datos viejos pero algo)
+        pedidos_boot = _bootstrap_json()
+        if pedidos_boot:
+            _cache_guardar(pedidos_boot)
+            return pedidos_boot, omitidos, {
+                "fuente": "csv_bootstrap", "stale": True, "fetched_at": datetime.now()
+            }
+        return [], omitidos, {"fuente": "sin_datos", "stale": False}
+
+    # — Carga normal: SQLite → bootstrap (sin tocar la API) —
+
+    # 1. SQLite fresco
+    hit = _cache_leer(ignorar_ttl=False)
+    if hit:
+        pedidos, fetched_at, _ = hit
+        return pedidos, omitidos, {"fuente": "cache", "stale": False, "fetched_at": fetched_at}
+
+    # 2. SQLite stale
     stale = _cache_leer(ignorar_ttl=True)
     if stale:
         pedidos, fetched_at, _ = stale
         return pedidos, omitidos, {"fuente": "stale", "stale": True, "fetched_at": fetched_at}
 
-    # 4 — JSON bootstrap (datos del repo, siempre disponibles)
+    # 3. JSON bootstrap → guarda en SQLite para próximas cargas
     pedidos_boot = _bootstrap_json()
     if pedidos_boot:
-        _cache_guardar(pedidos_boot)   # guarda en SQLite para la próxima carga
-        return pedidos_boot, omitidos, {"fuente": "csv_bootstrap", "stale": True, "fetched_at": datetime.now()}
+        _cache_guardar(pedidos_boot)
+        return pedidos_boot, omitidos, {
+            "fuente": "csv_bootstrap", "stale": True, "fetched_at": datetime.now()
+        }
 
     return [], omitidos, {"fuente": "sin_datos", "stale": False}
 
