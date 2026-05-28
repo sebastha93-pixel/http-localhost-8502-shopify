@@ -179,43 +179,35 @@ def _supabase_limpiar():
 
 # ── Capa 3: Melonn API ─────────────────────────────────────────────────────────
 def _get(path: str, params: dict = None) -> Optional[dict]:
-    """GET con reintentos y backoff exponencial."""
+    """GET sin reintentos en rate limit — falla rápido para llegar al fallback de caché."""
     url = f"{_BASE_URL}/{path.lstrip('/')}"
-    for intento in range(_MAX_RETRIES):
-        try:
-            r = requests.get(url, headers=_headers(), params=params, timeout=_TIMEOUT)
+    try:
+        r = requests.get(url, headers=_headers(), params=params, timeout=_TIMEOUT)
 
-            if r.status_code in (429, 503):
-                wait = _RETRY_WAIT * (2 ** intento)
-                log.warning(f"Rate limit HTTP {r.status_code} — esperando {wait}s...")
-                time.sleep(wait)
-                continue
+        # Rate limit → falla inmediato (no esperar — el fallback de Supabase/CSV es mejor)
+        if r.status_code in (429, 503):
+            log.warning(f"Rate limit {r.status_code} — usando caché fallback")
+            return None
 
-            r.raise_for_status()
-            data = r.json()
+        r.raise_for_status()
+        data = r.json()
 
-            if isinstance(data, dict) and data.get("message") == "Limit Exceeded":
-                wait = _RETRY_WAIT * (2 ** intento)
-                log.warning(f"Limit Exceeded en {path} — esperando {wait}s...")
-                time.sleep(wait)
-                continue
+        if isinstance(data, dict) and data.get("message") == "Limit Exceeded":
+            log.warning("Limit Exceeded — usando caché fallback")
+            return None
 
-            return data
+        return data
 
-        except requests.HTTPError as e:
-            status = e.response.status_code
-            log.warning(f"HTTP {status} en {url} (intento {intento+1})")
-            if status in (401, 403):
-                log.error("API key inválido — verifica MELONN_API_KEY")
-                return None
-        except requests.RequestException as e:
-            log.warning(f"Request error: {e} (intento {intento+1})")
-
-        if intento < _MAX_RETRIES - 1:
-            time.sleep(_RETRY_WAIT)
-
-    log.error(f"Fallaron {_MAX_RETRIES} intentos para {path}")
-    return None
+    except requests.HTTPError as e:
+        status = e.response.status_code
+        if status in (401, 403):
+            log.error("API key inválido — verifica MELONN_API_KEY")
+        else:
+            log.warning(f"HTTP {status} en {url}")
+        return None
+    except requests.RequestException as e:
+        log.warning(f"Request error: {e}")
+        return None
 
 
 # ── Normalización ──────────────────────────────────────────────────────────────
@@ -397,36 +389,47 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
             log.info("Supabase cache vencido — intentando refresh de API")
 
     # ── Capa 3: API Melonn ─────────────────────────────────────────────────────
-    pedidos_api, omitidos = _fetch_de_api()
+    try:
+        pedidos_api, omitidos = _fetch_de_api()
+    except Exception as e:
+        log.error(f"_fetch_de_api excepcion: {e}")
+        pedidos_api, omitidos = [], {}
 
     if pedidos_api:
-        # Fetch exitoso → actualizar ambas capas
         _supabase_escribir(pedidos_api)
         _session_escribir(pedidos_api)
         return pedidos_api, omitidos, {
             "fuente": "api_live", "stale": False, "fetched_at": datetime.now()
         }
 
-    # API falló → retornar stale de Supabase si hay algo
-    sb_stale = _supabase_leer()
+    log.warning("API Melonn no disponible — intentando fallbacks")
+
+    # Capa 3b: Supabase stale (si el cache expiró pero hay datos)
+    try:
+        sb_stale = _supabase_leer()
+    except Exception:
+        sb_stale = None
+
     if sb_stale:
         pedidos_stale, fetched_at, _ = sb_stale
-        log.warning(f"API rate-limited — usando datos Supabase del {fetched_at}")
         _session_escribir(pedidos_stale, fetched_at)
         return pedidos_stale, {"resuelto": 0, "sin_datos": 0}, {
             "fuente": "stale", "stale": True, "fetched_at": fetched_at
         }
 
-    # Capa 4: CSV bootstrap (último recurso — solo si todo lo anterior falla)
-    pedidos_csv = _seed_desde_csv()
+    # Capa 4: CSV bootstrap — último recurso cuando API y Supabase fallan
+    try:
+        pedidos_csv = _seed_desde_csv()
+    except Exception as e:
+        log.error(f"CSV bootstrap excepcion: {e}")
+        pedidos_csv = []
+
     if pedidos_csv:
-        # Guardar en Supabase para que la próxima carga use eso
         _supabase_escribir(pedidos_csv)
         _session_escribir(pedidos_csv)
-        log.info("Bootstrap CSV guardado en Supabase — próximas cargas usarán Supabase")
+        log.info(f"Bootstrap CSV: {len(pedidos_csv)} pedidos cargados y guardados en Supabase")
         return pedidos_csv, {"resuelto": 0, "sin_datos": 0}, {
-            "fuente": "csv_bootstrap", "stale": True,
-            "fetched_at": datetime.now(),
+            "fuente": "csv_bootstrap", "stale": True, "fetched_at": datetime.now(),
         }
 
     return [], {"resuelto": 0, "sin_datos": 0}, _EMPTY_META
