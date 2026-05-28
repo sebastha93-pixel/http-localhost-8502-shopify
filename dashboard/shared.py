@@ -613,7 +613,10 @@ def render_sidebar(page_label: str):
         # ── Estado API Melonn ──────────────────────────────────────────────────
         _api_ok = _MELONN_API_DISPONIBLE and melonn_client.credenciales_ok()
         if _api_ok:
-            _info = melonn_client.cache_info()
+            try:
+                _info = melonn_client.cache_info() if hasattr(melonn_client, "cache_info") else None
+            except Exception:
+                _info = None
             if _info:
                 _age_txt = f"hace {int(_info['age_s']//60)}min" if _info['age_s'] >= 60 else "ahora mismo"
                 _color   = "#52b788" if _info["fresco"] else "#f5a623"
@@ -633,7 +636,8 @@ def render_sidebar(page_label: str):
             </div>
             """, unsafe_allow_html=True)
             if st.button("↻ Actualizar datos", key="btn_refresh_melonn", use_container_width=True):
-                melonn_client.limpiar_cache()
+                if hasattr(melonn_client, "limpiar_cache"):
+                    melonn_client.limpiar_cache()
                 st.cache_data.clear()
                 st.rerun()
             archivo = None
