@@ -127,10 +127,11 @@ html, body, [class*="css"], .stMarkdown, .stText,
 /* ── KPI Cards ─────────────────────────────────────────────────────────────── */
 .kpi-card {{
   border-radius: 10px;
-  padding: 16px 18px;
+  padding: 14px 16px;
   margin-bottom: 4px;
-  min-height: 106px;
+  height: 128px;
   box-sizing: border-box;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -147,7 +148,7 @@ html, body, [class*="css"], .stMarkdown, .stText,
 .kpi-extra {{ background: linear-gradient(135deg, #59204d 0%, #451840 100%); border-left: 3px solid {STEEL_BLUE}; }}
 .kpi-num   {{
   font-family: 'Inter', 'Arial Black', sans-serif;
-  font-size: 1.85rem;
+  font-size: 1.7rem;
   font-weight: 800;
   color: white;
   margin: 0;
@@ -159,24 +160,24 @@ html, body, [class*="css"], .stMarkdown, .stText,
 }}
 .kpi-label {{
   font-family: 'Inter', sans-serif;
-  font-size: 0.58rem;
+  font-size: 0.56rem;
   color: rgba(255,255,255,0.92);
   margin: 5px 0 0;
-  letter-spacing: 2px;
+  letter-spacing: 1.5px;
   text-transform: uppercase;
   font-weight: 700;
   white-space: normal;
-  line-height: 1.35;
-  word-break: break-word;
+  line-height: 1.3;
+  overflow-wrap: break-word;
 }}
 .kpi-sub {{
-  font-size: 0.62rem;
+  font-size: 0.6rem;
   color: rgba(255,255,255,0.82);
-  margin: 3px 0 0;
+  margin: 2px 0 0;
   white-space: normal;
-  line-height: 1.35;
+  line-height: 1.3;
   font-weight: 400;
-  word-break: break-word;
+  overflow-wrap: break-word;
 }}
 
 /* ── Section titles ────────────────────────────────────────────────────────── */
