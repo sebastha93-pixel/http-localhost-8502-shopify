@@ -18,7 +18,7 @@ import requests
 log = logging.getLogger(__name__)
 
 # ── Configuración ──────────────────────────────────────────────────────────────
-_BASE_URL      = "https://api.melonn.com/prod/api"
+_BASE_URL      = "https://api.orbita.melonn.com"
 _TIMEOUT       = 30          # segundos por request
 _MAX_RETRIES   = 3
 _RETRY_WAIT    = 2           # segundos entre reintentos
@@ -133,135 +133,88 @@ def _calcular_dias(fecha_despacho: Optional[date], fecha_entrega: Optional[date]
 
 def _normalizar_pedido(raw: dict) -> Optional[dict]:
     """
-    Convierte un pedido JSON de la API Melonn al esquema interno de ingest.py.
+    Convierte un pedido JSON de la API Melonn (orbita) al esquema interno.
 
-    Estructura confirmada (2026-05-28):
-    {
-      "id": 1732571663793215,
-      "internal_order_number": "M...",
-      "external_order_number": "SHOPIFY-XXX",
-      "external_order_id": null,
-      "creation_date": "2024-11-25T21:54:25.000Z",
-      "melonn_tracking_link": "https://...",
-      "payment_on_delivery_amount": null | 59900,
-      "is_b2b": false,
-      "sell_order_state": {"id": 2, "name": "All items reserved..."},
-      "buyer": {"full_name": "...", "phone_number": "+57...", "email": "..."},
-      "line_items": [{"quantity": 1, "sku": "S0001"}],
-      "shipping_method": {"code": "MEL-15", "name": "Estándar..."},
-      "warehouse": {"city": "Sabaneta", "region": "ANTIOQUIA", ...},
-      -- campos que aparecen en órdenes despachadas (pendiente confirmar nombres):
-      "delivery_address": {"city": "...", "region": "...", ...},
-      "dispatch_date": "...",
-      "promise_date": "...",
-      "delivery_date": "...",
-      "carrier": {"name": "..."}
-    }
+    Estructura confirmada 2026-05-28 con api.orbita.melonn.com:
+      sell_order_state.name  → estado
+      buyer.full_name / phone_number
+      shipping_info.city / region  → destino (NO warehouse, que es origen)
+      payment_on_delivery_amount   → COD
+      creation_date                → única fecha disponible en la API
+      line_items[].sku / quantity
+      melonn_tracking_link
+      external_order_number (sin #) → orden_tienda
+      internal_order_number         → orden_melonn
     """
-    # ── Campos base (confirmados) ──────────────────────────────────────────────
     estado = str((raw.get("sell_order_state") or {}).get("name") or "")
 
+    # Comprador
     buyer  = raw.get("buyer") or {}
     nombre = str(buyer.get("full_name") or "")
     tel    = str(buyer.get("phone_number") or "")
 
-    # Primer line_item para SKU / cantidad
+    # Destino (shipping_info = dirección del comprador, warehouse = bodega origen)
+    dest   = raw.get("shipping_info") or {}
+    ciudad = str(dest.get("city") or "").upper().strip()
+    region = str(dest.get("region") or "")
+
+    # Método de envío como proxy de transportadora (Melonn no expone carrier directo)
+    metodo = str((raw.get("shipping_method") or {}).get("name") or "")
+
+    # Line items
     items      = raw.get("line_items") or []
     first_item = items[0] if items else {}
     sku        = str(first_item.get("sku") or "")
     cantidad   = int(first_item.get("quantity") or 1)
-    # Producto: concatenar todos los SKUs si hay varios
     producto   = ", ".join(str(i.get("sku", "")) for i in items if i.get("sku"))
 
+    # Fechas — la API solo provee creation_date
     fecha_creacion = _parsear_fecha(raw.get("creation_date"))
-    valor_cod      = raw.get("payment_on_delivery_amount")
+    fecha_despacho = fecha_creacion   # proxy: días desde creación
+    fecha_entrega  = None
+    fecha_promesa  = None
 
-    # ── Campos de despacho (aparecen cuando el pedido está enviado) ────────────
-    # Intentar múltiples nombres posibles hasta confirmar con Melonn
-    def _f(*keys):
-        for k in keys:
-            v = raw.get(k)
-            if v is not None:
-                return v
-        return None
-
-    fecha_despacho = _parsear_fecha(
-        _f("dispatch_date", "shipping_date", "shipped_date", "dispatched_at"))
-    fecha_entrega  = _parsear_fecha(
-        _f("delivery_date", "delivered_date", "actual_delivery_date"))
-    fecha_promesa  = _parsear_fecha(
-        _f("promise_date", "promised_delivery_date", "estimated_delivery_date",
-           "max_delivery_date"))
-
-    # ── Destino (aparece cuando el pedido está creado con dirección real) ──────
-    dest   = (raw.get("delivery_address") or raw.get("destination")
-              or raw.get("shipping_address") or raw.get("buyer_address") or {})
-    ciudad = str(dest.get("city") or dest.get("ciudad") or "").upper().strip()
-    region = str(dest.get("region") or dest.get("state") or "")
-
-    # ── Transportadora ─────────────────────────────────────────────────────────
-    carrier_obj  = raw.get("carrier") or raw.get("courier") or {}
-    transportadora = str(
-        carrier_obj.get("name") or carrier_obj.get("carrier_name") or
-        raw.get("carrier_name") or raw.get("transportadora") or
-        (raw.get("shipping_method") or {}).get("name") or ""
-    )
-
-    # Si no hay fecha de despacho, usar fecha de creación como proxy
-    # (órdenes en preparación siguen siendo relevantes operativamente)
-    if not fecha_despacho:
-        fecha_despacho = fecha_creacion
+    # COD
+    valor_cod = raw.get("payment_on_delivery_amount")
+    tipo_recaudo = str((raw.get("payment_on_delivery_type") or {}).get("name") or
+                       ("Contraentrega" if valor_cod else "Prepago"))
 
     p = {
-        # Identificadores
         "orden_melonn":       str(raw.get("internal_order_number") or raw.get("id") or ""),
-        "orden_tienda":       str(raw.get("external_order_number") or raw.get("external_order_id") or ""),
+        "orden_tienda":       str(raw.get("external_order_number") or "").lstrip("#"),
         "estado_melonn":      estado,
         "tienda":             "",
-        "canal_venta":        "B2B" if raw.get("is_b2b") else "D2C",
+        "canal_venta":        str((raw.get("fulfillment_type") or {}).get("order_type") or "D2C"),
 
-        # Comprador
         "nombre_comprador":   nombre,
         "telefono_comprador": tel,
         "ciudad_destino":     ciudad,
         "region_destino":     region,
 
-        # Logística
-        "transportadora":     transportadora,
+        "transportadora":     metodo,
         "link_guia":          str(raw.get("melonn_tracking_link") or ""),
 
-        # Fechas
         "fecha_despacho":     fecha_despacho,
         "fecha_entrega":      fecha_entrega,
         "fecha_promesa":      fecha_promesa,
         "fecha_creacion":     fecha_creacion,
 
-        # Producto
         "sku":                sku,
         "producto":           producto,
-        "variante":           str(first_item.get("variant") or first_item.get("variante") or ""),
+        "variante":           "",
         "cantidad":           cantidad,
-        "precio_unitario":    float(
-            str(first_item.get("unit_price") or first_item.get("price") or 0)
-            .replace(",", ".")),
+        "precio_unitario":    0.0,
 
-        # COD
         "valor_cod_raw":      str(valor_cod or 0),
-        "tipo_recaudo":       "contraentrega" if valor_cod else "prepago",
+        "tipo_recaudo":       tipo_recaudo,
 
-        # Calculados
         "es_contraentrega":   _es_contraentrega(valor_cod),
         "dias_en_transito":   _calcular_dias(fecha_despacho, fecha_entrega),
         "esta_en_transito":   estado in ESTADOS_EN_TRANSITO,
         "entregado":          estado in ESTADOS_RESUELTOS,
         "incidencia":         "NINGUNO",
+        "promesa_vencida":    False,
     }
-
-    # Promesa vencida
-    if p["fecha_promesa"] and not p["entregado"]:
-        p["promesa_vencida"] = date.today() > p["fecha_promesa"]
-    else:
-        p["promesa_vencida"] = False
 
     return p
 
@@ -336,10 +289,8 @@ def obtener_pedidos_activos(dias: int = 30) -> tuple[list, dict]:
             omitidos["resuelto"] += 1
             continue
 
-        # Usar internal_order_number (siempre único) para el detalle
-        order_id = (item.get("internal_order_number")
-                    or item.get("external_order_number")
-                    or str(item.get("id", "")))
+        # Detalle: external_order_number sin '#' (confirmado con api.orbita.melonn.com)
+        order_id = str(item.get("external_order_number") or "").lstrip("#") or str(item.get("id", ""))
 
         # Intentar enriquecer con detalle (buyer, fechas, dirección)
         detalle = _get(f"sell-orders/{order_id}")
