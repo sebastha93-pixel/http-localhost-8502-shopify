@@ -11,6 +11,7 @@ sys.path.insert(0, str(_HERE))
 sys.path.insert(0, str(_HERE.parent / "src"))
 
 import base64, io
+from datetime import datetime, timedelta
 import streamlit as st
 from PIL import Image
 
@@ -109,8 +110,14 @@ footer { visibility: hidden !important; }
 
 
 # ── Autenticación ──────────────────────────────────────────────────────────────
-def _build_auth():
-    """Construye el autenticador desde st.secrets."""
+_INACTIVITY_HOURS = 3   # logout automático si no hay actividad en X horas
+
+def _build_auth(remember_me: bool = False):
+    """
+    Construye el autenticador desde st.secrets.
+    remember_me=True  → cookie dura 30 días (persiste al cerrar navegador)
+    remember_me=False → cookie dura 0 días  (sesión de navegador, expira al cerrar)
+    """
     import streamlit_authenticator as stauth
 
     creds = {
@@ -124,13 +131,37 @@ def _build_auth():
                                               .get("usernames", {}).items()
         }
     }
-    cookie = st.secrets.get("cookie", {})
+    cookie      = st.secrets.get("cookie", {})
+    expiry_days = int(cookie.get("expiry_days", 30)) if remember_me else 0
     return stauth.Authenticate(
         creds,
-        str(cookie.get("name",        "maledenim_auth")),
-        str(cookie.get("key",         "maledenim_key_2026")),
-        int(cookie.get("expiry_days", 30)),
+        str(cookie.get("name", "maledenim_auth")),
+        str(cookie.get("key",  "maledenim_key_2026")),
+        expiry_days,
     )
+
+
+def _check_inactivity(auth) -> bool:
+    """
+    Retorna True (y hace logout) si el usuario lleva más de _INACTIVITY_HOURS
+    sin ninguna interacción. Actualiza last_activity en cada llamada.
+    """
+    ahora = datetime.now()
+    ultima = st.session_state.get("last_activity")
+
+    if ultima and (ahora - ultima) > timedelta(hours=_INACTIVITY_HOURS):
+        auth.logout()
+        st.session_state.clear()
+        st.warning(
+            f"⏱️ Sesión cerrada por inactividad ({_INACTIVITY_HOURS} horas). "
+            "Inicia sesión nuevamente.",
+            icon="🔒",
+        )
+        st.rerun()
+        return True
+
+    st.session_state["last_activity"] = ahora
+    return False
 
 
 _TODOS_LOS_MODULOS = ["logistica", "comercial", "mercadopago", "conciliacion"]
@@ -179,7 +210,9 @@ if not _AUTH_CONFIGURADA:
     pg.run()
 
 else:
-    _auth = _build_auth()
+    # Leer preferencia "recordarme" guardada en session_state
+    _remember = st.session_state.get("remember_me", False)
+    _auth = _build_auth(remember_me=_remember)
 
     # ── Página de login ────────────────────────────────────────────────────────
     if not st.session_state.get("authentication_status"):
@@ -203,9 +236,23 @@ else:
     # Render login widget (siempre — gestiona cookies automáticamente)
     _auth.login()
 
+    # ── Checkbox "Recordarme" debajo del form de login ─────────────────────────
+    if not st.session_state.get("authentication_status"):
+        _rem_nuevo = st.checkbox(
+            "Recordarme en este dispositivo",
+            value=_remember,
+            key="chk_remember",
+            help="Mantiene la sesión activa aunque cierres el navegador (30 días)",
+        )
+        if _rem_nuevo != _remember:
+            st.session_state["remember_me"] = _rem_nuevo
+            st.rerun()
+
     _status = st.session_state.get("authentication_status")
 
     if _status is True:
+        # ── Verificar inactividad antes de mostrar el app ──────────────────────
+        _check_inactivity(_auth)
         # ── Autenticado: mostrar app ───────────────────────────────────────────
         _username = st.session_state.get("username", "")
         _role     = _get_role(_username)
