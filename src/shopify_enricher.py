@@ -187,8 +187,20 @@ def enriquecer(pedidos: list) -> list:
         if fi:
             p["cantidad"]        = int(fi.get("quantity") or 1)
             p["precio_unitario"] = float(fi.get("price") or 0)
+            variante = str(fi.get("variant_title") or "").strip()
+            if variante and variante.upper() != "DEFAULT TITLE":
+                p["variante"] = variante
         if total:
             p["valor_total"] = total
+
+        # Email del cliente
+        email = cust.get("email") or ship.get("email") or ""
+        if email:
+            p["email_comprador"] = email
+
+        # Tienda / canal
+        if not p.get("tienda"):
+            p["tienda"] = "MALE'DENIM"
 
         enriquecidos.append(p)
 
