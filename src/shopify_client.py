@@ -74,20 +74,34 @@ def _get(endpoint: str, params: Optional[Dict] = None) -> dict:
     GET a un endpoint de la API de Shopify con reintentos y rate limiting.
     Retorna el JSON parseado.
     """
-    url = f"{_base_url()}{endpoint}"
-    if params:
-        query = "&".join(f"{k}={v}" for k, v in params.items() if v is not None)
-        url = f"{url}?{query}"
+    data, _ = _get_full(endpoint, params)
+    return data
+
+
+def _get_full(endpoint: str, params: Optional[Dict] = None):
+    """
+    GET con reintentos. Retorna (json_data, link_header_str).
+    El Link header de Shopify contiene la URL de la siguiente página (cursor).
+    """
+    # Si el endpoint ya es una URL absoluta (page_info cursor), úsala directamente
+    if endpoint.startswith("http"):
+        url = endpoint
+    else:
+        url = f"{_base_url()}{endpoint}"
+        if params:
+            query = "&".join(f"{k}={v}" for k, v in params.items() if v is not None)
+            url = f"{url}?{query}"
 
     for intento in range(MAX_REINTENTOS):
         try:
             req = urllib.request.Request(url, headers=_headers())
             with urllib.request.urlopen(req, timeout=30) as resp:
                 time.sleep(RATE_LIMIT_PAUSA)
-                return json.loads(resp.read().decode("utf-8"))
+                link_header = resp.headers.get("Link", "")
+                return json.loads(resp.read().decode("utf-8")), link_header
 
         except urllib.error.HTTPError as e:
-            if e.code == 429:           # Too Many Requests
+            if e.code == 429:
                 espera = 2 ** (intento + 1)
                 print(f"  Rate limit — esperando {espera}s...")
                 time.sleep(espera)
@@ -106,43 +120,54 @@ def _get(endpoint: str, params: Optional[Dict] = None) -> dict:
     raise ShopifyError("Máximo de reintentos alcanzado")
 
 
+def _next_url_from_link(link_header: str) -> Optional[str]:
+    """
+    Extrae la URL de la próxima página del header Link de Shopify.
+    Formato: <URL>; rel="next", <URL>; rel="previous"
+    """
+    if not link_header:
+        return None
+    for part in link_header.split(","):
+        part = part.strip()
+        if 'rel="next"' in part:
+            # Extraer URL entre < >
+            start = part.find("<")
+            end = part.find(">")
+            if start != -1 and end != -1:
+                return part[start + 1:end]
+    return None
+
+
 def paginar(endpoint: str, clave: str, params: Optional[Dict] = None) -> Iterator[List[Dict]]:
     """
-    Itera sobre todas las páginas de un endpoint usando paginación por cursor.
+    Itera sobre todas las páginas usando paginación por cursor (Link header).
+    Shopify pone la URL de la siguiente página en el header HTTP Link rel="next".
     Yields: lista de registros por página.
-
-    Uso:
-        for pagina in paginar("/orders.json", "orders", params={"status": "any"}):
-            for orden in pagina:
-                procesar(orden)
     """
-    p = {
-        "limit": LIMITE_POR_PAGINA,
-        **(params or {}),
-    }
+    # Primera página con parámetros normales
+    current_url = endpoint
+    current_params = {"limit": LIMITE_POR_PAGINA, **(params or {})}
+    use_params = True
 
     while True:
-        data = _get(endpoint, p)
+        if use_params:
+            data, link_header = _get_full(current_url, current_params)
+        else:
+            # Páginas siguientes: URL absoluta del cursor, sin params adicionales
+            data, link_header = _get_full(current_url)
+
         registros = data.get(clave, [])
         if not registros:
             break
 
         yield registros
 
-        # Shopify usa Link header para cursor — lo simulamos con since_id
-        if len(registros) < LIMITE_POR_PAGINA:
+        # Seguir con el cursor del Link header
+        next_url = _next_url_from_link(link_header)
+        if not next_url:
             break
-
-        # next_page_info si viene en la respuesta (API más nueva)
-        next_info = data.get("next_page_info")
-        if next_info:
-            p = {"limit": LIMITE_POR_PAGINA, "page_info": next_info}
-        else:
-            # Fallback: paginar por ID
-            ultimo_id = registros[-1].get("id")
-            if not ultimo_id:
-                break
-            p = {**p, "since_id": ultimo_id}
+        current_url = next_url
+        use_params = False  # cursor ya viene en la URL
 
 
 def verificar_conexion() -> Dict:

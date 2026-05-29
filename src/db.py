@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS pedidos (
     metodo_pago             TEXT,          -- cod / wompi / mercadopago / addi / transferencia
     plataforma_pago         TEXT,
     valor_pagado            REAL,
+    fecha_pago              DATE,
     estado_pago             TEXT DEFAULT 'pendiente',  -- pendiente / pagado / fallido / devuelto
 
     -- Logística (último estado conocido)
