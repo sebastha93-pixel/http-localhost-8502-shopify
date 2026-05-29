@@ -7,6 +7,7 @@ Una sola llamada batch por sync → eficiente y sin rate-limit issues.
 """
 
 import logging
+from datetime import datetime
 from typing import Optional
 
 import requests
@@ -50,7 +51,7 @@ def _fetch_shopify_orders(order_ids: list[str]) -> dict:
     store, token, version = creds
     url     = f"https://{store}/admin/api/{version}/orders.json"
     headers = {"X-Shopify-Access-Token": token}
-    fields  = "id,name,customer,shipping_address,line_items,total_price"
+    fields  = "id,name,customer,shipping_address,line_items,total_price,fulfillments"
 
     resultado = {}
     for i in range(0, len(order_ids), _BATCH_SIZE):
@@ -80,7 +81,7 @@ def _fetch_by_name(order_name: str, store: str, token: str, version: str) -> Opt
             params={
                 "name": f"#{order_name}" if not order_name.startswith("#") else order_name,
                 "status": "any",
-                "fields": "id,name,customer,shipping_address,line_items,total_price",
+                "fields": "id,name,customer,shipping_address,line_items,total_price,fulfillments",
             },
             timeout=_TIMEOUT,
         )
@@ -197,6 +198,22 @@ def enriquecer(pedidos: list) -> list:
         email = cust.get("email") or ship.get("email") or ""
         if email:
             p["email_comprador"] = email
+
+        # ── Fechas desde fulfillment ──────────────────────────────────────────
+        # fulfillments[0].created_at = cuando Melonn marcó el pedido como despachado
+        fulls = o.get("fulfillments") or []
+        if fulls:
+            f0 = fulls[0]
+            # fecha_despacho: solo rellenar si Melonn no la devolvió
+            if not p.get("fecha_despacho"):
+                raw_dt = f0.get("created_at") or ""
+                if raw_dt:
+                    try:
+                        p["fecha_despacho"] = datetime.fromisoformat(
+                            raw_dt.replace("Z", "+00:00")
+                        ).date().isoformat()
+                    except Exception:
+                        pass
 
         # Tienda / canal
         if not p.get("tienda"):

@@ -180,8 +180,9 @@ def agregar_nota(orden: str, autor: str, nota: str) -> tuple[bool, str]:
 
 
 # ── Acciones ───────────────────────────────────────────────────────────────────
-TIPOS_ACCION = ["llamada", "escalado", "visita", "acuerdo_cliente",
-                "gestion_transportadora", "resuelto", "devolucion", "otro"]
+TIPOS_ACCION = ["despacho_autorizado", "llamada", "escalado", "visita",
+                "acuerdo_cliente", "gestion_transportadora", "resuelto",
+                "devolucion", "otro"]
 
 def cargar_acciones(orden: str) -> pd.DataFrame:
     sb = _client()

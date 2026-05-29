@@ -25,13 +25,14 @@ DEEP_INK      = "#213033"
 STEEL_BLUE    = "#87a6b8"
 GRAPHITE_GREY = "#606060"
 SOFT_CONCRETE = "#e1e1df"
-CRITICO_COLOR  = "#990012"
-RIESGO_COLOR   = "#b95902"
-NORMAL_COLOR   = "#036a73"
-COD_COLOR      = "#59204d"
-VENCIDO_COLOR  = "#606060"   # gris — pedidos >MAX_DIAS_ACTIVO sin confirmar entrega
+CRITICO_COLOR   = "#990012"
+RIESGO_COLOR    = "#b95902"
+NORMAL_COLOR    = "#036a73"
+COD_COLOR       = "#59204d"
+VENCIDO_COLOR   = "#606060"   # gris — pedidos >MAX_DIAS_ACTIVO sin confirmar entrega
+RESUELTO_COLOR  = "#2d6a4f"   # verde oscuro — novedad solucionada
 
-MAX_DIAS_ACTIVO = 14  # días máx. en tránsito; pasado esto → VENCIDO (posiblemente entregado sin actualizar)
+MAX_DIAS_ACTIVO = 20  # días máx. en tránsito; pasado esto → VENCIDO (posiblemente entregado sin actualizar)
 
 ZONAS_ES = {
     "MEDELLIN":       "Medellín / Área Metro",
@@ -41,17 +42,33 @@ ZONAS_ES = {
     "REEXPEDIDO":     "Reexpedido",
 }
 ESTADOS_ES = {
-    "Shipped - in transit":     "En tránsito",
-    "Delivery not posible":     "Entrega no posible",
-    "Packed":                   "Empacado",
-    "Packed - on hold":         "Empacado - retenido",
-    "Prepared for dispatch":    "Listo para despacho",
-    "Delivered to buyer":       "Entregado",
-    "Picked-up by buyer":       "Recogido",
-    "Canceled":                 "Cancelado",
-    "All items reserved - ready for fulfillment": "Reservado - listo",
-    "All items reserved - fulfillment on hold - ext. conditionals": "Reservado - en espera",
-    "on stand by - not able to fulfil - no stock": "Sin stock",
+    # Pendiente despacho
+    "Received - valid":                              "Recibido · válido",
+    "All items reserved - ready for fulfillment":    "Reservado · listo",
+    "Picking":                                       "Alistando",
+    "Picked":                                        "Alistado",
+    "Packed":                                        "Empacado",
+    "Fixed & valid - to be processed":               "Corregido · listo",
+    "Processing Requested":                          "En proceso",
+    "Packing":                                       "Empacando",
+    "Prepared for dispatch":                         "Listo para despacho",
+    "Selected for dispatch preparation":             "Seleccionado · preparar",
+    "Pre Packing - Vas Pending":                     "Pre-empaque · VAS",
+    "Ready For Packing":                             "En cola · empaque",
+    # En tránsito
+    "Shipped - in transit":                          "En tránsito",
+    # Novedades
+    "Error - not able to process":                   "Error · no procesa",
+    "on stand by - not able to fulfil - no stock":   "Sin stock",
+    "Delivery not posible":                          "Entrega no posible",
+    "on stand by - not able to fulfil - expired promises": "Promesa vencida",
+    "Packed - on hold":                              "Empacado · retenido",
+    "All items reserved - fulfillment on hold":      "Fulfillment en espera",
+    "All items reserved - fulfillment on hold - ext. conditionals": "En espera · ext.",
+    "All items reserved - fulfillment on hold - int. conditionals": "En espera · int.",
+    "on stand by - not able to fulfil - SM restriction": "Restricción método envío",
+    # Resuelto
+    "Picked-up by buyer":                            "Recogido · resuelto",
 }
 
 DEFAULT_CSV = str(Path(__file__).parent.parent / "data" / "logistica" / "raw" / "melonn_2026-05-12.csv")
@@ -524,6 +541,19 @@ footer {{ visibility: hidden !important; }}
 </style>
 """
 
+# ── Sesión / usuario activo ───────────────────────────────────────────────────
+def usuario_activo() -> str:
+    """
+    Retorna el nombre del usuario logueado para registrarlo en acciones/notas.
+    Fallback a username si no hay nombre, o 'dashboard' si no hay sesión.
+    """
+    try:
+        nombre = st.session_state.get("name") or st.session_state.get("username") or ""
+        return nombre.strip() or "dashboard"
+    except Exception:
+        return "dashboard"
+
+
 # ── Carga y procesamiento ─────────────────────────────────────────────────────
 def _dias_reales(p: dict) -> int:
     """
@@ -537,6 +567,34 @@ def _dias_reales(p: dict) -> int:
         except Exception:
             pass
     return int(p.get("dias_en_transito") or 0)
+
+
+def _promesa_vencida(p: dict, sla_critico: int) -> str:
+    """
+    Retorna 'SÍ' si la fecha de promesa ya venció, '—' si no.
+    Orden de prioridad para la fecha de promesa:
+      1. fecha_promesa del pedido (viene de Melonn CSV o bootstrap)
+      2. fecha_despacho + sla_critico (estimado por zona) — solo para tránsito
+    """
+    from datetime import timedelta
+    fp = p.get("fecha_promesa")
+    if not fp:
+        # Estimar promesa a partir de fecha_despacho + SLA de zona
+        fd = p.get("fecha_despacho")
+        if fd:
+            try:
+                fd_obj  = date.fromisoformat(str(fd))
+                fp      = str(fd_obj + timedelta(days=sla_critico))
+                # Guardar la promesa estimada en el pedido para que se muestre
+                p["fecha_promesa"] = fp
+            except Exception:
+                return "—"
+        else:
+            return "—"
+    try:
+        return "SÍ" if date.today() > date.fromisoformat(str(fp)) else "—"
+    except Exception:
+        return "—"
 
 
 def _procesar_df(pedidos: list) -> pd.DataFrame:
@@ -565,15 +623,23 @@ def _procesar_df(pedidos: list) -> pd.DataFrame:
             es_contraentrega=es_cod,
         )
 
-        # VENCIDO: solo aplica si el pedido ya fue despachado (en_transito o novedad)
-        # y lleva más de MAX_DIAS_ACTIVO días sin confirmar entrega.
-        # Pendientes de despacho tienen dias_real = 0 → nunca son VENCIDO.
+        # RESUELTO: novedad solucionada — no aplica riesgo ni VENCIDO
+        es_resuelto = (sub == "resuelto")
+
+        # VENCIDO: solo en_transito/novedad con >MAX_DIAS_ACTIVO sin confirmar
         es_vencido = (
-            dias_real > MAX_DIAS_ACTIVO
+            not es_resuelto
+            and dias_real > MAX_DIAS_ACTIVO
             and sub in ("en_transito", "novedad")
         )
 
-        if es_vencido:
+        if es_resuelto:
+            nivel     = "RESUELTO"
+            prioridad = 10
+            score     = 100
+            motivo    = "Novedad solucionada · pedido recogido"
+            categoria = "OK"
+        elif es_vencido:
             nivel     = "VENCIDO"
             prioridad = 6
             score     = 0
@@ -586,6 +652,9 @@ def _procesar_df(pedidos: list) -> pd.DataFrame:
             motivo    = r.motivos[0] if r.motivos else "—"
             categoria = r.incidencia_info.categoria
 
+        # Calcular promesa ANTES del append — puede mutar p["fecha_promesa"]
+        _prom_vencida = _promesa_vencida(p, r.zona_info.sla_critico) if not es_resuelto else "—"
+
         rows.append({
             "Prioridad":       prioridad,
             "Nivel":           nivel,
@@ -593,20 +662,21 @@ def _procesar_df(pedidos: list) -> pd.DataFrame:
             "Sub_Estado":      sub,
             "Tipo_Recaudo":    "Contraentrega" if es_cod else "Prepago",
             "Orden":           p.get("orden_tienda") or p.get("orden_melonn", ""),
+            "Orden Melonn":    p.get("orden_melonn", ""),
             "Cliente":         p.get("nombre_comprador", ""),
             "Teléfono":        p.get("telefono_comprador", ""),
-            "Ciudad":          p["ciudad_destino"],
+            "Ciudad":          p.get("ciudad_destino", ""),
             "Zona":            ZONAS_ES.get(r.zona_info.zona, r.zona_info.zona),
             "Días":            dias_real,
             "SLA Crítico":     r.zona_info.sla_critico,
             "Días sobre SLA":  max(0, dias_real - r.zona_info.sla_critico + 1),
-            "COD":             "SÍ" if es_cod else "—",
             "Valor COD":       p.get("valor_cod_raw", ""),
-            "Transportadora":  p.get("transportadora", ""),
+            "Método Envío":    p.get("transportadora", ""),
             "Estado":          ESTADOS_ES.get(p.get("estado_melonn",""), p.get("estado_melonn","")),
             "Novedad":         p.get("incidencia", "NINGUNO"),
             "Categoría":       categoria,
-            "Promesa vencida": "SÍ" if p.get("promesa_vencida") else "—",
+            "F. Promesa":      str(p.get("fecha_promesa") or ""),
+            "Promesa vencida": _prom_vencida,
             "F. Despacho":     str(p.get("fecha_despacho") or ""),
             "F. Creación":     str(p.get("fecha_creacion") or ""),
             "Motivo riesgo":   motivo,
@@ -840,7 +910,7 @@ def render_detalle(df_tab: pd.DataFrame, tab_key: str):
         <div style="text-align:right;">
           <div style="font-size:0.58rem;letter-spacing:2.5px;color:#909090;text-transform:uppercase;margin-bottom:3px;">Orden</div>
           <div style="font-size:0.95rem;font-weight:700;color:{DEEP_INK};">{fila['Orden']}</div>
-          <div style="font-size:0.78rem;color:#909090;margin-top:2px;">{fila['Transportadora']}</div>
+          <div style="font-size:0.78rem;color:#909090;margin-top:2px;">{fila.get('Método Envío', fila.get('Transportadora',''))}</div>
         </div>
       </div>
       <!-- separador -->
@@ -858,8 +928,15 @@ def render_detalle(df_tab: pd.DataFrame, tab_key: str):
           <div style="font-size:0.73rem;color:#909090;">SLA crítico: {int(fila['SLA Crítico'])}d</div>
         </div>
         <div>
+          <div style="font-size:0.58rem;letter-spacing:2px;color:#909090;text-transform:uppercase;margin-bottom:3px;">Despacho · Promesa</div>
+          <div style="font-weight:600;color:{DEEP_INK};font-size:0.85rem;">{fila.get('F. Despacho','') or '—'}</div>
+          <div style="font-size:0.73rem;color:{'#c0392b' if fila.get('Promesa vencida') == 'SÍ' else '#909090'};">
+            {'⚠ ' if fila.get('Promesa vencida') == 'SÍ' else ''}{fila.get('F. Promesa','') or '—'}
+          </div>
+        </div>
+        <div>
           <div style="font-size:0.58rem;letter-spacing:2px;color:#909090;text-transform:uppercase;margin-bottom:3px;">Modalidad pago</div>
-          <div style="font-weight:600;color:{DEEP_INK};font-size:0.85rem;">{fila['COD']}</div>
+          <div style="font-weight:600;color:{DEEP_INK};font-size:0.85rem;">{fila.get('Tipo_Recaudo', fila.get('COD','—'))}</div>
           <div style="font-size:0.73rem;color:#909090;">{fila['Valor COD']}</div>
         </div>
         <div>
@@ -877,7 +954,7 @@ def render_detalle(df_tab: pd.DataFrame, tab_key: str):
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown(f"<div class='sec-title' style='margin-top:14px;'>Seguimiento Melonn — {fila['Transportadora']}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='sec-title' style='margin-top:14px;'>Seguimiento Melonn — {fila.get('Método Envío', fila.get('Transportadora',''))}</div>", unsafe_allow_html=True)
 
     if link:
         components.html(f"""
@@ -897,7 +974,7 @@ def render_detalle(df_tab: pd.DataFrame, tab_key: str):
         <div class="wrap">
           <a class="btn" href="{link}" target="_blank">→ ABRIR TRACKING</a>
           <div>
-            <div class="tag">{fila['Orden']} · {fila['Transportadora']}</div>
+            <div class="tag">{fila['Orden']} · {fila.get('Método Envío', fila.get('Transportadora',''))}</div>
             <div class="st" id="s">Abriendo guía automáticamente...</div>
           </div>
         </div>
