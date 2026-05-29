@@ -166,11 +166,27 @@ def _check_inactivity(auth) -> bool:
 
 _TODOS_LOS_MODULOS = ["logistica", "comercial", "mercadopago", "conciliacion"]
 
+def _buscar_usuario(username: str) -> dict:
+    """
+    Busca el dict de un usuario en secrets sin importar mayúsculas.
+    streamlit-authenticator puede guardar el username con capitalización
+    diferente a la clave en secrets (ej. 'Lgarcia' vs 'lgarcia').
+    """
+    usuarios = st.secrets.get("credentials", {}).get("usernames", {})
+    # Búsqueda exacta primero
+    if username in usuarios:
+        return dict(usuarios[username])
+    # Fallback: comparación insensible a mayúsculas
+    username_lower = username.lower()
+    for key, data in usuarios.items():
+        if key.lower() == username_lower:
+            return dict(data)
+    return {}
+
+
 def _get_role(username: str) -> str:
     try:
-        return str(
-            st.secrets["credentials"]["usernames"][username].get("role", "user")
-        )
+        return str(_buscar_usuario(username).get("role", "user"))
     except Exception:
         return "user"
 
@@ -183,7 +199,7 @@ def _get_permisos(username: str, role: str) -> list:
     if role == "admin":
         return _TODOS_LOS_MODULOS.copy()
     try:
-        raw = st.secrets["credentials"]["usernames"][username].get("permisos", [])
+        raw = _buscar_usuario(username).get("permisos", [])
         return list(raw) if raw else []
     except Exception:
         return []
