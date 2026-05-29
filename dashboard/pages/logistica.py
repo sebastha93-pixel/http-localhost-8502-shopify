@@ -207,17 +207,6 @@ elif _fuente in ("csv_bootstrap", "stale"):
         icon="⚠️",
     )
 
-# Banner de pedidos vencidos — solo si hay datos desactualizados
-if vencidos > 0:
-    _v_cod = len(df_vencido[df_vencido["COD"] == "SÍ"])
-    st.info(
-        f"ℹ️ **{vencidos} pedidos** llevan más de **{MAX_DIAS_ACTIVO} días** en tránsito sin confirmación "
-        f"de entrega ({_v_cod} con COD). Probablemente entregados sin actualizar en Melonn. "
-        f"Están clasificados como **Sin confirmar** — no se cuentan como excepciones. "
-        f"Usa el filtro 'VENCIDO' en el sidebar para revisarlos.",
-        icon="📋",
-    )
-
 ts = _fa_txt or "api"
 
 # ── Separar pedidos activos de los vencidos ──────────────────────────────────
@@ -252,6 +241,17 @@ riesgo_n = len(df_active[df_active["Nivel"] == "RIESGO"])
 normales = len(df_active[df_active["Nivel"] == "NORMAL"])
 pct_exc  = round((criticos + riesgo_n) / n_active * 100) if n_active else 0
 valor_cod_riesgo = df_cod[df_cod["Nivel"].isin(["CRITICO","RIESGO"])]["Valor COD"].apply(_parse_cod).sum()
+
+# Banner de pedidos vencidos
+if vencidos > 0:
+    _v_cod = len(df_vencido[df_vencido["COD"] == "SÍ"])
+    st.info(
+        f"ℹ️ **{vencidos} pedidos** llevan más de **{MAX_DIAS_ACTIVO} días** en tránsito sin confirmación "
+        f"de entrega ({_v_cod} con COD). Probablemente entregados sin actualizar en Melonn. "
+        f"Clasificados como **Sin confirmar** — no cuentan como excepciones. "
+        f"Usa el filtro 'VENCIDO' en el sidebar para revisarlos.",
+        icon="📋",
+    )
 
 def _fmt_m(v):
     """Formatea montos: 15.1M, 897K, etc."""
