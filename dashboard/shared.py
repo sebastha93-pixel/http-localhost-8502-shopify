@@ -730,43 +730,6 @@ def render_sidebar(page_label: str):
             if st.button("↻ Actualizar datos", key="btn_refresh_melonn", use_container_width=True):
                 st.session_state["_melonn_refresh"] = True
                 st.rerun()
-
-            # ── Carga manual de CSV (alternativa cuando la API no está disponible) ──
-            st.markdown(
-                f"<div style='font-size:0.62rem;color:#a0b8c8;letter-spacing:1px;"
-                f"margin:10px 0 4px;'>O CARGA UN CSV DE MELONN</div>",
-                unsafe_allow_html=True,
-            )
-            _csv_file = st.file_uploader(
-                "CSV Melonn",
-                type=["csv"],
-                key="csv_melonn_upload",
-                label_visibility="collapsed",
-                help="Exporta el reporte desde el panel de Melonn y súbelo aquí",
-            )
-            if _csv_file is not None:
-                import tempfile, os as _os
-                try:
-                    with tempfile.NamedTemporaryFile(
-                        suffix=".csv", delete=False, mode="wb"
-                    ) as _tmp:
-                        _tmp.write(_csv_file.read())
-                        _tmp_path = _tmp.name
-                    _pedidos_csv, _omit_csv = leer_csv_melonn(_tmp_path, solo_activos=True)
-                    _os.unlink(_tmp_path)
-                    if _pedidos_csv:
-                        _res = melonn_client.cargar_desde_csv(_pedidos_csv)
-                        if _res["ok"]:
-                            st.success(
-                                f"✓ {_res['total']} pedidos cargados desde CSV",
-                                icon="📄",
-                            )
-                            st.session_state.pop("csv_melonn_upload", None)
-                            st.rerun()
-                    else:
-                        st.warning("No se encontraron pedidos activos en el CSV.")
-                except Exception as _e:
-                    st.error(f"Error procesando CSV: {_e}")
         else:
             st.markdown(f"""
             <div style="background:rgba(153,0,18,0.15);border:1px solid #990012;border-radius:6px;
