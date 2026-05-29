@@ -543,7 +543,6 @@ def _procesar_df(pedidos: list) -> pd.DataFrame:
     rows = []
     for p in pedidos:
         dias_real = _dias_reales(p)
-        zona      = clasificar_zona(p["ciudad_destino"])
 
         # Siempre calculamos riesgo para obtener zona_info (SLA, zona)
         r = calcular_riesgo(
