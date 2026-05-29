@@ -21,11 +21,18 @@ import requests
 
 log = logging.getLogger(__name__)
 
+# Enriquecimiento con datos de cliente desde Shopify
+try:
+    import shopify_enricher as _enricher
+    _SHOPIFY_ENRICHER_OK = True
+except ImportError:
+    _SHOPIFY_ENRICHER_OK = False
+
 # ── Config ─────────────────────────────────────────────────────────────────────
 _BASE_URL  = "https://api.orbita.melonn.com"
 _TIMEOUT   = 20
 _PAGE_SIZE  = 50
-_MAX_PAGES  = 2        # máximo 2 requests por sync (100 pedidos)
+_MAX_PAGES  = 5        # hasta 250 pedidos por sync (5 × 50)
 _CACHE_TTL  = 14400    # 4 horas
 
 # Rate limiting — Melonn permite 10 req/s; usamos 8 para dejar margen
@@ -300,6 +307,7 @@ def _normalizar(raw: dict) -> dict:
     return {
         "orden_melonn":           str(raw.get("internal_order_number") or raw.get("id") or ""),
         "orden_tienda":           str(raw.get("external_order_number") or "").lstrip("#"),
+        "external_order_id":      str(raw.get("external_order_id") or ""),
         "estado_melonn":          estado,
         "sub_estado_logistico":   _sub_estado_logistico(estado),
         "tienda":                 "",
@@ -372,15 +380,40 @@ def _fetch_api() -> list:
         sub = p["sub_estado_logistico"]
 
         if p["es_contraentrega"]:
-            # COD: incluimos todo lo que no esté resuelto
             resultado.append(p)
         else:
-            # Prepago: solo si hay una novedad activa
             if sub == "novedad":
                 resultado.append(p)
-            # En tránsito normal de prepago → no requiere acción, se omite
+
+    # Enriquecer con datos de cliente desde Shopify (una llamada batch)
+    if _SHOPIFY_ENRICHER_OK and resultado:
+        try:
+            resultado = _enricher.enriquecer(resultado)
+        except Exception as e:
+            log.warning(f"Shopify enricher error: {e}")
 
     return resultado
+
+
+def _lazy_enrich(pedidos: list) -> list:
+    """
+    Enriquece con Shopify los pedidos que ya están en caché pero no tienen
+    datos de cliente (bootstrap antiguo o caché de versión anterior).
+    Solo actúa si algún pedido tiene external_order_id pero no nombre_comprador.
+    """
+    if not _SHOPIFY_ENRICHER_OK:
+        return pedidos
+    necesita = any(
+        p.get("external_order_id") and not p.get("nombre_comprador")
+        for p in pedidos
+    )
+    if not necesita:
+        return pedidos
+    try:
+        return _enricher.enriquecer(pedidos)
+    except Exception as e:
+        log.warning(f"Lazy Shopify enricher error: {e}")
+        return pedidos
 
 
 def _enriquecer_y_filtrar(pedidos: list) -> list:
@@ -501,6 +534,7 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
     if hit:
         pedidos, fetched_at, _, fuente_hit = hit
         pedidos = _enriquecer_y_filtrar(pedidos)
+        pedidos = _lazy_enrich(pedidos)
         return pedidos, omitidos, {"fuente": fuente_hit, "stale": False, "fetched_at": fetched_at}
 
     # 2. SQLite stale
@@ -508,6 +542,7 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
     if stale:
         pedidos, fetched_at, _, fuente_stale = stale
         pedidos = _enriquecer_y_filtrar(pedidos)
+        pedidos = _lazy_enrich(pedidos)
         return pedidos, omitidos, {"fuente": fuente_stale, "stale": True, "fetched_at": fetched_at}
 
     # 3. JSON bootstrap → guarda en SQLite para próximas cargas
