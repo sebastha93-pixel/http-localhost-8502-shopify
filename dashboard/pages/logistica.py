@@ -170,21 +170,14 @@ def _render_memoria(orden: str):
                     st.warning("Escribe una nota antes de guardar.")
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
-_sidebar_result = render_sidebar("Logística")
-if len(_sidebar_result) == 4:
-    # Retrocompatibilidad con shared.py anterior (ruta_csv, ts, filtro_nivel, filtro_zona)
-    _ruta, _ts, filtro_nivel, filtro_zona = _sidebar_result
-    activo = _ruta is not None
-else:
-    activo, filtro_nivel, filtro_zona = _sidebar_result
+activo, filtro_nivel, filtro_zona = render_sidebar("Logística")
 
-# ── Cargar datos desde Melonn (API → caché → bootstrap) ───────────────────────
-with st.spinner("Cargando pedidos de Melonn..."):
-    try:
-        df_all, omitidos, _meta = cargar_datos_api()
-    except Exception as e:
-        st.error(f"❌ Error inesperado: {e}")
-        st.stop()
+# ── Cargar datos (SQLite → bootstrap.json; API solo si botón ↻ fue presionado) ─
+try:
+    df_all, omitidos, _meta = cargar_datos_api()
+except Exception as e:
+    st.error(f"❌ Error inesperado cargando datos: {e}")
+    st.stop()
 
 if df_all.empty:
     st.markdown(f"""

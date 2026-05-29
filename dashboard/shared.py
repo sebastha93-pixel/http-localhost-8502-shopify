@@ -567,12 +567,14 @@ def cargar_datos(ruta: str, ts: str):
 def cargar_datos_api(forzar_refresh: bool = False):
     """
     Carga pedidos desde Melonn.
-    Cache SQLite maneja la persistencia — no necesitamos @st.cache_data aquí.
     Retorna (df, omitidos, meta) donde meta incluye fuente y si es stale.
+    Lee st.session_state["_melonn_refresh"] para detectar refresh manual (botón ↻).
     """
     if not _MELONN_API_DISPONIBLE:
         return pd.DataFrame(), {}, {"fuente": "no_api"}
-    resultado = melonn_client.obtener_pedidos_activos(forzar_refresh=forzar_refresh)
+    # El botón ↻ del sidebar pone este flag en session_state
+    _refresh = forzar_refresh or st.session_state.pop("_melonn_refresh", False)
+    resultado = melonn_client.obtener_pedidos_activos(forzar_refresh=_refresh)
     if len(resultado) == 3:
         pedidos, omitidos, meta = resultado
     else:
@@ -634,12 +636,13 @@ def render_sidebar(page_label: str):
                 _info = None
 
             if _info:
-                _age_min = int(_info["age_s"] // 60)
-                _age_txt = (
-                    f"hace {_age_min}min" if _age_min >= 1
-                    else f"hace {_age_min//60}h" if _age_min >= 60
-                    else "ahora mismo"
-                )
+                _age_s = int(_info["age_s"])
+                if _age_s < 60:
+                    _age_txt = "ahora mismo"
+                elif _age_s < 3600:
+                    _age_txt = f"hace {_age_s // 60}min"
+                else:
+                    _age_txt = f"hace {_age_s // 3600}h"
                 if _info.get("stale"):
                     _color, _icon, _tag = "#f5a623", "⚠", "DATOS EN CACHÉ"
                 else:
@@ -660,8 +663,8 @@ def render_sidebar(page_label: str):
             """, unsafe_allow_html=True)
 
             if st.button("↻ Actualizar datos", key="btn_refresh_melonn", use_container_width=True):
-                melonn_client.limpiar_cache()
-                st.cache_data.clear()
+                # Marcar que el siguiente cargar_datos_api debe llamar la API real
+                st.session_state["_melonn_refresh"] = True
                 st.rerun()
         else:
             st.markdown(f"""
