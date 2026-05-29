@@ -117,23 +117,25 @@ def enriquecer(pedidos: list) -> list:
 
     log.info(f"Shopify enricher: consultando {len(ids_necesarios)} pedidos por ID")
     shopify_map = _fetch_shopify_orders(ids_necesarios) if ids_necesarios else {}
-
-    if not shopify_map:
-        return pedidos
+    # NO retornar si shopify_map está vacío — puede haber pedidos sin external_order_id
+    # que necesitan fallback por nombre de orden
 
     enriquecidos = []
     for p in pedidos:
         sid = str(p.get("external_order_id") or "")
         o   = shopify_map.get(sid)
 
-        # Fallback: buscar por nombre de orden si no hay external_order_id
-        # (cubre reenvíos como "58043-NUEVO_ENVIO")
+        # Fallback: buscar por nombre de orden cuando falta external_order_id
+        # Cubre: reenvíos ("58043-NUEVO_ENVIO"), caché viejo sin ID, etc.
         if not o and not p.get("nombre_comprador") and creds:
             orden_tienda = str(p.get("orden_tienda") or "")
-            # Extraer número base: "58043-NUEVO_ENVIO" → "58043"
             base = orden_tienda.split("-")[0].strip()
             if base.isdigit():
                 o = _fetch_by_name(base, *creds)
+                if o:
+                    # Guardar el ID de Shopify para futuros lookups
+                    p = dict(p)
+                    p["external_order_id"] = str(o.get("id", ""))
 
         if not o:
             enriquecidos.append(p)

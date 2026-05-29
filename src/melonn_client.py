@@ -397,18 +397,25 @@ def _fetch_api() -> list:
 
 def _lazy_enrich(pedidos: list) -> list:
     """
-    Enriquece con Shopify los pedidos que ya están en caché pero no tienen
-    datos de cliente (bootstrap antiguo o caché de versión anterior).
-    Solo actúa si algún pedido tiene external_order_id pero no nombre_comprador.
+    Enriquece con Shopify los pedidos en caché sin datos de cliente.
+    Detecta tres casos:
+      1. Tiene external_order_id pero no nombre_comprador  → API data sin enriquecer
+      2. Sin external_order_id, sin nombre, con orden_tienda numérico → caché viejo
     """
     if not _SHOPIFY_ENRICHER_OK:
         return pedidos
+
     necesita = any(
-        p.get("external_order_id") and not p.get("nombre_comprador")
+        not p.get("nombre_comprador") and (
+            p.get("external_order_id")
+            or str(p.get("orden_tienda", "")).split("-")[0].isdigit()
+        )
         for p in pedidos
     )
     if not necesita:
         return pedidos
+
+    log.info("Lazy Shopify enricher: detectados pedidos sin datos de cliente en caché")
     try:
         return _enricher.enriquecer(pedidos)
     except Exception as e:
