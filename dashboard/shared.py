@@ -695,11 +695,20 @@ def render_sidebar(page_label: str):
                     _age_txt = f"hace {_age_s // 60}min"
                 else:
                     _age_txt = f"hace {_age_s // 3600}h"
-                if _info.get("stale"):
-                    _color, _icon, _tag = "#f5a623", "⚠", "DATOS EN CACHÉ"
+
+                _fuente_info = _info.get("fuente", "api_live")
+                if _fuente_info == "csv_bootstrap":
+                    # Datos genéricos del bootstrap — no son órdenes reales de Melonn
+                    _color = "#f5a623"
+                    _icon  = "⚠"
+                    _tag   = "DATOS BOOTSTRAP"
+                    _sub   = f"{_info['total']} pedidos genéricos · presiona ↻ para sincronizar"
+                elif _info.get("stale") or _fuente_info == "stale":
+                    _color, _icon, _tag = "#f5a623", "⚠", "CACHÉ DESACTUALIZADO"
+                    _sub = f"{_info['total']} pedidos · {_age_txt}"
                 else:
                     _color, _icon, _tag = "#52b788", "✓", "MELONN SINCRONIZADO"
-                _sub = f"{_info['total']} pedidos · {_age_txt}"
+                    _sub = f"{_info['total']} pedidos · {_age_txt}"
             else:
                 _color, _icon, _tag = "#f5a623", "↻", "SIN DATOS AÚN"
                 _sub = "Presiona actualizar"

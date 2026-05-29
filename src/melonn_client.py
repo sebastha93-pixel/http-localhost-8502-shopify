@@ -70,42 +70,49 @@ def _init_tabla():
                 id           INTEGER PRIMARY KEY CHECK (id = 1),
                 fetched_at   TEXT NOT NULL,
                 pedidos_json TEXT NOT NULL,
-                total        INTEGER NOT NULL DEFAULT 0
+                total        INTEGER NOT NULL DEFAULT 0,
+                fuente       TEXT DEFAULT 'api_live'
             )
         """)
+        # Migración: agrega columna fuente si la tabla ya existía sin ella
+        try:
+            c.execute("ALTER TABLE melonn_pedidos_cache ADD COLUMN fuente TEXT DEFAULT 'api_live'")
+        except Exception:
+            pass  # columna ya existe — normal
         c.commit()
 
 
 def _cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:
-    """Retorna (pedidos, fetched_at, fresco) o None si no hay datos."""
+    """Retorna (pedidos, fetched_at, fresco, fuente) o None si no hay datos."""
     try:
         _init_tabla()
         with _conn() as c:
             row = c.execute(
-                "SELECT fetched_at, pedidos_json FROM melonn_pedidos_cache WHERE id=1"
+                "SELECT fetched_at, pedidos_json, fuente FROM melonn_pedidos_cache WHERE id=1"
             ).fetchone()
         if not row:
             return None
         fetched_at = datetime.fromisoformat(row["fetched_at"])
-        age   = (datetime.now() - fetched_at).total_seconds()
+        age    = (datetime.now() - fetched_at).total_seconds()
         fresco = age <= _CACHE_TTL
         if not fresco and not ignorar_ttl:
             return None
         pedidos = json.loads(row["pedidos_json"])
-        return pedidos, fetched_at, fresco
+        fuente  = row["fuente"] if row["fuente"] else "api_live"
+        return pedidos, fetched_at, fresco, fuente
     except Exception as e:
         log.warning(f"Error leyendo SQLite cache: {e}")
         return None
 
 
-def _cache_guardar(pedidos: list):
+def _cache_guardar(pedidos: list, fuente: str = "api_live"):
     try:
         _init_tabla()
         with _conn() as c:
             c.execute("""
-                INSERT OR REPLACE INTO melonn_pedidos_cache (id, fetched_at, pedidos_json, total)
-                VALUES (1, ?, ?, ?)
-            """, (datetime.now().isoformat(), json.dumps(pedidos, default=str), len(pedidos)))
+                INSERT OR REPLACE INTO melonn_pedidos_cache (id, fetched_at, pedidos_json, total, fuente)
+                VALUES (1, ?, ?, ?, ?)
+            """, (datetime.now().isoformat(), json.dumps(pedidos, default=str), len(pedidos), fuente))
             c.commit()
     except Exception as e:
         log.warning(f"Error guardando SQLite cache: {e}")
@@ -126,18 +133,20 @@ def cache_info() -> Optional[dict]:
         _init_tabla()
         with _conn() as c:
             row = c.execute(
-                "SELECT fetched_at, total FROM melonn_pedidos_cache WHERE id=1"
+                "SELECT fetched_at, total, fuente FROM melonn_pedidos_cache WHERE id=1"
             ).fetchone()
         if not row:
             return None
         fetched_at = datetime.fromisoformat(row["fetched_at"])
-        age = (datetime.now() - fetched_at).total_seconds()
+        age    = (datetime.now() - fetched_at).total_seconds()
+        fuente = row["fuente"] if row["fuente"] else "api_live"
         return {
             "fetched_at": fetched_at,
             "age_s":      age,
             "total":      row["total"],
             "fresco":     age <= _CACHE_TTL,
             "stale":      age > _CACHE_TTL,
+            "fuente":     fuente,
         }
     except Exception:
         return None
@@ -300,12 +309,12 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
         # API falló → stale o bootstrap
         stale = _cache_leer(ignorar_ttl=True)
         if stale:
-            pedidos, fetched_at, _ = stale
-            return pedidos, omitidos, {"fuente": "stale", "stale": True, "fetched_at": fetched_at}
+            pedidos, fetched_at, _, fuente_stale = stale
+            return pedidos, omitidos, {"fuente": fuente_stale, "stale": True, "fetched_at": fetched_at}
 
         pedidos_boot = _bootstrap_json()
         if pedidos_boot:
-            _cache_guardar(pedidos_boot)
+            _cache_guardar(pedidos_boot, fuente="csv_bootstrap")
             return pedidos_boot, omitidos, {
                 "fuente": "csv_bootstrap", "stale": True, "fetched_at": datetime.now()
             }
@@ -316,19 +325,19 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
     # 1. SQLite fresco
     hit = _cache_leer(ignorar_ttl=False)
     if hit:
-        pedidos, fetched_at, _ = hit
-        return pedidos, omitidos, {"fuente": "cache", "stale": False, "fetched_at": fetched_at}
+        pedidos, fetched_at, _, fuente_hit = hit
+        return pedidos, omitidos, {"fuente": fuente_hit, "stale": False, "fetched_at": fetched_at}
 
     # 2. SQLite stale
     stale = _cache_leer(ignorar_ttl=True)
     if stale:
-        pedidos, fetched_at, _ = stale
-        return pedidos, omitidos, {"fuente": "stale", "stale": True, "fetched_at": fetched_at}
+        pedidos, fetched_at, _, fuente_stale = stale
+        return pedidos, omitidos, {"fuente": fuente_stale, "stale": True, "fetched_at": fetched_at}
 
     # 3. JSON bootstrap → guarda en SQLite para próximas cargas
     pedidos_boot = _bootstrap_json()
     if pedidos_boot:
-        _cache_guardar(pedidos_boot)
+        _cache_guardar(pedidos_boot, fuente="csv_bootstrap")
         return pedidos_boot, omitidos, {
             "fuente": "csv_bootstrap", "stale": True, "fetched_at": datetime.now()
         }
