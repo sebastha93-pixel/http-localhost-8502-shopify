@@ -345,6 +345,17 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
     return [], omitidos, {"fuente": "sin_datos", "stale": False}
 
 
+def cargar_desde_csv(pedidos: list) -> dict:
+    """
+    Guarda pedidos ya normalizados (provenientes de un CSV cargado manualmente)
+    como caché activo. Fuente = 'csv_upload' para distinguirlos de datos de API.
+    """
+    if not pedidos:
+        return {"ok": False, "msg": "Sin pedidos válidos"}
+    _cache_guardar(pedidos, fuente="csv_upload")
+    return {"ok": True, "total": len(pedidos)}
+
+
 def estado() -> dict:
     info = cache_info()
     return {
