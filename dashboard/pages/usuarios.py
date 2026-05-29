@@ -15,19 +15,23 @@ st.markdown(CSS, unsafe_allow_html=True)
 
 # Guard: solo admin puede acceder
 if st.session_state.get("authentication_status") is not True:
-    st.error("Acceso denegado.")
+    st.error("🔒 Acceso denegado. Inicia sesión primero.")
     st.stop()
 
-try:
-    _role = str(
-        st.secrets["credentials"]["usernames"]
-        [st.session_state.get("username", "")].get("role", "user")
-    )
-except Exception:
-    _role = "user"
+# Leer rol desde session_state (lo pone app.py tras el login)
+# Fallback a st.secrets si por alguna razón no está en session_state
+_role = st.session_state.get("user_role", "")
+if not _role:
+    try:
+        _role = str(
+            st.secrets["credentials"]["usernames"]
+            [st.session_state.get("username", "")].get("role", "user")
+        )
+    except Exception:
+        _role = "user"
 
 if _role != "admin":
-    st.error("Solo el administrador puede gestionar usuarios.")
+    st.error("🔒 Solo el administrador puede gestionar usuarios.")
     st.stop()
 
 # ── Header ─────────────────────────────────────────────────────────────────────
