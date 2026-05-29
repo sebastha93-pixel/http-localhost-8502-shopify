@@ -72,6 +72,8 @@ ESTADOS_PENDIENTE_DESPACHO = {
     "All items reserved - ready for fulfillment",
     "Prepared for dispatch",
     "Packed",
+    "Ready For Packing",   # en cola para empaque
+    "Picking",             # alistamiento de ítems en bodega
 }
 
 # Pedido en camino (flujo normal)
