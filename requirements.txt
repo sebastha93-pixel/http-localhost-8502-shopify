@@ -5,3 +5,5 @@ supabase>=2.0.0
 python-dotenv>=1.0.0
 Pillow>=9.0.0
 openpyxl>=3.0.0
+streamlit-authenticator>=0.3.0
+bcrypt>=4.0.0
