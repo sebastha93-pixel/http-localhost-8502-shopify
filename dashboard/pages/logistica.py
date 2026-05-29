@@ -23,7 +23,8 @@ except Exception:
 
 from shared import (
     CSS, DEEP_INK, STEEL_BLUE, GRAPHITE_GREY, SOFT_CONCRETE,
-    CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR, COD_COLOR,
+    CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR, COD_COLOR, VENCIDO_COLOR,
+    MAX_DIAS_ACTIVO,
     cargar_datos_api, render_sidebar, render_detalle, _parse_cod, render_tabla,
 )
 from memoria import (
@@ -36,7 +37,7 @@ from memoria import (
 st.markdown(CSS, unsafe_allow_html=True)
 
 # ── Helpers de gráficos ────────────────────────────────────────────────────────
-COLOR_NIVEL = {"CRITICO": CRITICO_COLOR, "RIESGO": RIESGO_COLOR, "NORMAL": NORMAL_COLOR}
+COLOR_NIVEL = {"CRITICO": CRITICO_COLOR, "RIESGO": RIESGO_COLOR, "NORMAL": NORMAL_COLOR, "VENCIDO": VENCIDO_COLOR}
 FONT = dict(family="Arial, sans-serif", size=12, color=GRAPHITE_GREY)
 
 def _lay(fig, h=280):
@@ -206,23 +207,50 @@ elif _fuente in ("csv_bootstrap", "stale"):
         icon="⚠️",
     )
 
+# Banner de pedidos vencidos — solo si hay datos desactualizados
+if vencidos > 0:
+    _v_cod = len(df_vencido[df_vencido["COD"] == "SÍ"])
+    st.info(
+        f"ℹ️ **{vencidos} pedidos** llevan más de **{MAX_DIAS_ACTIVO} días** en tránsito sin confirmación "
+        f"de entrega ({_v_cod} con COD). Probablemente entregados sin actualizar en Melonn. "
+        f"Están clasificados como **Sin confirmar** — no se cuentan como excepciones. "
+        f"Usa el filtro 'VENCIDO' en el sidebar para revisarlos.",
+        icon="📋",
+    )
+
 ts = _fa_txt or "api"
 
-df_cod     = df_all[df_all["COD"] == "SÍ"]
-df_prepago = df_all[df_all["COD"] == "—"]
+# ── Separar pedidos activos de los vencidos ──────────────────────────────────
+# VENCIDO = más de MAX_DIAS_ACTIVO días en tránsito sin confirmar entrega.
+# Probablemente entregados sin actualizar en Melonn. No se alarman como CRÍTICO.
+df_active  = df_all[df_all["Nivel"] != "VENCIDO"]
+df_vencido = df_all[df_all["Nivel"] == "VENCIDO"]
 
-df_filt = df_all.copy()
-if filtro_nivel: df_filt = df_filt[df_filt["Nivel"].isin(filtro_nivel)]
+df_cod     = df_active[df_active["COD"] == "SÍ"]
+df_prepago = df_active[df_active["COD"] == "—"]
+
+# Filtros del sidebar — aplican solo a pedidos activos
+df_filt = df_active.copy()
+if filtro_nivel:
+    # Si el usuario explícitamente pide VENCIDO, incluirlos
+    niv_activos  = [n for n in filtro_nivel if n != "VENCIDO"]
+    if niv_activos:
+        df_filt = df_filt[df_filt["Nivel"].isin(niv_activos)]
+    if "VENCIDO" in filtro_nivel:
+        df_filt = pd.concat([df_filt, df_vencido], ignore_index=True)
 if filtro_zona:  df_filt = df_filt[df_filt["Zona"].isin(filtro_zona)]
 
 df_cod_f = df_filt[df_filt["COD"] == "SÍ"]
 df_pre_f = df_filt[df_filt["COD"] == "—"]
 
-total    = len(df_all)
-criticos = len(df_all[df_all["Nivel"] == "CRITICO"])
-riesgo_n = len(df_all[df_all["Nivel"] == "RIESGO"])
-normales = len(df_all[df_all["Nivel"] == "NORMAL"])
-pct_exc  = round((criticos + riesgo_n) / total * 100) if total else 0
+total    = len(df_all)       # total incluyendo vencidos (para info)
+n_active = len(df_active)    # solo pedidos activos (base para % excepción)
+vencidos = len(df_vencido)
+
+criticos = len(df_active[df_active["Nivel"] == "CRITICO"])
+riesgo_n = len(df_active[df_active["Nivel"] == "RIESGO"])
+normales = len(df_active[df_active["Nivel"] == "NORMAL"])
+pct_exc  = round((criticos + riesgo_n) / n_active * 100) if n_active else 0
 valor_cod_riesgo = df_cod[df_cod["Nivel"].isin(["CRITICO","RIESGO"])]["Valor COD"].apply(_parse_cod).sum()
 
 def _fmt_m(v):
@@ -239,7 +267,7 @@ st.markdown(f"""
     <hr style='margin:10px 0;'>
 """, unsafe_allow_html=True)
 
-k1,k2,k3,k4,k5 = st.columns(5)
+k1,k2,k3,k4,k5,k6 = st.columns(6)
 color_pct = CRITICO_COLOR if pct_exc > 40 else (RIESGO_COLOR if pct_exc > 20 else NORMAL_COLOR)
 with k1:
     st.markdown(f"""<div class="kpi-card kpi-crit">
@@ -261,13 +289,17 @@ with k4:
 with k5:
     st.markdown(f"""<div class="kpi-card" style="background:{color_pct};border-left:4px solid {STEEL_BLUE};">
         <p class="kpi-num">{pct_exc}%</p><p class="kpi-label">EN EXCEPCIÓN</p>
-        <p class="kpi-sub">{criticos+riesgo_n} de {total} pedidos</p></div>""", unsafe_allow_html=True)
+        <p class="kpi-sub">{criticos+riesgo_n} de {n_active} activos</p></div>""", unsafe_allow_html=True)
+with k6:
+    st.markdown(f"""<div class="kpi-card" style="background:{VENCIDO_COLOR};border-left:4px solid #909090;">
+        <p class="kpi-num">{vencidos}</p><p class="kpi-label">SIN CONFIRMAR</p>
+        <p class="kpi-sub">&gt;{MAX_DIAS_ACTIVO}d · verificar</p></div>""", unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── TABS ───────────────────────────────────────────────────────────────────────
 tab_ins, tab_cod, tab_pre, tab_ana = st.tabs([
-    f"📊  Insights  ({total})",
+    f"📊  Insights  ({n_active} activos)",
     f"💰  Contraentregas  ({len(df_cod_f)} COD)",
     f"✅  Pago Previo  ({len(df_pre_f)})",
     "📈  Análisis",
@@ -278,22 +310,22 @@ tab_ins, tab_cod, tab_pre, tab_ana = st.tabs([
 # TAB 1 — INSIGHTS
 # ════════════════════════════════════════════════════════════════════════════════
 with tab_ins:
-    dias_prom = df_all["Días"].mean() if not df_all.empty else 0
+    dias_prom = df_active["Días"].mean() if not df_active.empty else 0
     c1,c2,c3,c4 = st.columns(4)
     with c1:
         st.markdown(f"""<div class="kpi-card kpi-extra">
             <p class="kpi-num">{len(df_cod)}</p><p class="kpi-label">PEDIDOS COD</p>
-            <p class="kpi-sub">{round(len(df_cod)/total*100) if total else 0}% del total</p></div>""",
+            <p class="kpi-sub">{round(len(df_cod)/n_active*100) if n_active else 0}% de activos</p></div>""",
             unsafe_allow_html=True)
     with c2:
         st.markdown(f"""<div class="kpi-card" style="background:{DEEP_INK};border-left:4px solid {STEEL_BLUE};">
             <p class="kpi-num">{len(df_prepago)}</p><p class="kpi-label">PAGO PREVIO</p>
-            <p class="kpi-sub">{round(len(df_prepago)/total*100) if total else 0}% del total</p></div>""",
+            <p class="kpi-sub">{round(len(df_prepago)/n_active*100) if n_active else 0}% de activos</p></div>""",
             unsafe_allow_html=True)
     with c3:
         st.markdown(f"""<div class="kpi-card" style="background:{DEEP_INK};border-left:4px solid {STEEL_BLUE};">
             <p class="kpi-num">{dias_prom:.1f}</p><p class="kpi-label">DÍAS PROMEDIO</p>
-            <p class="kpi-sub">Tiempo en tránsito</p></div>""", unsafe_allow_html=True)
+            <p class="kpi-sub">Pedidos activos</p></div>""", unsafe_allow_html=True)
     with c4:
         st.markdown(f"""<div class="kpi-card" style="background:{DEEP_INK};border-left:4px solid {STEEL_BLUE};">
             <p class="kpi-num">{omit_total}</p><p class="kpi-label">OMITIDOS</p>
@@ -349,8 +381,38 @@ with tab_ins:
                          })
             st.caption(f"Top 20 de {len(df_exc)} excepciones")
 
+    # ── Pedidos sin confirmar entrega (VENCIDO) ─────────────────────────────────
+    if vencidos > 0:
+        _v_cod_n = len(df_vencido[df_vencido["COD"] == "SÍ"])
+        with st.expander(
+            f"📋 Sin confirmar entrega — {vencidos} pedidos (+{MAX_DIAS_ACTIVO}d en tránsito)",
+            expanded=False,
+        ):
+            st.caption(
+                f"Estos {vencidos} pedidos llevan más de {MAX_DIAS_ACTIVO} días en tránsito sin "
+                f"actualización de estado en Melonn. {_v_cod_n} son COD. Suelen estar entregados "
+                f"pero la transportadora no reportó a tiempo. Verifica directamente con el cliente o la guía."
+            )
+            COLS_V = ["Orden","Cliente","Teléfono","Ciudad","Zona","Días","COD","Valor COD",
+                      "Transportadora","Novedad","F. Despacho","Link Melonn"]
+            COLS_V = [c for c in COLS_V if c in df_vencido.columns]
+            st.dataframe(
+                df_vencido[COLS_V],
+                use_container_width=True, height=280, hide_index=True,
+                column_config={
+                    "Días": st.column_config.NumberColumn("Días", format="%d"),
+                    "Link Melonn": st.column_config.LinkColumn("Guía", display_text="Ver"),
+                },
+            )
+            st.download_button(
+                "⬇️ Descargar lista sin confirmar (.CSV)",
+                data=df_vencido[COLS_V].to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"maledenim_sin_confirmar_{date.today()}.csv",
+                mime="text/csv",
+            )
+
     with st.expander("📋 Novedades más frecuentes", expanded=False):
-        nov = (df_all[df_all["Novedad"] != "NINGUNO"]["Novedad"]
+        nov = (df_active[df_active["Novedad"] != "NINGUNO"]["Novedad"]
                .value_counts().head(8).sort_values(ascending=True).reset_index())
         nov.columns = ["Novedad","Cantidad"]
         if not nov.empty:
@@ -574,7 +636,7 @@ with tab_ana:
 
         with col1:
             st.markdown("<div class='sec-title'>Por nivel</div>", unsafe_allow_html=True)
-            nc = df_all["Nivel"].value_counts().reindex(["CRITICO","RIESGO","NORMAL"]).fillna(0)
+            nc = df_active["Nivel"].value_counts().reindex(["CRITICO","RIESGO","NORMAL"]).fillna(0)
             fig_d1 = go.Figure(go.Pie(
                 labels=nc.index, values=nc.values, hole=0.55,
                 marker_colors=[CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR],
@@ -586,14 +648,14 @@ with tab_ana:
                 margin=dict(l=0,r=0,t=10,b=0), height=220,
                 showlegend=True,
                 legend=dict(orientation="h", y=-0.08, font=dict(color=GRAPHITE_GREY, size=11)),
-                annotations=[dict(text=f"<b>{total}</b>", x=0.5, y=0.5,
+                annotations=[dict(text=f"<b>{n_active}</b>", x=0.5, y=0.5,
                                   font_size=18, font_color=DEEP_INK, showarrow=False)],
             )
             st.plotly_chart(fig_d1, use_container_width=True)
 
         with col2:
             st.markdown("<div class='sec-title'>COD vs Pago previo</div>", unsafe_allow_html=True)
-            tc = df_all["COD"].map({"SÍ":"COD","—":"Pago previo"}).value_counts()
+            tc = df_active["COD"].map({"SÍ":"COD","—":"Pago previo"}).value_counts()
             fig_d2 = go.Figure(go.Pie(
                 labels=tc.index, values=tc.values, hole=0.55,
                 marker_colors=[COD_COLOR, STEEL_BLUE],
@@ -609,8 +671,8 @@ with tab_ana:
 
         with col3:
             st.markdown("<div class='sec-title'>Cumplimiento SLA</div>", unsafe_allow_html=True)
-            dentro = len(df_all[df_all["Días sobre SLA"] <= 0])
-            fuera  = len(df_all[df_all["Días sobre SLA"] > 0])
+            dentro = len(df_active[df_active["Días sobre SLA"] <= 0])
+            fuera  = len(df_active[df_active["Días sobre SLA"] > 0])
             fig_d3 = go.Figure(go.Pie(
                 labels=["Dentro de SLA","Fuera de SLA"],
                 values=[dentro, fuera], hole=0.55,
@@ -630,7 +692,7 @@ with tab_ana:
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("<div class='sec-title'>Pedidos por zona y nivel</div>", unsafe_allow_html=True)
-            zn = (df_all.groupby(["Zona","Nivel"]).size().reset_index(name="Pedidos"))
+            zn = (df_active.groupby(["Zona","Nivel"]).size().reset_index(name="Pedidos"))
             zn["Nivel"] = pd.Categorical(zn["Nivel"], ["CRITICO","RIESGO","NORMAL"], ordered=True)
             fig_z2 = px.bar(zn, y="Zona", x="Pedidos", color="Nivel",
                             color_discrete_map=COLOR_NIVEL, orientation="h",
@@ -642,7 +704,7 @@ with tab_ana:
 
         with col2:
             st.markdown("<div class='sec-title'>Días promedio por zona</div>", unsafe_allow_html=True)
-            dz = df_all.groupby("Zona")["Días"].mean().sort_values(ascending=True).reset_index()
+            dz = df_active.groupby("Zona")["Días"].mean().sort_values(ascending=True).reset_index()
             dz.columns = ["Zona","Días prom"]
             dz["color"] = dz["Días prom"].apply(
                 lambda d: CRITICO_COLOR if d > 10 else (RIESGO_COLOR if d > 6 else NORMAL_COLOR))
@@ -660,7 +722,7 @@ with tab_ana:
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("<div class='sec-title'>Volumen total</div>", unsafe_allow_html=True)
-            tv = (df_all.groupby("Transportadora").size()
+            tv = (df_active.groupby("Transportadora").size()
                   .sort_values(ascending=True).reset_index(name="Pedidos"))
             fig_tv = px.bar(tv, y="Transportadora", x="Pedidos",
                             orientation="h", height=280,
@@ -673,7 +735,7 @@ with tab_ana:
 
         with col2:
             st.markdown("<div class='sec-title'>Excepciones por transportadora</div>", unsafe_allow_html=True)
-            te2 = (df_all[df_all["Nivel"].isin(["CRITICO","RIESGO"])]
+            te2 = (df_active[df_active["Nivel"].isin(["CRITICO","RIESGO"])]
                    .groupby(["Transportadora","Nivel"]).size().reset_index(name="Pedidos"))
             te2["Nivel"] = pd.Categorical(te2["Nivel"], ["CRITICO","RIESGO"], ordered=True)
             fig_te2 = px.bar(te2, y="Transportadora", x="Pedidos", color="Nivel",
@@ -689,7 +751,7 @@ with tab_ana:
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("<div class='sec-title'>Distribución de días</div>", unsafe_allow_html=True)
-            fig_h = px.histogram(df_all, x="Días", nbins=20,
+            fig_h = px.histogram(df_active, x="Días", nbins=20,
                                  color_discrete_sequence=[STEEL_BLUE], height=260)
             fig_h.update_traces(marker_line_color="white", marker_line_width=1)
             fig_h = _lay(fig_h, 260)
@@ -700,7 +762,7 @@ with tab_ana:
 
         with col2:
             st.markdown("<div class='sec-title'>Rango por nivel</div>", unsafe_allow_html=True)
-            fig_b = px.box(df_all, x="Nivel", y="Días", color="Nivel",
+            fig_b = px.box(df_active, x="Nivel", y="Días", color="Nivel",
                            color_discrete_map=COLOR_NIVEL,
                            category_orders={"Nivel":["CRITICO","RIESGO","NORMAL"]},
                            height=260)
@@ -714,7 +776,7 @@ with tab_ana:
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("<div class='sec-title'>Top 10 ciudades</div>", unsafe_allow_html=True)
-            ciu = (df_all.groupby("Ciudad").size()
+            ciu = (df_active.groupby("Ciudad").size()
                    .sort_values(ascending=True).tail(10).reset_index(name="Pedidos"))
             fig_ciu = px.bar(ciu, y="Ciudad", x="Pedidos", orientation="h",
                              height=300, color_discrete_sequence=[DEEP_INK], text="Pedidos")
@@ -726,7 +788,7 @@ with tab_ana:
 
         with col2:
             st.markdown("<div class='sec-title'>Novedades frecuentes</div>", unsafe_allow_html=True)
-            nov2 = (df_all[df_all["Novedad"] != "NINGUNO"]["Novedad"]
+            nov2 = (df_active[df_active["Novedad"] != "NINGUNO"]["Novedad"]
                     .value_counts().head(10)
                     .sort_values(ascending=True).reset_index())
             nov2.columns = ["Novedad","Cantidad"]
@@ -744,7 +806,7 @@ with tab_ana:
 
     # ── Fila 6: COD en riesgo ────────────────────────────────────────────────────
     with st.expander("💸 Valor COD en riesgo", expanded=False):
-        df_cod2 = df_all[df_all["COD"] == "SÍ"].copy()
+        df_cod2 = df_active[df_active["COD"] == "SÍ"].copy()
         df_cod2["Valor $"] = df_cod2["Valor COD"].apply(_parse_cod)
         col1, col2 = st.columns(2)
         with col1:
