@@ -257,7 +257,7 @@ df_novedades_f = _aplicar_filtros(df_novedades)
 # ── Encabezado ─────────────────────────────────────────────────────────────────
 st.markdown(f"""
     <p class="titulo-panel">📦 LOGÍSTICA</p>
-    <p class="subtitulo">Trazabilidad operativa · MALE'DENIM · {ts}</p>
+    <p class="subtitulo">Trazabilidad operativa · MALE'DENIM · {date.today().strftime('%d/%m/%Y')}</p>
     <hr style='margin:10px 0;'>
 """, unsafe_allow_html=True)
 
