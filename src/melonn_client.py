@@ -56,15 +56,37 @@ _rate_limiter = _RateLimiter()
 _DB_PATH        = Path(__file__).parent.parent / "data" / "db" / "maledenim.db"
 _JSON_BOOTSTRAP = Path(__file__).parent.parent / "data" / "logistica" / "bootstrap.json"
 
-# ── Estados ────────────────────────────────────────────────────────────────────
-ESTADOS_EN_TRANSITO = {
-    "Shipped - in transit", "Delivery not posible", "Packed",
-    "Packed - on hold", "Prepared for dispatch",
-    "All items reserved - ready for fulfillment",
-    "All items reserved - fulfillment on hold - ext. conditionals",
-    "on stand by - not able to fulfil - no stock",
-}
+# ── Clasificación de estados ───────────────────────────────────────────────────
+#
+# Lógica de inclusión:
+#   • COD (contra entrega): mostramos TODO lo que NO esté resuelto
+#       – Pendientes por despachar  → seguimiento de fulfillment
+#       – En tránsito               → seguimiento hasta entrega y cobro
+#   • Prepago: solo mostramos NOVEDADES (algo salió mal en la entrega)
+#       – En tránsito normal no requiere acción, no se muestra
+#
 ESTADOS_RESUELTOS = {"Delivered to buyer", "Picked-up by buyer", "Canceled"}
+
+# Pedido listo para despachar / aún en bodega
+ESTADOS_PENDIENTE_DESPACHO = {
+    "All items reserved - ready for fulfillment",
+    "Prepared for dispatch",
+    "Packed",
+}
+
+# Pedido en camino (flujo normal)
+ESTADOS_EN_TRANSITO = {"Shipped - in transit"}
+
+# Novedad activa — problema que requiere gestión (aplica a COD y Prepago)
+ESTADOS_NOVEDAD = {
+    "Delivery not posible",                                          # intento fallido
+    "Packed - on hold",                                             # paquete retenido
+    "All items reserved - fulfillment on hold - ext. conditionals", # espera externa
+    "on stand by - not able to fulfil - no stock",                  # sin stock
+}
+
+# Todos los activos (para referencia y para el filtro de _fetch_api)
+ESTADOS_ACTIVOS = ESTADOS_PENDIENTE_DESPACHO | ESTADOS_EN_TRANSITO | ESTADOS_NOVEDAD
 
 
 # ── Credenciales ───────────────────────────────────────────────────────────────
@@ -244,6 +266,22 @@ def _parsear_fecha(valor) -> Optional[date]:
         return None
 
 
+def _sub_estado_logistico(estado: str) -> str:
+    """
+    Clasifica el estado Melonn en las tres categorías operativas del dashboard.
+      pendiente_despacho → en bodega, aún no enviado
+      en_transito        → despachado, esperando entrega normal
+      novedad            → problema activo que requiere gestión
+    """
+    if estado in ESTADOS_NOVEDAD:
+        return "novedad"
+    if estado in ESTADOS_EN_TRANSITO:
+        return "en_transito"
+    if estado in ESTADOS_PENDIENTE_DESPACHO:
+        return "pendiente_despacho"
+    return "otro"  # estado desconocido / nuevo
+
+
 def _normalizar(raw: dict) -> dict:
     estado    = str((raw.get("sell_order_state") or {}).get("name") or "")
     buyer     = raw.get("buyer") or {}
@@ -255,41 +293,54 @@ def _normalizar(raw: dict) -> dict:
 
     fd = _parsear_fecha(raw.get("dispatch_date")) or _parsear_fecha(raw.get("creation_date"))
     fe = _parsear_fecha(raw.get("delivery_date"))
+    es_cod = bool(valor_cod and float(str(valor_cod).replace(",",".") or 0) > 0)
 
     return {
-        "orden_melonn":       str(raw.get("internal_order_number") or raw.get("id") or ""),
-        "orden_tienda":       str(raw.get("external_order_number") or "").lstrip("#"),
-        "estado_melonn":      estado,
-        "tienda":             "",
-        "canal_venta":        str((raw.get("fulfillment_type") or {}).get("order_type") or "D2C"),
-        "nombre_comprador":   str(buyer.get("full_name") or ""),
-        "telefono_comprador": str(buyer.get("phone_number") or ""),
-        "ciudad_destino":     str(dest.get("city") or "").upper().strip(),
-        "region_destino":     str(dest.get("region") or ""),
-        "transportadora":     metodo,
-        "link_guia":          str(raw.get("melonn_tracking_link") or ""),
-        "fecha_despacho":     fd,
-        "fecha_entrega":      fe,
-        "fecha_promesa":      _parsear_fecha(raw.get("promise_date")),
-        "fecha_creacion":     _parsear_fecha(raw.get("creation_date")),
-        "sku":                str(fi.get("sku") or ""),
-        "producto":           ", ".join(str(i.get("sku","")) for i in items if i.get("sku")),
-        "variante":           "",
-        "cantidad":           int(fi.get("quantity") or 1),
-        "precio_unitario":    0.0,
-        "valor_cod_raw":      str(valor_cod or 0),
-        "tipo_recaudo":       "Contraentrega" if valor_cod else "Prepago",
-        "es_contraentrega":   bool(valor_cod and float(str(valor_cod).replace(",",".") or 0) > 0),
-        "dias_en_transito":   max(0, ((fe or date.today()) - fd).days) if fd else 0,
-        "esta_en_transito":   estado in ESTADOS_EN_TRANSITO,
-        "entregado":          estado in ESTADOS_RESUELTOS,
-        "incidencia":         "NINGUNO",
-        "promesa_vencida":    False,
+        "orden_melonn":           str(raw.get("internal_order_number") or raw.get("id") or ""),
+        "orden_tienda":           str(raw.get("external_order_number") or "").lstrip("#"),
+        "estado_melonn":          estado,
+        "sub_estado_logistico":   _sub_estado_logistico(estado),
+        "tienda":                 "",
+        "canal_venta":            str((raw.get("fulfillment_type") or {}).get("order_type") or "D2C"),
+        "nombre_comprador":       str(buyer.get("full_name") or ""),
+        "telefono_comprador":     str(buyer.get("phone_number") or ""),
+        "ciudad_destino":         str(dest.get("city") or "").upper().strip(),
+        "region_destino":         str(dest.get("region") or ""),
+        "transportadora":         metodo,
+        "link_guia":              str(raw.get("melonn_tracking_link") or ""),
+        "fecha_despacho":         fd,
+        "fecha_entrega":          fe,
+        "fecha_promesa":          _parsear_fecha(raw.get("promise_date")),
+        "fecha_creacion":         _parsear_fecha(raw.get("creation_date")),
+        "sku":                    str(fi.get("sku") or ""),
+        "producto":               ", ".join(str(i.get("sku","")) for i in items if i.get("sku")),
+        "variante":               "",
+        "cantidad":               int(fi.get("quantity") or 1),
+        "precio_unitario":        0.0,
+        "valor_cod_raw":          str(valor_cod or 0),
+        "tipo_recaudo":           "Contraentrega" if es_cod else "Prepago",
+        "es_contraentrega":       es_cod,
+        "dias_en_transito":       max(0, ((fe or date.today()) - fd).days) if fd else 0,
+        "esta_en_transito":       estado in ESTADOS_EN_TRANSITO,
+        "entregado":              estado in ESTADOS_RESUELTOS,
+        "incidencia":             "NINGUNO",
+        "promesa_vencida":        False,
     }
 
 
 def _fetch_api() -> list:
-    """Trae hasta _MAX_PAGES páginas de pedidos para no agotar la cuota de la API."""
+    """
+    Trae hasta _MAX_PAGES páginas y aplica la lógica de inclusión:
+
+      • COD (contra entrega):
+          – Pendiente despacho  → seguimiento en bodega
+          – En tránsito         → seguimiento hasta entrega y cobro
+          – Novedad             → requiere gestión urgente
+
+      • Prepago:
+          – Solo novedades      → algo salió mal, requiere acción
+          – En tránsito normal  → sin acción necesaria, NO se incluye
+    """
     pedidos, page = [], 0
     while page < _MAX_PAGES:
         resp = _get("sell-orders", params={"per_page": _PAGE_SIZE, "page": page})
@@ -302,17 +353,71 @@ def _fetch_api() -> list:
         if not items or len(pedidos) >= total_count:
             break
         page += 1
-        time.sleep(0.3)
 
-    activos = []
+    resultado = []
     for item in pedidos:
-        if str((item.get("sell_order_state") or {}).get("name") or "") in ESTADOS_RESUELTOS:
+        estado = str((item.get("sell_order_state") or {}).get("name") or "")
+
+        # Siempre excluir pedidos resueltos (entregados, recogidos, cancelados)
+        if estado in ESTADOS_RESUELTOS:
             continue
+
         try:
-            activos.append(_normalizar(item))
+            p = _normalizar(item)
         except Exception:
-            pass
-    return activos
+            continue
+
+        sub = p["sub_estado_logistico"]
+
+        if p["es_contraentrega"]:
+            # COD: incluimos todo lo que no esté resuelto
+            resultado.append(p)
+        else:
+            # Prepago: solo si hay una novedad activa
+            if sub == "novedad":
+                resultado.append(p)
+            # En tránsito normal de prepago → no requiere acción, se omite
+
+    return resultado
+
+
+def _enriquecer_y_filtrar(pedidos: list) -> list:
+    """
+    Aplica la lógica de inclusión a pedidos ya normalizados
+    (bootstrap.json, CSV, caché SQLite de versiones anteriores).
+
+    — Añade 'sub_estado_logistico' si el registro no lo tiene todavía.
+    — Filtra: COD → todo; Prepago → solo novedades.
+    """
+    resultado = []
+    for p in pedidos:
+        p = dict(p)  # no mutar el original
+
+        # Compatibilidad hacia atrás: añadir campo si falta
+        if "sub_estado_logistico" not in p:
+            p["sub_estado_logistico"] = _sub_estado_logistico(
+                p.get("estado_melonn", "")
+            )
+
+        # Normalizar campo tipo_recaudo / es_contraentrega para formatos viejos
+        if "es_contraentrega" not in p:
+            p["es_contraentrega"] = p.get("tipo_recaudo", "") == "Contraentrega"
+
+        sub    = p["sub_estado_logistico"]
+        es_cod = p["es_contraentrega"]
+
+        # Estados resueltos en caché antiguo → descartar
+        if p.get("estado_melonn", "") in ESTADOS_RESUELTOS:
+            continue
+
+        if es_cod:
+            resultado.append(p)
+        else:
+            # Prepago: solo novedades
+            if sub == "novedad":
+                resultado.append(p)
+
+    return resultado
 
 
 def _bootstrap_json() -> list:
@@ -376,9 +481,10 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
         stale = _cache_leer(ignorar_ttl=True)
         if stale:
             pedidos, fetched_at, _, fuente_stale = stale
+            pedidos = _enriquecer_y_filtrar(pedidos)
             return pedidos, omitidos, {"fuente": fuente_stale, "stale": True, "fetched_at": fetched_at}
 
-        pedidos_boot = _bootstrap_json()
+        pedidos_boot = _enriquecer_y_filtrar(_bootstrap_json())
         if pedidos_boot:
             _cache_guardar(pedidos_boot, fuente="csv_bootstrap")
             return pedidos_boot, omitidos, {
@@ -392,16 +498,18 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
     hit = _cache_leer(ignorar_ttl=False)
     if hit:
         pedidos, fetched_at, _, fuente_hit = hit
+        pedidos = _enriquecer_y_filtrar(pedidos)
         return pedidos, omitidos, {"fuente": fuente_hit, "stale": False, "fetched_at": fetched_at}
 
     # 2. SQLite stale
     stale = _cache_leer(ignorar_ttl=True)
     if stale:
         pedidos, fetched_at, _, fuente_stale = stale
+        pedidos = _enriquecer_y_filtrar(pedidos)
         return pedidos, omitidos, {"fuente": fuente_stale, "stale": True, "fetched_at": fetched_at}
 
     # 3. JSON bootstrap → guarda en SQLite para próximas cargas
-    pedidos_boot = _bootstrap_json()
+    pedidos_boot = _enriquecer_y_filtrar(_bootstrap_json())
     if pedidos_boot:
         _cache_guardar(pedidos_boot, fuente="csv_bootstrap")
         return pedidos_boot, omitidos, {

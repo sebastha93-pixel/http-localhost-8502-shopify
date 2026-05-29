@@ -540,72 +540,82 @@ def _dias_reales(p: dict) -> int:
 
 
 def _procesar_df(pedidos: list) -> pd.DataFrame:
+    """
+    Convierte la lista de pedidos en DataFrame con clasificación de riesgo.
+
+    Columnas clave añadidas:
+      Sub_Estado  → pendiente_despacho | en_transito | novedad | otro
+      Tipo_Recaudo → Contraentrega | Prepago
+      Nivel        → CRITICO | RIESGO | NORMAL | VENCIDO
+
+    VENCIDO aplica solo a pedidos en tránsito (COD o Prepago) que superan
+    MAX_DIAS_ACTIVO sin confirmación de entrega — nunca a pendientes de despacho.
+    """
     rows = []
     for p in pedidos:
         dias_real = _dias_reales(p)
+        sub       = p.get("sub_estado_logistico", "en_transito")
+        es_cod    = p["es_contraentrega"]
 
-        # Siempre calculamos riesgo para obtener zona_info (SLA, zona)
+        # Calculamos riesgo en todos los casos para obtener zona_info y SLA
         r = calcular_riesgo(
             ciudad=p["ciudad_destino"],
             dias_en_transito=dias_real,
             incidencia_raw=p.get("incidencia", "NINGUNO"),
-            es_contraentrega=p["es_contraentrega"],
+            es_contraentrega=es_cod,
         )
 
-        if dias_real > MAX_DIAS_ACTIVO:
-            # ── VENCIDO: pasó el umbral máximo sin confirmación de entrega ─────
-            # Probablemente entregado sin actualizar en Melonn (común en Colombia).
-            # No se clasifica como CRÍTICO — requiere verificación manual.
-            rows.append({
-                "Prioridad":      6,
-                "Nivel":          "VENCIDO",
-                "Score":          0,
-                "Orden":          p.get("orden_tienda") or p.get("orden_melonn", ""),
-                "Cliente":        p.get("nombre_comprador", ""),
-                "Teléfono":       p.get("telefono_comprador", ""),
-                "Ciudad":         p["ciudad_destino"],
-                "Zona":           ZONAS_ES.get(r.zona_info.zona, r.zona_info.zona),
-                "Días":           dias_real,
-                "SLA Crítico":    r.zona_info.sla_critico,
-                "Días sobre SLA": max(0, dias_real - r.zona_info.sla_critico + 1),
-                "COD":            "SÍ" if p["es_contraentrega"] else "—",
-                "Valor COD":      p.get("valor_cod_raw", ""),
-                "Transportadora": p.get("transportadora", ""),
-                "Estado":         ESTADOS_ES.get(p.get("estado_melonn",""), p.get("estado_melonn","")),
-                "Novedad":        p.get("incidencia", "NINGUNO"),
-                "Categoría":      "OK",
-                "Promesa vencida":"SÍ" if p.get("promesa_vencida") else "—",
-                "F. Despacho":    str(p.get("fecha_despacho") or ""),
-                "Motivo riesgo":  f"Sin confirmación · {dias_real}d en tránsito",
-                "Link Melonn":    p.get("link_guia", ""),
-            })
+        # VENCIDO: solo aplica si el pedido ya fue despachado (en_transito o novedad)
+        # y lleva más de MAX_DIAS_ACTIVO días sin confirmar entrega.
+        # Pendientes de despacho tienen dias_real = 0 → nunca son VENCIDO.
+        es_vencido = (
+            dias_real > MAX_DIAS_ACTIVO
+            and sub in ("en_transito", "novedad")
+        )
+
+        if es_vencido:
+            nivel     = "VENCIDO"
+            prioridad = 6
+            score     = 0
+            motivo    = f"Sin confirmación · {dias_real}d en tránsito"
+            categoria = "OK"
         else:
-            # ── Activo: usar score y nivel calculados ──────────────────────────
-            rows.append({
-                "Prioridad":      r.prioridad,
-                "Nivel":          r.nivel,
-                "Score":          r.score,
-                "Orden":          p.get("orden_tienda") or p.get("orden_melonn", ""),
-                "Cliente":        p.get("nombre_comprador", ""),
-                "Teléfono":       p.get("telefono_comprador", ""),
-                "Ciudad":         p["ciudad_destino"],
-                "Zona":           ZONAS_ES.get(r.zona_info.zona, r.zona_info.zona),
-                "Días":           dias_real,
-                "SLA Crítico":    r.zona_info.sla_critico,
-                "Días sobre SLA": max(0, dias_real - r.zona_info.sla_critico + 1),
-                "COD":            "SÍ" if p["es_contraentrega"] else "—",
-                "Valor COD":      p.get("valor_cod_raw", ""),
-                "Transportadora": p.get("transportadora", ""),
-                "Estado":         ESTADOS_ES.get(p.get("estado_melonn",""), p.get("estado_melonn","")),
-                "Novedad":        p.get("incidencia", "NINGUNO"),
-                "Categoría":      r.incidencia_info.categoria,
-                "Promesa vencida":"SÍ" if p.get("promesa_vencida") else "—",
-                "F. Despacho":    str(p.get("fecha_despacho") or ""),
-                "Motivo riesgo":  r.motivos[0] if r.motivos else "—",
-                "Link Melonn":    p.get("link_guia", ""),
-            })
+            nivel     = r.nivel
+            prioridad = r.prioridad
+            score     = r.score
+            motivo    = r.motivos[0] if r.motivos else "—"
+            categoria = r.incidencia_info.categoria
+
+        rows.append({
+            "Prioridad":       prioridad,
+            "Nivel":           nivel,
+            "Score":           score,
+            "Sub_Estado":      sub,
+            "Tipo_Recaudo":    "Contraentrega" if es_cod else "Prepago",
+            "Orden":           p.get("orden_tienda") or p.get("orden_melonn", ""),
+            "Cliente":         p.get("nombre_comprador", ""),
+            "Teléfono":        p.get("telefono_comprador", ""),
+            "Ciudad":          p["ciudad_destino"],
+            "Zona":            ZONAS_ES.get(r.zona_info.zona, r.zona_info.zona),
+            "Días":            dias_real,
+            "SLA Crítico":     r.zona_info.sla_critico,
+            "Días sobre SLA":  max(0, dias_real - r.zona_info.sla_critico + 1),
+            "COD":             "SÍ" if es_cod else "—",
+            "Valor COD":       p.get("valor_cod_raw", ""),
+            "Transportadora":  p.get("transportadora", ""),
+            "Estado":          ESTADOS_ES.get(p.get("estado_melonn",""), p.get("estado_melonn","")),
+            "Novedad":         p.get("incidencia", "NINGUNO"),
+            "Categoría":       categoria,
+            "Promesa vencida": "SÍ" if p.get("promesa_vencida") else "—",
+            "F. Despacho":     str(p.get("fecha_despacho") or ""),
+            "F. Creación":     str(p.get("fecha_creacion") or ""),
+            "Motivo riesgo":   motivo,
+            "Link Melonn":     p.get("link_guia", ""),
+        })
 
     df = pd.DataFrame(rows)
+    if df.empty:
+        return df
     return df.sort_values(["Prioridad","Días sobre SLA"], ascending=[True,False]).reset_index(drop=True)
 
 @st.cache_data(show_spinner=False)
