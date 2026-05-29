@@ -11,6 +11,7 @@ Estrategia de caché (simple y robusta):
 import json
 import logging
 import sqlite3
+import threading
 import time
 from datetime import date, datetime
 from pathlib import Path
@@ -24,8 +25,33 @@ log = logging.getLogger(__name__)
 _BASE_URL  = "https://api.orbita.melonn.com"
 _TIMEOUT   = 20
 _PAGE_SIZE  = 50
-_MAX_PAGES  = 2      # máximo 2 requests por sync (100 pedidos) — cuida la cuota
-_CACHE_TTL  = 14400  # 4 horas
+_MAX_PAGES  = 2        # máximo 2 requests por sync (100 pedidos)
+_CACHE_TTL  = 14400    # 4 horas
+
+# Rate limiting — Melonn permite 10 req/s; usamos 8 para dejar margen
+_MAX_RPS           = 8          # requests por segundo que nosotros enviamos
+_MIN_INTERVAL      = 1.0 / _MAX_RPS   # 0.125s entre requests
+_MIN_REFRESH_SECS  = 300        # 5 min mínimo entre syncs a la API aunque el usuario pulse ↻
+_RETRY_MAX         = 3          # reintentos en 429/503
+_RETRY_BACKOFF     = [2, 5, 15] # segundos de espera por intento
+
+
+class _RateLimiter:
+    """Token bucket simplificado — garantiza <= _MAX_RPS requests/s."""
+    def __init__(self):
+        self._lock      = threading.Lock()
+        self._last_call = 0.0
+
+    def wait(self):
+        with self._lock:
+            now   = time.monotonic()
+            delta = now - self._last_call
+            if delta < _MIN_INTERVAL:
+                time.sleep(_MIN_INTERVAL - delta)
+            self._last_call = time.monotonic()
+
+
+_rate_limiter = _RateLimiter()
 
 _DB_PATH        = Path(__file__).parent.parent / "data" / "db" / "maledenim.db"
 _JSON_BOOTSTRAP = Path(__file__).parent.parent / "data" / "logistica" / "bootstrap.json"
@@ -154,29 +180,55 @@ def cache_info() -> Optional[dict]:
 
 # ── Melonn API ─────────────────────────────────────────────────────────────────
 def _get(path: str, params: dict = None) -> Optional[dict]:
+    """
+    GET con rate limiting y retry/backoff automático en 429/503.
+
+    Aplica el token-bucket antes de cada intento para nunca superar
+    los 10 req/s que permite la API de Melonn.
+    """
     url = f"{_BASE_URL}/{path.lstrip('/')}"
-    try:
-        r = requests.get(
-            url,
-            headers={"x-api-key": _api_key(), "Accept": "application/json"},
-            params=params,
-            timeout=_TIMEOUT,
-        )
-        if r.status_code == 429 or r.status_code == 503:
-            log.warning(f"Rate limit {r.status_code}")
+    for attempt, backoff in enumerate([0] + _RETRY_BACKOFF):
+        if backoff:
+            log.warning(f"Melonn rate-limit — esperando {backoff}s (intento {attempt+1}/{_RETRY_MAX+1})")
+            time.sleep(backoff)
+
+        _rate_limiter.wait()  # respeta el techo de _MAX_RPS req/s
+
+        try:
+            r = requests.get(
+                url,
+                headers={"x-api-key": _api_key(), "Accept": "application/json"},
+                params=params,
+                timeout=_TIMEOUT,
+            )
+
+            if r.status_code in (429, 503):
+                # Respeta Retry-After si la API lo devuelve
+                retry_after = int(r.headers.get("Retry-After", _RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF)-1)]))
+                log.warning(f"HTTP {r.status_code} — Retry-After: {retry_after}s")
+                if attempt < _RETRY_MAX:
+                    time.sleep(retry_after)
+                    continue
+                return None  # agotados los reintentos
+
+            r.raise_for_status()
+            data = r.json()
+            if isinstance(data, dict) and data.get("message") == "Limit Exceeded":
+                log.warning("Limit Exceeded (respuesta JSON)")
+                if attempt < _RETRY_MAX:
+                    time.sleep(_RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF)-1)])
+                    continue
+                return None
+            return data
+
+        except requests.HTTPError as e:
+            log.warning(f"HTTP {e.response.status_code} en {url}")
             return None
-        r.raise_for_status()
-        data = r.json()
-        if isinstance(data, dict) and data.get("message") == "Limit Exceeded":
-            log.warning("Limit Exceeded")
+        except Exception as e:
+            log.warning(f"Request error en {url}: {e}")
             return None
-        return data
-    except requests.HTTPError as e:
-        log.warning(f"HTTP {e.response.status_code}")
-        return None
-    except Exception as e:
-        log.warning(f"Request error: {e}")
-        return None
+
+    return None
 
 
 def _parsear_fecha(valor) -> Optional[date]:
@@ -296,6 +348,20 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
     omitidos = {"resuelto": 0, "sin_datos": 0}
 
     if forzar_refresh:
+        # Protección multi-usuario: si otro usuario ya sincronizó hace <5 min,
+        # reutilizamos ese caché en lugar de volver a golpear la API.
+        info_actual = cache_info()
+        if info_actual and not info_actual.get("stale") and info_actual.get("fuente") == "api_live":
+            age = info_actual.get("age_s", _MIN_REFRESH_SECS + 1)
+            if age < _MIN_REFRESH_SECS:
+                pedidos, fetched_at, _, fuente_hit = _cache_leer(ignorar_ttl=True)
+                log.info(f"Refresh bloqueado — caché api_live tiene {int(age)}s (<{_MIN_REFRESH_SECS}s)")
+                return pedidos, omitidos, {
+                    "fuente": fuente_hit, "stale": False,
+                    "fetched_at": fetched_at,
+                    "refresh_bloqueado": True,
+                }
+
         limpiar_cache()
 
         # — Intentar API real —

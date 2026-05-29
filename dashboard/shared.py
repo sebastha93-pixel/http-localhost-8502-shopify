@@ -631,6 +631,9 @@ def cargar_datos_api(forzar_refresh: bool = False):
     else:
         pedidos, omitidos = resultado
         meta = {}
+    # Si el cliente bloqueó el refresh por cooldown, avisa en el sidebar
+    if meta.get("refresh_bloqueado"):
+        st.session_state["_refresh_bloqueado"] = True
     if not pedidos:
         return pd.DataFrame(), omitidos, meta
     df = _procesar_df(pedidos)
@@ -726,6 +729,10 @@ def render_sidebar(page_label: str):
                 <div style="font-size:0.65rem;color:{_color};margin-top:3px;">{_sub}</div>
             </div>
             """, unsafe_allow_html=True)
+
+            # Aviso si el último refresh fue bloqueado por cooldown
+            if st.session_state.pop("_refresh_bloqueado", False):
+                st.warning("⏳ Sincronizado hace menos de 5 min — usando caché actual.", icon="ℹ️")
 
             if st.button("↻ Actualizar datos", key="btn_refresh_melonn", use_container_width=True):
                 st.session_state["_melonn_refresh"] = True
