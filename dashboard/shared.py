@@ -14,7 +14,6 @@ import streamlit.components.v1 as components
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from ingest import leer_csv_melonn
 from riesgo import calcular_riesgo
-from zonas import clasificar_zona
 try:
     import melonn_client
     _MELONN_API_DISPONIBLE = True
@@ -546,11 +545,18 @@ def _procesar_df(pedidos: list) -> pd.DataFrame:
         dias_real = _dias_reales(p)
         zona      = clasificar_zona(p["ciudad_destino"])
 
+        # Siempre calculamos riesgo para obtener zona_info (SLA, zona)
+        r = calcular_riesgo(
+            ciudad=p["ciudad_destino"],
+            dias_en_transito=dias_real,
+            incidencia_raw=p.get("incidencia", "NINGUNO"),
+            es_contraentrega=p["es_contraentrega"],
+        )
+
         if dias_real > MAX_DIAS_ACTIVO:
             # ── VENCIDO: pasó el umbral máximo sin confirmación de entrega ─────
-            # Estos pedidos probablemente ya fueron entregados pero Melonn
-            # no actualizó el estado (común en Colombia). No se clasifican
-            # como CRÍTICO — requieren verificación manual, no alarma.
+            # Probablemente entregado sin actualizar en Melonn (común en Colombia).
+            # No se clasifica como CRÍTICO — requiere verificación manual.
             rows.append({
                 "Prioridad":      6,
                 "Nivel":          "VENCIDO",
@@ -559,10 +565,10 @@ def _procesar_df(pedidos: list) -> pd.DataFrame:
                 "Cliente":        p.get("nombre_comprador", ""),
                 "Teléfono":       p.get("telefono_comprador", ""),
                 "Ciudad":         p["ciudad_destino"],
-                "Zona":           ZONAS_ES.get(zona.zona, zona.zona),
+                "Zona":           ZONAS_ES.get(r.zona_info.zona, r.zona_info.zona),
                 "Días":           dias_real,
-                "SLA Crítico":    zona.sla_critico,
-                "Días sobre SLA": max(0, dias_real - zona.sla_critico + 1),
+                "SLA Crítico":    r.zona_info.sla_critico,
+                "Días sobre SLA": max(0, dias_real - r.zona_info.sla_critico + 1),
                 "COD":            "SÍ" if p["es_contraentrega"] else "—",
                 "Valor COD":      p.get("valor_cod_raw", ""),
                 "Transportadora": p.get("transportadora", ""),
@@ -575,13 +581,7 @@ def _procesar_df(pedidos: list) -> pd.DataFrame:
                 "Link Melonn":    p.get("link_guia", ""),
             })
         else:
-            # ── Activo: calcular score y nivel de riesgo normalmente ───────────
-            r = calcular_riesgo(
-                ciudad=p["ciudad_destino"],
-                dias_en_transito=dias_real,
-                incidencia_raw=p.get("incidencia", "NINGUNO"),
-                es_contraentrega=p["es_contraentrega"],
-            )
+            # ── Activo: usar score y nivel calculados ──────────────────────────
             rows.append({
                 "Prioridad":      r.prioridad,
                 "Nivel":          r.nivel,
