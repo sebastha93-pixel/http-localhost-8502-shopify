@@ -15,8 +15,14 @@ from typing import Optional
 def _client():
     try:
         from supabase import create_client
-        url = os.environ.get("SUPABASE_URL", "")
-        key = os.environ.get("SUPABASE_KEY", "")
+        # Intentar st.secrets primero (Streamlit Cloud), luego env vars
+        try:
+            import streamlit as st
+            url = st.secrets.get("SUPABASE_URL", "") or os.environ.get("SUPABASE_URL", "")
+            key = st.secrets.get("SUPABASE_KEY", "") or os.environ.get("SUPABASE_KEY", "")
+        except Exception:
+            url = os.environ.get("SUPABASE_URL", "")
+            key = os.environ.get("SUPABASE_KEY", "")
         if not url or not key:
             return None
         return create_client(url, key)
