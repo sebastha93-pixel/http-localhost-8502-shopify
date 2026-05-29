@@ -28,6 +28,11 @@ import shopify_scheduler as scheduler
 
 st.markdown(CSS, unsafe_allow_html=True)
 
+# Guard: solo usuarios con acceso al módulo comercial
+if "comercial" not in st.session_state.get("permisos", ["comercial"]):
+    st.error("🔒 No tienes acceso al módulo Comercial.")
+    st.stop()
+
 
 # ── Helper mensaje vacío (definido aquí para estar disponible en los tabs) ─────
 def _msg_vacio(entidad: str, emoji: str) -> None:

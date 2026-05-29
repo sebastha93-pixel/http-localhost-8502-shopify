@@ -32,6 +32,11 @@ from db import get_conn
 
 st.markdown(CSS, unsafe_allow_html=True)
 
+# Guard: solo usuarios con acceso al módulo conciliacion
+if "conciliacion" not in st.session_state.get("permisos", ["conciliacion"]):
+    st.error("🔒 No tienes acceso al módulo Conciliación.")
+    st.stop()
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown(f"""

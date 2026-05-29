@@ -36,6 +36,11 @@ from memoria import (
 
 st.markdown(CSS, unsafe_allow_html=True)
 
+# ── Guard de permisos ──────────────────────────────────────────────────────────
+if "logistica" not in st.session_state.get("permisos", ["logistica"]):
+    st.error("🔒 No tienes acceso al módulo de Logística.")
+    st.stop()
+
 # ── Helpers de gráficos ────────────────────────────────────────────────────────
 COLOR_NIVEL = {"CRITICO": CRITICO_COLOR, "RIESGO": RIESGO_COLOR, "NORMAL": NORMAL_COLOR, "VENCIDO": VENCIDO_COLOR}
 FONT = dict(family="Arial, sans-serif", size=12, color=GRAPHITE_GREY)

@@ -18,6 +18,11 @@ from db import get_conn
 
 st.markdown(CSS, unsafe_allow_html=True)
 
+# Guard: solo usuarios con acceso al módulo mercadopago
+if "mercadopago" not in st.session_state.get("permisos", ["mercadopago"]):
+    st.error("🔒 No tienes acceso al módulo MercadoPago.")
+    st.stop()
+
 # ── Header ────────────────────────────────────────────────────────────────────
 st.markdown(f"""
 <div style="padding:18px 0 6px 0; border-bottom:2px solid {STEEL_BLUE}22; margin-bottom:20px;">

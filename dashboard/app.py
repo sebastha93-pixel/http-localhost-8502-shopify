@@ -133,6 +133,8 @@ def _build_auth():
     )
 
 
+_TODOS_LOS_MODULOS = ["logistica", "comercial", "mercadopago", "conciliacion"]
+
 def _get_role(username: str) -> str:
     try:
         return str(
@@ -140,6 +142,20 @@ def _get_role(username: str) -> str:
         )
     except Exception:
         return "user"
+
+
+def _get_permisos(username: str, role: str) -> list:
+    """
+    Retorna lista de módulos habilitados para el usuario.
+    Admin siempre tiene todos los módulos.
+    """
+    if role == "admin":
+        return _TODOS_LOS_MODULOS.copy()
+    try:
+        raw = st.secrets["credentials"]["usernames"][username].get("permisos", [])
+        return list(raw) if raw else []
+    except Exception:
+        return []
 
 
 # Verificar si auth está configurada en secrets
@@ -193,15 +209,21 @@ else:
         # ── Autenticado: mostrar app ───────────────────────────────────────────
         _username = st.session_state.get("username", "")
         _role     = _get_role(_username)
+        _permisos = _get_permisos(_username, _role)
+
+        # Guardar en session_state para que cada página pueda verificar
+        st.session_state["permisos"] = _permisos
+        st.session_state["user_role"] = _role
 
         # Logout + info usuario al fondo del sidebar
         with st.sidebar:
+            _role_label = "Admin" if _role == "admin" else "Usuario"
             st.markdown(
                 f"<div style='position:fixed;bottom:16px;left:0;width:240px;"
                 f"padding:10px 16px;border-top:1px solid rgba(135,166,184,0.15);'>"
                 f"<div style='font-size:0.6rem;color:#87a6b8;letter-spacing:1px;"
-                f"text-transform:uppercase;'>Usuario</div>"
-                f"<div style='font-size:0.78rem;color:#e0dedd;font-weight:600;margin-top:2px;'>"
+                f"text-transform:uppercase;margin-bottom:3px;'>{_role_label}</div>"
+                f"<div style='font-size:0.78rem;color:#e0dedd;font-weight:600;'>"
                 f"{st.session_state.get('name', _username)}</div>"
                 f"</div>",
                 unsafe_allow_html=True,
@@ -211,21 +233,24 @@ else:
                 _auth.logout()
                 st.rerun()
 
-        # Construir navegación según rol
-        _pages = {
-            "OPERACIONES": [
-                st.Page("pages/logistica.py", title="LOGÍSTICA"),
-                st.Page("pages/4_shopify.py", title="COMERCIAL"),
-            ],
-            "FINANZAS": [
-                st.Page("pages/mercadopago.py",    title="MERCADOPAGO"),
-                st.Page("pages/3_conciliacion.py", title="CONCILIACIÓN"),
-            ],
-        }
+        # ── Construir navegación según permisos ────────────────────────────────
+        _ops = []
+        if "logistica"  in _permisos: _ops.append(st.Page("pages/logistica.py",  title="LOGÍSTICA"))
+        if "comercial"  in _permisos: _ops.append(st.Page("pages/4_shopify.py",  title="COMERCIAL"))
+
+        _fin = []
+        if "mercadopago"  in _permisos: _fin.append(st.Page("pages/mercadopago.py",    title="MERCADOPAGO"))
+        if "conciliacion" in _permisos: _fin.append(st.Page("pages/3_conciliacion.py", title="CONCILIACIÓN"))
+
+        _pages = {}
+        if _ops: _pages["OPERACIONES"] = _ops
+        if _fin: _pages["FINANZAS"]    = _fin
         if _role == "admin":
-            _pages["CONFIGURACIÓN"] = [
-                st.Page("pages/usuarios.py", title="USUARIOS"),
-            ]
+            _pages["CONFIGURACIÓN"] = [st.Page("pages/usuarios.py", title="USUARIOS")]
+
+        if not _pages:
+            st.warning("No tienes módulos asignados. Contacta al administrador.")
+            st.stop()
 
         pg = st.navigation(_pages)
         pg.run()

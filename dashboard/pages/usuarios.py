@@ -40,27 +40,41 @@ st.markdown(f"""
 # ── Usuarios actuales ──────────────────────────────────────────────────────────
 st.markdown("<div class='sec-title'>Usuarios registrados</div>", unsafe_allow_html=True)
 
+_MODULOS_LABEL = {
+    "logistica":    "Logística",
+    "comercial":    "Comercial",
+    "mercadopago":  "MercadoPago",
+    "conciliacion": "Conciliación",
+}
+
 try:
     _usuarios = st.secrets["credentials"]["usernames"]
     for _uname, _udata in _usuarios.items():
-        _rol_u  = _udata.get("role", "user")
-        _badge  = "🔑 Admin" if _rol_u == "admin" else "👤 Usuario"
-        _color  = STEEL_BLUE if _rol_u == "admin" else GRAPHITE_GREY
+        _rol_u   = _udata.get("role", "user")
+        _badge   = "🔑 Admin" if _rol_u == "admin" else "👤 Usuario"
+        _color   = STEEL_BLUE if _rol_u == "admin" else GRAPHITE_GREY
+        _perms_u = list(_udata.get("permisos", [])) if _rol_u != "admin" else list(_MODULOS_LABEL.keys())
+        _tags    = " · ".join(_MODULOS_LABEL.get(p, p) for p in _perms_u) or "Sin módulos"
         st.markdown(f"""
         <div style="background:white;border-radius:8px;padding:14px 18px;margin-bottom:8px;
-                    border:1px solid rgba(33,48,51,0.07);border-left:3px solid {_color};
-                    display:flex;justify-content:space-between;align-items:center;">
-            <div>
-                <div style="font-weight:700;color:{DEEP_INK};font-size:0.9rem;">
-                    {_udata.get('name', _uname)}
+                    border:1px solid rgba(33,48,51,0.07);border-left:3px solid {_color};">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+                <div>
+                    <div style="font-weight:700;color:{DEEP_INK};font-size:0.9rem;">
+                        {_udata.get('name', _uname)}
+                    </div>
+                    <div style="font-size:0.72rem;color:{GRAPHITE_GREY};margin-top:2px;">
+                        @{_uname} · {_udata.get('email', '—')}
+                    </div>
                 </div>
-                <div style="font-size:0.72rem;color:{GRAPHITE_GREY};margin-top:2px;">
-                    @{_uname} · {_udata.get('email', '—')}
+                <div style="font-size:0.65rem;color:{_color};font-weight:700;
+                            letter-spacing:1px;text-transform:uppercase;">
+                    {_badge}
                 </div>
             </div>
-            <div style="font-size:0.65rem;color:{_color};font-weight:700;
-                        letter-spacing:1px;text-transform:uppercase;">
-                {_badge}
+            <div style="margin-top:8px;font-size:0.68rem;color:#505050;">
+                <span style="color:#909090;letter-spacing:1px;text-transform:uppercase;
+                             font-size:0.58rem;">Módulos · </span>{_tags}
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -76,16 +90,36 @@ st.caption(
     "en los **Secrets de Streamlit Cloud**."
 )
 
+_MODULOS = {
+    "logistica":    "📦 Logística",
+    "comercial":    "🛍️ Comercial (Shopify)",
+    "mercadopago":  "💳 MercadoPago",
+    "conciliacion": "📊 Conciliación",
+}
+
 with st.form("form_nuevo_usuario", clear_on_submit=False):
     c1, c2 = st.columns(2)
     with c1:
-        _new_username  = st.text_input("Username (sin espacios)", placeholder="juan.perez")
-        _new_name      = st.text_input("Nombre completo",         placeholder="Juan Pérez")
+        _new_username = st.text_input("Username (sin espacios)", placeholder="juan.perez")
+        _new_name     = st.text_input("Nombre completo",         placeholder="Juan Pérez")
     with c2:
-        _new_email     = st.text_input("Email",                   placeholder="juan@maledenim.co")
-        _new_role      = st.selectbox("Rol", ["user", "admin"])
-    _new_password  = st.text_input("Contraseña inicial", type="password",
-                                   placeholder="Mínimo 8 caracteres")
+        _new_email    = st.text_input("Email",                   placeholder="juan@maledenim.co")
+        _new_role     = st.selectbox("Rol", ["user", "admin"])
+    _new_password = st.text_input("Contraseña inicial", type="password",
+                                  placeholder="Mínimo 8 caracteres")
+
+    st.markdown(
+        "<div style='font-size:0.72rem;font-weight:600;color:#213033;"
+        "margin:12px 0 6px;'>Módulos habilitados</div>",
+        unsafe_allow_html=True,
+    )
+    _perm_cols = st.columns(len(_MODULOS))
+    _new_permisos = []
+    for i, (key, label) in enumerate(_MODULOS.items()):
+        with _perm_cols[i]:
+            if st.checkbox(label, value=True, key=f"perm_{key}"):
+                _new_permisos.append(key)
+
     _submitted = st.form_submit_button("🔑 Generar credenciales", use_container_width=True)
 
 if _submitted:
@@ -96,23 +130,34 @@ if _submitted:
         _errs.append("Nombre completo requerido")
     if not _new_password or len(_new_password) < 8:
         _errs.append("Contraseña muy corta (mín. 8 caracteres)")
+    if not _new_permisos and _new_role != "admin":
+        _errs.append("Selecciona al menos un módulo")
 
     if _errs:
         for e in _errs:
             st.error(e)
     else:
         _hash = bcrypt.hashpw(_new_password.encode(), bcrypt.gensalt(12)).decode()
+        _perms_toml = str(_new_permisos).replace("'", '"')
 
         _bloque = f"""[credentials.usernames.{_new_username}]
 name     = "{_new_name}"
 email    = "{_new_email}"
 password = "{_hash}"
 role     = "{_new_role}"
+permisos = {_perms_toml}
 """
         st.success(
             f"✅ Credenciales generadas para **{_new_name}** (@{_new_username})",
             icon="🔑",
         )
+
+        # Mostrar resumen de permisos
+        _perm_labels = [_MODULOS[p] for p in _new_permisos if p in _MODULOS]
+        st.markdown(
+            f"**Módulos asignados:** {' · '.join(_perm_labels) if _perm_labels else '—'}"
+        )
+
         st.markdown("#### Pega este bloque en Streamlit Cloud → App settings → Secrets")
         st.code(_bloque, language="toml")
         st.info(
