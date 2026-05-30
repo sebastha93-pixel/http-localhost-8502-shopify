@@ -42,33 +42,40 @@ ZONAS_ES = {
     "REEXPEDIDO":     "Reexpedido",
 }
 ESTADOS_ES = {
-    # Pendiente despacho
-    "Received - valid":                              "Recibido · válido",
-    "All items reserved - ready for fulfillment":    "Reservado · listo",
-    "Picking":                                       "Alistando",
-    "Picked":                                        "Alistado",
-    "Packed":                                        "Empacado",
-    "Fixed & valid - to be processed":               "Corregido · listo",
-    "Processing Requested":                          "En proceso",
-    "Packing":                                       "Empacando",
-    "Prepared for dispatch":                         "Listo para despacho",
-    "Selected for dispatch preparation":             "Seleccionado · preparar",
-    "Pre Packing - Vas Pending":                     "Pre-empaque · VAS",
-    "Ready For Packing":                             "En cola · empaque",
-    # En tránsito
+    # ── Novedades (códigos 1, 2) ─────────────────────────────────────────────
+    "Received - valid":                              "Recibida · válida",
+    "Recibida - valida":                             "Recibida · válida",
+    "All items reserved - ready for fulfillment":    "Reservada · lista alistamiento",
+    "Recibida - valida - lista para alistamiento":   "Reservada · lista alistamiento",
+    # ── Pendiente despacho (código 26) ──────────────────────────────────────
+    "All items reserved - fulfillment on hold":      "Alistamiento en espera · Seller",
+    "Alistamiento en espera - Seller":               "Alistamiento en espera · Seller",
+    "Packed - on hold":                              "Alistamiento en espera · Seller",
+    # ── En tránsito (códigos 5, 6, 7, 24, 28) ──────────────────────────────
+    "Packed":                                        "Empacada · lista para despacho",
+    "Empacada":                                      "Empacada · lista para despacho",
+    "Prepared for dispatch":                         "Preparada para despacho",
+    "Preparada para despacho":                       "Preparada para despacho",
     "Shipped - in transit":                          "En tránsito",
-    # Novedades
+    "Despachada - en tránsito":                      "En tránsito",
+    "En tránsito":                                   "En tránsito",
+    "Ready For Packing":                             "Lista para empaque · bodega",
+    "Lista para empaque":                            "Lista para empaque · bodega",
+    "Picked-up by buyer":                            "Recogida · finalizada",
+    "Recogida por el comprador":                     "Recogida · finalizada",
+    # ── Novedades ────────────────────────────────────────────────────────────
     "Error - not able to process":                   "Error · no procesa",
+    "Error - no es posible procesar":                "Error · no procesa",
     "on stand by - not able to fulfil - no stock":   "Sin stock",
+    "En espera - sin stock":                         "Sin stock",
     "Delivery not posible":                          "Entrega no posible",
+    "Entrega no posible":                            "Entrega no posible",
     "on stand by - not able to fulfil - expired promises": "Promesa vencida",
-    "Packed - on hold":                              "Empacado · retenido",
-    "All items reserved - fulfillment on hold":      "Fulfillment en espera",
+    "En espera - promesas vencidas":                 "Promesa vencida",
     "All items reserved - fulfillment on hold - ext. conditionals": "En espera · ext.",
     "All items reserved - fulfillment on hold - int. conditionals": "En espera · int.",
     "on stand by - not able to fulfil - SM restriction": "Restricción método envío",
-    # Resuelto
-    "Picked-up by buyer":                            "Recogido · resuelto",
+    "Restricción método de envío":                   "Restricción método envío",
 }
 
 DEFAULT_CSV = str(Path(__file__).parent.parent / "data" / "logistica" / "raw" / "melonn_2026-05-12.csv")
@@ -673,6 +680,7 @@ def _procesar_df(pedidos: list) -> pd.DataFrame:
             "Valor COD":       p.get("valor_cod_raw", ""),
             "Método Envío":    p.get("transportadora", ""),
             "Estado":          ESTADOS_ES.get(p.get("estado_melonn",""), p.get("estado_melonn","")),
+            "Estado_Code":     int(p.get("estado_melonn_code") or 0),
             "Novedad":         p.get("incidencia", "NINGUNO"),
             "Categoría":       categoria,
             "F. Promesa":      str(p.get("fecha_promesa") or ""),

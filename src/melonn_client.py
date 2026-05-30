@@ -14,6 +14,7 @@ Estrategia de caché (simple y robusta):
     Cliente, producto y fechas de despacho se obtienen de Shopify API.
 """
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -39,16 +40,15 @@ _BASE_URL  = "https://api.orbita.melonn.com"
 _TIMEOUT   = 20
 _PAGE_SIZE  = 50
 _MAX_PAGES  = 5        # hasta 250 pedidos por sync (5 × 50)
-_CACHE_TTL  = 14400    # 4 horas
+_CACHE_TTL  = 1800     # 30 minutos — antes 4h, reducido para mayor frescura
 
 # Rate limiting — Melonn permite MÁXIMO 1 req/s (documentación oficial)
-# Usamos 0.8 req/s para dejar margen de seguridad (1.25s entre requests)
-_MAX_RPS           = 0.8        # requests por segundo que nosotros enviamos
+_MAX_RPS           = 0.8
 _MIN_INTERVAL      = 1.0 / _MAX_RPS   # 1.25s entre requests
-_MIN_REFRESH_SECS  = 300        # 5 min mínimo entre syncs a la API aunque el usuario pulse ↻
-_RETRY_MAX         = 3          # reintentos en 429/503
-_RETRY_BACKOFF     = [5, 15, 30] # segundos de espera — más conservador dado el límite estricto
-_CACHE_TTL_NOVEDAD = 3600       # 1 hora — novedades prepago se re-validan más frecuentemente
+_MIN_REFRESH_SECS  = 60         # 1 min mínimo entre syncs (antes 5 min)
+_RETRY_MAX         = 3
+_RETRY_BACKOFF     = [5, 15, 30]
+_CACHE_TTL_NOVEDAD = 1800       # igual que TTL principal
 
 
 class _RateLimiter:
@@ -84,81 +84,120 @@ _JSON_BOOTSTRAP = Path(__file__).parent.parent / "data" / "logistica" / "bootstr
 
 # ── Filtro por CÓDIGO numérico (más fiable que el nombre) ─────────────────────
 #
-# Nunca mostrar — terminales, cancelados, entregados
-# Códigos: 8, 9, 15, 16, 17, 18, 19
-# (16 = "Picked-up by courier for return" también es terminal)
+# Nunca mostrar — terminales, cancelados, entregados, proceso interno Melonn
 #
-CODIGOS_EXCLUIR = {8, 9, 15, 16, 17, 18, 19}
+# Excluidos siempre (terminal / cancelado):
+#   8  Delivered, 9  Invalid, 15 Canceled
+#   16 Return pickup, 17/18/19 Cancelation process
+#
+# Excluidos porque son proceso INTERNO de Melonn — el seller no puede actuar:
+#   1  Received-valid, 2  Reserved-ready, 3  Picking, 4  Picked, 5  Packed
+#   10 Fixed-valid, 12 Processing, 22 Packing, 24 Prepared-dispatch
+#   25 Selected-prep, 27 Pre-packing-VAS, 28 Ready-for-packing
+#
+CODIGOS_EXCLUIR = {8, 9, 15, 16, 17, 18, 19}   # 8=Entregado excluido
 
-# Códigos que SÍ queremos mostrar (whitelist exacta)
-#   COD     → 1-5, 6, 7, 10, 11, 12, 13, 20-31 activos
-#   Prepago → solo los de novedad: 11, 13, 20, 21, 23, 26, 29, 30, 31
-CODIGOS_PENDIENTE_DESPACHO = {1, 2, 3, 4, 5, 10, 12, 22, 24, 25, 27, 28}
-CODIGOS_EN_TRANSITO        = {7}
-CODIGOS_NOVEDAD            = {11, 13, 20, 21, 23, 26, 29, 30, 31}
-CODIGOS_RESUELTO           = {6}
+# Proceso interno — nunca se muestra al seller
+# 1=Recibida-válida y 2=Reservada-lista se movieron a NOVEDAD
+CODIGOS_PROCESO_INTERNO = {3, 4, 10, 12, 22, 25, 27}
+
+# Whitelist por código
+#   Pendiente seller  → 26          "Alistamiento en espera - Seller"
+#   En tránsito COD   → 5,6,7,24,28
+#   Novedad           → 1,2
+#                        1  Recibida · válida
+#                        2  Reservada · lista para alistamiento
+CODIGOS_PENDIENTE_DESPACHO = {26}
+CODIGOS_EN_TRANSITO        = {5, 6, 7, 24, 28}
+CODIGOS_NOVEDAD            = {1, 2}
+CODIGOS_RESUELTO           = set()
 CODIGOS_ACTIVOS            = (
     CODIGOS_PENDIENTE_DESPACHO
     | CODIGOS_EN_TRANSITO
     | CODIGOS_NOVEDAD
-    | CODIGOS_RESUELTO
 )
 
 # ── Nombres de estado (para compatibilidad con caché antiguo y UI) ────────────
 # Nunca mostrar — se saltan en fetch y en caché
 ESTADOS_EXCLUIR = {
-    "Delivered to buyer",                                   # 8
+    # Inglés
     "Received - invalid fixable",                          # 9
     "Canceled",                                            # 15
     "Picked-up by courier for return",                     # 16
     "On Cancelation Process - to be unpacked & relocated", # 17
     "On Cancelation Process - to be received from courier",# 18
     "In transit - Cancelation requested",                  # 19
+    "Delivered to buyer",                                  # 8 excluido
+    # Español
+    "Cancelada",                                           # 15 español
+    "Recogida por transportadora para devolución",         # 16 español
+    "En proceso de cancelación",                           # 17/18 español
+    "En tránsito - cancelación solicitada",                # 19 español
+    "Entregada al comprador",                              # 8 español excluido
+    "Entregada - pendiente de cobro",                      # 8 variante excluida
 }
 
-# Novedad solucionada — entrega confirmada, COD cobrado
-ESTADOS_RESUELTO = {
-    "Picked-up by buyer",                                  # 6
-}
+# Código 6 movido a EN_TRANSITO — ya no hay "resueltos" separados
+ESTADOS_RESUELTO = set()
 
 # Alias para compatibilidad con bootstrap/caché antiguo
 ESTADOS_RESUELTOS = ESTADOS_EXCLUIR | ESTADOS_RESUELTO
 
-# Pedido en bodega, siendo preparado (códigos 1,2,3,4,5,10,12,22,24,25,27,28)
+# Solo los estados donde el seller DEBE autorizar el despacho (códigos 23 y 26)
+# Todo lo demás es proceso interno de Melonn — no se muestra en el dashboard
 ESTADOS_PENDIENTE_DESPACHO = {
-    "Received - valid",                              # 1
-    "All items reserved - ready for fulfillment",    # 2
-    "Picking",                                       # 3
-    "Picked",                                        # 4
-    "Packed",                                        # 5
-    "Fixed & valid - to be processed",               # 10
-    "Processing Requested",                          # 12
-    "Packing",                                       # 22
-    "Prepared for dispatch",                         # 24
-    "Selected for dispatch preparation",             # 25
-    "Pre Packing - Vas Pending",                     # 27
-    "Ready For Packing",                             # 28
+    # Código 26 únicamente — seller debe autorizar despacho
+    "All items reserved - fulfillment on hold",      # 26 inglés
+    "Alistamiento en espera - Seller",               # 26 español ← estado real de la cuenta
+    # "Packed - on hold" (23) excluido — no aplica para esta cuenta
 }
 
-# Despachado, en camino (código 7)
+# En tránsito COD — códigos 5, 6, 7, 24, 28
 ESTADOS_EN_TRANSITO = {
-    "Shipped - in transit",                          # 7
+    # Código 5 — Empacada
+    "Packed", "Empacada",
+    # Código 6 — Recogida por el comprador (finalizada)
+    "Picked-up by buyer", "Recogida por el comprador",
+    # Código 7 — Con la transportadora
+    "Shipped - in transit", "Despachada - en tránsito", "En tránsito",
+    # Código 24 — Preparada para despacho
+    "Prepared for dispatch", "Preparada para despacho",
+    # Código 28 — Lista para empaque (en bodega)
+    "Ready For Packing", "Lista para empaque",
 }
 
-# Novedad activa — problema que requiere gestión (códigos 11,13,20,21,23,26,29,30,31)
+# Novedad — códigos 1 y 2 únicamente
 ESTADOS_NOVEDAD = {
-    "Error - not able to process",                                    # 11
-    "on stand by - not able to fulfil - no stock",                    # 13
-    "Delivery not posible",                                           # 20
-    "on stand by - not able to fulfil - expired promises",            # 21
-    "Packed - on hold",                                               # 23
-    "All items reserved - fulfillment on hold",                       # 26
-    "All items reserved - fulfillment on hold - ext. conditionals",   # 29
-    "All items reserved - fulfillment on hold - int. conditionals",   # 30
-    "on stand by - not able to fulfil - SM restriction",              # 31
+    # Código 1 — Recibida válida
+    "Received - valid",                              # 1 inglés
+    "Recibida - valida",                             # 1 español
+    # Código 2 — Reservada lista para alistamiento
+    "All items reserved - ready for fulfillment",    # 2 inglés
+    "Recibida - valida - lista para alistamiento",   # 2 español
+}
+
+# Estados de proceso interno — nunca mostrar
+# 1 y 2 se movieron a NOVEDAD; 28 se movió a EN_TRANSITO
+ESTADOS_PROCESO_INTERNO = {
+    # Inglés
+    "Picking", "Picked", "Fixed & valid - to be processed",
+    "Processing Requested", "Packing",
+    "Selected for dispatch preparation", "Pre Packing - Vas Pending",
+    # Español
+    "Alistando", "Alistada", "Empacando",
+    "Seleccionada para preparación de despacho",
 }
 
 ESTADOS_ACTIVOS = ESTADOS_PENDIENTE_DESPACHO | ESTADOS_EN_TRANSITO | ESTADOS_NOVEDAD | ESTADOS_RESUELTO
+
+
+def _config_hash() -> str:
+    """
+    Hash de 8 chars de CODIGOS_ACTIVOS.
+    Cambia automáticamente cada vez que se modifica qué códigos deben cargarse.
+    La caché lo compara en cada lectura — si difiere, se descarta y se refetchea.
+    """
+    return hashlib.md5(str(sorted(CODIGOS_ACTIVOS)).encode()).hexdigest()[:8]
 
 
 # ── Credenciales ───────────────────────────────────────────────────────────────
@@ -191,32 +230,51 @@ def _init_tabla():
                 fetched_at   TEXT NOT NULL,
                 pedidos_json TEXT NOT NULL,
                 total        INTEGER NOT NULL DEFAULT 0,
-                fuente       TEXT DEFAULT 'api_live'
+                fuente       TEXT DEFAULT 'api_live',
+                config_hash  TEXT DEFAULT ''
             )
         """)
-        # Migración: agrega columna fuente si la tabla ya existía sin ella
-        try:
-            c.execute("ALTER TABLE melonn_pedidos_cache ADD COLUMN fuente TEXT DEFAULT 'api_live'")
-        except Exception:
-            pass  # columna ya existe — normal
+        # Migraciones — añade columnas si la tabla ya existía sin ellas
+        for col, default in [("fuente", "'api_live'"), ("config_hash", "''")]:
+            try:
+                c.execute(f"ALTER TABLE melonn_pedidos_cache ADD COLUMN {col} TEXT DEFAULT {default}")
+            except Exception:
+                pass
         c.commit()
 
 
 def _cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:
-    """Retorna (pedidos, fetched_at, fresco, fuente) o None si no hay datos."""
+    """
+    Retorna (pedidos, fetched_at, fresco, fuente) o None.
+
+    Descarta la caché automáticamente si:
+      - El TTL de 30 min venció (a menos que ignorar_ttl=True)
+      - El config_hash no coincide con el hash actual de CODIGOS_ACTIVOS
+        → significa que los códigos a mostrar cambiaron desde el último fetch
+    """
     try:
         _init_tabla()
         with _conn() as c:
             row = c.execute(
-                "SELECT fetched_at, pedidos_json, fuente FROM melonn_pedidos_cache WHERE id=1"
+                "SELECT fetched_at, pedidos_json, fuente, config_hash "
+                "FROM melonn_pedidos_cache WHERE id=1"
             ).fetchone()
         if not row:
             return None
+
+        # Invalidar si CODIGOS_ACTIVOS cambió desde que se guardó la caché
+        stored_hash  = row["config_hash"] or ""
+        current_hash = _config_hash()
+        if stored_hash != current_hash:
+            log.info(f"config_hash cambió ({stored_hash} → {current_hash}) — caché invalidada")
+            return None
+
         fetched_at = datetime.fromisoformat(row["fetched_at"])
         age    = (datetime.now() - fetched_at).total_seconds()
         fresco = age <= _CACHE_TTL
         if not fresco and not ignorar_ttl:
             return None
+
         pedidos = json.loads(row["pedidos_json"])
         fuente  = row["fuente"] if row["fuente"] else "api_live"
         return pedidos, fetched_at, fresco, fuente
@@ -226,13 +284,21 @@ def _cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:
 
 
 def _cache_guardar(pedidos: list, fuente: str = "api_live"):
+    """Guarda pedidos junto con el hash actual de CODIGOS_ACTIVOS."""
     try:
         _init_tabla()
         with _conn() as c:
             c.execute("""
-                INSERT OR REPLACE INTO melonn_pedidos_cache (id, fetched_at, pedidos_json, total, fuente)
-                VALUES (1, ?, ?, ?, ?)
-            """, (datetime.now().isoformat(), json.dumps(pedidos, default=str), len(pedidos), fuente))
+                INSERT OR REPLACE INTO melonn_pedidos_cache
+                    (id, fetched_at, pedidos_json, total, fuente, config_hash)
+                VALUES (1, ?, ?, ?, ?, ?)
+            """, (
+                datetime.now().isoformat(),
+                json.dumps(pedidos, default=str),
+                len(pedidos),
+                fuente,
+                _config_hash(),
+            ))
             c.commit()
     except Exception as e:
         log.warning(f"Error guardando SQLite cache: {e}")
@@ -253,20 +319,24 @@ def cache_info() -> Optional[dict]:
         _init_tabla()
         with _conn() as c:
             row = c.execute(
-                "SELECT fetched_at, total, fuente FROM melonn_pedidos_cache WHERE id=1"
+                "SELECT fetched_at, total, fuente, config_hash "
+                "FROM melonn_pedidos_cache WHERE id=1"
             ).fetchone()
         if not row:
             return None
-        fetched_at = datetime.fromisoformat(row["fetched_at"])
-        age    = (datetime.now() - fetched_at).total_seconds()
-        fuente = row["fuente"] if row["fuente"] else "api_live"
+        fetched_at   = datetime.fromisoformat(row["fetched_at"])
+        age          = (datetime.now() - fetched_at).total_seconds()
+        fuente       = row["fuente"] if row["fuente"] else "api_live"
+        hash_ok      = (row["config_hash"] or "") == _config_hash()
         return {
-            "fetched_at": fetched_at,
-            "age_s":      age,
-            "total":      row["total"],
-            "fresco":     age <= _CACHE_TTL,
-            "stale":      age > _CACHE_TTL,
-            "fuente":     fuente,
+            "fetched_at":  fetched_at,
+            "age_s":       age,
+            "total":       row["total"],
+            "fresco":      age <= _CACHE_TTL and hash_ok,
+            "stale":       age > _CACHE_TTL or not hash_ok,
+            "fuente":      fuente,
+            "config_hash": row["config_hash"],
+            "hash_ok":     hash_ok,
         }
     except Exception:
         return None
@@ -538,14 +608,15 @@ def _fetch_api() -> list:
         estado_nombre = str(estado_obj.get("name") or "")
         estado_codigo = int(estado_obj.get("code") or 0)
 
-        # ── Whitelist por código — excluye entregados, cancelados y cualquier
-        #    estado desconocido que la API pueda agregar en el futuro ──────────
+        # ── Whitelist por código — solo estados activos (excluye terminales,
+        #    cancelados Y proceso interno de Melonn) ──────────────────────────
         if estado_codigo not in CODIGOS_ACTIVOS:
-            log.debug(f"Excluido estado {estado_codigo} ({estado_nombre})")
+            log.debug(f"Excluido código {estado_codigo} ({estado_nombre})")
             continue
 
-        # Doble check por nombre para compatibilidad con caché antiguo
-        if estado_nombre in ESTADOS_EXCLUIR:
+        # Doble check por nombre — proceso interno y estados excluidos
+        if estado_nombre in ESTADOS_EXCLUIR or estado_nombre in ESTADOS_PROCESO_INTERNO:
+            log.debug(f"Excluido por nombre: {estado_nombre}")
             continue
 
         try:
@@ -631,12 +702,12 @@ def _enriquecer_y_filtrar(pedidos: list) -> list:
         sub    = p["sub_estado_logistico"]
         es_cod = p["es_contraentrega"]
 
-        # Whitelist por código (más fiable) — excluye terminal/cancelados
+        # Whitelist por código — excluye terminales, cancelados y proceso interno
         if estado_cod_guardado and estado_cod_guardado not in CODIGOS_ACTIVOS:
             continue
 
-        # Doble check por nombre para caché sin código guardado
-        if estado_guardado in ESTADOS_EXCLUIR:
+        # Doble check por nombre — proceso interno y excluidos
+        if estado_guardado in ESTADOS_EXCLUIR or estado_guardado in ESTADOS_PROCESO_INTERNO:
             continue
 
         if es_cod:

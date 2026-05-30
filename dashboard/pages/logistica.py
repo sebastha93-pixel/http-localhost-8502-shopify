@@ -23,7 +23,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import date
+from datetime import date, datetime
 
 try:
     from dotenv import load_dotenv
@@ -69,11 +69,15 @@ NOVEDAD_ES = {
     "on stand by - not able to fulfil - no stock":                   "Sin stock",
     "Delivery not posible":                                           "Entrega no posible",
     "on stand by - not able to fulfil - expired promises":           "Promesa vencida",
-    "Packed - on hold":                                               "Empacado · retenido",
-    "All items reserved - fulfillment on hold":                      "Fulfillment en espera",
     "All items reserved - fulfillment on hold - ext. conditionals":  "En espera · ext.",
     "All items reserved - fulfillment on hold - int. conditionals":  "En espera · int.",
     "on stand by - not able to fulfil - SM restriction":             "Restricción método envío",
+}
+
+# Estados que representan "alistado en espera - seller" (COD on hold, requiere autorización)
+ESTADOS_EN_ESPERA_SELLER = {
+    "Packed - on hold",
+    "All items reserved - fulfillment on hold",
 }
 
 
@@ -210,13 +214,20 @@ if df_all.empty:
     """, unsafe_allow_html=True)
     st.stop()
 
-_fuente  = _meta.get("fuente", "")
-_fa      = _meta.get("fetched_at")
-_fa_txt  = _fa.strftime("%d/%m/%Y %H:%M") if _fa else ""
+_fuente       = _meta.get("fuente", "")
+_fa           = _meta.get("fetched_at")
+_fa_txt       = _fa.strftime("%d/%m/%Y %H:%M") if _fa else ""
+_datos_frescos = _fuente in ("api_live",)   # solo API real = datos confiables para Pendientes
+
+# Pendientes requiere datos muy recientes — máx 10 minutos
+# Si los datos son más viejos, hacemos auto-refresh silencioso
+_MAX_PEND_SEG = 600   # 10 minutos
+_edad_seg     = (datetime.now() - _fa).total_seconds() if _fa else 99999
+
 if _fuente in ("csv_bootstrap", "stale"):
     st.warning(
-        f"⚠️ Mostrando datos del {_fa_txt} (caché). "
-        "Presiona **↻ Actualizar datos** para sincronizar.",
+        f"⚠️ Mostrando datos del {_fa_txt} (caché desactualizado). "
+        "Presiona **↻ Actualizar datos** para sincronizar con Melonn.",
         icon="⚠️",
     )
 
@@ -224,10 +235,12 @@ if _fuente in ("csv_bootstrap", "stale"):
 df_cod = df_all[df_all["Tipo_Recaudo"] == "Contraentrega"].copy()
 df_pre = df_all[df_all["Tipo_Recaudo"] == "Prepago"].copy()
 
-df_pend    = df_cod[df_cod["Sub_Estado"] == "pendiente_despacho"].copy()
+# Código 26 = "Alistamiento en espera - Seller" (en cualquier idioma que devuelva la API)
+df_pend    = df_cod[df_cod["Estado_Code"] == 26].copy()
+# En tránsito: códigos 5, 6, 7, 24, 28
 df_tran    = df_cod[df_cod["Sub_Estado"] == "en_transito"].copy()
 df_nov_cod = df_cod[df_cod["Sub_Estado"] == "novedad"].copy()
-df_res     = df_cod[df_cod["Sub_Estado"] == "resuelto"].copy()
+df_res     = df_cod[df_cod["Sub_Estado"] == "resuelto"].copy()   # vacío — código 6 en tránsito
 df_nov_pre = df_pre[df_pre["Sub_Estado"] == "novedad"].copy()
 
 # Filtros del sidebar
@@ -242,7 +255,7 @@ def _filtrar(df):
 df_pend_f    = _filtrar(df_pend)
 df_tran_f    = _filtrar(df_tran)
 df_nov_cod_f = _filtrar(df_nov_cod)
-df_res_f     = _filtrar(df_res)
+df_res_f     = _filtrar(df_res)      # vacío — código 6 ahora en tránsito
 df_nov_pre_f = _filtrar(df_nov_pre)
 
 # Métricas globales
@@ -265,7 +278,12 @@ st.markdown(f"""
 # KPIs globales
 k1, k2, k3, k4, k5, k6 = st.columns(6)
 with k1:
-    st.markdown(_kpi(len(df_pend), "PENDIENTES", "Por despachar", border=STEEL_BLUE), unsafe_allow_html=True)
+    _n_auth_global = len(df_pend[df_pend["Estado_Code"] == 26])
+    _pend_sub = f"{_n_auth_global} auth · {len(df_pend)} total" if len(df_pend) > _n_auth_global else "Por despachar"
+    st.markdown(_kpi(
+        _n_auth_global if len(df_pend) > _n_auth_global else len(df_pend),
+        "PEND. POR DESPACHO", _pend_sub, border=RIESGO_COLOR if _n_auth_global > 0 else STEEL_BLUE,
+    ), unsafe_allow_html=True)
 with k2:
     c = CRITICO_COLOR if n_criticos > 0 else (RIESGO_COLOR if n_riesgo > 0 else NORMAL_COLOR)
     st.markdown(_kpi(len(df_tran), "EN TRÁNSITO", f"{n_criticos} crít · {n_riesgo} riesgo", border=c), unsafe_allow_html=True)
@@ -297,8 +315,15 @@ tab_cod, tab_pre, tab_ana = st.tabs([
 # TAB 1 — CONTRAENTREGA
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_cod:
+    # Contar cuántas requieren autorización seller para el badge del tab
+    _n_auth = len(df_pend_f[df_pend_f["Estado_Code"] == 26])
+    _pend_label = (
+        f"⏳  Pendientes por despacho  ({_n_auth} auth · {len(df_pend_f)} total)"
+        if len(df_pend_f) > _n_auth
+        else f"⏳  Pendientes por despacho  ({_n_auth})"
+    )
     st_pend, st_tran, st_nov, st_res = st.tabs([
-        f"⏳  Pendientes  ({len(df_pend_f)})",
+        _pend_label,
         f"🚚  En tránsito  ({len(df_tran_f)})",
         f"⚠️  Novedades  ({len(df_nov_cod_f)})",
         f"✅  Resueltos  ({len(df_res_f)})",
@@ -306,39 +331,75 @@ with tab_cod:
 
     # ── Pendientes por despacho ───────────────────────────────────────────────
     with st_pend:
-        st.caption("Pedidos contraentrega en bodega Melonn — aún no despachados.")
-        if df_pend_f.empty:
-            st.success("✅ Sin pedidos pendientes de despacho.")
-        else:
-            p1, p2, p3, p4 = st.columns(4)
-            val_pend = df_pend_f["Valor COD"].apply(_parse_cod).sum()
-            n_listos = len(df_pend_f[df_pend_f["Estado"].str.contains(
-                "listo|Listo|reservado|Reservado|Empacado", na=False)])
-            n_espera = len(df_pend_f[df_pend_f["Estado"].str.contains(
-                "espera|VAS|cola|Empacando|proceso", na=False)])
-            with p1:
-                st.markdown(_kpi(len(df_pend_f), "PENDIENTES", "Por salir de bodega"), unsafe_allow_html=True)
-            with p2:
-                st.markdown(_kpi(_fmt_m(val_pend), "VALOR COD", "Portafolio pendiente", border=COD_COLOR), unsafe_allow_html=True)
-            with p3:
-                st.markdown(_kpi(n_listos, "LISTOS", "Para despachar hoy", border=NORMAL_COLOR), unsafe_allow_html=True)
-            with p4:
-                st.markdown(_kpi(n_espera, "EN ESPERA / PROCESO", "Requieren atención",
-                                 border=RIESGO_COLOR if n_espera > 0 else DEEP_INK), unsafe_allow_html=True)
+        st.caption(
+            "Contraentregas que requieren autorización del seller — "
+            "estado Melonn: **Alistamiento en espera · Seller**."
+        )
 
+        # ── Guard: Pendientes SIEMPRE requiere datos de la API con < 10 min ────
+        # Si los datos son de caché viejo o tienen más de 10 min, auto-refrescamos.
+        # Usamos un timestamp en session_state para no entrar en bucle infinito.
+        _pend_necesita_refresh = (not _datos_frescos) or (_edad_seg > _MAX_PEND_SEG)
+        if _pend_necesita_refresh:
+            _ultimo_intento = st.session_state.get("_pend_refresh_ts")
+            _hace_poco      = _ultimo_intento and (datetime.now() - _ultimo_intento).total_seconds() < 30
+            if not _hace_poco:
+                # Auto-refresh silencioso
+                st.session_state["_pend_refresh_ts"] = datetime.now()
+                st.session_state["_melonn_refresh"]  = True
+                st.rerun()
+            else:
+                # Ya intentamos hace <30s y los datos siguen viejos → API no respondió
+                st.info(
+                    "🔄 No se pudo obtener datos en tiempo real desde Melonn. "
+                    "Presiona **↻ Actualizar datos** para reintentar.",
+                    icon="📡",
+                )
+                st.stop()
+
+        # df_pend_f ya contiene SOLO "Alistamiento en espera · Seller"
+        df_auth_f = df_pend_f
+
+        if df_pend_f.empty:
+            st.success("✅ Sin pedidos pendientes de despacho en este momento.")
+        else:
+            val_auth  = df_auth_f["Valor COD"].apply(_parse_cod).sum()
+
+            p1, p2 = st.columns(2)
+            with p1:
+                st.markdown(_kpi(
+                    len(df_auth_f), "ESPERAN AUTORIZACIÓN",
+                    "Alistamiento en espera · Seller",
+                    bg=RIESGO_COLOR if len(df_auth_f) > 0 else DEEP_INK,
+                    border=RIESGO_COLOR,
+                ), unsafe_allow_html=True)
+            with p2:
+                st.markdown(_kpi(
+                    _fmt_m(val_auth), "VALOR COD · PENDIENTE",
+                    "Por autorizar despacho", border=COD_COLOR,
+                ), unsafe_allow_html=True)
+
+            # ── Tabla principal: solo las que requieren autorización ───────────
             st.markdown("<br>", unsafe_allow_html=True)
-            COLS_P = ["Orden","Cliente","Teléfono","Ciudad","Método Envío",
-                      "Estado","F. Creación","Valor COD","Link Melonn"]
-            COLS_P = [c for c in COLS_P if c in df_pend_f.columns]
-            st.markdown("<div class='sec-title'>Lista de trabajo — pendientes despacho</div>",
-                        unsafe_allow_html=True)
-            _sel_pend = render_tabla(df_pend_f, COLS_P, key="tbl_pend", height=380)
+            COLS_A = ["Orden","Cliente","Teléfono","Ciudad","Estado",
+                      "Método Envío","F. Creación","Valor COD","Link Melonn"]
+            COLS_A = [c for c in COLS_A if c in df_pend_f.columns]
+
+            if df_auth_f.empty:
+                st.success("✅ Sin órdenes en espera de autorización seller.")
+                _sel_pend = None
+            else:
+                st.markdown(
+                    "<div class='sec-title'>🔑 Autorización requerida — alistado en espera · seller</div>",
+                    unsafe_allow_html=True,
+                )
+                _sel_pend = render_tabla(df_auth_f, COLS_A, key="tbl_pend", height=360)
 
             # ── Panel de autorización de despacho ─────────────────────────────
             sel_p = _sel_pend is not None
 
             if sel_p:
-                fila_auth = df_pend_f.iloc[_sel_pend]
+                fila_auth    = df_auth_f.iloc[_sel_pend]
                 orden_auth   = str(fila_auth.get("Orden", ""))
                 orden_melonn = str(fila_auth.get("Orden Melonn", ""))
                 cliente_auth = str(fila_auth.get("Cliente", "—"))
@@ -348,37 +409,46 @@ with tab_cod:
                 estado_auth  = str(fila_auth.get("Estado", "—"))
                 link_auth    = str(fila_auth.get("Link Melonn", ""))
 
-                # Construir link admin Melonn desde el internal_order_number
-                if orden_melonn:
-                    admin_url = f"https://app.melonn.com/sell-orders?search={orden_melonn}"
-                elif link_auth:
-                    admin_url = link_auth
-                else:
-                    admin_url = ""
-
+                admin_url = (
+                    f"https://app.melonn.com/sell-orders?search={orden_melonn}"
+                    if orden_melonn else link_auth
+                )
                 _k_auth = f"_auth_ok_{orden_auth}"
 
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.markdown(
-                    f"<div class='sec-title' style='color:{STEEL_BLUE};'>🚀 Autorizar despacho</div>",
+                    f"<div class='sec-title' style='color:{RIESGO_COLOR};'>🚀 Autorizar despacho</div>",
                     unsafe_allow_html=True,
                 )
                 st.markdown(
-                    f"""<div style="background:white;border:1px solid {STEEL_BLUE}33;
-                        border-left:4px solid {STEEL_BLUE};border-radius:8px;
+                    f"""<div style="background:white;border:1px solid {RIESGO_COLOR}33;
+                        border-left:4px solid {RIESGO_COLOR};border-radius:8px;
                         padding:16px 20px;margin-bottom:12px;">
                       <div style="display:flex;gap:32px;flex-wrap:wrap;">
-                        <div><div style="font-size:0.6rem;color:#909090;letter-spacing:2px;text-transform:uppercase;margin-bottom:3px;">Orden</div>
-                             <div style="font-weight:700;color:{DEEP_INK};font-size:0.95rem;">#{orden_auth}</div>
-                             <div style="font-size:0.75rem;color:#909090;">{orden_melonn}</div></div>
-                        <div><div style="font-size:0.6rem;color:#909090;letter-spacing:2px;text-transform:uppercase;margin-bottom:3px;">Cliente</div>
-                             <div style="font-weight:600;color:{DEEP_INK};font-size:0.85rem;">{cliente_auth}</div>
-                             <div style="font-size:0.75rem;color:#909090;">{ciudad_auth}</div></div>
-                        <div><div style="font-size:0.6rem;color:#909090;letter-spacing:2px;text-transform:uppercase;margin-bottom:3px;">Transportadora</div>
-                             <div style="font-weight:600;color:{DEEP_INK};font-size:0.85rem;">{metodo_auth}</div>
-                             <div style="font-size:0.75rem;color:#909090;">{estado_auth}</div></div>
-                        <div><div style="font-size:0.6rem;color:#909090;letter-spacing:2px;text-transform:uppercase;margin-bottom:3px;">Valor COD</div>
-                             <div style="font-weight:700;color:{COD_COLOR};font-size:1rem;">${cod_auth}</div></div>
+                        <div>
+                          <div style="font-size:0.6rem;color:#909090;letter-spacing:2px;text-transform:uppercase;margin-bottom:3px;">Orden</div>
+                          <div style="font-weight:700;color:{DEEP_INK};font-size:0.95rem;">#{orden_auth}</div>
+                          <div style="font-size:0.75rem;color:#909090;">{orden_melonn}</div>
+                        </div>
+                        <div>
+                          <div style="font-size:0.6rem;color:#909090;letter-spacing:2px;text-transform:uppercase;margin-bottom:3px;">Cliente</div>
+                          <div style="font-weight:600;color:{DEEP_INK};font-size:0.85rem;">{cliente_auth}</div>
+                          <div style="font-size:0.75rem;color:#909090;">{ciudad_auth}</div>
+                        </div>
+                        <div>
+                          <div style="font-size:0.6rem;color:#909090;letter-spacing:2px;text-transform:uppercase;margin-bottom:3px;">Transportadora · Estado</div>
+                          <div style="font-weight:600;color:{DEEP_INK};font-size:0.85rem;">{metodo_auth}</div>
+                          <div style="font-size:0.75rem;color:{RIESGO_COLOR};font-weight:700;">{estado_auth}</div>
+                        </div>
+                        <div>
+                          <div style="font-size:0.6rem;color:#909090;letter-spacing:2px;text-transform:uppercase;margin-bottom:3px;">Valor COD</div>
+                          <div style="font-weight:700;color:{COD_COLOR};font-size:1rem;">${cod_auth}</div>
+                        </div>
+                      </div>
+                      <div style="margin-top:10px;background:{RIESGO_COLOR}12;border:1px solid {RIESGO_COLOR}33;
+                                  border-radius:5px;padding:6px 12px;font-size:0.68rem;
+                                  color:{RIESGO_COLOR};font-weight:700;letter-spacing:1px;">
+                        ⏸ ALISTADO EN ESPERA · SELLER — Usa el botón para liberar el hold y autorizar despacho
                       </div>
                     </div>""",
                     unsafe_allow_html=True,
@@ -402,7 +472,6 @@ with tab_cod:
                         shipping_override = st.text_input(
                             "Código método envío (opcional)",
                             placeholder="Dejar vacío para usar el asignado",
-                            label_visibility="visible",
                         )
                         submitted = st.form_submit_button(
                             "🚀 Autorizar despacho en Melonn",
@@ -446,36 +515,36 @@ with tab_cod:
                             unsafe_allow_html=True,
                         )
 
-            with st.expander("Detalle del pedido", expanded=False):
-                if not sel_p:
-                    st.caption("Selecciona una fila para ver el detalle.")
-                else:
-                    render_detalle(df_pend_f, tab_key="pend")
-                    _render_memoria(str(df_pend_f.iloc[_sel_pend]["Orden"]))
+            if sel_p:
+                with st.expander("Detalle del pedido", expanded=False):
+                    render_detalle(df_auth_f, tab_key="pend")
+                    _render_memoria(str(df_auth_f.iloc[_sel_pend]["Orden"]))
+
 
             st.markdown("<br>", unsafe_allow_html=True)
-            st.download_button("⬇️ Descargar (.CSV)",
+            st.download_button(
+                "⬇️ Descargar pendientes (.CSV)",
                 data=df_pend_f.to_csv(index=False).encode("utf-8-sig"),
-                file_name=f"maledenim_pendientes_{date.today()}.csv", mime="text/csv")
+                file_name=f"maledenim_pendientes_{date.today()}.csv",
+                mime="text/csv",
+            )
 
     # ── En tránsito ───────────────────────────────────────────────────────────
     with st_tran:
-        st.caption("COD despachados — en camino al cliente. Seguimiento hasta entrega y cobro.")
+        st.caption(
+            "COD en movimiento — códigos Melonn 5 · 6 · 7 · 24 · 28 · solo Contraentrega."
+        )
         if df_tran_f.empty:
             st.success("✅ Sin pedidos COD en tránsito.")
         else:
-            df_t_act  = df_tran_f[df_tran_f["Nivel"] != "VENCIDO"]
-            df_t_venc = df_tran_f[df_tran_f["Nivel"] == "VENCIDO"]
+            df_t_riesgo = df_tran_f[df_tran_f["Nivel"] != "VENCIDO"]
+            n_crit  = len(df_t_riesgo[df_t_riesgo["Nivel"] == "CRITICO"])
+            n_ries  = len(df_t_riesgo[df_t_riesgo["Nivel"] == "RIESGO"])
+            n_norm  = len(df_t_riesgo[df_t_riesgo["Nivel"] == "NORMAL"])
+            val_tr  = (df_t_riesgo[df_t_riesgo["Nivel"].isin(["CRITICO","RIESGO"])]
+                       ["Valor COD"].apply(_parse_cod).sum())
 
-            n_crit = len(df_t_act[df_t_act["Nivel"] == "CRITICO"])
-            n_ries = len(df_t_act[df_t_act["Nivel"] == "RIESGO"])
-            n_norm = len(df_t_act[df_t_act["Nivel"] == "NORMAL"])
-            n_venc = len(df_t_venc)
-            val_t  = df_t_act["Valor COD"].apply(_parse_cod).sum()
-            val_tr = (df_t_act[df_t_act["Nivel"].isin(["CRITICO","RIESGO"])]
-                      ["Valor COD"].apply(_parse_cod).sum())
-
-            t1, t2, t3, t4, t5 = st.columns(5)
+            t1, t2, t3, t4 = st.columns(4)
             with t1:
                 st.markdown(f"""<div class="kpi-card" style="border-left:4px solid {CRITICO_COLOR};">
                     <p class="kpi-num">{n_crit}</p><p class="kpi-label">CRÍTICO</p>
@@ -491,17 +560,14 @@ with tab_cod:
             with t4:
                 st.markdown(_kpi(_fmt_m(val_tr), "COD EN RIESGO",
                                  "Recaudo comprometido", border=COD_COLOR), unsafe_allow_html=True)
-            with t5:
-                st.markdown(_kpi(n_venc, "SIN CONFIRMAR",
-                                 f">{MAX_DIAS_ACTIVO}d sin actualizar",
-                                 bg=VENCIDO_COLOR, border="#909090"), unsafe_allow_html=True)
 
             st.markdown("<br>", unsafe_allow_html=True)
-            COLS_T = ["Nivel","Orden","Cliente","Teléfono","Ciudad","Zona",
+            COLS_T = ["Nivel","Orden","Cliente","Teléfono","Ciudad","Zona","Estado",
                       "Días","Días sobre SLA","F. Despacho","F. Promesa",
-                      "Promesa vencida","Valor COD","Método Envío","Motivo riesgo","Link Melonn"]
+                      "Promesa vencida","Valor COD","Método Envío","Link Melonn"]
             COLS_T = [c for c in COLS_T if c in df_tran_f.columns]
-            st.markdown("<div class='sec-title'>Lista de trabajo — en tránsito</div>",
+
+            st.markdown("<div class='sec-title'>Lista de trabajo — COD en tránsito</div>",
                         unsafe_allow_html=True)
             _sel_tran = render_tabla(df_tran_f, COLS_T, key="tbl_tran", height=420)
 
@@ -511,19 +577,6 @@ with tab_cod:
                 else:
                     render_detalle(df_tran_f, tab_key="tran")
                     _render_memoria(str(df_tran_f.iloc[_sel_tran]["Orden"]))
-
-            if n_venc > 0:
-                with st.expander(
-                    f"📋 Sin confirmar entrega — {n_venc} pedidos (>{MAX_DIAS_ACTIVO}d)",
-                    expanded=False,
-                ):
-                    st.caption(f"Más de {MAX_DIAS_ACTIVO} días despachados sin confirmación. Verifica con el cliente o la guía.")
-                    COLS_V = ["Orden","Cliente","Teléfono","Ciudad","Días",
-                              "Valor COD","Método Envío","F. Despacho","F. Promesa","Link Melonn"]
-                    COLS_V = [c for c in COLS_V if c in df_t_venc.columns]
-                    st.dataframe(df_t_venc[COLS_V], use_container_width=True,
-                                 height=260, hide_index=True,
-                                 column_config={"Link Melonn": st.column_config.LinkColumn("Guía", display_text="Ver")})
 
             st.markdown("<br>", unsafe_allow_html=True)
             st.download_button("⬇️ Descargar en tránsito (.CSV)",
