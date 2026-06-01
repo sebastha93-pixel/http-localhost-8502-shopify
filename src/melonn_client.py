@@ -70,6 +70,7 @@ _rate_limiter = _RateLimiter()
 
 _DB_PATH        = Path(__file__).parent.parent / "data" / "db" / "maledenim.db"
 _JSON_BOOTSTRAP = Path(__file__).parent.parent / "data" / "logistica" / "bootstrap.json"
+_SB_TABLA       = "melonn_cache"    # tabla en Supabase
 
 # ── Clasificación de estados ───────────────────────────────────────────────────
 #
@@ -214,13 +215,118 @@ def credenciales_ok() -> bool:
     return bool(_api_key())
 
 
-# ── SQLite cache ───────────────────────────────────────────────────────────────
+# ── SQLite helper ─────────────────────────────────────────────────────────────
 def _conn() -> sqlite3.Connection:
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     c = sqlite3.connect(str(_DB_PATH), timeout=10)
     c.row_factory = sqlite3.Row
     return c
 
+
+# ── Supabase (caché primaria — persiste entre deployments) ────────────────────
+#
+# Formato del campo pedidos_json en Supabase (envelope v2):
+#   { "v":2, "fuente":"api_live", "config_hash":"xxxxxxxx", "pedidos":[...] }
+#
+# El campo total se guarda aparte en la columna total.
+# Si el JSON es una lista plana (v1 / formato antiguo) se descarta como inválido.
+
+from functools import lru_cache as _lru_cache
+
+@_lru_cache(maxsize=1)
+def _sb():
+    """Cliente Supabase singleton. None si las credenciales no están configuradas."""
+    try:
+        from supabase import create_client
+        try:
+            import streamlit as st
+            u = st.secrets.get("SUPABASE_URL","") or __import__("os").getenv("SUPABASE_URL","")
+            k = st.secrets.get("SUPABASE_KEY","") or __import__("os").getenv("SUPABASE_KEY","")
+        except Exception:
+            import os
+            u = os.getenv("SUPABASE_URL","")
+            k = os.getenv("SUPABASE_KEY","")
+        if u and k:
+            return create_client(u, k)
+    except Exception:
+        pass
+    return None
+
+
+def _sb_ok() -> bool:
+    return _sb() is not None
+
+
+def _sb_cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:
+    """Lee caché desde Supabase. Retorna (pedidos, fetched_at, fresco, fuente) o None."""
+    try:
+        sb = _sb()
+        if not sb:
+            return None
+        rows = sb.table(_SB_TABLA).select("fetched_at,pedidos_json,total").eq("id", 1).execute().data
+        if not rows:
+            return None
+        row = rows[0]
+
+        envelope = json.loads(row["pedidos_json"])
+        if not isinstance(envelope, dict) or envelope.get("v") != 2:
+            log.info("Supabase cache: formato v1 o inválido — descartando")
+            return None
+
+        stored_hash = envelope.get("config_hash","")
+        if stored_hash != _config_hash():
+            log.info(f"Supabase cache: config_hash cambió ({stored_hash} → {_config_hash()}) — invalidando")
+            return None
+
+        # fetched_at viene como string ISO desde Supabase
+        fa_raw     = row["fetched_at"]
+        fetched_at = datetime.fromisoformat(fa_raw.replace("Z","+00:00").replace("+00:00",""))
+        age        = (datetime.now() - fetched_at).total_seconds()
+        fresco     = age <= _CACHE_TTL
+        if not fresco and not ignorar_ttl:
+            return None
+
+        pedidos = envelope.get("pedidos", [])
+        fuente  = envelope.get("fuente","api_live")
+        return pedidos, fetched_at, fresco, fuente
+    except Exception as e:
+        log.warning(f"Supabase cache leer error: {e}")
+        return None
+
+
+def _sb_cache_guardar(pedidos: list, fuente: str = "api_live"):
+    """Guarda caché en Supabase (upsert single row id=1)."""
+    try:
+        sb = _sb()
+        if not sb:
+            return
+        envelope = json.dumps({
+            "v":           2,
+            "fuente":      fuente,
+            "config_hash": _config_hash(),
+            "pedidos":     pedidos,
+        }, default=str)
+        sb.table(_SB_TABLA).upsert({
+            "id":          1,
+            "fetched_at":  datetime.utcnow().isoformat(),
+            "pedidos_json": envelope,
+            "total":       len(pedidos),
+        }).execute()
+        log.info(f"Supabase cache guardado: {len(pedidos)} pedidos, fuente={fuente}")
+    except Exception as e:
+        log.warning(f"Supabase cache guardar error: {e}")
+
+
+def _sb_limpiar():
+    try:
+        sb = _sb()
+        if sb:
+            sb.table(_SB_TABLA).delete().eq("id", 1).execute()
+    except Exception as e:
+        log.warning(f"Supabase limpiar error: {e}")
+
+
+# ── SQLite (caché local / fallback) ───────────────────────────────────────────
 
 def _init_tabla():
     with _conn() as c:
@@ -234,7 +340,6 @@ def _init_tabla():
                 config_hash  TEXT DEFAULT ''
             )
         """)
-        # Migraciones — añade columnas si la tabla ya existía sin ellas
         for col, default in [("fuente", "'api_live'"), ("config_hash", "''")]:
             try:
                 c.execute(f"ALTER TABLE melonn_pedidos_cache ADD COLUMN {col} TEXT DEFAULT {default}")
@@ -243,15 +348,8 @@ def _init_tabla():
         c.commit()
 
 
-def _cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:
-    """
-    Retorna (pedidos, fetched_at, fresco, fuente) o None.
-
-    Descarta la caché automáticamente si:
-      - El TTL de 30 min venció (a menos que ignorar_ttl=True)
-      - El config_hash no coincide con el hash actual de CODIGOS_ACTIVOS
-        → significa que los códigos a mostrar cambiaron desde el último fetch
-    """
+def _sq_cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:
+    """Lee caché desde SQLite local."""
     try:
         _init_tabla()
         with _conn() as c:
@@ -261,30 +359,24 @@ def _cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:
             ).fetchone()
         if not row:
             return None
-
-        # Invalidar si CODIGOS_ACTIVOS cambió desde que se guardó la caché
-        stored_hash  = row["config_hash"] or ""
-        current_hash = _config_hash()
-        if stored_hash != current_hash:
-            log.info(f"config_hash cambió ({stored_hash} → {current_hash}) — caché invalidada")
+        stored_hash = row["config_hash"] or ""
+        if stored_hash != _config_hash():
+            log.info("SQLite cache: config_hash cambió — invalidando")
             return None
-
         fetched_at = datetime.fromisoformat(row["fetched_at"])
         age    = (datetime.now() - fetched_at).total_seconds()
         fresco = age <= _CACHE_TTL
         if not fresco and not ignorar_ttl:
             return None
-
         pedidos = json.loads(row["pedidos_json"])
-        fuente  = row["fuente"] if row["fuente"] else "api_live"
+        fuente  = row["fuente"] or "api_live"
         return pedidos, fetched_at, fresco, fuente
     except Exception as e:
-        log.warning(f"Error leyendo SQLite cache: {e}")
+        log.warning(f"SQLite cache leer error: {e}")
         return None
 
 
-def _cache_guardar(pedidos: list, fuente: str = "api_live"):
-    """Guarda pedidos junto con el hash actual de CODIGOS_ACTIVOS."""
+def _sq_cache_guardar(pedidos: list, fuente: str = "api_live"):
     try:
         _init_tabla()
         with _conn() as c:
@@ -292,42 +384,83 @@ def _cache_guardar(pedidos: list, fuente: str = "api_live"):
                 INSERT OR REPLACE INTO melonn_pedidos_cache
                     (id, fetched_at, pedidos_json, total, fuente, config_hash)
                 VALUES (1, ?, ?, ?, ?, ?)
-            """, (
-                datetime.now().isoformat(),
-                json.dumps(pedidos, default=str),
-                len(pedidos),
-                fuente,
-                _config_hash(),
-            ))
+            """, (datetime.now().isoformat(), json.dumps(pedidos, default=str),
+                  len(pedidos), fuente, _config_hash()))
             c.commit()
     except Exception as e:
-        log.warning(f"Error guardando SQLite cache: {e}")
+        log.warning(f"SQLite cache guardar error: {e}")
+
+
+# ── API pública de caché (Supabase → SQLite fallback) ─────────────────────────
+
+def _cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:
+    """Supabase primero, SQLite como fallback."""
+    result = _sb_cache_leer(ignorar_ttl)
+    if result is not None:
+        return result
+    return _sq_cache_leer(ignorar_ttl)
+
+
+def _cache_guardar(pedidos: list, fuente: str = "api_live"):
+    """Escribe en Supabase Y en SQLite (redundancia)."""
+    _sb_cache_guardar(pedidos, fuente)
+    _sq_cache_guardar(pedidos, fuente)
 
 
 def limpiar_cache():
+    """Limpia ambas cachés."""
+    _sb_limpiar()
     try:
         _init_tabla()
         with _conn() as c:
             c.execute("DELETE FROM melonn_pedidos_cache WHERE id=1")
             c.commit()
     except Exception as e:
-        log.warning(f"Error limpiando cache: {e}")
+        log.warning(f"SQLite limpiar error: {e}")
 
 
 def cache_info() -> Optional[dict]:
+    """Info de la caché activa (Supabase si disponible, si no SQLite)."""
+    # Intentar Supabase
+    try:
+        sb = _sb()
+        if sb:
+            rows = sb.table(_SB_TABLA).select("fetched_at,total,pedidos_json").eq("id",1).execute().data
+            if rows:
+                row        = rows[0]
+                envelope   = json.loads(row["pedidos_json"])
+                fuente     = envelope.get("fuente","api_live") if isinstance(envelope, dict) else "api_live"
+                cfg_hash   = envelope.get("config_hash","") if isinstance(envelope, dict) else ""
+                fa_raw     = row["fetched_at"]
+                fetched_at = datetime.fromisoformat(fa_raw.replace("Z","+00:00").replace("+00:00",""))
+                age        = (datetime.now() - fetched_at).total_seconds()
+                hash_ok    = cfg_hash == _config_hash()
+                return {
+                    "fetched_at":  fetched_at,
+                    "age_s":       age,
+                    "total":       row["total"],
+                    "fresco":      age <= _CACHE_TTL and hash_ok,
+                    "stale":       age > _CACHE_TTL or not hash_ok,
+                    "fuente":      fuente,
+                    "config_hash": cfg_hash,
+                    "hash_ok":     hash_ok,
+                    "backend":     "supabase",
+                }
+    except Exception:
+        pass
+    # Fallback SQLite
     try:
         _init_tabla()
         with _conn() as c:
             row = c.execute(
-                "SELECT fetched_at, total, fuente, config_hash "
-                "FROM melonn_pedidos_cache WHERE id=1"
+                "SELECT fetched_at,total,fuente,config_hash FROM melonn_pedidos_cache WHERE id=1"
             ).fetchone()
         if not row:
             return None
-        fetched_at   = datetime.fromisoformat(row["fetched_at"])
-        age          = (datetime.now() - fetched_at).total_seconds()
-        fuente       = row["fuente"] if row["fuente"] else "api_live"
-        hash_ok      = (row["config_hash"] or "") == _config_hash()
+        fetched_at = datetime.fromisoformat(row["fetched_at"])
+        age        = (datetime.now() - fetched_at).total_seconds()
+        fuente     = row["fuente"] or "api_live"
+        hash_ok    = (row["config_hash"] or "") == _config_hash()
         return {
             "fetched_at":  fetched_at,
             "age_s":       age,
@@ -337,6 +470,7 @@ def cache_info() -> Optional[dict]:
             "fuente":      fuente,
             "config_hash": row["config_hash"],
             "hash_ok":     hash_ok,
+            "backend":     "sqlite",
         }
     except Exception:
         return None
