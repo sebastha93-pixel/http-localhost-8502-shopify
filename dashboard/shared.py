@@ -976,24 +976,16 @@ def render_detalle(df_tab: pd.DataFrame, tab_key: str):
                 border-radius:2px;font-weight:700;white-space:nowrap;}}
           .btn:hover{{background:{STEEL_BLUE};color:{DEEP_INK};}}
           .tag{{font-size:0.68rem;color:{STEEL_BLUE};letter-spacing:1px;}}
-          .st{{font-size:0.68rem;letter-spacing:1.5px;text-transform:uppercase;color:{GRAPHITE_GREY};}}
-          .st.ok{{color:{NORMAL_COLOR};}} .st.err{{color:{RIESGO_COLOR};}}
+          .sub{{font-size:0.68rem;letter-spacing:1px;color:{GRAPHITE_GREY};}}
         </style></head><body>
         <div class="wrap">
           <a class="btn" href="{link}" target="_blank">→ ABRIR TRACKING</a>
           <div>
             <div class="tag">{fila['Orden']} · {fila.get('Método Envío', fila.get('Transportadora',''))}</div>
-            <div class="st" id="s">Abriendo guía automáticamente...</div>
+            <div class="sub">Haz clic en el botón para abrir la guía</div>
           </div>
         </div>
-        <script>
-        (function(){{
-          var w=window.open("{link}","_blank","noopener,noreferrer");
-          var s=document.getElementById('s');
-          if(w){{s.textContent='✓ Guía abierta en nueva pestaña';s.className='st ok';}}
-          else{{s.textContent='Bloqueado — usa el botón';s.className='st err';}}
-        }})();
-        </script></body></html>
+        </body></html>
         """, height=48)
     else:
         st.warning("Sin link de seguimiento para este pedido.")
