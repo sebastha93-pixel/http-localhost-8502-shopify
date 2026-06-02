@@ -766,17 +766,11 @@ def _fetch_api() -> list:
         except Exception:
             continue
 
-        sub    = p["sub_estado_logistico"]
-        es_cod = p["es_contraentrega"]
+        sub = p["sub_estado_logistico"]
 
-        if es_cod:
-            # COD: pendiente | tránsito | novedad externa | entregado
-            if sub in ("pendiente_despacho", "en_transito", "novedad", "entregado"):
-                resultado.append(p)
-        else:
-            # Prepago: solo novedades (códigos 1, 2)
-            if sub == "novedad":
-                resultado.append(p)
+        # Incluir TODAS las órdenes activas sin distinción de método de pago
+        if sub in ("pendiente_despacho", "en_transito", "novedad", "entregado"):
+            resultado.append(p)
 
     # Enriquecer con datos de cliente y fechas desde Shopify (batch)
     if _SHOPIFY_ENRICHER_OK and resultado:
@@ -842,8 +836,7 @@ def _enriquecer_y_filtrar(pedidos: list) -> list:
         if "es_contraentrega" not in p:
             p["es_contraentrega"] = p.get("tipo_recaudo", "") == "Contraentrega"
 
-        sub    = p["sub_estado_logistico"]
-        es_cod = p["es_contraentrega"]
+        sub = p["sub_estado_logistico"]
 
         # Whitelist: código activo O nombre en novedades externas
         if (estado_cod_guardado
@@ -855,12 +848,9 @@ def _enriquecer_y_filtrar(pedidos: list) -> list:
         if estado_guardado in ESTADOS_EXCLUIR or estado_guardado in ESTADOS_PROCESO_INTERNO:
             continue
 
-        if es_cod:
-            if sub in ("pendiente_despacho", "en_transito", "novedad", "entregado"):
-                resultado.append(p)
-        else:
-            if sub == "novedad":
-                resultado.append(p)
+        # Incluir TODAS las órdenes activas sin distinción de método de pago
+        if sub in ("pendiente_despacho", "en_transito", "novedad", "entregado"):
+            resultado.append(p)
 
     return resultado
 

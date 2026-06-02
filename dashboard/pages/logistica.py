@@ -232,19 +232,17 @@ if _fuente in ("csv_bootstrap", "stale"):
     )
 
 # ── Segmentación ───────────────────────────────────────────────────────────────
-df_cod = df_all[df_all["Tipo_Recaudo"] == "Contraentrega"].copy()
+# Las 4 pestañas de Contraentrega muestran TODAS las órdenes activas (COD + prepago)
+# filtradas únicamente por estado Melonn — sin restricción de tipo de recaudo.
+df_cod = df_all[df_all["Tipo_Recaudo"] == "Contraentrega"].copy()   # para KPIs y métricas COD
 df_pre = df_all[df_all["Tipo_Recaudo"] == "Prepago"].copy()
 
-# Pendiente despacho — código 26 únicamente
-df_pend    = df_cod[df_cod["Estado_Code"] == 26].copy()
-# En tránsito — código 7 únicamente (ya salió de bodega, con la transportadora)
-df_tran    = df_cod[df_cod["Estado_Code"] == 7].copy()
-# Novedades externas — "Delivery not posible" + "ext. conditionals" (por nombre)
-df_nov_cod = df_cod[df_cod["Sub_Estado"] == "novedad"].copy()
-# Entregados — códigos 6 y 8
-df_ent     = df_cod[df_cod["Estado_Code"].isin([6, 8])].copy()
-# Prepago novedades
-df_nov_pre = df_pre[df_pre["Sub_Estado"] == "novedad"].copy()
+# ── Tabs operativas — todas las órdenes activas ────────────────────────────────
+df_pend    = df_all[df_all["Estado_Code"] == 26].copy()             # pendiente despacho
+df_tran    = df_all[df_all["Estado_Code"] == 7].copy()              # en tránsito
+df_nov_cod = df_all[df_all["Sub_Estado"] == "novedad"].copy()       # novedades externas
+df_ent     = df_all[df_all["Estado_Code"].isin([6, 8])].copy()      # entregados
+df_nov_pre = df_pre[df_pre["Sub_Estado"] == "novedad"].copy()       # novedades prepago (tab aparte)
 
 # Filtros del sidebar
 def _filtrar(df):
@@ -307,8 +305,9 @@ with k6:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── TABS PRINCIPALES ───────────────────────────────────────────────────────────
+_n_activas = len(df_pend) + len(df_tran) + len(df_nov_cod) + len(df_ent)
 tab_cod, tab_pre, tab_ana = st.tabs([
-    f"📦  Contraentrega  ({len(df_cod)})",
+    f"📦  Logística activa  ({_n_activas})",
     f"💳  Pedidos Pagos  ({len(df_nov_pre)})",
     "📊  Análisis",
 ])
