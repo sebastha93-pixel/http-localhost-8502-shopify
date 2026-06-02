@@ -96,100 +96,102 @@ _SB_TABLA       = "melonn_cache"    # tabla en Supabase
 #   10 Fixed-valid, 12 Processing, 22 Packing, 24 Prepared-dispatch
 #   25 Selected-prep, 27 Pre-packing-VAS, 28 Ready-for-packing
 #
-CODIGOS_EXCLUIR = {8, 9, 15, 16, 17, 18, 19}   # 8=Entregado excluido
+# Excluidos siempre (terminales / cancelados / devolución)
+# Nota: código 8 y 6 YA NO están aquí — ahora se muestran como "entregado" para COD
+CODIGOS_EXCLUIR = {9, 15, 16, 17, 18, 19}
 
-# Proceso interno — nunca se muestra al seller
-# 1=Recibida-válida y 2=Reservada-lista se movieron a NOVEDAD
-CODIGOS_PROCESO_INTERNO = {3, 4, 10, 12, 22, 25, 27}
+# Proceso interno de Melonn — el seller no puede actuar, nunca se muestra
+CODIGOS_PROCESO_INTERNO = {3, 4, 5, 10, 12, 22, 24, 25, 27, 28}
 
-# Whitelist por código
-#   Pendiente seller  → 26          "Alistamiento en espera - Seller"
-#   En tránsito COD   → 5,6,7,24,28
-#   Novedad           → 1,2
-#                        1  Recibida · válida
-#                        2  Reservada · lista para alistamiento
+# ── Whitelist por código ───────────────────────────────────────────────────────
+#   Pendiente seller → 26   "Alistamiento en espera · Seller"
+#   En tránsito COD  → 7    "Shipped - in transit"
+#   Entregado COD    → 6, 8  "Picked-up by buyer" / "Delivered to buyer"
+#   Prepago novedad  → 1, 2  (se muestra en tab Pedidos Pagos)
+#   Novedades ext.   → filtradas por NOMBRE (código no confirmado en API docs)
 CODIGOS_PENDIENTE_DESPACHO = {26}
-CODIGOS_EN_TRANSITO        = {5, 6, 7, 24, 28}
-CODIGOS_NOVEDAD            = {1, 2}
+CODIGOS_EN_TRANSITO        = {7}
+CODIGOS_ENTREGADO          = {6, 8}
+CODIGOS_NOVEDAD            = set()   # novedades externas → filtro por nombre
 CODIGOS_RESUELTO           = set()
 CODIGOS_ACTIVOS            = (
     CODIGOS_PENDIENTE_DESPACHO
     | CODIGOS_EN_TRANSITO
-    | CODIGOS_NOVEDAD
+    | CODIGOS_ENTREGADO
+    | {1, 2}   # prepago novedades (tab Pedidos Pagos)
 )
 
-# ── Nombres de estado (para compatibilidad con caché antiguo y UI) ────────────
-# Nunca mostrar — se saltan en fetch y en caché
+# ── Nombres de estado ─────────────────────────────────────────────────────────
+# Excluidos por nombre (cancelados / devolución)
 ESTADOS_EXCLUIR = {
-    # Inglés
-    "Received - invalid fixable",                          # 9
-    "Canceled",                                            # 15
-    "Picked-up by courier for return",                     # 16
-    "On Cancelation Process - to be unpacked & relocated", # 17
-    "On Cancelation Process - to be received from courier",# 18
-    "In transit - Cancelation requested",                  # 19
-    "Delivered to buyer",                                  # 8 excluido
+    "Received - invalid fixable",                           # 9
+    "Canceled",                                             # 15
+    "Picked-up by courier for return",                      # 16
+    "On Cancelation Process - to be unpacked & relocated",  # 17
+    "On Cancelation Process - to be received from courier", # 18
+    "In transit - Cancelation requested",                   # 19
     # Español
-    "Cancelada",                                           # 15 español
-    "Recogida por transportadora para devolución",         # 16 español
-    "En proceso de cancelación",                           # 17/18 español
-    "En tránsito - cancelación solicitada",                # 19 español
-    "Entregada al comprador",                              # 8 español excluido
-    "Entregada - pendiente de cobro",                      # 8 variante excluida
+    "Cancelada",
+    "Recogida por transportadora para devolución",
+    "En proceso de cancelación",
+    "En tránsito - cancelación solicitada",
 }
 
-# Código 6 movido a EN_TRANSITO — ya no hay "resueltos" separados
-ESTADOS_RESUELTO = set()
+# Novedades externas — detectadas por NOMBRE (código numérico no documentado)
+# Estas son las dos novedades operativas para COD
+ESTADOS_NOVEDAD_EXTERNA = {
+    "Delivery not posible",                                       # transportadora no pudo entregar
+    "All items reserved - fulfillment on hold - ext. conditionals",# condición externa (dirección / zona)
+}
 
-# Alias para compatibilidad con bootstrap/caché antiguo
-ESTADOS_RESUELTOS = ESTADOS_EXCLUIR | ESTADOS_RESUELTO
+# Entregados COD — códigos 6 y 8
+ESTADOS_ENTREGADO = {
+    "Picked-up by buyer",         "Recogida por el comprador",    # 6
+    "Delivered to buyer",         "Entregada al comprador",       # 8
+    "Entregada - pendiente de cobro",                             # 8 variante
+}
 
-# Solo los estados donde el seller DEBE autorizar el despacho (códigos 23 y 26)
-# Todo lo demás es proceso interno de Melonn — no se muestra en el dashboard
+# Pendiente seller — código 26
 ESTADOS_PENDIENTE_DESPACHO = {
-    # Código 26 únicamente — seller debe autorizar despacho
-    "All items reserved - fulfillment on hold",      # 26 inglés
-    "Alistamiento en espera - Seller",               # 26 español ← estado real de la cuenta
-    # "Packed - on hold" (23) excluido — no aplica para esta cuenta
+    "All items reserved - fulfillment on hold",   # 26 inglés
+    "Alistamiento en espera - Seller",            # 26 español
 }
 
-# En tránsito COD — códigos 5, 6, 7, 24, 28
+# En tránsito — solo código 7 (ya salió de bodega, con la transportadora)
 ESTADOS_EN_TRANSITO = {
-    # Código 5 — Empacada
-    "Packed", "Empacada",
-    # Código 6 — Recogida por el comprador (finalizada)
-    "Picked-up by buyer", "Recogida por el comprador",
-    # Código 7 — Con la transportadora
-    "Shipped - in transit", "Despachada - en tránsito", "En tránsito",
-    # Código 24 — Preparada para despacho
-    "Prepared for dispatch", "Preparada para despacho",
-    # Código 28 — Lista para empaque (en bodega)
-    "Ready For Packing", "Lista para empaque",
+    "Shipped - in transit",         # 7 inglés
+    "Despachada - en tránsito",     # 7 español
+    "En tránsito",                  # 7 variante
 }
 
-# Novedad — códigos 1 y 2 únicamente
-ESTADOS_NOVEDAD = {
-    # Código 1 — Recibida válida
+# Novedades prepago — códigos 1 y 2 (se muestran en tab Pedidos Pagos)
+ESTADOS_NOVEDAD_PREPAGO = {
     "Received - valid",                              # 1 inglés
     "Recibida - valida",                             # 1 español
-    # Código 2 — Reservada lista para alistamiento
     "All items reserved - ready for fulfillment",    # 2 inglés
     "Recibida - valida - lista para alistamiento",   # 2 español
 }
 
-# Estados de proceso interno — nunca mostrar
-# 1 y 2 se movieron a NOVEDAD; 28 se movió a EN_TRANSITO
+# Proceso interno — nunca se muestra
 ESTADOS_PROCESO_INTERNO = {
-    # Inglés
+    "Packed", "Empacada",                                          # 5
+    "Prepared for dispatch", "Preparada para despacho",            # 24
+    "Ready For Packing", "Lista para empaque",                     # 28
     "Picking", "Picked", "Fixed & valid - to be processed",
     "Processing Requested", "Packing",
     "Selected for dispatch preparation", "Pre Packing - Vas Pending",
-    # Español
     "Alistando", "Alistada", "Empacando",
     "Seleccionada para preparación de despacho",
 }
 
-ESTADOS_ACTIVOS = ESTADOS_PENDIENTE_DESPACHO | ESTADOS_EN_TRANSITO | ESTADOS_NOVEDAD | ESTADOS_RESUELTO
+# Aliases para compatibilidad con caché antiguo
+ESTADOS_NOVEDAD   = ESTADOS_NOVEDAD_EXTERNA | ESTADOS_NOVEDAD_PREPAGO
+ESTADOS_RESUELTO  = set()
+ESTADOS_RESUELTOS = ESTADOS_EXCLUIR
+ESTADOS_ACTIVOS   = (
+    ESTADOS_PENDIENTE_DESPACHO | ESTADOS_EN_TRANSITO
+    | ESTADOS_NOVEDAD | ESTADOS_ENTREGADO
+)
 
 
 def _config_hash() -> str:
@@ -614,18 +616,23 @@ def _fecha_corte() -> date:
     return min(hoy.replace(day=1), hoy - timedelta(days=15))
 
 
-def _sub_estado_logistico(estado: str) -> str:
+def _sub_estado_logistico(estado: str, codigo: int = 0) -> str:
     """
-    Clasifica el estado Melonn en las 4 categorías operativas del dashboard:
-      pendiente_despacho → en bodega, aún no enviado
-      en_transito        → despachado, esperando entrega normal
-      novedad            → problema activo que requiere gestión
-      resuelto           → novedad solucionada / pedido recogido (estado 6)
+    Clasifica el estado Melonn en las 5 categorías operativas del dashboard:
+      pendiente_despacho → código 26 — en bodega, seller debe autorizar
+      en_transito        → código 7  — con la transportadora
+      novedad            → novedades externas (por nombre) + prepago (1,2)
+      entregado          → códigos 6, 8 — COD cobrado / entregado
+      otro               → no clasificado
     """
-    if estado in ESTADOS_NOVEDAD:       return "novedad"
-    if estado in ESTADOS_EN_TRANSITO:   return "en_transito"
-    if estado in ESTADOS_PENDIENTE_DESPACHO: return "pendiente_despacho"
-    if estado in ESTADOS_RESUELTO:      return "resuelto"
+    if estado in ESTADOS_NOVEDAD_EXTERNA:         return "novedad"
+    if codigo in CODIGOS_ENTREGADO or estado in ESTADOS_ENTREGADO:
+                                                  return "entregado"
+    if codigo == 7 or estado in ESTADOS_EN_TRANSITO:
+                                                  return "en_transito"
+    if codigo == 26 or estado in ESTADOS_PENDIENTE_DESPACHO:
+                                                  return "pendiente_despacho"
+    if estado in ESTADOS_NOVEDAD_PREPAGO:         return "novedad"
     return "otro"
 
 
@@ -659,7 +666,7 @@ def _normalizar(raw: dict) -> dict:
         # ── Estado ───────────────────────────────────────────────────────────
         "estado_melonn":          estado,
         "estado_melonn_code":     estado_code,
-        "sub_estado_logistico":   _sub_estado_logistico(estado),
+        "sub_estado_logistico":   _sub_estado_logistico(estado, estado_code),
         # ── Canal / bodega ────────────────────────────────────────────────────
         "canal_venta":            "B2B" if es_b2b else "D2C",
         "es_b2b":                 es_b2b,
@@ -742,13 +749,14 @@ def _fetch_api() -> list:
         estado_nombre = str(estado_obj.get("name") or "")
         estado_codigo = int(estado_obj.get("code") or 0)
 
-        # ── Whitelist por código — solo estados activos (excluye terminales,
-        #    cancelados Y proceso interno de Melonn) ──────────────────────────
-        if estado_codigo not in CODIGOS_ACTIVOS:
+        # ── Whitelist: código en CODIGOS_ACTIVOS O nombre en ESTADOS_NOVEDAD_EXTERNA
+        #    Las novedades externas no tienen código documentado → se detectan por nombre
+        if (estado_codigo not in CODIGOS_ACTIVOS
+                and estado_nombre not in ESTADOS_NOVEDAD_EXTERNA):
             log.debug(f"Excluido código {estado_codigo} ({estado_nombre})")
             continue
 
-        # Doble check por nombre — proceso interno y estados excluidos
+        # Doble check por nombre — cancelados y proceso interno
         if estado_nombre in ESTADOS_EXCLUIR or estado_nombre in ESTADOS_PROCESO_INTERNO:
             log.debug(f"Excluido por nombre: {estado_nombre}")
             continue
@@ -762,10 +770,11 @@ def _fetch_api() -> list:
         es_cod = p["es_contraentrega"]
 
         if es_cod:
-            # COD: mostrar pendiente, tránsito, novedad y resuelto
-            resultado.append(p)
+            # COD: pendiente | tránsito | novedad externa | entregado
+            if sub in ("pendiente_despacho", "en_transito", "novedad", "entregado"):
+                resultado.append(p)
         else:
-            # Prepago: solo novedades activas
+            # Prepago: solo novedades (códigos 1, 2)
             if sub == "novedad":
                 resultado.append(p)
 
@@ -827,7 +836,7 @@ def _enriquecer_y_filtrar(pedidos: list) -> list:
         # el pedido cambió de novedad → entregado pero el caché no se refrescó.
         estado_guardado = p.get("estado_melonn", "")
         estado_cod_guardado = int(p.get("estado_melonn_code") or 0)
-        p["sub_estado_logistico"] = _sub_estado_logistico(estado_guardado)
+        p["sub_estado_logistico"] = _sub_estado_logistico(estado_guardado, estado_cod_guardado)
 
         # Normalizar campo tipo_recaudo / es_contraentrega para formatos viejos
         if "es_contraentrega" not in p:
@@ -836,19 +845,20 @@ def _enriquecer_y_filtrar(pedidos: list) -> list:
         sub    = p["sub_estado_logistico"]
         es_cod = p["es_contraentrega"]
 
-        # Whitelist por código — excluye terminales, cancelados y proceso interno
-        if estado_cod_guardado and estado_cod_guardado not in CODIGOS_ACTIVOS:
+        # Whitelist: código activo O nombre en novedades externas
+        if (estado_cod_guardado
+                and estado_cod_guardado not in CODIGOS_ACTIVOS
+                and estado_guardado not in ESTADOS_NOVEDAD_EXTERNA):
             continue
 
-        # Doble check por nombre — proceso interno y excluidos
+        # Doble check por nombre — cancelados y proceso interno
         if estado_guardado in ESTADOS_EXCLUIR or estado_guardado in ESTADOS_PROCESO_INTERNO:
             continue
 
         if es_cod:
-            # COD: pendiente, tránsito, novedad y resuelto (estado 6)
-            resultado.append(p)
+            if sub in ("pendiente_despacho", "en_transito", "novedad", "entregado"):
+                resultado.append(p)
         else:
-            # Prepago: solo novedades activas
             if sub == "novedad":
                 resultado.append(p)
 

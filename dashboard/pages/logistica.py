@@ -235,12 +235,15 @@ if _fuente in ("csv_bootstrap", "stale"):
 df_cod = df_all[df_all["Tipo_Recaudo"] == "Contraentrega"].copy()
 df_pre = df_all[df_all["Tipo_Recaudo"] == "Prepago"].copy()
 
-# Código 26 = "Alistamiento en espera - Seller" (en cualquier idioma que devuelva la API)
+# Pendiente despacho — código 26 únicamente
 df_pend    = df_cod[df_cod["Estado_Code"] == 26].copy()
-# En tránsito: códigos 5, 6, 7, 24, 28
-df_tran    = df_cod[df_cod["Sub_Estado"] == "en_transito"].copy()
+# En tránsito — código 7 únicamente (ya salió de bodega, con la transportadora)
+df_tran    = df_cod[df_cod["Estado_Code"] == 7].copy()
+# Novedades externas — "Delivery not posible" + "ext. conditionals" (por nombre)
 df_nov_cod = df_cod[df_cod["Sub_Estado"] == "novedad"].copy()
-df_res     = df_cod[df_cod["Sub_Estado"] == "resuelto"].copy()   # vacío — código 6 en tránsito
+# Entregados — códigos 6 y 8
+df_ent     = df_cod[df_cod["Estado_Code"].isin([6, 8])].copy()
+# Prepago novedades
 df_nov_pre = df_pre[df_pre["Sub_Estado"] == "novedad"].copy()
 
 # Filtros del sidebar
@@ -255,7 +258,7 @@ def _filtrar(df):
 df_pend_f    = _filtrar(df_pend)
 df_tran_f    = _filtrar(df_tran)
 df_nov_cod_f = _filtrar(df_nov_cod)
-df_res_f     = _filtrar(df_res)      # vacío — código 6 ahora en tránsito
+df_ent_f     = _filtrar(df_ent)
 df_nov_pre_f = _filtrar(df_nov_pre)
 
 # Métricas globales
@@ -264,7 +267,7 @@ val_tran_riesgo = (
     df_tran[df_tran["Nivel"].isin(["CRITICO","RIESGO"])]
     ["Valor COD"].apply(_parse_cod).sum()
 )
-val_res_total   = df_res["Valor COD"].apply(_parse_cod).sum()
+val_ent_total   = df_ent["Valor COD"].apply(_parse_cod).sum()
 n_criticos      = len(df_tran[df_tran["Nivel"] == "CRITICO"])
 n_riesgo        = len(df_tran[df_tran["Nivel"] == "RIESGO"])
 
@@ -292,7 +295,7 @@ with k3:
                      bg=CRITICO_COLOR if df_nov_cod.shape[0] > 0 else DEEP_INK,
                      border=CRITICO_COLOR), unsafe_allow_html=True)
 with k4:
-    st.markdown(_kpi(len(df_res), "RESUELTOS", _fmt_m(val_res_total) + " cobrado",
+    st.markdown(_kpi(len(df_ent), "ENTREGADOS COD", _fmt_m(val_ent_total) + " cobrado",
                      border=RESUELTO_COLOR), unsafe_allow_html=True)
 with k5:
     st.markdown(_kpi(len(df_nov_pre), "NOV. PREPAGO", "Pagados · entrega fallida",
@@ -317,16 +320,11 @@ tab_cod, tab_pre, tab_ana = st.tabs([
 with tab_cod:
     # Contar cuántas requieren autorización seller para el badge del tab
     _n_auth = len(df_pend_f[df_pend_f["Estado_Code"] == 26])
-    _pend_label = (
-        f"⏳  Pendientes por despacho  ({_n_auth} auth · {len(df_pend_f)} total)"
-        if len(df_pend_f) > _n_auth
-        else f"⏳  Pendientes por despacho  ({_n_auth})"
-    )
     st_pend, st_tran, st_nov, st_res = st.tabs([
-        _pend_label,
+        f"⏳  Pendientes por despacho  ({len(df_pend_f)})",
         f"🚚  En tránsito  ({len(df_tran_f)})",
         f"⚠️  Novedades  ({len(df_nov_cod_f)})",
-        f"✅  Resueltos  ({len(df_res_f)})",
+        f"📦  Entregados  ({len(df_ent_f)})",
     ])
 
     # ── Pendientes por despacho ───────────────────────────────────────────────
@@ -532,7 +530,7 @@ with tab_cod:
     # ── En tránsito ───────────────────────────────────────────────────────────
     with st_tran:
         st.caption(
-            "COD en movimiento — códigos Melonn 5 · 6 · 7 · 24 · 28 · solo Contraentrega."
+            "COD despachado y en movimiento con la transportadora — código Melonn 7 · solo Contraentrega."
         )
         if df_tran_f.empty:
             st.success("✅ Sin pedidos COD en tránsito.")
@@ -585,7 +583,7 @@ with tab_cod:
 
     # ── Novedades COD ─────────────────────────────────────────────────────────
     with st_nov:
-        st.caption("COD con problema activo de entrega — riesgo de no cobro. Requiere gestión.")
+        st.caption("COD con novedad externa activa — transportadora no pudo entregar o hay condición externa bloqueante. Requiere gestión.")
         if df_nov_cod_f.empty:
             st.success("✅ Sin novedades COD activas.")
         else:
@@ -626,38 +624,41 @@ with tab_cod:
                 data=df_nov_cod_f.to_csv(index=False).encode("utf-8-sig"),
                 file_name=f"maledenim_novedades_cod_{date.today()}.csv", mime="text/csv")
 
-    # ── Resueltos ─────────────────────────────────────────────────────────────
+    # ── Entregados ────────────────────────────────────────────────────────────
     with st_res:
-        st.caption("COD con novedad solucionada — pedido recogido por el comprador (estado 6).")
-        if df_res_f.empty:
-            st.info("Sin pedidos resueltos en la ventana actual (mes + últimos 15 días).")
+        st.caption("COD entregado al comprador — códigos Melonn 6 (recogido) y 8 (entregado). Ventana: mes + 15 días.")
+        if df_ent_f.empty:
+            st.info("Sin pedidos COD entregados en la ventana actual (mes + últimos 15 días).")
         else:
-            val_res = df_res_f["Valor COD"].apply(_parse_cod).sum()
-            r1, r2, r3 = st.columns(3)
-            with r1:
-                st.markdown(_kpi(len(df_res_f), "RESUELTOS",
-                                 "Novedades solucionadas",
+            val_ent  = df_ent_f["Valor COD"].apply(_parse_cod).sum()
+            n_c6     = len(df_ent_f[df_ent_f["Estado_Code"] == 6])
+            n_c8     = len(df_ent_f[df_ent_f["Estado_Code"] == 8])
+            avg_dias = int(df_ent_f["Días"].mean()) if not df_ent_f.empty else 0
+
+            e1, e2, e3 = st.columns(3)
+            with e1:
+                st.markdown(_kpi(len(df_ent_f), "ENTREGADOS COD",
+                                 f"{n_c6} recogidos · {n_c8} entregados",
                                  border=RESUELTO_COLOR), unsafe_allow_html=True)
-            with r2:
-                st.markdown(_kpi(_fmt_m(val_res), "COD COBRADO",
-                                 "Confirmado entregado", border=COD_COLOR), unsafe_allow_html=True)
-            with r3:
-                avg_dias = int(df_res_f["Días"].mean()) if not df_res_f.empty else 0
-                st.markdown(_kpi(f"{avg_dias}d", "PROMEDIO TRÁNSITO",
-                                 "Días hasta resolución", border=STEEL_BLUE), unsafe_allow_html=True)
+            with e2:
+                st.markdown(_kpi(_fmt_m(val_ent), "COD COBRADO",
+                                 "Total recaudado en ventana", border=COD_COLOR), unsafe_allow_html=True)
+            with e3:
+                st.markdown(_kpi(f"{avg_dias}d", "DÍAS PROMEDIO",
+                                 "Desde despacho hasta entrega", border=STEEL_BLUE), unsafe_allow_html=True)
 
             st.markdown("<br>", unsafe_allow_html=True)
-            COLS_R = ["Orden","Cliente","Ciudad","F. Creación","F. Despacho",
-                      "Valor COD","Método Envío","Días","Link Melonn"]
-            COLS_R = [c for c in COLS_R if c in df_res_f.columns]
-            st.markdown("<div class='sec-title'>Pedidos resueltos — ventana actual</div>",
+            COLS_E = ["Estado","Orden","Cliente","Ciudad","F. Creación",
+                      "F. Despacho","Valor COD","Método Envío","Días","Link Melonn"]
+            COLS_E = [c for c in COLS_E if c in df_ent_f.columns]
+            st.markdown("<div class='sec-title'>Pedidos COD entregados — ventana actual</div>",
                         unsafe_allow_html=True)
-            render_tabla(df_res_f, COLS_R, key="tbl_res", height=380)
+            render_tabla(df_ent_f, COLS_E, key="tbl_ent", height=380)
 
             st.markdown("<br>", unsafe_allow_html=True)
-            st.download_button("⬇️ Descargar resueltos (.CSV)",
-                data=df_res_f.to_csv(index=False).encode("utf-8-sig"),
-                file_name=f"maledenim_resueltos_{date.today()}.csv", mime="text/csv")
+            st.download_button("⬇️ Descargar entregados (.CSV)",
+                data=df_ent_f.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"maledenim_entregados_cod_{date.today()}.csv", mime="text/csv")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

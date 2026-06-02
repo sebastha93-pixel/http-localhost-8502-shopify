@@ -630,17 +630,27 @@ def _procesar_df(pedidos: list) -> pd.DataFrame:
             es_contraentrega=es_cod,
         )
 
+        # ENTREGADO: pedido cobrado/entregado — no aplica riesgo
+        es_entregado = (sub == "entregado")
+
         # RESUELTO: novedad solucionada — no aplica riesgo ni VENCIDO
         es_resuelto = (sub == "resuelto")
 
         # VENCIDO: solo en_transito/novedad con >MAX_DIAS_ACTIVO sin confirmar
         es_vencido = (
             not es_resuelto
+            and not es_entregado
             and dias_real > MAX_DIAS_ACTIVO
             and sub in ("en_transito", "novedad")
         )
 
-        if es_resuelto:
+        if es_entregado:
+            nivel     = "NORMAL"
+            prioridad = 20
+            score     = 100
+            motivo    = "Pedido entregado · COD cobrado"
+            categoria = "OK"
+        elif es_resuelto:
             nivel     = "RESUELTO"
             prioridad = 10
             score     = 100
@@ -659,8 +669,11 @@ def _procesar_df(pedidos: list) -> pd.DataFrame:
             motivo    = r.motivos[0] if r.motivos else "—"
             categoria = r.incidencia_info.categoria
 
-        # Calcular promesa ANTES del append — puede mutar p["fecha_promesa"]
-        _prom_vencida = _promesa_vencida(p, r.zona_info.sla_critico) if not es_resuelto else "—"
+        # Calcular promesa ANTES del append — no aplica a entregados/resueltos
+        _prom_vencida = (
+            _promesa_vencida(p, r.zona_info.sla_critico)
+            if not es_resuelto and not es_entregado else "—"
+        )
 
         rows.append({
             "Prioridad":       prioridad,
