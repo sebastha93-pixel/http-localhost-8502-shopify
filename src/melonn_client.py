@@ -100,19 +100,21 @@ _SB_TABLA       = "melonn_cache"    # tabla en Supabase
 # Nota: código 8 y 6 YA NO están aquí — ahora se muestran como "entregado" para COD
 CODIGOS_EXCLUIR = {9, 15, 16, 17, 18, 19}
 
-# Proceso interno de Melonn — el seller no puede actuar, nunca se muestra
-CODIGOS_PROCESO_INTERNO = {3, 4, 5, 10, 12, 22, 24, 25, 27, 28}
+# Proceso interno puro — el seller no puede actuar, nunca se muestra
+# (5=Packed, 24=Prepared for dispatch, 28=Ready for packing se INCLUYEN ahora
+#  en el tab Tránsito para no perder visibilidad de órdenes activas)
+CODIGOS_PROCESO_INTERNO = {3, 4, 10, 12, 22, 25, 27}
 
 # ── Whitelist por código ───────────────────────────────────────────────────────
-#   Pendiente seller → 26   "Alistamiento en espera · Seller"
-#   En tránsito COD  → 7    "Shipped - in transit"
-#   Entregado COD    → 6, 8  "Picked-up by buyer" / "Delivered to buyer"
-#   Prepago novedad  → 1, 2  (se muestra en tab Pedidos Pagos)
-#   Novedades ext.   → filtradas por NOMBRE (código no confirmado en API docs)
+#   Pendiente seller → 26          "Alistamiento en espera · Seller"
+#   En tránsito      → 5,7,24,28  "En bodega lista" + "Con transportadora"
+#   Entregado        → 6, 8        "Picked-up by buyer" / "Delivered to buyer"
+#   Prepago novedad  → 1, 2        (se muestra en tab Pedidos Pagos)
+#   Novedades ext.   → por NOMBRE  (código no confirmado en API docs)
 CODIGOS_PENDIENTE_DESPACHO = {26}
-CODIGOS_EN_TRANSITO        = {7}
+CODIGOS_EN_TRANSITO        = {5, 7, 24, 28}   # 7=con transportadora, 5/24/28=en bodega lista
 CODIGOS_ENTREGADO          = {6, 8}
-CODIGOS_NOVEDAD            = set()   # novedades externas → filtro por nombre
+CODIGOS_NOVEDAD            = set()             # novedades externas → filtro por nombre
 CODIGOS_RESUELTO           = set()
 CODIGOS_ACTIVOS            = (
     CODIGOS_PENDIENTE_DESPACHO
@@ -157,11 +159,16 @@ ESTADOS_PENDIENTE_DESPACHO = {
     "Alistamiento en espera - Seller",            # 26 español
 }
 
-# En tránsito — solo código 7 (ya salió de bodega, con la transportadora)
+# En tránsito — códigos 5, 7, 24, 28
+#   7  = con la transportadora (en ruta)
+#   5  = Empacada · lista para salir
+#   24 = Preparada para despacho
+#   28 = Lista para empaque · en bodega
 ESTADOS_EN_TRANSITO = {
-    "Shipped - in transit",         # 7 inglés
-    "Despachada - en tránsito",     # 7 español
-    "En tránsito",                  # 7 variante
+    "Shipped - in transit", "Despachada - en tránsito", "En tránsito",  # 7
+    "Packed", "Empacada",                                                # 5
+    "Prepared for dispatch", "Preparada para despacho",                  # 24
+    "Ready For Packing", "Lista para empaque",                           # 28
 }
 
 # Novedades prepago — códigos 1 y 2 (se muestran en tab Pedidos Pagos)
@@ -172,11 +179,8 @@ ESTADOS_NOVEDAD_PREPAGO = {
     "Recibida - valida - lista para alistamiento",   # 2 español
 }
 
-# Proceso interno — nunca se muestra
+# Proceso interno puro — nunca se muestra (alistado, picking, packing interno)
 ESTADOS_PROCESO_INTERNO = {
-    "Packed", "Empacada",                                          # 5
-    "Prepared for dispatch", "Preparada para despacho",            # 24
-    "Ready For Packing", "Lista para empaque",                     # 28
     "Picking", "Picked", "Fixed & valid - to be processed",
     "Processing Requested", "Packing",
     "Selected for dispatch preparation", "Pre Packing - Vas Pending",

@@ -305,9 +305,8 @@ with k6:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── TABS PRINCIPALES ───────────────────────────────────────────────────────────
-_n_activas = len(df_pend) + len(df_tran) + len(df_nov_cod) + len(df_ent)
 tab_cod, tab_pre, tab_ana = st.tabs([
-    f"📦  Logística activa  ({_n_activas})",
+    f"📦  Contraentrega  ({len(df_cod)})",
     f"💳  Pedidos Pagos  ({len(df_nov_pre)})",
     "📊  Análisis",
 ])
@@ -529,7 +528,7 @@ with tab_cod:
     # ── En tránsito ───────────────────────────────────────────────────────────
     with st_tran:
         st.caption(
-            "COD despachado y en movimiento con la transportadora — código Melonn 7 · solo Contraentrega."
+            "Órdenes activas en proceso de despacho — códigos Melonn 5 (empacada) · 7 (con transportadora) · 24 (preparada) · 28 (lista para empaque)."
         )
         if df_tran_f.empty:
             st.success("✅ Sin pedidos COD en tránsito.")
