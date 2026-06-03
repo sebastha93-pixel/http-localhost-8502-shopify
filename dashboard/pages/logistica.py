@@ -1,15 +1,15 @@
 """
 Módulo Logística — MALE'DENIM
-Rebuild completo — arquitectura real Melonn + Shopify
 
-Tab 📦 Contraentrega
-  ⏳ Pendientes despacho   → COD en bodega esperando salida
-  🚚 En tránsito           → COD despachados, seguimiento hasta cobro
-  ⚠️ Novedades             → COD con problema activo
-  ✅ Resueltos             → COD con novedad solucionada (estado 6)
+Tab 📦 Contraentrega  (D2C COD únicamente, sin B2B)
+  ⏳ Pendientes despacho  → código 26 · seller debe autorizar
+  🚚 En tránsito          → códigos 5,7,24,28 · en bodega o con transportadora
+  ⚠️ Novedades            → novedades externas (transportadora)
+  📦 Entregados           → códigos 6,8 · COD cobrado
 
-Tab 💳 Pedidos Pagos
-  Novedades prepago        → pagados y con problema de entrega
+Tab 💳 Pedidos Pagos  (D2C prepago únicamente, sin B2B)
+  🚚 En tránsito          → prepago despachado activo
+  ⚠️ Novedades            → novedades externas + internas · cliente ya pagó
 
 Tab 📊 Análisis
 """
@@ -72,12 +72,6 @@ NOVEDAD_ES = {
     "All items reserved - fulfillment on hold - ext. conditionals":  "En espera · ext.",
     "All items reserved - fulfillment on hold - int. conditionals":  "En espera · int.",
     "on stand by - not able to fulfil - SM restriction":             "Restricción método envío",
-}
-
-# Estados que representan "alistado en espera - seller" (COD on hold, requiere autorización)
-ESTADOS_EN_ESPERA_SELLER = {
-    "Packed - on hold",
-    "All items reserved - fulfillment on hold",
 }
 
 
@@ -265,13 +259,12 @@ df_tran_pre_f = _filtrar(df_tran_pre)
 
 # Métricas globales
 val_cod_total   = df_cod["Valor COD"].apply(_parse_cod).sum()
-val_tran_riesgo = (
-    df_tran[df_tran["Nivel"].isin(["CRITICO","RIESGO"])]
-    ["Valor COD"].apply(_parse_cod).sum()
-)
 val_ent_total   = df_ent["Valor COD"].apply(_parse_cod).sum()
+val_nov_cod     = df_nov_cod["Valor COD"].apply(_parse_cod).sum()
 n_criticos      = len(df_tran[df_tran["Nivel"] == "CRITICO"])
 n_riesgo        = len(df_tran[df_tran["Nivel"] == "RIESGO"])
+_n_cod_activas  = len(df_pend) + len(df_tran) + len(df_nov_cod) + len(df_ent)
+_n_pre_total    = len(df_tran_pre) + len(df_nov_pre)
 
 # ── Encabezado ─────────────────────────────────────────────────────────────────
 st.markdown(f"""
@@ -283,25 +276,27 @@ st.markdown(f"""
 # KPIs globales
 k1, k2, k3, k4, k5, k6 = st.columns(6)
 with k1:
-    _n_auth_global = len(df_pend[df_pend["Estado_Code"] == 26])
-    _pend_sub = f"{_n_auth_global} auth · {len(df_pend)} total" if len(df_pend) > _n_auth_global else "Por despachar"
     st.markdown(_kpi(
-        _n_auth_global if len(df_pend) > _n_auth_global else len(df_pend),
-        "PEND. POR DESPACHO", _pend_sub, border=RIESGO_COLOR if _n_auth_global > 0 else STEEL_BLUE,
+        len(df_pend), "PEND. DESPACHO", "Autorización requerida",
+        border=RIESGO_COLOR if len(df_pend) > 0 else STEEL_BLUE,
     ), unsafe_allow_html=True)
 with k2:
     c = CRITICO_COLOR if n_criticos > 0 else (RIESGO_COLOR if n_riesgo > 0 else NORMAL_COLOR)
-    st.markdown(_kpi(len(df_tran), "EN TRÁNSITO", f"{n_criticos} crít · {n_riesgo} riesgo", border=c), unsafe_allow_html=True)
+    st.markdown(_kpi(len(df_tran), "EN TRÁNSITO COD",
+                     f"{n_criticos} crít · {n_riesgo} riesgo", border=c), unsafe_allow_html=True)
 with k3:
-    st.markdown(_kpi(len(df_nov_cod), "NOV. COD", _fmt_m(val_tran_riesgo) + " en riesgo",
-                     bg=CRITICO_COLOR if df_nov_cod.shape[0] > 0 else DEEP_INK,
+    st.markdown(_kpi(len(df_nov_cod), "NOV. COD",
+                     _fmt_m(val_nov_cod) + " en riesgo" if val_nov_cod > 0 else "Sin novedades",
+                     bg=CRITICO_COLOR if len(df_nov_cod) > 0 else DEEP_INK,
                      border=CRITICO_COLOR), unsafe_allow_html=True)
 with k4:
     st.markdown(_kpi(len(df_ent), "ENTREGADOS COD", _fmt_m(val_ent_total) + " cobrado",
                      border=RESUELTO_COLOR), unsafe_allow_html=True)
 with k5:
-    st.markdown(_kpi(len(df_nov_pre), "NOV. PREPAGO", "Pagados · entrega fallida",
-                     border=RIESGO_COLOR), unsafe_allow_html=True)
+    st.markdown(_kpi(_n_pre_total, "PEDIDOS PAGOS",
+                     f"{len(df_tran_pre)} tránsito · {len(df_nov_pre)} novedades",
+                     border=RIESGO_COLOR if len(df_nov_pre) > 0 else STEEL_BLUE),
+                unsafe_allow_html=True)
 with k6:
     st.markdown(_kpi(_fmt_m(val_cod_total), "PORTAFOLIO COD", "Total activo",
                      border=COD_COLOR), unsafe_allow_html=True)
@@ -309,9 +304,8 @@ with k6:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── TABS PRINCIPALES ───────────────────────────────────────────────────────────
-_n_pre_total = len(df_tran_pre) + len(df_nov_pre)
 tab_cod, tab_pre, tab_ana = st.tabs([
-    f"📦  Contraentrega  ({len(df_cod)})",
+    f"📦  Contraentrega  ({_n_cod_activas})",
     f"💳  Pedidos Pagos  ({_n_pre_total})",
     "📊  Análisis",
 ])
@@ -321,8 +315,6 @@ tab_cod, tab_pre, tab_ana = st.tabs([
 # TAB 1 — CONTRAENTREGA
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_cod:
-    # Contar cuántas requieren autorización seller para el badge del tab
-    _n_auth = len(df_pend_f[df_pend_f["Estado_Code"] == 26])
     st_pend, st_tran, st_nov, st_res = st.tabs([
         f"⏳  Pendientes por despacho  ({len(df_pend_f)})",
         f"🚚  En tránsito  ({len(df_tran_f)})",
