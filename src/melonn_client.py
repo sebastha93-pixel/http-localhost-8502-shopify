@@ -610,14 +610,12 @@ def _parsear_fecha(valor) -> Optional[date]:
 
 def _fecha_corte() -> date:
     """
-    Ventana de datos: mes actual completo + hasta 15 días del mes anterior.
-    Retorna la más temprana entre: primer día del mes actual y hoy - 15 días.
-    Ejemplo: hoy = 5 junio  → min(1 jun, 21 may) = 21 mayo
-             hoy = 25 junio → min(1 jun, 10 jun) = 1 junio
+    Ventana de datos: últimos 90 días.
+    Cubre pedidos activos creados hace hasta 3 meses (prepago en tránsito largo,
+    COD con novedad, etc.) sin procesar historial completo.
     """
     from datetime import timedelta
-    hoy = date.today()
-    return min(hoy.replace(day=1), hoy - timedelta(days=15))
+    return date.today() - timedelta(days=90)
 
 
 def _sub_estado_logistico(estado: str, codigo: int = 0) -> str:
@@ -714,13 +712,13 @@ def _normalizar(raw: dict) -> dict:
 
 def _fetch_api() -> list:
     """
-    Trae pedidos dentro de la ventana: mes actual + últimos 15 días.
-    Para cuando encuentra un pedido más antiguo que la fecha de corte.
+    Trae todos los pedidos D2C activos de los últimos 90 días.
+    Órdenes más antiguas con código activo también se incluyen (no se cortan).
 
     Inclusión:
-      COD     → pendiente_despacho | en_transito | novedad | resuelto (estado 6)
-      Prepago → solo novedad
-      Excluidos siempre: estados en ESTADOS_EXCLUIR (8,9,15,17,18,19)
+      COD     → pendiente_despacho | en_transito | novedad | entregado
+      Prepago → en_transito | novedad
+      Excluidos: B2B, estados terminales/cancelados, proceso interno Melonn
     """
     corte       = _fecha_corte()
     pedidos_raw = []
@@ -733,19 +731,20 @@ def _fetch_api() -> list:
         items = resp.get("data") or []
         meta  = resp.get("meta_data") or {}
 
-        alcanzado_corte = False
         for item in items:
             fc = _parsear_fecha(item.get("creation_date"))
+            # Omitir historial antiguo sin estado activo — no parar el loop
             if fc and fc < corte:
-                alcanzado_corte = True
-                break
+                estado_c = int((item.get("sell_order_state") or {}).get("code") or 0)
+                if estado_c not in CODIGOS_ACTIVOS:
+                    continue   # orden antigua + no activa → saltar
             pedidos_raw.append(item)
 
-        if alcanzado_corte or not items or len(pedidos_raw) >= (meta.get("total_count") or 0):
+        if not items or len(pedidos_raw) >= (meta.get("total_count") or 0):
             break
         page += 1
 
-    log.info(f"Melonn API: {len(pedidos_raw)} pedidos desde {corte} (ventana: mes + 15d)")
+    log.info(f"Melonn API: {len(pedidos_raw)} pedidos (ventana 90 días, activos sin límite)")
 
     resultado = []
     for item in pedidos_raw:
