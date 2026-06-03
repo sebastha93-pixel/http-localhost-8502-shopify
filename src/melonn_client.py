@@ -770,9 +770,14 @@ def _fetch_api() -> list:
         except Exception:
             continue
 
+        # Excluir pedidos B2B — este dashboard es solo para D2C
+        if p.get("es_b2b"):
+            log.debug(f"Excluido B2B: {p.get('orden_tienda')}")
+            continue
+
         sub = p["sub_estado_logistico"]
 
-        # Incluir TODAS las órdenes activas sin distinción de método de pago
+        # Incluir todas las órdenes activas D2C
         if sub in ("pendiente_despacho", "en_transito", "novedad", "entregado"):
             resultado.append(p)
 
@@ -842,6 +847,10 @@ def _enriquecer_y_filtrar(pedidos: list) -> list:
 
         sub = p["sub_estado_logistico"]
 
+        # Excluir pedidos B2B
+        if p.get("es_b2b"):
+            continue
+
         # Whitelist: código activo O nombre en novedades externas
         if (estado_cod_guardado
                 and estado_cod_guardado not in CODIGOS_ACTIVOS
@@ -852,7 +861,7 @@ def _enriquecer_y_filtrar(pedidos: list) -> list:
         if estado_guardado in ESTADOS_EXCLUIR or estado_guardado in ESTADOS_PROCESO_INTERNO:
             continue
 
-        # Incluir TODAS las órdenes activas sin distinción de método de pago
+        # Incluir todas las órdenes activas D2C
         if sub in ("pendiente_despacho", "en_transito", "novedad", "entregado"):
             resultado.append(p)
 
