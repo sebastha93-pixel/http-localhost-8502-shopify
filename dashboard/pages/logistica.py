@@ -244,7 +244,8 @@ df_pend    = df_cod[df_cod["Estado_Code"] == 26].copy()
 df_tran    = df_cod[df_cod["Estado_Code"].isin([5, 7, 24, 28])].copy()
 df_nov_cod = df_cod[df_cod["Sub_Estado"] == "novedad"].copy()
 df_ent     = df_cod[df_cod["Estado_Code"].isin([6, 8])].copy()
-df_nov_pre = df_pre[df_pre["Sub_Estado"] == "novedad"].copy()
+df_nov_pre  = df_pre[df_pre["Sub_Estado"] == "novedad"].copy()       # novedades (ext + prepago)
+df_tran_pre = df_pre[df_pre["Sub_Estado"] == "en_transito"].copy()  # tránsito prepago
 
 # Filtros del sidebar
 def _filtrar(df):
@@ -255,11 +256,12 @@ def _filtrar(df):
         d = d[d["Zona"].isin(filtro_zona)]
     return d
 
-df_pend_f    = _filtrar(df_pend)
-df_tran_f    = _filtrar(df_tran)
-df_nov_cod_f = _filtrar(df_nov_cod)
-df_ent_f     = _filtrar(df_ent)
-df_nov_pre_f = _filtrar(df_nov_pre)
+df_pend_f     = _filtrar(df_pend)
+df_tran_f     = _filtrar(df_tran)
+df_nov_cod_f  = _filtrar(df_nov_cod)
+df_ent_f      = _filtrar(df_ent)
+df_nov_pre_f  = _filtrar(df_nov_pre)
+df_tran_pre_f = _filtrar(df_tran_pre)
 
 # Métricas globales
 val_cod_total   = df_cod["Valor COD"].apply(_parse_cod).sum()
@@ -307,9 +309,10 @@ with k6:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── TABS PRINCIPALES ───────────────────────────────────────────────────────────
+_n_pre_total = len(df_tran_pre) + len(df_nov_pre)
 tab_cod, tab_pre, tab_ana = st.tabs([
     f"📦  Contraentrega  ({len(df_cod)})",
-    f"💳  Pedidos Pagos  ({len(df_nov_pre)})",
+    f"💳  Pedidos Pagos  ({_n_pre_total})",
     "📊  Análisis",
 ])
 
@@ -662,124 +665,109 @@ with tab_cod:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — PEDIDOS PAGOS (novedades prepago)
+# TAB 2 — PEDIDOS PAGOS (trazabilidad completa prepago D2C)
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_pre:
     st.caption(
-        "Pedidos de pago previo con novedad activa — el cliente ya pagó y la entrega falló. "
-        "Requieren gestión para re-entrega o devolución."
+        "Pedidos de pago previo D2C — trazabilidad completa: en tránsito y novedades activas."
     )
-    if df_nov_pre_f.empty:
-        st.success("✅ Sin novedades en pedidos de pago previo.")
-    else:
-        # ── KPIs ──────────────────────────────────────────────────────────────
-        pp1, pp2, pp3 = st.columns(3)
-        with pp1:
-            st.markdown(_kpi(len(df_nov_pre_f), "NOVEDADES PREPAGO",
-                             "Cliente pagó · entrega fallida",
-                             bg=CRITICO_COLOR if df_nov_pre_f.shape[0] > 2 else DEEP_INK,
-                             border=RIESGO_COLOR), unsafe_allow_html=True)
-        with pp2:
-            tipo_pre = (df_nov_pre_f["Estado"].value_counts().index[0]
-                        if not df_nov_pre_f.empty else "—")
-            st.markdown(_kpi(df_nov_pre_f["Estado"].nunique(), "TIPOS NOVEDAD",
-                             NOVEDAD_ES.get(tipo_pre, tipo_pre)[:28],
-                             border=RIESGO_COLOR), unsafe_allow_html=True)
-        with pp3:
-            avg_d = int(df_nov_pre_f["Días"].mean()) if not df_nov_pre_f.empty else 0
-            st.markdown(_kpi(f"{avg_d}d", "DÍAS PROMEDIO",
-                             "En novedad", border=STEEL_BLUE), unsafe_allow_html=True)
 
-        st.markdown("<br>", unsafe_allow_html=True)
+    # KPIs globales prepago
+    pp1, pp2, pp3, pp4 = st.columns(4)
+    with pp1:
+        st.markdown(_kpi(len(df_tran_pre_f), "EN TRÁNSITO",
+                         "Prepago con transportadora", border=STEEL_BLUE), unsafe_allow_html=True)
+    with pp2:
+        st.markdown(_kpi(len(df_nov_pre_f), "NOVEDADES",
+                         "Requieren gestión",
+                         bg=CRITICO_COLOR if len(df_nov_pre_f) > 0 else DEEP_INK,
+                         border=CRITICO_COLOR), unsafe_allow_html=True)
+    with pp3:
+        avg_d = int(df_tran_pre_f["Días"].mean()) if not df_tran_pre_f.empty else 0
+        st.markdown(_kpi(f"{avg_d}d", "DÍAS PROMEDIO",
+                         "Tránsito prepago", border=GRAPHITE_GREY), unsafe_allow_html=True)
+    with pp4:
+        st.markdown(_kpi(_n_pre_total, "TOTAL ACTIVOS",
+                         "Tránsito + novedades", border=NORMAL_COLOR), unsafe_allow_html=True)
 
-        # ── Desglose por tipo de novedad ───────────────────────────────────────
-        with st.expander("📊 Desglose por tipo de novedad", expanded=True):
-            _pre_tipos = (
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    pre_tran_tab, pre_nov_tab = st.tabs([
+        f"🚚  En tránsito  ({len(df_tran_pre_f)})",
+        f"⚠️  Novedades  ({len(df_nov_pre_f)})",
+    ])
+
+    # ── En tránsito prepago ───────────────────────────────────────────────────
+    with pre_tran_tab:
+        st.caption("Pedidos prepago despachados activos — trazabilidad de entrega.")
+        if df_tran_pre_f.empty:
+            st.success("✅ Sin pedidos prepago en tránsito.")
+        else:
+            COLS_PT = ["Nivel","Orden","Cliente","Teléfono","Ciudad","Zona","Estado",
+                       "Días","Días sobre SLA","F. Despacho","F. Promesa",
+                       "Promesa vencida","Método Envío","Link Melonn"]
+            COLS_PT = [c for c in COLS_PT if c in df_tran_pre_f.columns]
+            st.markdown("<div class='sec-title'>Pedidos prepago en tránsito</div>",
+                        unsafe_allow_html=True)
+            _sel_tpre = render_tabla(df_tran_pre_f, COLS_PT, key="tbl_tran_pre", height=400)
+            with st.expander("Detalle del pedido", expanded=_sel_tpre is not None):
+                if _sel_tpre is None:
+                    st.caption("Selecciona una fila para ver el detalle.")
+                else:
+                    render_detalle(df_tran_pre_f, tab_key="tran_pre")
+                    _render_memoria(str(df_tran_pre_f.iloc[_sel_tpre]["Orden"]))
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.download_button("⬇️ Descargar tránsito prepago (.CSV)",
+                data=df_tran_pre_f.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"maledenim_transito_prepago_{date.today()}.csv", mime="text/csv")
+
+    # ── Novedades prepago ─────────────────────────────────────────────────────
+    with pre_nov_tab:
+        st.caption(
+            "Novedades activas — incluye novedades externas (transportadora) "
+            "e internas (Melonn). El cliente ya pagó."
+        )
+        if df_nov_pre_f.empty:
+            st.success("✅ Sin novedades en pedidos de pago previo.")
+        else:
+            # Filtro por tipo
+            _opciones_tipo = ["Todos los tipos"] + list(
                 df_nov_pre_f["Estado"]
                 .map(lambda x: NOVEDAD_ES.get(x, x))
                 .value_counts()
-                .reset_index()
+                .index
             )
-            _pre_tipos.columns = ["Tipo", "Cantidad"]
-            _pre_tipos["% del total"] = (_pre_tipos["Cantidad"] / len(df_nov_pre_f) * 100).round(1)
+            _tipo_sel = st.selectbox(
+                "🔎 Filtrar por tipo", _opciones_tipo, key="filtro_tipo_pre",
+            )
+            df_pre_vista = (
+                df_nov_pre_f if _tipo_sel == "Todos los tipos"
+                else df_nov_pre_f[
+                    df_nov_pre_f["Estado"].map(lambda x: NOVEDAD_ES.get(x, x)) == _tipo_sel
+                ]
+            )
 
-            ch1, ch2 = st.columns([1.2, 1])
-            with ch1:
-                fig_pre_tipo = px.bar(
-                    _pre_tipos.sort_values("Cantidad"),
-                    y="Tipo", x="Cantidad", orientation="h",
-                    text="Cantidad",
-                    height=max(220, len(_pre_tipos) * 42),
-                    color_discrete_sequence=[RIESGO_COLOR],
-                )
-                fig_pre_tipo.update_traces(
-                    textposition="outside",
-                    textfont=dict(color=GRAPHITE_GREY, size=11),
-                )
-                fig_pre_tipo = _lay(fig_pre_tipo, max(220, len(_pre_tipos) * 42))
-                fig_pre_tipo.update_layout(showlegend=False, xaxis_title="Pedidos", yaxis_title="")
-                st.plotly_chart(fig_pre_tipo, use_container_width=True)
-            with ch2:
-                st.markdown("<div class='sec-title'>Resumen</div>", unsafe_allow_html=True)
-                for _, row in _pre_tipos.iterrows():
-                    pct = row["% del total"]
-                    color = CRITICO_COLOR if pct >= 40 else (RIESGO_COLOR if pct >= 20 else STEEL_BLUE)
-                    st.markdown(
-                        f"<div style='background:white;border-left:4px solid {color};"
-                        f"padding:7px 12px;margin-bottom:6px;border-radius:4px;font-size:0.82rem;'>"
-                        f"<b style='color:{DEEP_INK};'>{row['Tipo']}</b><br>"
-                        f"<span style='color:{GRAPHITE_GREY};'>"
-                        f"{int(row['Cantidad'])} pedido{'s' if row['Cantidad']>1 else ''} · {pct}%"
-                        f"</span></div>",
-                        unsafe_allow_html=True,
-                    )
+            COLS_PP = ["Nivel","Orden","Cliente","Teléfono","Ciudad","Zona",
+                       "Días","Estado","F. Despacho","F. Promesa",
+                       "Promesa vencida","Método Envío","Link Melonn"]
+            COLS_PP = [c for c in COLS_PP if c in df_pre_vista.columns]
+            st.markdown(
+                f"<div class='sec-title'>Novedades prepago — {_tipo_sel} ({len(df_pre_vista)})</div>",
+                unsafe_allow_html=True,
+            )
+            _sel_pre = render_tabla(df_pre_vista, COLS_PP, key="tbl_nov_pre", height=400)
 
-        # ── Filtro por tipo ────────────────────────────────────────────────────
-        _opciones_tipo = ["Todos los tipos"] + list(
-            df_nov_pre_f["Estado"]
-            .map(lambda x: NOVEDAD_ES.get(x, x))
-            .value_counts()
-            .index
-        )
-        _tipo_sel = st.selectbox(
-            "🔎 Filtrar por tipo de novedad",
-            _opciones_tipo,
-            key="filtro_tipo_pre",
-        )
+            with st.expander("Detalle del pedido", expanded=_sel_pre is not None):
+                if _sel_pre is None:
+                    st.caption("Selecciona una fila para ver el detalle.")
+                else:
+                    render_detalle(df_pre_vista, tab_key="nov_pre")
+                    _render_memoria(str(df_pre_vista.iloc[_sel_pre]["Orden"]))
 
-        if _tipo_sel == "Todos los tipos":
-            df_pre_vista = df_nov_pre_f
-        else:
-            _estado_orig = {v: k for k, v in NOVEDAD_ES.items()}.get(_tipo_sel, _tipo_sel)
-            df_pre_vista = df_nov_pre_f[
-                df_nov_pre_f["Estado"].map(lambda x: NOVEDAD_ES.get(x, x)) == _tipo_sel
-            ]
-
-        # ── Tabla de trabajo ───────────────────────────────────────────────────
-        st.markdown("<br>", unsafe_allow_html=True)
-        COLS_PP = ["Orden","Cliente","Teléfono","Ciudad","Zona",
-                   "Días","Estado","F. Despacho","F. Promesa",
-                   "Promesa vencida","Método Envío","Link Melonn"]
-        COLS_PP = [c for c in COLS_PP if c in df_pre_vista.columns]
-        _titulo_tabla = (
-            f"Lista de trabajo — {_tipo_sel}" if _tipo_sel != "Todos los tipos"
-            else "Lista de trabajo — todas las novedades prepago"
-        )
-        st.markdown(f"<div class='sec-title'>{_titulo_tabla} ({len(df_pre_vista)})</div>",
-                    unsafe_allow_html=True)
-        _sel_pre = render_tabla(df_pre_vista, COLS_PP, key="tbl_nov_pre", height=420)
-
-        with st.expander("Detalle del pedido", expanded=_sel_pre is not None):
-            if _sel_pre is None:
-                st.caption("Selecciona una fila para ver el detalle.")
-            else:
-                render_detalle(df_pre_vista, tab_key="nov_pre")
-                _render_memoria(str(df_pre_vista.iloc[_sel_pre]["Orden"]))
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.download_button("⬇️ Descargar novedades prepago (.CSV)",
-            data=df_pre_vista.to_csv(index=False).encode("utf-8-sig"),
-            file_name=f"maledenim_novedades_prepago_{date.today()}.csv", mime="text/csv")
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.download_button("⬇️ Descargar novedades prepago (.CSV)",
+                data=df_pre_vista.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"maledenim_novedades_prepago_{date.today()}.csv", mime="text/csv")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
