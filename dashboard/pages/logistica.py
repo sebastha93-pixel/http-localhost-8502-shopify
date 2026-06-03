@@ -237,12 +237,14 @@ if _fuente in ("csv_bootstrap", "stale"):
 df_cod = df_all[df_all["Tipo_Recaudo"] == "Contraentrega"].copy()   # para KPIs y métricas COD
 df_pre = df_all[df_all["Tipo_Recaudo"] == "Prepago"].copy()
 
-# ── Tabs operativas — todas las órdenes activas ────────────────────────────────
-df_pend    = df_all[df_all["Estado_Code"] == 26].copy()             # pendiente despacho
-df_tran    = df_all[df_all["Estado_Code"] == 7].copy()              # en tránsito
-df_nov_cod = df_all[df_all["Sub_Estado"] == "novedad"].copy()       # novedades externas
-df_ent     = df_all[df_all["Estado_Code"].isin([6, 8])].copy()      # entregados
-df_nov_pre = df_pre[df_pre["Sub_Estado"] == "novedad"].copy()       # novedades prepago (tab aparte)
+# ── Tabs operativas ────────────────────────────────────────────────────────────
+# Contraentregas → siempre desde df_cod (D2C COD únicamente)
+# Pedidos Pagos  → siempre desde df_pre (D2C prepago únicamente)
+df_pend    = df_cod[df_cod["Estado_Code"] == 26].copy()
+df_tran    = df_cod[df_cod["Estado_Code"].isin([5, 7, 24, 28])].copy()
+df_nov_cod = df_cod[df_cod["Sub_Estado"] == "novedad"].copy()
+df_ent     = df_cod[df_cod["Estado_Code"].isin([6, 8])].copy()
+df_nov_pre = df_pre[df_pre["Sub_Estado"] == "novedad"].copy()
 
 # Filtros del sidebar
 def _filtrar(df):
