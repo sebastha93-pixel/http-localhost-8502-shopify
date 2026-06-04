@@ -39,7 +39,7 @@ except ImportError:
 _BASE_URL  = "https://api.orbita.melonn.com"
 _TIMEOUT   = 20
 _PAGE_SIZE  = 50
-_MAX_PAGES  = 5        # hasta 250 pedidos por sync (5 × 50)
+_MAX_PAGES  = 40       # hasta 2000 pedidos — cubre historial activo completo
 _CACHE_TTL  = 1800     # 30 minutos — antes 4h, reducido para mayor frescura
 
 # Rate limiting — Melonn permite MÁXIMO 1 req/s (documentación oficial)
@@ -204,11 +204,18 @@ ESTADOS_ACTIVOS   = (
 
 def _config_hash() -> str:
     """
-    Hash de 8 chars de CODIGOS_ACTIVOS.
-    Cambia automáticamente cada vez que se modifica qué códigos deben cargarse.
-    La caché lo compara en cada lectura — si difiere, se descarta y se refetchea.
+    Hash combinado de CODIGOS_ACTIVOS + lógica de clasificación.
+    Cubre tanto qué códigos se traen como cómo se clasifican.
+    Si cambia CUALQUIER conjunto → caché invalidado automáticamente.
     """
-    return hashlib.md5(str(sorted(CODIGOS_ACTIVOS)).encode()).hexdigest()[:8]
+    key = (
+        str(sorted(CODIGOS_ACTIVOS))
+        + str(sorted(CODIGOS_PENDIENTE_DESPACHO))
+        + str(sorted(CODIGOS_EN_TRANSITO))
+        + str(sorted(CODIGOS_NOVEDAD))
+        + str(sorted(CODIGOS_ENTREGADO))
+    )
+    return hashlib.md5(key.encode()).hexdigest()[:8]
 
 
 # ── Credenciales ───────────────────────────────────────────────────────────────
@@ -752,11 +759,11 @@ def _fetch_api() -> list:
                     continue   # orden antigua + no activa → saltar
             pedidos_raw.append(item)
 
-        if not items or len(pedidos_raw) >= (meta.get("total_count") or 0):
-            break
+        if not items or len(items) < _PAGE_SIZE:
+            break   # última página — no hay más
         page += 1
 
-    log.info(f"Melonn API: {len(pedidos_raw)} pedidos (ventana 90 días, activos sin límite)")
+    log.info(f"Melonn API: {len(pedidos_raw)} pedidos en {page+1} página(s)")
 
     resultado = []
     for item in pedidos_raw:
@@ -832,23 +839,32 @@ def _lazy_enrich(pedidos: list) -> list:
 
 def _enriquecer_y_filtrar(pedidos: list) -> list:
     """
-    Aplica la lógica de inclusión a pedidos ya normalizados
-    (bootstrap.json, CSV, caché SQLite de versiones anteriores).
+    Re-aplica la lógica de clasificación vigente a pedidos ya normalizados.
 
-    — Añade 'sub_estado_logistico' si el registro no lo tiene todavía.
-    — Filtra: COD → todo; Prepago → solo novedades ACTIVAS.
+    Re-deriva SIEMPRE:
+      • es_contraentrega  → desde valor_cod_raw + payment_on_delivery_type
+      • sub_estado_logistico → desde estado_melonn_code + estado_melonn
 
-    ⚠️  Re-deriva sub_estado_logistico desde estado_melonn en cada carga
-        para que pedidos entregados (estado 8) que quedaron en caché como
-        "novedad" sean correctamente excluidos aunque el caché sea viejo.
+    Esto garantiza que cambios en la lógica de clasificación surtan efecto
+    en el caché existente sin necesitar un refresh manual.
     """
     resultado = []
     for p in pedidos:
         p = dict(p)  # no mutar el original
 
-        # Siempre re-deriva desde el estado guardado — esto cubre el caso donde
-        # el pedido cambió de novedad → entregado pero el caché no se refrescó.
-        estado_guardado = p.get("estado_melonn", "")
+        # ── Re-derivar es_contraentrega desde campos guardados ────────────────
+        # Cubre: fix de payment_on_delivery_type, cambios de lógica futuros
+        valor_cod = p.get("valor_cod_raw", "0") or "0"
+        pay_type  = p.get("payment_on_delivery_type") or {}
+        try:
+            _monto = float(str(valor_cod).replace(",", "."))
+        except Exception:
+            _monto = 0.0
+        _tipo = int(pay_type.get("code", 0)) if isinstance(pay_type, dict) else 0
+        p["es_contraentrega"] = _monto > 0 or _tipo > 0
+        p["tipo_recaudo"]     = "Contraentrega" if p["es_contraentrega"] else "Prepago"
+
+        estado_guardado     = p.get("estado_melonn", "")
         estado_cod_guardado = int(p.get("estado_melonn_code") or 0)
         p["sub_estado_logistico"] = _sub_estado_logistico(
             estado_guardado, estado_cod_guardado, p.get("es_contraentrega", False)
