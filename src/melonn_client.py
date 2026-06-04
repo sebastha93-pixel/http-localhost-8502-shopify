@@ -661,9 +661,13 @@ def _normalizar(raw: dict) -> dict:
     estado_code = int((raw.get("sell_order_state") or {}).get("code") or 0)
     metodo    = str((raw.get("shipping_method") or {}).get("name") or "")
     valor_cod = raw.get("payment_on_delivery_amount")
+    pay_type  = raw.get("payment_on_delivery_type") or {}
     es_b2b    = bool(raw.get("is_b2b"))
 
-    es_cod = bool(valor_cod and float(str(valor_cod).replace(",", ".") or 0) > 0)
+    # COD si tiene monto > 0  O  si payment_on_delivery_type tiene código activo
+    _monto = float(str(valor_cod).replace(",", ".") or 0) if valor_cod else 0.0
+    _tipo  = int(pay_type.get("code", 0)) if isinstance(pay_type, dict) else 0
+    es_cod = _monto > 0 or _tipo > 0
 
     return {
         # ── Identificadores ──────────────────────────────────────────────────
