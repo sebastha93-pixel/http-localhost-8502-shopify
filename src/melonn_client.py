@@ -114,13 +114,14 @@ CODIGOS_PROCESO_INTERNO = {3, 4, 10, 12, 22, 25, 27}
 CODIGOS_PENDIENTE_DESPACHO = {26}
 CODIGOS_EN_TRANSITO        = {5, 7, 24, 28}   # 7=con transportadora, 5/24/28=en bodega lista
 CODIGOS_ENTREGADO          = {6, 8}
-CODIGOS_NOVEDAD            = set()             # novedades externas → filtro por nombre
+CODIGOS_NOVEDAD            = {20, 29}          # 20=Delivery not posible, 29=ext. conditionals
 CODIGOS_RESUELTO           = set()
 CODIGOS_ACTIVOS            = (
     CODIGOS_PENDIENTE_DESPACHO
     | CODIGOS_EN_TRANSITO
     | CODIGOS_ENTREGADO
-    | {1, 2}   # prepago novedades (tab Pedidos Pagos)
+    | CODIGOS_NOVEDAD
+    | {1, 2}   # prepago (All items reserved - ready for fulfillment)
 )
 
 # ── Nombres de estado ─────────────────────────────────────────────────────────
@@ -139,11 +140,11 @@ ESTADOS_EXCLUIR = {
     "En tránsito - cancelación solicitada",
 }
 
-# Novedades externas — detectadas por NOMBRE (código numérico no documentado)
-# Estas son las dos novedades operativas para COD
+# Novedades externas — código 20 y 29 (confirmados en producción)
+# También se detectan por nombre como fallback para variantes futuras
 ESTADOS_NOVEDAD_EXTERNA = {
-    "Delivery not posible",                                       # transportadora no pudo entregar
-    "All items reserved - fulfillment on hold - ext. conditionals",# condición externa (dirección / zona)
+    "Delivery not posible",                                        # 20
+    "All items reserved - fulfillment on hold - ext. conditionals",# 29
 }
 
 # Entregados COD — códigos 6 y 8
@@ -620,19 +621,22 @@ def _fecha_corte() -> date:
 
 def _sub_estado_logistico(estado: str, codigo: int = 0) -> str:
     """
-    Clasifica el estado Melonn en las 5 categorías operativas del dashboard:
-      pendiente_despacho → código 26 — en bodega, seller debe autorizar
-      en_transito        → código 7  — con la transportadora
-      novedad            → novedades externas (por nombre) + prepago (1,2)
-      entregado          → códigos 6, 8 — COD cobrado / entregado
-      otro               → no clasificado
+    Clasifica el estado Melonn en las 5 categorías operativas del dashboard.
+    Códigos confirmados en producción (junio 2026):
+      pendiente_despacho → 26
+      en_transito        → 5, 7, 24, 28
+      novedad            → 20 (Delivery not posible), 29 (ext. conditionals)
+      entregado          → 6, 8
+      novedad prepago    → 1, 2  (solo tab Pedidos Pagos)
     """
-    if estado in ESTADOS_NOVEDAD_EXTERNA:         return "novedad"
+    # Novedades externas — por código (más fiable) + nombre como fallback
+    if codigo in CODIGOS_NOVEDAD or estado in ESTADOS_NOVEDAD_EXTERNA:
+                                                  return "novedad"
     if codigo in CODIGOS_ENTREGADO or estado in ESTADOS_ENTREGADO:
                                                   return "entregado"
-    if codigo == 7 or estado in ESTADOS_EN_TRANSITO:
+    if codigo in CODIGOS_EN_TRANSITO or estado in ESTADOS_EN_TRANSITO:
                                                   return "en_transito"
-    if codigo == 26 or estado in ESTADOS_PENDIENTE_DESPACHO:
+    if codigo in CODIGOS_PENDIENTE_DESPACHO or estado in ESTADOS_PENDIENTE_DESPACHO:
                                                   return "pendiente_despacho"
     if estado in ESTADOS_NOVEDAD_PREPAGO:         return "novedad"
     return "otro"

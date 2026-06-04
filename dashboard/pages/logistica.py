@@ -240,6 +240,7 @@ df_nov_cod = df_cod[df_cod["Sub_Estado"] == "novedad"].copy()
 df_ent     = df_cod[df_cod["Estado_Code"].isin([6, 8])].copy()
 df_nov_pre  = df_pre[df_pre["Sub_Estado"] == "novedad"].copy()       # novedades (ext + prepago)
 df_tran_pre = df_pre[df_pre["Sub_Estado"] == "en_transito"].copy()  # tránsito prepago
+df_ent_pre  = df_pre[df_pre["Sub_Estado"] == "entregado"].copy()    # entregados prepago (cód 8)
 
 # Filtros del sidebar
 def _filtrar(df):
@@ -256,6 +257,7 @@ df_nov_cod_f  = _filtrar(df_nov_cod)
 df_ent_f      = _filtrar(df_ent)
 df_nov_pre_f  = _filtrar(df_nov_pre)
 df_tran_pre_f = _filtrar(df_tran_pre)
+df_ent_pre_f  = _filtrar(df_ent_pre)
 
 # Métricas globales
 val_cod_total   = df_cod["Valor COD"].apply(_parse_cod).sum()
@@ -264,7 +266,7 @@ val_nov_cod     = df_nov_cod["Valor COD"].apply(_parse_cod).sum()
 n_criticos      = len(df_tran[df_tran["Nivel"] == "CRITICO"])
 n_riesgo        = len(df_tran[df_tran["Nivel"] == "RIESGO"])
 _n_cod_activas  = len(df_pend) + len(df_tran) + len(df_nov_cod) + len(df_ent)
-_n_pre_total    = len(df_tran_pre) + len(df_nov_pre)
+_n_pre_total    = len(df_tran_pre) + len(df_nov_pre) + len(df_ent_pre)
 
 # ── Encabezado ─────────────────────────────────────────────────────────────────
 st.markdown(f"""
@@ -675,18 +677,20 @@ with tab_pre:
                          bg=CRITICO_COLOR if len(df_nov_pre_f) > 0 else DEEP_INK,
                          border=CRITICO_COLOR), unsafe_allow_html=True)
     with pp3:
+        st.markdown(_kpi(len(df_ent_pre_f), "ENTREGADOS",
+                         "Cliente recibió el pedido",
+                         border=RESUELTO_COLOR), unsafe_allow_html=True)
+    with pp4:
         avg_d = int(df_tran_pre_f["Días"].mean()) if not df_tran_pre_f.empty else 0
         st.markdown(_kpi(f"{avg_d}d", "DÍAS PROMEDIO",
                          "Tránsito prepago", border=GRAPHITE_GREY), unsafe_allow_html=True)
-    with pp4:
-        st.markdown(_kpi(_n_pre_total, "TOTAL ACTIVOS",
-                         "Tránsito + novedades", border=NORMAL_COLOR), unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    pre_tran_tab, pre_nov_tab = st.tabs([
+    pre_tran_tab, pre_nov_tab, pre_ent_tab = st.tabs([
         f"🚚  En tránsito  ({len(df_tran_pre_f)})",
         f"⚠️  Novedades  ({len(df_nov_pre_f)})",
+        f"📦  Entregados  ({len(df_ent_pre_f)})",
     ])
 
     # ── En tránsito prepago ───────────────────────────────────────────────────
@@ -760,6 +764,29 @@ with tab_pre:
             st.download_button("⬇️ Descargar novedades prepago (.CSV)",
                 data=df_pre_vista.to_csv(index=False).encode("utf-8-sig"),
                 file_name=f"maledenim_novedades_prepago_{date.today()}.csv", mime="text/csv")
+
+    # ── Entregados prepago ────────────────────────────────────────────────────
+    with pre_ent_tab:
+        st.caption("Pedidos prepago entregados al comprador — código Melonn 8.")
+        if df_ent_pre_f.empty:
+            st.success("✅ Sin pedidos prepago entregados en la ventana actual.")
+        else:
+            COLS_EP = ["Orden","Cliente","Teléfono","Ciudad","Estado",
+                       "F. Creación","F. Despacho","Días","Método Envío","Link Melonn"]
+            COLS_EP = [c for c in COLS_EP if c in df_ent_pre_f.columns]
+            st.markdown("<div class='sec-title'>Pedidos prepago entregados</div>",
+                        unsafe_allow_html=True)
+            _sel_ep = render_tabla(df_ent_pre_f, COLS_EP, key="tbl_ent_pre", height=380)
+            with st.expander("Detalle del pedido", expanded=_sel_ep is not None):
+                if _sel_ep is None:
+                    st.caption("Selecciona una fila para ver el detalle.")
+                else:
+                    render_detalle(df_ent_pre_f, tab_key="ent_pre")
+                    _render_memoria(str(df_ent_pre_f.iloc[_sel_ep]["Orden"]))
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.download_button("⬇️ Descargar entregados prepago (.CSV)",
+                data=df_ent_pre_f.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"maledenim_entregados_prepago_{date.today()}.csv", mime="text/csv")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
