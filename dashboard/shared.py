@@ -11,9 +11,7 @@ import pandas as pd
 from datetime import date, datetime
 import streamlit.components.v1 as components
 
-_HERE = Path(__file__).parent
-sys.path.insert(0, str(_HERE))                    # dashboard/ → design_system, components
-sys.path.insert(0, str(_HERE.parent / "src"))     # src/ → melonn_client, riesgo, etc.
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from ingest import leer_csv_melonn
 from riesgo import calcular_riesgo
@@ -23,24 +21,94 @@ try:
 except Exception:
     _MELONN_API_DISPONIBLE = False
 
-# ── Design system ─────────────────────────────────────────────────────────────
-from design_system import (
-    CSS,
-    DEEP_INK, STEEL_BLUE, GRAPHITE_GREY, SOFT_CONCRETE,
-    COLOR_CRITICO as CRITICO_COLOR,
-    COLOR_RIESGO  as RIESGO_COLOR,
-    COLOR_NORMAL  as NORMAL_COLOR,
-    COLOR_PENDIENTE,
-    TEAL, NAVY, RUST, CRIMSON, BURGUNDY,
-    SURFACE_CARD, BORDER_DEFAULT, SURFACE_BG,
-)
-# Aliases de compatibilidad para módulos existentes
-CRITICO_COLOR   = "#990012"
-RIESGO_COLOR    = "#b95902"
-NORMAL_COLOR    = "#036a73"
-COD_COLOR       = "#59204d"
-VENCIDO_COLOR   = "#606060"
-RESUELTO_COLOR  = "#2d6a4f"   # verde oscuro — novedad solucionada
+# ── Paleta ────────────────────────────────────────────────────────────────────
+DEEP_INK      = "#213033"
+STEEL_BLUE    = "#87a6b8"
+GRAPHITE_GREY = "#606060"
+SOFT_CONCRETE = "#e1e1df"
+CRITICO_COLOR = "#990012"
+RIESGO_COLOR  = "#b95902"
+NORMAL_COLOR  = "#036a73"
+COD_COLOR     = "#59204d"
+VENCIDO_COLOR = "#606060"
+RESUELTO_COLOR= "#2d6a4f"
+
+# ── CSS (auto-contenido — no depende de design_system) ────────────────────────
+CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+html, body, [class*="css"] { font-family: 'Inter', sans-serif !important; }
+.stApp { background-color: #F7F5F2 !important; }
+.main .block-container { padding: 1.5rem 2rem 3rem !important; max-width: 100% !important; }
+
+#MainMenu, footer, [data-testid="stDeployButton"],
+[data-testid="stToolbar"], [data-testid="stDecoration"],
+[data-testid="stStatusWidget"] { visibility:hidden !important; display:none !important; }
+
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg,#0D1A1D 0%,#1A2B2F 60%,#213033 100%) !important;
+    border-right: 1px solid rgba(135,166,184,0.08) !important;
+}
+[data-testid="stSidebarNavLink"] {
+    font-size:0.68rem !important; font-weight:600 !important;
+    letter-spacing:1.8px !important; text-transform:uppercase !important;
+    color:rgba(225,225,223,0.72) !important; border-radius:7px !important;
+    padding:9px 12px !important; margin:1px 0 !important;
+}
+[data-testid="stSidebarNavLink"]:hover  { background:rgba(135,166,184,0.10) !important; color:#E1E1DF !important; }
+[data-testid="stSidebarNavLink"][aria-selected="true"] {
+    background:rgba(135,166,184,0.15) !important;
+    border-left:2px solid #87A6B8 !important;
+    color:#FFFFFF !important; padding-left:10px !important;
+}
+[data-testid="stSidebarNavSeparator"] {
+    font-size:0.52rem !important; letter-spacing:3px !important;
+    color:rgba(135,166,184,0.45) !important; padding:14px 14px 4px !important;
+    text-transform:uppercase !important;
+}
+
+[data-testid="stTabs"] [role="tablist"] {
+    background:transparent !important; border-bottom:1.5px solid #E6E4E0 !important;
+}
+[data-testid="stTabs"] button[role="tab"] {
+    font-size:0.72rem !important; font-weight:600 !important;
+    letter-spacing:1.2px !important; text-transform:uppercase !important;
+    color:#606060 !important; background:transparent !important;
+    border:none !important; border-bottom:2px solid transparent !important;
+    padding:10px 18px !important; border-radius:0 !important;
+}
+[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+    color:#213033 !important; border-bottom:2px solid #213033 !important;
+}
+[data-testid="stTabs"] [role="tabpanel"] { padding:20px 0 0 !important; }
+
+.stButton > button {
+    font-size:0.72rem !important; font-weight:600 !important;
+    letter-spacing:1px !important; text-transform:uppercase !important;
+    border-radius:8px !important; padding:9px 18px !important;
+}
+
+[data-testid="stDataFrame"] {
+    border:1px solid #E6E4E0 !important; border-radius:12px !important; overflow:hidden !important;
+}
+[data-testid="stDataFrame"] th {
+    background:#F7F5F2 !important; color:#606060 !important;
+    font-size:0.65rem !important; font-weight:600 !important;
+    letter-spacing:1.5px !important; text-transform:uppercase !important;
+    border-bottom:1px solid #E6E4E0 !important; padding:10px 14px !important;
+}
+[data-testid="stDataFrame"] td {
+    font-size:0.82rem !important; color:#213033 !important;
+    padding:10px 14px !important; border-bottom:1px solid #F2F0ED !important;
+}
+[data-testid="stDataFrame"] tr:hover td { background:#F7F5F2 !important; }
+
+::-webkit-scrollbar { width:5px; height:5px; }
+::-webkit-scrollbar-thumb { background:#D4D2CE; border-radius:3px; }
+::-webkit-scrollbar-thumb:hover { background:#87A6B8; }
+</style>
+"""
 
 MAX_DIAS_ACTIVO = 20  # días máx. en tránsito; pasado esto → VENCIDO (posiblemente entregado sin actualizar)
 
