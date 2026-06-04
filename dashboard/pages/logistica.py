@@ -236,9 +236,23 @@ df_pend    = df_cod[df_cod["Estado_Code"] == 26].copy()
 df_tran    = df_cod[df_cod["Estado_Code"].isin([5, 7, 24, 28])].copy()
 df_nov_cod = df_cod[df_cod["Sub_Estado"] == "novedad"].copy()
 df_ent     = df_cod[df_cod["Estado_Code"].isin([6, 8])].copy()
-df_nov_pre  = df_pre[df_pre["Sub_Estado"] == "novedad"].copy()       # novedades (ext + prepago)
-df_tran_pre = df_pre[df_pre["Sub_Estado"] == "en_transito"].copy()  # tránsito prepago
-df_ent_pre  = df_pre[df_pre["Sub_Estado"] == "entregado"].copy()    # entregados prepago (cód 8)
+df_nov_pre  = df_pre[df_pre["Sub_Estado"] == "novedad"].copy()
+df_tran_pre = df_pre[df_pre["Sub_Estado"] == "en_transito"].copy()
+df_ent_pre  = df_pre[df_pre["Sub_Estado"] == "entregado"].copy()
+
+# Entregados: solo semana en curso (lunes → domingo)
+_lunes   = date.today() - pd.Timedelta(days=date.today().weekday())
+_domingo = _lunes + pd.Timedelta(days=6)
+
+def _es_esta_semana(fecha_str):
+    try:
+        f = pd.to_datetime(str(fecha_str)).date()
+        return _lunes <= f <= _domingo
+    except Exception:
+        return False
+
+df_ent     = df_ent[df_ent["F. Creación"].apply(_es_esta_semana)].copy()
+df_ent_pre = df_ent_pre[df_ent_pre["F. Creación"].apply(_es_esta_semana)].copy()
 
 # Filtros del sidebar
 def _filtrar(df):

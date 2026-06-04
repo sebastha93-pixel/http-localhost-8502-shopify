@@ -111,18 +111,21 @@ CODIGOS_PROCESO_INTERNO = {3, 4, 10, 12, 22, 25, 27}
 #   Entregado        → 6, 8        "Picked-up by buyer" / "Delivered to buyer"
 #   Prepago novedad  → 1, 2        (se muestra en tab Pedidos Pagos)
 #   Novedades ext.   → por NOMBRE  (código no confirmado en API docs)
-CODIGOS_PENDIENTE_DESPACHO = {26, 29}          # 26=seller hold, 29=ext. conditionals hold
-CODIGOS_EN_TRANSITO        = {5, 7, 24, 28}   # 7=con transportadora, 5/24/28=en bodega lista
+CODIGOS_PENDIENTE_DESPACHO = {26, 29}
+CODIGOS_EN_TRANSITO        = {5, 7, 24, 28}
 CODIGOS_ENTREGADO          = {6, 8}
-CODIGOS_NOVEDAD            = {20}              # 20=Delivery not posible
+CODIGOS_NOVEDAD            = {20}
 CODIGOS_RESUELTO           = set()
 CODIGOS_ACTIVOS            = (
     CODIGOS_PENDIENTE_DESPACHO
     | CODIGOS_EN_TRANSITO
     | CODIGOS_ENTREGADO
     | CODIGOS_NOVEDAD
-    | {1, 2}   # prepago (All items reserved - ready for fulfillment)
+    | {1, 2}
 )
+# Códigos OPERATIVOS — excluye entregados (6,8) del criterio de paginación.
+# Las páginas con solo entregados no cuentan como "activas" y detienen el loop.
+CODIGOS_ACTIVOS_OPERATIVO  = CODIGOS_ACTIVOS - CODIGOS_ENTREGADO
 
 # ── Nombres de estado ─────────────────────────────────────────────────────────
 # Excluidos por nombre (cancelados / devolución)
@@ -756,20 +759,23 @@ def _fetch_api() -> list:
             fc       = _parsear_fecha(item.get("creation_date"))
             estado_c = int((item.get("sell_order_state") or {}).get("code") or 0)
             estado_n = str((item.get("sell_order_state") or {}).get("name") or "")
-            es_activo = (estado_c in CODIGOS_ACTIVOS
-                         or estado_n in ESTADOS_NOVEDAD_EXTERNA)
+            es_activo          = (estado_c in CODIGOS_ACTIVOS
+                                  or estado_n in ESTADOS_NOVEDAD_EXTERNA)
+            # Entregados (6,8) se recogen pero NO cuentan para decidir si
+            # hay más páginas relevantes — evita paginar historial de entregas
+            es_activo_operativo = (estado_c in CODIGOS_ACTIVOS_OPERATIVO
+                                   or estado_n in ESTADOS_NOVEDAD_EXTERNA)
 
-            # Omitir historial antiguo sin código activo
             if fc and fc < corte and not es_activo:
                 continue
 
             pedidos_raw.append(item)
-            if es_activo:
+            if es_activo_operativo:
                 activos_en_pagina += 1
 
-        # Página completa sin activos → ya no hay más órdenes relevantes
+        # Página completa sin activos operativos → solo hay entregados/terminales
         if len(items) == _PAGE_SIZE and activos_en_pagina == 0:
-            log.info(f"Paginación detenida en página {page}: sin activos")
+            log.info(f"Paginación detenida en página {page}: sin activos operativos")
             break
 
         if len(items) < _PAGE_SIZE:
@@ -994,21 +1000,10 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
             }
         return [], omitidos, {"fuente": "sin_datos", "stale": False}
 
-    # — Carga normal: SQLite → bootstrap (sin tocar la API) —
-
-    # 1. SQLite fresco
-    # Si el TTL de novedades venció (>1h), intentar refresh silencioso de la API
-    # para que los pedidos entregados desaparezcan sin que el usuario pulse ↻.
-    _novedad_vencido = _cache_novedad_vencido()
-    if _novedad_vencido:
-        log.info("Caché de novedades vencido (>1h) — intentando refresh silencioso")
-        pedidos_api = _fetch_api()
-        if pedidos_api:
-            _cache_guardar(pedidos_api)
-            return pedidos_api, omitidos, {
-                "fuente": "api_live", "stale": False, "fetched_at": datetime.now()
-            }
-        # Si la API falla, continuar con caché aunque esté vencido
+    # — Carga normal: solo caché, nunca llama a la API —
+    # La API solo se llama con forzar_refresh=True (botón ↻).
+    # Eliminado el refresh silencioso — era la causa de la lentitud:
+    # disparaba _fetch_api() en cada carga cuando el caché no existía o era viejo.
 
     hit = _cache_leer(ignorar_ttl=False)
     if hit:
