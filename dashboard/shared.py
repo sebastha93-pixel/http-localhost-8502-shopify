@@ -11,7 +11,10 @@ import pandas as pd
 from datetime import date, datetime
 import streamlit.components.v1 as components
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+_HERE = Path(__file__).parent
+sys.path.insert(0, str(_HERE))                    # dashboard/ → design_system, components
+sys.path.insert(0, str(_HERE.parent / "src"))     # src/ → melonn_client, riesgo, etc.
+
 from ingest import leer_csv_melonn
 from riesgo import calcular_riesgo
 try:
@@ -31,15 +34,12 @@ from design_system import (
     TEAL, NAVY, RUST, CRIMSON, BURGUNDY,
     SURFACE_CARD, BORDER_DEFAULT, SURFACE_BG,
 )
-DEEP_INK      = DEEP_INK
-STEEL_BLUE    = STEEL_BLUE
-GRAPHITE_GREY = GRAPHITE_GREY
-SOFT_CONCRETE = SOFT_CONCRETE
+# Aliases de compatibilidad para módulos existentes
 CRITICO_COLOR   = "#990012"
 RIESGO_COLOR    = "#b95902"
 NORMAL_COLOR    = "#036a73"
 COD_COLOR       = "#59204d"
-VENCIDO_COLOR   = "#606060"   # gris — pedidos >MAX_DIAS_ACTIVO sin confirmar entrega
+VENCIDO_COLOR   = "#606060"
 RESUELTO_COLOR  = "#2d6a4f"   # verde oscuro — novedad solucionada
 
 MAX_DIAS_ACTIVO = 20  # días máx. en tránsito; pasado esto → VENCIDO (posiblemente entregado sin actualizar)

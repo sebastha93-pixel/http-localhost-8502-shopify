@@ -307,7 +307,7 @@ else:
         if "mercadopago"  in _permisos: _fin.append(st.Page("pages/mercadopago.py",    title="MERCADOPAGO"))
         if "conciliacion" in _permisos: _fin.append(st.Page("pages/3_conciliacion.py", title="CONCILIACIÓN"))
 
-        _pages = {"": _ctrl}
+        _pages = {"INICIO": _ctrl}
         if _ops: _pages["OPERACIONES"] = _ops
         if _fin: _pages["FINANZAS"]    = _fin
         if _role == "admin":

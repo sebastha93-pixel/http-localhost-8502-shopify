@@ -2,6 +2,10 @@
 MALE'DENIM OS — Component Library
 Componentes reutilizables en HTML/CSS para toda la app.
 """
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))  # dashboard/
+
 import streamlit as st
 from design_system import (
     DEEP_INK, STEEL_BLUE, GRAPHITE_GREY, SOFT_CONCRETE, SURFACE_BG,
