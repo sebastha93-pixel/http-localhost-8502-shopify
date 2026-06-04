@@ -619,17 +619,16 @@ def _fecha_corte() -> date:
     return date.today() - timedelta(days=90)
 
 
-def _sub_estado_logistico(estado: str, codigo: int = 0) -> str:
+def _sub_estado_logistico(estado: str, codigo: int = 0, es_cod: bool = False) -> str:
     """
-    Clasifica el estado Melonn en las 5 categorías operativas del dashboard.
+    Clasifica el estado Melonn en las categorías operativas del dashboard.
     Códigos confirmados en producción (junio 2026):
       pendiente_despacho → 26
       en_transito        → 5, 7, 24, 28
-      novedad            → 20 (Delivery not posible), 29 (ext. conditionals)
+      novedad COD        → 20 únicamente (Delivery not posible)
+      novedad prepago    → 1, 2 + 20, 29
       entregado          → 6, 8
-      novedad prepago    → 1, 2  (solo tab Pedidos Pagos)
     """
-    # Novedades externas — por código (más fiable) + nombre como fallback
     if codigo in CODIGOS_NOVEDAD or estado in ESTADOS_NOVEDAD_EXTERNA:
                                                   return "novedad"
     if codigo in CODIGOS_ENTREGADO or estado in ESTADOS_ENTREGADO:
@@ -638,7 +637,9 @@ def _sub_estado_logistico(estado: str, codigo: int = 0) -> str:
                                                   return "en_transito"
     if codigo in CODIGOS_PENDIENTE_DESPACHO or estado in ESTADOS_PENDIENTE_DESPACHO:
                                                   return "pendiente_despacho"
-    if estado in ESTADOS_NOVEDAD_PREPAGO:         return "novedad"
+    # Códigos 1 y 2 solo se muestran como novedad en prepago — no en COD
+    if not es_cod and estado in ESTADOS_NOVEDAD_PREPAGO:
+                                                  return "novedad"
     return "otro"
 
 
@@ -672,7 +673,7 @@ def _normalizar(raw: dict) -> dict:
         # ── Estado ───────────────────────────────────────────────────────────
         "estado_melonn":          estado,
         "estado_melonn_code":     estado_code,
-        "sub_estado_logistico":   _sub_estado_logistico(estado, estado_code),
+        "sub_estado_logistico":   _sub_estado_logistico(estado, estado_code, es_cod),
         # ── Canal / bodega ────────────────────────────────────────────────────
         "canal_venta":            "B2B" if es_b2b else "D2C",
         "es_b2b":                 es_b2b,
@@ -842,7 +843,9 @@ def _enriquecer_y_filtrar(pedidos: list) -> list:
         # el pedido cambió de novedad → entregado pero el caché no se refrescó.
         estado_guardado = p.get("estado_melonn", "")
         estado_cod_guardado = int(p.get("estado_melonn_code") or 0)
-        p["sub_estado_logistico"] = _sub_estado_logistico(estado_guardado, estado_cod_guardado)
+        p["sub_estado_logistico"] = _sub_estado_logistico(
+            estado_guardado, estado_cod_guardado, p.get("es_contraentrega", False)
+        )
 
         # Normalizar campo tipo_recaudo / es_contraentrega para formatos viejos
         if "es_contraentrega" not in p:
