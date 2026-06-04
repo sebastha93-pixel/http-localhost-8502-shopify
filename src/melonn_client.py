@@ -731,13 +731,13 @@ def _normalizar(raw: dict) -> dict:
 
 def _fetch_api() -> list:
     """
-    Trae todos los pedidos D2C activos de los últimos 90 días.
-    Órdenes más antiguas con código activo también se incluyen (no se cortan).
+    Trae todos los pedidos D2C activos paginando inteligentemente.
 
-    Inclusión:
-      COD     → pendiente_despacho | en_transito | novedad | entregado
-      Prepago → en_transito | novedad
-      Excluidos: B2B, estados terminales/cancelados, proceso interno Melonn
+    Estrategia de parada:
+      - Si una página completa (50 ítems) no contiene ninguna orden activa
+        → detenemos: lo que sigue son solo históricos terminales.
+      - Si la página viene incompleta (<50) → es la última página.
+      - Límite de seguridad: _MAX_PAGES páginas.
     """
     corte       = _fecha_corte()
     pedidos_raw = []
@@ -748,22 +748,35 @@ def _fetch_api() -> list:
         if resp is None:
             break
         items = resp.get("data") or []
-        meta  = resp.get("meta_data") or {}
+        if not items:
+            break
 
+        activos_en_pagina = 0
         for item in items:
-            fc = _parsear_fecha(item.get("creation_date"))
-            # Omitir historial antiguo sin estado activo — no parar el loop
-            if fc and fc < corte:
-                estado_c = int((item.get("sell_order_state") or {}).get("code") or 0)
-                if estado_c not in CODIGOS_ACTIVOS:
-                    continue   # orden antigua + no activa → saltar
-            pedidos_raw.append(item)
+            fc       = _parsear_fecha(item.get("creation_date"))
+            estado_c = int((item.get("sell_order_state") or {}).get("code") or 0)
+            estado_n = str((item.get("sell_order_state") or {}).get("name") or "")
+            es_activo = (estado_c in CODIGOS_ACTIVOS
+                         or estado_n in ESTADOS_NOVEDAD_EXTERNA)
 
-        if not items or len(items) < _PAGE_SIZE:
-            break   # última página — no hay más
+            # Omitir historial antiguo sin código activo
+            if fc and fc < corte and not es_activo:
+                continue
+
+            pedidos_raw.append(item)
+            if es_activo:
+                activos_en_pagina += 1
+
+        # Página completa sin activos → ya no hay más órdenes relevantes
+        if len(items) == _PAGE_SIZE and activos_en_pagina == 0:
+            log.info(f"Paginación detenida en página {page}: sin activos")
+            break
+
+        if len(items) < _PAGE_SIZE:
+            break   # última página
         page += 1
 
-    log.info(f"Melonn API: {len(pedidos_raw)} pedidos en {page+1} página(s)")
+    log.info(f"Melonn API: {len(pedidos_raw)} pedidos ({page+1} página(s))")
 
     resultado = []
     for item in pedidos_raw:

@@ -214,9 +214,7 @@ _fa_txt       = _fa.strftime("%d/%m/%Y %H:%M") if _fa else ""
 _datos_frescos = _fuente in ("api_live",)   # solo API real = datos confiables para Pendientes
 
 # Pendientes requiere datos muy recientes — máx 10 minutos
-# Si los datos son más viejos, hacemos auto-refresh silencioso
-_MAX_PEND_SEG = 600   # 10 minutos
-_edad_seg     = (datetime.now() - _fa).total_seconds() if _fa else 99999
+_edad_seg = (datetime.now() - _fa).total_seconds() if _fa else 99999
 
 if _fuente in ("csv_bootstrap", "stale"):
     st.warning(
@@ -331,28 +329,14 @@ with tab_cod:
             "estado Melonn: **Alistamiento en espera · Seller**."
         )
 
-        # ── Guard: Pendientes SIEMPRE requiere datos de la API con < 10 min ────
-        # Si los datos son de caché viejo o tienen más de 10 min, auto-refrescamos.
-        # Usamos un timestamp en session_state para no entrar en bucle infinito.
-        _pend_necesita_refresh = (not _datos_frescos) or (_edad_seg > _MAX_PEND_SEG)
-        if _pend_necesita_refresh:
-            _ultimo_intento = st.session_state.get("_pend_refresh_ts")
-            _hace_poco      = _ultimo_intento and (datetime.now() - _ultimo_intento).total_seconds() < 30
-            if not _hace_poco:
-                # Auto-refresh silencioso
-                st.session_state["_pend_refresh_ts"] = datetime.now()
-                st.session_state["_melonn_refresh"]  = True
-                st.rerun()
-            else:
-                # Ya intentamos hace <30s y los datos siguen viejos → API no respondió
-                st.info(
-                    "🔄 No se pudo obtener datos en tiempo real desde Melonn. "
-                    "Presiona **↻ Actualizar datos** para reintentar.",
-                    icon="📡",
-                )
-                st.stop()
+        # Indicador de frescura — no fuerza refresh automático para evitar lentitud
+        if not _datos_frescos or _edad_seg > 1800:
+            st.info(
+                f"📡 Datos de hace {int(_edad_seg/60)} min. "
+                "Presiona **↻ Actualizar datos** para sincronizar con Melonn.",
+                icon="🕐",
+            )
 
-        # df_pend_f ya contiene SOLO "Alistamiento en espera · Seller"
         df_auth_f = df_pend_f
 
         if df_pend_f.empty:
