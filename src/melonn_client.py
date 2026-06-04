@@ -111,10 +111,10 @@ CODIGOS_PROCESO_INTERNO = {3, 4, 10, 12, 22, 25, 27}
 #   Entregado        → 6, 8        "Picked-up by buyer" / "Delivered to buyer"
 #   Prepago novedad  → 1, 2        (se muestra en tab Pedidos Pagos)
 #   Novedades ext.   → por NOMBRE  (código no confirmado en API docs)
-CODIGOS_PENDIENTE_DESPACHO = {26}
+CODIGOS_PENDIENTE_DESPACHO = {26, 29}          # 26=seller hold, 29=ext. conditionals hold
 CODIGOS_EN_TRANSITO        = {5, 7, 24, 28}   # 7=con transportadora, 5/24/28=en bodega lista
 CODIGOS_ENTREGADO          = {6, 8}
-CODIGOS_NOVEDAD            = {20, 29}          # 20=Delivery not posible, 29=ext. conditionals
+CODIGOS_NOVEDAD            = {20}              # 20=Delivery not posible
 CODIGOS_RESUELTO           = set()
 CODIGOS_ACTIVOS            = (
     CODIGOS_PENDIENTE_DESPACHO
@@ -143,8 +143,7 @@ ESTADOS_EXCLUIR = {
 # Novedades externas — código 20 y 29 (confirmados en producción)
 # También se detectan por nombre como fallback para variantes futuras
 ESTADOS_NOVEDAD_EXTERNA = {
-    "Delivery not posible",                                        # 20
-    "All items reserved - fulfillment on hold - ext. conditionals",# 29
+    "Delivery not posible",   # 20 — transportadora no pudo entregar
 }
 
 # Entregados COD — códigos 6 y 8
@@ -154,10 +153,14 @@ ESTADOS_ENTREGADO = {
     "Entregada - pendiente de cobro",                             # 8 variante
 }
 
-# Pendiente seller — código 26
+# Pendiente despacho — códigos 26 y 29
+# Ambos muestran "Alistamiento en espera" en la UI de Melonn
+# 26 = hold del seller (requiere autorización)
+# 29 = hold por condiciones externas (requiere gestión)
 ESTADOS_PENDIENTE_DESPACHO = {
-    "All items reserved - fulfillment on hold",   # 26 inglés
-    "Alistamiento en espera - Seller",            # 26 español
+    "All items reserved - fulfillment on hold",                    # 26
+    "Alistamiento en espera - Seller",                             # 26 español
+    "All items reserved - fulfillment on hold - ext. conditionals",# 29
 }
 
 # En tránsito — códigos 5, 7, 24, 28
