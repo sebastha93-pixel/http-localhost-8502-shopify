@@ -716,29 +716,55 @@ def cargar_datos(ruta: str, ts: str):
     df = _procesar_df(pedidos)
     return df, omitidos
 
+_SS_DATOS = "_api_datos"   # (df, omitidos, meta) en session_state
+_SS_TS    = "_api_datos_ts" # datetime del último fetch
+_SS_TTL   = 300             # 5 min en memoria — evita llamadas a Supabase en cada re-render
+
 def cargar_datos_api(forzar_refresh: bool = False):
     """
-    Carga pedidos desde Melonn.
-    Retorna (df, omitidos, meta) donde meta incluye fuente y si es stale.
-    Lee st.session_state["_melonn_refresh"] para detectar refresh manual (botón ↻).
+    Carga pedidos desde Melonn con caché en session_state.
+
+    Flujo:
+      1. Si hay datos en session_state con < 5 min → retorna instantáneo (sin Supabase)
+      2. Si forzar_refresh o caché vencido → fetch desde Supabase/API → guarda en session_state
+
+    Esto elimina la llamada a Supabase en cada re-render de Streamlit
+    (cada click, selección de tabla, cambio de tab).
     """
     if not _MELONN_API_DISPONIBLE:
         return pd.DataFrame(), {}, {"fuente": "no_api"}
-    # El botón ↻ del sidebar pone este flag en session_state
+
     _refresh = forzar_refresh or st.session_state.pop("_melonn_refresh", False)
+
+    # ── Caché en memoria (session_state) ─────────────────────────────────────
+    if not _refresh:
+        _cached = st.session_state.get(_SS_DATOS)
+        _ts     = st.session_state.get(_SS_TS)
+        if _cached is not None and _ts is not None:
+            if (datetime.now() - _ts).total_seconds() < _SS_TTL:
+                return _cached   # ← instantáneo, cero red
+
+    # ── Fetch desde Supabase o API ────────────────────────────────────────────
     resultado = melonn_client.obtener_pedidos_activos(forzar_refresh=_refresh)
     if len(resultado) == 3:
         pedidos, omitidos, meta = resultado
     else:
         pedidos, omitidos = resultado
         meta = {}
-    # Si el cliente bloqueó el refresh por cooldown, avisa en el sidebar
+
     if meta.get("refresh_bloqueado"):
         st.session_state["_refresh_bloqueado"] = True
+
     if not pedidos:
-        return pd.DataFrame(), omitidos, meta
-    df = _procesar_df(pedidos)
-    return df, omitidos, meta
+        result = (pd.DataFrame(), omitidos, meta)
+    else:
+        df = _procesar_df(pedidos)
+        result = (df, omitidos, meta)
+
+    # Guardar en session_state para las próximas interacciones
+    st.session_state[_SS_DATOS] = result
+    st.session_state[_SS_TS]    = datetime.now()
+    return result
 
 def api_melonn_activa() -> bool:
     """True si el API key está configurado y el módulo disponible."""
