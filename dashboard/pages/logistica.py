@@ -216,10 +216,14 @@ _datos_frescos = _fuente in ("api_live",)   # solo API real = datos confiables p
 # Pendientes requiere datos muy recientes — máx 10 minutos
 _edad_seg = (datetime.now() - _fa).total_seconds() if _fa else 99999
 
-if _fuente in ("csv_bootstrap", "stale"):
+if _meta.get("bg_refresh"):
+    st.info(
+        "🔄 Actualizando datos en segundo plano — la próxima carga mostrará datos frescos.",
+        icon="⏳",
+    )
+elif _fuente in ("csv_bootstrap", "stale"):
     st.warning(
-        f"⚠️ Mostrando datos del {_fa_txt} (caché desactualizado). "
-        "Presiona **↻ Actualizar datos** para sincronizar con Melonn.",
+        f"⚠️ Mostrando datos del {_fa_txt} · actualizando en segundo plano.",
         icon="⚠️",
     )
 

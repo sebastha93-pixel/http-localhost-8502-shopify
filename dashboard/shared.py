@@ -718,7 +718,7 @@ def cargar_datos(ruta: str, ts: str):
 
 _SS_DATOS = "_api_datos"   # (df, omitidos, meta) en session_state
 _SS_TS    = "_api_datos_ts" # datetime del último fetch
-_SS_TTL   = 300             # 5 min en memoria — evita llamadas a Supabase en cada re-render
+_SS_TTL   = 1800            # 30 min en memoria — coincide con TTL de Supabase
 
 def cargar_datos_api(forzar_refresh: bool = False):
     """

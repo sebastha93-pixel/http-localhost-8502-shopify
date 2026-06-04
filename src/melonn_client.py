@@ -28,6 +28,39 @@ import requests
 
 log = logging.getLogger(__name__)
 
+# ── Background refresh ─────────────────────────────────────────────────────────
+_bg_lock    = threading.Lock()
+_bg_running = False
+
+def _refresh_background():
+    """
+    Lanza un fetch completo en un hilo daemon.
+    Si ya hay uno en curso, no lanza otro.
+    Actualiza Supabase cuando termina → próxima sesión carga datos frescos.
+    """
+    global _bg_running
+    with _bg_lock:
+        if _bg_running:
+            return
+        _bg_running = True
+
+    def _run():
+        global _bg_running
+        try:
+            pedidos = _fetch_api()
+            if pedidos:
+                _cache_guardar(pedidos)
+                log.info(f"[bg] Refresh completado: {len(pedidos)} pedidos en Supabase")
+        except Exception as e:
+            log.warning(f"[bg] Refresh error: {e}")
+        finally:
+            with _bg_lock:
+                _bg_running = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    log.info("[bg] Refresh iniciado en segundo plano")
+
+
 # Enriquecimiento con datos de cliente desde Shopify
 try:
     import shopify_enricher as _enricher
@@ -1000,11 +1033,8 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
             }
         return [], omitidos, {"fuente": "sin_datos", "stale": False}
 
-    # — Carga normal: solo caché, nunca llama a la API —
-    # La API solo se llama con forzar_refresh=True (botón ↻).
-    # Eliminado el refresh silencioso — era la causa de la lentitud:
-    # disparaba _fetch_api() en cada carga cuando el caché no existía o era viejo.
-
+    # ── Carga normal: stale-while-revalidate ─────────────────────────────────
+    # 1. Mostrar datos frescos del caché → instantáneo
     hit = _cache_leer(ignorar_ttl=False)
     if hit:
         pedidos, fetched_at, _, fuente_hit = hit
@@ -1012,23 +1042,21 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
         pedidos = _lazy_enrich(pedidos)
         return pedidos, omitidos, {"fuente": fuente_hit, "stale": False, "fetched_at": fetched_at}
 
-    # 2. SQLite stale
+    # 2. Caché existe pero expiró → mostrar igual + refrescar en background
     stale = _cache_leer(ignorar_ttl=True)
     if stale:
         pedidos, fetched_at, _, fuente_stale = stale
         pedidos = _enriquecer_y_filtrar(pedidos)
         pedidos = _lazy_enrich(pedidos)
-        return pedidos, omitidos, {"fuente": fuente_stale, "stale": True, "fetched_at": fetched_at}
-
-    # 3. JSON bootstrap → guarda en SQLite para próximas cargas
-    pedidos_boot = _enriquecer_y_filtrar(_bootstrap_json())
-    if pedidos_boot:
-        _cache_guardar(pedidos_boot, fuente="csv_bootstrap")
-        return pedidos_boot, omitidos, {
-            "fuente": "csv_bootstrap", "stale": True, "fetched_at": datetime.now()
+        _refresh_background()   # actualiza Supabase sin bloquear la UI
+        return pedidos, omitidos, {
+            "fuente": fuente_stale, "stale": True,
+            "fetched_at": fetched_at, "bg_refresh": True,
         }
 
-    return [], omitidos, {"fuente": "sin_datos", "stale": False}
+    # 3. Sin caché → lanzar background y devolver vacío (primera vez)
+    _refresh_background()
+    return [], omitidos, {"fuente": "sin_datos", "stale": False, "bg_refresh": True}
 
 
 def cargar_desde_csv(pedidos: list) -> dict:
