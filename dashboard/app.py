@@ -226,84 +226,94 @@ if not _AUTH_CONFIGURADA:
     pg.run()
 
 else:
-    # Leer preferencia "recordarme" guardada en session_state
     _remember = st.session_state.get("remember_me", False)
-    _auth = _build_auth(remember_me=_remember)
+    _auth     = _build_auth(remember_me=_remember)
 
-    # ── Página de login ────────────────────────────────────────────────────────
-    if not st.session_state.get("authentication_status"):
-        # Ocultar sidebar durante el login
+    # ── Construir navegación SIEMPRE — evita auto-descubrimiento de pages/ ────
+    # st.navigation() debe llamarse en cada run, autenticado o no.
+    # Cuando no está autenticado usamos una página "login" inline.
+
+    def _pagina_login():
+        """Página de login — renderizada por st.navigation cuando no hay sesión."""
         st.markdown("""
         <style>
-        [data-testid="stSidebar"] { display: none !important; }
-        .main .block-container { max-width: 460px !important; padding-top: 6rem !important; }
-        </style>
-        """, unsafe_allow_html=True)
+        [data-testid="stSidebar"]  { display: none !important; }
+        .main .block-container     { max-width: 460px !important; padding-top: 6rem !important; }
+        </style>""", unsafe_allow_html=True)
 
-        # Branding
         st.markdown("""
         <div style="text-align:center;margin-bottom:32px;">
             <div class="login-brand">MALE'DENIM</div>
             <div class="login-tagline">That Fits</div>
             <div class="login-divider" style="margin:18px auto;"></div>
-        </div>
-        """, unsafe_allow_html=True)
+        </div>""", unsafe_allow_html=True)
 
-    # Render login widget (siempre — gestiona cookies automáticamente)
-    _auth.login()
+        _auth.login()
 
-    # ── Checkbox "Recordarme" debajo del form de login ─────────────────────────
-    if not st.session_state.get("authentication_status"):
-        _rem_nuevo = st.checkbox(
-            "Recordarme en este dispositivo",
-            value=_remember,
-            key="chk_remember",
+        _rem = st.session_state.get("remember_me", False)
+        _nuevo = st.checkbox(
+            "Recordarme en este dispositivo", value=_rem, key="chk_remember",
             help="Mantiene la sesión activa aunque cierres el navegador (30 días)",
         )
-        if _rem_nuevo != _remember:
-            st.session_state["remember_me"] = _rem_nuevo
+        if _nuevo != _rem:
+            st.session_state["remember_me"] = _nuevo
             st.rerun()
 
+        if st.session_state.get("authentication_status") is False:
+            st.error("Usuario o contraseña incorrectos.", icon="🔒")
+
+        if st.session_state.get("authentication_status") is True:
+            st.rerun()  # recargar para entrar a la navegación autenticada
+
+    # ── Definir páginas según estado de autenticación ─────────────────────────
     _status = st.session_state.get("authentication_status")
 
     if _status is True:
-        # ── Verificar inactividad antes de mostrar el app ──────────────────────
         _check_inactivity(_auth)
-        # ── Autenticado: mostrar app ───────────────────────────────────────────
         _username = st.session_state.get("username", "")
         _role     = _get_role(_username)
         _permisos = _get_permisos(_username, _role)
 
-        # Guardar en session_state para que cada página pueda verificar
         st.session_state["permisos"] = _permisos
         st.session_state["user_role"] = _role
 
-        # Logout + info usuario al fondo del sidebar
+        # Logo + logout en sidebar
+        with st.sidebar:
+            st.markdown(f"""
+            <div style="padding:20px 16px 14px;border-bottom:1px solid rgba(135,166,184,0.1);">
+              <p style="font-size:1rem;font-weight:800;letter-spacing:4px;
+                        color:#fff;margin:0;line-height:1;">MALE'DENIM</p>
+              <p style="font-size:0.5rem;font-weight:600;letter-spacing:5px;
+                        color:rgba(135,166,184,0.65);margin:3px 0 0 0;">THAT FITS</p>
+            </div>
+            """, unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+
         with st.sidebar:
             _role_label = "Admin" if _role == "admin" else "Usuario"
             st.markdown(
-                f"<div style='position:fixed;bottom:16px;left:0;width:240px;"
-                f"padding:10px 16px;border-top:1px solid rgba(135,166,184,0.15);'>"
-                f"<div style='font-size:0.6rem;color:#87a6b8;letter-spacing:1px;"
-                f"text-transform:uppercase;margin-bottom:3px;'>{_role_label}</div>"
+                f"<div style='position:fixed;bottom:16px;left:0;width:236px;"
+                f"padding:10px 16px;border-top:1px solid rgba(135,166,184,0.1);'>"
+                f"<div style='font-size:0.55rem;color:#87a6b8;letter-spacing:1.5px;"
+                f"text-transform:uppercase;margin-bottom:2px;'>{_role_label}</div>"
                 f"<div style='font-size:0.78rem;color:#e0dedd;font-weight:600;'>"
                 f"{st.session_state.get('name', _username)}</div>"
+                f"<div style='font-size:0.52rem;color:rgba(135,166,184,0.4);"
+                f"letter-spacing:1px;margin-top:5px;'>MALE'DENIM OS v1.0</div>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
-            if st.button("⎋  Cerrar sesión", use_container_width=True,
-                         key="btn_logout"):
+            if st.button("⎋  Cerrar sesión", use_container_width=True, key="btn_logout"):
                 _auth.logout()
+                st.session_state.pop("_api_datos",    None)
+                st.session_state.pop("_api_datos_ts", None)
                 st.rerun()
 
-        # ── Construir navegación según permisos ────────────────────────────────
-        _home = [st.Page("pages/home.py", title="CENTRO DE CONTROL")]
-
-        _ops = []
-        if "logistica"  in _permisos: _ops.append(st.Page("pages/logistica.py",  title="LOGÍSTICA"))
-        if "comercial"  in _permisos: _ops.append(st.Page("pages/4_shopify.py",  title="COMERCIAL"))
-
-        _fin = []
+        _home = [st.Page("pages/home.py",        title="CENTRO DE CONTROL")]
+        _ops  = []
+        if "logistica"   in _permisos: _ops.append(st.Page("pages/logistica.py",       title="LOGÍSTICA"))
+        if "comercial"   in _permisos: _ops.append(st.Page("pages/4_shopify.py",       title="COMERCIAL"))
+        _fin  = []
         if "mercadopago"  in _permisos: _fin.append(st.Page("pages/mercadopago.py",    title="MERCADOPAGO"))
         if "conciliacion" in _permisos: _fin.append(st.Page("pages/3_conciliacion.py", title="CONCILIACIÓN"))
 
@@ -313,14 +323,9 @@ else:
         if _role == "admin":
             _pages["CONFIGURACIÓN"] = [st.Page("pages/usuarios.py", title="USUARIOS")]
 
-        if not _pages:
-            st.warning("No tienes módulos asignados. Contacta al administrador.")
-            st.stop()
+    else:
+        # No autenticado — página de login como único destino
+        _pages = {"": [st.Page(_pagina_login, title="Inicio")]}
 
-        pg = st.navigation(_pages)
-        pg.run()
-
-    elif _status is False:
-        st.error("Usuario o contraseña incorrectos. Intenta de nuevo.", icon="🔒")
-
-    # Si _status is None → login form ya visible, nada más que hacer
+    pg = st.navigation(_pages)
+    pg.run()
