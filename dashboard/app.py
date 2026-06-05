@@ -10,10 +10,13 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE))
 sys.path.insert(0, str(_HERE.parent / "src"))
 
-import base64, io
+import base64, io, time
 from datetime import datetime, timedelta
 import streamlit as st
 from PIL import Image
+
+# Timer global — mide tiempo desde el inicio del script hasta el final del render
+_T0 = time.perf_counter()
 
 _FAVICON = _HERE / "assets" / "favicon.png"
 _icon = Image.open(_FAVICON) if _FAVICON.exists() else "📦"
@@ -357,10 +360,11 @@ else:
                     st.session_state.pop(k, None)
                 st.rerun()
 
-            st.markdown("""
+            _elapsed_ms = int((time.perf_counter() - _T0) * 1000)
+            st.markdown(f"""
             <p style="font-size:0.5rem;color:rgba(135,166,184,0.35);
                       letter-spacing:1px;margin:12px 0 0 0;text-align:center;">
-              MALE'DENIM OS · v1.0
+              MALE'DENIM OS · v1.0 · {_elapsed_ms}ms
             </p>
             """, unsafe_allow_html=True)
 

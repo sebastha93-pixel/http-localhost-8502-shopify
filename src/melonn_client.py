@@ -1035,11 +1035,12 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
 
     # ── Carga normal: stale-while-revalidate ─────────────────────────────────
     # 1. Mostrar datos frescos del caché → instantáneo
+    # Skip _lazy_enrich del path normal: solo corre en refresh forzado.
+    # En cache normal los datos ya están enriquecidos desde el último fetch.
     hit = _cache_leer(ignorar_ttl=False)
     if hit:
         pedidos, fetched_at, _, fuente_hit = hit
         pedidos = _enriquecer_y_filtrar(pedidos)
-        pedidos = _lazy_enrich(pedidos)
         return pedidos, omitidos, {"fuente": fuente_hit, "stale": False, "fetched_at": fetched_at}
 
     # 2. Caché existe pero expiró → mostrar igual + refrescar en background
@@ -1047,8 +1048,7 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
     if stale:
         pedidos, fetched_at, _, fuente_stale = stale
         pedidos = _enriquecer_y_filtrar(pedidos)
-        pedidos = _lazy_enrich(pedidos)
-        _refresh_background()   # actualiza Supabase sin bloquear la UI
+        _refresh_background()
         return pedidos, omitidos, {
             "fuente": fuente_stale, "stale": True,
             "fetched_at": fetched_at, "bg_refresh": True,
