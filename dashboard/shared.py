@@ -80,471 +80,306 @@ ESTADOS_ES = {
 
 DEFAULT_CSV = str(Path(__file__).parent.parent / "data" / "logistica" / "raw" / "melonn_2026-05-12.csv")
 
-# ── CSS global ────────────────────────────────────────────────────────────────
+# ── CSS global ─────────────────────────────────────────────────────────────────
+# Paleta — usada en el CSS con f-string
+_C_INK   = "#213033"
+_C_STEEL = "#87a6b8"
+_C_GREY  = "#606060"
+_C_CRIT  = "#990012"
+_C_RISK  = "#b95902"
+_C_OK    = "#036a73"
+_C_PEND  = "#7b6e42"
+
 CSS = f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 
-/* ── Base ──────────────────────────────────────────────────────────────────── */
-html, body, [class*="css"], .stMarkdown, .stText,
-[data-testid="stMarkdownContainer"] * {{
+/* ── Reset ──────────────────────────────────────────────────────────────────── */
+html, body, [class*="css"] {{
   font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif !important;
 }}
-.stApp {{ background-color: #f0ede8 !important; }}
+.stApp {{ background-color: #F7F5F2 !important; }}
 .main .block-container {{
   padding: 2rem 2.5rem 3rem !important;
-  max-width: 1500px !important;
+  max-width: 100% !important;
 }}
-
-/* ── Sidebar ───────────────────────────────────────────────────────────────── */
-[data-testid="stSidebar"] {{
-  background-color: {DEEP_INK} !important;
-  border-right: 1px solid rgba(135,166,184,0.12) !important;
-}}
-[data-testid="stSidebar"] * {{ color: #e0dedd !important; }}
-[data-testid="stSidebar"] hr {{ border-color: rgba(135,166,184,0.18) !important; margin: 12px 0 !important; }}
-[data-testid="stSidebar"] label {{ font-size:0.7rem !important; letter-spacing:1px !important; text-transform:uppercase !important; font-weight:600 !important; color: #c8cdd0 !important; }}
-[data-testid="stSidebarNavItems"] {{ padding-top:0 !important; }}
-[data-testid="stSidebarNavLink"] {{
-  border-radius: 5px !important;
-  font-size: 0.68rem !important;
-  font-weight: 700 !important;
-  letter-spacing: 2.5px !important;
-  text-transform: uppercase !important;
-  padding: 10px 14px !important;
-  margin: 2px 4px !important;
-  color: rgba(224,222,221,0.88) !important;
-  transition: all 0.15s ease !important;
-}}
-[data-testid="stSidebarNavLink"]:hover {{
-  background: rgba(135,166,184,0.12) !important;
-  color: white !important;
-}}
-[data-testid="stSidebarNavLink"][aria-selected="true"] {{
-  background: rgba(135,166,184,0.18) !important;
-  border-left: 3px solid {STEEL_BLUE} !important;
-  color: white !important;
-}}
-
-/* ── Tabs ──────────────────────────────────────────────────────────────────── */
-[data-testid="stTabs"] [data-baseweb="tab-list"] {{
-  background: transparent !important;
-  border-bottom: 1px solid rgba(33,48,51,0.12) !important;
-  gap: 0 !important;
-  padding: 0 !important;
-}}
-[data-baseweb="tab"] {{
-  font-family: 'Inter', sans-serif !important;
-  font-size: 0.67rem !important;
-  font-weight: 700 !important;
-  letter-spacing: 2px !important;
-  text-transform: uppercase !important;
-  color: #909090 !important;
-  padding: 10px 20px 12px !important;
-  background: transparent !important;
-  border: none !important;
-  border-bottom: 2px solid transparent !important;
-  margin-bottom: -1px !important;
-  transition: color 0.15s ease !important;
-}}
-[data-baseweb="tab"][aria-selected="true"] {{
-  color: {DEEP_INK} !important;
-  border-bottom: 2px solid {DEEP_INK} !important;
-  background: transparent !important;
-}}
-[data-baseweb="tab"]:hover {{ color: {DEEP_INK} !important; }}
-[data-testid="stTabPanel"] {{ padding-top: 20px !important; background: transparent !important; }}
-[data-baseweb="tab-highlight"] {{ display: none !important; }}
-[data-baseweb="tab-border"] {{ display: none !important; }}
-
-/* ── KPI Cards ─────────────────────────────────────────────────────────────── */
-.kpi-card {{
-  border-radius: 10px;
-  padding: 14px 16px;
-  margin-bottom: 4px;
-  height: 128px;
-  box-sizing: border-box;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.14), 0 1px 3px rgba(0,0,0,0.08);
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
-}}
-.kpi-card:hover {{
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(0,0,0,0.18), 0 2px 6px rgba(0,0,0,0.1);
-}}
-.kpi-crit  {{ background: linear-gradient(135deg, #990012 0%, #7a0010 100%); border-left: 3px solid #ff2244; }}
-.kpi-ries  {{ background: linear-gradient(135deg, #b95902 0%, #9a4a00 100%); border-left: 3px solid #f5a623; }}
-.kpi-norm  {{ background: linear-gradient(135deg, #036a73 0%, #025560 100%); border-left: 3px solid {STEEL_BLUE}; }}
-.kpi-extra {{ background: linear-gradient(135deg, #59204d 0%, #451840 100%); border-left: 3px solid {STEEL_BLUE}; }}
-.kpi-num   {{
-  font-family: 'Inter', 'Arial Black', sans-serif;
-  font-size: 1.7rem;
-  font-weight: 800;
-  color: white;
-  margin: 0;
-  line-height: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  letter-spacing: -0.5px;
-}}
-.kpi-label {{
-  font-family: 'Inter', sans-serif;
-  font-size: 0.56rem;
-  color: rgba(255,255,255,0.92);
-  margin: 5px 0 0;
-  letter-spacing: 1.5px;
-  text-transform: uppercase;
-  font-weight: 700;
-  white-space: normal;
-  line-height: 1.3;
-  overflow-wrap: break-word;
-}}
-.kpi-sub {{
-  font-size: 0.6rem;
-  color: rgba(255,255,255,0.82);
-  margin: 2px 0 0;
-  white-space: normal;
-  line-height: 1.3;
-  font-weight: 400;
-  overflow-wrap: break-word;
-}}
-
-/* ── Section titles ────────────────────────────────────────────────────────── */
-.sec-title {{
-  font-family: 'Inter', sans-serif;
-  font-size: 0.6rem;
-  font-weight: 700;
-  letter-spacing: 3px;
-  text-transform: uppercase;
-  color: #3a5f6a;
-  margin: 20px 0 10px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid rgba(58,95,106,0.18);
-}}
-
-/* ── Panel header ──────────────────────────────────────────────────────────── */
-.titulo-panel {{
-  font-family: 'Inter', 'Arial Black', sans-serif;
-  font-size: 1.55rem;
-  font-weight: 800;
-  color: {DEEP_INK};
-  letter-spacing: -0.8px;
-  margin: 0;
-  line-height: 1.1;
-}}
-.subtitulo {{
-  font-size: 0.62rem;
-  color: #505050;
-  letter-spacing: 3px;
-  text-transform: uppercase;
-  margin-top: 4px;
-  font-weight: 500;
-}}
-
-/* ── Sidebar brand ─────────────────────────────────────────────────────────── */
-.logo-sidebar {{
-  font-family: 'Inter', 'Arial Black', sans-serif;
-  font-size: 1.15rem;
-  font-weight: 800;
-  color: white !important;
-  line-height: 1;
-  letter-spacing: 1px;
-}}
-.logo-tagline {{
-  font-size: 0.55rem;
-  letter-spacing: 5px;
-  color: #a8c8d8 !important;
-  margin-top: 3px;
-  font-weight: 600;
-}}
-
-/* ── Expanders como cards ──────────────────────────────────────────────────── */
-[data-testid="stExpander"] {{
-  background: white !important;
-  border: 1px solid rgba(33,48,51,0.07) !important;
-  border-radius: 10px !important;
-  box-shadow: 0 1px 6px rgba(0,0,0,0.05) !important;
-  overflow: hidden !important;
-  margin-bottom: 12px !important;
-}}
-[data-testid="stExpander"] details summary {{
-  font-family: 'Inter', sans-serif !important;
-  font-size: 0.68rem !important;
-  font-weight: 700 !important;
-  letter-spacing: 1.5px !important;
-  text-transform: uppercase !important;
-  color: {DEEP_INK} !important;
-  padding: 14px 18px !important;
-  user-select: none;
-}}
-[data-testid="stExpander"] details summary:hover {{
-  background: rgba(33,48,51,0.02) !important;
-}}
-[data-testid="stExpander"] [data-testid="stExpanderDetails"] {{
-  padding: 4px 18px 18px !important;
-}}
-
-/* ── DataFrames ────────────────────────────────────────────────────────────── */
-[data-testid="stDataFrame"] > div {{
-  border-radius: 8px !important;
-  overflow: hidden !important;
-  box-shadow: 0 1px 6px rgba(0,0,0,0.06) !important;
-  border: 1px solid rgba(33,48,51,0.07) !important;
-}}
-
-/* ── Botones ───────────────────────────────────────────────────────────────── */
-.stButton > button {{
-  font-family: 'Inter', sans-serif !important;
-  font-size: 0.65rem !important;
-  font-weight: 700 !important;
-  letter-spacing: 2px !important;
-  text-transform: uppercase !important;
-  border-radius: 5px !important;
-  border: 1.5px solid {DEEP_INK} !important;
-  background: transparent !important;
-  color: {DEEP_INK} !important;
-  padding: 8px 18px !important;
-  transition: all 0.15s ease !important;
-}}
-.stButton > button:hover {{
-  background: {DEEP_INK} !important;
-  color: #f0ede8 !important;
-  border-color: {DEEP_INK} !important;
-}}
-.stButton > button[kind="primary"] {{
-  background: {DEEP_INK} !important;
-  color: #f0ede8 !important;
-}}
-.stButton > button[kind="primary"]:hover {{
-  background: {STEEL_BLUE} !important;
-  border-color: {STEEL_BLUE} !important;
-  color: {DEEP_INK} !important;
-}}
-.stButton > button:disabled {{
-  opacity: 0.35 !important;
-  cursor: not-allowed !important;
-}}
-
-/* ── Download button ───────────────────────────────────────────────────────── */
-.stDownloadButton button {{
-  background: {DEEP_INK} !important;
-  color: #f0ede8 !important;
-  border: none !important;
-  border-radius: 5px !important;
-  letter-spacing: 2px;
-  font-size: 0.65rem;
-  font-weight: 700 !important;
-  text-transform: uppercase;
-  transition: all 0.15s ease !important;
-}}
-.stDownloadButton button:hover {{
-  background: {STEEL_BLUE} !important;
-  color: {DEEP_INK} !important;
-}}
-
-/* ── Labels de widgets ─────────────────────────────────────────────────────── */
-[data-testid="stWidgetLabel"] p,
-[data-testid="stWidgetLabel"] span,
-[data-testid="stWidgetLabel"] label {{
-  color: {DEEP_INK} !important;
-  font-family: 'Inter', sans-serif !important;
-  font-size: 0.72rem !important;
-  font-weight: 600 !important;
-}}
-
-/* ── Inputs y textareas ────────────────────────────────────────────────────── */
-[data-testid="stTextInput"] input,
-[data-testid="stTextArea"] textarea,
-[data-baseweb="input"] input,
-[data-baseweb="textarea"] textarea {{
-  border-radius: 5px !important;
-  border: 1.5px solid rgba(33,48,51,0.18) !important;
-  font-family: 'Inter', sans-serif !important;
-  font-size: 0.82rem !important;
-  background: white !important;
-  color: {DEEP_INK} !important;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
-}}
-[data-testid="stTextInput"] input:focus,
-[data-testid="stTextArea"] textarea:focus {{
-  border-color: {STEEL_BLUE} !important;
-  box-shadow: 0 0 0 3px rgba(135,166,184,0.18) !important;
-}}
-input::placeholder, textarea::placeholder {{
-  color: #888888 !important;
-  opacity: 1 !important;
-}}
-
-/* ── Select / Multiselect: TODO el árbol interno ───────────────────────────── */
-/* Los selectbox de Streamlit usan BaseWeb con clases hasheadas — usamos * */
-[data-baseweb="select"] * {{
-  color: {DEEP_INK} !important;
-  font-family: 'Inter', sans-serif !important;
-}}
-[data-baseweb="select"] > div:first-child {{
-  border-radius: 5px !important;
-  border: 1.5px solid rgba(33,48,51,0.18) !important;
-  background: white !important;
-  font-size: 0.82rem !important;
-}}
-/* Restore sidebar selects a color claro */
-[data-testid="stSidebar"] [data-baseweb="select"] * {{
-  color: #e0dedd !important;
-}}
-
-/* ── Sidebar widget labels — mayor especificidad que la regla global ─────────── */
-/* La regla global [stWidgetLabel] label tiene la misma especificidad que        */
-/* [stSidebar] label y la sobrescribe porque aparece después. Esta regla tiene   */
-/* dos atributos (0,2,1) y gana siempre.                                         */
-[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p,
-[data-testid="stSidebar"] [data-testid="stWidgetLabel"] span,
-[data-testid="stSidebar"] [data-testid="stWidgetLabel"] label {{
-  color: rgba(224,222,221,0.88) !important;
-  font-size: 0.7rem !important;
-  letter-spacing: 1px !important;
-  text-transform: uppercase !important;
-  font-weight: 600 !important;
-}}
-
-/* Captions del sidebar — #555 sobre #213033 da contraste 1.9:1, invisible */
-[data-testid="stSidebar"] .stCaption,
-[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {{
-  color: rgba(200,205,208,0.72) !important;
-  font-size: 0.67rem !important;
-}}
-
-/* Texto markdown genérico dentro del sidebar (st.markdown, st.info, etc.) */
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] li {{
-  color: rgba(224,222,221,0.85) !important;
-}}
-
-/* ── Menú desplegable (portal — renderiza fuera del DOM principal) ──────────── */
-[data-baseweb="menu"],
-[data-baseweb="popover"] > div {{
-  background: white !important;
-  border: 1px solid rgba(33,48,51,0.1) !important;
-  border-radius: 8px !important;
-  box-shadow: 0 6px 24px rgba(0,0,0,0.12) !important;
-}}
-[data-baseweb="menu"] *,
-[data-baseweb="popover"] * {{
-  color: {DEEP_INK} !important;
-  font-family: 'Inter', sans-serif !important;
-  font-size: 0.82rem !important;
-  background: transparent !important;
-}}
-[data-baseweb="menu"] [aria-selected="true"],
-[data-baseweb="menu"] li:hover {{
-  background: rgba(33,48,51,0.06) !important;
-}}
-
-/* ── Multiselect: tags ─────────────────────────────────────────────────────── */
-[data-baseweb="tag"] {{
-  background: rgba(33,48,51,0.08) !important;
-  border-radius: 4px !important;
-}}
-[data-baseweb="tag"] * {{
-  color: {DEEP_INK} !important;
-}}
-
-/* ── Alerts ────────────────────────────────────────────────────────────────── */
-[data-testid="stAlert"] {{
-  border-radius: 7px !important;
-  font-size: 0.8rem !important;
-  font-family: 'Inter', sans-serif !important;
-}}
-
-/* ── Captions ──────────────────────────────────────────────────────────────── */
-.stCaption, [data-testid="stCaptionContainer"] p {{
-  font-size: 0.67rem !important;
-  letter-spacing: 0.5px !important;
-  color: #555555 !important;
-  font-family: 'Inter', sans-serif !important;
-}}
-
-/* ── Headings ──────────────────────────────────────────────────────────────── */
-h1,h2,h3,h4,h5 {{
-  font-family: 'Inter', sans-serif !important;
-  color: {DEEP_INK} !important;
-  font-weight: 700 !important;
-}}
-hr {{ border-color: rgba(33,48,51,0.1) !important; margin: 14px 0 !important; }}
-
-/* ── Spinner ───────────────────────────────────────────────────────────────── */
-[data-testid="stSpinner"] p {{
-  font-size: 0.75rem !important;
-  letter-spacing: 1px !important;
-  color: {GRAPHITE_GREY} !important;
-}}
-
-/* ── File uploader ──────────────────────────────────────────────────────────── */
-/* Streamlit renderiza el dropzone con fondo claro (secondaryBackgroundColor)    */
-/* incluso cuando está dentro del sidebar oscuro → hay que fijar el texto oscuro */
-[data-testid="stFileUploaderDropzone"] {{
-  border-radius: 8px !important;
-  border: 1.5px dashed rgba(33,48,51,0.22) !important;
-}}
-/* Texto de instrucciones: "Drag and drop…" y "Limit 200MB…" */
-[data-testid="stFileUploaderDropzoneInstructions"] span,
-[data-testid="stFileUploaderDropzoneInstructions"] small,
-[data-testid="stFileUploaderDropzoneInstructions"] p,
-[data-testid="stFileUploaderDropzoneInstructions"] * {{
-  color: {DEEP_INK} !important;
-  opacity: 0.78;
-}}
-/* Botón "Browse files" */
-[data-testid="stFileUploaderDropzone"] button {{
-  color: {DEEP_INK} !important;
-  border: 1.5px solid rgba(33,48,51,0.25) !important;
-  background: transparent !important;
-  font-family: 'Inter', sans-serif !important;
-  font-size: 0.75rem !important;
-}}
-[data-testid="stFileUploaderDropzone"] button:hover {{
-  background: rgba(33,48,51,0.06) !important;
-}}
-/* Neutralizar el "*" del sidebar para el interior del dropzone */
-[data-testid="stSidebar"] [data-testid="stFileUploaderDropzoneInstructions"] *,
-[data-testid="stSidebar"] [data-testid="stFileUploaderDropzoneInstructions"] span,
-[data-testid="stSidebar"] [data-testid="stFileUploaderDropzoneInstructions"] small {{
-  color: {DEEP_INK} !important;
-  opacity: 0.78;
-}}
-[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] button {{
-  color: {DEEP_INK} !important;
-  border: 1.5px solid rgba(33,48,51,0.25) !important;
-  background: rgba(255,255,255,0.85) !important;
-}}
-[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] button:hover {{
-  background: rgba(255,255,255,1) !important;
-}}
-/* Nombre del archivo ya subido */
-[data-testid="stFileUploaderFile"] *,
-[data-testid="stFileUploader"] [data-testid="stMarkdownContainer"] * {{
-  color: {DEEP_INK} !important;
-}}
-[data-testid="stSidebar"] [data-testid="stFileUploaderFile"] *,
-[data-testid="stSidebar"] [data-testid="stFileUploader"] [data-testid="stMarkdownContainer"] * {{
-  color: {DEEP_INK} !important;
-}}
-
-/* ── Scrollbar ─────────────────────────────────────────────────────────────── */
-::-webkit-scrollbar {{ width: 4px; height: 4px; }}
-::-webkit-scrollbar-track {{ background: transparent; }}
-::-webkit-scrollbar-thumb {{ background: rgba(135,166,184,0.35); border-radius: 2px; }}
-::-webkit-scrollbar-thumb:hover {{ background: rgba(135,166,184,0.6); }}
-
-/* ── Ocultar chrome Streamlit ──────────────────────────────────────────────── */
 #MainMenu {{ visibility: hidden !important; }}
 footer {{ visibility: hidden !important; }}
 [data-testid="stDeployButton"] {{ display: none !important; }}
 [data-testid="stStatusWidget"] {{ display: none !important; }}
-[data-testid="stToolbar"] {{ display: none !important; }}
+[data-testid="stToolbar"]      {{ display: none !important; }}
+
+/* ── Sidebar ────────────────────────────────────────────────────────────────── */
+[data-testid="stSidebar"] {{
+  background: linear-gradient(180deg, #0D1A1D 0%, #1A2B2F 55%, {_C_INK} 100%) !important;
+  border-right: 1px solid rgba(135,166,184,0.08) !important;
+  min-width: 230px !important;
+}}
+[data-testid="stSidebar"] * {{ color: #e0dedd !important; }}
+[data-testid="stSidebar"] hr {{
+  border: none !important;
+  border-top: 1px solid rgba(135,166,184,0.12) !important;
+  margin: 10px 0 !important;
+}}
+[data-testid="stSidebarNavItems"] {{ padding: 6px 10px 0 !important; }}
+[data-testid="stSidebarNavLink"] {{
+  font-size: 0.66rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 2px !important;
+  text-transform: uppercase !important;
+  color: rgba(224,222,221,0.75) !important;
+  border-radius: 6px !important;
+  padding: 9px 12px !important;
+  margin: 1px 0 !important;
+  transition: all 0.15s ease !important;
+}}
+[data-testid="stSidebarNavLink"]:hover {{
+  background: rgba(135,166,184,0.12) !important;
+  color: #ffffff !important;
+}}
+[data-testid="stSidebarNavLink"][aria-selected="true"] {{
+  background: rgba(135,166,184,0.15) !important;
+  border-left: 2px solid {_C_STEEL} !important;
+  color: #ffffff !important;
+  padding-left: 10px !important;
+}}
+[data-testid="stSidebarNavSeparator"] {{
+  font-size: 0.5rem !important;
+  letter-spacing: 3px !important;
+  opacity: 0.4 !important;
+  padding: 12px 12px 4px !important;
+}}
+
+/* ── Tabs ────────────────────────────────────────────────────────────────────── */
+[data-testid="stTabs"] [data-baseweb="tab-list"],
+[data-testid="stTabs"] [role="tablist"] {{
+  background: transparent !important;
+  border-bottom: 1.5px solid #E6E4E0 !important;
+  gap: 0 !important; padding: 0 !important;
+}}
+[data-baseweb="tab"],
+[data-testid="stTabs"] button[role="tab"] {{
+  font-size: 0.68rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 2px !important;
+  text-transform: uppercase !important;
+  color: #909090 !important;
+  background: transparent !important;
+  border: none !important;
+  border-bottom: 2px solid transparent !important;
+  padding: 10px 18px 12px !important;
+  margin-bottom: -1.5px !important;
+}}
+[data-baseweb="tab"][aria-selected="true"],
+[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {{
+  color: {_C_INK} !important;
+  border-bottom: 2px solid {_C_INK} !important;
+}}
+[data-baseweb="tab"]:hover,
+[data-testid="stTabs"] button[role="tab"]:hover {{ color: {_C_INK} !important; }}
+[data-testid="stTabPanel"]   {{ padding-top: 20px !important; background: transparent !important; }}
+[data-baseweb="tab-highlight"],
+[data-baseweb="tab-border"]  {{ display: none !important; }}
+
+/* ── KPI cards ───────────────────────────────────────────────────────────────── */
+.kpi-card {{
+  background: #ffffff;
+  border: 1px solid #E6E4E0;
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin-bottom: 4px;
+  min-height: 110px;
+  box-sizing: border-box;
+  display: flex; flex-direction: column; justify-content: space-between;
+  box-shadow: 0 1px 4px rgba(33,48,51,0.06);
+  transition: box-shadow 0.15s;
+}}
+.kpi-card:hover {{ box-shadow: 0 3px 12px rgba(33,48,51,0.1); }}
+.kpi-num {{
+  font-size: 1.75rem;
+  font-weight: 800;
+  color: {_C_INK};
+  margin: 6px 0 0 0;
+  line-height: 1;
+  letter-spacing: -0.5px;
+}}
+.kpi-label {{
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: {_C_GREY};
+  margin: 0;
+}}
+.kpi-sub {{
+  font-size: 0.68rem;
+  color: {_C_GREY};
+  margin: 0;
+  line-height: 1.3;
+}}
+
+/* ── Tipografía de página ────────────────────────────────────────────────────── */
+.titulo-panel {{
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: {_C_INK};
+  letter-spacing: -0.3px;
+  margin: 0 0 2px 0;
+  line-height: 1;
+}}
+.subtitulo {{
+  font-size: 0.78rem;
+  color: {_C_GREY};
+  margin: 0 0 6px 0;
+  font-weight: 400;
+}}
+.sec-title {{
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: {_C_GREY};
+  margin: 18px 0 10px 0;
+}}
+
+/* ── Sidebar logo ────────────────────────────────────────────────────────────── */
+.logo-sidebar {{
+  font-size: 1rem;
+  font-weight: 800;
+  letter-spacing: 4px;
+  color: #ffffff;
+  line-height: 1;
+}}
+.logo-tagline {{
+  font-size: 0.5rem;
+  font-weight: 600;
+  letter-spacing: 5px;
+  color: rgba(135,166,184,0.65);
+  text-transform: uppercase;
+  margin-top: 3px;
+}}
+
+/* ── Botones ─────────────────────────────────────────────────────────────────── */
+.stButton > button {{
+  font-size: 0.7rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 1.2px !important;
+  text-transform: uppercase !important;
+  border-radius: 8px !important;
+  padding: 9px 18px !important;
+  transition: all 0.15s !important;
+}}
+.stButton > button[kind="primary"] {{
+  background: {_C_INK} !important;
+  color: white !important;
+  border: none !important;
+}}
+.stButton > button[kind="primary"]:hover {{
+  background: #0D1A1D !important;
+  box-shadow: 0 4px 12px rgba(33,48,51,0.25) !important;
+}}
+
+/* ── DataFrames ──────────────────────────────────────────────────────────────── */
+[data-testid="stDataFrame"] iframe {{ border-radius: 10px !important; }}
+[data-testid="stDataFrame"] th {{
+  background: #F7F5F2 !important;
+  color: {_C_GREY} !important;
+  font-size: 0.6rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 2px !important;
+  text-transform: uppercase !important;
+  padding: 10px 14px !important;
+}}
+[data-testid="stDataFrame"] td {{
+  font-size: 0.82rem !important;
+  color: {_C_INK} !important;
+  padding: 10px 14px !important;
+}}
+
+/* ── Inputs ──────────────────────────────────────────────────────────────────── */
+.stTextInput > div > input,
+.stSelectbox > div > div,
+.stTextArea > div > textarea {{
+  border: 1px solid #E6E4E0 !important;
+  border-radius: 8px !important;
+  background: white !important;
+  font-size: 0.82rem !important;
+}}
+.stTextInput > div > input:focus,
+.stTextArea > div > textarea:focus {{
+  border-color: {_C_STEEL} !important;
+  box-shadow: 0 0 0 3px rgba(135,166,184,0.18) !important;
+}}
+.stSelectbox label, .stTextInput label, .stTextArea label {{
+  font-size: 0.62rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 1.5px !important;
+  text-transform: uppercase !important;
+  color: {_C_GREY} !important;
+}}
+
+/* ── Expanders ───────────────────────────────────────────────────────────────── */
+[data-testid="stExpander"] {{
+  border: 1px solid #E6E4E0 !important;
+  border-radius: 10px !important;
+  background: white !important;
+}}
+[data-testid="stExpander"] summary {{
+  font-size: 0.75rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.5px !important;
+  color: {_C_INK} !important;
+  padding: 12px 16px !important;
+}}
+
+/* ── Alertas ─────────────────────────────────────────────────────────────────── */
+[data-testid="stAlert"] {{
+  border-radius: 10px !important;
+  font-size: 0.8rem !important;
+  border-left-width: 3px !important;
+}}
+
+/* ── Métricas nativas ────────────────────────────────────────────────────────── */
+[data-testid="stMetric"] {{
+  background: white !important;
+  border: 1px solid #E6E4E0 !important;
+  border-radius: 12px !important;
+  padding: 16px 20px !important;
+  box-shadow: 0 1px 4px rgba(33,48,51,0.05) !important;
+}}
+[data-testid="stMetricLabel"] {{
+  font-size: 0.6rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 2.5px !important;
+  text-transform: uppercase !important;
+  color: {_C_GREY} !important;
+}}
+[data-testid="stMetricValue"] {{
+  font-size: 1.6rem !important;
+  font-weight: 800 !important;
+  color: {_C_INK} !important;
+}}
+
+/* ── Scrollbar ───────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar               {{ width: 5px; height: 5px; }}
+::-webkit-scrollbar-track         {{ background: transparent; }}
+::-webkit-scrollbar-thumb         {{ background: #D4D2CE; border-radius: 3px; }}
+::-webkit-scrollbar-thumb:hover   {{ background: {_C_STEEL}; }}
+
+/* ── Download button ─────────────────────────────────────────────────────────── */
+.stDownloadButton > button {{
+  font-size: 0.68rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.8px !important;
+  background: white !important;
+  color: {_C_INK} !important;
+  border: 1px solid #E6E4E0 !important;
+  border-radius: 8px !important;
+}}
+
+/* ── Divisor ─────────────────────────────────────────────────────────────────── */
+hr {{ border: none !important; border-top: 1px solid #E6E4E0 !important; }}
+
 </style>
 """
 

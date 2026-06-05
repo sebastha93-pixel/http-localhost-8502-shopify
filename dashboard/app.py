@@ -297,6 +297,8 @@ else:
                 st.rerun()
 
         # ── Construir navegación según permisos ────────────────────────────────
+        _home = [st.Page("pages/home.py", title="CENTRO DE CONTROL")]
+
         _ops = []
         if "logistica"  in _permisos: _ops.append(st.Page("pages/logistica.py",  title="LOGÍSTICA"))
         if "comercial"  in _permisos: _ops.append(st.Page("pages/4_shopify.py",  title="COMERCIAL"))
@@ -305,7 +307,7 @@ else:
         if "mercadopago"  in _permisos: _fin.append(st.Page("pages/mercadopago.py",    title="MERCADOPAGO"))
         if "conciliacion" in _permisos: _fin.append(st.Page("pages/3_conciliacion.py", title="CONCILIACIÓN"))
 
-        _pages = {}
+        _pages = {"": _home}
         if _ops: _pages["OPERACIONES"] = _ops
         if _fin: _pages["FINANZAS"]    = _fin
         if _role == "admin":
