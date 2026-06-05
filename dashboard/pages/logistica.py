@@ -91,12 +91,20 @@ def _fmt_m(v):
     return f"${v:,.0f}"
 
 
-def _kpi(num, label, sub="", bg=DEEP_INK, border=STEEL_BLUE):
-    return f"""<div class="kpi-card" style="background:{bg};border-left:4px solid {border};">
-        <p class="kpi-num">{num}</p>
-        <p class="kpi-label">{label}</p>
-        <p class="kpi-sub">{sub}</p>
-    </div>"""
+def _kpi(num, label, sub="", bg=None, border=STEEL_BLUE):
+    """
+    KPI editorial — fondo blanco por defecto, accent lateral de color.
+    Si `bg` se pasa explícitamente (color de marca), el texto se invierte
+    automáticamente por el CSS para mantener contraste.
+    """
+    bg_style = f"background:{bg};" if bg else ""
+    return (
+        f'<div class="kpi-card" style="{bg_style}border-left:4px solid {border};">'
+        f'<p class="kpi-label">{label}</p>'
+        f'<div><p class="kpi-num">{num}</p>'
+        f'<p class="kpi-sub">{sub}</p></div>'
+        '</div>'
+    )
 
 
 def _render_memoria(orden: str):
@@ -305,8 +313,8 @@ with k2:
 with k3:
     st.markdown(_kpi(len(df_nov_cod), "NOV. COD",
                      _fmt_m(val_nov_cod) + " en riesgo" if val_nov_cod > 0 else "Sin novedades",
-                     bg=CRITICO_COLOR if len(df_nov_cod) > 0 else DEEP_INK,
-                     border=CRITICO_COLOR), unsafe_allow_html=True)
+                     border=CRITICO_COLOR if len(df_nov_cod) > 0 else STEEL_BLUE),
+                unsafe_allow_html=True)
 with k4:
     st.markdown(_kpi(len(df_ent), "ENTREGADOS COD", _fmt_m(val_ent_total) + " cobrado",
                      border=RESUELTO_COLOR), unsafe_allow_html=True)
@@ -367,7 +375,6 @@ with tab_cod:
                 st.markdown(_kpi(
                     len(df_auth_f), "ESPERAN AUTORIZACIÓN",
                     "Alistamiento en espera · Seller",
-                    bg=RIESGO_COLOR if len(df_auth_f) > 0 else DEEP_INK,
                     border=RIESGO_COLOR,
                 ), unsafe_allow_html=True)
             with p2:
@@ -590,7 +597,7 @@ with tab_cod:
             n1, n2, n3 = st.columns(3)
             with n1:
                 st.markdown(_kpi(len(df_nov_cod_f), "NOVEDADES COD",
-                                 "Requieren gestión", bg=CRITICO_COLOR, border=CRITICO_COLOR),
+                                 "Requieren gestión", border=CRITICO_COLOR),
                             unsafe_allow_html=True)
             with n2:
                 st.markdown(_kpi(_fmt_m(val_nov), "COD EN RIESGO",
@@ -676,8 +683,8 @@ with tab_pre:
     with pp2:
         st.markdown(_kpi(len(df_nov_pre_f), "NOVEDADES",
                          "Requieren gestión",
-                         bg=CRITICO_COLOR if len(df_nov_pre_f) > 0 else DEEP_INK,
-                         border=CRITICO_COLOR), unsafe_allow_html=True)
+                         border=CRITICO_COLOR if len(df_nov_pre_f) > 0 else STEEL_BLUE),
+                    unsafe_allow_html=True)
     with pp3:
         st.markdown(_kpi(len(df_ent_pre_f), "ENTREGADOS",
                          "Cliente recibió el pedido",

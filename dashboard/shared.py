@@ -181,42 +181,83 @@ footer {{ visibility: hidden !important; }}
 [data-baseweb="tab-highlight"],
 [data-baseweb="tab-border"]  {{ display: none !important; }}
 
-/* ── KPI cards ───────────────────────────────────────────────────────────────── */
+/* ── KPI cards ─────────────────────────────────────────────────────────────────
+   Cards SIEMPRE blancas con accent lateral de color.
+   Texto oscuro sobre blanco → contraste óptimo.
+   Si por algún caso se aplica fondo oscuro inline, el override de abajo
+   garantiza que texto y label cambien a claros.
+   ─────────────────────────────────────────────────────────────────────────── */
 .kpi-card {{
   background: #ffffff;
   border: 1px solid #E6E4E0;
   border-radius: 12px;
-  padding: 16px 18px;
+  padding: 18px 18px 16px;
   margin-bottom: 4px;
-  min-height: 110px;
+  min-height: 122px;
   box-sizing: border-box;
   display: flex; flex-direction: column; justify-content: space-between;
-  box-shadow: 0 1px 4px rgba(33,48,51,0.06);
-  transition: box-shadow 0.15s;
+  box-shadow: 0 1px 3px rgba(33,48,51,0.04);
+  transition: box-shadow 0.15s, transform 0.15s;
 }}
-.kpi-card:hover {{ box-shadow: 0 3px 12px rgba(33,48,51,0.1); }}
+.kpi-card:hover {{
+  box-shadow: 0 4px 14px rgba(33,48,51,0.09);
+  transform: translateY(-1px);
+}}
 .kpi-num {{
-  font-size: 1.75rem;
+  font-size: 1.8rem;
   font-weight: 800;
   color: {_C_INK};
   margin: 6px 0 0 0;
   line-height: 1;
-  letter-spacing: -0.5px;
+  letter-spacing: -0.6px;
 }}
 .kpi-label {{
-  font-size: 0.58rem;
+  font-size: 0.6rem;
   font-weight: 700;
-  letter-spacing: 2.5px;
+  letter-spacing: 1.5px;       /* reducido de 2.5px → labels caben en 1 línea */
   text-transform: uppercase;
   color: {_C_GREY};
   margin: 0;
+  white-space: nowrap;          /* fuerza una sola línea */
+  overflow: hidden;
+  text-overflow: ellipsis;
 }}
 .kpi-sub {{
-  font-size: 0.68rem;
+  font-size: 0.7rem;
   color: {_C_GREY};
-  margin: 0;
+  margin: 4px 0 0 0;
   line-height: 1.3;
+  font-weight: 400;
 }}
+
+/* Si una kpi-card recibe fondo oscuro (inline style), invertimos texto */
+.kpi-card[style*="background:#213033"] .kpi-num,
+.kpi-card[style*="background:#000"]    .kpi-num,
+.kpi-card[style*="background:#990012"] .kpi-num,
+.kpi-card[style*="background:#0c457a"] .kpi-num,
+.kpi-card[style*="background:#0C457A"] .kpi-num,
+.kpi-card[style*="background:#036a73"] .kpi-num,
+.kpi-card[style*="background:#036A73"] .kpi-num,
+.kpi-card[style*="background:#B95902"] .kpi-num,
+.kpi-card[style*="background:#b95902"] .kpi-num {{ color: #ffffff; }}
+.kpi-card[style*="background:#213033"] .kpi-label,
+.kpi-card[style*="background:#000"]    .kpi-label,
+.kpi-card[style*="background:#990012"] .kpi-label,
+.kpi-card[style*="background:#0c457a"] .kpi-label,
+.kpi-card[style*="background:#0C457A"] .kpi-label,
+.kpi-card[style*="background:#036a73"] .kpi-label,
+.kpi-card[style*="background:#036A73"] .kpi-label,
+.kpi-card[style*="background:#B95902"] .kpi-label,
+.kpi-card[style*="background:#b95902"] .kpi-label {{ color: rgba(255,255,255,0.75); }}
+.kpi-card[style*="background:#213033"] .kpi-sub,
+.kpi-card[style*="background:#000"]    .kpi-sub,
+.kpi-card[style*="background:#990012"] .kpi-sub,
+.kpi-card[style*="background:#0c457a"] .kpi-sub,
+.kpi-card[style*="background:#0C457A"] .kpi-sub,
+.kpi-card[style*="background:#036a73"] .kpi-sub,
+.kpi-card[style*="background:#036A73"] .kpi-sub,
+.kpi-card[style*="background:#B95902"] .kpi-sub,
+.kpi-card[style*="background:#b95902"] .kpi-sub {{ color: rgba(255,255,255,0.7); }}
 
 /* ── Tipografía de página ────────────────────────────────────────────────────── */
 .titulo-panel {{
