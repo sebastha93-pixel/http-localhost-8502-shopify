@@ -623,64 +623,50 @@ hr {{ border: none !important; border-top: 1px solid #E6E4E0 !important; }}
 # ═════════════════════════════════════════════════════════════════════════════
 
 def md_header(title: str, subtitle: str = "", meta_label: str = "", meta_value: str = "", meta_extra: str = ""):
-    """
-    Header de página editorial.
-    Ejemplo:
-        md_header("Hola, Sebastián", "Estado general · 04/06/2026",
-                  meta_label="Última sincronización", meta_value="hace 5 min")
-    """
-    right = ""
+    """Header de página editorial.  Sin indentación al inicio de línea: Streamlit lo trataría como code block."""
+    subtitle_html = f'<p class="md-header__subtitle">{subtitle}</p>' if subtitle else ''
+    right_html    = ""
     if meta_label or meta_value:
-        right = f"""
-        <div class="md-header__right">
-          {f'<p class="md-header__meta-label">{meta_label}</p>' if meta_label else ''}
-          {f'<p class="md-header__meta-value">{meta_value}</p>' if meta_value else ''}
-          {meta_extra}
-        </div>"""
-    st.markdown(f"""
-    <div class="md-header">
-      <div class="md-header__left">
-        <h1 class="md-header__title">{title}</h1>
-        {f'<p class="md-header__subtitle">{subtitle}</p>' if subtitle else ''}
-      </div>
-      {right}
-    </div>
-    """, unsafe_allow_html=True)
+        ml = f'<p class="md-header__meta-label">{meta_label}</p>' if meta_label else ''
+        mv = f'<p class="md-header__meta-value">{meta_value}</p>' if meta_value else ''
+        right_html = f'<div class="md-header__right">{ml}{mv}{meta_extra}</div>'
+    html = (
+        '<div class="md-header">'
+        f'<div class="md-header__left">'
+        f'<h1 class="md-header__title">{title}</h1>{subtitle_html}'
+        '</div>'
+        f'{right_html}'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def md_section(label: str, hint: str = ""):
     """Section divider con label uppercase + hint opcional."""
-    st.markdown(f"""
-    <div class="md-section">
-      <p class="md-section__label">{label}</p>
-      {f'<p class="md-section__hint">{hint}</p>' if hint else ''}
-    </div>
-    """, unsafe_allow_html=True)
+    hint_html = f'<p class="md-section__hint">{hint}</p>' if hint else ''
+    html = f'<div class="md-section"><p class="md-section__label">{label}</p>{hint_html}</div>'
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def md_kpi(value: str, label: str, sub: str = "", accent: str = STEEL_BLUE,
            delta: str = "", delta_up: bool = True, icon: str = "") -> str:
-    """
-    KPI card editorial. Retorna HTML — usar con st.markdown(..., unsafe_allow_html=True)
-    para colocar dentro de st.columns(N).
-    """
+    """KPI card editorial. Retorna HTML para usar con st.markdown(..., unsafe_allow_html=True)."""
     delta_html = ""
     if delta:
-        cls = "md-kpi__delta--up" if delta_up else "md-kpi__delta--down"
+        cls   = "md-kpi__delta--up" if delta_up else "md-kpi__delta--down"
         arrow = "↑" if delta_up else "↓"
         delta_html = f'<span class="md-kpi__delta {cls}">{arrow} {delta}</span>'
-
     icon_html = f'<span style="font-size:0.7rem;opacity:0.7;">{icon}</span>' if icon else ""
-
-    return f"""<div class="md-kpi">
-      <div class="md-kpi__accent" style="background:{accent};"></div>
-      <p class="md-kpi__label">{icon_html}{label}</p>
-      <div>
-        <p class="md-kpi__value">{value}</p>
-        {f'<p class="md-kpi__sub">{sub}</p>' if sub else ''}
-        {delta_html}
-      </div>
-    </div>"""
+    sub_html  = f'<p class="md-kpi__sub">{sub}</p>' if sub else ''
+    return (
+        '<div class="md-kpi">'
+        f'<div class="md-kpi__accent" style="background:{accent};"></div>'
+        f'<p class="md-kpi__label">{icon_html}{label}</p>'
+        '<div>'
+        f'<p class="md-kpi__value">{value}</p>{sub_html}{delta_html}'
+        '</div>'
+        '</div>'
+    )
 
 
 def md_badge(text: str, level: str = "neutral") -> str:
@@ -692,32 +678,33 @@ def md_badge(text: str, level: str = "neutral") -> str:
 
 
 def md_alert(title: str, msg: str, level: str = "info", icon: str = "", action: str = "") -> str:
-    """
-    Alert card. Retorna HTML para usar con st.markdown.
-    Niveles: critico, riesgo, normal, pendiente, info.
-    """
+    """Alert card. Retorna HTML."""
     icons_default = {"critico":"!", "riesgo":"!", "normal":"✓", "pendiente":"⏳", "info":"i"}
     _ic = icon or icons_default.get(level.lower(), "•")
     action_html = f'<span class="md-alert__action">{action} →</span>' if action else ''
-    return f"""<div class="md-alert md-alert--{level.lower()}">
-      <span class="md-alert__icon">{_ic}</span>
-      <div class="md-alert__body">
-        <p class="md-alert__title">{title}</p>
-        <p class="md-alert__msg">{msg}</p>
-      </div>
-      {action_html}
-    </div>"""
+    return (
+        f'<div class="md-alert md-alert--{level.lower()}">'
+        f'<span class="md-alert__icon">{_ic}</span>'
+        '<div class="md-alert__body">'
+        f'<p class="md-alert__title">{title}</p>'
+        f'<p class="md-alert__msg">{msg}</p>'
+        '</div>'
+        f'{action_html}'
+        '</div>'
+    )
 
 
 def md_empty(title: str, sub: str = "", icon: str = "○"):
     """Empty state elegante."""
-    st.markdown(f"""
-    <div class="md-empty">
-      <div class="md-empty__icon">{icon}</div>
-      <p class="md-empty__title">{title}</p>
-      {f'<p class="md-empty__sub">{sub}</p>' if sub else ''}
-    </div>
-    """, unsafe_allow_html=True)
+    sub_html = f'<p class="md-empty__sub">{sub}</p>' if sub else ''
+    html = (
+        '<div class="md-empty">'
+        f'<div class="md-empty__icon">{icon}</div>'
+        f'<p class="md-empty__title">{title}</p>'
+        f'{sub_html}'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
 
 # ── Sesión / usuario activo ───────────────────────────────────────────────────

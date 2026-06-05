@@ -229,28 +229,36 @@ else:
     _remember = st.session_state.get("remember_me", False)
     _auth     = _build_auth(remember_me=_remember)
 
-    # ── Construir navegación SIEMPRE — evita auto-descubrimiento de pages/ ────
-    # st.navigation() debe llamarse en cada run, autenticado o no.
-    # Cuando no está autenticado usamos una página "login" inline.
+    # ── PRIMER PASO: leer cookie / state ANTES de cualquier render ────────────
+    # streamlit-authenticator necesita inicializarse para que la cookie sea leída.
+    # Lo hacemos en un placeholder no visible para que NO renderice el form aquí.
+    _status_pre = st.session_state.get("authentication_status")
 
-    def _pagina_login():
-        """Página de login — renderizada por st.navigation cuando no hay sesión."""
+    # ── Si NO hay sesión, renderizar login inline (sin st.navigation) ─────────
+    if _status_pre is not True:
+        # Ocultar el sidebar agresivamente — antes de cualquier widget
         st.markdown("""
-        <style>
-        [data-testid="stSidebar"]  { display: none !important; }
-        .main .block-container     { max-width: 460px !important; padding-top: 6rem !important; }
-        </style>""", unsafe_allow_html=True)
+<style>
+[data-testid="stSidebar"], section[data-testid="stSidebar"],
+[data-testid="stSidebarCollapsedControl"] {
+    display: none !important;
+    visibility: hidden !important;
+}
+.main .block-container { max-width: 460px !important; padding-top: 6rem !important; }
+</style>
+""", unsafe_allow_html=True)
 
         st.markdown("""
-        <div style="text-align:center;margin-bottom:32px;">
-            <div class="login-brand">MALE'DENIM</div>
-            <div class="login-tagline">That Fits</div>
-            <div class="login-divider" style="margin:18px auto;"></div>
-        </div>""", unsafe_allow_html=True)
+<div style="text-align:center;margin-bottom:32px;">
+  <div class="login-brand">MALE'DENIM</div>
+  <div class="login-tagline">That Fits</div>
+  <div class="login-divider" style="margin:18px auto;"></div>
+</div>
+""", unsafe_allow_html=True)
 
         _auth.login()
 
-        _rem = st.session_state.get("remember_me", False)
+        _rem   = st.session_state.get("remember_me", False)
         _nuevo = st.checkbox(
             "Recordarme en este dispositivo", value=_rem, key="chk_remember",
             help="Mantiene la sesión activa aunque cierres el navegador (30 días)",
@@ -261,12 +269,12 @@ else:
 
         if st.session_state.get("authentication_status") is False:
             st.error("Usuario o contraseña incorrectos.", icon="🔒")
-
         if st.session_state.get("authentication_status") is True:
-            st.rerun()  # recargar para entrar a la navegación autenticada
+            st.rerun()
+        st.stop()   # detiene la ejecución antes de que se intente st.navigation
 
-    # ── Definir páginas según estado de autenticación ─────────────────────────
-    _status = st.session_state.get("authentication_status")
+    # ── Hay sesión → continuar con la navegación autenticada ──────────────────
+    _status = True
 
     if _status is True:
         _check_inactivity(_auth)
@@ -370,10 +378,6 @@ else:
         if _fin: _pages["FINANZAS"]    = _fin
         if _role == "admin":
             _pages["CONFIGURACIÓN"] = [st.Page("pages/usuarios.py", title="USUARIOS")]
-
-    else:
-        # No autenticado — página de login como único destino
-        _pages = {"": [st.Page(_pagina_login, title="Inicio")]}
 
     pg = st.navigation(_pages)
     pg.run()
