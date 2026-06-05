@@ -14,7 +14,7 @@ from datetime import date
 from shared import (
     CSS, DEEP_INK, STEEL_BLUE, GRAPHITE_GREY, SOFT_CONCRETE,
     CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR, COD_COLOR, RESUELTO_COLOR,
-    MAX_DIAS_ACTIVO, cargar_datos_api, render_sidebar, _parse_cod, usuario_activo,
+    MAX_DIAS_ACTIVO, cargar_datos_api, _parse_cod, usuario_activo,
 )
 
 st.markdown(CSS, unsafe_allow_html=True)
@@ -23,9 +23,6 @@ st.markdown(CSS, unsafe_allow_html=True)
 if "logistica" not in st.session_state.get("permisos", ["logistica"]):
     st.error("🔒 Sin acceso.")
     st.stop()
-
-# ── Sidebar ─────────────────────────────────────────────────────────────────────
-render_sidebar("Centro de Control")
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
 def _fmt(v):

@@ -274,41 +274,89 @@ else:
         _role     = _get_role(_username)
         _permisos = _get_permisos(_username, _role)
 
-        st.session_state["permisos"] = _permisos
+        st.session_state["permisos"]  = _permisos
         st.session_state["user_role"] = _role
 
-        # Logo + logout en sidebar
+        # ── Estado de la caché Melonn (cacheado en session_state, no golpea Supabase) ──
+        try:
+            from shared import _cache_info_rapido, _invalidar_cache_info
+            _info = _cache_info_rapido()
+        except Exception:
+            _info = None
+            _invalidar_cache_info = lambda: None
+
+        if _info:
+            _age = int(_info.get("age_s", 0))
+            _age_txt = (f"hace {_age//3600}h" if _age >= 3600
+                        else f"hace {_age//60}min" if _age >= 60
+                        else "ahora")
+            _total   = _info.get("total", 0)
+            _stale   = _info.get("stale") or False
+            _sync_tag   = "Desactualizado" if _stale else "Sincronizado"
+            _sync_color = "#f5a623" if _stale else "#52b788"
+            _sync_sub   = f"{_total} pedidos · {_age_txt}"
+        else:
+            _sync_tag, _sync_color, _sync_sub = "Sin datos", "#87a6b8", "Presiona actualizar"
+
+        # ── ÚNICO sidebar de la app ──────────────────────────────────────────────
         with st.sidebar:
-            st.markdown(f"""
-            <div style="padding:20px 16px 14px;border-bottom:1px solid rgba(135,166,184,0.1);">
+            # Logo
+            st.markdown("""
+            <div style="padding:18px 4px 14px;margin-bottom:6px;
+                        border-bottom:1px solid rgba(135,166,184,0.1);">
               <p style="font-size:1rem;font-weight:800;letter-spacing:4px;
                         color:#fff;margin:0;line-height:1;">MALE'DENIM</p>
               <p style="font-size:0.5rem;font-weight:600;letter-spacing:5px;
                         color:rgba(135,166,184,0.65);margin:3px 0 0 0;">THAT FITS</p>
             </div>
             """, unsafe_allow_html=True)
-            st.markdown("<br>", unsafe_allow_html=True)
+
+        # La navegación de Streamlit se renderiza automáticamente entre los dos bloques
 
         with st.sidebar:
-            _role_label = "Admin" if _role == "admin" else "Usuario"
-            st.markdown(
-                f"<div style='position:fixed;bottom:16px;left:0;width:236px;"
-                f"padding:10px 16px;border-top:1px solid rgba(135,166,184,0.1);'>"
-                f"<div style='font-size:0.55rem;color:#87a6b8;letter-spacing:1.5px;"
-                f"text-transform:uppercase;margin-bottom:2px;'>{_role_label}</div>"
-                f"<div style='font-size:0.78rem;color:#e0dedd;font-weight:600;'>"
-                f"{st.session_state.get('name', _username)}</div>"
-                f"<div style='font-size:0.52rem;color:rgba(135,166,184,0.4);"
-                f"letter-spacing:1px;margin-top:5px;'>MALE'DENIM OS v1.0</div>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-            if st.button("⎋  Cerrar sesión", use_container_width=True, key="btn_logout"):
-                _auth.logout()
-                st.session_state.pop("_api_datos",    None)
-                st.session_state.pop("_api_datos_ts", None)
+            # Estado de sincronización
+            st.markdown(f"""
+            <div style="background:rgba(135,166,184,0.08);
+                        border:1px solid rgba(135,166,184,0.18);
+                        border-radius:8px;padding:10px 12px;margin:12px 0 8px;">
+              <div style="font-size:0.55rem;color:{_sync_color};letter-spacing:1.5px;
+                          font-weight:700;text-transform:uppercase;">● {_sync_tag}</div>
+              <div style="font-size:0.65rem;color:rgba(225,225,223,0.7);margin-top:3px;">{_sync_sub}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            if st.button("↻  Actualizar datos", use_container_width=True, key="btn_refresh"):
+                st.session_state["_melonn_refresh"] = True
+                _invalidar_cache_info()
                 st.rerun()
 
+            # Footer: usuario + logout
+            _role_label = "Admin" if _role == "admin" else "Usuario"
+            _full_name  = st.session_state.get("name", _username)
+            st.markdown(f"""
+            <div style="margin-top:18px;padding-top:14px;
+                        border-top:1px solid rgba(135,166,184,0.1);">
+              <div style="font-size:0.55rem;color:#87a6b8;letter-spacing:1.5px;
+                          text-transform:uppercase;margin-bottom:2px;">{_role_label}</div>
+              <div style="font-size:0.78rem;color:#e0dedd;font-weight:600;
+                          margin-bottom:8px;">{_full_name}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            if st.button("⎋  Cerrar sesión", use_container_width=True, key="btn_logout"):
+                _auth.logout()
+                for k in ("_api_datos","_api_datos_ts","_cache_info","_cache_info_ts"):
+                    st.session_state.pop(k, None)
+                st.rerun()
+
+            st.markdown("""
+            <p style="font-size:0.5rem;color:rgba(135,166,184,0.35);
+                      letter-spacing:1px;margin:12px 0 0 0;text-align:center;">
+              MALE'DENIM OS · v1.0
+            </p>
+            """, unsafe_allow_html=True)
+
+        # ── Construir navegación ──────────────────────────────────────────────────
         _home = [st.Page("pages/home.py",        title="CENTRO DE CONTROL")]
         _ops  = []
         if "logistica"   in _permisos: _ops.append(st.Page("pages/logistica.py",       title="LOGÍSTICA"))
