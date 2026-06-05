@@ -380,8 +380,345 @@ footer {{ visibility: hidden !important; }}
 /* ── Divisor ─────────────────────────────────────────────────────────────────── */
 hr {{ border: none !important; border-top: 1px solid #E6E4E0 !important; }}
 
+/* ═════════════════════════════════════════════════════════════════════════════
+   EDITORIAL DESIGN SYSTEM v2 — Iteración 1
+   Componentes premium tipo Linear / Shopify Admin / Stripe Dashboard
+   ═════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Page header (título XL + subtítulo + slot derecho) ──────────────────────── */
+.md-header {{
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding-bottom: 18px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid #E6E4E0;
+  gap: 24px;
+}}
+.md-header__left  {{ flex: 1; min-width: 0; }}
+.md-header__right {{ flex-shrink: 0; text-align: right; }}
+.md-header__title {{
+  font-size: 1.55rem;
+  font-weight: 800;
+  color: {_C_INK};
+  letter-spacing: -0.5px;
+  line-height: 1.05;
+  margin: 0 0 4px 0;
+}}
+.md-header__subtitle {{
+  font-size: 0.8rem;
+  color: {_C_GREY};
+  margin: 0;
+  font-weight: 400;
+}}
+.md-header__meta-label {{
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: {_C_GREY};
+  margin: 0 0 2px 0;
+}}
+.md-header__meta-value {{
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: {_C_INK};
+  margin: 0;
+}}
+
+/* ── Section header (label uppercase con tracking amplio) ────────────────────── */
+.md-section {{
+  margin: 24px 0 14px 0;
+}}
+.md-section__label {{
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: {_C_GREY};
+  margin: 0 0 2px 0;
+}}
+.md-section__hint {{
+  font-size: 0.74rem;
+  color: {_C_GREY};
+  margin: 0;
+  font-weight: 400;
+}}
+
+/* ── KPI Card v2 — editorial, números grandes, jerarquía clara ───────────────── */
+.md-kpi {{
+  background: #FFFFFF;
+  border: 1px solid #E6E4E0;
+  border-radius: 14px;
+  padding: 18px 20px;
+  box-shadow: 0 1px 3px rgba(33,48,51,0.04);
+  transition: box-shadow 0.18s, transform 0.18s;
+  position: relative;
+  overflow: hidden;
+  min-height: 118px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}}
+.md-kpi:hover {{
+  box-shadow: 0 4px 14px rgba(33,48,51,0.09);
+}}
+.md-kpi__accent {{
+  position: absolute;
+  top: 0; left: 0;
+  width: 3px; height: 100%;
+  border-radius: 14px 0 0 14px;
+}}
+.md-kpi__label {{
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: {_C_GREY};
+  margin: 0 0 8px 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}}
+.md-kpi__value {{
+  font-size: 1.9rem;
+  font-weight: 800;
+  color: {_C_INK};
+  letter-spacing: -0.6px;
+  line-height: 1;
+  margin: 0 0 5px 0;
+}}
+.md-kpi__sub {{
+  font-size: 0.7rem;
+  color: {_C_GREY};
+  margin: 0;
+  line-height: 1.3;
+  font-weight: 400;
+}}
+.md-kpi__delta {{
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  margin-top: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}}
+.md-kpi__delta--up   {{ color: {_C_OK}; }}
+.md-kpi__delta--down {{ color: {_C_CRIT}; }}
+
+/* ── Badge v2 — paleta corporativa exacta ────────────────────────────────────── */
+.md-badge {{
+  display: inline-block;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: 20px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}}
+.md-badge--critico   {{ background: #FDEEF0; color: #990012; border-color: #99001222; }}
+.md-badge--riesgo    {{ background: #FDF1E8; color: #B95902; border-color: #B9590222; }}
+.md-badge--normal    {{ background: #E8F3F2; color: #036A73; border-color: #036A7322; }}
+.md-badge--pendiente {{ background: #F4F0E6; color: #7B6E42; border-color: #7B6E4222; }}
+.md-badge--info      {{ background: #E8F0F8; color: #0C457A; border-color: #0C457A22; }}
+.md-badge--neutral   {{ background: #F2F0EC; color: #606060; border-color: #60606022; }}
+.md-badge--entregado {{ background: #E8F3F2; color: #036A73; border-color: #036A7322; }}
+
+/* ── Card genérica ───────────────────────────────────────────────────────────── */
+.md-card {{
+  background: #FFFFFF;
+  border: 1px solid #E6E4E0;
+  border-radius: 14px;
+  padding: 20px 22px;
+  box-shadow: 0 1px 3px rgba(33,48,51,0.04);
+}}
+.md-card--accent-top {{
+  border-top-width: 3px;
+}}
+
+/* ── Alert card v2 ───────────────────────────────────────────────────────────── */
+.md-alert {{
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px 16px;
+  border-radius: 10px;
+  border: 1px solid;
+  border-left-width: 3px;
+  margin-bottom: 8px;
+  background: #FFFFFF;
+}}
+.md-alert__icon {{
+  font-size: 0.9rem;
+  font-weight: 700;
+  min-width: 16px;
+  text-align: center;
+  margin-top: 1px;
+}}
+.md-alert__body  {{ flex: 1; min-width: 0; }}
+.md-alert__title {{
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: {_C_INK};
+  margin: 0 0 2px 0;
+}}
+.md-alert__msg {{
+  font-size: 0.73rem;
+  color: {_C_GREY};
+  margin: 0;
+  line-height: 1.45;
+}}
+.md-alert__action {{
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  margin-top: 2px;
+}}
+.md-alert--critico   {{ background: #FDEEF0; border-color: #990012; }}
+.md-alert--critico   .md-alert__icon, .md-alert--critico .md-alert__action {{ color: #990012; }}
+.md-alert--riesgo    {{ background: #FDF1E8; border-color: #B95902; }}
+.md-alert--riesgo    .md-alert__icon, .md-alert--riesgo .md-alert__action {{ color: #B95902; }}
+.md-alert--normal    {{ background: #E8F3F2; border-color: #036A73; }}
+.md-alert--normal    .md-alert__icon, .md-alert--normal .md-alert__action {{ color: #036A73; }}
+.md-alert--pendiente {{ background: #F4F0E6; border-color: #7B6E42; }}
+.md-alert--pendiente .md-alert__icon, .md-alert--pendiente .md-alert__action {{ color: #7B6E42; }}
+.md-alert--info      {{ background: #E8F0F8; border-color: #0C457A; }}
+.md-alert--info      .md-alert__icon, .md-alert--info .md-alert__action {{ color: #0C457A; }}
+
+/* ── Empty state ────────────────────────────────────────────────────────────── */
+.md-empty {{
+  text-align: center;
+  padding: 36px 24px;
+  background: #FFFFFF;
+  border: 1px dashed #D4D2CE;
+  border-radius: 14px;
+}}
+.md-empty__icon {{
+  font-size: 1.6rem;
+  margin-bottom: 10px;
+  color: {_C_STEEL};
+}}
+.md-empty__title {{
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: {_C_INK};
+  margin: 0 0 4px 0;
+}}
+.md-empty__sub {{
+  font-size: 0.72rem;
+  color: {_C_GREY};
+  margin: 0;
+}}
+
 </style>
 """
+
+# ═════════════════════════════════════════════════════════════════════════════
+# EDITORIAL HELPERS — Iteración 1
+# Componentes premium reutilizables. Solo HTML/CSS, sin queries.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def md_header(title: str, subtitle: str = "", meta_label: str = "", meta_value: str = "", meta_extra: str = ""):
+    """
+    Header de página editorial.
+    Ejemplo:
+        md_header("Hola, Sebastián", "Estado general · 04/06/2026",
+                  meta_label="Última sincronización", meta_value="hace 5 min")
+    """
+    right = ""
+    if meta_label or meta_value:
+        right = f"""
+        <div class="md-header__right">
+          {f'<p class="md-header__meta-label">{meta_label}</p>' if meta_label else ''}
+          {f'<p class="md-header__meta-value">{meta_value}</p>' if meta_value else ''}
+          {meta_extra}
+        </div>"""
+    st.markdown(f"""
+    <div class="md-header">
+      <div class="md-header__left">
+        <h1 class="md-header__title">{title}</h1>
+        {f'<p class="md-header__subtitle">{subtitle}</p>' if subtitle else ''}
+      </div>
+      {right}
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def md_section(label: str, hint: str = ""):
+    """Section divider con label uppercase + hint opcional."""
+    st.markdown(f"""
+    <div class="md-section">
+      <p class="md-section__label">{label}</p>
+      {f'<p class="md-section__hint">{hint}</p>' if hint else ''}
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def md_kpi(value: str, label: str, sub: str = "", accent: str = STEEL_BLUE,
+           delta: str = "", delta_up: bool = True, icon: str = "") -> str:
+    """
+    KPI card editorial. Retorna HTML — usar con st.markdown(..., unsafe_allow_html=True)
+    para colocar dentro de st.columns(N).
+    """
+    delta_html = ""
+    if delta:
+        cls = "md-kpi__delta--up" if delta_up else "md-kpi__delta--down"
+        arrow = "↑" if delta_up else "↓"
+        delta_html = f'<span class="md-kpi__delta {cls}">{arrow} {delta}</span>'
+
+    icon_html = f'<span style="font-size:0.7rem;opacity:0.7;">{icon}</span>' if icon else ""
+
+    return f"""<div class="md-kpi">
+      <div class="md-kpi__accent" style="background:{accent};"></div>
+      <p class="md-kpi__label">{icon_html}{label}</p>
+      <div>
+        <p class="md-kpi__value">{value}</p>
+        {f'<p class="md-kpi__sub">{sub}</p>' if sub else ''}
+        {delta_html}
+      </div>
+    </div>"""
+
+
+def md_badge(text: str, level: str = "neutral") -> str:
+    """
+    Badge inline. Niveles: critico, riesgo, normal, pendiente, info, neutral, entregado.
+    Uso: f'Estado: {md_badge("CRÍTICO", "critico")}'
+    """
+    return f'<span class="md-badge md-badge--{level.lower()}">{text}</span>'
+
+
+def md_alert(title: str, msg: str, level: str = "info", icon: str = "", action: str = "") -> str:
+    """
+    Alert card. Retorna HTML para usar con st.markdown.
+    Niveles: critico, riesgo, normal, pendiente, info.
+    """
+    icons_default = {"critico":"!", "riesgo":"!", "normal":"✓", "pendiente":"⏳", "info":"i"}
+    _ic = icon or icons_default.get(level.lower(), "•")
+    action_html = f'<span class="md-alert__action">{action} →</span>' if action else ''
+    return f"""<div class="md-alert md-alert--{level.lower()}">
+      <span class="md-alert__icon">{_ic}</span>
+      <div class="md-alert__body">
+        <p class="md-alert__title">{title}</p>
+        <p class="md-alert__msg">{msg}</p>
+      </div>
+      {action_html}
+    </div>"""
+
+
+def md_empty(title: str, sub: str = "", icon: str = "○"):
+    """Empty state elegante."""
+    st.markdown(f"""
+    <div class="md-empty">
+      <div class="md-empty__icon">{icon}</div>
+      <p class="md-empty__title">{title}</p>
+      {f'<p class="md-empty__sub">{sub}</p>' if sub else ''}
+    </div>
+    """, unsafe_allow_html=True)
+
 
 # ── Sesión / usuario activo ───────────────────────────────────────────────────
 def usuario_activo() -> str:
