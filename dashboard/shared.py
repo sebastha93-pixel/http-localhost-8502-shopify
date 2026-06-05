@@ -555,6 +555,36 @@ _SS_DATOS = "_api_datos"   # (df, omitidos, meta) en session_state
 _SS_TS    = "_api_datos_ts" # datetime del último fetch
 _SS_TTL   = 1800            # 30 min en memoria — coincide con TTL de Supabase
 
+_SS_INFO    = "_cache_info"     # dict de cache_info() en session_state
+_SS_INFO_TS = "_cache_info_ts"  # datetime de la última consulta
+_SS_INFO_TTL= 120               # 2 min — el sidebar no golpea Supabase en cada navegación
+
+
+def _cache_info_rapido():
+    """
+    cache_info() cacheado en session_state.
+    Evita una query a Supabase en CADA navegación de página (la causa
+    principal de lentitud al cambiar de módulo).
+    """
+    _info = st.session_state.get(_SS_INFO)
+    _ts   = st.session_state.get(_SS_INFO_TS)
+    if _info is not None and _ts is not None:
+        if (datetime.now() - _ts).total_seconds() < _SS_INFO_TTL:
+            return _info
+    try:
+        _info = melonn_client.cache_info()
+    except Exception:
+        _info = None
+    st.session_state[_SS_INFO]    = _info
+    st.session_state[_SS_INFO_TS] = datetime.now()
+    return _info
+
+
+def _invalidar_cache_info():
+    """Llamar tras un refresh forzado para que el sidebar muestre el estado nuevo."""
+    st.session_state.pop(_SS_INFO, None)
+    st.session_state.pop(_SS_INFO_TS, None)
+
 def cargar_datos_api(forzar_refresh: bool = False):
     """
     Carga pedidos desde Melonn con caché en session_state.
@@ -647,10 +677,7 @@ def render_sidebar(page_label: str):
         # ── Estado del caché ───────────────────────────────────────────────────
         _api_ok = _MELONN_API_DISPONIBLE and melonn_client.credenciales_ok()
         if _api_ok:
-            try:
-                _info = melonn_client.cache_info()
-            except Exception:
-                _info = None
+            _info = _cache_info_rapido()
 
             if _info:
                 _age_s = int(_info["age_s"])
@@ -698,6 +725,7 @@ def render_sidebar(page_label: str):
 
             if st.button("↻ Actualizar datos", key="btn_refresh_melonn", use_container_width=True):
                 st.session_state["_melonn_refresh"] = True
+                _invalidar_cache_info()
                 st.rerun()
         else:
             st.markdown(f"""
