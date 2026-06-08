@@ -655,6 +655,430 @@ hr {{ border: none !important; border-top: 1px solid #E6E4E0 !important; }}
   margin: 0;
 }}
 
+/* ═════════════════════════════════════════════════════════════════════════════
+   DASH v3 — Stripe / Linear / Ramp visual language
+   Componentes nuevos para el rediseño del Centro de Control.
+   Prefijo .dash-* — no rompen ningún componente existente.
+   ═════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Page hero (saludo Hola, Sebastián) ──────────────────────────────────────── */
+.dash-hero {{
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+  gap: 24px;
+}}
+.dash-hero__title {{
+  font-size: 1.7rem;
+  font-weight: 700;
+  color: #1A1A1A;
+  letter-spacing: -0.6px;
+  line-height: 1.1;
+  margin: 0 0 4px 0;
+}}
+.dash-hero__sub {{
+  font-size: 0.86rem;
+  color: #6B7280;
+  margin: 0;
+  font-weight: 400;
+}}
+.dash-hero__tools {{
+  display: flex; gap: 10px; align-items: center;
+}}
+.dash-toolbtn {{
+  background: white;
+  border: 1px solid #ECECEC;
+  border-radius: 9px;
+  padding: 7px 12px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: #213033;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}}
+.dash-toolbtn:hover {{ background: #FAFAF8; border-color: #D4D2CE; }}
+.dash-avatar {{
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: #213033;
+  color: white;
+  font-size: 0.7rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}}
+
+/* ── Section header con "Ver detalle →" ──────────────────────────────────────── */
+.dash-section {{
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}}
+.dash-section__label {{
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: #9CA0A4;
+  margin: 0;
+}}
+.dash-section__link {{
+  font-size: 0.74rem;
+  color: #9CA0A4;
+  font-weight: 500;
+  text-decoration: none;
+}}
+
+/* ── Card base ──────────────────────────────────────────────────────────────── */
+.dash-card {{
+  background: white;
+  border: 1px solid #ECECEC;
+  border-radius: 16px;
+  padding: 18px 20px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+  height: 100%;
+  box-sizing: border-box;
+}}
+
+/* ── KPI card v3 con sparkline ───────────────────────────────────────────────── */
+.dash-kpi {{
+  background: white;
+  border: 1px solid #ECECEC;
+  border-radius: 16px;
+  padding: 16px 18px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+  min-height: 110px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: relative;
+}}
+.dash-kpi__label {{
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: #9CA0A4;
+  margin: 0;
+}}
+.dash-kpi__value {{
+  font-size: 1.55rem;
+  font-weight: 700;
+  color: #1A1A1A;
+  letter-spacing: -0.5px;
+  line-height: 1.05;
+  margin: 4px 0 6px 0;
+}}
+.dash-kpi__value--danger {{ color: #990012; }}
+.dash-kpi__meta {{
+  font-size: 0.74rem;
+  color: #6B7280;
+  font-weight: 500;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}}
+.dash-kpi__meta--up   {{ color: #036A73; }}
+.dash-kpi__meta--down {{ color: #990012; }}
+.dash-kpi__link {{
+  font-size: 0.74rem;
+  color: #6B7280;
+  font-weight: 500;
+}}
+.dash-kpi__spark {{
+  position: absolute;
+  right: 14px;
+  top: 14px;
+  width: 90px;
+  height: 36px;
+  opacity: 0.85;
+  pointer-events: none;
+}}
+
+/* ── Alert row (lista de alertas) ────────────────────────────────────────────── */
+.dash-alert {{
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.12s;
+}}
+.dash-alert:hover {{ background: #FAFAF8; }}
+.dash-alert + .dash-alert {{ border-top: 1px solid #F4F2EE; }}
+.dash-alert__chip {{
+  width: 36px; height: 36px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}}
+.dash-alert__body {{ flex: 1; min-width: 0; }}
+.dash-alert__title {{
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: #1A1A1A;
+  margin: 0 0 2px 0;
+  line-height: 1.25;
+}}
+.dash-alert__sub {{
+  font-size: 0.74rem;
+  color: #6B7280;
+  margin: 0;
+  font-weight: 400;
+}}
+.dash-alert__arrow {{
+  color: #9CA0A4;
+  font-size: 1rem;
+  flex-shrink: 0;
+}}
+
+/* ── Icon-badge chip (rojo/naranja/etc.) ─────────────────────────────────────── */
+.dash-chip--red    {{ background: #FDEEF0; color: #990012; }}
+.dash-chip--orange {{ background: #FDF1E8; color: #B95902; }}
+.dash-chip--yellow {{ background: #FAF4DC; color: #8A6D1F; }}
+.dash-chip--green  {{ background: #E6F4F2; color: #036A73; }}
+.dash-chip--blue   {{ background: #E7EEF6; color: #0C457A; }}
+.dash-chip--khaki  {{ background: #F1EAD8; color: #7B6E42; }}
+.dash-chip--gray   {{ background: #F2F2F0; color: #606060; }}
+
+/* ── Platform bar (Dinero pendiente por plataforma) ─────────────────────────── */
+.dash-platform {{
+  display: grid;
+  grid-template-columns: 28px 1fr 90px;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid #F4F2EE;
+}}
+.dash-platform:last-child {{ border-bottom: none; }}
+.dash-platform__icon {{
+  width: 26px; height: 26px;
+  border-radius: 7px;
+  background: #213033;
+  color: white;
+  font-size: 0.66rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}}
+.dash-platform__name {{
+  font-size: 0.84rem;
+  color: #1A1A1A;
+  font-weight: 500;
+}}
+.dash-platform__bar-wrap {{
+  flex: 1;
+  height: 6px;
+  background: #F2F0EC;
+  border-radius: 99px;
+  overflow: hidden;
+  margin: 4px 0 0 0;
+  grid-column: 2;
+}}
+.dash-platform__bar {{
+  height: 100%;
+  border-radius: 99px;
+}}
+.dash-platform__value {{
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #1A1A1A;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}}
+
+/* ── Order-status row con barra horizontal ───────────────────────────────────── */
+.dash-status {{
+  display: grid;
+  grid-template-columns: 14px 80px 1fr 50px 50px;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid #F4F2EE;
+}}
+.dash-status:last-child {{ border-bottom: none; }}
+.dash-status__dot {{
+  width: 8px; height: 8px; border-radius: 50%;
+}}
+.dash-status__label {{ font-size: 0.84rem; color: #1A1A1A; font-weight: 500; }}
+.dash-status__bar-wrap {{
+  height: 6px;
+  background: #F2F0EC;
+  border-radius: 99px;
+  overflow: hidden;
+}}
+.dash-status__bar {{ height: 100%; border-radius: 99px; }}
+.dash-status__count {{
+  font-size: 0.82rem;
+  color: #1A1A1A;
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}}
+.dash-status__pct {{
+  font-size: 0.78rem;
+  color: #9CA0A4;
+  font-weight: 500;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}}
+
+/* ── Recommendation card ─────────────────────────────────────────────────────── */
+.dash-rec {{
+  background: white;
+  border: 1px solid #ECECEC;
+  border-radius: 14px;
+  padding: 14px 16px;
+  height: 100%;
+  box-sizing: border-box;
+}}
+.dash-rec__icon {{
+  width: 30px; height: 30px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+  font-size: 0.92rem;
+}}
+.dash-rec__body {{
+  font-size: 0.82rem;
+  color: #1A1A1A;
+  font-weight: 500;
+  line-height: 1.45;
+  margin: 0 0 12px 0;
+}}
+.dash-rec__body b {{ font-weight: 700; }}
+.dash-rec__hint {{
+  font-size: 0.72rem;
+  color: #6B7280;
+  margin: 0;
+  font-weight: 400;
+  border-top: 1px solid #F2F0EC;
+  padding-top: 8px;
+}}
+.dash-rec__hint b {{ font-weight: 600; color: #213033; }}
+
+/* ── Quick action button ─────────────────────────────────────────────────────── */
+.dash-quick {{
+  background: white;
+  border: 1px solid #ECECEC;
+  border-radius: 14px;
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #1A1A1A;
+  cursor: pointer;
+  transition: all 0.12s;
+  text-decoration: none;
+  white-space: nowrap;
+}}
+.dash-quick:hover {{
+  background: #FAFAF8;
+  border-color: #D4D2CE;
+  transform: translateY(-1px);
+}}
+.dash-quick__icon {{
+  width: 22px; height: 22px;
+  border-radius: 6px;
+  background: #F2F0EC;
+  color: #213033;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.78rem;
+  flex-shrink: 0;
+}}
+
+/* ── Top reference row ───────────────────────────────────────────────────────── */
+.dash-topref {{
+  display: grid;
+  grid-template-columns: 26px 42px 1fr 110px 50px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #F4F2EE;
+}}
+.dash-topref:last-child {{ border-bottom: none; }}
+.dash-topref__rank {{
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #6B7280;
+}}
+.dash-topref__thumb {{
+  width: 36px; height: 36px;
+  border-radius: 8px;
+  background: #F2F0EC;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #9CA0A4;
+  font-size: 0.78rem;
+  overflow: hidden;
+}}
+.dash-topref__name {{
+  font-size: 0.84rem;
+  color: #1A1A1A;
+  font-weight: 500;
+}}
+.dash-topref__val {{
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-align: right;
+  color: #1A1A1A;
+  font-variant-numeric: tabular-nums;
+}}
+.dash-topref__pct {{
+  font-size: 0.78rem;
+  color: #9CA0A4;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}}
+
+/* ── Donut wrapper centrado ──────────────────────────────────────────────────── */
+.dash-donut-wrap {{ text-align: center; }}
+.dash-donut-label {{
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: #1A1A1A;
+  margin: 8px 0 2px 0;
+}}
+.dash-donut-sub {{
+  font-size: 0.72rem;
+  color: #6B7280;
+  font-weight: 400;
+  margin: 0;
+}}
+
+/* ── Status legend (rojo/naranja/verde con puntos) ──────────────────────────── */
+.dash-legend {{
+  display: flex; flex-direction: column; gap: 6px;
+}}
+.dash-legend__item {{
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.78rem;
+  color: #1A1A1A;
+  font-weight: 500;
+}}
+.dash-legend__dot {{
+  width: 8px; height: 8px; border-radius: 50%;
+}}
+
 </style>
 """
 
@@ -746,6 +1170,230 @@ def md_empty(title: str, sub: str = "", icon: str = "○"):
         '</div>'
     )
     st.markdown(html, unsafe_allow_html=True)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# DASH v3 — Helpers para los nuevos componentes del Centro de Control
+# Estilo Stripe / Linear / Ramp. Prefijo dash_*.
+# Retornan strings HTML (para columnas) o llaman st.markdown directamente.
+# ═════════════════════════════════════════════════════════════════════════════
+
+def dash_hero(title: str, subtitle: str = "", tools_html: str = ""):
+    """Header de la página estilo Stripe — Hola, Sebastián + subtítulo + tools a la derecha."""
+    sub  = f'<p class="dash-hero__sub">{subtitle}</p>' if subtitle else ''
+    right = f'<div class="dash-hero__tools">{tools_html}</div>' if tools_html else ''
+    html = (
+        '<div class="dash-hero">'
+        '<div>'
+        f'<h1 class="dash-hero__title">{title}</h1>{sub}'
+        '</div>'
+        f'{right}'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def dash_section(label: str, link_text: str = ""):
+    """Section label + link 'Ver detalle →' a la derecha."""
+    link = f'<span class="dash-section__link">{link_text} →</span>' if link_text else ''
+    html = (
+        '<div class="dash-section">'
+        f'<p class="dash-section__label">{label}</p>{link}'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def dash_card_start() -> str:
+    """Abre un .dash-card. Usar con st.markdown(... + dash_card_end(), unsafe_allow_html=True)."""
+    return '<div class="dash-card">'
+
+def dash_card_end() -> str:
+    return '</div>'
+
+
+def dash_kpi(label: str, value: str, meta: str = "", meta_dir: str = "",
+             link: str = "", value_danger: bool = False,
+             spark_svg: str = "") -> str:
+    """
+    KPI card v3 con sparkline SVG opcional.
+    - label: uppercase pequeño
+    - value: número grande
+    - meta:  '12.4% vs ayer' / '97.4% del esperado'
+    - meta_dir: 'up' | 'down' | ''  → color verde/rojo
+    - link: si se da, se muestra como meta en gris ('Ver detalle')
+    - value_danger: true → valor en rojo
+    - spark_svg: SVG inline para mini-gráfico
+    """
+    val_cls = ' dash-kpi__value--danger' if value_danger else ''
+    meta_html = ''
+    if meta:
+        dir_cls = ''
+        arrow   = ''
+        if meta_dir == 'up':
+            dir_cls, arrow = ' dash-kpi__meta--up', '↑ '
+        elif meta_dir == 'down':
+            dir_cls, arrow = ' dash-kpi__meta--down', '↓ '
+        meta_html = f'<p class="dash-kpi__meta{dir_cls}">{arrow}{meta}</p>'
+    elif link:
+        meta_html = f'<p class="dash-kpi__link">{link} →</p>'
+
+    spark_html = f'<div class="dash-kpi__spark">{spark_svg}</div>' if spark_svg else ''
+
+    return (
+        '<div class="dash-kpi">'
+        f'{spark_html}'
+        f'<p class="dash-kpi__label">{label}</p>'
+        f'<p class="dash-kpi__value{val_cls}">{value}</p>'
+        f'{meta_html}'
+        '</div>'
+    )
+
+
+def dash_sparkline(values: list, color: str = "#1A1A1A",
+                   width: int = 90, height: int = 36) -> str:
+    """
+    Genera un SVG sparkline con relleno gradiente.
+    values: lista de números. Se normalizan automáticamente al espacio disponible.
+    """
+    if not values or len(values) < 2:
+        return ''
+    vmin, vmax = min(values), max(values)
+    rng = (vmax - vmin) or 1.0
+    n = len(values)
+    pts = []
+    for i, v in enumerate(values):
+        x = round(i / (n - 1) * width, 2)
+        y = round(height - 2 - ((v - vmin) / rng) * (height - 4), 2)
+        pts.append(f"{x},{y}")
+    # Polyline para la línea + polygon con fill
+    line_pts = " ".join(pts)
+    poly_pts = f"0,{height} " + line_pts + f" {width},{height}"
+    grad_id  = f"gr{abs(hash((color, width, height))) % 100000}"
+    return (
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
+        'xmlns="http://www.w3.org/2000/svg">'
+        f'<defs><linearGradient id="{grad_id}" x1="0" x2="0" y1="0" y2="1">'
+        f'<stop offset="0%" stop-color="{color}" stop-opacity="0.18"/>'
+        f'<stop offset="100%" stop-color="{color}" stop-opacity="0"/>'
+        '</linearGradient></defs>'
+        f'<polygon points="{poly_pts}" fill="url(#{grad_id})"/>'
+        f'<polyline points="{line_pts}" fill="none" stroke="{color}" '
+        'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'
+        '</svg>'
+    )
+
+
+def dash_icon_badge(icon: str, tone: str = "gray") -> str:
+    """Chip cuadrado con ícono. Tono: red, orange, yellow, green, blue, khaki, gray."""
+    return f'<div class="dash-alert__chip dash-chip--{tone}">{icon}</div>'
+
+
+def dash_alert_row(title: str, sub: str, tone: str = "gray", icon: str = "!") -> str:
+    """
+    Fila de alerta con icon-badge + título + subtítulo + flecha.
+    Concatenar varias en un dash-card.
+    """
+    return (
+        '<div class="dash-alert">'
+        f'{dash_icon_badge(icon, tone)}'
+        '<div class="dash-alert__body">'
+        f'<p class="dash-alert__title">{title}</p>'
+        f'<p class="dash-alert__sub">{sub}</p>'
+        '</div>'
+        '<span class="dash-alert__arrow">›</span>'
+        '</div>'
+    )
+
+
+def dash_platform_row(name: str, icon: str, value: str,
+                      bar_pct: float = 50.0, bar_color: str = "#213033",
+                      icon_bg: str = "#213033") -> str:
+    """Fila de plataforma: ícono + nombre + barra horizontal + valor monetario."""
+    pct = max(2, min(100, bar_pct))
+    return (
+        '<div class="dash-platform">'
+        f'<div class="dash-platform__icon" style="background:{icon_bg};">{icon}</div>'
+        f'<span class="dash-platform__name">{name}</span>'
+        f'<span class="dash-platform__value">{value}</span>'
+        f'<div class="dash-platform__bar-wrap"><div class="dash-platform__bar" '
+        f'style="width:{pct}%;background:{bar_color};"></div></div>'
+        '</div>'
+    )
+
+
+def dash_status_row(label: str, count: int, pct: float,
+                    color: str = "#036A73", bar_max_pct: float = 100.0) -> str:
+    """Fila de pedidos por estado: dot + label + barra + número + %."""
+    bar_w = max(2, min(100, bar_max_pct))
+    return (
+        '<div class="dash-status">'
+        f'<span class="dash-status__dot" style="background:{color};"></span>'
+        f'<span class="dash-status__label">{label}</span>'
+        f'<div class="dash-status__bar-wrap"><div class="dash-status__bar" '
+        f'style="width:{bar_w}%;background:{color};"></div></div>'
+        f'<span class="dash-status__count">{count}</span>'
+        f'<span class="dash-status__pct">{pct:.0f}%</span>'
+        '</div>'
+    )
+
+
+def dash_rec_card(icon: str, body_html: str, hint_html: str = "", tone: str = "blue") -> str:
+    """
+    Card de recomendación inteligente. body_html admite <b> para destacar.
+    hint_html va abajo con 'Recomendación: ...'.
+    """
+    hint = f'<p class="dash-rec__hint">{hint_html}</p>' if hint_html else ''
+    return (
+        '<div class="dash-rec">'
+        f'<div class="dash-rec__icon dash-chip--{tone}">{icon}</div>'
+        f'<p class="dash-rec__body">{body_html}</p>'
+        f'{hint}'
+        '</div>'
+    )
+
+
+def dash_quick_action(label: str, icon: str = "▸") -> str:
+    """Botón de acceso rápido (visual only — para Streamlit usar st.button al lado)."""
+    return (
+        '<div class="dash-quick">'
+        f'<span class="dash-quick__icon">{icon}</span>'
+        f'<span>{label}</span>'
+        '</div>'
+    )
+
+
+def dash_topref_row(rank: int, name: str, value: str, pct: str,
+                    thumb_html: str = "") -> str:
+    """Fila Top Referencias. thumb_html opcional (placeholder gris si vacío)."""
+    if thumb_html:
+        thumb_block = thumb_html if thumb_html.startswith("<div") else (
+            '<div class="dash-topref__thumb">' + thumb_html + '</div>'
+        )
+    else:
+        thumb_block = '<div class="dash-topref__thumb">◫</div>'
+    return (
+        '<div class="dash-topref">'
+        f'<span class="dash-topref__rank">{rank}.</span>'
+        f'{thumb_block}'
+        f'<span class="dash-topref__name">{name}</span>'
+        f'<span class="dash-topref__val">{value}</span>'
+        f'<span class="dash-topref__pct">{pct}</span>'
+        '</div>'
+    )
+
+
+def dash_legend(items: list) -> str:
+    """
+    Leyenda de mapa. items = [(label, color), ...]
+    """
+    rows = "".join(
+        f'<div class="dash-legend__item">'
+        f'<span class="dash-legend__dot" style="background:{c};"></span>{l}'
+        '</div>'
+        for l, c in items
+    )
+    return f'<div class="dash-legend">{rows}</div>'
 
 
 # ── Sesión / usuario activo ───────────────────────────────────────────────────
