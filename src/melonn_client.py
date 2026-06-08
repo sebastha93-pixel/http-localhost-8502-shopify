@@ -41,18 +41,24 @@ def _refresh_background():
     global _bg_running
     with _bg_lock:
         if _bg_running:
+            log.info("[bg] Skip: ya hay un refresh en curso")
             return
         _bg_running = True
 
     def _run():
         global _bg_running
+        t0 = time.time()
         try:
             pedidos = _fetch_api()
+            elapsed = time.time() - t0
             if pedidos:
                 _cache_guardar(pedidos)
-                log.info(f"[bg] Refresh completado: {len(pedidos)} pedidos en Supabase")
+                log.info(f"[bg] OK: {len(pedidos)} pedidos guardados en Supabase · {elapsed:.1f}s")
+            else:
+                log.warning(f"[bg] _fetch_api retornó vacío después de {elapsed:.1f}s")
         except Exception as e:
-            log.warning(f"[bg] Refresh error: {e}")
+            elapsed = time.time() - t0
+            log.error(f"[bg] ERROR después de {elapsed:.1f}s: {e}", exc_info=True)
         finally:
             with _bg_lock:
                 _bg_running = False
@@ -69,19 +75,21 @@ except ImportError:
     _SHOPIFY_ENRICHER_OK = False
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-_BASE_URL  = "https://api.orbita.melonn.com"
-_TIMEOUT   = 20
-_PAGE_SIZE  = 50
-_MAX_PAGES  = 40       # hasta 2000 pedidos — cubre historial activo completo
-_CACHE_TTL  = 1800     # 30 minutos — antes 4h, reducido para mayor frescura
+_BASE_URL    = "https://api.orbita.melonn.com"
+_TIMEOUT     = 45         # antes 20s — API Melonn responde lento en horas pico
+_CONNECT_TO  = 8          # timeout de conexión separado
+_PAGE_SIZE   = 25         # antes 50 — páginas más pequeñas = response time más rápido
+_MAX_PAGES   = 60         # 25 × 60 = 1500 pedidos, suficiente para ventana 90d
+_CACHE_TTL   = 1800       # 30 min — caché Supabase
+_CACHE_HARD_TTL = 86400   # 24h — pasado esto, fuerza refresh aunque haya datos
 
 # Rate limiting — Melonn permite MÁXIMO 1 req/s (documentación oficial)
 _MAX_RPS           = 0.8
 _MIN_INTERVAL      = 1.0 / _MAX_RPS   # 1.25s entre requests
-_MIN_REFRESH_SECS  = 60         # 1 min mínimo entre syncs (antes 5 min)
+_MIN_REFRESH_SECS  = 60               # 1 min mínimo entre syncs
 _RETRY_MAX         = 3
-_RETRY_BACKOFF     = [5, 15, 30]
-_CACHE_TTL_NOVEDAD = 1800       # igual que TTL principal
+_RETRY_BACKOFF     = [3, 8, 20]       # antes 5,15,30 — más rápido para no congelar UI
+_CACHE_TTL_NOVEDAD = 1800             # igual que TTL principal
 
 
 class _RateLimiter:
@@ -550,7 +558,7 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
                 url,
                 headers={"x-api-key": _api_key(), "Accept": "application/json"},
                 params=params,
-                timeout=_TIMEOUT,
+                timeout=(_CONNECT_TO, _TIMEOUT),
             )
 
             if r.status_code in (429, 503):
@@ -1043,10 +1051,29 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
         pedidos = _enriquecer_y_filtrar(pedidos)
         return pedidos, omitidos, {"fuente": fuente_hit, "stale": False, "fetched_at": fetched_at}
 
-    # 2. Caché existe pero expiró → mostrar igual + refrescar en background
+    # 2. Caché existe pero expiró → comportamiento depende de cuán viejo está
     stale = _cache_leer(ignorar_ttl=True)
     if stale:
         pedidos, fetched_at, _, fuente_stale = stale
+        edad = (datetime.now() - fetched_at).total_seconds() if fetched_at else 999999
+
+        # ── HARD TTL (24h): forzar fetch sincrónico aunque sea lento ─────────
+        # Background refresh puede estar fallando silenciosamente — si llevamos
+        # >24h con datos viejos, intentamos refresh real ahora.
+        if edad > _CACHE_HARD_TTL:
+            log.warning(f"Cache stale >24h ({edad/3600:.1f}h) — forzando fetch sincrónico")
+            try:
+                pedidos_fresh = _fetch_api()
+                if pedidos_fresh:
+                    _cache_guardar(pedidos_fresh)
+                    return pedidos_fresh, omitidos, {
+                        "fuente": "api_live", "stale": False,
+                        "fetched_at": datetime.now(),
+                    }
+            except Exception as e:
+                log.error(f"Fetch sincrónico falló: {e}")
+
+        # Mostrar stale + refrescar en background
         pedidos = _enriquecer_y_filtrar(pedidos)
         _refresh_background()
         return pedidos, omitidos, {
