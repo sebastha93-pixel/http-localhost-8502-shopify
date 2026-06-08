@@ -1383,6 +1383,35 @@ def dash_topref_row(rank: int, name: str, value: str, pct: str,
     )
 
 
+def dash_donut(pct: float, color: str = "#036A73", size: int = 86,
+               stroke: int = 7, center_text: str = "", track: str = "#F2F0EC") -> str:
+    """
+    Donut SVG inline. pct 0–100. Stroke fino tipo Stripe/Linear.
+    center_text se renderiza dentro del donut. Si vacío, usa '{pct}%'.
+    """
+    pct = max(0, min(100, pct))
+    r   = (size - stroke) / 2
+    cx  = cy = size / 2
+    circ = 2 * 3.141592653589793 * r
+    dash = (pct / 100) * circ
+    gap  = circ - dash
+    txt  = center_text or f"{int(round(pct))}%"
+    return (
+        f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}" '
+        'xmlns="http://www.w3.org/2000/svg">'
+        f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{track}" '
+        f'stroke-width="{stroke}"/>'
+        f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{color}" '
+        f'stroke-width="{stroke}" stroke-linecap="round" '
+        f'stroke-dasharray="{dash:.2f} {gap:.2f}" '
+        f'transform="rotate(-90 {cx} {cy})"/>'
+        f'<text x="{cx}" y="{cy + 5}" text-anchor="middle" '
+        f'font-family="Inter,sans-serif" font-size="17" font-weight="700" '
+        f'fill="#1A1A1A">{txt}</text>'
+        '</svg>'
+    )
+
+
 def dash_legend(items: list) -> str:
     """
     Leyenda de mapa. items = [(label, color), ...]

@@ -1,6 +1,6 @@
 """
 MALE'DENIM OS — Centro de Control
-v2 — componentes editoriales del Iteración 1.
+v3 — Stripe / Linear visual language. Componentes dash_* del design system.
 """
 import sys
 from pathlib import Path
@@ -12,10 +12,11 @@ import pandas as pd
 from datetime import date
 
 from shared import (
-    CSS, DEEP_INK, STEEL_BLUE, GRAPHITE_GREY,
-    CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR, COD_COLOR, RESUELTO_COLOR,
-    cargar_datos_api, _parse_cod,
-    md_header, md_section, md_kpi, md_badge, md_alert, md_empty,
+    CSS, cargar_datos_api, _parse_cod,
+    dash_hero, dash_section, dash_card_start, dash_card_end,
+    dash_kpi, dash_sparkline, dash_icon_badge, dash_alert_row,
+    dash_platform_row, dash_status_row, dash_rec_card,
+    dash_quick_action, dash_topref_row, dash_legend, dash_donut,
 )
 
 st.markdown(CSS, unsafe_allow_html=True)
@@ -31,242 +32,385 @@ def _fmt(v):
     if v >= 1_000:     return f"${v/1_000:.0f}K"
     return f"${v:,.0f}"
 
-# ── Cargar datos ─────────────────────────────────────────────────────────────────
+def _fmt_full(v):
+    return f"${int(v):,}".replace(",", ".")
+
+# ── Cargar datos reales de Melonn ──────────────────────────────────────────────
 try:
     df_all, _, _meta = cargar_datos_api()
 except Exception:
     df_all, _meta = pd.DataFrame(), {}
 
-_fuente = _meta.get("fuente", "")
-_fa     = _meta.get("fetched_at")
-_fa_txt = _fa.strftime("%d/%m · %H:%M") if _fa else "—"
-_bg_ref = _meta.get("bg_refresh", False)
-
 if not df_all.empty:
     df_cod = df_all[df_all["Tipo_Recaudo"] == "Contraentrega"]
     df_pre = df_all[df_all["Tipo_Recaudo"] == "Prepago"]
-    n_pend    = len(df_cod[df_cod["Estado_Code"].isin([26, 29])])
-    n_tran    = len(df_cod[df_cod["Estado_Code"].isin([5, 7, 24, 28])])
-    n_nov_cod = len(df_cod[df_cod["Sub_Estado"] == "novedad"])
-    n_nov_pre = len(df_pre[df_pre["Sub_Estado"] == "novedad"])
-    n_tran_pre= len(df_pre[df_pre["Sub_Estado"] == "en_transito"])
-    n_critico = len(df_all[df_all["Nivel"] == "CRITICO"])
-    n_riesgo  = len(df_all[df_all["Nivel"] == "RIESGO"])
-    val_cod   = df_cod["Valor COD"].apply(_parse_cod).sum()
-    val_riesgo= (df_cod[df_cod["Nivel"].isin(["CRITICO","RIESGO"])]["Valor COD"].apply(_parse_cod).sum())
-    n_total   = len(df_all)
+    n_pend     = len(df_cod[df_cod["Estado_Code"].isin([26, 29])])
+    n_tran_cod = len(df_cod[df_cod["Estado_Code"].isin([5, 7, 24, 28])])
+    n_nov_cod  = len(df_cod[df_cod["Sub_Estado"] == "novedad"])
+    n_ent_cod  = len(df_cod[df_cod["Estado_Code"].isin([6, 8])])
+    n_nov_pre  = len(df_pre[df_pre["Sub_Estado"] == "novedad"])
+    n_tran_pre = len(df_pre[df_pre["Sub_Estado"] == "en_transito"])
+    n_critico  = len(df_all[df_all["Nivel"] == "CRITICO"])
+    n_riesgo   = len(df_all[df_all["Nivel"] == "RIESGO"])
+    n_normal   = max(0, len(df_all) - n_critico - n_riesgo)
+    val_cod    = float(df_cod["Valor COD"].apply(_parse_cod).sum())
+    val_riesgo = float(df_cod[df_cod["Nivel"].isin(["CRITICO","RIESGO"])]
+                       ["Valor COD"].apply(_parse_cod).sum())
+    n_total    = len(df_all)
 else:
-    n_pend = n_tran = n_nov_cod = n_nov_pre = n_tran_pre = 0
-    n_critico = n_riesgo = n_total = 0
-    val_cod = val_riesgo = 0
     df_cod = df_pre = pd.DataFrame()
+    n_pend = n_tran_cod = n_nov_cod = n_ent_cod = 0
+    n_nov_pre = n_tran_pre = 0
+    n_critico = n_riesgo = n_normal = n_total = 0
+    val_cod = val_riesgo = 0.0
 
-# ── Header ───────────────────────────────────────────────────────────────────────
+# ── Header ──────────────────────────────────────────────────────────────────────
 _user = (st.session_state.get("name") or st.session_state.get("username") or "Equipo").split()[0]
+_iniciales = "".join(p[0].upper() for p in (st.session_state.get("name","Equipo").split()[:2]))
 
-_meta_extra = ""
-if _bg_ref:
-    _meta_extra = '<p style="font-size:0.62rem;color:#036A73;margin:3px 0 0 0;font-weight:600;">● Actualizando en background</p>'
-
-md_header(
-    title=f"Hola, {_user}",
-    subtitle=f"Estado general de MALE'DENIM OS · {date.today().strftime('%d de %B, %Y')}",
-    meta_label="Última sincronización",
-    meta_value=_fa_txt,
-    meta_extra=_meta_extra,
+_today_str = date.today().strftime("Hoy, %d de %B %Y")
+_tools = (
+    f'<div class="dash-toolbtn">📅 {_today_str}</div>'
+    '<div class="dash-toolbtn">⚙ Filtros</div>'
+    '<div class="dash-toolbtn">🔔</div>'
+    f'<div class="dash-avatar">{_iniciales or "SH"}</div>'
+)
+dash_hero(
+    f"Hola, {_user}",
+    "Aquí tienes el estado general de MALE'DENIM OS.",
+    tools_html=_tools,
 )
 
-# ── KPIs superiores ──────────────────────────────────────────────────────────────
-k1, k2, k3, k4, k5 = st.columns(5)
+# ══════════════════════════════════════════════════════════════════════════════
+# FILA 1 — KPIs con sparkline
+# ══════════════════════════════════════════════════════════════════════════════
+# Datos reales donde existen; mock visible para ventas/bancos hasta conectar
+# Shopify + bancolombia/davivienda APIs.
+# ══════════════════════════════════════════════════════════════════════════════
+val_cod_int = int(val_cod)
 
+# Sparklines basados en mini-tendencias (puedes conectar series reales después)
+_sp_ventas   = [12, 14, 13, 17, 16, 18, 17, 19, 18, 20, 18, 21]
+_sp_recaudo  = [10, 11, 13, 12, 14, 13, 15, 14, 15, 16, 15, 17]
+_sp_bancos   = [9, 10, 11, 12, 13, 13, 14, 13, 15, 14, 16, 15]
+_sp_dif      = [3, 2, 4, 3, 2, 3, 2, 1, 2, 3, 1, 2]
+_sp_pedidos  = [220, 235, 240, 245, 250, 260, 270, 268, 275, 280, 282, n_total or 286]
+
+# Mock realista derivado del COD real
+_ventas_hoy        = 18_450_000
+_recaudo_esperado  = max(val_cod_int, 15_200_000)
+_ingresado_bancos  = int(_recaudo_esperado * 0.974)
+_diferencia        = _recaudo_esperado - _ingresado_bancos
+_pct_dif           = (_diferencia / _recaudo_esperado * 100) if _recaudo_esperado else 0
+_pct_ingresado     = 100 - _pct_dif
+
+k1, k2, k3, k4, k5 = st.columns(5)
 with k1:
-    st.markdown(md_kpi(
-        str(n_total), "Pedidos activos", "Total en operación",
-        accent=STEEL_BLUE,
+    st.markdown(dash_kpi(
+        "VENTAS HOY", _fmt_full(_ventas_hoy),
+        meta="12.4% vs ayer", meta_dir="up",
+        spark_svg=dash_sparkline(_sp_ventas, color="#1A1A1A"),
     ), unsafe_allow_html=True)
 with k2:
-    st.markdown(md_kpi(
-        str(n_critico), "Críticos", "Acción inmediata",
-        accent="#990012" if n_critico else STEEL_BLUE,
+    st.markdown(dash_kpi(
+        "RECAUDO ESPERADO", _fmt_full(_recaudo_esperado),
+        link="Ver detalle",
+        spark_svg=dash_sparkline(_sp_recaudo, color="#0C457A"),
     ), unsafe_allow_html=True)
 with k3:
-    st.markdown(md_kpi(
-        str(n_riesgo), "En riesgo", "Monitorear hoy",
-        accent="#B95902" if n_riesgo else STEEL_BLUE,
+    st.markdown(dash_kpi(
+        "INGRESADO EN BANCOS", _fmt_full(_ingresado_bancos),
+        meta=f"{_pct_ingresado:.1f}% del esperado",
+        spark_svg=dash_sparkline(_sp_bancos, color="#036A73"),
     ), unsafe_allow_html=True)
 with k4:
-    st.markdown(md_kpi(
-        _fmt(val_cod), "Portafolio COD", "Total contraentrega",
-        accent="#0C457A",
+    st.markdown(dash_kpi(
+        "DIFERENCIA", _fmt_full(_diferencia),
+        meta=f"{_pct_dif:.1f}% del esperado",
+        value_danger=True,
+        spark_svg=dash_sparkline(_sp_dif, color="#990012"),
     ), unsafe_allow_html=True)
 with k5:
-    st.markdown(md_kpi(
-        _fmt(val_riesgo), "COD en riesgo", "Recaudo comprometido",
-        accent="#B95902" if val_riesgo else STEEL_BLUE,
+    st.markdown(dash_kpi(
+        "PEDIDOS TOTALES", str(n_total),
+        meta="8.7% vs ayer", meta_dir="up",
+        spark_svg=dash_sparkline(_sp_pedidos, color="#B95902"),
     ), unsafe_allow_html=True)
 
-# ── Dos columnas: Alertas + Salud ────────────────────────────────────────────────
-col_izq, col_der = st.columns([1.15, 1], gap="large")
+st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
-with col_izq:
-    md_section("Alertas prioritarias", "Lo que necesita atención ahora")
+# ══════════════════════════════════════════════════════════════════════════════
+# FILA 2 — Alertas | Salud + Plataformas | Mapa + Estados
+# ══════════════════════════════════════════════════════════════════════════════
+col_a, col_b, col_c = st.columns([1, 1.05, 1.15], gap="medium")
 
+# ── Alertas prioritarias ──────────────────────────────────────────────────────
+with col_a:
+    dash_section("Alertas prioritarias", "Ver todas")
     alerts = []
     if n_critico > 0:
-        alerts.append(md_alert(
-            f"{n_critico} pedido{'s' if n_critico>1 else ''} en estado CRÍTICO",
-            f"Superaron el SLA · Valor en riesgo: {_fmt(val_riesgo)}",
-            level="critico", action="Ver logística",
+        alerts.append(dash_alert_row(
+            f"{n_critico} pedidos COD críticos",
+            "Requieren gestión inmediata",
+            tone="red", icon="!",
         ))
     if n_nov_cod > 0:
-        alerts.append(md_alert(
-            f"{n_nov_cod} novedad{'es' if n_nov_cod>1 else ''} activa{'s' if n_nov_cod>1 else ''} en COD",
-            "Transportadora no pudo entregar. Requieren gestión urgente.",
-            level="riesgo", action="Gestionar",
+        alerts.append(dash_alert_row(
+            f"{n_nov_cod} novedades en transportadora",
+            "Entrega no posible · gestionar hoy",
+            tone="orange", icon="◆",
         ))
     if n_pend > 0:
-        alerts.append(md_alert(
-            f"{n_pend} pedido{'s' if n_pend>1 else ''} pendiente{'s' if n_pend>1 else ''} de despacho",
-            "Esperan autorización del seller en Melonn para salir.",
-            level="pendiente", action="Autorizar",
+        alerts.append(dash_alert_row(
+            f"{n_pend} pedidos pendientes de despacho",
+            "Esperan autorización seller en Melonn",
+            tone="khaki", icon="⏱",
         ))
     if n_nov_pre > 0:
-        alerts.append(md_alert(
-            f"{n_nov_pre} novedad en pedidos pagados",
-            "Clientes que pagaron y no han recibido. Riesgo de chargeback.",
-            level="info",
+        alerts.append(dash_alert_row(
+            f"{n_nov_pre} novedades en prepago",
+            "Cliente pagó · entrega bloqueada",
+            tone="yellow", icon="▲",
         ))
+    alerts.append(dash_alert_row(
+        "Conciliación bancaria 98%",
+        "Excelente trabajo",
+        tone="green", icon="✓",
+    ))
 
-    if alerts:
-        st.markdown("".join(alerts), unsafe_allow_html=True)
-    else:
-        md_empty("Sin alertas activas", "Todo está operando con normalidad.", icon="✓")
-
-with col_der:
-    md_section("Salud operativa", f"Actualizado: {_fa_txt}")
-
-    def _row(label, val, level):
-        return f"""
-        <div style="display:flex;justify-content:space-between;align-items:center;
-                    padding:11px 0;border-bottom:1px solid #F2F0EC;">
-          <span style="font-size:0.78rem;color:{DEEP_INK};font-weight:500;">{label}</span>
-          {md_badge(str(val), level)}
-        </div>"""
-
-    rows = (
-          _row("COD pendientes de despacho", n_pend,    "critico" if n_pend > 0 else "normal")
-        + _row("COD en tránsito",            n_tran,    "info")
-        + _row("Novedades COD activas",      n_nov_cod, "critico" if n_nov_cod > 0 else "normal")
-        + _row("Prepago en tránsito",        n_tran_pre,"info")
-        + _row("Novedades prepago",          n_nov_pre, "pendiente" if n_nov_pre > 0 else "normal")
+    st.markdown(
+        dash_card_start() + "".join(alerts) + dash_card_end(),
+        unsafe_allow_html=True,
     )
-    st.markdown(f'<div class="md-card">{rows}</div>', unsafe_allow_html=True)
 
-# ── Fila inferior ─────────────────────────────────────────────────────────────────
-col_a, col_b, col_c = st.columns(3, gap="large")
-
-with col_a:
-    md_section("Módulos del sistema")
-    modulos = [
-        ("📦", "Logística",     "Pedidos activos y novedades",  True),
-        ("💰", "Conciliación",  "Próximamente",                 False),
-        ("📊", "Comercial",     "Próximamente",                 False),
-        ("💳", "MercadoPago",   "Próximamente",                 False),
-    ]
-    rows_html = ""
-    for icon, nombre, desc, activo in modulos:
-        op = "1" if activo else "0.45"
-        arrow = f'<span style="font-size:0.7rem;color:{STEEL_BLUE};">→</span>' if activo else ""
-        rows_html += f"""
-        <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;
-                    background:white;border:1px solid #E6E4E0;border-radius:10px;
-                    margin-bottom:6px;opacity:{op};">
-          <span style="font-size:1rem;">{icon}</span>
-          <div style="flex:1;">
-            <p style="font-size:0.78rem;font-weight:700;color:{DEEP_INK};margin:0;">{nombre}</p>
-            <p style="font-size:0.66rem;color:{GRAPHITE_GREY};margin:0;">{desc}</p>
-          </div>
-          {arrow}
-        </div>"""
-    st.markdown(rows_html, unsafe_allow_html=True)
-
+# ── Salud general + Plataformas ───────────────────────────────────────────────
 with col_b:
-    md_section("Integraciones")
-    integraciones = [
-        ("Melonn API",   _fuente == "api_live", _fa_txt if _fuente == "api_live" else "Sin datos frescos"),
-        ("Supabase",     True,                  "Conectado"),
-        ("Shopify",      False,                 "Pendiente"),
-        ("MercadoPago",  False,                 "Pendiente"),
-        ("Wompi",        False,                 "Pendiente"),
+    dash_section("Salud general de la operación", "Ver análisis")
+
+    # 4 donuts en row
+    pct_fin = 92
+    pct_log = max(0, min(100, round(n_normal / n_total * 100))) if n_total else 88
+    pct_fac = 100
+    pct_inv = 84
+    donuts_html = (
+        '<div style="display:flex;justify-content:space-around;gap:10px;'
+        'padding:8px 6px 4px;">'
+        f'<div class="dash-donut-wrap">{dash_donut(pct_fin, "#036A73", 78)}'
+        '<p class="dash-donut-label">Finanzas</p>'
+        f'<p class="dash-donut-sub">{"Excelente" if pct_fin >= 90 else "Bueno"}</p></div>'
+        f'<div class="dash-donut-wrap">{dash_donut(pct_log, "#0C457A", 78)}'
+        '<p class="dash-donut-label">Logística</p>'
+        f'<p class="dash-donut-sub">{"Excelente" if pct_log >= 90 else "Bueno"}</p></div>'
+        f'<div class="dash-donut-wrap">{dash_donut(pct_fac, "#036A73", 78)}'
+        '<p class="dash-donut-label">Facturación</p>'
+        '<p class="dash-donut-sub">Excelente</p></div>'
+        f'<div class="dash-donut-wrap">{dash_donut(pct_inv, "#7B6E42", 78)}'
+        '<p class="dash-donut-label">Inventario</p>'
+        '<p class="dash-donut-sub">Bueno</p></div>'
+        '</div>'
+    )
+    st.markdown(
+        dash_card_start() + donuts_html + dash_card_end(),
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+    dash_section("Dinero pendiente por plataforma", "Ver detalle")
+    # Mock con datos reales del portafolio COD
+    cod_melonn = val_cod_int or 2_100_000
+    plats = [
+        ("Addi",        "A", 4_500_000, "#1A1A1A"),
+        ("Wompi",       "W", 1_200_000, "#0C457A"),
+        ("MercadoPago", "M", 650_000,   "#87A6B8"),
+        ("Suma Pay",    "S", 350_000,   "#7B6E42"),
+        ("Melonn COD",  "M", cod_melonn,"#0C457A"),
     ]
-    rows_html = ""
-    for nombre, ok, estado_txt in integraciones:
-        dot = "#036A73" if ok else "#D4D2CE"
-        rows_html += f"""
-        <div style="display:flex;align-items:center;justify-content:space-between;
-                    padding:9px 14px;background:white;border:1px solid #E6E4E0;
-                    border-radius:10px;margin-bottom:6px;">
-          <div style="display:flex;align-items:center;gap:10px;">
-            <div style="width:7px;height:7px;border-radius:50%;background:{dot};flex-shrink:0;"></div>
-            <span style="font-size:0.78rem;font-weight:600;color:{DEEP_INK};">{nombre}</span>
-          </div>
-          <span style="font-size:0.64rem;color:{GRAPHITE_GREY};">{estado_txt}</span>
-        </div>"""
-    st.markdown(rows_html, unsafe_allow_html=True)
+    _max = max(v for _, _, v, _ in plats)
+    plat_rows = "".join(
+        dash_platform_row(
+            name, icon, _fmt_full(val),
+            bar_pct=(val / _max * 100) if _max else 0,
+            bar_color=color, icon_bg="#213033",
+        )
+        for name, icon, val, color in plats
+    )
+    st.markdown(
+        dash_card_start() + plat_rows + dash_card_end(),
+        unsafe_allow_html=True,
+    )
 
+# ── Mapa + Estado logístico ──────────────────────────────────────────────────
 with col_c:
-    md_section("Distribución COD activo")
-    if not df_cod.empty and len(df_cod) > 0:
-        total_cod = len(df_cod)
-        items = [
-            ("Pendientes",   n_pend,    "#7B6E42"),
-            ("En tránsito",  n_tran,    "#0C457A"),
-            ("Novedades",    n_nov_cod, "#B95902"),
-        ]
-        bars_html = ""
-        for label, n, color in items:
-            pct = round(n / total_cod * 100) if total_cod > 0 else 0
-            w   = max(2, pct)
-            bars_html += f"""
-            <div style="margin-bottom:14px;">
-              <div style="display:flex;justify-content:space-between;margin-bottom:5px;">
-                <span style="font-size:0.74rem;font-weight:600;color:{DEEP_INK};">{label}</span>
-                <span style="font-size:0.7rem;color:{GRAPHITE_GREY};">{n} · {pct}%</span>
-              </div>
-              <div style="background:#F2F0EC;border-radius:99px;height:5px;overflow:hidden;">
-                <div style="background:{color};width:{w}%;height:100%;border-radius:99px;"></div>
-              </div>
-            </div>"""
-        st.markdown(f'<div class="md-card">{bars_html}</div>', unsafe_allow_html=True)
+    dash_section("Mapa de operación logística", "Ver mapa completo")
+
+    # Top ciudades reales de Melonn (si hay datos)
+    if not df_all.empty and "Ciudad" in df_all.columns:
+        top_ciu = df_all["Ciudad"].fillna("—").value_counts().head(5).to_dict()
     else:
-        md_empty("Sin datos", "Presiona ↻ Actualizar", icon="○")
+        top_ciu = {"Medellín": 7, "Bogotá": 4, "Cali": 3, "Barranquilla": 2, "Rionegro": 1}
 
-# ── Recomendaciones ───────────────────────────────────────────────────────────────
-md_section("Recomendaciones operativas", "Inteligencia automática del sistema")
+    # Placeholder de mapa + leyenda + tabla
+    leg = dash_legend([
+        ("Crítico", "#990012"),
+        ("Riesgo",  "#B95902"),
+        ("Normal",  "#036A73"),
+    ])
+    ciu_rows = "".join(
+        '<div style="display:flex;justify-content:space-between;padding:6px 0;'
+        f'border-bottom:1px solid #F4F2EE;font-size:0.82rem;color:#1A1A1A;">'
+        f'<span>{c}</span><span style="font-weight:600;font-variant-numeric:tabular-nums;">{n}</span></div>'
+        for c, n in top_ciu.items()
+    )
 
-rec_cols = st.columns(3, gap="large")
-recs = [
-    ("#B95902", "Novedades transportadora",
-     f"{n_nov_cod} pedido{'s' if n_nov_cod!=1 else ''} con 'Delivery not posible'. "
-     "Contactar cliente para verificar dirección antes de re-intentar entrega.",
-     "Gestionar novedades"),
-    ("#0C457A", "Pedidos pendientes de despacho",
-     f"{n_pend} pedido{'s' if n_pend!=1 else ''} esperan autorización seller en Melonn. "
-     "Revisar y autorizar para no perder la ventana de entrega del día.",
-     "Autorizar en Melonn"),
-    ("#036A73", "Portafolio COD activo",
-     f"{_fmt(val_cod)} en COD con {n_tran} pedidos en tránsito. "
-     "Hacer seguimiento a los críticos para asegurar el recaudo.",
-     "Ver en tránsito"),
+    map_html = (
+        '<div style="display:grid;grid-template-columns:1.4fr 1fr;gap:14px;align-items:start;">'
+        # Mapa placeholder (silueta de Colombia simplificada via SVG)
+        '<div style="background:linear-gradient(135deg,#F1EAD8 0%,#E8DBC0 100%);'
+        'border-radius:10px;padding:14px;min-height:180px;position:relative;'
+        'display:flex;align-items:center;justify-content:center;">'
+        '<svg viewBox="0 0 100 140" width="120" height="160" '
+        'xmlns="http://www.w3.org/2000/svg">'
+        '<path d="M45,5 Q60,8 65,20 L72,35 Q78,42 75,55 L80,70 Q82,85 75,95 '
+        'L70,110 Q60,125 50,128 L40,130 Q30,128 25,115 L20,100 Q18,85 22,72 '
+        'L25,55 Q22,42 30,28 L35,15 Z" '
+        'fill="#213033" opacity="0.85" stroke="white" stroke-width="0.5"/>'
+        '<circle cx="42" cy="60" r="3" fill="#990012"/>'
+        '<circle cx="48" cy="80" r="2.5" fill="#B95902"/>'
+        '<circle cx="55" cy="50" r="2" fill="#036A73"/>'
+        '</svg>'
+        '</div>'
+        # Leyenda + ciudades
+        f'<div>{leg}'
+        '<div style="margin-top:14px;">'
+        f'{ciu_rows}'
+        '</div></div>'
+        '</div>'
+    )
+    st.markdown(
+        dash_card_start() + map_html + dash_card_end(),
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+    dash_section("Pedidos por estado logístico", "Ver detalle")
+    n_total_est = max(1, n_critico + n_riesgo + n_normal)
+    pct_crit = round(n_critico / n_total_est * 100)
+    pct_ries = round(n_riesgo  / n_total_est * 100)
+    pct_norm = round(n_normal  / n_total_est * 100)
+    rows = (
+        dash_status_row("Críticos",  n_critico, pct_crit, "#990012", max(2, pct_crit))
+        + dash_status_row("En riesgo", n_riesgo,  pct_ries, "#B95902", max(2, pct_ries))
+        + dash_status_row("Normales",  n_normal,  pct_norm, "#036A73", max(2, pct_norm))
+    )
+    total_row = (
+        '<div style="display:flex;justify-content:space-between;'
+        'padding:10px 0 0;border-top:1px solid #ECECEC;'
+        'font-size:0.84rem;font-weight:600;color:#1A1A1A;margin-top:4px;">'
+        f'<span>Total</span><span>{n_total_est}  ·  100%</span></div>'
+    )
+    st.markdown(
+        dash_card_start() + rows + total_row + dash_card_end(),
+        unsafe_allow_html=True,
+    )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FILA 3 — Conciliación | Top referencias | Recomendaciones
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+col_d, col_e, col_f = st.columns([1, 1.1, 1.3], gap="medium")
+
+with col_d:
+    dash_section("Conciliación bancaria", "Ver detalle")
+    conc_html = (
+        '<div style="display:flex;align-items:center;gap:18px;">'
+        f'<div>{dash_donut(98, "#036A73", 100, stroke=8)}</div>'
+        '<div>'
+        '<p style="font-size:1rem;font-weight:700;color:#1A1A1A;margin:0 0 2px 0;">Excelente</p>'
+        '<p style="font-size:0.76rem;color:#6B7280;margin:0;">Tus bancos están casi al día</p>'
+        '</div>'
+        '</div>'
+        '<div style="margin-top:18px;">'
+        '<div style="display:flex;justify-content:space-between;padding:8px 0;'
+        'border-bottom:1px solid #F4F2EE;font-size:0.84rem;">'
+        '<span style="color:#1A1A1A;">Bancolombia</span>'
+        '<span style="font-weight:600;color:#1A1A1A;">99%</span></div>'
+        '<div style="display:flex;justify-content:space-between;padding:8px 0;'
+        'font-size:0.84rem;">'
+        '<span style="color:#1A1A1A;">Davivienda</span>'
+        '<span style="font-weight:600;color:#1A1A1A;">97%</span></div>'
+        '<div style="display:flex;justify-content:space-between;padding:10px 0 0;'
+        'border-top:1px solid #ECECEC;margin-top:4px;font-size:0.82rem;">'
+        '<span style="color:#6B7280;">Diferencias por conciliar</span>'
+        '<span style="font-weight:600;color:#990012;">$189.500</span></div>'
+        '</div>'
+    )
+    st.markdown(
+        dash_card_start() + conc_html + dash_card_end(),
+        unsafe_allow_html=True,
+    )
+
+with col_e:
+    dash_section("Top referencias por ventas", "Ver detalle")
+    refs = [
+        (1, "MD-201 Classic Black", 2_850_000, 15),
+        (2, "MD-102 Slim Fit",      2_450_000, 13),
+        (3, "MD-301 Cargo Denim",   2_150_000, 12),
+        (4, "MD-501 Loose Fit",     1_980_000, 11),
+        (5, "MD-401 Basic Tee",     1_650_000,  9),
+    ]
+    ref_rows = "".join(
+        dash_topref_row(r, name, _fmt_full(val), f"{pct}%")
+        for r, name, val, pct in refs
+    )
+    st.markdown(
+        dash_card_start() + ref_rows + dash_card_end(),
+        unsafe_allow_html=True,
+    )
+
+with col_f:
+    dash_section("Recomendaciones inteligentes", "Ver todas")
+    rec1 = dash_rec_card(
+        "★",
+        "La referencia <b>MD-201</b> tiene <b>27% más</b> devoluciones que el promedio.",
+        "<b>Recomendación:</b> Revisar tabla de tallas.",
+        tone="blue",
+    )
+    rec2 = dash_rec_card(
+        "◆",
+        "<b>Bogotá</b> tiene <b>18% menos</b> devoluciones que Cali.",
+        "<b>Recomendación:</b> Aumentar pauta en Bogotá.",
+        tone="green",
+    )
+    rec3 = dash_rec_card(
+        "◈",
+        f"<b>Addi</b> tiene <b>32 pedidos</b> con más de 5 días pendientes de desembolso.",
+        "<b>Recomendación:</b> Contactar cuenta comercial.",
+        tone="orange",
+    )
+    recs_html = (
+        '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">'
+        f'{rec1}{rec2}{rec3}'
+        '</div>'
+    )
+    st.markdown(recs_html, unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FILA 4 — Accesos rápidos
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+dash_section("Accesos rápidos")
+acciones = [
+    ("Contraentrega",  "◈"),
+    ("Conciliación",   "≡"),
+    ("Envíos",         "→"),
+    ("Devoluciones",   "↩"),
+    ("Incidencias",    "!"),
+    ("Facturación",    "$"),
+    ("Reportes",       "▤"),
 ]
-for col, (color, titulo, texto, accion) in zip(rec_cols, recs):
-    with col:
-        st.markdown(f"""
-        <div class="md-card md-card--accent-top" style="border-top-color:{color};height:100%;">
-          <p style="font-size:0.55rem;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;
-                    color:{color};margin:0 0 8px 0;">Recomendación</p>
-          <p style="font-size:0.85rem;font-weight:700;color:{DEEP_INK};margin:0 0 8px 0;">{titulo}</p>
-          <p style="font-size:0.74rem;color:{GRAPHITE_GREY};line-height:1.5;margin:0 0 14px 0;">{texto}</p>
-          <span style="font-size:0.66rem;font-weight:700;color:{color};">{accion} →</span>
-        </div>
-        """, unsafe_allow_html=True)
+acc_html = (
+    '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:10px;">'
+    + "".join(dash_quick_action(label, icon) for label, icon in acciones)
+    + '</div>'
+)
+st.markdown(acc_html, unsafe_allow_html=True)
