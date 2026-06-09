@@ -34,19 +34,16 @@ def _shopify_snapshot() -> dict:
     Trae datos de Shopify cacheados en session_state.
     Si falla o es lento, retorna fallback con flag is_real=False.
     """
-    KEY    = "_shopify_snap"
-    KEY_TS = "_shopify_snap_ts"
-    TTL    = 600  # 10 min en memoria por sesión
-
-    cached = st.session_state.get(KEY)
-    ts     = st.session_state.get(KEY_TS)
-    if cached and ts and (datetime.now() - ts).total_seconds() < TTL:
+    # Cache hit
+    cached = st.session_state.get("_shopify_snap")
+    ts     = st.session_state.get("_shopify_snap_ts")
+    if cached and ts and (datetime.now() - ts).total_seconds() < 600:
         return cached
 
     if not _SHOPIFY_OK:
-        return {"is_real": False, "error": "import shopify_metrics falló"}
+        return {"is_real": False, "error": "import shopify_metrics fallo"}
 
-    # ── Llamada 1: ventas del día (la más importante, ~1s) ───────────────────
+    # Llamada 1: ventas del dia (crítica)
     try:
         v_hoy = ventas_del_dia()
     except Exception as e:
@@ -62,43 +59,40 @@ def _shopify_snapshot() -> dict:
         "top":         None,
     }
 
-    # ── Llamada 2: delta vs ayer (~1s, opcional) ──────────────────────────────
+    # Llamada 2: delta vs ayer (opcional)
     try:
         delta = delta_vs_ayer()
         snap["delta_pct"] = delta["pct"]
         snap["delta_up"]  = delta["up"]
     except Exception:
-        pass   # mantenemos snap con ventas_hoy real, sin delta
+        pass
 
-    # ── Llamada 3: serie 7d para sparkline (opcional, puede fallar) ───────────
+    # Llamada 3: serie 7d (opcional)
     try:
-        snap["serie"] = ventas_serie(7)   # 7d en vez de 12d — más rápido
+        snap["serie"] = ventas_serie(7)
     except Exception:
         pass
 
-    st.session_state[KEY]    = snap
-    st.session_state[KEY_TS] = datetime.now()
+    # Guardar en session_state — strings inline para evitar cualquier issue de scope
+    st.session_state["_shopify_snap"]    = snap
+    st.session_state["_shopify_snap_ts"] = datetime.now()
     return snap
 
 
 def _shopify_top() -> list:
     """Top productos cacheado aparte por ser más lento."""
-    KEY    = "_shopify_top"
-    KEY_TS = "_shopify_top_ts"
-    TTL    = 1800  # 30 min
-
-    cached = st.session_state.get(KEY)
-    ts     = st.session_state.get(KEY_TS)
-    if cached and ts and (datetime.now() - ts).total_seconds() < TTL:
+    cached = st.session_state.get("_shopify_top")
+    ts     = st.session_state.get("_shopify_top_ts")
+    if cached and ts and (datetime.now() - ts).total_seconds() < 1800:
         return cached
 
     if not _SHOPIFY_OK:
         return []
 
     try:
-        top = top_productos(5, dias=7)   # 7 días = ~10s en lugar de 22s
-        st.session_state[KEY]    = top
-        st.session_state[KEY_TS] = datetime.now()
+        top = top_productos(5, dias=7)
+        st.session_state["_shopify_top"]    = top
+        st.session_state["_shopify_top_ts"] = datetime.now()
         return top
     except Exception:
         return []
