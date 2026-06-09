@@ -8,6 +8,7 @@ Matching strategy (orden de prioridad):
   Sin match → inserta en pagos_plataforma sin pedido_id (para revisión manual)
 """
 
+import os
 import requests
 import streamlit as st
 from datetime import datetime, timedelta
@@ -18,7 +19,10 @@ MP_BASE = "https://api.mercadopago.com"
 
 
 def _token() -> str:
-    return st.secrets["MP_ACCESS_TOKEN"]
+    try:
+        return st.secrets["MP_ACCESS_TOKEN"]
+    except Exception:
+        return os.getenv("MP_ACCESS_TOKEN", "")
 
 
 def _headers() -> dict:
