@@ -119,188 +119,61 @@ try:
 except Exception:
     pass
 
-# ── Sidebar nav: grupos collapsibles ────────────────────────────────────────
-# Streamlit no soporta nativo grupos colapsables. Inyectamos:
-#   1) CSS global con st.markdown (afecta el sidebar de Streamlit)
-#   2) JS via components.html (es la única forma de ejecutar JS real en Streamlit)
-#      desde un iframe accedemos al document parent (que es el de la app).
+# ── Sidebar nav: grupos colapsables con st.expander nativo ────────────────────
+# Se renderizan manualmente abajo con st.expander + st.page_link.
+# La nav automática de st.navigation queda oculta con position="hidden".
+
+# Ocultar la nav automática de Streamlit — usamos nuestra propia con expanders
 st.markdown("""
 <style>
-[data-testid="stSidebarNavSeparator"] {
-  cursor: pointer !important;
-  user-select: none;
-  position: relative;
-  padding-right: 24px !important;
-}
-[data-testid="stSidebarNavSeparator"]:hover { color: #E1E1DF !important; }
-[data-testid="stSidebarNavSeparator"]::after {
-  content: "▾";
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 0.6rem;
-  opacity: 0.65;
-  transition: transform 0.2s;
-}
-[data-testid="stSidebarNavSeparator"].md-collapsed::after {
-  transform: translateY(-50%) rotate(-90deg);
-}
-[data-testid="stSidebarNavLink"].md-nav-hidden {
-  display: none !important;
-}
+[data-testid="stSidebarNav"] { display: none !important; }
+[data-testid="stSidebarNavSeparator"] { display: none !important; }
+[data-testid="stSidebarNavLink"] { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# JS via components.html — busca grupos por NOMBRE de texto (más robusto que data-testid)
-import streamlit.components.v1 as _components
-_components.html("""
-<script>
-(function() {
-  const doc = window.parent.document;
-  const STORE = 'md_collapsed_groups_v2';
-  const GROUP_NAMES = ['Operaciones', 'Finanzas', 'Comercial', 'Inteligencia', 'Configuración'];
-
-  function getCollapsed() {
-    try { return JSON.parse(window.parent.localStorage.getItem(STORE) || '[]'); }
-    catch(e) { return []; }
-  }
-  function saveCollapsed(arr) {
-    window.parent.localStorage.setItem(STORE, JSON.stringify(arr));
-  }
-
-  function findGroups() {
-    const sidebar = doc.querySelector('[data-testid="stSidebar"]');
-    if (!sidebar) return null;
-
-    // Encuentra elementos cuyo textContent EXACTO coincide con un grupo
-    // Y QUE NO ESTÉN dentro de un <a> (que serían placeholders/pages con el mismo nombre)
-    const headers = [];
-    const walker = doc.createTreeWalker(sidebar, NodeFilter.SHOW_ELEMENT, null);
-    let node;
-    while ((node = walker.nextNode())) {
-      const t = (node.textContent || '').trim();
-      if (!GROUP_NAMES.includes(t)) continue;
-      if (node.children.length !== 0) continue;   // debe ser leaf
-      // Excluir si tiene un <a> ancestor (es un nav link, no header de grupo)
-      if (node.closest('a')) continue;
-      // Excluir si tiene data-testid de nav link
-      const navLinkAncestor = node.closest('[data-testid="stSidebarNavLink"]');
-      if (navLinkAncestor) continue;
-      headers.push({el: node, name: t});
-    }
-    if (headers.length === 0) return null;
-
-    // Para cada header: subir hasta encontrar un <li> o div padre que sea el "contenedor de grupo"
-    // y luego los hermanos siguientes son los links del grupo (hasta el próximo header)
-    const groups = headers.map((h, i) => {
-      // El "header container" es el ancestor que es hermano directo de otros items
-      let container = h.el;
-      while (container.parentElement && container.parentElement !== sidebar) {
-        // Subir hasta encontrar un li o un elemento con muchos hermanos
-        if (container.parentElement.children.length > 1 && container.tagName !== 'SPAN') {
-          break;
-        }
-        container = container.parentElement;
-      }
-      return { headerEl: h.el, container, name: h.name };
-    });
-
-    // Calcular los siguientes hermanos de cada container hasta el container del próximo header
-    groups.forEach((g, i) => {
-      g.items = [];
-      let sibling = g.container.nextElementSibling;
-      const nextContainer = groups[i + 1] ? groups[i + 1].container : null;
-      while (sibling && sibling !== nextContainer) {
-        g.items.push(sibling);
-        sibling = sibling.nextElementSibling;
-      }
-    });
-
-    return groups;
-  }
-
-  function applyState(groups) {
-    const collapsed = getCollapsed();
-    groups.forEach(g => {
-      const isCol = collapsed.includes(g.name);
-      g.items.forEach(it => {
-        it.style.display = isCol ? 'none' : '';
-      });
-      // Indicador chevron usando data attribute
-      g.headerEl.setAttribute('data-md-collapsed', isCol ? '1' : '0');
-    });
-  }
-
-  function bind() {
-    const groups = findGroups();
-    if (!groups || groups.length === 0) return false;
-
-    applyState(groups);
-
-    groups.forEach(g => {
-      if (g.container.dataset.mdBound === '1') return;
-      g.container.dataset.mdBound = '1';
-      g.container.style.cursor = 'pointer';
-      g.container.style.userSelect = 'none';
-
-      g.container.addEventListener('click', (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        const collapsed = getCollapsed();
-        const set = new Set(collapsed);
-        if (set.has(g.name)) set.delete(g.name);
-        else set.add(g.name);
-        saveCollapsed(Array.from(set));
-        applyState(findGroups());
-      }, true);
-    });
-    return true;
-  }
-
-  // Reintentar hasta que el sidebar exista
-  let tries = 0;
-  const tick = () => {
-    if (bind() || ++tries > 100) clearInterval(t);
-  };
-  const t = setInterval(tick, 200);
-
-  // Observer para re-aplicar cuando Streamlit re-rendera el sidebar
-  try {
-    const target = doc.querySelector('[data-testid="stSidebar"]') || doc.body;
-    const mo = new MutationObserver(() => {
-      const groups = findGroups();
-      if (groups) applyState(groups);
-    });
-    mo.observe(target, { childList: true, subtree: true });
-  } catch(e) {}
-})();
-</script>
-
-<style>
-/* Chevron via attribute selector — se aplica a través del iframe via window.parent */
-</style>
-""", height=0)
-
-# Chevron icon en headers de grupo (en CSS principal para que llegue al sidebar real)
+# Estilos de los expanders del sidebar para que parezcan headers de grupo
 st.markdown("""
 <style>
-[data-testid="stSidebar"] *[data-md-collapsed] {
-  position: relative;
-  padding-right: 22px !important;
+/* Expanders del sidebar — apariencia de headers de grupo */
+[data-testid="stSidebar"] [data-testid="stExpander"] {
+  background: transparent !important;
+  border: none !important;
+  margin: 6px 0 !important;
 }
-[data-testid="stSidebar"] *[data-md-collapsed]::after {
-  content: "▾";
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 0.65rem;
-  opacity: 0.6;
-  transition: transform 0.2s;
+[data-testid="stSidebar"] [data-testid="stExpander"] summary,
+[data-testid="stSidebar"] [data-testid="stExpander"] > details > summary {
+  font-size: 0.6rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 2.5px !important;
+  text-transform: uppercase !important;
+  color: rgba(225,225,223,0.6) !important;
+  padding: 8px 4px !important;
+  cursor: pointer !important;
+  background: transparent !important;
 }
-[data-testid="stSidebar"] *[data-md-collapsed="1"]::after {
-  transform: translateY(-50%) rotate(-90deg);
+[data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
+  color: #E1E1DF !important;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] [data-testid="stExpanderDetails"] {
+  padding: 0 !important;
+}
+/* st.page_link en sidebar — estilo de nav item */
+[data-testid="stSidebar"] [data-testid="stPageLink"] a,
+[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"] {
+  font-size: 0.7rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 1.5px !important;
+  text-transform: uppercase !important;
+  color: rgba(225,225,223,0.78) !important;
+  border-radius: 7px !important;
+  padding: 8px 10px !important;
+  margin: 1px 0 !important;
+  display: block;
+}
+[data-testid="stSidebar"] [data-testid="stPageLink"] a:hover {
+  background: rgba(135,166,184,0.10) !important;
+  color: #fff !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -503,6 +376,44 @@ else:
         else:
             _sync_tag, _sync_color, _sync_sub = "Sin datos", "#87a6b8", "Presiona actualizar"
 
+        # ── Definir TODAS las páginas (necesarias para navigation + page_link) ───
+        from placeholders import (
+            contraentrega, envios, devoluciones, incidencias,
+            finanzas as finanzas_page, facturacion,
+            comercial as comercial_page, inventario,
+            reportes,
+            configuracion,
+        )
+
+        _p_home          = st.Page("pages/home.py", title="Centro de Control", default=True)
+        _p_logistica     = st.Page("pages/logistica.py", title="Logística")
+        _p_contraentrega = st.Page(contraentrega, title="Contraentrega", url_path="contraentrega")
+        _p_envios        = st.Page(envios,        title="Envíos",        url_path="envios")
+        _p_devoluciones  = st.Page(devoluciones,  title="Devoluciones",  url_path="devoluciones")
+        _p_incidencias   = st.Page(incidencias,   title="Incidencias",   url_path="incidencias")
+        _p_finanzas      = st.Page(finanzas_page, title="Finanzas",      url_path="finanzas")
+        _p_conciliacion  = st.Page("pages/3_conciliacion.py", title="Conciliación")
+        _p_facturacion   = st.Page(facturacion,   title="Facturación",   url_path="facturacion")
+        _p_mercadopago   = st.Page("pages/mercadopago.py", title="MercadoPago")
+        _p_comercial     = st.Page("pages/4_shopify.py", title="Comercial")
+        _p_inventario    = st.Page(inventario,    title="Inventario",    url_path="inventario")
+        _p_inteligencia  = st.Page("pages/inteligencia.py", title="Inteligencia")
+        _p_reportes      = st.Page(reportes,      title="Reportes",      url_path="reportes")
+        _p_configuracion = st.Page(configuracion, title="Configuración", url_path="configuracion")
+        _p_usuarios      = st.Page("pages/usuarios.py", title="Usuarios")
+        _p_integraciones = st.Page("pages/integraciones.py", title="Integraciones")
+
+        # Lista de pages para st.navigation (hidden — usaremos nuestro propio sidebar)
+        _all_pages = [_p_home]
+        if "logistica"   in _permisos: _all_pages += [_p_logistica, _p_contraentrega, _p_envios, _p_devoluciones, _p_incidencias]
+        if "conciliacion" in _permisos: _all_pages += [_p_finanzas, _p_conciliacion, _p_facturacion]
+        if "mercadopago" in _permisos: _all_pages += [_p_mercadopago]
+        if "comercial"   in _permisos: _all_pages += [_p_comercial, _p_inventario]
+        _all_pages += [_p_inteligencia, _p_reportes, _p_configuracion]
+        if _role == "admin":
+            _all_pages += [_p_usuarios]
+        _all_pages += [_p_integraciones]
+
         # ── ÚNICO sidebar de la app ──────────────────────────────────────────────
         with st.sidebar:
             # Logo
@@ -516,14 +427,46 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-        # La navegación de Streamlit se renderiza automáticamente entre los dos bloques
+            # Navegación con expanders nativos (collapsibles garantizado)
+            st.page_link(_p_home, label="Centro de Control")
 
-        with st.sidebar:
+            if "logistica" in _permisos:
+                with st.expander("Operaciones", expanded=True):
+                    st.page_link(_p_logistica,     label="Logística")
+                    st.page_link(_p_contraentrega, label="Contraentrega")
+                    st.page_link(_p_envios,        label="Envíos")
+                    st.page_link(_p_devoluciones,  label="Devoluciones")
+                    st.page_link(_p_incidencias,   label="Incidencias")
+
+            if "conciliacion" in _permisos or "mercadopago" in _permisos:
+                with st.expander("Finanzas", expanded=False):
+                    if "conciliacion" in _permisos:
+                        st.page_link(_p_finanzas,     label="Finanzas")
+                        st.page_link(_p_conciliacion, label="Conciliación")
+                        st.page_link(_p_facturacion,  label="Facturación")
+                    if "mercadopago" in _permisos:
+                        st.page_link(_p_mercadopago,  label="MercadoPago")
+
+            if "comercial" in _permisos:
+                with st.expander("Comercial", expanded=False):
+                    st.page_link(_p_comercial,  label="Comercial")
+                    st.page_link(_p_inventario, label="Inventario")
+
+            with st.expander("Inteligencia", expanded=False):
+                st.page_link(_p_inteligencia, label="Inteligencia")
+                st.page_link(_p_reportes,     label="Reportes")
+
+            with st.expander("Configuración", expanded=False):
+                st.page_link(_p_configuracion, label="Configuración")
+                if _role == "admin":
+                    st.page_link(_p_usuarios, label="Usuarios")
+                st.page_link(_p_integraciones, label="Integraciones")
+
             # Estado de sincronización
             st.markdown(f"""
             <div style="background:rgba(135,166,184,0.08);
                         border:1px solid rgba(135,166,184,0.18);
-                        border-radius:8px;padding:10px 12px;margin:12px 0 8px;">
+                        border-radius:8px;padding:10px 12px;margin:18px 0 8px;">
               <div style="font-size:0.55rem;color:{_sync_color};letter-spacing:1.5px;
                           font-weight:700;text-transform:uppercase;">● {_sync_tag}</div>
               <div style="font-size:0.65rem;color:rgba(225,225,223,0.7);margin-top:3px;">{_sync_sub}</div>
@@ -562,54 +505,5 @@ else:
             </p>
             """, unsafe_allow_html=True)
 
-        # ── Construir navegación según el mockup ─────────────────────────────────
-        from placeholders import (
-            contraentrega, envios, devoluciones, incidencias,
-            finanzas as finanzas_page, facturacion,
-            comercial as comercial_page, inventario,
-            reportes,
-            configuracion,
-        )
-
-        _home = [st.Page("pages/home.py", title="Centro de Control", default=True)]
-
-        _ops = []
-        if "logistica" in _permisos:
-            _ops.append(st.Page("pages/logistica.py", title="Logística"))
-            _ops.append(st.Page(contraentrega, title="Contraentrega", url_path="contraentrega"))
-            _ops.append(st.Page(envios,        title="Envíos",        url_path="envios"))
-            _ops.append(st.Page(devoluciones,  title="Devoluciones",  url_path="devoluciones"))
-            _ops.append(st.Page(incidencias,   title="Incidencias",   url_path="incidencias"))
-
-        _fin = []
-        if "conciliacion" in _permisos:
-            _fin.append(st.Page(finanzas_page,                   title="Finanzas",     url_path="finanzas"))
-            _fin.append(st.Page("pages/3_conciliacion.py",       title="Conciliación"))
-            _fin.append(st.Page(facturacion,                     title="Facturación",  url_path="facturacion"))
-        if "mercadopago"  in _permisos:
-            _fin.append(st.Page("pages/mercadopago.py",          title="MercadoPago"))
-
-        _com = []
-        if "comercial" in _permisos:
-            _com.append(st.Page("pages/4_shopify.py", title="Comercial"))
-            _com.append(st.Page(inventario,           title="Inventario", url_path="inventario"))
-
-        _int = []
-        _int.append(st.Page("pages/inteligencia.py", title="Inteligencia"))
-        _int.append(st.Page(reportes,                title="Reportes",     url_path="reportes"))
-
-        _pages = {"": _home}
-        if _ops: _pages["Operaciones"]  = _ops
-        if _fin: _pages["Finanzas"]     = _fin
-        if _com: _pages["Comercial"]    = _com
-        if _int: _pages["Inteligencia"] = _int
-
-        _conf = []
-        _conf.append(st.Page(configuracion, title="Configuración", url_path="configuracion"))
-        if _role == "admin":
-            _conf.append(st.Page("pages/usuarios.py", title="Usuarios"))
-        _conf.append(st.Page("pages/integraciones.py", title="Integraciones"))
-        _pages["Configuración"] = _conf
-
-    pg = st.navigation(_pages)
+    pg = st.navigation(_all_pages, position="hidden")
     pg.run()
