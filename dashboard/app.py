@@ -373,7 +373,7 @@ else:
             contraentrega, envios, devoluciones, incidencias,
             finanzas as finanzas_page, facturacion,
             comercial as comercial_page, inventario,
-            inteligencia, reportes,
+            reportes,
             configuracion,
         )
 
@@ -401,8 +401,8 @@ else:
             _com.append(st.Page(inventario,           title="Inventario", icon="📋", url_path="inventario"))
 
         _int = []
-        _int.append(st.Page(inteligencia, title="Inteligencia", icon="🧠", url_path="inteligencia"))
-        _int.append(st.Page(reportes,     title="Reportes",     icon="📊", url_path="reportes"))
+        _int.append(st.Page("pages/inteligencia.py", title="Inteligencia", icon="🧠"))
+        _int.append(st.Page(reportes,                title="Reportes",     icon="📊", url_path="reportes"))
 
         _pages = {"": _home}
         if _ops: _pages["Operaciones"]  = _ops
