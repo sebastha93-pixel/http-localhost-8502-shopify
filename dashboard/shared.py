@@ -745,38 +745,58 @@ hr {{ border: none !important; border-top: 1px solid #E6E4E0 !important; }}
   box-sizing: border-box;
 }}
 
-/* ── KPI card v3 con sparkline ───────────────────────────────────────────────── */
+/* ── KPI card v3 con sparkline (grid 2col — label y spark NUNCA se sobreponen) ── */
 .dash-kpi {{
   background: white;
   border: 1px solid #ECECEC;
   border-radius: 16px;
-  padding: 16px 18px;
+  padding: 14px 16px 14px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.03);
-  min-height: 110px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  position: relative;
+  min-height: 116px;
+  display: grid;
+  grid-template-columns: 1fr 70px;
+  grid-template-rows: auto auto 1fr auto;
+  column-gap: 8px;
+  row-gap: 2px;
+  align-items: start;
 }}
 .dash-kpi__label {{
-  font-size: 0.62rem;
+  grid-column: 1 / 2;
+  grid-row: 1;
+  font-size: 0.6rem;
   font-weight: 600;
-  letter-spacing: 1.4px;
+  letter-spacing: 1.1px;       /* reducido — más espacio para texto */
   text-transform: uppercase;
   color: #9CA0A4;
   margin: 0;
+  line-height: 1.2;
+  /* permitir 2 líneas si necesario, sin truncar */
+}}
+.dash-kpi__spark {{
+  grid-column: 2 / 3;
+  grid-row: 1 / 3;
+  width: 70px;
+  height: 32px;
+  opacity: 0.85;
+  pointer-events: none;
+  align-self: start;
+  margin-top: -4px;
 }}
 .dash-kpi__value {{
-  font-size: 1.55rem;
+  grid-column: 1 / -1;       /* ocupa ambas columnas, debajo del spark */
+  grid-row: 3;
+  font-size: 1.45rem;
   font-weight: 700;
   color: #1A1A1A;
   letter-spacing: -0.5px;
-  line-height: 1.05;
-  margin: 4px 0 6px 0;
+  line-height: 1.1;
+  margin: 6px 0 4px 0;
 }}
 .dash-kpi__value--danger {{ color: #990012; }}
 .dash-kpi__meta {{
-  font-size: 0.74rem;
+  grid-column: 1 / -1;
+  grid-row: 4;
+  font-size: 0.72rem;
   color: #6B7280;
   font-weight: 500;
   margin: 0;
@@ -787,18 +807,11 @@ hr {{ border: none !important; border-top: 1px solid #E6E4E0 !important; }}
 .dash-kpi__meta--up   {{ color: #036A73; }}
 .dash-kpi__meta--down {{ color: #990012; }}
 .dash-kpi__link {{
-  font-size: 0.74rem;
+  grid-column: 1 / -1;
+  grid-row: 4;
+  font-size: 0.72rem;
   color: #6B7280;
   font-weight: 500;
-}}
-.dash-kpi__spark {{
-  position: absolute;
-  right: 14px;
-  top: 14px;
-  width: 90px;
-  height: 36px;
-  opacity: 0.85;
-  pointer-events: none;
 }}
 
 /* ── Alert row (lista de alertas) ────────────────────────────────────────────── */
@@ -1051,18 +1064,26 @@ hr {{ border: none !important; border-top: 1px solid #E6E4E0 !important; }}
 }}
 
 /* ── Donut wrapper centrado ──────────────────────────────────────────────────── */
-.dash-donut-wrap {{ text-align: center; }}
+.dash-donut-wrap {{
+  text-align: center;
+  min-width: 0;       /* permite que flex item se encoja */
+  flex: 1;
+}}
 .dash-donut-label {{
-  font-size: 0.86rem;
+  font-size: 0.78rem;     /* reducido de 0.86 para que quepa en 1 línea */
   font-weight: 600;
   color: #1A1A1A;
   margin: 8px 0 2px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }}
 .dash-donut-sub {{
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   color: #6B7280;
   font-weight: 400;
   margin: 0;
+  white-space: nowrap;
 }}
 
 /* ── Status legend (rojo/naranja/verde con puntos) ──────────────────────────── */

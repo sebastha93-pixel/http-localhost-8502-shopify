@@ -243,48 +243,49 @@ with col_b:
 with col_c:
     dash_section("Mapa de operación logística", "Ver mapa completo")
 
-    # Top ciudades reales de Melonn (si hay datos)
+    # Top ciudades reales de Melonn — normalizar para evitar duplicados (BOGOTÁ/BOGOTA)
+    def _norm_ciudad(s):
+        if not isinstance(s, str) or not s.strip():
+            return "—"
+        import unicodedata as _ud
+        # Quitar tildes, normalizar a mayúsculas, luego title case
+        nfkd = _ud.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
+        return nfkd.strip().title()
+
     if not df_all.empty and "Ciudad" in df_all.columns:
-        top_ciu = df_all["Ciudad"].fillna("—").value_counts().head(5).to_dict()
+        ciu_norm = df_all["Ciudad"].apply(_norm_ciudad)
+        top_ciu  = ciu_norm.value_counts().head(5).to_dict()
+        top_ciu.pop("—", None)   # quitar valores vacíos
     else:
-        top_ciu = {"Medellín": 7, "Bogotá": 4, "Cali": 3, "Barranquilla": 2, "Rionegro": 1}
+        top_ciu = {"Medellin": 7, "Bogota": 4, "Cali": 3, "Barranquilla": 2, "Rionegro": 1}
 
-    # Placeholder de mapa + leyenda + tabla
-    leg = dash_legend([
-        ("Crítico", "#990012"),
-        ("Riesgo",  "#B95902"),
-        ("Normal",  "#036A73"),
-    ])
-    ciu_rows = "".join(
-        '<div style="display:flex;justify-content:space-between;padding:6px 0;'
-        f'border-bottom:1px solid #F4F2EE;font-size:0.82rem;color:#1A1A1A;">'
-        f'<span>{c}</span><span style="font-weight:600;font-variant-numeric:tabular-nums;">{n}</span></div>'
-        for c, n in top_ciu.items()
-    )
+    # Top ciudades como barras horizontales (cleaner que silueta de Colombia)
+    _max_ciu = max(top_ciu.values()) if top_ciu else 1
+    ciu_bars = ""
+    for ciu, n in top_ciu.items():
+        pct = n / _max_ciu * 100 if _max_ciu else 0
+        # Color de barra según volumen — verde para alto, gris para bajo
+        color = "#213033" if n >= _max_ciu * 0.66 else "#87A6B8"
+        ciu_bars += (
+            '<div style="display:grid;grid-template-columns:90px 1fr 36px;'
+            'align-items:center;gap:10px;padding:8px 0;'
+            'border-bottom:1px solid #F4F2EE;">'
+            f'<span style="font-size:0.82rem;color:#1A1A1A;font-weight:500;'
+            'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
+            f'{ciu}</span>'
+            '<div style="height:6px;background:#F2F0EC;border-radius:99px;overflow:hidden;">'
+            f'<div style="width:{max(2,pct):.0f}%;height:100%;background:{color};'
+            'border-radius:99px;"></div></div>'
+            '<span style="font-size:0.84rem;font-weight:600;color:#1A1A1A;'
+            f'text-align:right;font-variant-numeric:tabular-nums;">{n}</span>'
+            '</div>'
+        )
 
+    total_pedidos_ciu = sum(top_ciu.values())
     map_html = (
-        '<div style="display:grid;grid-template-columns:1.4fr 1fr;gap:14px;align-items:start;">'
-        # Mapa placeholder (silueta de Colombia simplificada via SVG)
-        '<div style="background:linear-gradient(135deg,#F1EAD8 0%,#E8DBC0 100%);'
-        'border-radius:10px;padding:14px;min-height:180px;position:relative;'
-        'display:flex;align-items:center;justify-content:center;">'
-        '<svg viewBox="0 0 100 140" width="120" height="160" '
-        'xmlns="http://www.w3.org/2000/svg">'
-        '<path d="M45,5 Q60,8 65,20 L72,35 Q78,42 75,55 L80,70 Q82,85 75,95 '
-        'L70,110 Q60,125 50,128 L40,130 Q30,128 25,115 L20,100 Q18,85 22,72 '
-        'L25,55 Q22,42 30,28 L35,15 Z" '
-        'fill="#213033" opacity="0.85" stroke="white" stroke-width="0.5"/>'
-        '<circle cx="42" cy="60" r="3" fill="#990012"/>'
-        '<circle cx="48" cy="80" r="2.5" fill="#B95902"/>'
-        '<circle cx="55" cy="50" r="2" fill="#036A73"/>'
-        '</svg>'
-        '</div>'
-        # Leyenda + ciudades
-        f'<div>{leg}'
-        '<div style="margin-top:14px;">'
-        f'{ciu_rows}'
-        '</div></div>'
-        '</div>'
+        '<p style="font-size:0.72rem;color:#6B7280;margin:0 0 12px 0;'
+        f'font-weight:400;">{total_pedidos_ciu} pedidos activos en las principales ciudades</p>'
+        f'{ciu_bars}'
     )
     st.markdown(
         dash_card_start() + map_html + dash_card_end(),
