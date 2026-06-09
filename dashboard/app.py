@@ -119,6 +119,104 @@ try:
 except Exception:
     pass
 
+# ── Sidebar nav: grupos collapsibles + estética minimalista ─────────────────────
+# Streamlit no soporta nativo grupos colapsables, pero podemos inyectar JS
+# que añade comportamiento de toggle al hacer click sobre el label del grupo.
+st.markdown("""
+<style>
+/* Labels de grupos en el sidebar — apariencia clickable */
+[data-testid="stSidebarNavSeparator"] {
+  cursor: pointer !important;
+  user-select: none;
+  position: relative;
+  padding-right: 24px !important;
+  transition: opacity 0.15s;
+}
+[data-testid="stSidebarNavSeparator"]:hover {
+  opacity: 1 !important;
+  color: #E1E1DF !important;
+}
+[data-testid="stSidebarNavSeparator"]::after {
+  content: "▾";
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.55rem;
+  opacity: 0.6;
+  transition: transform 0.2s;
+}
+[data-testid="stSidebarNavSeparator"].collapsed::after {
+  transform: translateY(-50%) rotate(-90deg);
+}
+/* Cuando un grupo está collapsed, oculta los items siguientes hasta el próximo separator */
+[data-testid="stSidebarNavLink"].nav-hidden {
+  display: none !important;
+}
+</style>
+
+<script>
+(function() {
+  function toggleGroups() {
+    const navItems = window.parent.document.querySelectorAll(
+      '[data-testid="stSidebarNavSeparator"], [data-testid="stSidebarNavLink"]'
+    );
+    if (!navItems.length) return false;
+
+    // Restaurar estado guardado por nombre del grupo
+    const STORE = 'md_collapsed_groups_v1';
+    let collapsed;
+    try { collapsed = JSON.parse(window.parent.localStorage.getItem(STORE) || '[]'); }
+    catch(e) { collapsed = []; }
+
+    // Recorre items: separator → grupo nuevo, link → pertenece al grupo actual
+    let currentGroup = null;
+    let currentLinks = [];
+    const groups = [];
+    navItems.forEach(el => {
+      if (el.getAttribute('data-testid') === 'stSidebarNavSeparator') {
+        if (currentGroup) groups.push({header: currentGroup, links: currentLinks});
+        currentGroup = el;
+        currentLinks = [];
+      } else if (currentGroup) {
+        currentLinks.push(el);
+      }
+    });
+    if (currentGroup) groups.push({header: currentGroup, links: currentLinks});
+
+    // Aplicar estado inicial + click handler
+    groups.forEach(g => {
+      const name = (g.header.textContent || '').trim();
+      const isCollapsed = collapsed.includes(name);
+      g.header.classList.toggle('collapsed', isCollapsed);
+      g.links.forEach(l => l.classList.toggle('nav-hidden', isCollapsed));
+
+      if (g.header.dataset.mdBound) return;
+      g.header.dataset.mdBound = '1';
+      g.header.addEventListener('click', () => {
+        const willCollapse = !g.header.classList.contains('collapsed');
+        g.header.classList.toggle('collapsed', willCollapse);
+        g.links.forEach(l => l.classList.toggle('nav-hidden', willCollapse));
+        // Persistir
+        let saved;
+        try { saved = JSON.parse(window.parent.localStorage.getItem(STORE) || '[]'); }
+        catch(e) { saved = []; }
+        const set = new Set(saved);
+        if (willCollapse) set.add(name); else set.delete(name);
+        window.parent.localStorage.setItem(STORE, JSON.stringify(Array.from(set)));
+      });
+    });
+    return true;
+  }
+  // Reintenta hasta que el sidebar esté en el DOM
+  let tries = 0;
+  const id = setInterval(() => {
+    if (toggleGroups() || ++tries > 30) clearInterval(id);
+  }, 200);
+})();
+</script>
+""", unsafe_allow_html=True)
+
 
 # ── Autenticación ──────────────────────────────────────────────────────────────
 _INACTIVITY_HOURS = 3   # logout automático si no hay actividad en X horas
@@ -385,32 +483,32 @@ else:
             configuracion,
         )
 
-        _home = [st.Page("pages/home.py", title="Centro de Control", icon="🏠", default=True)]
+        _home = [st.Page("pages/home.py", title="Centro de Control", default=True)]
 
         _ops = []
         if "logistica" in _permisos:
-            _ops.append(st.Page("pages/logistica.py", title="Logística", icon="📦"))
-            _ops.append(st.Page(contraentrega, title="Contraentrega", icon="💵", url_path="contraentrega"))
-            _ops.append(st.Page(envios,        title="Envíos",        icon="🚚", url_path="envios"))
-            _ops.append(st.Page(devoluciones,  title="Devoluciones",  icon="🔄", url_path="devoluciones"))
-            _ops.append(st.Page(incidencias,   title="Incidencias",   icon="⚠️", url_path="incidencias"))
+            _ops.append(st.Page("pages/logistica.py", title="Logística"))
+            _ops.append(st.Page(contraentrega, title="Contraentrega", url_path="contraentrega"))
+            _ops.append(st.Page(envios,        title="Envíos",        url_path="envios"))
+            _ops.append(st.Page(devoluciones,  title="Devoluciones",  url_path="devoluciones"))
+            _ops.append(st.Page(incidencias,   title="Incidencias",   url_path="incidencias"))
 
         _fin = []
         if "conciliacion" in _permisos:
-            _fin.append(st.Page(finanzas_page,                   title="Finanzas",     icon="💰", url_path="finanzas"))
-            _fin.append(st.Page("pages/3_conciliacion.py",       title="Conciliación", icon="🔗"))
-            _fin.append(st.Page(facturacion,                     title="Facturación",  icon="🧾", url_path="facturacion"))
+            _fin.append(st.Page(finanzas_page,                   title="Finanzas",     url_path="finanzas"))
+            _fin.append(st.Page("pages/3_conciliacion.py",       title="Conciliación"))
+            _fin.append(st.Page(facturacion,                     title="Facturación",  url_path="facturacion"))
         if "mercadopago"  in _permisos:
-            _fin.append(st.Page("pages/mercadopago.py",          title="MercadoPago",  icon="💳"))
+            _fin.append(st.Page("pages/mercadopago.py",          title="MercadoPago"))
 
         _com = []
         if "comercial" in _permisos:
-            _com.append(st.Page("pages/4_shopify.py", title="Comercial",  icon="📈"))
-            _com.append(st.Page(inventario,           title="Inventario", icon="📋", url_path="inventario"))
+            _com.append(st.Page("pages/4_shopify.py", title="Comercial"))
+            _com.append(st.Page(inventario,           title="Inventario", url_path="inventario"))
 
         _int = []
-        _int.append(st.Page("pages/inteligencia.py", title="Inteligencia", icon="🧠"))
-        _int.append(st.Page(reportes,                title="Reportes",     icon="📊", url_path="reportes"))
+        _int.append(st.Page("pages/inteligencia.py", title="Inteligencia"))
+        _int.append(st.Page(reportes,                title="Reportes",     url_path="reportes"))
 
         _pages = {"": _home}
         if _ops: _pages["Operaciones"]  = _ops
@@ -419,10 +517,10 @@ else:
         if _int: _pages["Inteligencia"] = _int
 
         _conf = []
-        _conf.append(st.Page(configuracion, title="Configuración", icon="⚙️", url_path="configuracion"))
+        _conf.append(st.Page(configuracion, title="Configuración", url_path="configuracion"))
         if _role == "admin":
-            _conf.append(st.Page("pages/usuarios.py", title="Usuarios", icon="👥"))
-        _conf.append(st.Page("pages/integraciones.py", title="Integraciones", icon="🔌"))
+            _conf.append(st.Page("pages/usuarios.py", title="Usuarios"))
+        _conf.append(st.Page("pages/integraciones.py", title="Integraciones"))
         _pages["Configuración"] = _conf
 
     pg = st.navigation(_pages)
