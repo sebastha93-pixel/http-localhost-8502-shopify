@@ -1,0 +1,98 @@
+"use client";
+
+import { useMemo } from "react";
+import { usePedidos } from "@/lib/hooks";
+import { PedidosTable } from "@/components/pedidos-table";
+import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
+import { KpiCard } from "@/components/kpi-card";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Pedido } from "@/lib/types";
+import { formatMoneyShort } from "@/lib/utils";
+
+export default function ContraentregaPage() {
+  const { data, isLoading, error, refetch, isFetching } = usePedidos();
+
+  const groups = useMemo(() => {
+    const cods = (data?.pedidos ?? []).filter((p) => p.tipo_recaudo === "Contraentrega");
+    const code = (p: Pedido) => p.estado_melonn_code;
+    return {
+      todos:      cods,
+      pendientes: cods.filter((p) => [26, 29].includes(code(p))),
+      transito:   cods.filter((p) => [5, 7, 24, 28].includes(code(p))),
+      novedades:  cods.filter((p) => p.sub_estado_logistico === "novedad"),
+      entregados: cods.filter((p) => [6, 8].includes(code(p))),
+    };
+  }, [data]);
+
+  if (isLoading) return <LoadingState label="Cargando pedidos contraentrega..." />;
+  if (error || !data) return <ErrorState error={error} onRetry={() => refetch()} />;
+
+  const sumVal = (arr: Pedido[]) => arr.reduce((s, p) => s + (p.valor_num ?? 0), 0);
+  const valTotal = sumVal(groups.todos);
+  const valTransito = sumVal(groups.transito);
+  const valNovedades = sumVal(groups.novedades);
+  const valEntregado = sumVal(groups.entregados);
+
+  return (
+    <PageShell
+      title="Contraentrega"
+      subtitle={`${groups.todos.length} pedidos COD activos · recaudo pendiente`}
+      isFetching={isFetching}
+      onRefresh={() => refetch()}
+    >
+      {/* KPIs COD */}
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <KpiCard label="Total COD"        value={groups.todos.length}        meta={formatMoneyShort(valTotal)}     accent="navy" />
+        <KpiCard label="Pendientes"       value={groups.pendientes.length}   meta="Esperan despacho"               accent="khaki" />
+        <KpiCard label="En tránsito"      value={groups.transito.length}     meta={formatMoneyShort(valTransito)}  accent="steel" />
+        <KpiCard label="Novedades"        value={groups.novedades.length}    meta={formatMoneyShort(valNovedades)} accent={groups.novedades.length ? "rust" : "steel"} danger={groups.novedades.length > 0} />
+      </div>
+
+      <Tabs defaultValue="pendientes">
+        <TabsList>
+          <TabsTrigger value="pendientes">Pendientes ({groups.pendientes.length})</TabsTrigger>
+          <TabsTrigger value="transito">Tránsito ({groups.transito.length})</TabsTrigger>
+          <TabsTrigger value="novedades">Novedades ({groups.novedades.length})</TabsTrigger>
+          <TabsTrigger value="entregados">Entregados ({groups.entregados.length})</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="pendientes">
+          <PedidosTable
+            pedidos={groups.pendientes}
+            showTipoFilter={false}
+            emptyMessage="No hay pedidos pendientes de despacho"
+            columns={["nivel", "orden", "cliente", "ciudad", "zona", "dias", "valor", "estado", "link"]}
+          />
+        </TabsContent>
+        <TabsContent value="transito">
+          <PedidosTable
+            pedidos={groups.transito}
+            showTipoFilter={false}
+            emptyMessage="No hay pedidos en tránsito"
+            columns={["nivel", "orden", "cliente", "ciudad", "zona", "dias", "valor", "estado", "link"]}
+          />
+        </TabsContent>
+        <TabsContent value="novedades">
+          <PedidosTable
+            pedidos={groups.novedades}
+            showTipoFilter={false}
+            emptyMessage="✓ Sin novedades en COD"
+            columns={["nivel", "orden", "cliente", "ciudad", "dias", "valor", "novedad", "link"]}
+          />
+        </TabsContent>
+        <TabsContent value="entregados">
+          <PedidosTable
+            pedidos={groups.entregados}
+            showTipoFilter={false}
+            showNivelFilter={false}
+            emptyMessage="Sin entregas registradas"
+            columns={["orden", "cliente", "ciudad", "dias", "valor", "estado", "link"]}
+          />
+          <p className="text-xs text-graphite mt-3">
+            Total entregado: <span className="font-semibold text-ink">{formatMoneyShort(valEntregado)}</span>
+          </p>
+        </TabsContent>
+      </Tabs>
+    </PageShell>
+  );
+}

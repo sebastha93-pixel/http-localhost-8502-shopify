@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background:           36 14% 96%;     /* #F7F7F5 */
+    --foreground:           195 21% 16%;    /* #213033 ink */
+    --card:                 0 0% 100%;
+    --card-foreground:      195 21% 16%;
+    --popover:              0 0% 100%;
+    --popover-foreground:   195 21% 16%;
+    --primary:              195 21% 16%;    /* ink */
+    --primary-foreground:   0 0% 100%;
+    --secondary:            36 14% 92%;
+    --secondary-foreground: 195 21% 16%;
+    --muted:                36 14% 92%;
+    --muted-foreground:     0 0% 38%;
+    --accent:               202 28% 62%;    /* steel blue */
+    --accent-foreground:    195 21% 16%;
+    --destructive:          351 99% 30%;    /* crimson */
+    --destructive-foreground: 0 0% 100%;
+    --border:               36 14% 90%;
+    --input:                36 14% 90%;
+    --ring:                 202 28% 62%;
+    --radius:               0.875rem;
+  }
+
+  * { @apply border-border; }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+  html { scroll-behavior: smooth; }
+}
+
+/* Scrollbar fino */
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #D4D2CE; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #87A6B8; }
+
+/* Section header con tracking editorial */
+.section-label {
+  @apply text-[0.62rem] font-bold tracking-[0.18em] uppercase text-graphite;
+}

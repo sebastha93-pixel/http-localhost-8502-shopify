@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from backend.services import melonn as svc
+from backend.services import metricas as metricas_svc
 
 
 router = APIRouter(prefix="/api/melonn", tags=["melonn"])
@@ -62,4 +63,19 @@ def pedidos(
         data = svc.obtener_pedidos(forzar_refresh=refresh)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Melonn API error: {exc}")
+    # Enriquecer con nivel/zona/sla — campos críticos para tabla logística
+    data["pedidos"] = [metricas_svc.clasificar(p) for p in data["pedidos"]]
     return PedidoListResponse(**data)
+
+
+@router.get("/pedidos/{orden}")
+def pedido_detalle(orden: str) -> dict:
+    """Detalle de un pedido específico (por orden_tienda u orden_melonn)."""
+    try:
+        data = svc.obtener_pedidos(forzar_refresh=False)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Melonn API error: {exc}")
+    for p in data["pedidos"]:
+        if p.get("orden_tienda") == orden or p.get("orden_melonn") == orden:
+            return metricas_svc.clasificar(p)
+    raise HTTPException(status_code=404, detail=f"Pedido {orden} no encontrado")
