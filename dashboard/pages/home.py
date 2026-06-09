@@ -19,6 +19,79 @@ from shared import (
     dash_quick_action, dash_topref_row, dash_legend, dash_donut,
 )
 
+# ── Shopify metrics (opcional — falla limpia si no responde) ──────────────────
+try:
+    from shopify_metrics import (
+        ventas_del_dia, ventas_serie, delta_vs_ayer, top_productos,
+    )
+    _SHOPIFY_OK = True
+except Exception:
+    _SHOPIFY_OK = False
+
+
+def _shopify_snapshot() -> dict:
+    """
+    Trae datos de Shopify cacheados en session_state.
+    Si falla o es lento, retorna fallback con flag is_real=False.
+    """
+    KEY    = "_shopify_snap"
+    KEY_TS = "_shopify_snap_ts"
+    TTL    = 600  # 10 min en memoria por sesión
+
+    cached = st.session_state.get(KEY)
+    ts     = st.session_state.get(KEY_TS)
+    if cached and ts and (datetime.now() - ts).total_seconds() < TTL:
+        return cached
+
+    if not _SHOPIFY_OK:
+        return {"is_real": False}
+
+    try:
+        v_hoy = ventas_del_dia()
+        delta = delta_vs_ayer()
+        serie = ventas_serie(12)
+        # top_productos es lento (22s) — lo separamos: solo si hay tiempo
+        # Por ahora, datos sin top productos en el primer render
+        snap = {
+            "is_real":     True,
+            "ventas_hoy":  v_hoy["total"],
+            "num_pedidos": v_hoy["num_pedidos"],
+            "delta_pct":   delta["pct"],
+            "delta_up":    delta["up"],
+            "serie":       serie,
+            "top":         None,
+        }
+        st.session_state[KEY]    = snap
+        st.session_state[KEY_TS] = datetime.now()
+        return snap
+    except Exception as e:
+        # Fallback silencioso — no romper el home
+        return {"is_real": False, "error": str(e)[:80]}
+
+
+def _shopify_top() -> list:
+    """Top productos cacheado aparte por ser más lento."""
+    KEY    = "_shopify_top"
+    KEY_TS = "_shopify_top_ts"
+    TTL    = 1800  # 30 min
+
+    cached = st.session_state.get(KEY)
+    ts     = st.session_state.get(KEY_TS)
+    if cached and ts and (datetime.now() - ts).total_seconds() < TTL:
+        return cached
+
+    if not _SHOPIFY_OK:
+        return []
+
+    try:
+        top = top_productos(5, dias=7)   # 7 días = ~10s en lugar de 22s
+        st.session_state[KEY]    = top
+        st.session_state[KEY_TS] = datetime.now()
+        return top
+    except Exception:
+        return []
+
+
 st.markdown(CSS, unsafe_allow_html=True)
 
 # ── Guard ──────────────────────────────────────────────────────────────────────
@@ -89,15 +162,31 @@ dash_hero(
 # ══════════════════════════════════════════════════════════════════════════════
 val_cod_int = int(val_cod)
 
-# Sparklines basados en mini-tendencias (puedes conectar series reales después)
-_sp_ventas   = [12, 14, 13, 17, 16, 18, 17, 19, 18, 20, 18, 21]
+# ── Datos REALES de Shopify ──────────────────────────────────────────────────
+_shop = _shopify_snapshot()
+
+if _shop.get("is_real"):
+    _ventas_hoy   = int(_shop["ventas_hoy"])
+    _delta_pct    = _shop["delta_pct"]
+    _delta_up     = _shop["delta_up"]
+    _sp_ventas    = _shop["serie"] or [0] * 12
+    _pedidos_dia  = _shop["num_pedidos"]
+    _meta_ventas  = f"{abs(_delta_pct):.1f}% vs ayer"
+    _meta_dir     = "up" if _delta_up else "down"
+else:
+    # Fallback mock — solo si Shopify no responde
+    _ventas_hoy   = 18_450_000
+    _sp_ventas    = [12, 14, 13, 17, 16, 18, 17, 19, 18, 20, 18, 21]
+    _meta_ventas  = "—"
+    _meta_dir     = ""
+
+# Sparklines secundarios (recaudo, bancos, diferencia, pedidos)
 _sp_recaudo  = [10, 11, 13, 12, 14, 13, 15, 14, 15, 16, 15, 17]
 _sp_bancos   = [9, 10, 11, 12, 13, 13, 14, 13, 15, 14, 16, 15]
 _sp_dif      = [3, 2, 4, 3, 2, 3, 2, 1, 2, 3, 1, 2]
 _sp_pedidos  = [220, 235, 240, 245, 250, 260, 270, 268, 275, 280, 282, n_total or 286]
 
-# Mock realista derivado del COD real
-_ventas_hoy        = 18_450_000
+# Mock derivado del COD real (bancos pendiente)
 _recaudo_esperado  = max(val_cod_int, 15_200_000)
 _ingresado_bancos  = int(_recaudo_esperado * 0.974)
 _diferencia        = _recaudo_esperado - _ingresado_bancos
@@ -108,7 +197,7 @@ k1, k2, k3, k4, k5 = st.columns(5)
 with k1:
     st.markdown(dash_kpi(
         "VENTAS HOY", _fmt_full(_ventas_hoy),
-        meta="12.4% vs ayer", meta_dir="up",
+        meta=_meta_ventas, meta_dir=_meta_dir,
         spark_svg=dash_sparkline(_sp_ventas, color="#1A1A1A"),
     ), unsafe_allow_html=True)
 with k2:
@@ -351,22 +440,33 @@ with col_d:
     )
 
 with col_e:
-    dash_section("Top referencias por ventas", "Ver detalle")
-    refs = [
-        (1, "MD-201 Classic Black", 2_850_000, 15),
-        (2, "MD-102 Slim Fit",      2_450_000, 13),
-        (3, "MD-301 Cargo Denim",   2_150_000, 12),
-        (4, "MD-501 Loose Fit",     1_980_000, 11),
-        (5, "MD-401 Basic Tee",     1_650_000,  9),
-    ]
-    ref_rows = "".join(
-        dash_topref_row(r, name, _fmt_full(val), f"{pct}%")
-        for r, name, val, pct in refs
-    )
-    st.markdown(
-        dash_card_start() + ref_rows + dash_card_end(),
-        unsafe_allow_html=True,
-    )
+    dash_section("Top referencias por ventas", "Ver detalle · 7 días")
+
+    _top_real = _shopify_top()
+    if _top_real:
+        ref_rows = "".join(
+            dash_topref_row(
+                r + 1,
+                (p["nombre"] or p["sku"])[:38],
+                _fmt_full(p["revenue"]),
+                f"{p['pct_del_total']:.1f}%",
+            )
+            for r, p in enumerate(_top_real)
+        )
+        st.markdown(
+            dash_card_start() + ref_rows + dash_card_end(),
+            unsafe_allow_html=True,
+        )
+    else:
+        # Placeholder mientras Shopify responde (primera carga puede tardar)
+        st.markdown(dash_card_start() + (
+            '<p style="font-size:0.78rem;color:#6B7280;text-align:center;'
+            'padding:24px 0;margin:0;">'
+            '⏳ Cargando datos de Shopify...<br>'
+            '<span style="font-size:0.7rem;color:#9CA0A4;">'
+            'Recalcular dura ~10s la primera vez. Recarga la página.</span>'
+            '</p>'
+        ) + dash_card_end(), unsafe_allow_html=True)
 
 with col_f:
     dash_section("Recomendaciones inteligentes", "Ver todas")
