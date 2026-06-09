@@ -46,7 +46,7 @@ from memoria import (
     cargar_acciones, agregar_accion, TIPOS_ACCION,
 )
 
-st.markdown(CSS, unsafe_allow_html=True)
+# CSS ya está en app.py — no duplicar
 
 # ── Guard de permisos ──────────────────────────────────────────────────────────
 if "logistica" not in st.session_state.get("permisos", ["logistica"]):

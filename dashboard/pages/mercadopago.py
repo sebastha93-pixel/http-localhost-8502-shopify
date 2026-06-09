@@ -16,7 +16,7 @@ from shared import CSS, DEEP_INK, STEEL_BLUE, NORMAL_COLOR, CRITICO_COLOR, RIESG
 import mp_client
 from db import get_conn
 
-st.markdown(CSS, unsafe_allow_html=True)
+# CSS ya está en app.py — no duplicar
 
 # Guard: solo usuarios con acceso al módulo mercadopago
 if "mercadopago" not in st.session_state.get("permisos", ["mercadopago"]):

@@ -31,7 +31,7 @@ from conciliacion import (
 )
 from db import get_conn
 
-st.markdown(CSS, unsafe_allow_html=True)
+# CSS ya está en app.py — no duplicar
 
 # Guard: solo usuarios con acceso al módulo conciliacion
 if "conciliacion" not in st.session_state.get("permisos", ["conciliacion"]):

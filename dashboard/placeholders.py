@@ -19,7 +19,7 @@ from shared import (
 def _proximamente(title: str, descripcion: str, icon: str = "○",
                   features: list = None, tone: str = "blue"):
     """Render genérico de página 'Próximamente'."""
-    st.markdown(CSS, unsafe_allow_html=True)
+    # CSS ya está en app.py — no duplicar
 
     # Guard básico
     if "logistica" not in st.session_state.get("permisos", ["logistica"]):

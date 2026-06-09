@@ -11,7 +11,7 @@ import streamlit as st
 import bcrypt
 from shared import CSS, DEEP_INK, STEEL_BLUE, GRAPHITE_GREY
 
-st.markdown(CSS, unsafe_allow_html=True)
+# CSS ya está en app.py — no duplicar
 
 # Guard: solo admin puede acceder
 if st.session_state.get("authentication_status") is not True:

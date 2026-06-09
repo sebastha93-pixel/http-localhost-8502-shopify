@@ -111,6 +111,14 @@ footer { visibility: hidden !important; }
 </style>
 """, unsafe_allow_html=True)
 
+# ── CSS del design system (una sola vez por render, no en cada página) ────────
+# Eliminado de pages/*.py para no duplicar renders del mismo bloque CSS.
+try:
+    from shared import CSS as _DASH_CSS
+    st.markdown(_DASH_CSS, unsafe_allow_html=True)
+except Exception:
+    pass
+
 
 # ── Autenticación ──────────────────────────────────────────────────────────────
 _INACTIVITY_HOURS = 3   # logout automático si no hay actividad en X horas

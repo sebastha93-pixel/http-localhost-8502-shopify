@@ -18,7 +18,7 @@ from shared import (
     dash_kpi,
 )
 
-st.markdown(CSS, unsafe_allow_html=True)
+# CSS ya está en app.py — no duplicar
 
 # ── Guard ──────────────────────────────────────────────────────────────────────
 if "logistica" not in st.session_state.get("permisos", ["logistica"]):
