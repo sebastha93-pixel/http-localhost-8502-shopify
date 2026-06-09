@@ -368,20 +368,54 @@ else:
             </p>
             """, unsafe_allow_html=True)
 
-        # ── Construir navegación ──────────────────────────────────────────────────
-        _home = [st.Page("pages/home.py",        title="CENTRO DE CONTROL")]
-        _ops  = []
-        if "logistica"   in _permisos: _ops.append(st.Page("pages/logistica.py",       title="LOGÍSTICA"))
-        if "comercial"   in _permisos: _ops.append(st.Page("pages/4_shopify.py",       title="COMERCIAL"))
-        _fin  = []
-        if "mercadopago"  in _permisos: _fin.append(st.Page("pages/mercadopago.py",    title="MERCADOPAGO"))
-        if "conciliacion" in _permisos: _fin.append(st.Page("pages/3_conciliacion.py", title="CONCILIACIÓN"))
+        # ── Construir navegación según el mockup ─────────────────────────────────
+        from placeholders import (
+            contraentrega, envios, devoluciones, incidencias,
+            finanzas as finanzas_page, facturacion,
+            comercial as comercial_page, inventario,
+            inteligencia, reportes,
+            configuracion, integraciones,
+        )
+
+        _home = [st.Page("pages/home.py", title="Centro de Control", icon="◐", default=True)]
+
+        _ops = []
+        if "logistica" in _permisos:
+            _ops.append(st.Page("pages/logistica.py", title="Logística", icon="📦"))
+            _ops.append(st.Page(contraentrega, title="Contraentrega", icon="◆", url_path="contraentrega"))
+            _ops.append(st.Page(envios,        title="Envíos",        icon="→", url_path="envios"))
+            _ops.append(st.Page(devoluciones,  title="Devoluciones",  icon="↩", url_path="devoluciones"))
+            _ops.append(st.Page(incidencias,   title="Incidencias",   icon="!", url_path="incidencias"))
+
+        _fin = []
+        if "conciliacion" in _permisos:
+            _fin.append(st.Page(finanzas_page,                   title="Finanzas",     icon="$", url_path="finanzas"))
+            _fin.append(st.Page("pages/3_conciliacion.py",       title="Conciliación", icon="≡"))
+            _fin.append(st.Page(facturacion,                     title="Facturación",  icon="▤", url_path="facturacion"))
+        if "mercadopago"  in _permisos:
+            _fin.append(st.Page("pages/mercadopago.py",          title="MercadoPago",  icon="💳"))
+
+        _com = []
+        if "comercial" in _permisos:
+            _com.append(st.Page("pages/4_shopify.py", title="Comercial",  icon="↗"))
+            _com.append(st.Page(inventario,           title="Inventario", icon="◫", url_path="inventario"))
+
+        _int = []
+        _int.append(st.Page(inteligencia, title="Inteligencia", icon="★", url_path="inteligencia"))
+        _int.append(st.Page(reportes,     title="Reportes",     icon="▥", url_path="reportes"))
 
         _pages = {"": _home}
-        if _ops: _pages["OPERACIONES"] = _ops
-        if _fin: _pages["FINANZAS"]    = _fin
+        if _ops: _pages["Operaciones"]  = _ops
+        if _fin: _pages["Finanzas"]     = _fin
+        if _com: _pages["Comercial"]    = _com
+        if _int: _pages["Inteligencia"] = _int
+
+        _conf = []
+        _conf.append(st.Page(configuracion, title="Configuración", icon="⚙", url_path="configuracion"))
         if _role == "admin":
-            _pages["CONFIGURACIÓN"] = [st.Page("pages/usuarios.py", title="USUARIOS")]
+            _conf.append(st.Page("pages/usuarios.py", title="Usuarios", icon="◉"))
+        _conf.append(st.Page(integraciones, title="Integraciones", icon="◈", url_path="integraciones"))
+        _pages["Configuración"] = _conf
 
     pg = st.navigation(_pages)
     pg.run()
