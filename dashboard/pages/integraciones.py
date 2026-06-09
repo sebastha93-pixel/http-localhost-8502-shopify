@@ -289,7 +289,7 @@ info_html = (
     'padding:18px 22px;font-size:0.82rem;color:#1A1A1A;line-height:1.6;">'
     '<p style="margin:0 0 10px 0;font-weight:500;">'
     'Las credenciales viven en <b>.streamlit/secrets.toml</b> '
-    '(local) o en <b>Streamlit Cloud → App settings → Secrets</b> (producción). '
+    '(local) o en <b>Railway → Service → Variables</b> (producción). '
     'Nunca se commitean al repo.'
     '</p>'
     '<p style="margin:0;color:#6B7280;font-size:0.78rem;">'

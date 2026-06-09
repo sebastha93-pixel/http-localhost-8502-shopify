@@ -1,6 +1,6 @@
 """
 Panel de gestión de usuarios — Solo admin
-Permite crear nuevos usuarios y generar el bloque de secrets para Streamlit Cloud.
+Permite crear nuevos usuarios y generar el bloque para la env var STREAMLIT_SECRETS_TOML en Railway.
 """
 
 import sys
@@ -91,7 +91,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("<div class='sec-title'>Crear nuevo usuario</div>", unsafe_allow_html=True)
 st.caption(
     "Completa el formulario → el sistema genera el bloque listo para pegar "
-    "en los **Secrets de Streamlit Cloud**."
+    "en la variable **`STREAMLIT_SECRETS_TOML`** de Railway."
 )
 
 _MODULOS = {
@@ -162,13 +162,14 @@ permisos = {_perms_toml}
             f"**Módulos asignados:** {' · '.join(_perm_labels) if _perm_labels else '—'}"
         )
 
-        st.markdown("#### Pega este bloque en Streamlit Cloud → App settings → Secrets")
+        st.markdown("#### Pega este bloque dentro de `STREAMLIT_SECRETS_TOML` en Railway")
         st.code(_bloque, language="toml")
         st.info(
-            "1. Abre **Streamlit Cloud** → tu app → ⋮ **Manage app** → **Secrets**\n"
-            "2. Copia el bloque de arriba y agrégalo al final del archivo\n"
-            "3. Guarda — la app se reinicia automáticamente\n"
-            "4. Comparte el **username** y la **contraseña inicial** con el usuario por un canal seguro",
+            "1. Abre **Railway** → tu servicio → pestaña **Variables**\n"
+            "2. Click en la variable **`STREAMLIT_SECRETS_TOML`** → Edit\n"
+            "3. Agrega el bloque de arriba al final del valor (mantén el resto del TOML)\n"
+            "4. Guarda — Railway redeploya automáticamente\n"
+            "5. Comparte el **username** y la **contraseña inicial** con el usuario por un canal seguro",
             icon="📋",
         )
 
@@ -205,6 +206,6 @@ if _btn_change:
             language="toml",
         )
         st.info(
-            "Copia el nuevo hash y reemplázalo en **Streamlit Cloud → Secrets**.",
+            "Copia el nuevo hash y reemplázalo en **Railway → Variables → `STREAMLIT_SECRETS_TOML`**.",
             icon="📋",
         )

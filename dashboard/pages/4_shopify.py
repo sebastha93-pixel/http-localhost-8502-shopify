@@ -100,7 +100,7 @@ with st.sidebar:
                     padding:10px 12px;margin-bottom:12px;">
             <div style="font-size:0.65rem;color:#ff6b6b;letter-spacing:1px;">✗ SIN CREDENCIALES</div>
             <div style="font-size:0.7rem;color:{GRAPHITE_GREY};margin-top:4px;">
-                Agrega SHOPIFY_STORE y SHOPIFY_ACCESS_TOKEN en Streamlit Cloud → Secrets
+                Agrega SHOPIFY_STORE y SHOPIFY_ACCESS_TOKEN en Railway → Variables
             </div>
         </div>
         """, unsafe_allow_html=True)
