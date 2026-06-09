@@ -152,13 +152,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# JS via components.html — es la única forma confiable de correr JS en Streamlit
+# JS via components.html — busca grupos por NOMBRE de texto (más robusto que data-testid)
 import streamlit.components.v1 as _components
 _components.html("""
 <script>
 (function() {
   const doc = window.parent.document;
-  const STORE = 'md_collapsed_groups_v1';
+  const STORE = 'md_collapsed_groups_v2';
+  const GROUP_NAMES = ['Operaciones', 'Finanzas', 'Comercial', 'Inteligencia', 'Configuración'];
 
   function getCollapsed() {
     try { return JSON.parse(window.parent.localStorage.getItem(STORE) || '[]'); }
@@ -168,80 +169,136 @@ _components.html("""
     window.parent.localStorage.setItem(STORE, JSON.stringify(arr));
   }
 
-  function bind() {
-    // Buscar contenedor de navegación
-    const nav = doc.querySelector('[data-testid="stSidebarNav"]')
-             || doc.querySelector('[data-testid="stSidebar"]');
-    if (!nav) return false;
+  function findGroups() {
+    const sidebar = doc.querySelector('[data-testid="stSidebar"]');
+    if (!sidebar) return null;
 
-    // Selectores fallback — Streamlit puede usar diferentes data-testid
-    const items = nav.querySelectorAll(
-      '[data-testid="stSidebarNavSeparator"], [data-testid="stSidebarNavLink"], ' +
-      'li, span'
-    );
-    const sepEls  = [];
-    const linkEls = [];
-    nav.querySelectorAll('*').forEach(el => {
-      const t = el.getAttribute && el.getAttribute('data-testid');
-      if (t === 'stSidebarNavSeparator') sepEls.push(el);
-      else if (t === 'stSidebarNavLink') linkEls.push(el);
+    // Encuentra todos los elementos cuyo textContent EXACTO coincide con un grupo
+    const headers = [];
+    const walker = doc.createTreeWalker(sidebar, NodeFilter.SHOW_ELEMENT, null);
+    let node;
+    while ((node = walker.nextNode())) {
+      const t = (node.textContent || '').trim();
+      // Match exacto + sin hijos con su propio texto (es leaf)
+      if (GROUP_NAMES.includes(t) && node.children.length === 0) {
+        headers.push({el: node, name: t});
+      }
+    }
+    if (headers.length === 0) return null;
+
+    // Para cada header: subir hasta encontrar un <li> o div padre que sea el "contenedor de grupo"
+    // y luego los hermanos siguientes son los links del grupo (hasta el próximo header)
+    const groups = headers.map((h, i) => {
+      // El "header container" es el ancestor que es hermano directo de otros items
+      let container = h.el;
+      while (container.parentElement && container.parentElement !== sidebar) {
+        // Subir hasta encontrar un li o un elemento con muchos hermanos
+        if (container.parentElement.children.length > 1 && container.tagName !== 'SPAN') {
+          break;
+        }
+        container = container.parentElement;
+      }
+      return { headerEl: h.el, container, name: h.name };
     });
-    if (sepEls.length === 0) return false;
 
-    // Agrupar: cada separator define inicio, los links que vienen después le pertenecen
-    // hasta el próximo separator
-    const groups = sepEls.map((sep, i) => {
-      const next = sepEls[i + 1];
-      const links = linkEls.filter(l => {
-        const after  = l.compareDocumentPosition(sep) & Node.DOCUMENT_POSITION_PRECEDING;
-        const before = next ? (l.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING) : true;
-        return after && before;
-      });
-      return { sep, links, name: (sep.textContent || '').trim() };
+    // Calcular los siguientes hermanos de cada container hasta el container del próximo header
+    groups.forEach((g, i) => {
+      g.items = [];
+      let sibling = g.container.nextElementSibling;
+      const nextContainer = groups[i + 1] ? groups[i + 1].container : null;
+      while (sibling && sibling !== nextContainer) {
+        g.items.push(sibling);
+        sibling = sibling.nextElementSibling;
+      }
     });
 
+    return groups;
+  }
+
+  function applyState(groups) {
     const collapsed = getCollapsed();
-
     groups.forEach(g => {
       const isCol = collapsed.includes(g.name);
-      g.sep.classList.toggle('md-collapsed', isCol);
-      g.links.forEach(l => l.classList.toggle('md-nav-hidden', isCol));
+      g.items.forEach(it => {
+        it.style.display = isCol ? 'none' : '';
+      });
+      // Indicador chevron usando data attribute
+      g.headerEl.setAttribute('data-md-collapsed', isCol ? '1' : '0');
+    });
+  }
 
-      if (g.sep.dataset.mdBound === '1') return;
-      g.sep.dataset.mdBound = '1';
-      g.sep.style.cursor = 'pointer';
+  function bind() {
+    const groups = findGroups();
+    if (!groups || groups.length === 0) return false;
 
-      g.sep.addEventListener('click', (ev) => {
+    applyState(groups);
+
+    groups.forEach(g => {
+      if (g.container.dataset.mdBound === '1') return;
+      g.container.dataset.mdBound = '1';
+      g.container.style.cursor = 'pointer';
+      g.container.style.userSelect = 'none';
+
+      g.container.addEventListener('click', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        const willCol = !g.sep.classList.contains('md-collapsed');
-        g.sep.classList.toggle('md-collapsed', willCol);
-        g.links.forEach(l => l.classList.toggle('md-nav-hidden', willCol));
-        const arr = getCollapsed();
-        const set = new Set(arr);
-        if (willCol) set.add(g.name); else set.delete(g.name);
+        const collapsed = getCollapsed();
+        const set = new Set(collapsed);
+        if (set.has(g.name)) set.delete(g.name);
+        else set.add(g.name);
         saveCollapsed(Array.from(set));
-      });
+        applyState(findGroups());
+      }, true);
     });
     return true;
   }
 
-  // Reintentar hasta que el sidebar exista + observar cambios para re-bind
+  // Reintentar hasta que el sidebar exista
   let tries = 0;
   const tick = () => {
-    if (bind() || ++tries > 50) clearInterval(t);
+    if (bind() || ++tries > 100) clearInterval(t);
   };
   const t = setInterval(tick, 200);
 
   // Observer para re-aplicar cuando Streamlit re-rendera el sidebar
   try {
     const target = doc.querySelector('[data-testid="stSidebar"]') || doc.body;
-    const mo = new MutationObserver(() => { bind(); });
+    const mo = new MutationObserver(() => {
+      const groups = findGroups();
+      if (groups) applyState(groups);
+    });
     mo.observe(target, { childList: true, subtree: true });
   } catch(e) {}
 })();
 </script>
+
+<style>
+/* Chevron via attribute selector — se aplica a través del iframe via window.parent */
+</style>
 """, height=0)
+
+# Chevron icon en headers de grupo (en CSS principal para que llegue al sidebar real)
+st.markdown("""
+<style>
+[data-testid="stSidebar"] *[data-md-collapsed] {
+  position: relative;
+  padding-right: 22px !important;
+}
+[data-testid="stSidebar"] *[data-md-collapsed]::after {
+  content: "▾";
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.65rem;
+  opacity: 0.6;
+  transition: transform 0.2s;
+}
+[data-testid="stSidebar"] *[data-md-collapsed="1"]::after {
+  transform: translateY(-50%) rotate(-90deg);
+}
+</style>
+""", unsafe_allow_html=True)
 
 
 # ── Autenticación ──────────────────────────────────────────────────────────────
