@@ -119,103 +119,129 @@ try:
 except Exception:
     pass
 
-# ── Sidebar nav: grupos collapsibles + estética minimalista ─────────────────────
-# Streamlit no soporta nativo grupos colapsables, pero podemos inyectar JS
-# que añade comportamiento de toggle al hacer click sobre el label del grupo.
+# ── Sidebar nav: grupos collapsibles ────────────────────────────────────────
+# Streamlit no soporta nativo grupos colapsables. Inyectamos:
+#   1) CSS global con st.markdown (afecta el sidebar de Streamlit)
+#   2) JS via components.html (es la única forma de ejecutar JS real en Streamlit)
+#      desde un iframe accedemos al document parent (que es el de la app).
 st.markdown("""
 <style>
-/* Labels de grupos en el sidebar — apariencia clickable */
 [data-testid="stSidebarNavSeparator"] {
   cursor: pointer !important;
   user-select: none;
   position: relative;
   padding-right: 24px !important;
-  transition: opacity 0.15s;
 }
-[data-testid="stSidebarNavSeparator"]:hover {
-  opacity: 1 !important;
-  color: #E1E1DF !important;
-}
+[data-testid="stSidebarNavSeparator"]:hover { color: #E1E1DF !important; }
 [data-testid="stSidebarNavSeparator"]::after {
   content: "▾";
   position: absolute;
   right: 12px;
   top: 50%;
   transform: translateY(-50%);
-  font-size: 0.55rem;
-  opacity: 0.6;
+  font-size: 0.6rem;
+  opacity: 0.65;
   transition: transform 0.2s;
 }
-[data-testid="stSidebarNavSeparator"].collapsed::after {
+[data-testid="stSidebarNavSeparator"].md-collapsed::after {
   transform: translateY(-50%) rotate(-90deg);
 }
-/* Cuando un grupo está collapsed, oculta los items siguientes hasta el próximo separator */
-[data-testid="stSidebarNavLink"].nav-hidden {
+[data-testid="stSidebarNavLink"].md-nav-hidden {
   display: none !important;
 }
 </style>
+""", unsafe_allow_html=True)
 
+# JS via components.html — es la única forma confiable de correr JS en Streamlit
+import streamlit.components.v1 as _components
+_components.html("""
 <script>
 (function() {
-  function toggleGroups() {
-    const navItems = window.parent.document.querySelectorAll(
-      '[data-testid="stSidebarNavSeparator"], [data-testid="stSidebarNavLink"]'
+  const doc = window.parent.document;
+  const STORE = 'md_collapsed_groups_v1';
+
+  function getCollapsed() {
+    try { return JSON.parse(window.parent.localStorage.getItem(STORE) || '[]'); }
+    catch(e) { return []; }
+  }
+  function saveCollapsed(arr) {
+    window.parent.localStorage.setItem(STORE, JSON.stringify(arr));
+  }
+
+  function bind() {
+    // Buscar contenedor de navegación
+    const nav = doc.querySelector('[data-testid="stSidebarNav"]')
+             || doc.querySelector('[data-testid="stSidebar"]');
+    if (!nav) return false;
+
+    // Selectores fallback — Streamlit puede usar diferentes data-testid
+    const items = nav.querySelectorAll(
+      '[data-testid="stSidebarNavSeparator"], [data-testid="stSidebarNavLink"], ' +
+      'li, span'
     );
-    if (!navItems.length) return false;
-
-    // Restaurar estado guardado por nombre del grupo
-    const STORE = 'md_collapsed_groups_v1';
-    let collapsed;
-    try { collapsed = JSON.parse(window.parent.localStorage.getItem(STORE) || '[]'); }
-    catch(e) { collapsed = []; }
-
-    // Recorre items: separator → grupo nuevo, link → pertenece al grupo actual
-    let currentGroup = null;
-    let currentLinks = [];
-    const groups = [];
-    navItems.forEach(el => {
-      if (el.getAttribute('data-testid') === 'stSidebarNavSeparator') {
-        if (currentGroup) groups.push({header: currentGroup, links: currentLinks});
-        currentGroup = el;
-        currentLinks = [];
-      } else if (currentGroup) {
-        currentLinks.push(el);
-      }
+    const sepEls  = [];
+    const linkEls = [];
+    nav.querySelectorAll('*').forEach(el => {
+      const t = el.getAttribute && el.getAttribute('data-testid');
+      if (t === 'stSidebarNavSeparator') sepEls.push(el);
+      else if (t === 'stSidebarNavLink') linkEls.push(el);
     });
-    if (currentGroup) groups.push({header: currentGroup, links: currentLinks});
+    if (sepEls.length === 0) return false;
 
-    // Aplicar estado inicial + click handler
+    // Agrupar: cada separator define inicio, los links que vienen después le pertenecen
+    // hasta el próximo separator
+    const groups = sepEls.map((sep, i) => {
+      const next = sepEls[i + 1];
+      const links = linkEls.filter(l => {
+        const after  = l.compareDocumentPosition(sep) & Node.DOCUMENT_POSITION_PRECEDING;
+        const before = next ? (l.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING) : true;
+        return after && before;
+      });
+      return { sep, links, name: (sep.textContent || '').trim() };
+    });
+
+    const collapsed = getCollapsed();
+
     groups.forEach(g => {
-      const name = (g.header.textContent || '').trim();
-      const isCollapsed = collapsed.includes(name);
-      g.header.classList.toggle('collapsed', isCollapsed);
-      g.links.forEach(l => l.classList.toggle('nav-hidden', isCollapsed));
+      const isCol = collapsed.includes(g.name);
+      g.sep.classList.toggle('md-collapsed', isCol);
+      g.links.forEach(l => l.classList.toggle('md-nav-hidden', isCol));
 
-      if (g.header.dataset.mdBound) return;
-      g.header.dataset.mdBound = '1';
-      g.header.addEventListener('click', () => {
-        const willCollapse = !g.header.classList.contains('collapsed');
-        g.header.classList.toggle('collapsed', willCollapse);
-        g.links.forEach(l => l.classList.toggle('nav-hidden', willCollapse));
-        // Persistir
-        let saved;
-        try { saved = JSON.parse(window.parent.localStorage.getItem(STORE) || '[]'); }
-        catch(e) { saved = []; }
-        const set = new Set(saved);
-        if (willCollapse) set.add(name); else set.delete(name);
-        window.parent.localStorage.setItem(STORE, JSON.stringify(Array.from(set)));
+      if (g.sep.dataset.mdBound === '1') return;
+      g.sep.dataset.mdBound = '1';
+      g.sep.style.cursor = 'pointer';
+
+      g.sep.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const willCol = !g.sep.classList.contains('md-collapsed');
+        g.sep.classList.toggle('md-collapsed', willCol);
+        g.links.forEach(l => l.classList.toggle('md-nav-hidden', willCol));
+        const arr = getCollapsed();
+        const set = new Set(arr);
+        if (willCol) set.add(g.name); else set.delete(g.name);
+        saveCollapsed(Array.from(set));
       });
     });
     return true;
   }
-  // Reintenta hasta que el sidebar esté en el DOM
+
+  // Reintentar hasta que el sidebar exista + observar cambios para re-bind
   let tries = 0;
-  const id = setInterval(() => {
-    if (toggleGroups() || ++tries > 30) clearInterval(id);
-  }, 200);
+  const tick = () => {
+    if (bind() || ++tries > 50) clearInterval(t);
+  };
+  const t = setInterval(tick, 200);
+
+  // Observer para re-aplicar cuando Streamlit re-rendera el sidebar
+  try {
+    const target = doc.querySelector('[data-testid="stSidebar"]') || doc.body;
+    const mo = new MutationObserver(() => { bind(); });
+    mo.observe(target, { childList: true, subtree: true });
+  } catch(e) {}
 })();
 </script>
-""", unsafe_allow_html=True)
+""", height=0)
 
 
 # ── Autenticación ──────────────────────────────────────────────────────────────
