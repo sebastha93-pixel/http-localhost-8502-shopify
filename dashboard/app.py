@@ -22,7 +22,7 @@ _FAVICON = _HERE / "assets" / "favicon.png"
 _icon = Image.open(_FAVICON) if _FAVICON.exists() else "📦"
 
 st.set_page_config(
-    page_title="MALE'DENIM OS",
+    page_title="MALE'DENIM OS · v3",
     page_icon=_icon,
     layout="wide",
     initial_sidebar_state="expanded",
