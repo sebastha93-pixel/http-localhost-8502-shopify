@@ -1891,26 +1891,30 @@ def simple_bar(serie: pd.Series, color: str = "#87a6b8", height: int = 200) -> N
     st.plotly_chart(fig, use_container_width=True)
 
 
+def safe_fmt_int(v):
+    """Format int seguro contra NaN/None/string."""
+    try:
+        if pd.isna(v): return "—"
+        return f"{int(float(v))}"
+    except Exception:
+        return "—" if v in (None, "") else str(v)
+
+
+def safe_fmt_money(v):
+    """Format monetario seguro contra NaN/None/string."""
+    try:
+        if pd.isna(v): return "—"
+        return f"${float(v):,.0f}"
+    except Exception:
+        return "—" if v in (None, "") else str(v)
+
+
 def render_tabla(df: pd.DataFrame, cols: list, key: str, height: int = 440):
     """
     Renderiza la tabla de pedidos con selección de fila y colores de nivel.
-    Separa styling de on_select para compatibilidad con Streamlit Cloud.
-    Retorna el índice de fila seleccionada (o None).
+    El Styler ya no se usa porque st.dataframe(on_select=...) es incompatible
+    con Styler en Streamlit Cloud. El formato lo hace column_config.
     """
-    NIVEL_COLORES = {"CRITICO": CRITICO_COLOR, "RIESGO": RIESGO_COLOR, "NORMAL": NORMAL_COLOR}
-
-    # Columnas numéricas que formateamos
-    fmt = {}
-    for c in ["Score", "Días", "Días sobre SLA"]:
-        if c in cols:
-            fmt[c] = "{:.0f}"
-
-    # Styler solo para colorear — sin on_select
-    styled = df[cols].style
-    if "Nivel" in cols:
-        styled = styled.map(color_nivel, subset=["Nivel"])
-    if fmt:
-        styled = styled.format(fmt)
 
     # Tabla con selección (sin Styler — incompatible con on_select en Cloud)
     event = st.dataframe(

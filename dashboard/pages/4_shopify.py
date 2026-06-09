@@ -22,6 +22,7 @@ import json
 from shared import (
     CSS, DEEP_INK, STEEL_BLUE, GRAPHITE_GREY, SOFT_CONCRETE,
     CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR, COD_COLOR, simple_bar,
+    safe_fmt_money, safe_fmt_int,
 )
 from db import get_conn
 import shopify_scheduler as scheduler
@@ -270,7 +271,7 @@ with tab1:
         df_p["es_contraentrega"] = df_p["es_contraentrega"].map({1:"SÍ", 0:"—"})
 
         st.dataframe(
-            df_p.style.format({"precio_venta": "${:,.0f}"}),
+            df_p.style.format({"precio_venta": safe_fmt_money}),
             use_container_width=True, height=420, hide_index=True,
         )
         st.caption(f"{len(df_p)} pedidos")
@@ -309,8 +310,8 @@ with tab2:
 
         st.dataframe(
             df_pr.style.format({
-                "precio_min": "${:,.0f}",
-                "precio_max": "${:,.0f}",
+                "precio_min": safe_fmt_money,
+                "precio_max": safe_fmt_money,
             }),
             use_container_width=True, height=420, hide_index=True,
         )
@@ -337,7 +338,7 @@ with tab3:
         with cg1:
             top5 = df_cli.nlargest(5, "total_gastado")[["nombre","total_gastado","total_pedidos"]]
             st.markdown("<div class='sec-title' style='font-size:0.75rem'>Top 5 por valor</div>", unsafe_allow_html=True)
-            st.dataframe(top5.style.format({"total_gastado":"${:,.0f}"}), height=200, hide_index=True, use_container_width=True)
+            st.dataframe(top5.style.format({"total_gastado": safe_fmt_money}), height=200, hide_index=True, use_container_width=True)
         with cg2:
             ciud = df_cli["ciudad"].value_counts().head(5)
             st.markdown("<div class='sec-title' style='font-size:0.75rem'>Ciudades top</div>", unsafe_allow_html=True)
@@ -351,7 +352,7 @@ with tab3:
         st.markdown("<br>", unsafe_allow_html=True)
         df_cli["acepta_marketing"] = df_cli["acepta_marketing"].map({1:"✓", 0:"—"})
         st.dataframe(
-            df_cli.style.format({"total_gastado": "${:,.0f}"}),
+            df_cli.style.format({"total_gastado": safe_fmt_money}),
             use_container_width=True, height=380, hide_index=True,
         )
         st.caption(f"{len(df_cli)} clientes")
@@ -412,7 +413,7 @@ with tab4:
 
         st.dataframe(
             df_lz[["⏱","fecha_publicacion","titulo","estado","tipo","precio_min","precio_max","inventario_total","tags"]]
-            .style.format({"precio_min": "${:,.0f}", "precio_max": "${:,.0f}"}),
+            .style.format({"precio_min": safe_fmt_money, "precio_max": safe_fmt_money}),
             use_container_width=True, height=440, hide_index=True,
         )
         st.caption(f"{len(df_lz)} lanzamientos")

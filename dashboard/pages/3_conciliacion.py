@@ -21,6 +21,7 @@ import tempfile, os
 from shared import (
     CSS, DEEP_INK, STEEL_BLUE, GRAPHITE_GREY, SOFT_CONCRETE,
     CRITICO_COLOR, RIESGO_COLOR, NORMAL_COLOR, COD_COLOR,
+    safe_fmt_money, safe_fmt_int,
 )
 from conciliacion import (
     ingestar_wompi, ingestar_liquidacion_melonn, ingestar_banco,
@@ -257,9 +258,9 @@ with tab2:
 
         st.dataframe(
             df_dif.style.format({
-                "precio_venta":       "${:,.0f}",
-                "valor_desembolsado": "${:,.0f}",
-                "diferencia":         "${:,.0f}",
+                "precio_venta":       safe_fmt_money,
+                "valor_desembolsado": safe_fmt_money,
+                "diferencia":         safe_fmt_money,
             }),
             use_container_width=True,
             height=360,
@@ -295,7 +296,7 @@ with tab3:
             st.metric("Valor total en tránsito", f"${total_val:,.0f}")
 
         st.dataframe(
-            df_cod.style.format({"valor_cod": "${:,.0f}", "dias_en_transito": "{:.0f}"}),
+            df_cod.style.format({"valor_cod": safe_fmt_money, "dias_en_transito": safe_fmt_int}),
             use_container_width=True,
             height=380,
             hide_index=True,
@@ -333,7 +334,7 @@ with tab4:
         df_b = df_banco if filtro_origen == "Todos" else df_banco[df_banco["origen"] == filtro_origen]
 
         st.dataframe(
-            df_b.style.format({"valor": "${:,.0f}"}),
+            df_b.style.format({"valor": safe_fmt_money}),
             use_container_width=True,
             height=360,
             hide_index=True,
