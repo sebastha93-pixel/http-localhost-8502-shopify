@@ -1,8 +1,12 @@
+# Railway config — usa Nixpacks builder por defecto
+# Detecta automáticamente Python 3.11.9 desde runtime.txt
+# Procfile define el start command
+
 [build]
 builder = "nixpacks"
 
 [deploy]
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
-healthcheckPath = "/"
-healthcheckTimeout = 30
+healthcheckPath = "/_stcore/health"
+healthcheckTimeout = 60

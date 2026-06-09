@@ -1,1 +1,1 @@
-web: streamlit run dashboard/app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true --server.enableCORS=false
+web: python bootstrap_secrets.py && streamlit run dashboard/app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true --server.enableCORS=false --server.enableXsrfProtection=false
