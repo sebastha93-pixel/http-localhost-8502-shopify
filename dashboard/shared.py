@@ -1605,6 +1605,9 @@ def _procesar_df(pedidos: list) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     if df.empty:
         return df
+    # Pre-calcular columna numérica de Valor COD — evita .apply(_parse_cod)
+    # en cada operación de suma. Es la optimización más impactante (vectorizado).
+    df["Valor_num"] = df["Valor COD"].apply(_parse_cod).astype(float)
     return df.sort_values(["Prioridad","Días sobre SLA"], ascending=[True,False]).reset_index(drop=True)
 
 @st.cache_data(show_spinner=False)
@@ -1734,6 +1737,12 @@ def metricas_globales(df_all: pd.DataFrame) -> dict:
     n_critico = int((df_all["Nivel"] == "CRITICO").sum())
     n_riesgo  = int((df_all["Nivel"] == "RIESGO").sum())
 
+    # Usa Valor_num pre-calculado (vectorizado) en vez de .apply(_parse_cod)
+    # Fallback: si por alguna razón Valor_num no existe (caché viejo), calcular
+    if "Valor_num" not in df_cod.columns:
+        df_cod = df_cod.copy()
+        df_cod["Valor_num"] = df_cod["Valor COD"].apply(_parse_cod).astype(float)
+
     result = {
         "df_cod":     df_cod,
         "df_pre":     df_pre,
@@ -1748,13 +1757,13 @@ def metricas_globales(df_all: pd.DataFrame) -> dict:
         "n_critico":  n_critico,
         "n_riesgo":   n_riesgo,
         "n_normal":   max(0, len(df_all) - n_critico - n_riesgo),
-        "val_cod":    float(df_cod["Valor COD"].apply(_parse_cod).sum()),
-        "val_riesgo": float(df_cod[df_cod["Nivel"].isin(["CRITICO","RIESGO"])]
-                            ["Valor COD"].apply(_parse_cod).sum()),
-        "val_ent":    float(df_cod[df_cod["Estado_Code"].isin([6, 8])]
-                            ["Valor COD"].apply(_parse_cod).sum()),
-        "val_nov_cod":float(df_cod[df_cod["Sub_Estado"] == "novedad"]
-                            ["Valor COD"].apply(_parse_cod).sum()),
+        "val_cod":    float(df_cod["Valor_num"].sum()),
+        "val_riesgo": float(df_cod.loc[df_cod["Nivel"].isin(["CRITICO","RIESGO"]),
+                                       "Valor_num"].sum()),
+        "val_ent":    float(df_cod.loc[df_cod["Estado_Code"].isin([6, 8]),
+                                       "Valor_num"].sum()),
+        "val_nov_cod":float(df_cod.loc[df_cod["Sub_Estado"] == "novedad",
+                                       "Valor_num"].sum()),
     }
 
     st.session_state[_key] = result

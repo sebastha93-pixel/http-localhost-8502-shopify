@@ -283,12 +283,18 @@ df_nov_pre_f  = _filtrar(df_nov_pre)
 df_tran_pre_f = _filtrar(df_tran_pre)
 df_ent_pre_f  = _filtrar(df_ent_pre)
 
-# Métricas globales
-val_cod_total   = df_cod["Valor COD"].apply(_parse_cod).sum()
-val_ent_total   = df_ent["Valor COD"].apply(_parse_cod).sum()
-val_nov_cod     = df_nov_cod["Valor COD"].apply(_parse_cod).sum()
-n_criticos      = len(df_tran[df_tran["Nivel"] == "CRITICO"])
-n_riesgo        = len(df_tran[df_tran["Nivel"] == "RIESGO"])
+# Métricas globales — usar Valor_num pre-calculado (vectorizado, sin .apply)
+def _sum_valor(df):
+    """Suma Valor_num si existe, fallback a .apply para compatibilidad."""
+    if "Valor_num" in df.columns:
+        return float(df["Valor_num"].sum())
+    return float(df["Valor COD"].apply(_parse_cod).sum())
+
+val_cod_total   = _sum_valor(df_cod)
+val_ent_total   = _sum_valor(df_ent)
+val_nov_cod     = _sum_valor(df_nov_cod)
+n_criticos      = int((df_tran["Nivel"] == "CRITICO").sum())
+n_riesgo        = int((df_tran["Nivel"] == "RIESGO").sum())
 _n_cod_activas  = len(df_pend) + len(df_tran) + len(df_nov_cod) + len(df_ent)
 _n_pre_total    = len(df_tran_pre) + len(df_nov_pre) + len(df_ent_pre)
 
@@ -368,7 +374,7 @@ with tab_cod:
         if df_pend_f.empty:
             st.success("✅ Sin pedidos pendientes de despacho en este momento.")
         else:
-            val_auth  = df_auth_f["Valor COD"].apply(_parse_cod).sum()
+            val_auth  = _sum_valor(df_auth_f)
 
             p1, p2 = st.columns(2)
             with p1:
@@ -545,8 +551,7 @@ with tab_cod:
             n_crit  = len(df_t_riesgo[df_t_riesgo["Nivel"] == "CRITICO"])
             n_ries  = len(df_t_riesgo[df_t_riesgo["Nivel"] == "RIESGO"])
             n_norm  = len(df_t_riesgo[df_t_riesgo["Nivel"] == "NORMAL"])
-            val_tr  = (df_t_riesgo[df_t_riesgo["Nivel"].isin(["CRITICO","RIESGO"])]
-                       ["Valor COD"].apply(_parse_cod).sum())
+            val_tr  = _sum_valor(df_t_riesgo[df_t_riesgo["Nivel"].isin(["CRITICO","RIESGO"])])
 
             t1, t2, t3, t4 = st.columns(4)
             with t1:
@@ -593,7 +598,7 @@ with tab_cod:
         if df_nov_cod_f.empty:
             st.success("✅ Sin novedades COD activas.")
         else:
-            val_nov = df_nov_cod_f["Valor COD"].apply(_parse_cod).sum()
+            val_nov = _sum_valor(df_nov_cod_f)
             n1, n2, n3 = st.columns(3)
             with n1:
                 st.markdown(_kpi(len(df_nov_cod_f), "NOVEDADES COD",
@@ -636,7 +641,7 @@ with tab_cod:
         if df_ent_f.empty:
             st.info("Sin pedidos COD entregados en la ventana actual (mes + últimos 15 días).")
         else:
-            val_ent  = df_ent_f["Valor COD"].apply(_parse_cod).sum()
+            val_ent  = _sum_valor(df_ent_f)
             n_c6     = len(df_ent_f[df_ent_f["Estado_Code"] == 6])
             n_c8     = len(df_ent_f[df_ent_f["Estado_Code"] == 8])
             avg_dias = int(df_ent_f["Días"].mean()) if not df_ent_f.empty else 0
@@ -969,7 +974,9 @@ with tab_ana:
     # ── Valor COD en riesgo ────────────────────────────────────────────────────
     with st.expander("💸 Valor COD en riesgo", expanded=False):
         df_cod2 = df_ref.copy()
-        df_cod2["Valor $"] = df_cod2["Valor COD"].apply(_parse_cod)
+        # Usa Valor_num pre-calculado (vectorizado) en vez de .apply
+        df_cod2["Valor $"] = (df_cod2["Valor_num"] if "Valor_num" in df_cod2.columns
+                              else df_cod2["Valor COD"].apply(_parse_cod))
         v1, v2 = st.columns(2)
         with v1:
             st.markdown("<div class='sec-title'>Por zona y nivel</div>", unsafe_allow_html=True)
