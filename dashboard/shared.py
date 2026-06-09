@@ -1769,6 +1769,52 @@ def metricas_globales(df_all: pd.DataFrame) -> dict:
     st.session_state[_key] = result
     return result
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Wrappers cacheados de funciones Supabase (memoria.py)
+# Evitan round-trips repetidos a Supabase al re-renderizar la misma página
+# ═══════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cargar_notas_cached(orden: str):
+    """Notas de un pedido — cacheado 5 min."""
+    try:
+        import memoria
+        return memoria.cargar_notas(orden)
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cargar_acciones_cached(orden: str):
+    """Acciones de un pedido — cacheado 5 min."""
+    try:
+        import memoria
+        return memoria.cargar_acciones(orden)
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def historial_pedido_cached(orden: str):
+    """Historial de un pedido — cacheado 5 min."""
+    try:
+        import memoria
+        return memoria.historial_pedido(orden)
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def cargar_snapshots_cached(limite: int = 30):
+    """Lista de snapshots — cacheado 10 min."""
+    try:
+        import memoria
+        return memoria.cargar_snapshots(limite)
+    except Exception:
+        return pd.DataFrame()
+
+
 def color_nivel(val):
     return {
         "CRITICO": f"background-color:{CRITICO_COLOR}22;color:{CRITICO_COLOR};font-weight:700",
