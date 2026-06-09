@@ -374,7 +374,7 @@ else:
             finanzas as finanzas_page, facturacion,
             comercial as comercial_page, inventario,
             inteligencia, reportes,
-            configuracion, integraciones,
+            configuracion,
         )
 
         _home = [st.Page("pages/home.py", title="Centro de Control", icon="🏠", default=True)]
@@ -414,7 +414,7 @@ else:
         _conf.append(st.Page(configuracion, title="Configuración", icon="⚙️", url_path="configuracion"))
         if _role == "admin":
             _conf.append(st.Page("pages/usuarios.py", title="Usuarios", icon="👥"))
-        _conf.append(st.Page(integraciones, title="Integraciones", icon="🔌", url_path="integraciones"))
+        _conf.append(st.Page("pages/integraciones.py", title="Integraciones", icon="🔌"))
         _pages["Configuración"] = _conf
 
     pg = st.navigation(_pages)
