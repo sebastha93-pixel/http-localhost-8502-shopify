@@ -44,29 +44,41 @@ def _shopify_snapshot() -> dict:
         return cached
 
     if not _SHOPIFY_OK:
-        return {"is_real": False}
+        return {"is_real": False, "error": "import shopify_metrics falló"}
 
+    # ── Llamada 1: ventas del día (la más importante, ~1s) ───────────────────
     try:
         v_hoy = ventas_del_dia()
-        delta = delta_vs_ayer()
-        serie = ventas_serie(12)
-        # top_productos es lento (22s) — lo separamos: solo si hay tiempo
-        # Por ahora, datos sin top productos en el primer render
-        snap = {
-            "is_real":     True,
-            "ventas_hoy":  v_hoy["total"],
-            "num_pedidos": v_hoy["num_pedidos"],
-            "delta_pct":   delta["pct"],
-            "delta_up":    delta["up"],
-            "serie":       serie,
-            "top":         None,
-        }
-        st.session_state[KEY]    = snap
-        st.session_state[KEY_TS] = datetime.now()
-        return snap
     except Exception as e:
-        # Fallback silencioso — no romper el home
-        return {"is_real": False, "error": str(e)[:80]}
+        return {"is_real": False, "error": f"ventas_del_dia: {str(e)[:80]}"}
+
+    snap = {
+        "is_real":     True,
+        "ventas_hoy":  v_hoy["total"],
+        "num_pedidos": v_hoy["num_pedidos"],
+        "delta_pct":   0,
+        "delta_up":    True,
+        "serie":       [],
+        "top":         None,
+    }
+
+    # ── Llamada 2: delta vs ayer (~1s, opcional) ──────────────────────────────
+    try:
+        delta = delta_vs_ayer()
+        snap["delta_pct"] = delta["pct"]
+        snap["delta_up"]  = delta["up"]
+    except Exception:
+        pass   # mantenemos snap con ventas_hoy real, sin delta
+
+    # ── Llamada 3: serie 7d para sparkline (opcional, puede fallar) ───────────
+    try:
+        snap["serie"] = ventas_serie(7)   # 7d en vez de 12d — más rápido
+    except Exception:
+        pass
+
+    st.session_state[KEY]    = snap
+    st.session_state[KEY_TS] = datetime.now()
+    return snap
 
 
 def _shopify_top() -> list:
@@ -167,17 +179,24 @@ _shop = _shopify_snapshot()
 
 if _shop.get("is_real"):
     _ventas_hoy   = int(_shop["ventas_hoy"])
-    _delta_pct    = _shop["delta_pct"]
-    _delta_up     = _shop["delta_up"]
-    _sp_ventas    = _shop["serie"] or [0] * 12
-    _pedidos_dia  = _shop["num_pedidos"]
-    _meta_ventas  = f"{abs(_delta_pct):.1f}% vs ayer"
-    _meta_dir     = "up" if _delta_up else "down"
+    _delta_pct    = _shop.get("delta_pct", 0)
+    _delta_up     = _shop.get("delta_up", True)
+    _sp_ventas    = _shop.get("serie") or [_ventas_hoy] * 7
+    _pedidos_dia  = _shop.get("num_pedidos", 0)
+    if _delta_pct:
+        _meta_ventas = f"{abs(_delta_pct):.1f}% vs ayer"
+        _meta_dir    = "up" if _delta_up else "down"
+    else:
+        _meta_ventas = f"{_pedidos_dia} pedidos hoy"
+        _meta_dir    = ""
 else:
-    # Fallback mock — solo si Shopify no responde
+    # Fallback mock — Shopify no responde. Mostrar error en consola.
+    _err = _shop.get("error", "sin detalle")
+    import logging
+    logging.warning(f"[home] Shopify snapshot failed: {_err}")
     _ventas_hoy   = 18_450_000
     _sp_ventas    = [12, 14, 13, 17, 16, 18, 17, 19, 18, 20, 18, 21]
-    _meta_ventas  = "—"
+    _meta_ventas  = "Shopify offline · mock"
     _meta_dir     = ""
 
 # Sparklines secundarios (recaudo, bancos, diferencia, pedidos)
