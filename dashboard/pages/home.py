@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 import streamlit as st
 import pandas as pd
-from datetime import date
+from datetime import date, datetime
 
 from shared import (
     CSS, cargar_datos_api, _parse_cod,
