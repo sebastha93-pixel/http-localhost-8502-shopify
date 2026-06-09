@@ -12,7 +12,7 @@ import pandas as pd
 from datetime import date, datetime
 
 from shared import (
-    CSS, cargar_datos_api, _parse_cod,
+    CSS, cargar_datos_api, _parse_cod, metricas_globales,
     dash_hero, dash_section, dash_card_start, dash_card_end,
     dash_kpi, dash_sparkline, dash_icon_badge, dash_alert_row,
     dash_platform_row, dash_status_row, dash_rec_card,
@@ -120,28 +120,22 @@ try:
 except Exception:
     df_all, _meta = pd.DataFrame(), {}
 
-if not df_all.empty:
-    df_cod = df_all[df_all["Tipo_Recaudo"] == "Contraentrega"]
-    df_pre = df_all[df_all["Tipo_Recaudo"] == "Prepago"]
-    n_pend     = len(df_cod[df_cod["Estado_Code"].isin([26, 29])])
-    n_tran_cod = len(df_cod[df_cod["Estado_Code"].isin([5, 7, 24, 28])])
-    n_nov_cod  = len(df_cod[df_cod["Sub_Estado"] == "novedad"])
-    n_ent_cod  = len(df_cod[df_cod["Estado_Code"].isin([6, 8])])
-    n_nov_pre  = len(df_pre[df_pre["Sub_Estado"] == "novedad"])
-    n_tran_pre = len(df_pre[df_pre["Sub_Estado"] == "en_transito"])
-    n_critico  = len(df_all[df_all["Nivel"] == "CRITICO"])
-    n_riesgo   = len(df_all[df_all["Nivel"] == "RIESGO"])
-    n_normal   = max(0, len(df_all) - n_critico - n_riesgo)
-    val_cod    = float(df_cod["Valor COD"].apply(_parse_cod).sum())
-    val_riesgo = float(df_cod[df_cod["Nivel"].isin(["CRITICO","RIESGO"])]
-                       ["Valor COD"].apply(_parse_cod).sum())
-    n_total    = len(df_all)
-else:
-    df_cod = df_pre = pd.DataFrame()
-    n_pend = n_tran_cod = n_nov_cod = n_ent_cod = 0
-    n_nov_pre = n_tran_pre = 0
-    n_critico = n_riesgo = n_normal = n_total = 0
-    val_cod = val_riesgo = 0.0
+# Pre-calcular TODAS las métricas en una sola pasada (cacheado en session_state)
+_m = metricas_globales(df_all)
+df_cod     = _m["df_cod"]
+df_pre     = _m["df_pre"]
+n_pend     = _m["n_pend"]
+n_tran_cod = _m["n_tran_cod"]
+n_nov_cod  = _m["n_nov_cod"]
+n_ent_cod  = _m["n_ent_cod"]
+n_nov_pre  = _m["n_nov_pre"]
+n_tran_pre = _m["n_tran_pre"]
+n_critico  = _m["n_critico"]
+n_riesgo   = _m["n_riesgo"]
+n_normal   = _m["n_normal"]
+val_cod    = _m["val_cod"]
+val_riesgo = _m["val_riesgo"]
+n_total    = _m["n_total"]
 
 # ── Header ──────────────────────────────────────────────────────────────────────
 _user = (st.session_state.get("name") or st.session_state.get("username") or "Equipo").split()[0]

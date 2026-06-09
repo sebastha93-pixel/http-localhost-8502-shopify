@@ -1698,6 +1698,68 @@ def api_melonn_activa() -> bool:
     """True si el API key está configurado y el módulo disponible."""
     return _MELONN_API_DISPONIBLE and melonn_client.credenciales_ok()
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Métricas globales pre-calculadas — evita recalcular en cada página
+# ═══════════════════════════════════════════════════════════════════════════
+
+def metricas_globales(df_all: pd.DataFrame) -> dict:
+    """
+    Calcula TODAS las métricas globales de operación una sola vez.
+    Resultado cacheado en session_state — cualquier página puede leerlo
+    sin recalcular sobre el DataFrame grande.
+
+    Retorna dict con todos los conteos, sumas y derivados.
+    """
+    # Cache key basado en id del DataFrame (cambia cuando se refresca)
+    _key = f"_metricas_{id(df_all)}"
+    cached = st.session_state.get(_key)
+    if cached is not None:
+        return cached
+
+    if df_all is None or df_all.empty:
+        result = {
+            "df_cod": pd.DataFrame(), "df_pre": pd.DataFrame(),
+            "n_total": 0, "n_pend": 0, "n_tran_cod": 0, "n_nov_cod": 0,
+            "n_ent_cod": 0, "n_nov_pre": 0, "n_tran_pre": 0, "n_ent_pre": 0,
+            "n_critico": 0, "n_riesgo": 0, "n_normal": 0,
+            "val_cod": 0.0, "val_riesgo": 0.0, "val_ent": 0.0, "val_nov_cod": 0.0,
+        }
+        st.session_state[_key] = result
+        return result
+
+    df_cod = df_all[df_all["Tipo_Recaudo"] == "Contraentrega"]
+    df_pre = df_all[df_all["Tipo_Recaudo"] == "Prepago"]
+
+    n_critico = int((df_all["Nivel"] == "CRITICO").sum())
+    n_riesgo  = int((df_all["Nivel"] == "RIESGO").sum())
+
+    result = {
+        "df_cod":     df_cod,
+        "df_pre":     df_pre,
+        "n_total":    len(df_all),
+        "n_pend":     int(df_cod["Estado_Code"].isin([26, 29]).sum()),
+        "n_tran_cod": int(df_cod["Estado_Code"].isin([5, 7, 24, 28]).sum()),
+        "n_nov_cod":  int((df_cod["Sub_Estado"] == "novedad").sum()),
+        "n_ent_cod":  int(df_cod["Estado_Code"].isin([6, 8]).sum()),
+        "n_nov_pre":  int((df_pre["Sub_Estado"] == "novedad").sum()),
+        "n_tran_pre": int((df_pre["Sub_Estado"] == "en_transito").sum()),
+        "n_ent_pre":  int((df_pre["Sub_Estado"] == "entregado").sum()),
+        "n_critico":  n_critico,
+        "n_riesgo":   n_riesgo,
+        "n_normal":   max(0, len(df_all) - n_critico - n_riesgo),
+        "val_cod":    float(df_cod["Valor COD"].apply(_parse_cod).sum()),
+        "val_riesgo": float(df_cod[df_cod["Nivel"].isin(["CRITICO","RIESGO"])]
+                            ["Valor COD"].apply(_parse_cod).sum()),
+        "val_ent":    float(df_cod[df_cod["Estado_Code"].isin([6, 8])]
+                            ["Valor COD"].apply(_parse_cod).sum()),
+        "val_nov_cod":float(df_cod[df_cod["Sub_Estado"] == "novedad"]
+                            ["Valor COD"].apply(_parse_cod).sum()),
+    }
+
+    st.session_state[_key] = result
+    return result
+
 def color_nivel(val):
     return {
         "CRITICO": f"background-color:{CRITICO_COLOR}22;color:{CRITICO_COLOR};font-weight:700",

@@ -22,7 +22,7 @@ _FAVICON = _HERE / "assets" / "favicon.png"
 _icon = Image.open(_FAVICON) if _FAVICON.exists() else "📦"
 
 st.set_page_config(
-    page_title="MALE'DENIM OS · v3",
+    page_title="MALE'DENIM OS",
     page_icon=_icon,
     layout="wide",
     initial_sidebar_state="expanded",
@@ -361,12 +361,10 @@ else:
                 st.rerun()
 
             _elapsed_ms = int((time.perf_counter() - _T0) * 1000)
-            # BUILD MARKER — si ves este texto al pie del sidebar, estás corriendo el build correcto
             st.markdown(f"""
-            <p style="font-size:0.5rem;color:rgba(135,166,184,0.6);
-                      letter-spacing:1px;margin:12px 0 0 0;text-align:center;
-                      background:rgba(135,166,184,0.08);padding:4px 6px;border-radius:4px;">
-              BUILD v3 · 2026-06-09 · {_elapsed_ms}ms
+            <p style="font-size:0.5rem;color:rgba(135,166,184,0.35);
+                      letter-spacing:1px;margin:12px 0 0 0;text-align:center;">
+              MALE'DENIM OS · v3.0 · {_elapsed_ms}ms
             </p>
             """, unsafe_allow_html=True)
 
