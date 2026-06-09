@@ -173,16 +173,21 @@ _components.html("""
     const sidebar = doc.querySelector('[data-testid="stSidebar"]');
     if (!sidebar) return null;
 
-    // Encuentra todos los elementos cuyo textContent EXACTO coincide con un grupo
+    // Encuentra elementos cuyo textContent EXACTO coincide con un grupo
+    // Y QUE NO ESTÉN dentro de un <a> (que serían placeholders/pages con el mismo nombre)
     const headers = [];
     const walker = doc.createTreeWalker(sidebar, NodeFilter.SHOW_ELEMENT, null);
     let node;
     while ((node = walker.nextNode())) {
       const t = (node.textContent || '').trim();
-      // Match exacto + sin hijos con su propio texto (es leaf)
-      if (GROUP_NAMES.includes(t) && node.children.length === 0) {
-        headers.push({el: node, name: t});
-      }
+      if (!GROUP_NAMES.includes(t)) continue;
+      if (node.children.length !== 0) continue;   // debe ser leaf
+      // Excluir si tiene un <a> ancestor (es un nav link, no header de grupo)
+      if (node.closest('a')) continue;
+      // Excluir si tiene data-testid de nav link
+      const navLinkAncestor = node.closest('[data-testid="stSidebarNavLink"]');
+      if (navLinkAncestor) continue;
+      headers.push({el: node, name: t});
     }
     if (headers.length === 0) return null;
 
