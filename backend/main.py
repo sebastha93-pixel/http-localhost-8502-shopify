@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.config import settings
-from backend.api import health, melonn, metricas
+from backend.api import health, melonn, metricas, pedidos
 
 
 # ── Lifespan: bootstrap / cleanup ─────────────────────────────────────────────
@@ -58,6 +58,7 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(melonn.router)
 app.include_router(metricas.router)
+app.include_router(pedidos.router)
 
 
 @app.get("/", include_in_schema=False)

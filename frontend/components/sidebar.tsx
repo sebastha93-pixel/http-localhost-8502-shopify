@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import * as Collapsible from "@radix-ui/react-collapsible";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, UserCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { getUser, setUser } from "@/lib/user";
 
 interface NavItem {
   label: string;
@@ -90,11 +91,45 @@ export function Sidebar() {
         ))}
       </nav>
 
-      {/* Footer (placeholder — usuario + logout vendrá en Fase de auth) */}
-      <div className="border-t border-white/5 px-5 py-4 text-[0.5rem] tracking-[0.25em] text-steel/40 text-center">
+      {/* Footer — identidad del usuario (auditoría) */}
+      <UserBox />
+      <div className="border-t border-white/5 px-5 py-2 text-[0.5rem] tracking-[0.25em] text-steel/40 text-center">
         MALE'DENIM OS · v3
       </div>
     </aside>
+  );
+}
+
+function UserBox() {
+  const [user, setLocal] = useState<string>("");
+
+  useEffect(() => {
+    setLocal(getUser());
+  }, []);
+
+  const cambiar = () => {
+    const nuevo = (prompt("Tu nombre (queda registrado en auditoría):", user) || "").trim();
+    if (nuevo) {
+      setUser(nuevo);
+      setLocal(nuevo);
+    }
+  };
+
+  return (
+    <div className="border-t border-white/5 px-4 py-3">
+      <button
+        onClick={cambiar}
+        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-white/5 transition-colors"
+      >
+        <UserCircle className="h-4 w-4 text-steel" />
+        <div className="text-left min-w-0">
+          <p className="text-[0.55rem] font-bold uppercase tracking-[0.2em] text-steel/60">Usuario</p>
+          <p className="text-xs font-semibold text-concrete truncate">
+            {user || "Identificarse"}
+          </p>
+        </div>
+      </button>
+    </div>
   );
 }
 

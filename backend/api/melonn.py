@@ -81,6 +81,10 @@ def pedido_detalle(orden: str) -> dict:
     raise HTTPException(status_code=404, detail=f"Pedido {orden} no encontrado")
 
 
+class AutorizarRequest(BaseModel):
+    autor: str = "Sistema"
+
+
 class AutorizarResponse(BaseModel):
     ok: bool
     mensaje: str
@@ -88,10 +92,11 @@ class AutorizarResponse(BaseModel):
 
 
 @router.post("/pedidos/{orden_melonn}/autorizar-despacho", response_model=AutorizarResponse)
-def autorizar_despacho(orden_melonn: str) -> AutorizarResponse:
+def autorizar_despacho(orden_melonn: str, body: Optional[AutorizarRequest] = None) -> AutorizarResponse:
     """
     Libera el hold de fulfillment en Melonn y autoriza el despacho del pedido.
     Equivalente al botón "Authorize dispatch" en la UI de Melonn.
+    Registra automáticamente una acción de auditoría en Supabase.
     """
     import sys
     from pathlib import Path
@@ -99,6 +104,7 @@ def autorizar_despacho(orden_melonn: str) -> AutorizarResponse:
     if str(_SRC) not in sys.path:
         sys.path.insert(0, str(_SRC))
     import melonn_client as mc
+    import memoria
 
     try:
         ok, mensaje = mc.release_hold_fulfillment(orden_melonn)
@@ -107,5 +113,17 @@ def autorizar_despacho(orden_melonn: str) -> AutorizarResponse:
 
     if not ok:
         raise HTTPException(status_code=400, detail=mensaje)
+
+    # Audit trail: registrar quién autorizó
+    autor = (body.autor if body else "Sistema").strip() or "Sistema"
+    try:
+        memoria.agregar_accion(
+            orden_melonn,
+            "despacho_autorizado",
+            f"Despacho autorizado vía dashboard MALE'DENIM OS",
+            autor,
+        )
+    except Exception:
+        pass  # No bloquear la autorización si Supabase falla
 
     return AutorizarResponse(ok=True, mensaje=mensaje, orden_melonn=orden_melonn)

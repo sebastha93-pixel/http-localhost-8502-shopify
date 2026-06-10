@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatMoneyShort } from "@/lib/utils";
 import { Search, ExternalLink, Phone, MessageCircle } from "lucide-react";
+import { PedidoDetalle } from "@/components/pedido-detalle";
 
 const NIVELES: NivelRiesgo[] = ["CRITICO", "RIESGO", "NORMAL", "VENCIDO", "RESUELTO"];
 
@@ -45,6 +46,7 @@ export function PedidosTable({
   const [nivel, setNivel] = useState<NivelRiesgo | "Todos">("Todos");
   const [tipo, setTipo] = useState<TipoFiltro>("Todos");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Pedido | null>(null);
 
   // Auto-añadir columnas según props
   const cols = useMemo<ColumnKey[]>(() => {
@@ -110,6 +112,11 @@ export function PedidosTable({
           <Select label="Tipo" value={tipo} onChange={(v) => setTipo(v as TipoFiltro)} options={TIPO_FILTROS as unknown as string[]} />
         )}
       </div>
+
+      {/* Detalle del pedido seleccionado (entre buscador y tabla) */}
+      {expanded && (
+        <PedidoDetalle pedido={expanded} onClose={() => setExpanded(null)} />
+      )}
 
       {/* Barra de selección */}
       {selectable && selected.size > 0 && (
@@ -187,7 +194,9 @@ export function PedidosTable({
                         p={p}
                         cols={cols}
                         isSelected={selected.has(key)}
+                        isExpanded={expanded?.orden_melonn === p.orden_melonn}
                         onToggle={() => toggleOne(key)}
+                        onExpand={() => setExpanded(expanded?.orden_melonn === p.orden_melonn ? null : p)}
                         renderAction={renderAction}
                       />
                     );
@@ -208,12 +217,14 @@ export function PedidosTable({
 }
 
 function Row({
-  p, cols, isSelected, onToggle, renderAction,
+  p, cols, isSelected, isExpanded, onToggle, onExpand, renderAction,
 }: {
   p: Pedido;
   cols: ColumnKey[];
   isSelected: boolean;
+  isExpanded: boolean;
   onToggle: () => void;
+  onExpand: () => void;
   renderAction?: (p: Pedido) => React.ReactNode;
 }) {
   const has = (c: ColumnKey) => cols.includes(c);
@@ -222,8 +233,17 @@ function Row({
   const overSla = sla > 0 && dias > sla;
   const tel = (p.telefono_comprador || "").replace(/\D/g, "");
 
+  // Click en cualquier celda excepto checkboxes/enlaces expande el detalle
+  const handleRowClick = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('input, a, button, label')) return;
+    onExpand();
+  };
+
   return (
-    <tr className={`border-b border-border hover:bg-concrete/30 transition-colors ${isSelected ? "bg-steel/5" : ""}`}>
+    <tr
+      onClick={handleRowClick}
+      className={`border-b border-border hover:bg-concrete/30 transition-colors cursor-pointer ${isSelected ? "bg-steel/5" : ""} ${isExpanded ? "bg-steel/15 border-l-2 border-l-steel" : ""}`}>
       {has("select") && (
         <Td>
           <input

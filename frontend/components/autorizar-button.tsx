@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Pedido } from "@/lib/types";
+import { ensureUser } from "@/lib/user";
 import { CheckCircle, Loader2, AlertCircle, Send } from "lucide-react";
 
 interface AutorizarResponse {
@@ -18,8 +19,13 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
   const [msg, setMsg] = useState<string>("");
 
   const mutation = useMutation({
-    mutationFn: () =>
-      api.post<AutorizarResponse>(`/api/melonn/pedidos/${pedido.orden_melonn}/autorizar-despacho`),
+    mutationFn: () => {
+      const autor = ensureUser();
+      return api.post<AutorizarResponse>(
+        `/api/melonn/pedidos/${pedido.orden_melonn}/autorizar-despacho`,
+        { autor },
+      );
+    },
     onSuccess: (data) => {
       setFeedback("ok");
       setMsg(data.mensaje);

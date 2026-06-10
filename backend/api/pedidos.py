@@ -1,0 +1,143 @@
+"""
+backend.api.pedidos — Acciones, notas e historial por pedido (Supabase).
+Reusa src/memoria.py, mismo schema que Streamlit.
+"""
+from __future__ import annotations
+
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+_SRC = Path(__file__).resolve().parent.parent.parent / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+import memoria  # noqa: E402
+
+router = APIRouter(prefix="/api/pedidos", tags=["pedidos"])
+
+
+# ── Tipos de acción permitidos (alineados con memoria.TIPOS_ACCION) ──
+TIPOS_ACCION = [
+    "llamada", "whatsapp", "despacho_autorizado", "acuerdo_cliente",
+    "gestion_transportadora", "escalado", "visita", "resuelto",
+    "devolucion", "nota", "otro",
+]
+
+
+# ── Modelos ───────────────────────────────────────────────────────────
+
+class Accion(BaseModel):
+    tipo: str
+    descripcion: str
+    autor: str
+    creada_en: Optional[str] = None
+
+
+class NuevaAccion(BaseModel):
+    tipo: str = Field(..., description="Uno de TIPOS_ACCION")
+    descripcion: str = Field(default="")
+    autor: str = Field(..., min_length=1, description="Usuario que registra")
+
+
+class Nota(BaseModel):
+    autor: str
+    nota: str
+    creada_en: Optional[str] = None
+
+
+class NuevaNota(BaseModel):
+    autor: str = Field(..., min_length=1)
+    nota: str = Field(..., min_length=1)
+
+
+class HistorialItem(BaseModel):
+    fecha: Optional[str] = None
+    csv: Optional[str] = None
+    nivel: Optional[str] = None
+    score: Optional[int] = None
+    dias: Optional[int] = None
+    novedad: Optional[str] = None
+
+
+# ── Helpers ───────────────────────────────────────────────────────────
+
+def _df_to_records(df) -> list[dict]:
+    """Convierte DataFrame de pandas a list[dict] con datetimes ISO."""
+    if df is None or df.empty:
+        return []
+    out = []
+    for _, r in df.iterrows():
+        d = {}
+        for k, v in r.items():
+            if hasattr(v, "isoformat"):
+                d[k] = v.isoformat()
+            else:
+                d[k] = v
+        out.append(d)
+    return out
+
+
+# ── Acciones ──────────────────────────────────────────────────────────
+
+@router.get("/{orden}/acciones", response_model=list[Accion])
+def get_acciones(orden: str) -> list[Accion]:
+    df = memoria.cargar_acciones(orden)
+    return [Accion(**r) for r in _df_to_records(df)]
+
+
+@router.post("/{orden}/acciones", response_model=Accion)
+def post_accion(orden: str, body: NuevaAccion) -> Accion:
+    if body.tipo not in TIPOS_ACCION:
+        raise HTTPException(status_code=400, detail=f"Tipo inválido. Permitidos: {TIPOS_ACCION}")
+    ok, err = memoria.agregar_accion(orden, body.tipo, body.descripcion, body.autor)
+    if not ok:
+        raise HTTPException(status_code=500, detail=err or "Error al guardar acción")
+    return Accion(
+        tipo=body.tipo,
+        descripcion=body.descripcion,
+        autor=body.autor,
+        creada_en=datetime.utcnow().isoformat() + "Z",
+    )
+
+
+# ── Notas ─────────────────────────────────────────────────────────────
+
+@router.get("/{orden}/notas", response_model=list[Nota])
+def get_notas(orden: str) -> list[Nota]:
+    df = memoria.cargar_notas(orden)
+    return [Nota(**r) for r in _df_to_records(df)]
+
+
+@router.post("/{orden}/notas", response_model=Nota)
+def post_nota(orden: str, body: NuevaNota) -> Nota:
+    ok, err = memoria.agregar_nota(orden, body.autor, body.nota)
+    if not ok:
+        raise HTTPException(status_code=500, detail=err or "Error al guardar nota")
+    return Nota(
+        autor=body.autor,
+        nota=body.nota,
+        creada_en=datetime.utcnow().isoformat() + "Z",
+    )
+
+
+# ── Historial de estados (snapshots) ──────────────────────────────────
+
+@router.get("/{orden}/historial", response_model=list[HistorialItem])
+def get_historial(orden: str) -> list[HistorialItem]:
+    df = memoria.historial_pedido(orden)
+    return [
+        HistorialItem(
+            fecha=r.get("Fecha"),
+            csv=r.get("CSV"),
+            nivel=r.get("Nivel"),
+            score=r.get("Score"),
+            dias=r.get("Días"),
+            novedad=r.get("Novedad"),
+        )
+        for r in _df_to_records(df)
+    ]
