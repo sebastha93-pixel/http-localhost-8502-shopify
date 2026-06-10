@@ -57,13 +57,33 @@ def es_novedad_visible(p: dict) -> bool:
 # ── Helpers internos ─────────────────────────────────────────────────────────
 
 def _dias_reales(p: dict) -> int:
+    """
+    Días que el pedido ha estado / estuvo en tránsito.
+
+    - Si está entregado y existe fecha_entrega: fecha_entrega - fecha_despacho
+      (mide el tiempo REAL que tomó la entrega, no días después de entregado)
+    - Si está activo: hoy - fecha_despacho
+    - Fallback: campo dias_en_transito del pedido
+    """
     fd = p.get("fecha_despacho")
-    if fd:
+    if not fd:
+        return int(p.get("dias_en_transito") or 0)
+
+    try:
+        fd_date = date.fromisoformat(str(fd))
+    except Exception:
+        return int(p.get("dias_en_transito") or 0)
+
+    # Si está entregado y hay fecha de entrega → usar tiempo real
+    sub = p.get("sub_estado_logistico", "")
+    fe = p.get("fecha_entrega")
+    if sub == "entregado" and fe:
         try:
-            return max(0, (date.today() - date.fromisoformat(str(fd))).days)
+            return max(0, (date.fromisoformat(str(fe)) - fd_date).days)
         except Exception:
             pass
-    return int(p.get("dias_en_transito") or 0)
+
+    return max(0, (date.today() - fd_date).days)
 
 
 def _parse_cod(v: Any) -> float:

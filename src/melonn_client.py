@@ -1028,6 +1028,19 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
         if region and not p.get("region_destino"):
             p["region_destino"] = region
 
+        # Fechas (formato ISO YYYY-MM-DD)
+        for src_key, dst_key in [
+            ("dispatch_date",  "fecha_despacho"),
+            ("delivery_date",  "fecha_entrega"),
+            ("promise_date",   "fecha_promesa"),
+        ]:
+            raw = detail.get(src_key) or ""
+            if raw and not p.get(dst_key):
+                try:
+                    p[dst_key] = str(raw).split("T")[0]
+                except Exception:
+                    pass
+
         if nombre or telefono or ciudad:
             completados += 1
 
