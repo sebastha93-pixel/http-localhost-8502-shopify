@@ -598,8 +598,9 @@ def _post(path: str, body: dict = None) -> tuple:
     Retorna (ok: bool, data: dict | None, error_msg: str).
     """
     url = f"{_BASE_URL}/{path.lstrip('/')}"
-    # Retry budget más generoso que GET (acciones de usuario no pueden fallar)
-    post_backoff = [3, 8, 20, 45, 90]   # total max ~166s
+    # Retry budget corto — no congelar UI más de ~15s.
+    # Si Melonn está saturado, mejor decirle al usuario para que reintente.
+    post_backoff = [2, 5, 8]   # total max 15s
 
     for attempt, backoff in enumerate([0] + post_backoff):
         if backoff:
@@ -624,12 +625,17 @@ def _post(path: str, body: dict = None) -> tuple:
 
             # Rate limit / temporal: reintentar
             if r.status_code in (429, 503):
-                retry_after = int(r.headers.get("Retry-After", post_backoff[min(attempt, len(post_backoff)-1)]))
-                log.warning(f"POST {url} → HTTP {r.status_code}: Retry-After {retry_after}s (intento {attempt+1}/{len(post_backoff)+1})")
+                # Solo respetar Retry-After si es razonable (<30s); ignorar si Melonn pide más
+                retry_after_hdr = r.headers.get("Retry-After")
+                if retry_after_hdr and retry_after_hdr.isdigit() and int(retry_after_hdr) <= 30:
+                    wait = int(retry_after_hdr)
+                else:
+                    wait = post_backoff[min(attempt, len(post_backoff)-1)]
+                log.warning(f"POST {url} → HTTP {r.status_code}: esperando {wait}s (intento {attempt+1}/{len(post_backoff)+1})")
                 if attempt < len(post_backoff):
-                    time.sleep(retry_after)
+                    time.sleep(wait)
                     continue
-                return False, None, "Melonn ocupado. Vuelve a intentar en 1 minuto."
+                return False, None, "Melonn ocupado. Espera 30s y vuelve a darle click."
 
             try:
                 msg = r.json().get("message") or r.text[:200]

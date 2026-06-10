@@ -55,13 +55,15 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
 
   if (feedback === "error") {
     return (
-      <button
-        onClick={() => { setFeedback("idle"); setMsg(""); }}
-        className="inline-flex items-center gap-1 text-xs font-semibold text-crimson"
-        title={msg}
-      >
-        <AlertCircle className="h-3.5 w-3.5" /> Reintentar
-      </button>
+      <div className="inline-flex flex-col items-end gap-0.5">
+        <button
+          onClick={() => { setFeedback("idle"); setMsg(""); }}
+          className="inline-flex items-center gap-1 rounded-md bg-rust/15 px-2 py-1 text-xs font-semibold text-crimson hover:bg-rust/25"
+        >
+          <AlertCircle className="h-3 w-3" /> Reintentar
+        </button>
+        {msg && <span className="text-[0.6rem] text-graphite max-w-[200px] text-right">{msg}</span>}
+      </div>
     );
   }
 
