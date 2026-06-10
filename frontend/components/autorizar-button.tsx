@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Pedido } from "@/lib/types";
-import { ensureUser } from "@/lib/user";
+import { useAuth } from "@/components/auth-provider";
+import { puedeEscribir } from "@/lib/auth";
 import { CheckCircle, Loader2, AlertCircle, Send } from "lucide-react";
 
 interface AutorizarResponse {
@@ -15,17 +16,17 @@ interface AutorizarResponse {
 
 export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
   const qc = useQueryClient();
+  const { user } = useAuth();
   const [feedback, setFeedback] = useState<"idle" | "ok" | "error">("idle");
   const [msg, setMsg] = useState<string>("");
 
+  // Botón oculto si el usuario es solo lectura
+  if (!puedeEscribir(user)) return null;
+
   const mutation = useMutation({
-    mutationFn: () => {
-      const autor = ensureUser();
-      return api.post<AutorizarResponse>(
-        `/api/melonn/pedidos/${pedido.orden_melonn}/autorizar-despacho`,
-        { autor },
-      );
-    },
+    mutationFn: () => api.post<AutorizarResponse>(
+      `/api/melonn/pedidos/${pedido.orden_melonn}/autorizar-despacho`,
+    ),
     onSuccess: (data) => {
       setFeedback("ok");
       setMsg(data.mensaje);

@@ -4,9 +4,10 @@ backend.api.melonn — Endpoints REST de logística (Melonn).
 from __future__ import annotations
 
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from backend.core.security import CurrentUser, require_role
 from backend.services import melonn as svc
 from backend.services import metricas as metricas_svc
 
@@ -81,10 +82,6 @@ def pedido_detalle(orden: str) -> dict:
     raise HTTPException(status_code=404, detail=f"Pedido {orden} no encontrado")
 
 
-class AutorizarRequest(BaseModel):
-    autor: str = "Sistema"
-
-
 class AutorizarResponse(BaseModel):
     ok: bool
     mensaje: str
@@ -92,7 +89,10 @@ class AutorizarResponse(BaseModel):
 
 
 @router.post("/pedidos/{orden_melonn}/autorizar-despacho", response_model=AutorizarResponse)
-def autorizar_despacho(orden_melonn: str, body: Optional[AutorizarRequest] = None) -> AutorizarResponse:
+def autorizar_despacho(
+    orden_melonn: str,
+    user: CurrentUser = Depends(require_role("admin", "operador")),
+) -> AutorizarResponse:
     """
     Libera el hold de fulfillment en Melonn y autoriza el despacho del pedido.
     Equivalente al botón "Authorize dispatch" en la UI de Melonn.
@@ -114,14 +114,13 @@ def autorizar_despacho(orden_melonn: str, body: Optional[AutorizarRequest] = Non
     if not ok:
         raise HTTPException(status_code=400, detail=mensaje)
 
-    # Audit trail: registrar quién autorizó
-    autor = (body.autor if body else "Sistema").strip() or "Sistema"
+    # Audit trail: el usuario autenticado del JWT
     try:
         memoria.agregar_accion(
             orden_melonn,
             "despacho_autorizado",
-            f"Despacho autorizado vía dashboard MALE'DENIM OS",
-            autor,
+            "Despacho autorizado vía dashboard MALE'DENIM OS",
+            user.nombre,
         )
     except Exception:
         pass  # No bloquear la autorización si Supabase falla

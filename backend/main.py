@@ -18,7 +18,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.config import settings
-from backend.api import health, melonn, metricas, pedidos
+from backend.api import auth, health, melonn, metricas, pedidos
+from backend.services import usuarios as usuarios_svc
+from backend.core.security import hash_password
 
 
 # ── Lifespan: bootstrap / cleanup ─────────────────────────────────────────────
@@ -27,6 +29,24 @@ async def lifespan(app: FastAPI):
     # Startup
     print(f"🚀 MALE'DENIM OS API · env={settings.env}")
     print(f"   CORS allowed: {settings.cors_origins_list}")
+
+    # Bootstrap del primer admin si la tabla usuarios está vacía
+    try:
+        if (
+            settings.auth_bootstrap_email
+            and settings.auth_bootstrap_password
+            and usuarios_svc.contar() == 0
+        ):
+            usuarios_svc.crear(
+                email=settings.auth_bootstrap_email,
+                nombre=settings.auth_bootstrap_nombre,
+                password_hash=hash_password(settings.auth_bootstrap_password),
+                rol="admin",
+            )
+            print(f"   👤 Bootstrap admin creado: {settings.auth_bootstrap_email}")
+    except Exception as e:
+        print(f"   ⚠️  Bootstrap admin omitido: {e}")
+
     yield
     # Shutdown
     print("👋 API detenida")
@@ -56,6 +76,7 @@ app.add_middleware(
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(health.router)
+app.include_router(auth.router)
 app.include_router(melonn.router)
 app.include_router(metricas.router)
 app.include_router(pedidos.router)

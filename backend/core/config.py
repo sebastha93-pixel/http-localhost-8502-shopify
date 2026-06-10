@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     auth_jwt_secret: str  = Field(default="dev-only-change-in-prod-XXXX")
     auth_jwt_expiry_min: int = 60 * 24 * 7      # 7 días
 
+    # Bootstrap del primer admin (solo se usa si la tabla usuarios está vacía)
+    auth_bootstrap_email:    str = Field(default="", alias="AUTH_BOOTSTRAP_EMAIL")
+    auth_bootstrap_password: str = Field(default="", alias="AUTH_BOOTSTRAP_PASSWORD")
+    auth_bootstrap_nombre:   str = Field(default="Administrador", alias="AUTH_BOOTSTRAP_NOMBRE")
+
     # ── CORS ───────────────────────────────────────────────────────────────────
     cors_origins: str = Field(
         default="http://localhost:3000,http://localhost:3001",

@@ -18,3 +18,4 @@ pydantic-settings>=2.4
 httpx>=0.27
 python-multipart>=0.0.9
 PyJWT>=2.8
+email-validator>=2.1

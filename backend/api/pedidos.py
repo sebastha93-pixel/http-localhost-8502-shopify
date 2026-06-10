@@ -9,8 +9,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+
+from backend.core.security import CurrentUser, get_current_user, require_role
 
 _SRC = Path(__file__).resolve().parent.parent.parent / "src"
 if str(_SRC) not in sys.path:
@@ -41,7 +43,6 @@ class Accion(BaseModel):
 class NuevaAccion(BaseModel):
     tipo: str = Field(..., description="Uno de TIPOS_ACCION")
     descripcion: str = Field(default="")
-    autor: str = Field(..., min_length=1, description="Usuario que registra")
 
 
 class Nota(BaseModel):
@@ -51,7 +52,6 @@ class Nota(BaseModel):
 
 
 class NuevaNota(BaseModel):
-    autor: str = Field(..., min_length=1)
     nota: str = Field(..., min_length=1)
 
 
@@ -85,22 +85,26 @@ def _df_to_records(df) -> list[dict]:
 # ── Acciones ──────────────────────────────────────────────────────────
 
 @router.get("/{orden}/acciones", response_model=list[Accion])
-def get_acciones(orden: str) -> list[Accion]:
+def get_acciones(orden: str, _: CurrentUser = Depends(get_current_user)) -> list[Accion]:
     df = memoria.cargar_acciones(orden)
     return [Accion(**r) for r in _df_to_records(df)]
 
 
 @router.post("/{orden}/acciones", response_model=Accion)
-def post_accion(orden: str, body: NuevaAccion) -> Accion:
+def post_accion(
+    orden: str,
+    body: NuevaAccion,
+    user: CurrentUser = Depends(require_role("admin", "operador")),
+) -> Accion:
     if body.tipo not in TIPOS_ACCION:
         raise HTTPException(status_code=400, detail=f"Tipo inválido. Permitidos: {TIPOS_ACCION}")
-    ok, err = memoria.agregar_accion(orden, body.tipo, body.descripcion, body.autor)
+    ok, err = memoria.agregar_accion(orden, body.tipo, body.descripcion, user.nombre)
     if not ok:
         raise HTTPException(status_code=500, detail=err or "Error al guardar acción")
     return Accion(
         tipo=body.tipo,
         descripcion=body.descripcion,
-        autor=body.autor,
+        autor=user.nombre,
         creada_en=datetime.utcnow().isoformat() + "Z",
     )
 
@@ -108,18 +112,22 @@ def post_accion(orden: str, body: NuevaAccion) -> Accion:
 # ── Notas ─────────────────────────────────────────────────────────────
 
 @router.get("/{orden}/notas", response_model=list[Nota])
-def get_notas(orden: str) -> list[Nota]:
+def get_notas(orden: str, _: CurrentUser = Depends(get_current_user)) -> list[Nota]:
     df = memoria.cargar_notas(orden)
     return [Nota(**r) for r in _df_to_records(df)]
 
 
 @router.post("/{orden}/notas", response_model=Nota)
-def post_nota(orden: str, body: NuevaNota) -> Nota:
-    ok, err = memoria.agregar_nota(orden, body.autor, body.nota)
+def post_nota(
+    orden: str,
+    body: NuevaNota,
+    user: CurrentUser = Depends(require_role("admin", "operador")),
+) -> Nota:
+    ok, err = memoria.agregar_nota(orden, user.nombre, body.nota)
     if not ok:
         raise HTTPException(status_code=500, detail=err or "Error al guardar nota")
     return Nota(
-        autor=body.autor,
+        autor=user.nombre,
         nota=body.nota,
         creada_en=datetime.utcnow().isoformat() + "Z",
     )
@@ -128,7 +136,7 @@ def post_nota(orden: str, body: NuevaNota) -> Nota:
 # ── Historial de estados (snapshots) ──────────────────────────────────
 
 @router.get("/{orden}/historial", response_model=list[HistorialItem])
-def get_historial(orden: str) -> list[HistorialItem]:
+def get_historial(orden: str, _: CurrentUser = Depends(get_current_user)) -> list[HistorialItem]:
     df = memoria.historial_pedido(orden)
     return [
         HistorialItem(

@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Pedido } from "@/lib/types";
-import { ensureUser, getUser } from "@/lib/user";
+import { useAuth } from "@/components/auth-provider";
+import { puedeEscribir } from "@/lib/auth";
 import { formatMoneyShort } from "@/lib/utils";
 import {
   Phone, MessageCircle, ExternalLink, Send, FileText, AlertCircle,
@@ -37,6 +38,8 @@ const QUICK_ACTIONS: Array<{ tipo: string; label: string; icon: React.ComponentT
 export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: () => void }) {
   const orden = pedido.orden_melonn || pedido.orden_tienda;
   const qc = useQueryClient();
+  const { user } = useAuth();
+  const canWrite = puedeEscribir(user);
 
   const accionesQ = useQuery({
     queryKey: ["acciones", orden],
@@ -51,13 +54,13 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
   });
 
   const accionMut = useMutation({
-    mutationFn: (body: { tipo: string; descripcion: string; autor: string }) =>
+    mutationFn: (body: { tipo: string; descripcion: string }) =>
       api.post<Accion>(`/api/pedidos/${orden}/acciones`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["acciones", orden] }),
   });
 
   const notaMut = useMutation({
-    mutationFn: (body: { autor: string; nota: string }) =>
+    mutationFn: (body: { nota: string }) =>
       api.post<Nota>(`/api/pedidos/${orden}/notas`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notas", orden] }),
   });
@@ -65,14 +68,12 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
   const [notaTxt, setNotaTxt] = useState("");
 
   const registrarAccion = (tipo: string, label: string) => {
-    const autor = ensureUser();
-    accionMut.mutate({ tipo, descripcion: label, autor });
+    accionMut.mutate({ tipo, descripcion: label });
   };
 
   const guardarNota = () => {
     if (!notaTxt.trim()) return;
-    const autor = ensureUser();
-    notaMut.mutate({ autor, nota: notaTxt.trim() });
+    notaMut.mutate({ nota: notaTxt.trim() });
     setNotaTxt("");
   };
 
@@ -83,7 +84,7 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
   ].sort((a, b) => (b.creada_en || "").localeCompare(a.creada_en || ""));
 
   const tel = (pedido.telefono_comprador || "").replace(/\D/g, "");
-  const currentUser = getUser() || "Sin identificar";
+  const currentUser = user?.nombre || "Sin identificar";
 
   return (
     <div className="bg-white border-2 border-steel/30 rounded-lg shadow-lg overflow-hidden">
@@ -155,58 +156,60 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
             </div>
           )}
 
-          {/* Acciones rápidas */}
-          <div>
-            <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-2">Marcar acción</p>
-            <p className="text-[0.65rem] text-graphite mb-2">
-              Registrado como: <span className="font-semibold text-ink">{currentUser}</span>
-              {currentUser === "Sin identificar" && (
-                <button
-                  onClick={() => { ensureUser(); window.location.reload(); }}
-                  className="ml-2 text-steel hover:text-navy underline"
-                >
-                  identificarse
-                </button>
-              )}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {QUICK_ACTIONS.map((a) => {
-                const Icon = a.icon;
-                return (
-                  <button
-                    key={a.tipo}
-                    onClick={() => registrarAccion(a.tipo, a.label)}
-                    disabled={accionMut.isPending}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-border bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-concrete hover:border-steel transition-colors disabled:opacity-50"
-                  >
-                    <Icon className="h-3 w-3" />
-                    {a.label}
-                  </button>
-                );
-              })}
+          {/* Acciones rápidas — solo si tiene permisos */}
+          {canWrite && (
+            <div>
+              <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-2">Marcar acción</p>
+              <p className="text-[0.65rem] text-graphite mb-2">
+                Registrado como: <span className="font-semibold text-ink">{currentUser}</span>
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {QUICK_ACTIONS.map((a) => {
+                  const Icon = a.icon;
+                  return (
+                    <button
+                      key={a.tipo}
+                      onClick={() => registrarAccion(a.tipo, a.label)}
+                      disabled={accionMut.isPending}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-white px-3 py-1.5 text-xs font-semibold text-ink hover:bg-concrete hover:border-steel transition-colors disabled:opacity-50"
+                    >
+                      <Icon className="h-3 w-3" />
+                      {a.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* Nota libre */}
-          <div>
-            <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-2">Agregar nota</p>
-            <div className="flex gap-2">
-              <input
-                value={notaTxt}
-                onChange={(e) => setNotaTxt(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && guardarNota()}
-                placeholder="Comentario, contexto, observación..."
-                className="flex-1 rounded-md border border-border bg-white px-3 py-2 text-sm text-ink placeholder:text-graphite/60 focus:outline-none focus:ring-2 focus:ring-steel"
-              />
-              <button
-                onClick={guardarNota}
-                disabled={!notaTxt.trim() || notaMut.isPending}
-                className="rounded-md bg-ink px-3 py-2 text-xs font-semibold uppercase tracking-wider text-white hover:bg-black disabled:opacity-50"
-              >
-                {notaMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
-              </button>
+          {/* Nota libre — solo si tiene permisos */}
+          {canWrite && (
+            <div>
+              <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-2">Agregar nota</p>
+              <div className="flex gap-2">
+                <input
+                  value={notaTxt}
+                  onChange={(e) => setNotaTxt(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && guardarNota()}
+                  placeholder="Comentario, contexto, observación..."
+                  className="flex-1 rounded-md border border-border bg-white px-3 py-2 text-sm text-ink placeholder:text-graphite/60 focus:outline-none focus:ring-2 focus:ring-steel"
+                />
+                <button
+                  onClick={guardarNota}
+                  disabled={!notaTxt.trim() || notaMut.isPending}
+                  className="rounded-md bg-ink px-3 py-2 text-xs font-semibold uppercase tracking-wider text-white hover:bg-black disabled:opacity-50"
+                >
+                  {notaMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+                </button>
+              </div>
             </div>
-          </div>
+          )}
+
+          {!canWrite && (
+            <p className="text-xs text-graphite italic">
+              Tu rol es solo lectura. Para registrar acciones contacta al administrador.
+            </p>
+          )}
         </div>
 
         {/* Columna derecha — Timeline */}

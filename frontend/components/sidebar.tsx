@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import * as Collapsible from "@radix-ui/react-collapsible";
-import { ChevronDown, UserCircle } from "lucide-react";
+import { ChevronDown, UserCircle, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useEffect, useState } from "react";
-import { getUser, setUser } from "@/lib/user";
+import { useState } from "react";
+import { useAuth } from "@/components/auth-provider";
+import { ROL_LABEL, esAdmin } from "@/lib/auth";
 
 interface NavItem {
   label: string;
@@ -69,6 +70,13 @@ const NAV: { home: NavItem; groups: NavGroup[] } = {
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { user } = useAuth();
+
+  // Filtra grupo Configuración: "Usuarios" solo visible para admin
+  const groups = NAV.groups.map((g) => ({
+    ...g,
+    items: g.items.filter((it) => it.href !== "/usuarios" || esAdmin(user)),
+  }));
 
   return (
     <aside className="fixed inset-y-0 left-0 z-30 flex w-60 flex-col bg-gradient-to-b from-black via-[#1A2B2F] to-ink text-concrete">
@@ -86,7 +94,7 @@ export function Sidebar() {
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
         <NavLink item={NAV.home} pathname={pathname} highlight />
 
-        {NAV.groups.map((g) => (
+        {groups.map((g) => (
           <NavGroupCollapsible key={g.title} group={g} pathname={pathname} />
         ))}
       </nav>
@@ -101,34 +109,27 @@ export function Sidebar() {
 }
 
 function UserBox() {
-  const [user, setLocal] = useState<string>("");
-
-  useEffect(() => {
-    setLocal(getUser());
-  }, []);
-
-  const cambiar = () => {
-    const nuevo = (prompt("Tu nombre (queda registrado en auditoría):", user) || "").trim();
-    if (nuevo) {
-      setUser(nuevo);
-      setLocal(nuevo);
-    }
-  };
+  const { user, logout } = useAuth();
+  if (!user) return null;
 
   return (
     <div className="border-t border-white/5 px-4 py-3">
-      <button
-        onClick={cambiar}
-        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-white/5 transition-colors"
-      >
-        <UserCircle className="h-4 w-4 text-steel" />
-        <div className="text-left min-w-0">
-          <p className="text-[0.55rem] font-bold uppercase tracking-[0.2em] text-steel/60">Usuario</p>
-          <p className="text-xs font-semibold text-concrete truncate">
-            {user || "Identificarse"}
+      <div className="flex items-center gap-2 px-2 py-1.5">
+        <UserCircle className="h-4 w-4 text-steel flex-none" />
+        <div className="text-left min-w-0 flex-1">
+          <p className="text-xs font-semibold text-concrete truncate">{user.nombre}</p>
+          <p className="text-[0.55rem] font-semibold uppercase tracking-[0.2em] text-steel/60">
+            {ROL_LABEL[user.rol]}
           </p>
         </div>
-      </button>
+        <button
+          onClick={logout}
+          title="Cerrar sesión"
+          className="text-steel/70 hover:text-white p-1 rounded hover:bg-white/5"
+        >
+          <LogOut className="h-3.5 w-3.5" />
+        </button>
+      </div>
     </div>
   );
 }
