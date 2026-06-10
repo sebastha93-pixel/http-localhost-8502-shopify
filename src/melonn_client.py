@@ -1049,6 +1049,17 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
     if hit:
         pedidos, fetched_at, _, fuente_hit = hit
         pedidos = _enriquecer_y_filtrar(pedidos)
+        # Lazy enrich: si hay pedidos en caché sin datos de cliente, intentar
+        # completarlos desde Shopify. Guardar caché actualizado.
+        antes = sum(1 for p in pedidos if p.get("nombre_comprador"))
+        pedidos = _lazy_enrich(pedidos)
+        despues = sum(1 for p in pedidos if p.get("nombre_comprador"))
+        if despues > antes:
+            log.info(f"Lazy enrich: completados {despues - antes} pedidos · guardando caché")
+            try:
+                _cache_guardar(pedidos, fuente=fuente_hit)
+            except Exception as e:
+                log.warning(f"No se pudo guardar caché tras lazy enrich: {e}")
         return pedidos, omitidos, {"fuente": fuente_hit, "stale": False, "fetched_at": fetched_at}
 
     # 2. Caché existe pero expiró → comportamiento depende de cuán viejo está
@@ -1075,6 +1086,7 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
 
         # Mostrar stale + refrescar en background
         pedidos = _enriquecer_y_filtrar(pedidos)
+        pedidos = _lazy_enrich(pedidos)  # Completar datos faltantes desde Shopify
         _refresh_background()
         return pedidos, omitidos, {
             "fuente": fuente_stale, "stale": True,
