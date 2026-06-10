@@ -1214,21 +1214,24 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
                     "refresh_bloqueado": True,
                 }
 
-        limpiar_cache()
+        # NO limpiamos caché aún — solo después de fetch exitoso.
+        # Si limpiáramos primero y la API fallara, dejaríamos todo vacío.
 
         # — Intentar API real —
         pedidos_api = _fetch_api()
         if pedidos_api:
+            # Solo aquí, con datos frescos confirmados, reemplazamos caché
             _cache_guardar(pedidos_api)
             return pedidos_api, omitidos, {
                 "fuente": "api_live", "stale": False, "fetched_at": datetime.now()
             }
 
-        # API falló → stale o bootstrap
+        # API falló → mantener caché existente como stale
         stale = _cache_leer(ignorar_ttl=True)
         if stale:
             pedidos, fetched_at, _, fuente_stale = stale
             pedidos = _enriquecer_y_filtrar(pedidos)
+            log.warning("forzar_refresh: API falló, devuelvo caché stale")
             return pedidos, omitidos, {"fuente": fuente_stale, "stale": True, "fetched_at": fetched_at}
 
         pedidos_boot = _enriquecer_y_filtrar(_bootstrap_json())

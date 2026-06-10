@@ -62,10 +62,14 @@ def _refresh_once() -> dict:
         log.info("Scheduler: sync_completo...")
         result = mc.sync_completo()
 
-        last_run["ok"] = True
+        last_run["ok"] = bool(result.get("ok"))
         last_run["completados"] = result.get("completados", 0)
         last_run["total"] = result.get("total", 0)
-        log.info(f"Scheduler: ✓ {result.get('completados', 0)} pedidos completados de {result.get('total', 0)}")
+        if not result.get("ok"):
+            last_run["error"] = result.get("error") or "sync_completo retornó ok=False"
+            log.warning(f"Scheduler: sync_completo no OK → {last_run['error']}")
+        else:
+            log.info(f"Scheduler: ✓ {result.get('completados', 0)} completados de {result.get('total', 0)}")
         return result
     except Exception as e:
         last_run["ok"] = False
