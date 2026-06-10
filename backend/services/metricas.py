@@ -47,11 +47,33 @@ NOVEDADES_VISIBLES = {
 
 
 def es_novedad_visible(p: dict) -> bool:
-    """True si el pedido aparece en Novedades/Incidencias del dashboard."""
-    if p.get("sub_estado_logistico") != "novedad":
-        return False
+    """
+    True si el pedido aparece en Novedades/Incidencias del dashboard.
+
+    Criterios (cualquiera activa la novedad):
+    1. Override manual: marcado por operador como "tiene novedad"
+    2. Estado Melonn explícito en NOVEDADES_VISIBLES
+    3. Heurístico: en tránsito con tiempo CRÍTICO o VENCIDO (>SLA) —
+       Melonn no expone incidencias por API pero un pedido muy excedido
+       casi siempre tiene una incidencia operativa subyacente
+    """
+    # 1) Override manual
+    if p.get("novedad_manual"):
+        return True
+
+    sub = p.get("sub_estado_logistico")
     estado = (p.get("estado_melonn") or "").strip()
-    return estado in NOVEDADES_VISIBLES
+
+    # 2) Novedad por estado Melonn
+    if sub == "novedad" and estado in NOVEDADES_VISIBLES:
+        return True
+
+    # 3) Heurística: tiempo crítico o vencido en tránsito
+    nivel = p.get("nivel")
+    if sub == "en_transito" and nivel in ("CRITICO", "VENCIDO"):
+        return True
+
+    return False
 
 
 # ── Helpers internos ─────────────────────────────────────────────────────────

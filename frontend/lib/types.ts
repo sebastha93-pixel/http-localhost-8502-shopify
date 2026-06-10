@@ -50,6 +50,8 @@ export interface Pedido {
   categoria_incidencia?: string;
   requiere_contacto?: boolean;
   es_novedad_visible?: boolean;
+  novedad_manual?: boolean;
+  motivo_novedad_manual?: string;
   valor_num?: number;
   [key: string]: unknown;
 }

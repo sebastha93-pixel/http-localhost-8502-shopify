@@ -162,6 +162,11 @@ class NuevoOverride(BaseModel):
     ciudad: str = ""
 
 
+class MarcarNovedadBody(BaseModel):
+    novedad_manual: bool = True
+    motivo: str = ""
+
+
 @router.get("/{orden}/override", response_model=Optional[Override])
 def get_override(orden: str, _: CurrentUser = Depends(get_current_user)) -> Optional[Override]:
     o = overrides_svc.obtener(orden)
@@ -184,6 +189,35 @@ def post_override(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    return Override(**o)
+
+
+@router.post("/{orden}/novedad", response_model=Override)
+def marcar_novedad(
+    orden: str,
+    body: MarcarNovedadBody,
+    user: CurrentUser = Depends(require_role("admin", "operador")),
+) -> Override:
+    """Marca o desmarca manualmente un pedido como novedad."""
+    try:
+        o = overrides_svc.upsert(
+            orden,
+            autor=user.nombre,
+            novedad_manual=body.novedad_manual,
+            motivo_novedad=body.motivo,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    # Registrar también en auditoría de acciones
+    try:
+        memoria.agregar_accion(
+            orden,
+            "escalado" if body.novedad_manual else "resuelto",
+            f"{'Marcado como novedad' if body.novedad_manual else 'Novedad cerrada'}: {body.motivo}",
+            user.nombre,
+        )
+    except Exception:
+        pass
     return Override(**o)
 
 

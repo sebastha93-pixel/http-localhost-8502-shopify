@@ -10,7 +10,7 @@ import { formatMoneyShort, fmtDateTime } from "@/lib/utils";
 import {
   Phone, MessageCircle, ExternalLink, Send, FileText, AlertCircle,
   PhoneCall, CheckCircle, Truck, RotateCcw, X, Loader2, MapPin, User, Calendar,
-  Edit3,
+  Edit3, Flag, FlagOff,
 } from "lucide-react";
 
 interface Accion {
@@ -78,6 +78,29 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
     },
   });
 
+  const novedadMut = useMutation({
+    mutationFn: (body: { novedad_manual: boolean; motivo: string }) =>
+      api.post(`/api/pedidos/${orden}/novedad`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["melonn"] });
+      qc.invalidateQueries({ queryKey: ["metricas"] });
+      qc.invalidateQueries({ queryKey: ["acciones", orden] });
+    },
+  });
+
+  const tieneNovedadManual = Boolean(pedido.novedad_manual);
+
+  const toggleNovedad = () => {
+    if (tieneNovedadManual) {
+      novedadMut.mutate({ novedad_manual: false, motivo: "Cerrada desde dashboard" });
+    } else {
+      const motivo = prompt("¿Por qué marcas este pedido como novedad? (ej: cliente no contesta, dirección errada, no quiere recibir)") || "";
+      if (motivo.trim()) {
+        novedadMut.mutate({ novedad_manual: true, motivo });
+      }
+    }
+  };
+
   const registrarAccion = (tipo: string, label: string) => {
     accionMut.mutate({ tipo, descripcion: label });
   };
@@ -118,6 +141,26 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
             >
               <ExternalLink className="h-3 w-3" /> Ver guía Melonn
             </a>
+          )}
+          {canWrite && (
+            <button
+              onClick={toggleNovedad}
+              disabled={novedadMut.isPending}
+              className={`inline-flex items-center gap-1 ml-2 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+                tieneNovedadManual
+                  ? "bg-crimson/30 hover:bg-crimson/40 text-white border border-crimson/50"
+                  : "bg-white/10 hover:bg-rust/30 text-white"
+              }`}
+              title={tieneNovedadManual ? "Quitar marca de novedad" : "Marcar como novedad"}
+            >
+              {novedadMut.isPending ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : tieneNovedadManual ? (
+                <><FlagOff className="h-3 w-3" /> Quitar novedad</>
+              ) : (
+                <><Flag className="h-3 w-3" /> Marcar novedad</>
+              )}
+            </button>
           )}
         </div>
         <button onClick={onClose} className="text-white/60 hover:text-white">

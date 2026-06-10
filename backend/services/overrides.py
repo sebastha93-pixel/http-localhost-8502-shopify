@@ -42,14 +42,21 @@ def _sb() -> Optional[Client]:
 
 
 def cargar_map() -> dict[str, dict]:
-    """Retorna {orden: {nombre, telefono, ciudad, autor, actualizado_en}}."""
+    """Retorna {orden: {nombre, telefono, ciudad, novedad_manual, autor, actualizado_en}}."""
     sb = _sb()
     if sb is None:
         return {}
     try:
-        res = (sb.table("pedido_overrides")
-               .select("orden,nombre_comprador,telefono_comprador,ciudad_destino,autor,actualizado_en")
-               .execute())
+        # Intentar con la columna novedad_manual; si la columna no existe,
+        # fallback al select original.
+        try:
+            res = (sb.table("pedido_overrides")
+                   .select("orden,nombre_comprador,telefono_comprador,ciudad_destino,novedad_manual,motivo_novedad,autor,actualizado_en")
+                   .execute())
+        except Exception:
+            res = (sb.table("pedido_overrides")
+                   .select("orden,nombre_comprador,telefono_comprador,ciudad_destino,autor,actualizado_en")
+                   .execute())
         return {r["orden"]: r for r in (res.data or [])}
     except Exception as e:
         print(f"[overrides] Error cargar_map: {e}")
@@ -79,11 +86,13 @@ def upsert(
     telefono: str = "",
     ciudad: str = "",
     autor: str,
+    novedad_manual: Optional[bool] = None,
+    motivo_novedad: str = "",
 ) -> dict:
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
-    data = {
+    data: dict = {
         "orden":              orden,
         "nombre_comprador":   nombre.strip() or None,
         "telefono_comprador": telefono.strip() or None,
@@ -91,6 +100,9 @@ def upsert(
         "autor":              autor,
         "actualizado_en":     datetime.now(timezone.utc).isoformat(),
     }
+    if novedad_manual is not None:
+        data["novedad_manual"] = novedad_manual
+        data["motivo_novedad"] = motivo_novedad.strip() or None
     res = sb.table("pedido_overrides").upsert(data, on_conflict="orden").execute()
     return res.data[0] if res.data else data
 
@@ -113,6 +125,10 @@ def aplicar_a_pedido(p: dict, overrides_map: dict[str, dict]) -> dict:
         p["telefono_comprador"] = o["telefono_comprador"]
     if o.get("ciudad_destino"):
         p["ciudad_destino"] = o["ciudad_destino"]
+    if o.get("novedad_manual"):
+        p["novedad_manual"] = True
+        if o.get("motivo_novedad"):
+            p["motivo_novedad_manual"] = o["motivo_novedad"]
     p["_override_autor"]         = o.get("autor")
     p["_override_actualizado_en"] = o.get("actualizado_en")
     return p
