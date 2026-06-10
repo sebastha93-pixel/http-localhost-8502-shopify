@@ -51,6 +51,30 @@ class SyncResponse(BaseModel):
     error: Optional[str] = None
 
 
+@router.get("/debug/detalle/{orden_melonn}")
+def debug_detalle(
+    orden_melonn: str,
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Debug: respuesta RAW del detail endpoint de Melonn para una orden."""
+    import sys
+    from pathlib import Path
+    _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+    import melonn_client as mc
+
+    try:
+        detail = mc._get(f"sell-orders/{orden_melonn}")
+        if not detail:
+            raise HTTPException(404, "Melonn devolvió respuesta vacía")
+        return {"orden_melonn": orden_melonn, "detail": detail, "keys": list(detail.keys())}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"Error: {e}")
+
+
 @router.post("/sync-completo", response_model=SyncResponse)
 def sync_completo_endpoint(
     user: CurrentUser = Depends(require_role("admin", "operador")),
