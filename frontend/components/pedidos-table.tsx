@@ -317,7 +317,14 @@ function Row({
             ) : null}
             <div className="min-w-0 text-xs">
               <div className="font-semibold text-ink truncate max-w-[150px]">{p.sku || "—"}</div>
-              {p.variante && <div className="text-graphite">Talla {p.variante}</div>}
+              <div className="text-graphite">
+                {p.variante && <span>Talla {p.variante}</span>}
+                {p.items && p.items.length > 1 && (
+                  <span className="ml-1 inline-block rounded bg-steel/15 px-1 py-0.5 text-[0.6rem] font-bold text-navy">
+                    +{p.items.length - 1} más
+                  </span>
+                )}
+              </div>
             </div>
           </div>
         </Td>

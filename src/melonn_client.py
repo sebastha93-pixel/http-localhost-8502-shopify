@@ -1149,6 +1149,19 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
                 p["producto"] = " / ".join([n for n in nombres if n])
             if items and not p.get("sku"):
                 p["sku"] = str(items[0].get("sku") or "")
+            # Lista completa (multi-producto). Melonn solo da sku+cantidad.
+            if not p.get("items"):
+                p["items"] = [
+                    {
+                        "sku":      str(i.get("sku") or ""),
+                        "titulo":   str(i.get("name") or i.get("title") or ""),
+                        "variante": "",
+                        "cantidad": int(i.get("quantity") or 1),
+                        "precio":   0.0,
+                        "imagen":   "",
+                    }
+                    for i in items
+                ]
 
         if nombre and not p.get("nombre_comprador"):
             p["nombre_comprador"] = nombre

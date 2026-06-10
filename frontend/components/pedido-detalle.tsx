@@ -216,57 +216,8 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
             </div>
           )}
 
-          {/* Producto */}
-          {(pedido.producto || pedido.sku || pedido.imagen_producto) && (
-            <div className="flex gap-3 rounded-md border border-border bg-white p-3">
-              {pedido.imagen_producto ? (
-                <a
-                  href={pedido.imagen_producto as string}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex-none"
-                  title="Ver imagen completa"
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={pedido.imagen_producto as string}
-                    alt={pedido.producto || "Producto"}
-                    className="h-20 w-20 rounded-md object-cover border border-border bg-concrete"
-                  />
-                </a>
-              ) : (
-                <div className="flex-none h-20 w-20 rounded-md bg-concrete border border-border flex items-center justify-center">
-                  <Package className="h-6 w-6 text-graphite/40" />
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-0.5">Producto</p>
-                {pedido.producto && (
-                  <p className="text-sm font-semibold text-ink line-clamp-2">{pedido.producto}</p>
-                )}
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1.5 text-xs">
-                  {pedido.sku && (
-                    <span>
-                      <span className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">SKU</span>{" "}
-                      <span className="tabular-nums text-ink font-semibold">{pedido.sku}</span>
-                    </span>
-                  )}
-                  {pedido.variante && (
-                    <span>
-                      <span className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Talla</span>{" "}
-                      <span className="text-ink font-semibold">{pedido.variante}</span>
-                    </span>
-                  )}
-                  {pedido.cantidad && pedido.cantidad > 1 && (
-                    <span>
-                      <span className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Cant.</span>{" "}
-                      <span className="text-ink font-semibold tabular-nums">{pedido.cantidad}</span>
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
+          {/* Productos — lista completa si hay varios */}
+          <ProductosPedido pedido={pedido} />
 
           {pedido.valor_num ? (
             <div className="rounded-md bg-navy/5 border border-navy/20 px-3 py-2">
@@ -389,6 +340,91 @@ function TimelineItem({ item }: { item: { tipo: string; descripcion: string; aut
     </div>
   );
 }
+
+function ProductosPedido({ pedido }: { pedido: Pedido }) {
+  // Preferimos la lista completa de items; fallback al producto único legacy
+  const items = pedido.items && pedido.items.length > 0
+    ? pedido.items
+    : (pedido.producto || pedido.sku)
+      ? [{
+          sku: pedido.sku || "",
+          titulo: pedido.producto || "",
+          variante: pedido.variante || "",
+          cantidad: pedido.cantidad || 1,
+          precio: pedido.precio_unitario || 0,
+          imagen: pedido.imagen_producto || "",
+        }]
+      : [];
+
+  if (items.length === 0) return null;
+
+  const totalUnidades = items.reduce((s, i) => s + (i.cantidad || 1), 0);
+
+  return (
+    <div className="rounded-md border border-border bg-white p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">
+          {items.length === 1 ? "Producto" : `Productos (${items.length})`}
+        </p>
+        {totalUnidades > 1 && (
+          <span className="text-[0.65rem] text-graphite tabular-nums">
+            {totalUnidades} unidades en total
+          </span>
+        )}
+      </div>
+
+      <div className="space-y-2 max-h-[260px] overflow-y-auto">
+        {items.map((it, i) => (
+          <div key={i} className="flex items-center gap-3">
+            {it.imagen ? (
+              <a
+                href={it.imagen}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-none"
+                title="Ver imagen completa"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={it.imagen}
+                  alt={it.titulo || "Producto"}
+                  className="h-14 w-14 rounded-md object-cover border border-border bg-concrete"
+                />
+              </a>
+            ) : (
+              <div className="flex-none h-14 w-14 rounded-md bg-concrete border border-border flex items-center justify-center">
+                <Package className="h-5 w-5 text-graphite/40" />
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              {it.titulo && (
+                <p className="text-sm font-semibold text-ink truncate">{it.titulo}</p>
+              )}
+              <div className="flex flex-wrap items-center gap-x-3 text-xs mt-0.5">
+                {it.sku && (
+                  <span className="tabular-nums text-graphite">
+                    SKU <span className="text-ink font-semibold">{it.sku}</span>
+                  </span>
+                )}
+                {it.variante && (
+                  <span className="text-graphite">
+                    Talla <span className="text-ink font-semibold">{it.variante}</span>
+                  </span>
+                )}
+                {it.cantidad > 1 && (
+                  <span className="text-graphite">
+                    × <span className="text-ink font-semibold tabular-nums">{it.cantidad}</span>
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 
 function EditarDatos({
   pedido, onCancel, onSubmit, pending,

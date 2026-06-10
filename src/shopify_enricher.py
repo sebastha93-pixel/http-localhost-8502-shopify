@@ -253,6 +253,23 @@ def enriquecer(pedidos: list) -> list:
         if total:
             p["valor_total"] = total
 
+        # ── Lista completa de items (multi-producto) ─────────────────────────
+        if items:
+            p["items"] = []
+            for li in items:
+                var = str(li.get("variant_title") or "").strip()
+                if var.upper() == "DEFAULT TITLE":
+                    var = ""
+                li_pid = str(li.get("product_id") or "")
+                p["items"].append({
+                    "sku":      str(li.get("sku") or ""),
+                    "titulo":   str(li.get("title") or "")[:60],
+                    "variante": var,
+                    "cantidad": int(li.get("quantity") or 1),
+                    "precio":   float(li.get("price") or 0),
+                    "imagen":   images_map.get(li_pid, ""),
+                })
+
         # Email del cliente
         email = cust.get("email") or ship.get("email") or ""
         if email:

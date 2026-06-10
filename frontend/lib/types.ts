@@ -19,6 +19,15 @@ export interface ConfigCheck {
 }
 
 // ── Melonn ──────────────────────────────────────────────────────────────────
+export interface ItemPedido {
+  sku: string;
+  titulo: string;
+  variante: string;
+  cantidad: number;
+  precio: number;
+  imagen: string;
+}
+
 export interface Pedido {
   orden_melonn: string;
   orden_tienda: string;
@@ -60,6 +69,7 @@ export interface Pedido {
   cantidad?: number;
   precio_unitario?: number;
   imagen_producto?: string;
+  items?: ItemPedido[];
   [key: string]: unknown;
 }
 
