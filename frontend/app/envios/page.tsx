@@ -17,7 +17,7 @@ export default function EnviosPage() {
     return {
       todos:      pres,
       transito:   pres.filter((p) => sub(p) === "en_transito" || sub(p) === "pendiente_despacho"),
-      novedades:  pres.filter((p) => sub(p) === "novedad"),
+      novedades:  pres.filter((p) => p.es_novedad_visible),
       entregados: pres.filter((p) => sub(p) === "entregado"),
     };
   }, [data]);

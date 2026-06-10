@@ -49,6 +49,7 @@ export interface Pedido {
   motivo_riesgo?: string;
   categoria_incidencia?: string;
   requiere_contacto?: boolean;
+  es_novedad_visible?: boolean;
   valor_num?: number;
   [key: string]: unknown;
 }

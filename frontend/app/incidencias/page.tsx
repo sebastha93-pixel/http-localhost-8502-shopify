@@ -12,9 +12,7 @@ export default function IncidenciasPage() {
   const { data, isLoading, error, refetch, isFetching } = usePedidos();
 
   const groups = useMemo(() => {
-    const novedades = (data?.pedidos ?? []).filter(
-      (p) => p.sub_estado_logistico === "novedad",
-    );
+    const novedades = (data?.pedidos ?? []).filter((p) => p.es_novedad_visible);
     const cat = (p: Pedido) => (p.categoria_incidencia || "OTRO").toUpperCase();
     return {
       todas:           novedades,

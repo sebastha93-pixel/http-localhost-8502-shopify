@@ -19,6 +19,41 @@ from riesgo import calcular_riesgo  # noqa: E402
 
 MAX_DIAS_ACTIVO = 20
 
+# ── Estados de Melonn que se consideran "novedad/incidencia" operativa ───────
+# Son los que requieren gestión humana (llamar cliente, autorizar, escalar).
+# Excluimos estados internos de proceso que no son accionables (picking, etc.)
+NOVEDADES_VISIBLES = {
+    # COD — transportadora no pudo entregar
+    "Delivery not posible",
+    "Entrega no posible",
+
+    # Sin stock / expired promises / SM restriction → "on stand by - not able to fulfil - X"
+    "on stand by - not able to fulfil - no stock",
+    "En espera - sin stock",
+    "on stand by - not able to fulfil - expired promises",
+    "En espera - promesas vencidas",
+    "on stand by - not able to fulfil - SM restriction",
+    "Restricción método de envío",
+
+    # Pendiente despacho que requiere gestión externa
+    "All items reserved - fulfillment on hold",
+    "All items reserved - fulfillment on hold - ext. conditionals",
+    "All items reserved - fulfillment on hold - int. conditionals",
+    "Alistamiento en espera - Seller",
+
+    # Errores genéricos
+    "Error - not able to process",
+    "Error - no es posible procesar",
+}
+
+
+def es_novedad_visible(p: dict) -> bool:
+    """True si el pedido aparece en Novedades/Incidencias del dashboard."""
+    if p.get("sub_estado_logistico") != "novedad":
+        return False
+    estado = (p.get("estado_melonn") or "").strip()
+    return estado in NOVEDADES_VISIBLES
+
 
 # ── Helpers internos ─────────────────────────────────────────────────────────
 
@@ -80,7 +115,7 @@ def clasificar(p: dict) -> dict:
         score  = r.score
         motivo = r.motivos[0] if r.motivos else "—"
 
-    return {
+    enriched = {
         **p,
         "nivel":               nivel,
         "score":               score,
@@ -93,6 +128,8 @@ def clasificar(p: dict) -> dict:
         "requiere_contacto":   bool(getattr(r.incidencia_info, "requiere_contacto", False)),
         "valor_num":           _parse_cod(p.get("valor_cod_raw", "")),
     }
+    enriched["es_novedad_visible"] = es_novedad_visible(enriched)
+    return enriched
 
 
 # ── Métricas globales ─────────────────────────────────────────────────────────
@@ -124,9 +161,9 @@ def calcular_metricas(pedidos: list[dict]) -> dict:
         "n_total":     len(enriched),
         "n_pend":      sum(1 for p in cods if _code(p) in (26, 29)),
         "n_tran_cod":  sum(1 for p in cods if _code(p) in (5, 7, 24, 28)),
-        "n_nov_cod":   sum(1 for p in cods if p.get("sub_estado_logistico") == "novedad"),
+        "n_nov_cod":   sum(1 for p in cods if p.get("es_novedad_visible")),
         "n_ent_cod":   sum(1 for p in cods if _code(p) in (6, 8)),
-        "n_nov_pre":   sum(1 for p in pres if p.get("sub_estado_logistico") == "novedad"),
+        "n_nov_pre":   sum(1 for p in pres if p.get("es_novedad_visible")),
         "n_tran_pre":  sum(1 for p in pres if p.get("sub_estado_logistico") == "en_transito"),
         "n_ent_pre":   sum(1 for p in pres if p.get("sub_estado_logistico") == "entregado"),
         "n_critico":   n_critico,
@@ -135,6 +172,6 @@ def calcular_metricas(pedidos: list[dict]) -> dict:
         "val_cod":     sum(p["valor_num"] for p in cods),
         "val_riesgo":  sum(p["valor_num"] for p in cods if p["nivel"] in ("CRITICO", "RIESGO")),
         "val_ent":     sum(p["valor_num"] for p in cods if _code(p) in (6, 8)),
-        "val_nov_cod": sum(p["valor_num"] for p in cods if p.get("sub_estado_logistico") == "novedad"),
+        "val_nov_cod": sum(p["valor_num"] for p in cods if p.get("es_novedad_visible")),
         "pedidos":     enriched,
     }

@@ -20,7 +20,7 @@ export default function ContraentregaPage() {
       todos:      cods,
       pendientes: cods.filter((p) => [26, 29].includes(code(p))),
       transito:   cods.filter((p) => [5, 7, 24, 28].includes(code(p))),
-      novedades:  cods.filter((p) => p.sub_estado_logistico === "novedad"),
+      novedades:  cods.filter((p) => p.es_novedad_visible),
       entregados: cods.filter((p) => [6, 8].includes(code(p))),
     };
   }, [data]);
