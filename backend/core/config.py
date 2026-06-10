@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     """Configuración global de la app. Se lee una sola vez por proceso."""
 
     # ── Hosting ────────────────────────────────────────────────────────────────
-    env: str = Field(default="development", description="production | development")
+    env: str = Field(default="development", alias="APP_ENV", description="production | development")
     port: int = Field(default=8000, description="Puerto del servidor")
 
     # ── Auth ───────────────────────────────────────────────────────────────────
