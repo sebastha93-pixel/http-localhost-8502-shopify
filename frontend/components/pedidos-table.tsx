@@ -30,6 +30,13 @@ interface Props {
 const TIPO_FILTROS = ["Todos", "Contraentrega", "Prepago"] as const;
 type TipoFiltro = (typeof TIPO_FILTROS)[number];
 
+const DATOS_FILTROS = ["Todos", "Completos", "Sin datos"] as const;
+type DatosFiltro = (typeof DATOS_FILTROS)[number];
+
+function sinDatosCliente(p: { nombre_comprador?: string; telefono_comprador?: string; ciudad_destino?: string }): boolean {
+  return !p.nombre_comprador && !p.telefono_comprador && !p.ciudad_destino;
+}
+
 const DEFAULT_COLS: ColumnKey[] = ["nivel", "orden", "cliente", "telefono", "ciudad", "zona", "dias", "valor", "estado", "tipo", "link"];
 
 export function PedidosTable({
@@ -45,6 +52,7 @@ export function PedidosTable({
   const [q, setQ] = useState("");
   const [nivel, setNivel] = useState<NivelRiesgo | "Todos">("Todos");
   const [tipo, setTipo] = useState<TipoFiltro>("Todos");
+  const [datos, setDatos] = useState<DatosFiltro>("Todos");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Pedido | null>(null);
 
@@ -61,6 +69,8 @@ export function PedidosTable({
     return pedidos.filter((p) => {
       if (showNivelFilter && nivel !== "Todos" && p.nivel !== nivel) return false;
       if (showTipoFilter && tipo !== "Todos" && p.tipo_recaudo !== tipo) return false;
+      if (datos === "Sin datos" && !sinDatosCliente(p)) return false;
+      if (datos === "Completos" && sinDatosCliente(p)) return false;
       if (!term) return true;
       return (
         p.orden_tienda?.toLowerCase().includes(term) ||
@@ -70,7 +80,7 @@ export function PedidosTable({
         p.telefono_comprador?.toLowerCase().includes(term)
       );
     });
-  }, [pedidos, q, nivel, tipo, showNivelFilter, showTipoFilter]);
+  }, [pedidos, q, nivel, tipo, datos, showNivelFilter, showTipoFilter]);
 
   const has = (c: ColumnKey) => cols.includes(c);
 
@@ -111,6 +121,7 @@ export function PedidosTable({
         {showTipoFilter && (
           <Select label="Tipo" value={tipo} onChange={(v) => setTipo(v as TipoFiltro)} options={TIPO_FILTROS as unknown as string[]} />
         )}
+        <Select label="Datos" value={datos} onChange={(v) => setDatos(v as DatosFiltro)} options={DATOS_FILTROS as unknown as string[]} />
       </div>
 
       {/* Detalle del pedido seleccionado (entre buscador y tabla) */}

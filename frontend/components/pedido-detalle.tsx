@@ -10,6 +10,7 @@ import { formatMoneyShort, fmtDateTime } from "@/lib/utils";
 import {
   Phone, MessageCircle, ExternalLink, Send, FileText, AlertCircle,
   PhoneCall, CheckCircle, Truck, RotateCcw, X, Loader2, MapPin, User, Calendar,
+  Edit3,
 } from "lucide-react";
 
 interface Accion {
@@ -66,6 +67,16 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
   });
 
   const [notaTxt, setNotaTxt] = useState("");
+  const [editandoDatos, setEditandoDatos] = useState(false);
+
+  const overrideMut = useMutation({
+    mutationFn: (body: { nombre: string; telefono: string; ciudad: string }) =>
+      api.post(`/api/pedidos/${orden}/override`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["melonn"] });
+      setEditandoDatos(false);
+    },
+  });
 
   const registrarAccion = (tipo: string, label: string) => {
     accionMut.mutate({ tipo, descripcion: label });
@@ -117,12 +128,32 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-0">
         {/* Columna izquierda — Info del pedido */}
         <div className="p-5 border-r border-border space-y-4">
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <InfoRow icon={User}     label="Cliente"   value={pedido.nombre_comprador || "—"} />
-            <InfoRow icon={MapPin}   label="Ciudad"    value={`${pedido.ciudad_destino || "—"} · ${pedido.zona || "—"}`} />
-            <InfoRow icon={Calendar} label="Días"      value={`${pedido.dias_real ?? 0}d / SLA ${pedido.sla_critico ?? 0}`} />
-            <InfoRow icon={Truck}    label="Transp."   value={pedido.transportadora || "—"} />
-          </div>
+          {editandoDatos && canWrite ? (
+            <EditarDatos
+              pedido={pedido}
+              onCancel={() => setEditandoDatos(false)}
+              onSubmit={(d) => overrideMut.mutate(d)}
+              pending={overrideMut.isPending}
+            />
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <InfoRow icon={User}     label="Cliente"   value={pedido.nombre_comprador || "—"} />
+                <InfoRow icon={MapPin}   label="Ciudad"    value={`${pedido.ciudad_destino || "—"} · ${pedido.zona || "—"}`} />
+                <InfoRow icon={Calendar} label="Días"      value={`${pedido.dias_real ?? 0}d / SLA ${pedido.sla_critico ?? 0}`} />
+                <InfoRow icon={Truck}    label="Transp."   value={pedido.transportadora || "—"} />
+              </div>
+              {canWrite && (
+                <button
+                  onClick={() => setEditandoDatos(true)}
+                  className="inline-flex items-center gap-1.5 text-xs text-steel hover:text-navy font-semibold"
+                >
+                  <Edit3 className="h-3 w-3" />
+                  {pedido.nombre_comprador ? "Editar datos cliente" : "Agregar datos cliente"}
+                </button>
+              )}
+            </>
+          )}
 
           {tel && (
             <div className="flex items-center gap-2 rounded-md bg-concrete/50 px-3 py-2">
@@ -263,6 +294,66 @@ function TimelineItem({ item }: { item: { tipo: string; descripcion: string; aut
     </div>
   );
 }
+
+function EditarDatos({
+  pedido, onCancel, onSubmit, pending,
+}: {
+  pedido: Pedido;
+  onCancel: () => void;
+  onSubmit: (d: { nombre: string; telefono: string; ciudad: string }) => void;
+  pending: boolean;
+}) {
+  const [nombre, setNombre]   = useState(pedido.nombre_comprador || "");
+  const [telefono, setTel]    = useState(pedido.telefono_comprador || "");
+  const [ciudad, setCiudad]   = useState(pedido.ciudad_destino || "");
+
+  return (
+    <div className="rounded-md border border-steel/30 bg-steel/5 p-3 space-y-2">
+      <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-1">
+        Editar datos manuales (override)
+      </p>
+      <div className="grid grid-cols-1 gap-2">
+        <input
+          value={nombre}
+          onChange={(e) => setNombre(e.target.value)}
+          placeholder="Nombre del cliente"
+          className="rounded-md border border-border bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-steel"
+        />
+        <input
+          value={telefono}
+          onChange={(e) => setTel(e.target.value)}
+          placeholder="Teléfono (solo dígitos)"
+          className="rounded-md border border-border bg-white px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-steel"
+        />
+        <input
+          value={ciudad}
+          onChange={(e) => setCiudad(e.target.value)}
+          placeholder="Ciudad"
+          className="rounded-md border border-border bg-white px-3 py-1.5 text-sm uppercase focus:outline-none focus:ring-2 focus:ring-steel"
+        />
+      </div>
+      <div className="flex justify-end gap-2 pt-1">
+        <button
+          onClick={onCancel}
+          className="rounded-md border border-border bg-white px-3 py-1.5 text-xs font-semibold text-graphite hover:bg-concrete"
+        >
+          Cancelar
+        </button>
+        <button
+          onClick={() => onSubmit({ nombre, telefono, ciudad })}
+          disabled={pending || (!nombre && !telefono && !ciudad)}
+          className="inline-flex items-center gap-1.5 rounded-md bg-ink px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-white hover:bg-black disabled:opacity-50"
+        >
+          {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Guardar"}
+        </button>
+      </div>
+      <p className="text-[0.6rem] text-graphite italic">
+        Los datos manuales quedan registrados con tu nombre como autor y se aplican en todas las páginas.
+      </p>
+    </div>
+  );
+}
+
 
 function InfoRow({ icon: Icon, label, value }: { icon: React.ComponentType<{ className?: string }>; label: string; value: string }) {
   return (

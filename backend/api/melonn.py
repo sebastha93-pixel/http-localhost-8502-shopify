@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from backend.core.security import CurrentUser, require_role
 from backend.services import melonn as svc
 from backend.services import metricas as metricas_svc
+from backend.services import overrides as overrides_svc
 
 
 router = APIRouter(prefix="/api/melonn", tags=["melonn"])
@@ -95,8 +96,11 @@ def pedidos(
         data = svc.obtener_pedidos(forzar_refresh=refresh)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Melonn API error: {exc}")
-    # Enriquecer con nivel/zona/sla — campos críticos para tabla logística
-    data["pedidos"] = [metricas_svc.clasificar(p) for p in data["pedidos"]]
+    # 1) Aplicar overrides manuales (datos rellenados a mano desde la UI)
+    overrides = overrides_svc.cargar_map()
+    pedidos = [overrides_svc.aplicar_a_pedido(p, overrides) for p in data["pedidos"]]
+    # 2) Enriquecer con nivel/zona/sla — campos críticos para tabla logística
+    data["pedidos"] = [metricas_svc.clasificar(p) for p in pedidos]
     return PedidoListResponse(**data)
 
 
@@ -107,8 +111,10 @@ def pedido_detalle(orden: str) -> dict:
         data = svc.obtener_pedidos(forzar_refresh=False)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Melonn API error: {exc}")
+    overrides = overrides_svc.cargar_map()
     for p in data["pedidos"]:
         if p.get("orden_tienda") == orden or p.get("orden_melonn") == orden:
+            p = overrides_svc.aplicar_a_pedido(p, overrides)
             return metricas_svc.clasificar(p)
     raise HTTPException(status_code=404, detail=f"Pedido {orden} no encontrado")
 

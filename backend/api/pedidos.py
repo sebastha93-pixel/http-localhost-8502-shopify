@@ -20,6 +20,8 @@ if str(_SRC) not in sys.path:
 
 import memoria  # noqa: E402
 
+from backend.services import overrides as overrides_svc
+
 router = APIRouter(prefix="/api/pedidos", tags=["pedidos"])
 
 
@@ -139,6 +141,50 @@ def post_nota(
         nota=body.nota,
         creada_en=datetime.utcnow().isoformat() + "Z",
     )
+
+
+# ── Historial de estados (snapshots) ──────────────────────────────────
+
+# ── Overrides manuales de cliente ────────────────────────────────────
+
+class Override(BaseModel):
+    orden: str
+    nombre_comprador: Optional[str] = None
+    telefono_comprador: Optional[str] = None
+    ciudad_destino: Optional[str] = None
+    autor: Optional[str] = None
+    actualizado_en: Optional[str] = None
+
+
+class NuevoOverride(BaseModel):
+    nombre: str = ""
+    telefono: str = ""
+    ciudad: str = ""
+
+
+@router.get("/{orden}/override", response_model=Optional[Override])
+def get_override(orden: str, _: CurrentUser = Depends(get_current_user)) -> Optional[Override]:
+    o = overrides_svc.obtener(orden)
+    return Override(**o) if o else None
+
+
+@router.post("/{orden}/override", response_model=Override)
+def post_override(
+    orden: str,
+    body: NuevoOverride,
+    user: CurrentUser = Depends(require_role("admin", "operador")),
+) -> Override:
+    try:
+        o = overrides_svc.upsert(
+            orden,
+            nombre=body.nombre,
+            telefono=body.telefono,
+            ciudad=body.ciudad,
+            autor=user.nombre,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return Override(**o)
 
 
 # ── Historial de estados (snapshots) ──────────────────────────────────
