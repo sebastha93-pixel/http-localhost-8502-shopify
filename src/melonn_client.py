@@ -592,12 +592,16 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
 
 def _post(path: str, body: dict = None) -> tuple:
     """
-    POST con rate limiting + retry exponencial en 429/503.
+    POST con rate limiting + retry agresivo en 429/503.
+    Importante: las acciones del usuario (autorizar, etc.) DEBEN suceder.
+    Si Melonn devuelve 429, esperamos progresivamente más para no fallar.
     Retorna (ok: bool, data: dict | None, error_msg: str).
     """
     url = f"{_BASE_URL}/{path.lstrip('/')}"
+    # Retry budget más generoso que GET (acciones de usuario no pueden fallar)
+    post_backoff = [3, 8, 20, 45, 90]   # total max ~166s
 
-    for attempt, backoff in enumerate([0] + _RETRY_BACKOFF):
+    for attempt, backoff in enumerate([0] + post_backoff):
         if backoff:
             log.warning(f"POST rate-limit — esperando {backoff}s (intento {attempt+1}/{_RETRY_MAX+1})")
             time.sleep(backoff)
@@ -620,12 +624,12 @@ def _post(path: str, body: dict = None) -> tuple:
 
             # Rate limit / temporal: reintentar
             if r.status_code in (429, 503):
-                retry_after = int(r.headers.get("Retry-After", _RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF)-1)]))
-                log.warning(f"POST {url} → HTTP {r.status_code}: Retry-After {retry_after}s")
-                if attempt < _RETRY_MAX:
+                retry_after = int(r.headers.get("Retry-After", post_backoff[min(attempt, len(post_backoff)-1)]))
+                log.warning(f"POST {url} → HTTP {r.status_code}: Retry-After {retry_after}s (intento {attempt+1}/{len(post_backoff)+1})")
+                if attempt < len(post_backoff):
                     time.sleep(retry_after)
                     continue
-                return False, None, f"HTTP {r.status_code}: rate limit"
+                return False, None, "Melonn ocupado. Vuelve a intentar en 1 minuto."
 
             try:
                 msg = r.json().get("message") or r.text[:200]
@@ -635,7 +639,7 @@ def _post(path: str, body: dict = None) -> tuple:
             return False, None, f"HTTP {r.status_code}: {msg}"
         except Exception as e:
             log.warning(f"POST {url} error: {e}")
-            if attempt < _RETRY_MAX:
+            if attempt < len(post_backoff):
                 continue
             return False, None, str(e)
 
@@ -1189,15 +1193,16 @@ def sync_completo() -> dict:
     except Exception as e:
         log.warning(f"Shopify enricher en sync_completo: {e}")
 
-    # Pasada de Melonn detail para pedidos manuales (sin límite — exhaustivo)
+    # Pasada de Melonn detail para pedidos manuales — limitado a 50 por ciclo
+    # para conservar cuota de la API. Eventualmente se completan en próximos runs.
     try:
-        pedidos = _enriquecer_desde_melonn(pedidos, max_pedidos=10_000)
+        pedidos = _enriquecer_desde_melonn(pedidos, max_pedidos=50)
     except Exception as e:
         log.warning(f"Melonn detail enricher en sync_completo: {e}")
 
-    # Verificar estados stale (en tránsito viejos que pueden estar entregados)
+    # Verificar estados stale — solo 25 más antiguos por ciclo (preserva cuota)
     try:
-        pedidos = _verificar_estados_stale(pedidos, max_check=100)
+        pedidos = _verificar_estados_stale(pedidos, max_check=25)
     except Exception as e:
         log.warning(f"Verificación estados stale en sync_completo: {e}")
 
