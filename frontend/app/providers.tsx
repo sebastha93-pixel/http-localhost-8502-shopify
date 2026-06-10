@@ -9,12 +9,12 @@ export function Providers({ children }: { children: React.ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            staleTime: 5 * 60_000,           // 5 min — datos frescos sin refetch
+            staleTime: 2 * 60_000,           // 2 min — datos frescos sin refetch
             gcTime: 30 * 60_000,             // 30 min — basura recolectada
-            refetchOnWindowFocus: false,
+            refetchOnWindowFocus: true,      // volver a la pestaña → refresca
             refetchOnMount: false,           // navegar entre páginas no refetcha
-            refetchInterval: 15 * 60_000,    // auto-refresh cada 15 min
-            refetchIntervalInBackground: true,
+            refetchInterval: 2 * 60_000,     // auto-refresh cada 2 min
+            refetchIntervalInBackground: false,  // pausa si la pestaña no está visible
             retry: 1,
           },
         },

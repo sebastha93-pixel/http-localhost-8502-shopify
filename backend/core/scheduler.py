@@ -19,11 +19,19 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-# Intervalo configurable vía env var (segundos). Default: 15 min.
-REFRESH_INTERVAL_SECONDS = int(os.environ.get("SCHEDULER_INTERVAL_SEC", 15 * 60))
+# Dos niveles de refresh:
+#  LIGHT: solo fetch Melonn list (rápido, ~3-5 API calls)
+#  FULL:  sync_completo (enrich Shopify + Melonn detail + verify states)
+REFRESH_LIGHT_SECONDS = int(os.environ.get("SCHEDULER_LIGHT_SEC", 3 * 60))   # 3 min
+REFRESH_FULL_SECONDS  = int(os.environ.get("SCHEDULER_FULL_SEC", 15 * 60))   # 15 min
 
-# Delay inicial antes del primer run (evita pelearse con bootstrap del proceso)
-INITIAL_DELAY_SECONDS = 60
+# Compat: variable antigua sigue funcionando para FULL
+if os.environ.get("SCHEDULER_INTERVAL_SEC"):
+    REFRESH_FULL_SECONDS = int(os.environ["SCHEDULER_INTERVAL_SEC"])
+
+REFRESH_INTERVAL_SECONDS = REFRESH_LIGHT_SECONDS  # tick principal
+
+INITIAL_DELAY_SECONDS = 30
 
 _thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
@@ -37,39 +45,52 @@ last_run: dict = {
     "completados": 0,
     "total": 0,
     "error": None,
+    "type": None,           # "light" | "full"
 }
+_last_full_at: float = 0.0   # timestamp del último FULL sync
 
 
-def _refresh_once() -> dict:
-    """Una pasada completa: refresh Melonn + lazy enrich + sync exhaustivo."""
+def _refresh_once(full: bool = False) -> dict:
+    """
+    Una pasada de refresh.
+      full=False (default): solo Melonn list fetch (~5s, barato)
+      full=True: sync_completo con enrich + verify states (~30-90s)
+    """
+    global _last_full_at
     start = time.time()
     last_run["started_at"] = datetime.now(timezone.utc).isoformat()
     last_run["ok"] = None
     last_run["error"] = None
+    last_run["type"] = "full" if full else "light"
 
     try:
-        # Asegurar que src/ está en path
         _SRC = Path(__file__).resolve().parent.parent.parent / "src"
         if str(_SRC) not in sys.path:
             sys.path.insert(0, str(_SRC))
         import melonn_client as mc
 
-        # 1) Fresh fetch desde Melonn API (actualiza estado + nuevos pedidos)
-        log.info("Scheduler: refresh Melonn...")
+        # 1) Fresh fetch desde Melonn API (siempre — barato)
+        log.info(f"Scheduler [{last_run['type']}]: refresh Melonn...")
         mc.obtener_pedidos_activos(forzar_refresh=True)
 
-        # 2) Pasada exhaustiva de enriquecimiento (Shopify + Melonn detail)
+        if not full:
+            last_run["ok"] = True
+            log.info("Scheduler light: ✓")
+            return {"ok": True, "type": "light"}
+
+        # 2) Solo en FULL: enrich + verify states
         log.info("Scheduler: sync_completo...")
         result = mc.sync_completo()
+        _last_full_at = time.time()
 
         last_run["ok"] = bool(result.get("ok"))
         last_run["completados"] = result.get("completados", 0)
         last_run["total"] = result.get("total", 0)
         if not result.get("ok"):
             last_run["error"] = result.get("error") or "sync_completo retornó ok=False"
-            log.warning(f"Scheduler: sync_completo no OK → {last_run['error']}")
+            log.warning(f"Scheduler full: {last_run['error']}")
         else:
-            log.info(f"Scheduler: ✓ {result.get('completados', 0)} completados de {result.get('total', 0)}")
+            log.info(f"Scheduler full: ✓ {result.get('completados', 0)} de {result.get('total', 0)}")
         return result
     except Exception as e:
         last_run["ok"] = False
@@ -82,17 +103,22 @@ def _refresh_once() -> dict:
 
 
 def _loop():
-    """Loop principal del scheduler."""
-    log.info(f"Scheduler iniciado · primer run en {INITIAL_DELAY_SECONDS}s · luego cada {REFRESH_INTERVAL_SECONDS}s")
+    """Loop principal del scheduler: tick cada LIGHT, hace FULL cuando toca."""
+    log.info(
+        f"Scheduler iniciado · primer run en {INITIAL_DELAY_SECONDS}s · "
+        f"light cada {REFRESH_LIGHT_SECONDS}s · full cada {REFRESH_FULL_SECONDS}s"
+    )
 
-    # Delay inicial (no bloquear startup)
     if _stop_event.wait(INITIAL_DELAY_SECONDS):
         return
 
     while not _stop_event.is_set():
-        _refresh_once()
-        # Espera con poll para poder detenerse rápido
-        if _stop_event.wait(REFRESH_INTERVAL_SECONDS):
+        # Decide si toca FULL o LIGHT
+        now = time.time()
+        full = (now - _last_full_at) >= REFRESH_FULL_SECONDS
+        _refresh_once(full=full)
+
+        if _stop_event.wait(REFRESH_LIGHT_SECONDS):
             break
 
     log.info("Scheduler detenido.")
@@ -118,6 +144,8 @@ def status() -> dict:
     """Estado actual del scheduler — para /api/health/scheduler."""
     return {
         "running": _thread is not None and _thread.is_alive(),
-        "interval_seconds": REFRESH_INTERVAL_SECONDS,
+        "interval_seconds": REFRESH_LIGHT_SECONDS,
+        "light_interval_seconds": REFRESH_LIGHT_SECONDS,
+        "full_interval_seconds": REFRESH_FULL_SECONDS,
         "last_run": last_run,
     }
