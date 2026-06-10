@@ -53,9 +53,10 @@ def es_novedad_visible(p: dict) -> bool:
     Criterios (cualquiera activa la novedad):
     1. Override manual: marcado por operador como "tiene novedad"
     2. Estado Melonn explícito en NOVEDADES_VISIBLES
-    3. Heurístico: en tránsito con tiempo CRÍTICO o VENCIDO (>SLA) —
-       Melonn no expone incidencias por API pero un pedido muy excedido
-       casi siempre tiene una incidencia operativa subyacente
+    3. Heurístico SLA: pedido en tránsito que excede el SLA crítico de
+       su zona (aplica IGUAL a COD y Prepago — los prepagos también son
+       incidencias operativas cuando se tardan)
+    4. Heurístico VENCIDO: > 20 días sin confirmación
     """
     # 1) Override manual
     if p.get("novedad_manual"):
@@ -68,10 +69,15 @@ def es_novedad_visible(p: dict) -> bool:
     if sub == "novedad" and estado in NOVEDADES_VISIBLES:
         return True
 
-    # 3) Heurística: tiempo crítico o vencido en tránsito
-    nivel = p.get("nivel")
-    if sub == "en_transito" and nivel in ("CRITICO", "VENCIDO"):
-        return True
+    # 3) Heurística: días reales > SLA crítico de la zona (aplica a COD + PRE)
+    if sub == "en_transito":
+        dias = int(p.get("dias_real") or 0)
+        sla  = int(p.get("sla_critico") or 0)
+        if sla > 0 and dias > sla:
+            return True
+        # 4) VENCIDO genérico
+        if p.get("nivel") == "VENCIDO":
+            return True
 
     return False
 
