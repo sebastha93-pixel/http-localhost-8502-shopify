@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 # Dos niveles de refresh:
 #  LIGHT: solo fetch Melonn list (rápido, ~3-5 API calls)
 #  FULL:  sync_completo (enrich Shopify + Melonn detail + verify states)
-REFRESH_LIGHT_SECONDS = int(os.environ.get("SCHEDULER_LIGHT_SEC", 10 * 60))  # 10 min
+REFRESH_LIGHT_SECONDS = int(os.environ.get("SCHEDULER_LIGHT_SEC", 15 * 60))  # 15 min
 # FULL automático DESACTIVADO por defecto — preserva cuota Melonn.
 # Si quieres FULL programado, setea SCHEDULER_FULL_SEC en Railway (ej 21600 = 6h).
 # Sin esa env var, el FULL solo corre via botón "Sincronizar datos" (manual).
