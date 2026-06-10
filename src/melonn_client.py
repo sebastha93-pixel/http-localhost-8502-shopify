@@ -622,31 +622,52 @@ def _post(path: str, body: dict = None) -> tuple:
         return False, None, str(e)
 
 
-def release_hold_fulfillment(orden_melonn: str, shipping_method_code: str = None) -> tuple:
+def release_hold_fulfillment(orden: str, shipping_method_code: str = None) -> tuple:
     """
-    Libera el hold de fulfillment de un pedido — autoriza su despacho.
+    Libera el hold de fulfillment — autoriza despacho.
 
-    POST /sell-orders/{orden_melonn}/release-hold-fulfillment
-    Body opcional: { "shipping_method_code": "XXX" }
+    IMPORTANTE: el endpoint Melonn requiere external_order_number
+    (= orden_tienda), NO internal_order_number (M-id). Si recibimos
+    M-id, hacemos un lookup en el detail para encontrar el external.
+
+    POST /sell-orders/{external_order_number}/release-hold-fulfillment
 
     Retorna (ok: bool, mensaje: str).
     """
-    if not orden_melonn:
-        return False, "Número de orden Melonn no disponible"
+    if not orden:
+        return False, "Número de orden no disponible"
+
+    # Si nos pasaron un M-id, traducir a external_order_number
+    if orden.startswith("M") and orden[1:].isdigit():
+        log.info(f"release: traduciendo M-id {orden} a external_order_number...")
+        detail = _get(f"sell-orders/{orden}")
+        if not detail:
+            # El detail con M-id falla — buscar en cache para obtener orden_tienda
+            cache_hit = _cache_leer(ignorar_ttl=True)
+            if cache_hit:
+                pedidos, _, _, _ = cache_hit
+                for p in pedidos:
+                    if p.get("orden_melonn") == orden:
+                        orden = p.get("orden_tienda") or orden
+                        break
+        else:
+            ext = detail.get("external_order_number")
+            if ext:
+                orden = str(ext)
 
     body = {}
     if shipping_method_code:
         body["shipping_method_code"] = shipping_method_code
 
     ok, data, err = _post(
-        f"sell-orders/{orden_melonn}/release-hold-fulfillment",
+        f"sell-orders/{orden}/release-hold-fulfillment",
         body=body,
     )
 
     if ok:
-        log.info(f"Despacho autorizado: {orden_melonn}")
+        log.info(f"Despacho autorizado: {orden}")
         melonn_msg = (data or {}).get("message", "Order released successfully")
-        return True, f"{melonn_msg} · Orden {orden_melonn}"
+        return True, f"{melonn_msg} · Orden {orden}"
     return False, err or "Error desconocido al autorizar despacho"
 
 

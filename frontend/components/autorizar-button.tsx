@@ -24,9 +24,14 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
   if (!puedeEscribir(user)) return null;
 
   const mutation = useMutation({
-    mutationFn: () => api.post<AutorizarResponse>(
-      `/api/melonn/pedidos/${pedido.orden_melonn}/autorizar-despacho`,
-    ),
+    mutationFn: () => {
+      // Melonn requiere external_order_number (orden_tienda) para release-hold.
+      // Si no hay, fallback al M-id (el backend resuelve).
+      const id = pedido.orden_tienda || pedido.orden_melonn;
+      return api.post<AutorizarResponse>(
+        `/api/melonn/pedidos/${id}/autorizar-despacho`,
+      );
+    },
     onSuccess: (data) => {
       setFeedback("ok");
       setMsg(data.mensaje);
