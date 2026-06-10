@@ -64,6 +64,7 @@ const NAV: { home: NavItem; groups: NavGroup[] } = {
       items: [
         { label: "Configuración", href: "/configuracion" },
         { label: "Usuarios",      href: "/usuarios" },
+        { label: "Auditoría",     href: "/auditoria" },
         { label: "Integraciones", href: "/integraciones" },
       ],
     },
@@ -74,10 +75,11 @@ export function Sidebar() {
   const pathname = usePathname();
   const { user } = useAuth();
 
-  // Filtra grupo Configuración: "Usuarios" solo visible para admin
+  // Filtra grupo Configuración: "Usuarios" y "Auditoría" solo para admin
+  const ADMIN_ONLY = ["/usuarios", "/auditoria"];
   const groups = NAV.groups.map((g) => ({
     ...g,
-    items: g.items.filter((it) => it.href !== "/usuarios" || esAdmin(user)),
+    items: g.items.filter((it) => !ADMIN_ONLY.includes(it.href) || esAdmin(user)),
   }));
 
   return (
