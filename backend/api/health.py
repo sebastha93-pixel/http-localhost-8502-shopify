@@ -53,3 +53,19 @@ def health_scheduler() -> dict:
     """Estado del scheduler de refresh automático."""
     from backend.core import scheduler
     return scheduler.status()
+
+
+@router.post("/health/scheduler/pause")
+def health_scheduler_pause(hours: float = 4) -> dict:
+    """Pausa el scheduler por N horas (default 4). Útil cuando Melonn bloquea."""
+    from backend.core import scheduler
+    scheduler.trigger_cooldown(int(hours * 3600))
+    return {"ok": True, "paused_seconds": int(hours * 3600), **scheduler.status()}
+
+
+@router.post("/health/scheduler/resume")
+def health_scheduler_resume() -> dict:
+    """Reanuda el scheduler (cancela cualquier cooldown activo)."""
+    from backend.core import scheduler
+    scheduler.resume_now()
+    return {"ok": True, **scheduler.status()}

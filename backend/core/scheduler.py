@@ -168,6 +168,13 @@ def trigger_cooldown(seconds: int = COOLDOWN_AFTER_429_SEC):
     log.warning(f"Scheduler pausado {seconds}s por rate-limit Melonn")
 
 
+def resume_now():
+    """Cancela el cooldown — reanuda el scheduler ya."""
+    global _cooldown_until
+    _cooldown_until = 0.0
+    log.info("Scheduler cooldown cancelado manualmente")
+
+
 def status() -> dict:
     """Estado actual del scheduler — para /api/health/scheduler."""
     now = time.time()
