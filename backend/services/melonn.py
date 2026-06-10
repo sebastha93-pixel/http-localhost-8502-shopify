@@ -46,8 +46,24 @@ def obtener_pedidos(forzar_refresh: bool = False) -> dict[str, Any]:
         "total":      len(pedidos or []),
         "fuente":     meta.get("fuente", "unknown"),
         "stale":      bool(meta.get("stale", False)),
-        "fetched_at": fa.isoformat() if hasattr(fa, "isoformat") else (fa or ""),
+        "fetched_at": _as_utc_iso(fa),
     }
+
+
+def _as_utc_iso(value) -> str:
+    """Convierte cualquier datetime/string a ISO UTC con sufijo Z."""
+    if not value:
+        return ""
+    if hasattr(value, "isoformat"):
+        from datetime import timezone
+        # Si es naive, asumimos UTC (es lo que Railway devuelve)
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    s = str(value)
+    if not s.endswith("Z") and "+" not in s and "-" not in s[10:]:
+        s += "Z"
+    return s
 
 
 def cache_info() -> dict[str, Any] | None:
@@ -60,7 +76,7 @@ def cache_info() -> dict[str, Any] | None:
     return {
         "total":      info.get("total"),
         "age_seconds":int(info.get("age_s", 0)),
-        "fetched_at": fa.isoformat() if hasattr(fa, "isoformat") else (fa or ""),
+        "fetched_at": _as_utc_iso(fa),
         "stale":      bool(info.get("stale", False)),
         "fuente":     info.get("fuente"),
         "backend":    info.get("backend"),

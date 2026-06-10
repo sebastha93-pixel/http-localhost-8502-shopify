@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { Pedido } from "@/lib/types";
 import { useAuth } from "@/components/auth-provider";
 import { puedeEscribir } from "@/lib/auth";
-import { formatMoneyShort } from "@/lib/utils";
+import { formatMoneyShort, fmtDateTime } from "@/lib/utils";
 import {
   Phone, MessageCircle, ExternalLink, Send, FileText, AlertCircle,
   PhoneCall, CheckCircle, Truck, RotateCcw, X, Loader2, MapPin, User, Calendar,
@@ -241,12 +241,7 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
 }
 
 function TimelineItem({ item }: { item: { tipo: string; descripcion: string; autor: string; creada_en?: string; kind: "accion" | "nota" } }) {
-  const fecha = item.creada_en
-    ? new Date(item.creada_en).toLocaleString("es-CO", {
-        day: "2-digit", month: "2-digit", year: "2-digit",
-        hour: "2-digit", minute: "2-digit",
-      })
-    : "—";
+  const fecha = fmtDateTime(item.creada_en);
 
   const isNota = item.kind === "nota";
 

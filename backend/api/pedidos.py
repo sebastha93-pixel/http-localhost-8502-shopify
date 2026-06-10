@@ -67,7 +67,8 @@ class HistorialItem(BaseModel):
 # ── Helpers ───────────────────────────────────────────────────────────
 
 def _df_to_records(df) -> list[dict]:
-    """Convierte DataFrame de pandas a list[dict] con datetimes ISO."""
+    """Convierte DataFrame de pandas a list[dict] con datetimes ISO UTC (Z)."""
+    from datetime import timezone
     if df is None or df.empty:
         return []
     out = []
@@ -75,7 +76,14 @@ def _df_to_records(df) -> list[dict]:
         d = {}
         for k, v in r.items():
             if hasattr(v, "isoformat"):
-                d[k] = v.isoformat()
+                # Asegurar UTC con sufijo Z
+                try:
+                    if v.tzinfo is None:
+                        v = v.tz_localize("UTC") if hasattr(v, "tz_localize") else v.replace(tzinfo=timezone.utc)
+                    iso = v.isoformat() if not hasattr(v, "tz_convert") else v.tz_convert("UTC").isoformat()
+                except Exception:
+                    iso = v.isoformat()
+                d[k] = iso.replace("+00:00", "Z") if "+00:00" in iso else (iso if iso.endswith("Z") else iso + "Z")
             else:
                 d[k] = v
         out.append(d)

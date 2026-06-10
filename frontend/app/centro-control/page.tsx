@@ -6,7 +6,7 @@ import { MetricasResponse } from "@/lib/types";
 import { KpiCard } from "@/components/kpi-card";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { formatMoneyShort } from "@/lib/utils";
+import { formatMoneyShort, fmtDateTime, hoyBogota } from "@/lib/utils";
 import { Loader2 } from "lucide-react";
 
 export default function CentroControlPage() {
@@ -57,15 +57,13 @@ export default function CentroControlPage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-ink">Hola, Sebastián</h1>
           <p className="mt-1 text-sm text-graphite">
-            Estado general de MALE'DENIM OS · {new Date().toLocaleDateString("es-CO", { day: "numeric", month: "long", year: "numeric" })}
+            Estado general de MALE&apos;DENIM OS · {hoyBogota()}
           </p>
         </div>
         <div className="text-right">
           <p className="section-label">Última sincronización</p>
           <p className="text-sm font-semibold text-ink mt-1">
-            {data.fetched_at ? new Date(data.fetched_at).toLocaleString("es-CO", {
-              hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit",
-            }) : "—"}
+            {fmtDateTime(data.fetched_at)}
             {isFetching && <Loader2 className="inline ml-2 h-3 w-3 animate-spin text-steel" />}
           </p>
           <div className="mt-1">
