@@ -83,9 +83,13 @@ _MAX_PAGES   = 60         # 25 × 60 = 1500 pedidos, suficiente para ventana 90d
 _CACHE_TTL   = 1800       # 30 min — caché Supabase
 _CACHE_HARD_TTL = 86400   # 24h — pasado esto, fuerza refresh aunque haya datos
 
-# Rate limiting — Melonn permite MÁXIMO 1 req/s (documentación oficial)
-_MAX_RPS           = 0.8
-_MIN_INTERVAL      = 1.0 / _MAX_RPS   # 1.25s entre requests
+# Rate limiting — Melonn permite EXACTAMENTE 1 req/s (doc oficial Postman).
+# Usamos 0.5 RPS (2s entre requests) para tener margen contra:
+#   - Múltiples procesos (Railway puede levantar réplicas)
+#   - Bursts durante sync_completo
+#   - Latencia entre cliente y servidor
+_MAX_RPS           = 0.5
+_MIN_INTERVAL      = 1.0 / _MAX_RPS   # 2.0s entre requests
 _MIN_REFRESH_SECS  = 60               # 1 min mínimo entre syncs
 _RETRY_MAX         = 3
 _RETRY_BACKOFF     = [3, 8, 20]       # antes 5,15,30 — más rápido para no congelar UI
