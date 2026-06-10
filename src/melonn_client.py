@@ -592,34 +592,54 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
 
 def _post(path: str, body: dict = None) -> tuple:
     """
-    POST con rate limiting.
+    POST con rate limiting + retry exponencial en 429/503.
     Retorna (ok: bool, data: dict | None, error_msg: str).
     """
     url = f"{_BASE_URL}/{path.lstrip('/')}"
-    _rate_limiter.wait()
-    try:
-        r = requests.post(
-            url,
-            headers={
-                "x-api-key":     _api_key(),
-                "Accept":        "application/json",
-                "Content-Type":  "application/json",
-            },
-            json=body or {},
-            timeout=_TIMEOUT,
-        )
-        if r.status_code in (200, 201, 204):
-            data = r.json() if r.content else {}
-            return True, data, ""
+
+    for attempt, backoff in enumerate([0] + _RETRY_BACKOFF):
+        if backoff:
+            log.warning(f"POST rate-limit — esperando {backoff}s (intento {attempt+1}/{_RETRY_MAX+1})")
+            time.sleep(backoff)
+
+        _rate_limiter.wait()
         try:
-            msg = r.json().get("message") or r.text[:200]
-        except Exception:
-            msg = r.text[:200]
-        log.warning(f"POST {url} → HTTP {r.status_code}: {msg}")
-        return False, None, f"HTTP {r.status_code}: {msg}"
-    except Exception as e:
-        log.warning(f"POST {url} error: {e}")
-        return False, None, str(e)
+            r = requests.post(
+                url,
+                headers={
+                    "x-api-key":     _api_key(),
+                    "Accept":        "application/json",
+                    "Content-Type":  "application/json",
+                },
+                json=body or {},
+                timeout=_TIMEOUT,
+            )
+            if r.status_code in (200, 201, 204):
+                data = r.json() if r.content else {}
+                return True, data, ""
+
+            # Rate limit / temporal: reintentar
+            if r.status_code in (429, 503):
+                retry_after = int(r.headers.get("Retry-After", _RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF)-1)]))
+                log.warning(f"POST {url} → HTTP {r.status_code}: Retry-After {retry_after}s")
+                if attempt < _RETRY_MAX:
+                    time.sleep(retry_after)
+                    continue
+                return False, None, f"HTTP {r.status_code}: rate limit"
+
+            try:
+                msg = r.json().get("message") or r.text[:200]
+            except Exception:
+                msg = r.text[:200]
+            log.warning(f"POST {url} → HTTP {r.status_code}: {msg}")
+            return False, None, f"HTTP {r.status_code}: {msg}"
+        except Exception as e:
+            log.warning(f"POST {url} error: {e}")
+            if attempt < _RETRY_MAX:
+                continue
+            return False, None, str(e)
+
+    return False, None, "POST agotó reintentos"
 
 
 def release_hold_fulfillment(orden: str, shipping_method_code: str = None) -> tuple:

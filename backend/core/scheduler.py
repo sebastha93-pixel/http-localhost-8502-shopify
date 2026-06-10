@@ -22,8 +22,8 @@ log = logging.getLogger(__name__)
 # Dos niveles de refresh:
 #  LIGHT: solo fetch Melonn list (rápido, ~3-5 API calls)
 #  FULL:  sync_completo (enrich Shopify + Melonn detail + verify states)
-REFRESH_LIGHT_SECONDS = int(os.environ.get("SCHEDULER_LIGHT_SEC", 3 * 60))   # 3 min
-REFRESH_FULL_SECONDS  = int(os.environ.get("SCHEDULER_FULL_SEC", 15 * 60))   # 15 min
+REFRESH_LIGHT_SECONDS = int(os.environ.get("SCHEDULER_LIGHT_SEC", 5 * 60))   # 5 min
+REFRESH_FULL_SECONDS  = int(os.environ.get("SCHEDULER_FULL_SEC", 20 * 60))   # 20 min
 
 # Compat: variable antigua sigue funcionando para FULL
 if os.environ.get("SCHEDULER_INTERVAL_SEC"):
