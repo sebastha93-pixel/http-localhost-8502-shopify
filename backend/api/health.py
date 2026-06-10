@@ -46,3 +46,10 @@ def health_config() -> ConfigCheck:
         mercadopago = bool(settings.mp_access_token),
         supabase    = bool(settings.supabase_url and settings.supabase_key),
     )
+
+
+@router.get("/health/scheduler")
+def health_scheduler() -> dict:
+    """Estado del scheduler de refresh automático."""
+    from backend.core import scheduler
+    return scheduler.status()

@@ -21,6 +21,7 @@ from backend.core.config import settings
 from backend.api import auth, finanzas, health, melonn, metricas, pedidos
 from backend.services import usuarios as usuarios_svc
 from backend.core.security import hash_password
+from backend.core import scheduler
 
 
 # ── Lifespan: bootstrap / cleanup ─────────────────────────────────────────────
@@ -47,8 +48,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"   ⚠️  Bootstrap admin omitido: {e}")
 
+    # Arrancar scheduler de refresh automático (cada 15 min por default)
+    try:
+        scheduler.start()
+        print(f"   ⏱️  Scheduler activo · refresh cada {scheduler.REFRESH_INTERVAL_SECONDS}s")
+    except Exception as e:
+        print(f"   ⚠️  Scheduler no arrancó: {e}")
+
     yield
     # Shutdown
+    scheduler.stop()
     print("👋 API detenida")
 
 
