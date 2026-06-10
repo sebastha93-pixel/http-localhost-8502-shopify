@@ -81,9 +81,20 @@ def me(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
 
 # ── Gestión de usuarios (solo admin) ─────────────────────────────────
 
+def _to_out(u: dict) -> UsuarioOut:
+    return UsuarioOut(
+        id=str(u["id"]),
+        email=u["email"],
+        nombre=u["nombre"],
+        rol=u["rol"],
+        activo=u.get("activo", True),
+        creado_en=u.get("creado_en"),
+    )
+
+
 @router.get("/usuarios", response_model=list[UsuarioOut])
 def listar_usuarios(_: CurrentUser = Depends(require_role("admin"))) -> list[UsuarioOut]:
-    return [UsuarioOut(**u, id=str(u["id"])) for u in svc.listar()]
+    return [_to_out(u) for u in svc.listar()]
 
 
 @router.post("/usuarios", response_model=UsuarioOut, status_code=201)
@@ -104,7 +115,7 @@ def crear_usuario(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    return UsuarioOut(**u, id=str(u["id"]))
+    return _to_out(u)
 
 
 @router.patch("/usuarios/{uid}", response_model=UsuarioOut)
@@ -122,4 +133,4 @@ def actualizar_usuario(
         u = svc.actualizar(uid, **campos)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return UsuarioOut(**u, id=str(u["id"]))
+    return _to_out(u)
