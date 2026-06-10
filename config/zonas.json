@@ -13,9 +13,9 @@
     },
     "BOGOTA_RAPIDAS": {
       "descripcion": "Bogotá y zonas rápidas Antioquia",
-      "sla_normal_max": 3,
-      "sla_riesgo": 4,
-      "sla_critico": 6,
+      "sla_normal_max": 2,
+      "sla_riesgo": 3,
+      "sla_critico": 5,
       "ciudades": [
         "BOGOTÁ", "BOGOTA", "BOGOTA D.C.", "BOGOTÁ D.C.",
         "RIONEGRO", "LA CEJA", "MARINILLA", "GUARNE", "EL RETIRO",
@@ -25,9 +25,9 @@
     },
     "PRINCIPALES": {
       "descripcion": "Ciudades principales Colombia",
-      "sla_normal_max": 5,
-      "sla_riesgo": 7,
-      "sla_critico": 9,
+      "sla_normal_max": 4,
+      "sla_riesgo": 6,
+      "sla_critico": 8,
       "ciudades": [
         "CALI", "BARRANQUILLA", "CARTAGENA", "BUCARAMANGA",
         "PEREIRA", "MANIZALES", "ARMENIA", "SANTA MARTA", "IBAGUÉ",
@@ -45,16 +45,16 @@
     },
     "SECUNDARIAS": {
       "descripcion": "Municipios secundarios y pueblos",
-      "sla_normal_max": 7,
-      "sla_riesgo": 9,
-      "sla_critico": 12,
+      "sla_normal_max": 6,
+      "sla_riesgo": 8,
+      "sla_critico": 11,
       "ciudades": []
     },
     "REEXPEDIDO": {
       "descripcion": "Pedidos reexpedidos o relanzados",
-      "sla_normal_max": 14,
-      "sla_riesgo": 18,
-      "sla_critico": 22,
+      "sla_normal_max": 13,
+      "sla_riesgo": 17,
+      "sla_critico": 21,
       "ciudades": []
     }
   },
