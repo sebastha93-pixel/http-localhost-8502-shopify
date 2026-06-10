@@ -8,6 +8,7 @@ import { KpiCard } from "@/components/kpi-card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Pedido } from "@/lib/types";
 import { formatMoneyShort } from "@/lib/utils";
+import { AutorizarDespachoButton } from "@/components/autorizar-button";
 
 export default function ContraentregaPage() {
   const { data, isLoading, error, refetch, isFetching } = usePedidos();
@@ -61,7 +62,9 @@ export default function ContraentregaPage() {
             pedidos={groups.pendientes}
             showTipoFilter={false}
             emptyMessage="No hay pedidos pendientes de despacho"
-            columns={["nivel", "orden", "cliente", "ciudad", "zona", "dias", "valor", "estado", "link"]}
+            columns={["nivel", "orden", "cliente", "telefono", "ciudad", "zona", "dias", "valor", "estado"]}
+            selectable
+            renderAction={(p) => <AutorizarDespachoButton pedido={p} />}
           />
         </TabsContent>
         <TabsContent value="transito">
@@ -69,7 +72,8 @@ export default function ContraentregaPage() {
             pedidos={groups.transito}
             showTipoFilter={false}
             emptyMessage="No hay pedidos en tránsito"
-            columns={["nivel", "orden", "cliente", "ciudad", "zona", "dias", "valor", "estado", "link"]}
+            columns={["nivel", "orden", "cliente", "telefono", "ciudad", "zona", "dias", "valor", "estado", "link"]}
+            selectable
           />
         </TabsContent>
         <TabsContent value="novedades">
@@ -77,7 +81,8 @@ export default function ContraentregaPage() {
             pedidos={groups.novedades}
             showTipoFilter={false}
             emptyMessage="✓ Sin novedades en COD"
-            columns={["nivel", "orden", "cliente", "ciudad", "dias", "valor", "novedad", "link"]}
+            columns={["nivel", "orden", "cliente", "telefono", "ciudad", "dias", "valor", "novedad", "link"]}
+            selectable
           />
         </TabsContent>
         <TabsContent value="entregados">
@@ -86,7 +91,8 @@ export default function ContraentregaPage() {
             showTipoFilter={false}
             showNivelFilter={false}
             emptyMessage="Sin entregas registradas"
-            columns={["orden", "cliente", "ciudad", "dias", "valor", "estado", "link"]}
+            columns={["orden", "cliente", "telefono", "ciudad", "dias", "valor", "estado", "link"]}
+            selectable
           />
           <p className="text-xs text-graphite mt-3">
             Total entregado: <span className="font-semibold text-ink">{formatMoneyShort(valEntregado)}</span>

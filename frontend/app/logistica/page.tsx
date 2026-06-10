@@ -17,7 +17,7 @@ export default function LogisticaPage() {
       isFetching={isFetching}
       onRefresh={() => refetch()}
     >
-      <PedidosTable pedidos={data.pedidos} />
+      <PedidosTable pedidos={data.pedidos} selectable />
     </PageShell>
   );
 }

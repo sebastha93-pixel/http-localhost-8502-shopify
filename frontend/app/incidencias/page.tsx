@@ -28,8 +28,8 @@ export default function IncidenciasPage() {
   if (isLoading) return <LoadingState label="Cargando incidencias..." />;
   if (error || !data) return <ErrorState error={error} onRetry={() => refetch()} />;
 
-  const cols: Array<"nivel" | "orden" | "cliente" | "ciudad" | "dias" | "valor" | "novedad" | "tipo" | "link"> = [
-    "nivel", "orden", "cliente", "ciudad", "dias", "valor", "novedad", "tipo", "link",
+  const cols: Array<"nivel" | "orden" | "cliente" | "telefono" | "ciudad" | "dias" | "valor" | "novedad" | "tipo" | "link"> = [
+    "nivel", "orden", "cliente", "telefono", "ciudad", "dias", "valor", "novedad", "tipo", "link",
   ];
 
   return (
@@ -56,7 +56,7 @@ export default function IncidenciasPage() {
         </TabsList>
 
         <TabsContent value="todas">
-          <PedidosTable pedidos={groups.todas} emptyMessage="✓ Sin incidencias activas" columns={cols} />
+          <PedidosTable pedidos={groups.todas} emptyMessage="✓ Sin incidencias activas" columns={cols} selectable />
         </TabsContent>
         <TabsContent value="cliente">
           <PedidosTable
@@ -64,6 +64,7 @@ export default function IncidenciasPage() {
             showTipoFilter={false}
             emptyMessage="✓ Sin incidencias de cliente"
             columns={cols}
+            selectable
           />
         </TabsContent>
         <TabsContent value="transportadora">
@@ -72,6 +73,7 @@ export default function IncidenciasPage() {
             showTipoFilter={false}
             emptyMessage="✓ Sin incidencias de transportadora"
             columns={cols}
+            selectable
           />
         </TabsContent>
         <TabsContent value="seguimiento">
@@ -80,11 +82,12 @@ export default function IncidenciasPage() {
             showTipoFilter={false}
             emptyMessage="✓ Sin incidencias de seguimiento"
             columns={cols}
+            selectable
           />
         </TabsContent>
         {groups.otros.length > 0 && (
           <TabsContent value="otros">
-            <PedidosTable pedidos={groups.otros} showTipoFilter={false} columns={cols} />
+            <PedidosTable pedidos={groups.otros} showTipoFilter={false} columns={cols} selectable />
           </TabsContent>
         )}
       </Tabs>

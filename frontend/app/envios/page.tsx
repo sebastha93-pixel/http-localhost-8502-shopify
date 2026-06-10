@@ -51,7 +51,8 @@ export default function EnviosPage() {
             pedidos={groups.transito}
             showTipoFilter={false}
             emptyMessage="No hay envíos en tránsito"
-            columns={["nivel", "orden", "cliente", "ciudad", "zona", "dias", "estado", "link"]}
+            columns={["nivel", "orden", "cliente", "telefono", "ciudad", "zona", "dias", "estado", "link"]}
+            selectable
           />
         </TabsContent>
         <TabsContent value="novedades">
@@ -59,7 +60,8 @@ export default function EnviosPage() {
             pedidos={groups.novedades}
             showTipoFilter={false}
             emptyMessage="✓ Sin novedades en prepago"
-            columns={["nivel", "orden", "cliente", "ciudad", "dias", "novedad", "link"]}
+            columns={["nivel", "orden", "cliente", "telefono", "ciudad", "dias", "novedad", "link"]}
+            selectable
           />
         </TabsContent>
         <TabsContent value="entregados">
@@ -68,7 +70,8 @@ export default function EnviosPage() {
             showTipoFilter={false}
             showNivelFilter={false}
             emptyMessage="Sin entregas registradas"
-            columns={["orden", "cliente", "ciudad", "dias", "estado", "link"]}
+            columns={["orden", "cliente", "telefono", "ciudad", "dias", "estado", "link"]}
+            selectable
           />
         </TabsContent>
       </Tabs>

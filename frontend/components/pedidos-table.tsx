@@ -5,11 +5,13 @@ import { Pedido, NivelRiesgo } from "@/lib/types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatMoneyShort } from "@/lib/utils";
-import { Search, ExternalLink } from "lucide-react";
+import { Search, ExternalLink, Phone, MessageCircle } from "lucide-react";
 
 const NIVELES: NivelRiesgo[] = ["CRITICO", "RIESGO", "NORMAL", "VENCIDO", "RESUELTO"];
 
-type ColumnKey = "nivel" | "orden" | "cliente" | "ciudad" | "zona" | "dias" | "valor" | "estado" | "tipo" | "novedad" | "link";
+type ColumnKey =
+  | "select" | "nivel" | "orden" | "cliente" | "telefono" | "ciudad" | "zona"
+  | "dias" | "valor" | "estado" | "tipo" | "novedad" | "link" | "action";
 
 interface Props {
   pedidos: Pedido[];
@@ -17,12 +19,17 @@ interface Props {
   showTipoFilter?: boolean;
   emptyMessage?: string;
   limit?: number;
-  /** Columnas visibles. Default todas. */
   columns?: ColumnKey[];
+  /** Habilita checkboxes y barra de acciones bulk */
+  selectable?: boolean;
+  /** Acción render-prop por fila (ej. botón Autorizar despacho) */
+  renderAction?: (p: Pedido) => React.ReactNode;
 }
 
 const TIPO_FILTROS = ["Todos", "Contraentrega", "Prepago"] as const;
 type TipoFiltro = (typeof TIPO_FILTROS)[number];
+
+const DEFAULT_COLS: ColumnKey[] = ["nivel", "orden", "cliente", "telefono", "ciudad", "zona", "dias", "valor", "estado", "tipo", "link"];
 
 export function PedidosTable({
   pedidos,
@@ -30,11 +37,22 @@ export function PedidosTable({
   showTipoFilter = true,
   emptyMessage = "Sin resultados con los filtros aplicados",
   limit = 200,
-  columns = ["nivel", "orden", "cliente", "ciudad", "zona", "dias", "valor", "estado", "tipo", "link"],
+  columns = DEFAULT_COLS,
+  selectable = false,
+  renderAction,
 }: Props) {
   const [q, setQ] = useState("");
   const [nivel, setNivel] = useState<NivelRiesgo | "Todos">("Todos");
   const [tipo, setTipo] = useState<TipoFiltro>("Todos");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // Auto-añadir columnas según props
+  const cols = useMemo<ColumnKey[]>(() => {
+    const c = [...columns];
+    if (selectable && !c.includes("select")) c.unshift("select");
+    if (renderAction && !c.includes("action")) c.push("action");
+    return c;
+  }, [columns, selectable, renderAction]);
 
   const filtered = useMemo(() => {
     const term = q.trim().toLowerCase();
@@ -46,12 +64,31 @@ export function PedidosTable({
         p.orden_tienda?.toLowerCase().includes(term) ||
         p.orden_melonn?.toLowerCase().includes(term) ||
         p.nombre_comprador?.toLowerCase().includes(term) ||
-        p.ciudad_destino?.toLowerCase().includes(term)
+        p.ciudad_destino?.toLowerCase().includes(term) ||
+        p.telefono_comprador?.toLowerCase().includes(term)
       );
     });
   }, [pedidos, q, nivel, tipo, showNivelFilter, showTipoFilter]);
 
-  const has = (c: ColumnKey) => columns.includes(c);
+  const has = (c: ColumnKey) => cols.includes(c);
+
+  const toggleOne = (orden: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(orden) ? next.delete(orden) : next.add(orden);
+      return next;
+    });
+  };
+  const toggleAll = () => {
+    if (selected.size === filtered.length) setSelected(new Set());
+    else setSelected(new Set(filtered.slice(0, limit).map((p) => p.orden_melonn || p.orden_tienda)));
+  };
+
+  const abrirGuiasSeleccionadas = () => {
+    filtered
+      .filter((p) => selected.has(p.orden_melonn || p.orden_tienda) && p.link_guia)
+      .forEach((p) => window.open(p.link_guia as string, "_blank"));
+  };
 
   return (
     <div className="space-y-4">
@@ -62,7 +99,7 @@ export function PedidosTable({
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Buscar por orden, cliente o ciudad..."
+            placeholder="Buscar por orden, cliente, ciudad o teléfono..."
             className="w-full rounded-md border border-border bg-white pl-9 pr-3 py-2 text-sm text-ink placeholder:text-graphite/60 focus:outline-none focus:ring-2 focus:ring-steel"
           />
         </div>
@@ -73,6 +110,29 @@ export function PedidosTable({
           <Select label="Tipo" value={tipo} onChange={(v) => setTipo(v as TipoFiltro)} options={TIPO_FILTROS as unknown as string[]} />
         )}
       </div>
+
+      {/* Barra de selección */}
+      {selectable && selected.size > 0 && (
+        <div className="flex items-center justify-between rounded-md border border-steel/40 bg-steel/10 px-4 py-2.5">
+          <p className="text-sm font-semibold text-ink">
+            {selected.size} {selected.size === 1 ? "pedido seleccionado" : "pedidos seleccionados"}
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={abrirGuiasSeleccionadas}
+              className="rounded-md bg-navy px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-white hover:bg-ink"
+            >
+              Abrir guías ({selected.size})
+            </button>
+            <button
+              onClick={() => setSelected(new Set())}
+              className="rounded-md border border-border bg-white px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-graphite hover:bg-concrete"
+            >
+              Limpiar
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Resultados */}
       <p className="text-xs text-graphite">
@@ -86,30 +146,52 @@ export function PedidosTable({
             <table className="w-full text-sm">
               <thead className="bg-concrete/50 border-b border-border">
                 <tr>
-                  {has("nivel")   && <Th>Nivel</Th>}
-                  {has("orden")   && <Th>Orden</Th>}
-                  {has("cliente") && <Th>Cliente</Th>}
-                  {has("ciudad")  && <Th>Ciudad</Th>}
-                  {has("zona")    && <Th>Zona</Th>}
-                  {has("dias")    && <Th align="right">Días</Th>}
-                  {has("valor")   && <Th align="right">Valor COD</Th>}
-                  {has("estado")  && <Th>Estado</Th>}
-                  {has("novedad") && <Th>Novedad</Th>}
-                  {has("tipo")    && <Th>Tipo</Th>}
-                  {has("link")    && <Th>{""}</Th>}
+                  {has("select")   && (
+                    <Th>
+                      <input
+                        type="checkbox"
+                        checked={selected.size > 0 && selected.size === Math.min(filtered.length, limit)}
+                        onChange={toggleAll}
+                        className="rounded border-graphite/40"
+                      />
+                    </Th>
+                  )}
+                  {has("nivel")    && <Th>Nivel</Th>}
+                  {has("orden")    && <Th>Orden</Th>}
+                  {has("cliente")  && <Th>Cliente</Th>}
+                  {has("telefono") && <Th>Teléfono</Th>}
+                  {has("ciudad")   && <Th>Ciudad</Th>}
+                  {has("zona")     && <Th>Zona</Th>}
+                  {has("dias")     && <Th align="right">Días</Th>}
+                  {has("valor")    && <Th align="right">Valor COD</Th>}
+                  {has("estado")   && <Th>Estado</Th>}
+                  {has("novedad")  && <Th>Novedad</Th>}
+                  {has("tipo")     && <Th>Tipo</Th>}
+                  {has("link")     && <Th>{""}</Th>}
+                  {has("action")   && <Th align="right">Acción</Th>}
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={columns.length} className="text-center py-12 text-graphite">
+                    <td colSpan={cols.length} className="text-center py-12 text-graphite">
                       {emptyMessage}
                     </td>
                   </tr>
                 ) : (
-                  filtered.slice(0, limit).map((p) => (
-                    <Row key={p.orden_melonn || p.orden_tienda} p={p} columns={columns} />
-                  ))
+                  filtered.slice(0, limit).map((p) => {
+                    const key = p.orden_melonn || p.orden_tienda;
+                    return (
+                      <Row
+                        key={key}
+                        p={p}
+                        cols={cols}
+                        isSelected={selected.has(key)}
+                        onToggle={() => toggleOne(key)}
+                        renderAction={renderAction}
+                      />
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -125,14 +207,33 @@ export function PedidosTable({
   );
 }
 
-function Row({ p, columns }: { p: Pedido; columns: ColumnKey[] }) {
-  const has = (c: ColumnKey) => columns.includes(c);
+function Row({
+  p, cols, isSelected, onToggle, renderAction,
+}: {
+  p: Pedido;
+  cols: ColumnKey[];
+  isSelected: boolean;
+  onToggle: () => void;
+  renderAction?: (p: Pedido) => React.ReactNode;
+}) {
+  const has = (c: ColumnKey) => cols.includes(c);
   const dias = p.dias_real ?? 0;
   const sla  = p.sla_critico ?? 0;
   const overSla = sla > 0 && dias > sla;
+  const tel = (p.telefono_comprador || "").replace(/\D/g, "");
 
   return (
-    <tr className="border-b border-border hover:bg-concrete/30 transition-colors">
+    <tr className={`border-b border-border hover:bg-concrete/30 transition-colors ${isSelected ? "bg-steel/5" : ""}`}>
+      {has("select") && (
+        <Td>
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={onToggle}
+            className="rounded border-graphite/40"
+          />
+        </Td>
+      )}
       {has("nivel") && <Td><NivelBadge nivel={p.nivel} /></Td>}
       {has("orden") && (
         <Td>
@@ -145,6 +246,29 @@ function Row({ p, columns }: { p: Pedido; columns: ColumnKey[] }) {
       {has("cliente") && (
         <Td>
           <div className="truncate max-w-[180px]">{p.nombre_comprador || "—"}</div>
+        </Td>
+      )}
+      {has("telefono") && (
+        <Td>
+          {tel ? (
+            <div className="flex items-center gap-1.5">
+              <a href={`tel:+57${tel}`} className="text-ink hover:text-navy" title="Llamar">
+                <Phone className="h-3.5 w-3.5" />
+              </a>
+              <a
+                href={`https://wa.me/57${tel}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-teal hover:text-ink"
+                title="WhatsApp"
+              >
+                <MessageCircle className="h-3.5 w-3.5" />
+              </a>
+              <span className="text-xs text-graphite tabular-nums">{p.telefono_comprador}</span>
+            </div>
+          ) : (
+            <span className="text-graphite">—</span>
+          )}
         </Td>
       )}
       {has("ciudad") && <Td>{p.ciudad_destino || "—"}</Td>}
@@ -178,12 +302,15 @@ function Row({ p, columns }: { p: Pedido; columns: ColumnKey[] }) {
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center text-steel hover:text-navy"
-              title="Ver en Melonn"
+              title="Ver guía en Melonn"
             >
               <ExternalLink className="h-3.5 w-3.5" />
             </a>
           ) : null}
         </Td>
+      )}
+      {has("action") && renderAction && (
+        <Td align="right">{renderAction(p)}</Td>
       )}
     </tr>
   );
@@ -211,28 +338,18 @@ function Th({ children, align = "left" }: { children?: React.ReactNode; align?: 
 }
 
 function Td({
-  children,
-  align = "left",
-  className = "",
+  children, align = "left", className = "",
 }: {
-  children?: React.ReactNode;
-  align?: "left" | "right";
-  className?: string;
+  children?: React.ReactNode; align?: "left" | "right"; className?: string;
 }) {
   const alignCls = align === "right" ? "text-right" : "text-left";
   return <td className={`px-3 py-2.5 ${alignCls} ${className}`}>{children}</td>;
 }
 
 function Select({
-  label,
-  value,
-  onChange,
-  options,
+  label, value, onChange, options,
 }: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: string[];
+  label: string; value: string; onChange: (v: string) => void; options: string[];
 }) {
   return (
     <label className="flex items-center gap-2 text-xs text-graphite">

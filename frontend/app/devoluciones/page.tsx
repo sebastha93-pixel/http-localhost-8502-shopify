@@ -74,14 +74,16 @@ export default function DevolucionesPage() {
             <PedidosTable
               pedidos={groups.activas}
               emptyMessage="✓ Sin devoluciones activas"
-              columns={["nivel", "orden", "cliente", "ciudad", "dias", "valor", "novedad", "tipo", "link"]}
+              columns={["nivel", "orden", "cliente", "telefono", "ciudad", "dias", "valor", "novedad", "tipo", "link"]}
+              selectable
             />
           </TabsContent>
           <TabsContent value="enRuta">
             <PedidosTable
               pedidos={groups.enRuta}
               emptyMessage="Sin devoluciones en tránsito"
-              columns={["nivel", "orden", "cliente", "ciudad", "dias", "valor", "estado", "tipo", "link"]}
+              columns={["nivel", "orden", "cliente", "telefono", "ciudad", "dias", "valor", "estado", "tipo", "link"]}
+              selectable
             />
           </TabsContent>
           <TabsContent value="resueltas">
@@ -89,13 +91,15 @@ export default function DevolucionesPage() {
               pedidos={groups.resueltas}
               showNivelFilter={false}
               emptyMessage="Sin devoluciones resueltas"
-              columns={["orden", "cliente", "ciudad", "valor", "novedad", "tipo", "link"]}
+              columns={["orden", "cliente", "telefono", "ciudad", "valor", "novedad", "tipo", "link"]}
+              selectable
             />
           </TabsContent>
           <TabsContent value="todas">
             <PedidosTable
               pedidos={groups.todas}
-              columns={["nivel", "orden", "cliente", "ciudad", "dias", "valor", "novedad", "tipo", "link"]}
+              columns={["nivel", "orden", "cliente", "telefono", "ciudad", "dias", "valor", "novedad", "tipo", "link"]}
+              selectable
             />
           </TabsContent>
         </Tabs>

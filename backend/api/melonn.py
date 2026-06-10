@@ -79,3 +79,33 @@ def pedido_detalle(orden: str) -> dict:
         if p.get("orden_tienda") == orden or p.get("orden_melonn") == orden:
             return metricas_svc.clasificar(p)
     raise HTTPException(status_code=404, detail=f"Pedido {orden} no encontrado")
+
+
+class AutorizarResponse(BaseModel):
+    ok: bool
+    mensaje: str
+    orden_melonn: str
+
+
+@router.post("/pedidos/{orden_melonn}/autorizar-despacho", response_model=AutorizarResponse)
+def autorizar_despacho(orden_melonn: str) -> AutorizarResponse:
+    """
+    Libera el hold de fulfillment en Melonn y autoriza el despacho del pedido.
+    Equivalente al botón "Authorize dispatch" en la UI de Melonn.
+    """
+    import sys
+    from pathlib import Path
+    _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+    import melonn_client as mc
+
+    try:
+        ok, mensaje = mc.release_hold_fulfillment(orden_melonn)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Melonn API error: {exc}")
+
+    if not ok:
+        raise HTTPException(status_code=400, detail=mensaje)
+
+    return AutorizarResponse(ok=True, mensaje=mensaje, orden_melonn=orden_melonn)
