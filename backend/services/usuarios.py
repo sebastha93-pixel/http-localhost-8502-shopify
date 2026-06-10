@@ -14,24 +14,30 @@ Schema esperado:
 """
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from supabase import create_client, Client
-
-from backend.core.config import settings
 
 
 _client: Optional[Client] = None
 
 
 def _sb() -> Optional[Client]:
+    """Mismo patrón que src/memoria.py — lee env vars directo."""
     global _client
     if _client is not None:
         return _client
-    if not settings.supabase_url or not settings.supabase_key:
+    url = os.environ.get("SUPABASE_URL", "").strip()
+    key = os.environ.get("SUPABASE_KEY", "").strip()
+    if not url or not key:
         return None
-    _client = create_client(settings.supabase_url, settings.supabase_key)
-    return _client
+    try:
+        _client = create_client(url, key)
+        return _client
+    except Exception as e:
+        print(f"[usuarios] Error creando cliente Supabase: {e}")
+        return None
 
 
 ROLES = ("admin", "operador", "lectura")
