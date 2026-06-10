@@ -43,7 +43,6 @@ export interface Pedido {
   // Campos enriquecidos por backend/services/metricas.clasificar:
   nivel?: NivelRiesgo;
   score?: number;
-  tipo_recaudo?: string;
   dias_real?: number;
   sla_critico?: number;
   zona?: string;

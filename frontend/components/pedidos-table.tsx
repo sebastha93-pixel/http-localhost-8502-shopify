@@ -9,6 +9,8 @@ import { Search, ExternalLink } from "lucide-react";
 
 const NIVELES: NivelRiesgo[] = ["CRITICO", "RIESGO", "NORMAL", "VENCIDO", "RESUELTO"];
 
+type ColumnKey = "nivel" | "orden" | "cliente" | "ciudad" | "zona" | "dias" | "valor" | "estado" | "tipo" | "novedad" | "link";
+
 interface Props {
   pedidos: Pedido[];
   showNivelFilter?: boolean;
@@ -16,7 +18,7 @@ interface Props {
   emptyMessage?: string;
   limit?: number;
   /** Columnas visibles. Default todas. */
-  columns?: Array<"nivel" | "orden" | "cliente" | "ciudad" | "zona" | "dias" | "valor" | "estado" | "tipo" | "novedad" | "link">;
+  columns?: ColumnKey[];
 }
 
 const TIPO_FILTROS = ["Todos", "Contraentrega", "Prepago"] as const;
@@ -49,7 +51,7 @@ export function PedidosTable({
     });
   }, [pedidos, q, nivel, tipo, showNivelFilter, showTipoFilter]);
 
-  const has = (c: Props["columns"] extends Array<infer T> ? T : never) => columns.includes(c);
+  const has = (c: ColumnKey) => columns.includes(c);
 
   return (
     <div className="space-y-4">
@@ -94,7 +96,7 @@ export function PedidosTable({
                   {has("estado")  && <Th>Estado</Th>}
                   {has("novedad") && <Th>Novedad</Th>}
                   {has("tipo")    && <Th>Tipo</Th>}
-                  {has("link")    && <Th></Th>}
+                  {has("link")    && <Th>{""}</Th>}
                 </tr>
               </thead>
               <tbody>
@@ -123,8 +125,8 @@ export function PedidosTable({
   );
 }
 
-function Row({ p, columns }: { p: Pedido; columns: NonNullable<Props["columns"]> }) {
-  const has = (c: (typeof columns)[number]) => columns.includes(c);
+function Row({ p, columns }: { p: Pedido; columns: ColumnKey[] }) {
+  const has = (c: ColumnKey) => columns.includes(c);
   const dias = p.dias_real ?? 0;
   const sla  = p.sla_critico ?? 0;
   const overSla = sla > 0 && dias > sla;
@@ -199,7 +201,7 @@ function NivelBadge({ nivel }: { nivel?: NivelRiesgo }) {
   return <Badge tone={map[nivel]}>{nivel}</Badge>;
 }
 
-function Th({ children, align = "left" }: { children: React.ReactNode; align?: "left" | "right" }) {
+function Th({ children, align = "left" }: { children?: React.ReactNode; align?: "left" | "right" }) {
   const alignCls = align === "right" ? "text-right" : "text-left";
   return (
     <th className={`px-3 py-2.5 text-[0.6rem] font-bold uppercase tracking-[0.15em] text-graphite ${alignCls}`}>
@@ -213,7 +215,7 @@ function Td({
   align = "left",
   className = "",
 }: {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   align?: "left" | "right";
   className?: string;
 }) {
