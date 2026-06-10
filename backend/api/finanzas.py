@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from backend.core.security import CurrentUser, get_current_user, require_role
 from backend.services import melonn as melonn_svc
 from backend.services import metricas as metricas_svc
+from backend.services import addi as addi_svc
 
 _SRC = Path(__file__).resolve().parent.parent.parent / "src"
 if str(_SRC) not in sys.path:
@@ -157,6 +158,72 @@ def listar_pagos_mp(
         valor_bruto_total=sum(p.valor_bruto for p in pagos),
         valor_neto_total=sum(p.valor_neto for p in pagos),
         comision_total=sum(p.comision for p in pagos),
+        desde=desde,
+        hasta=hasta,
+    )
+
+
+# ── Addi ────────────────────────────────────────────────────────────
+
+class AddiStatusResponse(BaseModel):
+    ok: bool
+    error: Optional[str] = None
+    base_url: Optional[str] = None
+    token_path: Optional[str] = None
+
+
+class TransaccionAddi(BaseModel):
+    addi_id: str
+    valor_bruto: float
+    estado: str
+    fecha: str
+    email_cliente: str
+    nombre_cliente: str
+    external_ref: str
+
+
+class TransaccionesAddiResponse(BaseModel):
+    transacciones: list[TransaccionAddi]
+    total: int
+    valor_total: float
+    desde: str
+    hasta: str
+
+
+@router.get("/addi/status", response_model=AddiStatusResponse)
+def addi_status(_: CurrentUser = Depends(get_current_user)) -> AddiStatusResponse:
+    """Verifica conectividad y credenciales Addi (intenta obtener access_token)."""
+    r = addi_svc.status()
+    return AddiStatusResponse(**r)
+
+
+@router.get("/addi", response_model=TransaccionesAddiResponse)
+def listar_addi(
+    desde: Optional[str] = Query(default=None),
+    hasta: Optional[str] = Query(default=None),
+    limit: int = Query(default=200, le=2000),
+    _: CurrentUser = Depends(get_current_user),
+) -> TransaccionesAddiResponse:
+    """Transacciones Addi en el rango dado (default últimos 30d)."""
+    if not desde:
+        desde = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    if not hasta:
+        hasta = datetime.now().strftime("%Y-%m-%d")
+
+    try:
+        raw = addi_svc.obtener_transacciones(fecha_desde=desde, fecha_hasta=hasta, limit=limit)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Addi error: {exc}")
+
+    transacciones = []
+    for r in raw:
+        r.pop("_raw", None)  # No exponemos el payload crudo al frontend
+        transacciones.append(TransaccionAddi(**r))
+
+    return TransaccionesAddiResponse(
+        transacciones=transacciones,
+        total=len(transacciones),
+        valor_total=sum(t.valor_bruto for t in transacciones),
         desde=desde,
         hasta=hasta,
     )

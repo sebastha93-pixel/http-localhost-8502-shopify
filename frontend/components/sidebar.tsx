@@ -42,6 +42,7 @@ const NAV: { home: NavItem; groups: NavGroup[] } = {
         { label: "Conciliación", href: "/conciliacion" },
         { label: "Facturación",  href: "/facturacion" },
         { label: "MercadoPago",  href: "/mercadopago" },
+        { label: "Addi",         href: "/addi" },
       ],
     },
     {
