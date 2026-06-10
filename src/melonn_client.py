@@ -934,16 +934,14 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
 
     Limita batch a `max_pedidos` por llamada para no bloquear la UI.
     """
-    # Identificar pedidos manuales sin datos
-    # Llamamos detail endpoint cuando: no hay nombre Y tenemos un id Melonn.
-    # No filtramos por external_order_id porque el detail endpoint de Melonn
-    # tiene info que Shopify a veces no — incluye también pedidos D2C.
+    # Identificar pedidos manuales sin datos.
+    # IMPORTANTE: el endpoint GET /sell-orders/{X} usa el external_order_number
+    # (= orden_tienda en nuestro modelo), no el internal_order_number.
     indices = []
     for i, p in enumerate(pedidos):
         if p.get("nombre_comprador"):
             continue
-        # Necesitamos id Melonn para llamar GET /sell-orders/{id}
-        if p.get("orden_melonn") or p.get("id"):
+        if p.get("orden_tienda"):
             indices.append(i)
 
     if not indices:
@@ -964,76 +962,49 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
 
     for idx in indices:
         p = pedidos[idx]
-        order_id = p.get("orden_melonn") or p.get("id")
-        if not order_id:
+        # Melonn GET /sell-orders/{X} requiere el external_order_number
+        ext = p.get("orden_tienda")
+        if not ext:
             continue
 
         try:
-            detail = _get(f"sell-orders/{order_id}")
+            detail = _get(f"sell-orders/{ext}")
         except Exception as e:
-            log.warning(f"Error fetching detalle {order_id}: {e}")
+            log.warning(f"Error fetching detalle {ext}: {e}")
             continue
 
         if not detail:
-            log.warning(f"Detalle vacío para {order_id}")
             continue
-
-        # Log para debugging — primera vez ayuda a ver keys reales
-        if log.isEnabledFor(10):  # DEBUG
-            log.debug(f"Detalle Melonn {order_id} keys: {list(detail.keys())}")
 
         p = dict(p)
 
-        # Buyer / recipient info — Melonn usa varias keys según versión.
-        # Cubrimos todas las variantes conocidas.
+        # Schema real Melonn API:
+        #   buyer.full_name, buyer.phone_number, buyer.email
+        #   shipping_info.full_name, phone_number, city, region,
+        #                 address_l1, address_l2, postal_code
+        #   warehouse.city, warehouse.region (origen, no destino)
         buyer = detail.get("buyer") or {}
-        ship  = (detail.get("shipping_info")
-                 or detail.get("shipping_address")
-                 or detail.get("recipient")
-                 or detail.get("destination")
-                 or {})
+        ship  = detail.get("shipping_info") or {}
 
-        # Top-level fallbacks (algunas respuestas planas)
+        # Prioridad: nombre del comprador (buyer) > recipient (shipping)
         nombre = (
-            buyer.get("name")
-            or buyer.get("full_name")
-            or " ".join(filter(None, [buyer.get("first_name", ""), buyer.get("last_name", "")])).strip()
-            or ship.get("name")
-            or ship.get("recipient_name")
-            or detail.get("buyer_name")
-            or detail.get("recipient_name")
-            or ""
-        ).strip()
+            (buyer.get("full_name") or "").strip()
+            or (ship.get("full_name") or "").strip()
+        )
 
         telefono = (
-            buyer.get("phone")
-            or buyer.get("cellphone")
-            or buyer.get("mobile")
-            or ship.get("phone")
-            or ship.get("cellphone")
-            or detail.get("phone")
-            or detail.get("cellphone")
-            or ""
-        ).strip()
-
-        ciudad = (
-            ship.get("city")
-            or ship.get("city_name")
-            or ship.get("municipality")
-            or buyer.get("city")
-            or detail.get("city")
-            or ""
-        ).strip().upper()
-
-        region = (
-            ship.get("state")
-            or ship.get("province")
-            or ship.get("region")
-            or ship.get("department")
-            or detail.get("state")
-            or detail.get("region")
-            or ""
+            (buyer.get("phone_number") or "").strip()
+            or (ship.get("phone_number") or "").strip()
         )
+
+        ciudad = ((ship.get("city") or "").strip().upper())
+        region = (ship.get("region") or "")
+
+        email = (buyer.get("email") or "").strip()
+        direccion = " ".join(filter(None, [
+            (ship.get("address_l1") or "").strip(),
+            (ship.get("address_l2") or "").strip(),
+        ]))
 
         # Productos si vienen
         items = detail.get("line_items") or detail.get("items") or []
@@ -1052,6 +1023,10 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
             p["ciudad_destino"] = ciudad
         if region and not p.get("region_destino"):
             p["region_destino"] = region
+        if email and not p.get("email_comprador"):
+            p["email_comprador"] = email
+        if direccion and not p.get("direccion"):
+            p["direccion"] = direccion
 
         # Fechas (formato ISO YYYY-MM-DD)
         for src_key, dst_key in [
