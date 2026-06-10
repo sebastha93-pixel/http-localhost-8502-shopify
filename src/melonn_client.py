@@ -926,6 +926,80 @@ def _lazy_enrich(pedidos: list, max_pedidos: int = 30) -> list:
     return resultado
 
 
+def _verificar_estados_stale(pedidos: list, max_check: int = 50) -> list:
+    """
+    Para pedidos que llevan mucho tiempo en tránsito, llama al detail
+    endpoint de Melonn para verificar si el estado real cambió.
+
+    Útil cuando el LIST endpoint reporta estado viejo (Shipped - in transit)
+    pero el pedido ya está entregado/cobrado según el DETAIL endpoint.
+
+    Solo verifica pedidos que cumplen TODOS:
+    - sub_estado_logistico == "en_transito"
+    - dias_en_transito > 5 (umbral conservador)
+    - tienen orden_tienda (necesario para el detail endpoint)
+
+    Actualiza estado_melonn / estado_melonn_code / sub_estado_logistico
+    si el detail responde un estado diferente.
+    """
+    candidatos = []
+    for i, p in enumerate(pedidos):
+        if p.get("sub_estado_logistico") != "en_transito":
+            continue
+        if int(p.get("dias_en_transito") or 0) < 5:
+            continue
+        if not p.get("orden_tienda"):
+            continue
+        candidatos.append(i)
+
+    if not candidatos:
+        return pedidos
+
+    # Priorizar pedidos más antiguos (mayor riesgo de stale)
+    candidatos.sort(key=lambda i: int(pedidos[i].get("dias_en_transito") or 0), reverse=True)
+    candidatos = candidatos[:max_check]
+
+    log.info(f"Verificación estados stale: {len(candidatos)} pedidos a re-chequear")
+    resultado = list(pedidos)
+    actualizados = 0
+
+    for idx in candidatos:
+        p = pedidos[idx]
+        ext = p.get("orden_tienda")
+        try:
+            detail = _get(f"sell-orders/{ext}")
+        except Exception:
+            continue
+        if not detail:
+            continue
+
+        new_state = detail.get("sell_order_state") or {}
+        new_code  = int(new_state.get("id") or 0)
+        new_name  = str(new_state.get("name") or "")
+
+        if new_code and new_code != int(p.get("estado_melonn_code") or 0):
+            es_cod = p.get("es_contraentrega", False)
+            new_sub = _sub_estado_logistico(new_name, new_code, es_cod)
+            p_new = dict(p)
+            p_new["estado_melonn"]        = new_name
+            p_new["estado_melonn_code"]   = new_code
+            p_new["sub_estado_logistico"] = new_sub
+            p_new["esta_en_transito"]     = new_name in ESTADOS_EN_TRANSITO
+            p_new["entregado"]            = new_name in ESTADOS_ENTREGADO
+
+            # Actualizar fecha_entrega si vino en detail
+            del_date = detail.get("delivery_date")
+            if del_date and not p_new.get("fecha_entrega"):
+                p_new["fecha_entrega"] = str(del_date).split("T")[0]
+
+            resultado[idx] = p_new
+            actualizados += 1
+
+    if actualizados:
+        log.info(f"Verificación estados stale: {actualizados} pedidos actualizados")
+    return resultado
+
+
 def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
     """
     Para pedidos cargados MANUALMENTE en Melonn (sin external_order_id y sin
@@ -1079,6 +1153,12 @@ def sync_completo() -> dict:
         pedidos = _enriquecer_desde_melonn(pedidos, max_pedidos=10_000)
     except Exception as e:
         log.warning(f"Melonn detail enricher en sync_completo: {e}")
+
+    # Verificar estados stale (en tránsito viejos que pueden estar entregados)
+    try:
+        pedidos = _verificar_estados_stale(pedidos, max_check=100)
+    except Exception as e:
+        log.warning(f"Verificación estados stale en sync_completo: {e}")
 
     despues = sum(1 for p in pedidos if p.get("nombre_comprador"))
     try:

@@ -72,6 +72,41 @@ def _fetch_shopify_orders(order_ids: list[str]) -> dict:
     return resultado
 
 
+def _fetch_product_images(product_ids: list[str]) -> dict[str, str]:
+    """Batch fetch de imágenes principales por product_id. {id → image_url}."""
+    creds = _credenciales()
+    if not creds or not product_ids:
+        return {}
+    store, token, version = creds
+    url = f"https://{store}/admin/api/{version}/products.json"
+    headers = {"X-Shopify-Access-Token": token}
+
+    resultado: dict[str, str] = {}
+    unique_ids = list({str(pid) for pid in product_ids if pid})
+    for i in range(0, len(unique_ids), _BATCH_SIZE):
+        chunk = unique_ids[i : i + _BATCH_SIZE]
+        try:
+            r = requests.get(
+                url,
+                headers=headers,
+                params={"ids": ",".join(chunk), "fields": "id,image,images,title"},
+                timeout=_TIMEOUT,
+            )
+            r.raise_for_status()
+            for prod in r.json().get("products", []):
+                pid = str(prod["id"])
+                img = (prod.get("image") or {}).get("src")
+                if not img:
+                    imgs = prod.get("images") or []
+                    if imgs:
+                        img = imgs[0].get("src")
+                if img:
+                    resultado[pid] = img
+        except Exception as e:
+            log.warning(f"Shopify products batch error: {e}")
+    return resultado
+
+
 def _fetch_by_name(order_name: str, store: str, token: str, version: str) -> Optional[dict]:
     """Busca en Shopify por nombre de orden (ej. #58043) — para reenvíos sin external_order_id."""
     try:
@@ -120,6 +155,26 @@ def enriquecer(pedidos: list) -> list:
     shopify_map = _fetch_shopify_orders(ids_necesarios) if ids_necesarios else {}
     # NO retornar si shopify_map está vacío — puede haber pedidos sin external_order_id
     # que necesitan fallback por nombre de orden
+
+    # Recolectar product_ids de pedidos NO entregados que no tienen imagen aún
+    # (entregados ya no necesitamos imagen porque el operador no va a llamarlos)
+    product_ids_a_consultar: list[str] = []
+    for p in pedidos:
+        if p.get("imagen_producto"):
+            continue
+        if p.get("sub_estado_logistico") == "entregado":
+            continue
+        sid = str(p.get("external_order_id") or "")
+        o = shopify_map.get(sid) if sid else None
+        if o:
+            for li in (o.get("line_items") or []):
+                pid = li.get("product_id")
+                if pid:
+                    product_ids_a_consultar.append(str(pid))
+
+    images_map = _fetch_product_images(product_ids_a_consultar) if product_ids_a_consultar else {}
+    if images_map:
+        log.info(f"Shopify enricher: {len(images_map)} imágenes de producto cargadas")
 
     enriquecidos = []
     for p in pedidos:
@@ -191,6 +246,10 @@ def enriquecer(pedidos: list) -> list:
             variante = str(fi.get("variant_title") or "").strip()
             if variante and variante.upper() != "DEFAULT TITLE":
                 p["variante"] = variante
+            # Imagen del primer producto (si la cargamos arriba)
+            pid = str(fi.get("product_id") or "")
+            if pid and pid in images_map:
+                p["imagen_producto"] = images_map[pid]
         if total:
             p["valor_total"] = total
 

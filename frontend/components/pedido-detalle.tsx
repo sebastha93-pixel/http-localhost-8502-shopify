@@ -10,7 +10,7 @@ import { formatMoneyShort, fmtDateTime } from "@/lib/utils";
 import {
   Phone, MessageCircle, ExternalLink, Send, FileText, AlertCircle,
   PhoneCall, CheckCircle, Truck, RotateCcw, X, Loader2, MapPin, User, Calendar,
-  Edit3, Flag, FlagOff,
+  Edit3, Flag, FlagOff, Package,
 } from "lucide-react";
 
 interface Accion {
@@ -213,6 +213,58 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
                 <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
               </a>
               <span className="ml-auto text-sm tabular-nums text-graphite">{pedido.telefono_comprador}</span>
+            </div>
+          )}
+
+          {/* Producto */}
+          {(pedido.producto || pedido.sku || pedido.imagen_producto) && (
+            <div className="flex gap-3 rounded-md border border-border bg-white p-3">
+              {pedido.imagen_producto ? (
+                <a
+                  href={pedido.imagen_producto as string}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-none"
+                  title="Ver imagen completa"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={pedido.imagen_producto as string}
+                    alt={pedido.producto || "Producto"}
+                    className="h-20 w-20 rounded-md object-cover border border-border bg-concrete"
+                  />
+                </a>
+              ) : (
+                <div className="flex-none h-20 w-20 rounded-md bg-concrete border border-border flex items-center justify-center">
+                  <Package className="h-6 w-6 text-graphite/40" />
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-0.5">Producto</p>
+                {pedido.producto && (
+                  <p className="text-sm font-semibold text-ink line-clamp-2">{pedido.producto}</p>
+                )}
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1.5 text-xs">
+                  {pedido.sku && (
+                    <span>
+                      <span className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">SKU</span>{" "}
+                      <span className="tabular-nums text-ink font-semibold">{pedido.sku}</span>
+                    </span>
+                  )}
+                  {pedido.variante && (
+                    <span>
+                      <span className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Talla</span>{" "}
+                      <span className="text-ink font-semibold">{pedido.variante}</span>
+                    </span>
+                  )}
+                  {pedido.cantidad && pedido.cantidad > 1 && (
+                    <span>
+                      <span className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Cant.</span>{" "}
+                      <span className="text-ink font-semibold tabular-nums">{pedido.cantidad}</span>
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
           )}
 

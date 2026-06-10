@@ -53,6 +53,13 @@ export interface Pedido {
   novedad_manual?: boolean;
   motivo_novedad_manual?: string;
   valor_num?: number;
+  // Producto (enriquecido desde Shopify)
+  sku?: string;
+  producto?: string;
+  variante?: string;
+  cantidad?: number;
+  precio_unitario?: number;
+  imagen_producto?: string;
   [key: string]: unknown;
 }
 

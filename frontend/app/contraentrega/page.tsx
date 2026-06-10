@@ -62,7 +62,7 @@ export default function ContraentregaPage() {
             pedidos={groups.pendientes}
             showTipoFilter={false}
             emptyMessage="No hay pedidos pendientes de despacho"
-            columns={["nivel", "orden", "cliente", "telefono", "ciudad", "zona", "dias", "valor", "estado"]}
+            columns={["nivel", "orden", "cliente", "telefono", "producto", "ciudad", "dias", "valor", "estado"]}
             selectable
             renderAction={(p) => <AutorizarDespachoButton pedido={p} />}
           />

@@ -12,7 +12,8 @@ const NIVELES: NivelRiesgo[] = ["CRITICO", "RIESGO", "NORMAL", "VENCIDO", "RESUE
 
 type ColumnKey =
   | "select" | "nivel" | "orden" | "cliente" | "telefono" | "ciudad" | "zona"
-  | "dias" | "valor" | "estado" | "tipo" | "novedad" | "link" | "action";
+  | "dias" | "valor" | "estado" | "tipo" | "novedad" | "link" | "action"
+  | "producto";
 
 interface Props {
   pedidos: Pedido[];
@@ -178,6 +179,7 @@ export function PedidosTable({
                   {has("orden")    && <Th>Orden</Th>}
                   {has("cliente")  && <Th>Cliente</Th>}
                   {has("telefono") && <Th>Teléfono</Th>}
+                  {has("producto") && <Th>Producto</Th>}
                   {has("ciudad")   && <Th>Ciudad</Th>}
                   {has("zona")     && <Th>Zona</Th>}
                   {has("dias")     && <Th align="right">Días</Th>}
@@ -300,6 +302,24 @@ function Row({
           ) : (
             <span className="text-graphite">—</span>
           )}
+        </Td>
+      )}
+      {has("producto") && (
+        <Td>
+          <div className="flex items-center gap-2 min-w-0">
+            {p.imagen_producto ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={p.imagen_producto as string}
+                alt=""
+                className="h-9 w-9 rounded object-cover border border-border flex-none bg-concrete"
+              />
+            ) : null}
+            <div className="min-w-0 text-xs">
+              <div className="font-semibold text-ink truncate max-w-[150px]">{p.sku || "—"}</div>
+              {p.variante && <div className="text-graphite">Talla {p.variante}</div>}
+            </div>
+          </div>
         </Td>
       )}
       {has("ciudad") && <Td>{p.ciudad_destino || "—"}</Td>}
