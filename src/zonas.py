@@ -82,12 +82,16 @@ def evaluar_tiempo(dias_en_transito: int, zona_info: ZonaInfo) -> str:
     """
     Dado cuántos días lleva un pedido en tránsito, retorna el nivel de tiempo.
 
+    Semántica: el SLA es el límite TOLERADO. Solo se entra al siguiente nivel
+    cuando se EXCEDE (>). Ejemplo Medellín con sla_critico=5: día 5 sigue
+    siendo aceptable; día 6 ya es CRITICO.
+
     Returns:
         'NORMAL', 'RIESGO', o 'CRITICO'
     """
-    if dias_en_transito >= zona_info.sla_critico:
+    if dias_en_transito > zona_info.sla_critico:
         return "CRITICO"
-    elif dias_en_transito >= zona_info.sla_riesgo:
+    elif dias_en_transito > zona_info.sla_riesgo:
         return "RIESGO"
     else:
         return "NORMAL"
