@@ -22,8 +22,12 @@ log = logging.getLogger(__name__)
 # Dos niveles de refresh:
 #  LIGHT: solo fetch Melonn list (rápido, ~3-5 API calls)
 #  FULL:  sync_completo (enrich Shopify + Melonn detail + verify states)
-REFRESH_LIGHT_SECONDS = int(os.environ.get("SCHEDULER_LIGHT_SEC", 10 * 60))  # 10 min
-REFRESH_FULL_SECONDS  = int(os.environ.get("SCHEDULER_FULL_SEC", 60 * 60))   # 60 min
+REFRESH_LIGHT_SECONDS = int(os.environ.get("SCHEDULER_LIGHT_SEC", 30 * 60))  # 30 min
+REFRESH_FULL_SECONDS  = int(os.environ.get("SCHEDULER_FULL_SEC", 4 * 60 * 60)) # 4 horas
+
+# Pausa de emergencia si Melonn responde 429 — preserva cuota
+_cooldown_until: float = 0.0
+COOLDOWN_AFTER_429_SEC = 30 * 60   # 30 min de pausa cuando detectamos rate limit
 
 # Compat: variable antigua sigue funcionando para FULL
 if os.environ.get("SCHEDULER_INTERVAL_SEC"):
@@ -56,7 +60,17 @@ def _refresh_once(full: bool = False) -> dict:
       full=False (default): solo Melonn list fetch (~5s, barato)
       full=True: sync_completo con enrich + verify states (~30-90s)
     """
-    global _last_full_at
+    global _last_full_at, _cooldown_until
+
+    # Circuit breaker: si estamos en cooldown por rate-limit, saltar
+    now = time.time()
+    if now < _cooldown_until:
+        remaining = int(_cooldown_until - now)
+        log.info(f"Scheduler en cooldown — quedan {remaining}s. Saltando este tick.")
+        last_run["type"] = "skipped_cooldown"
+        last_run["error"] = f"Cooldown {remaining}s restantes"
+        return {"ok": False, "skipped": True, "cooldown_remaining": remaining}
+
     start = time.time()
     last_run["started_at"] = datetime.now(timezone.utc).isoformat()
     last_run["ok"] = None
@@ -140,12 +154,22 @@ def stop():
     _stop_event.set()
 
 
+def trigger_cooldown(seconds: int = COOLDOWN_AFTER_429_SEC):
+    """Pausa el scheduler por N segundos. Llamar cuando Melonn devuelve 429."""
+    global _cooldown_until
+    _cooldown_until = time.time() + seconds
+    log.warning(f"Scheduler pausado {seconds}s por rate-limit Melonn")
+
+
 def status() -> dict:
     """Estado actual del scheduler — para /api/health/scheduler."""
+    now = time.time()
+    cooldown_remaining = max(0, int(_cooldown_until - now))
     return {
         "running": _thread is not None and _thread.is_alive(),
         "interval_seconds": REFRESH_LIGHT_SECONDS,
         "light_interval_seconds": REFRESH_LIGHT_SECONDS,
         "full_interval_seconds": REFRESH_FULL_SECONDS,
+        "cooldown_remaining_seconds": cooldown_remaining,
         "last_run": last_run,
     }

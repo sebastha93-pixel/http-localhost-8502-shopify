@@ -635,7 +635,13 @@ def _post(path: str, body: dict = None) -> tuple:
                 if attempt < len(post_backoff):
                     time.sleep(wait)
                     continue
-                return False, None, "Melonn ocupado. Espera 30s y vuelve a darle click."
+                # Tras agotar reintentos: pausar scheduler para liberar cuota
+                try:
+                    from backend.core import scheduler as _sched
+                    _sched.trigger_cooldown()
+                except Exception:
+                    pass
+                return False, None, "Melonn saturado. Esperando 30 min para liberar cuota. Reintenta más tarde."
 
             try:
                 msg = r.json().get("message") or r.text[:200]
