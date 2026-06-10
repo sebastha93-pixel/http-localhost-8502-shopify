@@ -913,12 +913,129 @@ def _lazy_enrich(pedidos: list, max_pedidos: int = 30) -> list:
         enriquecidos = _enricher.enriquecer(sublista)
     except Exception as e:
         log.warning(f"Lazy Shopify enricher error: {e}")
-        return pedidos
+        enriquecidos = sublista
 
     # Merge de vuelta al array original por índice
     resultado = list(pedidos)
     for idx, p_enr in zip(indices_a_procesar, enriquecidos):
         resultado[idx] = p_enr
+
+    # Segundo paso: pedidos manuales sin external_order_id → Melonn detail endpoint
+    resultado = _enriquecer_desde_melonn(resultado, max_pedidos=max_pedidos)
+
+    return resultado
+
+
+def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
+    """
+    Para pedidos cargados MANUALMENTE en Melonn (sin external_order_id y sin
+    datos de cliente), llama GET /sell-orders/{id} para obtener el detalle
+    completo (buyer, shipping_info, line_items).
+
+    Limita batch a `max_pedidos` por llamada para no bloquear la UI.
+    """
+    # Identificar pedidos manuales sin datos
+    indices = []
+    for i, p in enumerate(pedidos):
+        if p.get("nombre_comprador"):
+            continue
+        if p.get("external_order_id"):
+            continue  # los maneja shopify_enricher
+        if p.get("id"):
+            indices.append(i)
+
+    if not indices:
+        return pedidos
+
+    # Priorizar por número de orden descendente (más recientes primero)
+    def _key(i: int) -> int:
+        ot = str(pedidos[i].get("orden_tienda", "")).split("-")[0]
+        return int(ot) if ot.isdigit() else 0
+
+    indices.sort(key=_key, reverse=True)
+    indices = indices[:max_pedidos]
+
+    log.info(f"Melonn detail enricher: consultando {len(indices)} pedidos manuales")
+
+    resultado = list(pedidos)
+    completados = 0
+
+    for idx in indices:
+        p = pedidos[idx]
+        order_id = p.get("id")
+        if not order_id:
+            continue
+
+        try:
+            detail = _get(f"sell-orders/{order_id}")
+        except Exception as e:
+            log.warning(f"Error fetching detalle {order_id}: {e}")
+            continue
+
+        if not detail:
+            continue
+
+        p = dict(p)
+
+        # Buyer info (puede venir como "buyer" o "shipping_info")
+        buyer = detail.get("buyer") or {}
+        ship  = detail.get("shipping_info") or detail.get("shipping_address") or {}
+
+        nombre = (
+            buyer.get("name")
+            or buyer.get("full_name")
+            or " ".join(filter(None, [buyer.get("first_name", ""), buyer.get("last_name", "")])).strip()
+            or ship.get("name")
+            or ""
+        ).strip()
+
+        telefono = (
+            buyer.get("phone")
+            or buyer.get("cellphone")
+            or ship.get("phone")
+            or ""
+        ).strip()
+
+        ciudad = (
+            ship.get("city")
+            or ship.get("city_name")
+            or buyer.get("city")
+            or ""
+        ).strip().upper()
+
+        region = (
+            ship.get("state")
+            or ship.get("province")
+            or ship.get("region")
+            or ""
+        )
+
+        # Productos si vienen
+        items = detail.get("line_items") or detail.get("items") or []
+        if items:
+            nombres = [str(i.get("name") or i.get("title") or "")[:40] for i in items]
+            if nombres and not p.get("producto"):
+                p["producto"] = " / ".join([n for n in nombres if n])
+            if items and not p.get("sku"):
+                p["sku"] = str(items[0].get("sku") or "")
+
+        if nombre and not p.get("nombre_comprador"):
+            p["nombre_comprador"] = nombre
+        if telefono and not p.get("telefono_comprador"):
+            p["telefono_comprador"] = telefono
+        if ciudad and not p.get("ciudad_destino"):
+            p["ciudad_destino"] = ciudad
+        if region and not p.get("region_destino"):
+            p["region_destino"] = region
+
+        if nombre or telefono or ciudad:
+            completados += 1
+
+        resultado[idx] = p
+
+    if completados > 0:
+        log.info(f"Melonn detail enricher: {completados} pedidos completados")
+
     return resultado
 
 
@@ -942,7 +1059,13 @@ def sync_completo() -> dict:
     try:
         pedidos = _enricher.enriquecer(pedidos)
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        log.warning(f"Shopify enricher en sync_completo: {e}")
+
+    # Pasada de Melonn detail para pedidos manuales (sin límite — exhaustivo)
+    try:
+        pedidos = _enriquecer_desde_melonn(pedidos, max_pedidos=10_000)
+    except Exception as e:
+        log.warning(f"Melonn detail enricher en sync_completo: {e}")
 
     despues = sum(1 for p in pedidos if p.get("nombre_comprador"))
     try:
