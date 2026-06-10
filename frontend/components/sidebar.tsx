@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { ROL_LABEL, esAdmin } from "@/lib/auth";
+import { SyncButton } from "@/components/sync-button";
 
 interface NavItem {
   label: string;
@@ -99,6 +100,8 @@ export function Sidebar() {
         ))}
       </nav>
 
+      {/* Sync button (admin/operador) */}
+      <SyncButton />
       {/* Footer — identidad del usuario (auditoría) */}
       <UserBox />
       <div className="border-t border-white/5 px-5 py-2 text-[0.5rem] tracking-[0.25em] text-steel/40 text-center">

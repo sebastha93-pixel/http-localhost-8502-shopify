@@ -41,6 +41,37 @@ class StatusResponse(BaseModel):
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
+class SyncResponse(BaseModel):
+    ok: bool
+    total: int = 0
+    antes: int = 0
+    despues: int = 0
+    completados: int = 0
+    error: Optional[str] = None
+
+
+@router.post("/sync-completo", response_model=SyncResponse)
+def sync_completo_endpoint(
+    user: CurrentUser = Depends(require_role("admin", "operador")),
+) -> SyncResponse:
+    """
+    Pasada exhaustiva de enriquecimiento Shopify sobre TODO el caché.
+    Lento (~30-90s). Solo admin/operador.
+    """
+    import sys
+    from pathlib import Path
+    _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+    import melonn_client as mc
+
+    try:
+        result = mc.sync_completo()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return SyncResponse(**result)
+
+
 @router.get("/status", response_model=StatusResponse)
 def status() -> StatusResponse:
     """Estado de la integración Melonn — credenciales y caché."""

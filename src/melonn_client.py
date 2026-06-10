@@ -869,32 +869,94 @@ def _fetch_api() -> list:
     return resultado
 
 
-def _lazy_enrich(pedidos: list) -> list:
+def _lazy_enrich(pedidos: list, max_pedidos: int = 30) -> list:
     """
     Enriquece con Shopify los pedidos en caché sin datos de cliente.
-    Detecta tres casos:
-      1. Tiene external_order_id pero no nombre_comprador  → API data sin enriquecer
-      2. Sin external_order_id, sin nombre, con orden_tienda numérico → caché viejo
+
+    Estrategia rápida (default):
+      - Solo procesa máximo `max_pedidos` por llamada (no bloquea la UI)
+      - Prioriza pedidos más recientes (mayor orden_tienda numérica)
+      - Los faltantes se completan en llamadas siguientes o vía sync_completo()
+
+    Para enriquecimiento exhaustivo, usar sync_completo().
     """
     if not _SHOPIFY_ENRICHER_OK:
         return pedidos
 
-    necesita = any(
-        not p.get("nombre_comprador") and (
+    # Identificar pedidos que necesitan enriquecimiento
+    indices_pendientes = [
+        i for i, p in enumerate(pedidos)
+        if not p.get("nombre_comprador") and (
             p.get("external_order_id")
             or str(p.get("orden_tienda", "")).split("-")[0].isdigit()
         )
-        for p in pedidos
-    )
-    if not necesita:
+    ]
+    if not indices_pendientes:
         return pedidos
 
-    log.info("Lazy Shopify enricher: detectados pedidos sin datos de cliente en caché")
+    # Limitar batch — prioriza por orden_tienda descendente (más recientes primero)
+    def _key(i: int) -> int:
+        ot = str(pedidos[i].get("orden_tienda", "")).split("-")[0]
+        return int(ot) if ot.isdigit() else 0
+
+    indices_pendientes.sort(key=_key, reverse=True)
+    indices_a_procesar = indices_pendientes[:max_pedidos]
+
+    log.info(
+        f"Lazy enrich: {len(indices_a_procesar)}/{len(indices_pendientes)} "
+        f"pedidos procesados (límite {max_pedidos})"
+    )
+
+    # Construir sublista a enriquecer, manteniendo refs
+    sublista = [pedidos[i] for i in indices_a_procesar]
     try:
-        return _enricher.enriquecer(pedidos)
+        enriquecidos = _enricher.enriquecer(sublista)
     except Exception as e:
         log.warning(f"Lazy Shopify enricher error: {e}")
         return pedidos
+
+    # Merge de vuelta al array original por índice
+    resultado = list(pedidos)
+    for idx, p_enr in zip(indices_a_procesar, enriquecidos):
+        resultado[idx] = p_enr
+    return resultado
+
+
+def sync_completo() -> dict:
+    """
+    Pasada exhaustiva de enriquecimiento sobre TODO el caché.
+    Lento (~30-90s según volumen) — solo invocar manualmente.
+    """
+    if not _SHOPIFY_ENRICHER_OK:
+        return {"ok": False, "error": "Shopify enricher no disponible"}
+
+    hit = _cache_leer(ignorar_ttl=True)
+    if not hit:
+        return {"ok": False, "error": "Sin caché para enriquecer"}
+
+    pedidos, fetched_at, _, fuente = hit
+    pedidos = _enriquecer_y_filtrar(pedidos)
+    antes = sum(1 for p in pedidos if p.get("nombre_comprador"))
+    total = len(pedidos)
+
+    try:
+        pedidos = _enricher.enriquecer(pedidos)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    despues = sum(1 for p in pedidos if p.get("nombre_comprador"))
+    try:
+        _cache_guardar(pedidos, fuente=fuente)
+    except Exception as e:
+        log.warning(f"sync_completo no pudo guardar caché: {e}")
+
+    return {
+        "ok":       True,
+        "total":    total,
+        "antes":    antes,
+        "despues":  despues,
+        "completados": despues - antes,
+    }
 
 
 def _enriquecer_y_filtrar(pedidos: list) -> list:
