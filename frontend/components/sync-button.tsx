@@ -51,7 +51,7 @@ export function SyncButton() {
         onClick={() => mut.mutate()}
         disabled={mut.isPending}
         className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-white/5 disabled:opacity-60 transition-colors"
-        title="Buscar datos faltantes en Shopify (puede tardar ~30s)"
+        title="Sincronización completa: refresca estados, enriquece datos faltantes y verifica pedidos viejos (~60-90s)"
       >
         {mut.isPending ? (
           <Loader2 className="h-3.5 w-3.5 text-steel animate-spin flex-none" />

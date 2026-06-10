@@ -22,8 +22,11 @@ log = logging.getLogger(__name__)
 # Dos niveles de refresh:
 #  LIGHT: solo fetch Melonn list (rápido, ~3-5 API calls)
 #  FULL:  sync_completo (enrich Shopify + Melonn detail + verify states)
-REFRESH_LIGHT_SECONDS = int(os.environ.get("SCHEDULER_LIGHT_SEC", 30 * 60))  # 30 min
-REFRESH_FULL_SECONDS  = int(os.environ.get("SCHEDULER_FULL_SEC", 4 * 60 * 60)) # 4 horas
+REFRESH_LIGHT_SECONDS = int(os.environ.get("SCHEDULER_LIGHT_SEC", 60 * 60))  # 1 hora
+# FULL automático DESACTIVADO por defecto — preserva cuota Melonn.
+# Si quieres FULL programado, setea SCHEDULER_FULL_SEC en Railway (ej 21600 = 6h).
+# Sin esa env var, el FULL solo corre via botón "Sincronizar datos" (manual).
+REFRESH_FULL_SECONDS = int(os.environ.get("SCHEDULER_FULL_SEC", 0))           # 0 = nunca
 
 # Pausa de emergencia si Melonn responde 429 — preserva cuota
 _cooldown_until: float = 0.0
@@ -127,9 +130,13 @@ def _loop():
         return
 
     while not _stop_event.is_set():
-        # Decide si toca FULL o LIGHT
+        # Decide si toca FULL o LIGHT.
+        # Si REFRESH_FULL_SECONDS == 0 → FULL nunca corre automáticamente.
         now = time.time()
-        full = (now - _last_full_at) >= REFRESH_FULL_SECONDS
+        full = (
+            REFRESH_FULL_SECONDS > 0
+            and (now - _last_full_at) >= REFRESH_FULL_SECONDS
+        )
         _refresh_once(full=full)
 
         if _stop_event.wait(REFRESH_LIGHT_SECONDS):
