@@ -1,0 +1,9 @@
+# Railway / Railpack: instalar Chromium para Playwright durante el build
+[phases.setup]
+nixPkgs = ["python311", "playwright-driver-browsers"]
+
+[phases.build]
+cmds = [
+  "pip install -r requirements.txt",
+  "python -m playwright install --with-deps chromium || python -m playwright install chromium || true",
+]
