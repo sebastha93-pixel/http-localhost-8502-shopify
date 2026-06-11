@@ -69,7 +69,20 @@ class MelonnBot:
     def start(self):
         from playwright.sync_api import sync_playwright
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=self.headless)
+        try:
+            self._browser = self._pw.chromium.launch(headless=self.headless)
+        except Exception as e:
+            # Red de seguridad: si Chromium no está instalado, instalarlo on-the-fly
+            if "Executable doesn" in str(e) or "playwright install" in str(e):
+                log.warning("Chromium no encontrado — instalando on-the-fly...")
+                import subprocess, sys
+                subprocess.run(
+                    [sys.executable, "-m", "playwright", "install", "chromium"],
+                    check=False, timeout=300,
+                )
+                self._browser = self._pw.chromium.launch(headless=self.headless)
+            else:
+                raise
         # Reutilizar sesión si existe
         if SESSION_PATH.exists():
             self._context = self._browser.new_context(storage_state=str(SESSION_PATH))
