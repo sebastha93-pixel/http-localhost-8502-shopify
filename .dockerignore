@@ -1,0 +1,14 @@
+frontend/
+dashboard/
+node_modules/
+.next/
+.git/
+*.pyc
+__pycache__/
+.streamlit/
+data/
+reports/
+*.md
+.env
+.env.example
+.vercel/
