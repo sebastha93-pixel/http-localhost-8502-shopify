@@ -270,37 +270,46 @@ def diagnostico(_: CurrentUser = Depends(require_role("admin"))) -> dict:
                         info["form_sigue_visible"] = False
                     info["is_logged_in_check"] = bot._is_logged_in()
 
-                    # Si logueó, navegar a un pedido y capturar el texto real
+                    # Si logueó, ir a Órdenes D2C y descubrir la URL real del detalle
                     if login_res.get("ok"):
                         from backend.scrapers.melonn_bot import ADMIN_URL as _A
+                        # 1. Ir al listado de órdenes D2C
                         for u in [
-                            f"{_A}/seller/d2c/sell-orders/58902",
-                            f"{_A}/d2c/sell-orders/58902",
-                            f"{_A}/sell-orders/58902",
+                            f"{_A}/sell-orders",
+                            f"{_A}/orders",
+                            f"{_A}/d2c",
                         ]:
-                            page.goto(u, wait_until="domcontentloaded", timeout=20_000)
-                            _t.sleep(3)
-                            c = page.content()
-                            if "58902" in c:
-                                info["order_url_ok"] = u
-                                break
-                        info["order_url_final"] = page.url
-                        # Click tab Transporte
+                            try:
+                                page.goto(u, wait_until="networkidle", timeout=25_000)
+                                _t.sleep(4)
+                                if page.locator("text=58902").first.is_visible(timeout=2000):
+                                    info["listado_url"] = u
+                                    break
+                            except Exception:
+                                continue
+                        info["listado_final"] = page.url
+
+                        # 2. Buscar todos los hrefs que contengan números de orden
                         try:
+                            hrefs = page.eval_on_selector_all(
+                                "a[href]",
+                                "els => els.map(e=>e.getAttribute('href')).filter(h=>h && /order|sell|58|59/i.test(h)).slice(0,15)",
+                            )
+                            info["hrefs_orden"] = hrefs
+                        except Exception as e:
+                            info["hrefs_error"] = str(e)[:200]
+
+                        # 3. Intentar click en el texto 58902 para ver a dónde lleva
+                        try:
+                            page.locator("text=58902").first.click(timeout=4000)
+                            _t.sleep(4)
+                            info["click_resultado_url"] = page.url
                             bot._click_tab("Transporte")
                             _t.sleep(2)
+                            info["transporte_text"] = page.inner_text("body")[:2500]
                         except Exception as e:
-                            info["click_transporte_error"] = str(e)[:200]
-                        info["transporte_text"] = page.inner_text("body")[:2500]
-                        # Inventario de tabs visibles
-                        try:
-                            tabs = page.eval_on_selector_all(
-                                "[role=tab], button, a",
-                                "els => els.map(e=>(e.innerText||'').trim()).filter(t=>/transporte|incidencia/i.test(t)).slice(0,8)",
-                            )
-                            info["tabs_detectados"] = tabs
-                        except Exception:
-                            pass
+                            info["click_error"] = str(e)[:200]
+                            info["transporte_text"] = page.inner_text("body")[:1500]
                 except Exception as e:
                     info["login_intento_error"] = str(e)[:400]
         finally:
