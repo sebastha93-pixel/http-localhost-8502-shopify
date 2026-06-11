@@ -112,7 +112,7 @@ def _run_bot(task_id: str, ordenes: list[str], autor: str):
         # NOTA: el scrape_batch interno no expone progreso paso a paso;
         # para v1 esperamos a que termine completo. Si quieres progreso
         # en vivo, lo refactorizamos para iteración.
-        res = scrape_batch(ordenes, delay_seconds=4.0)
+        res = scrape_batch(ordenes, delay_seconds=2.0)
 
         with _lock:
             _bot_state["processed"] = res.get("total_procesados", 0)

@@ -240,14 +240,20 @@ class MelonnBot:
         url = f"{ADMIN_URL}/sell-orders/{internal_id}"
         loaded = False
         try:
-            self._page.goto(url, wait_until="networkidle", timeout=30_000)
-            time.sleep(3)  # SPA render
-            content = self._page.content()
-            # La página cargó si vemos secciones del detalle (no el "Loading..." genérico)
-            txt_lower = content.lower()
-            if ("transporte" in txt_lower or "incidencia" in txt_lower
-                    or "información de la orden" in txt_lower or "informaci" in txt_lower):
+            # domcontentloaded (rápido) en vez de networkidle (lento en SPA)
+            self._page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+            # Esperar a que aparezca el tab Transporte/Incidencias (señal de render)
+            try:
+                self._page.get_by_text(
+                    re.compile(r"Transporte|Incidencias", re.I)
+                ).first.wait_for(state="visible", timeout=12_000)
                 loaded = True
+            except Exception:
+                # Fallback: revisar contenido tras breve espera
+                time.sleep(2)
+                txt_lower = self._page.content().lower()
+                loaded = ("transporte" in txt_lower or "incidencia" in txt_lower
+                          or "informaci" in txt_lower)
         except Exception as e:
             log.debug(f"Falló URL {url}: {e}")
 
@@ -382,7 +388,7 @@ class MelonnBot:
 
 # ── API funcional para el endpoint ────────────────────────────────────
 
-def scrape_batch(ordenes: list, delay_seconds: float = 4.0) -> dict:
+def scrape_batch(ordenes: list, delay_seconds: float = 2.0) -> dict:
     """
     Loguea y procesa una lista de pedidos. Retorna resultados agregados.
 
