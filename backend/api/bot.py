@@ -269,6 +269,38 @@ def diagnostico(_: CurrentUser = Depends(require_role("admin"))) -> dict:
                     except Exception:
                         info["form_sigue_visible"] = False
                     info["is_logged_in_check"] = bot._is_logged_in()
+
+                    # Si logueó, navegar a un pedido y capturar el texto real
+                    if login_res.get("ok"):
+                        from backend.scrapers.melonn_bot import ADMIN_URL as _A
+                        for u in [
+                            f"{_A}/seller/d2c/sell-orders/58902",
+                            f"{_A}/d2c/sell-orders/58902",
+                            f"{_A}/sell-orders/58902",
+                        ]:
+                            page.goto(u, wait_until="domcontentloaded", timeout=20_000)
+                            _t.sleep(3)
+                            c = page.content()
+                            if "58902" in c:
+                                info["order_url_ok"] = u
+                                break
+                        info["order_url_final"] = page.url
+                        # Click tab Transporte
+                        try:
+                            bot._click_tab("Transporte")
+                            _t.sleep(2)
+                        except Exception as e:
+                            info["click_transporte_error"] = str(e)[:200]
+                        info["transporte_text"] = page.inner_text("body")[:2500]
+                        # Inventario de tabs visibles
+                        try:
+                            tabs = page.eval_on_selector_all(
+                                "[role=tab], button, a",
+                                "els => els.map(e=>(e.innerText||'').trim()).filter(t=>/transporte|incidencia/i.test(t)).slice(0,8)",
+                            )
+                            info["tabs_detectados"] = tabs
+                        except Exception:
+                            pass
                 except Exception as e:
                     info["login_intento_error"] = str(e)[:400]
         finally:
