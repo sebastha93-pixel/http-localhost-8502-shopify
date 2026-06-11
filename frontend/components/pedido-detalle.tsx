@@ -12,7 +12,7 @@ import {
   PhoneCall, CheckCircle, Truck, RotateCcw, X, Loader2, MapPin, User, Calendar,
   Edit3, Flag, FlagOff, Package,
 } from "lucide-react";
-import { CarrierLinks } from "@/components/carrier-links";
+import { EnvioInfo } from "@/components/envio-info";
 
 interface Accion {
   tipo: string;
@@ -207,11 +207,8 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
             </div>
           )}
 
-          {/* Rastreo: acceso rápido a las 5 transportadoras + Melonn */}
-          <CarrierLinks
-            orden={pedido.orden_tienda || pedido.orden_melonn}
-            melonnLink={pedido.link_guia as string | undefined}
-          />
+          {/* Envío: transportadora + guía (editable) + acceso directo */}
+          <EnvioInfo pedido={pedido} />
 
           {/* Productos — lista completa si hay varios */}
           <ProductosPedido pedido={pedido} />

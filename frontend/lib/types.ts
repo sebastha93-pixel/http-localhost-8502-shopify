@@ -61,6 +61,8 @@ export interface Pedido {
   es_novedad_visible?: boolean;
   novedad_manual?: boolean;
   motivo_novedad_manual?: string;
+  carrier_real?: string;
+  guia_real?: string;
   valor_num?: number;
   // Producto (enriquecido desde Shopify)
   sku?: string;

@@ -42,21 +42,13 @@ def _sb() -> Optional[Client]:
 
 
 def cargar_map() -> dict[str, dict]:
-    """Retorna {orden: {nombre, telefono, ciudad, novedad_manual, autor, actualizado_en}}."""
+    """Retorna {orden: {todos los campos de override}}."""
     sb = _sb()
     if sb is None:
         return {}
     try:
-        # Intentar con la columna novedad_manual; si la columna no existe,
-        # fallback al select original.
-        try:
-            res = (sb.table("pedido_overrides")
-                   .select("orden,nombre_comprador,telefono_comprador,ciudad_destino,novedad_manual,motivo_novedad,autor,actualizado_en")
-                   .execute())
-        except Exception:
-            res = (sb.table("pedido_overrides")
-                   .select("orden,nombre_comprador,telefono_comprador,ciudad_destino,autor,actualizado_en")
-                   .execute())
+        # Select * para que tolere columnas nuevas sin redeploy
+        res = sb.table("pedido_overrides").select("*").execute()
         return {r["orden"]: r for r in (res.data or [])}
     except Exception as e:
         print(f"[overrides] Error cargar_map: {e}")
@@ -88,6 +80,8 @@ def upsert(
     autor: str,
     novedad_manual: Optional[bool] = None,
     motivo_novedad: str = "",
+    carrier_real: Optional[str] = None,
+    guia_real: Optional[str] = None,
 ) -> dict:
     sb = _sb()
     if sb is None:
@@ -103,6 +97,10 @@ def upsert(
     if novedad_manual is not None:
         data["novedad_manual"] = novedad_manual
         data["motivo_novedad"] = motivo_novedad.strip() or None
+    if carrier_real is not None:
+        data["carrier_real"] = carrier_real.strip() or None
+    if guia_real is not None:
+        data["guia_real"] = guia_real.strip() or None
     res = sb.table("pedido_overrides").upsert(data, on_conflict="orden").execute()
     return res.data[0] if res.data else data
 
@@ -129,6 +127,10 @@ def aplicar_a_pedido(p: dict, overrides_map: dict[str, dict]) -> dict:
         p["novedad_manual"] = True
         if o.get("motivo_novedad"):
             p["motivo_novedad_manual"] = o["motivo_novedad"]
+    if o.get("carrier_real"):
+        p["carrier_real"] = o["carrier_real"]
+    if o.get("guia_real"):
+        p["guia_real"] = o["guia_real"]
     p["_override_autor"]         = o.get("autor")
     p["_override_actualizado_en"] = o.get("actualizado_en")
     return p

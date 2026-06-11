@@ -167,6 +167,11 @@ class MarcarNovedadBody(BaseModel):
     motivo: str = ""
 
 
+class GuiaBody(BaseModel):
+    carrier: str = ""    # ej. "Coordinadora Mercantil"
+    guia: str = ""       # ej. "16143078876"
+
+
 @router.get("/{orden}/override", response_model=Optional[Override])
 def get_override(orden: str, _: CurrentUser = Depends(get_current_user)) -> Optional[Override]:
     o = overrides_svc.obtener(orden)
@@ -218,6 +223,25 @@ def marcar_novedad(
         )
     except Exception:
         pass
+    return Override(**o)
+
+
+@router.post("/{orden}/guia", response_model=Override)
+def guardar_guia(
+    orden: str,
+    body: GuiaBody,
+    user: CurrentUser = Depends(require_role("admin", "operador")),
+) -> Override:
+    """Guarda la transportadora real y número de guía (datos que Melonn no expone)."""
+    try:
+        o = overrides_svc.upsert(
+            orden,
+            autor=user.nombre,
+            carrier_real=body.carrier,
+            guia_real=body.guia,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     return Override(**o)
 
 
