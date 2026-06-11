@@ -221,37 +221,38 @@ class MelonnBot:
 
     # ── Extracción ───────────────────────────────────────────────────
 
-    def extract_order(self, orden_tienda: str) -> ExtractedOrder:
+    def extract_order(self, orden_tienda: str, melonn_id: str = "") -> ExtractedOrder:
         """
         Navega a la página del pedido y extrae carrier + guía + incidencias.
 
-        La URL del admin para una orden tiene patrón:
-        admin.melonn.com/seller/d2c/sell-orders/{external_id}
-        (ajustable si descubrimos otro patrón al inspeccionar)
+        URL real confirmada: admin.melonn.com/sell-orders/{id_interno}
+        donde id_interno = internal_order_number sin la "M" inicial.
+        Ej: orden_melonn=M1781094268990396 → /sell-orders/1781094268990396
         """
         result = ExtractedOrder(orden_tienda=orden_tienda)
 
-        urls_to_try = [
-            f"{ADMIN_URL}/seller/d2c/sell-orders/{orden_tienda}",
-            f"{ADMIN_URL}/d2c/sell-orders/{orden_tienda}",
-            f"{ADMIN_URL}/sell-orders/{orden_tienda}",
-        ]
+        # Derivar el ID interno: quitar "M" del orden_melonn
+        internal_id = (melonn_id or "").lstrip("Mm").strip()
+        if not internal_id:
+            result.error = "Falta melonn_id para construir la URL"
+            return result
 
+        url = f"{ADMIN_URL}/sell-orders/{internal_id}"
         loaded = False
-        for url in urls_to_try:
-            try:
-                self._page.goto(url, wait_until="domcontentloaded", timeout=15_000)
-                time.sleep(2)  # esperar JS render
-                # Si el contenido tiene el número de orden + "Información del envío" → cargó OK
-                content = self._page.content()
-                if orden_tienda in content and ("envío" in content.lower() or "envio" in content.lower()):
-                    loaded = True
-                    break
-            except Exception as e:
-                log.debug(f"Falló URL {url}: {e}")
+        try:
+            self._page.goto(url, wait_until="networkidle", timeout=30_000)
+            time.sleep(3)  # SPA render
+            content = self._page.content()
+            # La página cargó si vemos secciones del detalle (no el "Loading..." genérico)
+            txt_lower = content.lower()
+            if ("transporte" in txt_lower or "incidencia" in txt_lower
+                    or "información de la orden" in txt_lower or "informaci" in txt_lower):
+                loaded = True
+        except Exception as e:
+            log.debug(f"Falló URL {url}: {e}")
 
         if not loaded:
-            result.error = "No se pudo cargar la página del pedido"
+            result.error = f"No se pudo cargar el detalle (url: {url})"
             return result
 
         try:
@@ -381,9 +382,13 @@ class MelonnBot:
 
 # ── API funcional para el endpoint ────────────────────────────────────
 
-def scrape_batch(ordenes: list[str], delay_seconds: float = 4.0) -> dict:
+def scrape_batch(ordenes: list, delay_seconds: float = 4.0) -> dict:
     """
     Loguea y procesa una lista de pedidos. Retorna resultados agregados.
+
+    `ordenes` puede ser:
+      - lista de strings (orden_tienda) — sin melonn_id, no funcionará la URL
+      - lista de tuplas/dicts {orden_tienda, melonn_id} — recomendado
     """
     email = os.environ.get("MELONN_BOT_EMAIL", "").strip()
     pwd   = os.environ.get("MELONN_BOT_PASSWORD", "").strip()
@@ -393,6 +398,16 @@ def scrape_batch(ordenes: list[str], delay_seconds: float = 4.0) -> dict:
             "error": "Faltan credenciales: configura MELONN_BOT_EMAIL y MELONN_BOT_PASSWORD en Railway.",
             "resultados": [],
         }
+
+    # Normalizar a lista de (orden_tienda, melonn_id)
+    pares: list[tuple[str, str]] = []
+    for o in ordenes:
+        if isinstance(o, dict):
+            pares.append((str(o.get("orden_tienda") or ""), str(o.get("melonn_id") or o.get("orden_melonn") or "")))
+        elif isinstance(o, (list, tuple)):
+            pares.append((str(o[0]), str(o[1]) if len(o) > 1 else ""))
+        else:
+            pares.append((str(o), ""))
 
     extracted: list[ExtractedOrder] = []
     try:
@@ -406,10 +421,10 @@ def scrape_batch(ordenes: list[str], delay_seconds: float = 4.0) -> dict:
                     "resultados": [],
                 }
 
-            for i, orden in enumerate(ordenes):
+            for i, (orden, mid) in enumerate(pares):
                 if i > 0:
                     time.sleep(delay_seconds)  # delay entre pedidos
-                r = bot.extract_order(orden)
+                r = bot.extract_order(orden, melonn_id=mid)
                 extracted.append(r)
                 log.info(f"[{i+1}/{len(ordenes)}] {orden}: ok={r.ok} carrier={r.carrier} guia={r.guia} incidencias={len(r.incidencias)}")
     except Exception as e:

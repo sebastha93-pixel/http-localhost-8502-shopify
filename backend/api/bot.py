@@ -53,18 +53,26 @@ class ScrapeResponse(BaseModel):
 
 def _seleccionar_pedidos(req: ScrapeRequest) -> list[str]:
     """Decide qué pedidos procesar."""
-    if req.forzar_pedidos:
-        return req.forzar_pedidos[: req.max_pedidos]
-
-    # Solo pedidos activos (no entregados) sin carrier_real aún
+    # Mapear orden_tienda → melonn_id desde el caché de pedidos
     try:
         data = melonn_svc.obtener_pedidos(forzar_refresh=False)
     except Exception:
         return []
+    pedidos = data.get("pedidos", [])
+    id_por_orden = {
+        str(p.get("orden_tienda")): str(p.get("orden_melonn") or "")
+        for p in pedidos if p.get("orden_tienda")
+    }
+
+    if req.forzar_pedidos:
+        return [
+            {"orden_tienda": o, "melonn_id": id_por_orden.get(o, "")}
+            for o in req.forzar_pedidos[: req.max_pedidos]
+        ]
 
     overrides = overrides_svc.cargar_map()
-    seleccion: list[str] = []
-    for p in data.get("pedidos", []):
+    seleccion: list[dict] = []
+    for p in pedidos:
         if p.get("sub_estado_logistico") == "entregado":
             continue  # ya entregados, no urgentes
         orden = p.get("orden_tienda") or ""
@@ -74,7 +82,7 @@ def _seleccionar_pedidos(req: ScrapeRequest) -> list[str]:
         ya_tiene_carrier = ov and ov.get("carrier_real")
         if req.solo_sin_guia and ya_tiene_carrier:
             continue
-        seleccion.append(orden)
+        seleccion.append({"orden_tienda": orden, "melonn_id": str(p.get("orden_melonn") or "")})
         if len(seleccion) >= req.max_pedidos:
             break
     return seleccion
