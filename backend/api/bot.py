@@ -107,18 +107,51 @@ def _run_bot(task_id: str, ordenes: list[str], autor: str):
             "log": [f"Iniciando bot · {len(ordenes)} pedidos a procesar"],
         })
 
+    # Contador de novedades detectadas (mutado por el callback)
+    counters = {"novedad": 0, "guardados": 0}
+
+    def _persistir(r: dict, idx: int, total: int):
+        """Callback: guarda CADA pedido apenas se extrae (incremental)."""
+        orden = r.get("orden_tienda")
+        # Actualizar progreso en vivo
+        with _lock:
+            _bot_state["processed"] = idx
+            if r.get("ok"):
+                _bot_state["exitos"] = _bot_state.get("exitos", 0) + 1
+            else:
+                _bot_state["fallidos"] = _bot_state.get("fallidos", 0) + 1
+        if not orden:
+            return
+        try:
+            if r.get("carrier") or r.get("guia"):
+                overrides_svc.upsert(
+                    orden,
+                    autor=f"Bot ({autor})",
+                    carrier_real=r.get("carrier") or "",
+                    guia_real=r.get("guia") or "",
+                )
+                counters["guardados"] += 1
+            incidencias = r.get("incidencias") or []
+            pendientes = [i for i in incidencias if (i.get("estado") or "").lower().startswith("sin")]
+            if pendientes:
+                motivo = "Bot Melonn detectó: " + "; ".join(
+                    f"{i['numero']} {i['descripcion'][:60]}" for i in pendientes[:3]
+                )
+                overrides_svc.upsert(
+                    orden, autor=f"Bot ({autor})",
+                    novedad_manual=True, motivo_novedad=motivo[:300],
+                )
+                counters["novedad"] += 1
+            with _lock:
+                _bot_state["fallos_con_novedad"] = counters["novedad"]
+        except Exception as e:
+            with _lock:
+                _bot_state["log"].append(f"⚠ {orden}: error guardando — {str(e)[:120]}")
+
     try:
-        # Ejecuta el scraping completo (login + batch)
-        # NOTA: el scrape_batch interno no expone progreso paso a paso;
-        # para v1 esperamos a que termine completo. Si quieres progreso
-        # en vivo, lo refactorizamos para iteración.
-        res = scrape_batch(ordenes, delay_seconds=2.0)
+        res = scrape_batch(ordenes, delay_seconds=2.0, on_result=_persistir)
 
         with _lock:
-            _bot_state["processed"] = res.get("total_procesados", 0)
-            _bot_state["exitos"] = res.get("exitos", 0)
-            _bot_state["fallidos"] = res.get("fallidos", 0)
-
             if not res.get("ok"):
                 _bot_state["error"] = res.get("error")
                 if res.get("requires_2fa"):
@@ -126,51 +159,10 @@ def _run_bot(task_id: str, ordenes: list[str], autor: str):
                 _bot_state["log"].append(f"✗ {_bot_state['error']}")
             else:
                 _bot_state["log"].append(
-                    f"✓ Procesados: {res['total_procesados']} · "
-                    f"Éxitos: {res['exitos']} · Fallidos: {res['fallidos']}"
+                    f"✓ Procesados: {res.get('total_procesados',0)} · "
+                    f"Guías guardadas: {counters['guardados']} · "
+                    f"Novedades: {counters['novedad']}"
                 )
-
-        # Persistir resultados en Supabase vía overrides
-        fallos_nov = 0
-        for r in res.get("resultados", []):
-            orden = r.get("orden_tienda")
-            if not orden:
-                continue
-            try:
-                # Si trajo carrier/guia, guardarlos
-                if r.get("carrier") or r.get("guia"):
-                    overrides_svc.upsert(
-                        orden,
-                        autor=f"Bot ({autor})",
-                        carrier_real=r.get("carrier") or "",
-                        guia_real=r.get("guia") or "",
-                    )
-
-                # Si tiene incidencias sin gestionar → marcar como novedad
-                incidencias = r.get("incidencias") or []
-                pendientes = [
-                    i for i in incidencias
-                    if (i.get("estado") or "").lower().startswith("sin")
-                ]
-                if pendientes:
-                    motivo = "Bot Melonn detectó: " + "; ".join(
-                        f"{i['numero']} {i['descripcion'][:60]}" for i in pendientes[:3]
-                    )
-                    overrides_svc.upsert(
-                        orden,
-                        autor=f"Bot ({autor})",
-                        novedad_manual=True,
-                        motivo_novedad=motivo[:300],
-                    )
-                    fallos_nov += 1
-            except Exception as e:
-                with _lock:
-                    _bot_state["log"].append(f"⚠ {orden}: error guardando — {e}")
-
-        with _lock:
-            _bot_state["fallos_con_novedad"] = fallos_nov
-            if fallos_nov:
-                _bot_state["log"].append(f"⚠ {fallos_nov} pedidos marcados con novedad por incidencias detectadas")
     except Exception as e:
         with _lock:
             _bot_state["error"] = str(e)

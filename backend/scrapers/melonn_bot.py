@@ -388,13 +388,17 @@ class MelonnBot:
 
 # ── API funcional para el endpoint ────────────────────────────────────
 
-def scrape_batch(ordenes: list, delay_seconds: float = 2.0) -> dict:
+def scrape_batch(ordenes: list, delay_seconds: float = 2.0, on_result=None) -> dict:
     """
     Loguea y procesa una lista de pedidos. Retorna resultados agregados.
 
     `ordenes` puede ser:
       - lista de strings (orden_tienda) — sin melonn_id, no funcionará la URL
       - lista de tuplas/dicts {orden_tienda, melonn_id} — recomendado
+
+    `on_result(dict)`: callback opcional invocado por CADA pedido apenas se
+    extrae (guardado incremental — no se pierde lo ya conseguido si el bot
+    se cae a mitad).
     """
     email = os.environ.get("MELONN_BOT_EMAIL", "").strip()
     pwd   = os.environ.get("MELONN_BOT_PASSWORD", "").strip()
@@ -433,6 +437,12 @@ def scrape_batch(ordenes: list, delay_seconds: float = 2.0) -> dict:
                 r = bot.extract_order(orden, melonn_id=mid)
                 extracted.append(r)
                 log.info(f"[{i+1}/{len(ordenes)}] {orden}: ok={r.ok} carrier={r.carrier} guia={r.guia} incidencias={len(r.incidencias)}")
+                # Guardado incremental: persistir este pedido YA
+                if on_result is not None:
+                    try:
+                        on_result(asdict(r), i + 1, len(pares))
+                    except Exception as e:
+                        log.warning(f"on_result callback error en {orden}: {e}")
     except Exception as e:
         log.exception("Error en scrape_batch")
         return {"ok": False, "error": str(e), "resultados": [asdict(r) for r in extracted]}
