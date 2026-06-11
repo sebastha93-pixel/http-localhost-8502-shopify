@@ -18,4 +18,9 @@ COPY . .
 ENV PORT=8080
 EXPOSE 8080
 
-CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+# Entrypoint script garantiza expansión de $PORT incluso si Railway
+# pasa el comando sin shell.
+RUN printf '#!/bin/sh\nexec uvicorn backend.main:app --host 0.0.0.0 --port "${PORT:-8080}"\n' > /app/start.sh \
+    && chmod +x /app/start.sh
+
+CMD ["/app/start.sh"]
