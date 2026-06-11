@@ -204,3 +204,56 @@ def status(_: CurrentUser = Depends(require_role("admin", "operador"))) -> dict:
     """Estado actual del bot scraper."""
     with _lock:
         return dict(_bot_state)
+
+
+@router.get("/diagnostico")
+def diagnostico(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """
+    Abre la página de login de Melonn y reporta qué encuentra:
+    inputs, botones, URL, título. Para ajustar selectores sin adivinar.
+    """
+    import os
+    email = os.environ.get("MELONN_BOT_EMAIL", "")
+    pwd = os.environ.get("MELONN_BOT_PASSWORD", "")
+
+    info: dict = {
+        "creds_email_present": bool(email),
+        "creds_password_present": bool(pwd),
+        "email_masked": (email[:3] + "***" + email[-8:]) if len(email) > 11 else ("***" if email else ""),
+    }
+
+    try:
+        from backend.scrapers.melonn_bot import MelonnBot, ADMIN_URL
+        bot = MelonnBot(email or "x", pwd or "x", headless=True)
+        bot.start()
+        try:
+            page = bot._page
+            page.goto(f"{ADMIN_URL}/", wait_until="domcontentloaded", timeout=25_000)
+            import time as _t
+            _t.sleep(3)
+            info["url_final"] = page.url
+            info["title"] = page.title()
+            # Inventario de inputs
+            inputs = page.eval_on_selector_all(
+                "input",
+                "els => els.map(e => ({type: e.type, name: e.name, id: e.id, placeholder: e.placeholder}))",
+            )
+            info["inputs"] = inputs
+            # Botones
+            botones = page.eval_on_selector_all(
+                "button",
+                "els => els.slice(0,10).map(e => (e.innerText||'').trim()).filter(Boolean)",
+            )
+            info["botones"] = botones
+            # ¿Hay texto de 2FA / código?
+            body_text = page.inner_text("body")[:2000]
+            info["menciona_2fa"] = bool(
+                __import__("re").search(r"c[óo]digo|verifi|2fa|two.?factor|autenticaci", body_text, __import__("re").I)
+            )
+            info["body_preview"] = body_text[:600]
+        finally:
+            bot.close()
+    except Exception as e:
+        info["error"] = str(e)[:500]
+
+    return info
