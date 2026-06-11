@@ -1,4 +1,16 @@
-# Railway / Nixpacks — instalar Chromium para Playwright durante el build
+# Railway / Nixpacks — instalar Chromium + libs del sistema para Playwright
+[phases.setup]
+# Librerías compartidas que Chromium necesita en Linux headless
+nixPkgs = [
+  "...",
+  "nss", "nspr", "atk", "at-spi2-atk", "at-spi2-core",
+  "cups", "dbus", "expat", "libdrm", "libxkbcommon",
+  "mesa", "alsa-lib", "cairo", "pango",
+  "gtk3", "gdk-pixbuf", "glib",
+  "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage",
+  "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "xorg.libxcb",
+]
+
 [phases.install]
 cmds = [
   "pip install -r requirements.txt",

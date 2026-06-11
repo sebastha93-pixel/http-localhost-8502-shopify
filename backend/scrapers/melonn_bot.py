@@ -67,21 +67,39 @@ class MelonnBot:
     def __exit__(self, *args):
         self.close()
 
+    # Flags obligatorios para correr Chromium en contenedores Linux (Railway)
+    _LAUNCH_ARGS = [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",      # evita crash por /dev/shm pequeño
+        "--disable-gpu",
+        "--single-process",             # más estable en contenedores con poca RAM
+        "--no-zygote",
+    ]
+
     def start(self):
         from playwright.sync_api import sync_playwright
         self._pw = sync_playwright().start()
+
+        def _launch():
+            return self._pw.chromium.launch(
+                headless=self.headless,
+                args=self._LAUNCH_ARGS,
+            )
+
         try:
-            self._browser = self._pw.chromium.launch(headless=self.headless)
+            self._browser = _launch()
         except Exception as e:
-            # Red de seguridad: si Chromium no está instalado, instalarlo on-the-fly
-            if "Executable doesn" in str(e) or "playwright install" in str(e):
+            msg = str(e)
+            # Chromium no instalado → instalar on-the-fly
+            if "Executable doesn" in msg or "playwright install" in msg:
                 log.warning("Chromium no encontrado — instalando on-the-fly...")
                 import subprocess, sys
                 subprocess.run(
                     [sys.executable, "-m", "playwright", "install", "chromium"],
                     check=False, timeout=300,
                 )
-                self._browser = self._pw.chromium.launch(headless=self.headless)
+                self._browser = _launch()
             else:
                 raise
         # Reutilizar sesión si existe
