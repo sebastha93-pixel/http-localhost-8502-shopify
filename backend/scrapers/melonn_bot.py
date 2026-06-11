@@ -39,6 +39,7 @@ class ExtractedOrder:
     orden_tienda: str
     carrier: Optional[str] = None
     guia: Optional[str] = None
+    tracking_url: Optional[str] = None
     incidencias: list[dict] = field(default_factory=list)  # [{tipo, estado, descripcion, fecha}]
     estado: Optional[str] = None
     ok: bool = False
@@ -235,27 +236,54 @@ class MelonnBot:
             time.sleep(1.2)
             text_transporte = self._page.inner_text("body")
 
-            # Carrier — patrones del admin:
-            #   "Entregada a: Coordinadora Mercantil"
-            #   "Transportadora: Servientrega"
+            # Layout real del admin (label en una línea, valor en la siguiente):
+            #   Transportadora
+            #   Coordinadora Mercantil
+            #   Guía
+            #   16143081998
+            #
+            # inner_text separa con \n, así que el valor viene después del label.
+
+            # Carrier: "Transportadora" seguido del nombre en la línea siguiente
             for pat in [
-                r"Entregada a:?\s*([A-Za-zÀ-ſ][^\n\r\|]{2,40})",
-                r"Transportadora:?\s*([A-Za-zÀ-ſ][^\n\r\|]{2,40})",
+                r"Transportadora\s*\n+\s*([A-Za-zÀ-ſ][^\n\r]{2,45})",
+                r"Transportadora:?\s*([A-Za-zÀ-ſ][^\n\r]{2,45})",
+                r"Entregada a:?\s*([A-Za-zÀ-ſ][^\n\r]{2,45})",
             ]:
                 m = re.search(pat, text_transporte)
                 if m:
                     carrier_raw = re.split(
-                        r"\s+(?:Gu[ií]a|Documento|Ver|Rastrear)\b",
+                        r"\s+(?:Gu[ií]a|Documento|Ver|Rastrear|Seguimiento|Intento)\b",
                         m.group(1).strip(),
                     )[0].strip()
                     if carrier_raw and len(carrier_raw) > 2:
                         result.carrier = carrier_raw
                         break
 
-            # Guía
-            m2 = re.search(r"Gu[ií]a:?\s*([A-Z0-9][A-Z0-9-]{4,40})", text_transporte)
-            if m2:
-                result.guia = m2.group(1).strip()
+            # Guía: "Guía" seguido del número (puede estar en línea siguiente)
+            for pat in [
+                r"Gu[ií]a\s*\n+\s*([A-Z0-9][A-Z0-9-]{4,40})",
+                r"Gu[ií]a:?\s*([A-Z0-9][A-Z0-9-]{4,40})",
+            ]:
+                m2 = re.search(pat, text_transporte)
+                if m2:
+                    result.guia = m2.group(1).strip()
+                    break
+
+            # Link directo "Seguimiento transportadora" (href del botón)
+            try:
+                btn = self._page.get_by_text(re.compile(r"Seguimiento transportadora", re.I)).first
+                href = btn.get_attribute("href", timeout=1500)
+                if not href:
+                    # puede ser un <a> padre o tener onclick; buscar href cercano
+                    href = self._page.eval_on_selector(
+                        "a:has-text('Seguimiento transportadora')",
+                        "el => el.href",
+                    )
+                if href and href.startswith("http"):
+                    result.tracking_url = href
+            except Exception:
+                pass
 
             # ── 2. Tab INCIDENCIAS ──
             self._click_tab("Incidencias")
