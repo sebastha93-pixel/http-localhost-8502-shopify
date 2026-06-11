@@ -25,12 +25,13 @@ SESSION_PATH = Path("/tmp/melonn_session.json")
 
 # Selectores y patrones a iterar según el HTML real de Melonn admin
 # (ajustables sin tocar el resto del código)
+# Selectores confirmados vía /api/bot/diagnostico contra admin.melonn.com
 SELECTORS = {
-    "email_input":    'input[type="email"], input[name="email"]',
-    "password_input": 'input[type="password"], input[name="password"]',
-    "submit_button":  'button[type="submit"]',
+    "email_input":    'input#email, input[name="email"]',
+    "password_input": 'input#password, input[name="password"]',
+    "submit_button":  'button:has-text("Iniciar sesión"), button[type="submit"]',
     "post_login_nav": "text=Órdenes D2C",  # algo que solo se ve logueado
-    "2fa_indicator":  "text=/(c[óo]digo|verifi|2FA|two.?factor)/i",
+    "2fa_indicator":  "text=/(c[óo]digo de verificaci|two.?factor)/i",
 }
 
 
@@ -147,14 +148,16 @@ class MelonnBot:
 
     def _is_logged_in(self) -> bool:
         url = self._page.url
+        # Si todavía vemos el form de login (input email visible) → no logueado
+        try:
+            if self._page.locator('input#email, input[name="email"]').first.is_visible(timeout=1_500):
+                return False
+        except Exception:
+            pass
+        # Si la URL ya no es de login y no hay form → asumimos logueado
         if "login" in url.lower() or "signin" in url.lower():
             return False
-        # Buscar algo que solo aparezca logueado
-        try:
-            self._page.locator(SELECTORS["post_login_nav"]).first.wait_for(state="visible", timeout=3_000)
-            return True
-        except Exception:
-            return False
+        return True
 
     def _do_login(self) -> dict:
         try:
@@ -171,7 +174,11 @@ class MelonnBot:
             submit = self._page.locator(SELECTORS["submit_button"]).first
             submit.click()
 
-            # Esperar redirect post-login
+            # Esperar redirect post-login (la URL debe cambiar de la de login)
+            try:
+                self._page.wait_for_url(lambda u: "login" not in u.lower(), timeout=12_000)
+            except Exception:
+                pass
             time.sleep(3)
 
             # Detectar 2FA
