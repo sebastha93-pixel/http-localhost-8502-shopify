@@ -251,6 +251,31 @@ def diagnostico(_: CurrentUser = Depends(require_role("admin"))) -> dict:
                 __import__("re").search(r"c[óo]digo|verifi|2fa|two.?factor|autenticaci", body_text, __import__("re").I)
             )
             info["body_preview"] = body_text[:600]
+
+            # Intentar login real y reportar qué pasa paso a paso
+            if email and pwd:
+                import time as _t
+                try:
+                    page.fill('input#email, input[name="email"]', email)
+                    page.fill('input#password, input[name="password"]', pwd)
+                    info["lleno_campos"] = True
+                    page.click('button:has-text("Iniciar sesión"), button[type="submit"]')
+                    _t.sleep(5)
+                    info["url_post_login"] = page.url
+                    post_text = page.inner_text("body")[:1500]
+                    info["post_login_preview"] = post_text
+                    # ¿Sigue habiendo form de login?
+                    try:
+                        info["form_sigue_visible"] = page.locator('input#email, input[name="email"]').first.is_visible(timeout=2000)
+                    except Exception:
+                        info["form_sigue_visible"] = False
+                    # ¿Algún mensaje de error visible?
+                    import re as _re
+                    err_m = _re.search(r"(incorrect|inv[áa]lid|error|no coincide|credencial|contrase|fallo)", post_text, _re.I)
+                    if err_m:
+                        info["posible_error_login"] = post_text[max(0,err_m.start()-50):err_m.start()+100]
+                except Exception as e:
+                    info["login_intento_error"] = str(e)[:300]
         finally:
             bot.close()
     except Exception as e:
