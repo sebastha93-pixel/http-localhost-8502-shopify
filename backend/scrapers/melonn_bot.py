@@ -215,60 +215,103 @@ class MelonnBot:
             result.error = "No se pudo cargar la página del pedido"
             return result
 
-        # ── Extraer carrier ──
-        # Patrones esperados en el HTML/texto:
-        #   "Entregada a: Coordinadora Mercantil"
-        #   "Entregada a: Servientrega"
         try:
-            html = self._page.content()
-            text = self._page.inner_text("body")
+            # ── 1. Tab TRANSPORTE: carrier + guía ──
+            # La info de transporte está en un tab separado. Click primero.
+            self._click_tab("Transporte")
+            time.sleep(1.2)
+            text_transporte = self._page.inner_text("body")
 
-            m = re.search(r"Entregada a:?\s*([A-Za-zÀ-ſ][^\n\r\|]{2,40})", text)
-            if m:
-                carrier_raw = m.group(1).strip()
-                # Cortar antes de palabras que típicamente siguen (Guía, +, etc)
-                carrier_raw = re.split(r"\s+(?:Gu[ií]a|Documento|Ver)\b", carrier_raw)[0].strip()
-                result.carrier = carrier_raw
+            # Carrier — patrones del admin:
+            #   "Entregada a: Coordinadora Mercantil"
+            #   "Transportadora: Servientrega"
+            for pat in [
+                r"Entregada a:?\s*([A-Za-zÀ-ſ][^\n\r\|]{2,40})",
+                r"Transportadora:?\s*([A-Za-zÀ-ſ][^\n\r\|]{2,40})",
+            ]:
+                m = re.search(pat, text_transporte)
+                if m:
+                    carrier_raw = re.split(
+                        r"\s+(?:Gu[ií]a|Documento|Ver|Rastrear)\b",
+                        m.group(1).strip(),
+                    )[0].strip()
+                    if carrier_raw and len(carrier_raw) > 2:
+                        result.carrier = carrier_raw
+                        break
 
-            # ── Extraer guía ──
-            m2 = re.search(r"Gu[ií]a:?\s*([A-Z0-9-]{5,40})", text)
+            # Guía
+            m2 = re.search(r"Gu[ií]a:?\s*([A-Z0-9][A-Z0-9-]{4,40})", text_transporte)
             if m2:
                 result.guia = m2.group(1).strip()
 
-            # ── Estado de la orden ──
-            m3 = re.search(r"El estado de tu orden es:?\s*([A-Za-zÀ-ſ ]{3,30})", text)
+            # ── 2. Tab INCIDENCIAS ──
+            self._click_tab("Incidencias")
+            time.sleep(1.2)
+            text_inc = self._page.inner_text("body")
+            self._extract_incidencias(text_inc, result)
+
+            # ── 3. Estado de la orden (header, visible en ambos tabs) ──
+            m3 = re.search(r"El estado de tu orden es:?\s*([A-Za-zÀ-ſ ]{3,30})", text_transporte)
             if m3:
                 result.estado = m3.group(1).strip()
 
-            # ── Incidencias ──
-            # Buscar bloques con "Incidencias" o "Sin gestionar" / "Resuelta"
-            incidencias = []
-            # Patrón simple: filas en una tabla con OV-XXX + Sin gestionar/Resuelta + descripción
-            for m in re.finditer(
-                r"(OV-\d+).*?(Sin gestionar|Resuelta|En gesti[oó]n|Gestionable)[\s\S]{0,500}?([\wÀ-ſ][^\n\r]{5,200})",
-                text,
-            ):
-                incidencias.append({
-                    "numero": m.group(1),
-                    "estado": m.group(2),
-                    "descripcion": m.group(3).strip()[:200],
-                })
-            # Dedupe por número
-            seen = set()
-            for inc in incidencias:
-                if inc["numero"] not in seen:
-                    seen.add(inc["numero"])
-                    result.incidencias.append(inc)
-
             result.ok = bool(result.carrier or result.guia or result.incidencias)
             if not result.ok:
-                result.error = "Página cargó pero no encontré carrier/guía/incidencias. ¿HTML cambió?"
+                # Guardar HTML para diagnóstico
+                try:
+                    snap = Path(f"/tmp/melonn_{orden_tienda}.txt")
+                    snap.write_text(text_transporte[:5000], encoding="utf-8")
+                    self._page.screenshot(path=f"/tmp/melonn_{orden_tienda}.png")
+                except Exception:
+                    pass
+                result.error = "Página cargó pero no encontré carrier/guía/incidencias. Revisa /tmp para diagnóstico."
+            return result
         except Exception as e:
             log.exception(f"Error extrayendo {orden_tienda}")
             result.error = str(e)
+            return result
 
-        return result
+    def _click_tab(self, nombre: str):
+        """Click en un tab (Transporte / Incidencias) si existe."""
+        try:
+            tab = self._page.get_by_role("tab", name=re.compile(nombre, re.I)).first
+            if tab.is_visible(timeout=2_000):
+                tab.click()
+                return
+        except Exception:
+            pass
+        # Fallback: buscar por texto
+        try:
+            self._page.get_by_text(re.compile(rf"^{nombre}", re.I)).first.click(timeout=2_000)
+        except Exception:
+            pass
 
+    def _extract_incidencias(self, text: str, result: ExtractedOrder):
+        """Parser de la tabla de incidencias (OV-XXX + estado + descripción)."""
+        try:
+            _dummy = re.search(r"Gu[ií]a:?\s*([A-Z0-9-]{5,40})", "")  # noop para mantener bloque
+        except Exception:
+            pass
+        # Patrón: OV-XXXXXXX seguido (en cualquier orden) de estado y descripción
+        # Buscamos las líneas que tienen OV-XXX
+        for m in re.finditer(r"(OV-\d+)", text):
+            num = m.group(1)
+            # Tomar ~200 chars alrededor para extraer estado + descripción
+            start = m.start()
+            ventana = text[start:start + 250]
+            estado_m = re.search(r"(Sin gestionar|Resuelta|En gesti[oó]n)", ventana)
+            estado = estado_m.group(1) if estado_m else "?"
+            # Descripción: texto después del estado
+            desc = ""
+            if estado_m:
+                resto = ventana[estado_m.end():].strip()
+                desc = re.split(r"\s{2,}|\d{4}/\w+\.", resto)[0].strip()[:120]
+            if not any(i["numero"] == num for i in result.incidencias):
+                result.incidencias.append({
+                    "numero": num,
+                    "estado": estado,
+                    "descripcion": desc,
+                })
 
 # ── API funcional para el endpoint ────────────────────────────────────
 
