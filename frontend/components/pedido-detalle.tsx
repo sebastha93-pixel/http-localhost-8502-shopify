@@ -12,6 +12,7 @@ import {
   PhoneCall, CheckCircle, Truck, RotateCcw, X, Loader2, MapPin, User, Calendar,
   Edit3, Flag, FlagOff, Package,
 } from "lucide-react";
+import { CarrierLinks } from "@/components/carrier-links";
 
 interface Accion {
   tipo: string;
@@ -132,16 +133,6 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
           {pedido.orden_tienda && pedido.orden_melonn && pedido.orden_tienda !== pedido.orden_melonn && (
             <div className="text-xs text-steel/70">Melonn: {pedido.orden_melonn}</div>
           )}
-          {pedido.link_guia && (
-            <a
-              href={pedido.link_guia as string}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 ml-3 rounded-md bg-white/10 hover:bg-white/20 px-3 py-1.5 text-xs font-semibold text-white"
-            >
-              <ExternalLink className="h-3 w-3" /> Ver guía Melonn
-            </a>
-          )}
           {canWrite && (
             <button
               onClick={toggleNovedad}
@@ -215,6 +206,12 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
               <span className="ml-auto text-sm tabular-nums text-graphite">{pedido.telefono_comprador}</span>
             </div>
           )}
+
+          {/* Rastreo: acceso rápido a las 5 transportadoras + Melonn */}
+          <CarrierLinks
+            orden={pedido.orden_tienda || pedido.orden_melonn}
+            melonnLink={pedido.link_guia as string | undefined}
+          />
 
           {/* Productos — lista completa si hay varios */}
           <ProductosPedido pedido={pedido} />
