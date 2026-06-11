@@ -69,3 +69,10 @@ def health_scheduler_resume() -> dict:
     from backend.core import scheduler
     scheduler.resume_now()
     return {"ok": True, **scheduler.status()}
+
+
+@router.get("/health/bot-scheduler")
+def health_bot_scheduler() -> dict:
+    """Estado del cron del bot scraper de guías."""
+    from backend.core import bot_scheduler
+    return bot_scheduler.status()

@@ -71,21 +71,31 @@ def _seleccionar_pedidos(req: ScrapeRequest) -> list[str]:
         ]
 
     overrides = overrides_svc.cargar_map()
-    seleccion: list[dict] = []
+
+    # Prioridad: novedad (1) > en_transito (2) > pendiente_despacho (3).
+    # Entregados se EXCLUYEN (ya no necesitan guía).
+    prioridad = {"novedad": 1, "en_transito": 2, "pendiente_despacho": 3}
+    candidatos: list[tuple[int, dict]] = []
     for p in pedidos:
-        if p.get("sub_estado_logistico") == "entregado":
-            continue  # ya entregados, no urgentes
+        sub = p.get("sub_estado_logistico")
+        if sub == "entregado":
+            continue  # nunca procesar entregados
+        if sub not in prioridad:
+            continue  # solo activos conocidos
         orden = p.get("orden_tienda") or ""
         if not orden:
             continue
         ov = overrides.get(orden) or overrides.get(p.get("orden_melonn", ""))
-        ya_tiene_carrier = ov and ov.get("carrier_real")
-        if req.solo_sin_guia and ya_tiene_carrier:
-            continue
-        seleccion.append({"orden_tienda": orden, "melonn_id": str(p.get("orden_melonn") or "")})
-        if len(seleccion) >= req.max_pedidos:
-            break
-    return seleccion
+        if req.solo_sin_guia and ov and ov.get("carrier_real"):
+            continue  # ya tiene guía guardada → saltar (incremental)
+        candidatos.append((
+            prioridad[sub],
+            {"orden_tienda": orden, "melonn_id": str(p.get("orden_melonn") or "")},
+        ))
+
+    # Ordenar por prioridad y tomar el lote
+    candidatos.sort(key=lambda c: c[0])
+    return [c[1] for c in candidatos[: req.max_pedidos]]
 
 
 def _run_bot(task_id: str, ordenes: list[str], autor: str):
@@ -173,29 +183,48 @@ def _run_bot(task_id: str, ordenes: list[str], autor: str):
             _bot_state["finished_at"] = time.time()
 
 
+def iniciar_run(max_pedidos: int, autor: str, solo_sin_guia: bool = True) -> dict:
+    """
+    Inicia un run del bot (reutilizable por el endpoint manual y el cron).
+    Retorna {ok, total, message} o {ok: False, error}.
+    """
+    with _lock:
+        if _bot_state["running"]:
+            return {"ok": False, "error": "Bot ya corriendo"}
+
+    body = ScrapeRequest(max_pedidos=max_pedidos, solo_sin_guia=solo_sin_guia)
+    ordenes = _seleccionar_pedidos(body)
+    if not ordenes:
+        return {"ok": False, "error": "Sin pedidos pendientes", "total": 0}
+
+    task_id = uuid.uuid4().hex[:8]
+    threading.Thread(target=_run_bot, args=(task_id, ordenes, autor), daemon=True).start()
+    return {"ok": True, "task_id": task_id, "total": len(ordenes)}
+
+
+@router.get("/pendientes")
+def pendientes(_: CurrentUser = Depends(require_role("admin", "operador"))) -> dict:
+    """Cuántos pedidos activos faltan por extraer guía."""
+    body = ScrapeRequest(max_pedidos=10_000, solo_sin_guia=True)
+    faltantes = _seleccionar_pedidos(body)
+    return {"pendientes": len(faltantes)}
+
+
 @router.post("/scrape", response_model=ScrapeResponse)
 def scrape(
     body: ScrapeRequest,
     user: CurrentUser = Depends(require_role("admin")),
 ) -> ScrapeResponse:
     """Dispara el bot scraper. Solo admin. Un run a la vez."""
-    with _lock:
-        if _bot_state["running"]:
+    r = iniciar_run(body.max_pedidos, user.nombre, body.solo_sin_guia)
+    if not r.get("ok"):
+        if r.get("error") == "Bot ya corriendo":
             raise HTTPException(409, "El bot ya está corriendo. Espera a que termine.")
-
-    ordenes = _seleccionar_pedidos(body)
-    if not ordenes:
-        raise HTTPException(400, "No hay pedidos pendientes que cumplan los criterios.")
-
-    task_id = uuid.uuid4().hex[:8]
-    threading.Thread(
-        target=_run_bot, args=(task_id, ordenes, user.nombre), daemon=True
-    ).start()
-
+        raise HTTPException(400, r.get("error") or "No hay pedidos pendientes.")
     return ScrapeResponse(
-        task_id=task_id,
-        total=len(ordenes),
-        message=f"Bot iniciado · procesando {len(ordenes)} pedidos. Consulta /api/bot/status.",
+        task_id=r["task_id"],
+        total=r["total"],
+        message=f"Bot iniciado · procesando {r['total']} pedidos. Consulta /api/bot/status.",
     )
 
 

@@ -22,6 +22,7 @@ from backend.api import auditoria, auth, bot, conciliacion, dashboard, finanzas,
 from backend.services import usuarios as usuarios_svc
 from backend.core.security import hash_password
 from backend.core import scheduler
+from backend.core import bot_scheduler
 
 
 # ── Lifespan: bootstrap / cleanup ─────────────────────────────────────────────
@@ -55,9 +56,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"   ⚠️  Scheduler no arrancó: {e}")
 
+    # Cron del bot scraper (solo si BOT_AUTO_ENABLED=true)
+    try:
+        bot_scheduler.start()
+    except Exception as e:
+        print(f"   ⚠️  Bot scheduler no arrancó: {e}")
+
     yield
     # Shutdown
     scheduler.stop()
+    bot_scheduler.stop()
     print("👋 API detenida")
 
 
