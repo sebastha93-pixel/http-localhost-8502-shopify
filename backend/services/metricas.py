@@ -35,10 +35,9 @@ NOVEDADES_VISIBLES = {
     "on stand by - not able to fulfil - SM restriction",
     "Restricción método de envío",
 
-    # Hold por condiciones externas/internas — NO incluye seller (esos están en
-    # "Pendientes despacho" donde se autorizan con el botón Autorizar)
-    "All items reserved - fulfillment on hold - ext. conditionals",
-    "All items reserved - fulfillment on hold - int. conditionals",
+    # NOTA: los "fulfillment on hold" (code 26 seller, 29 ext/int conditionals)
+    # NO van a novedades — son holds que esperan autorización y deben quedar
+    # en el tab "Pendientes despacho" (botón Autorizar). Por eso NO se listan aquí.
 
     # Errores genéricos
     "Error - not able to process",
