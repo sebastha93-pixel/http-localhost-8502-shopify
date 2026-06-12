@@ -247,109 +247,42 @@ def status(_: CurrentUser = Depends(require_role("admin", "operador"))) -> dict:
 @router.get("/diagnostico")
 def diagnostico(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     """
-    Abre la página de login de Melonn y reporta qué encuentra:
-    inputs, botones, URL, título. Para ajustar selectores sin adivinar.
+    Diagnóstico del path REAL: ensure_logged_in + extract_order de un
+    pedido pendiente real. Reporta el ExtractedOrder + el texto capturado.
     """
     import os
+    from dataclasses import asdict
     email = os.environ.get("MELONN_BOT_EMAIL", "")
     pwd = os.environ.get("MELONN_BOT_PASSWORD", "")
+    info: dict = {"creds_present": bool(email and pwd)}
 
-    info: dict = {
-        "creds_email_present": bool(email),
-        "creds_password_present": bool(pwd),
-        "email_masked": (email[:3] + "***" + email[-8:]) if len(email) > 11 else ("***" if email else ""),
-    }
+    # Tomar el primer pedido pendiente real (orden + melonn_id)
+    sel = _seleccionar_pedidos(ScrapeRequest(max_pedidos=1, solo_sin_guia=True))
+    if not sel:
+        info["aviso"] = "No hay pedidos pendientes para diagnosticar"
+        return info
+    info["pedido_prueba"] = sel[0]
 
     try:
         from backend.scrapers.melonn_bot import MelonnBot, ADMIN_URL
         bot = MelonnBot(email or "x", pwd or "x", headless=True)
         bot.start()
         try:
-            page = bot._page
-            page.goto(f"{ADMIN_URL}/", wait_until="domcontentloaded", timeout=25_000)
-            import time as _t
-            _t.sleep(3)
-            info["url_final"] = page.url
-            info["title"] = page.title()
-            # Inventario de inputs
-            inputs = page.eval_on_selector_all(
-                "input",
-                "els => els.map(e => ({type: e.type, name: e.name, id: e.id, placeholder: e.placeholder}))",
-            )
-            info["inputs"] = inputs
-            # Botones
-            botones = page.eval_on_selector_all(
-                "button",
-                "els => els.slice(0,10).map(e => (e.innerText||'').trim()).filter(Boolean)",
-            )
-            info["botones"] = botones
-            # ¿Hay texto de 2FA / código?
-            body_text = page.inner_text("body")[:2000]
-            info["menciona_2fa"] = bool(
-                __import__("re").search(r"c[óo]digo|verifi|2fa|two.?factor|autenticaci", body_text, __import__("re").I)
-            )
-            info["body_preview"] = body_text[:600]
-
-            # Ejecutar el login REAL (mismo path que usa el bot) y reportar
-            if email and pwd:
-                import time as _t
+            # Path REAL: ensure_logged_in (detecta sesión o re-loguea)
+            login = bot.ensure_logged_in()
+            info["login"] = login
+            if login.get("ok"):
+                orden = sel[0]["orden_tienda"]
+                mid = sel[0]["melonn_id"]
+                internal = mid.lstrip("Mm")
+                info["url_detalle"] = f"{ADMIN_URL}/sell-orders/{internal}"
+                r = bot.extract_order(orden, melonn_id=mid)
+                info["extract_resultado"] = asdict(r)
+                # Capturar el texto crudo de la página para ver qué hay
                 try:
-                    login_res = bot._do_login()
-                    info["login_resultado"] = login_res
-                    _t.sleep(2)
-                    info["url_post_login"] = page.url
-                    post_text = page.inner_text("body")[:1500]
-                    info["post_login_preview"] = post_text
-                    try:
-                        info["form_sigue_visible"] = page.locator(
-                            'input#email, input[name="email"]'
-                        ).first.is_visible(timeout=2000)
-                    except Exception:
-                        info["form_sigue_visible"] = False
-                    info["is_logged_in_check"] = bot._is_logged_in()
-
-                    # Si logueó, ir a Órdenes D2C y descubrir la URL real del detalle
-                    if login_res.get("ok"):
-                        from backend.scrapers.melonn_bot import ADMIN_URL as _A
-                        # 1. Ir al listado de órdenes D2C
-                        for u in [
-                            f"{_A}/sell-orders",
-                            f"{_A}/orders",
-                            f"{_A}/d2c",
-                        ]:
-                            try:
-                                page.goto(u, wait_until="networkidle", timeout=25_000)
-                                _t.sleep(4)
-                                if page.locator("text=58902").first.is_visible(timeout=2000):
-                                    info["listado_url"] = u
-                                    break
-                            except Exception:
-                                continue
-                        info["listado_final"] = page.url
-
-                        # 2. Buscar todos los hrefs que contengan números de orden
-                        try:
-                            hrefs = page.eval_on_selector_all(
-                                "a[href]",
-                                "els => els.map(e=>e.getAttribute('href')).filter(h=>h && /order|sell|58|59/i.test(h)).slice(0,15)",
-                            )
-                            info["hrefs_orden"] = hrefs
-                        except Exception as e:
-                            info["hrefs_error"] = str(e)[:200]
-
-                        # 3. Intentar click en el texto 58902 para ver a dónde lleva
-                        try:
-                            page.locator("text=58902").first.click(timeout=4000)
-                            _t.sleep(4)
-                            info["click_resultado_url"] = page.url
-                            bot._click_tab("Transporte")
-                            _t.sleep(2)
-                            info["transporte_text"] = page.inner_text("body")[:2500]
-                        except Exception as e:
-                            info["click_error"] = str(e)[:200]
-                            info["transporte_text"] = page.inner_text("body")[:1500]
-                except Exception as e:
-                    info["login_intento_error"] = str(e)[:400]
+                    info["texto_pagina"] = bot._page.inner_text("body")[:2000]
+                except Exception:
+                    pass
         finally:
             bot.close()
     except Exception as e:
