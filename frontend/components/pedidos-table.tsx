@@ -8,13 +8,14 @@ import { formatMoneyShort } from "@/lib/utils";
 import { Search, ExternalLink, Phone, MessageCircle } from "lucide-react";
 import { PedidoDetalle } from "@/components/pedido-detalle";
 import { trackingUrl } from "@/lib/carriers";
+import { tipoEnvio } from "@/lib/envio-tipo";
 
 const NIVELES: NivelRiesgo[] = ["CRITICO", "RIESGO", "NORMAL", "VENCIDO", "RESUELTO"];
 
 type ColumnKey =
   | "select" | "nivel" | "orden" | "cliente" | "telefono" | "ciudad" | "zona"
   | "dias" | "valor" | "estado" | "tipo" | "novedad" | "link" | "action"
-  | "producto";
+  | "producto" | "envio";
 
 interface Props {
   pedidos: Pedido[];
@@ -183,6 +184,7 @@ export function PedidosTable({
                   {has("producto") && <Th>Producto</Th>}
                   {has("ciudad")   && <Th>Ciudad</Th>}
                   {has("zona")     && <Th>Zona</Th>}
+                  {has("envio")    && <Th>Envío</Th>}
                   {has("dias")     && <Th align="right">Días</Th>}
                   {has("valor")    && <Th align="right">Valor COD</Th>}
                   {has("estado")   && <Th>Estado</Th>}
@@ -332,6 +334,15 @@ function Row({
       )}
       {has("ciudad") && <Td>{p.ciudad_destino || "—"}</Td>}
       {has("zona")   && <Td className="text-xs text-graphite">{p.zona || "—"}</Td>}
+      {has("envio") && (
+        <Td>
+          {(() => {
+            const te = tipoEnvio(p.transportadora as string);
+            if (!te) return <span className="text-graphite">—</span>;
+            return <Badge tone={te.tone}>{te.short}</Badge>;
+          })()}
+        </Td>
+      )}
       {has("dias") && (
         <Td align="right">
           <span className={overSla ? "text-crimson font-semibold tabular-nums" : "tabular-nums"}>

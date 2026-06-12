@@ -78,7 +78,7 @@ export default function ContraentregaPage() {
             pedidos={groups.proceso}
             showTipoFilter={false}
             emptyMessage="No hay pedidos en proceso"
-            columns={["nivel", "orden", "cliente", "telefono", "producto", "ciudad", "dias", "valor", "estado"]}
+            columns={["nivel", "orden", "cliente", "telefono", "producto", "ciudad", "envio", "dias", "valor", "estado"]}
             selectable
           />
         </TabsContent>
@@ -87,7 +87,7 @@ export default function ContraentregaPage() {
             pedidos={groups.transito}
             showTipoFilter={false}
             emptyMessage="No hay pedidos en tránsito"
-            columns={["nivel", "orden", "cliente", "telefono", "ciudad", "zona", "dias", "valor", "estado", "link"]}
+            columns={["nivel", "orden", "cliente", "telefono", "ciudad", "zona", "envio", "dias", "valor", "estado", "link"]}
             selectable
           />
         </TabsContent>

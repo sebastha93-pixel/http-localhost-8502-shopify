@@ -56,7 +56,7 @@ export default function EnviosPage() {
             pedidos={groups.proceso}
             showTipoFilter={false}
             emptyMessage="No hay envíos en proceso"
-            columns={["nivel", "orden", "cliente", "telefono", "producto", "ciudad", "dias", "estado"]}
+            columns={["nivel", "orden", "cliente", "telefono", "producto", "ciudad", "envio", "dias", "estado"]}
             selectable
           />
         </TabsContent>
@@ -65,7 +65,7 @@ export default function EnviosPage() {
             pedidos={groups.transito}
             showTipoFilter={false}
             emptyMessage="No hay envíos en tránsito"
-            columns={["nivel", "orden", "cliente", "telefono", "ciudad", "zona", "dias", "estado", "link"]}
+            columns={["nivel", "orden", "cliente", "telefono", "ciudad", "zona", "envio", "dias", "estado", "link"]}
             selectable
           />
         </TabsContent>

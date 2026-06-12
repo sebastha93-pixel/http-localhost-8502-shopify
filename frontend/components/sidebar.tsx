@@ -32,6 +32,7 @@ const NAV: { home: NavItem; groups: NavGroup[] } = {
         { label: "Logística",     href: "/logistica" },
         { label: "Contraentrega", href: "/contraentrega" },
         { label: "Envíos",        href: "/envios" },
+        { label: "B2B",           href: "/b2b" },
         { label: "Devoluciones",  href: "/devoluciones" },
         { label: "Incidencias",   href: "/incidencias" },
       ],
