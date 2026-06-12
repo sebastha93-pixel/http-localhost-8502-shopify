@@ -6,6 +6,7 @@ el progreso vía /status. Resultado se persiste vía overrides_svc.
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 import uuid
@@ -168,7 +169,9 @@ def _run_bot(task_id: str, ordenes: list[str], autor: str):
                 _bot_state["log"].append(f"⚠ {orden}: error guardando — {str(e)[:120]}")
 
     try:
-        res = scrape_batch(ordenes, delay_seconds=2.0, on_result=_persistir)
+        # Delay entre pedidos configurable (modo lento evita bloqueo Melonn)
+        _delay = float(os.environ.get("BOT_DELAY_SEC", "8"))
+        res = scrape_batch(ordenes, delay_seconds=_delay, on_result=_persistir)
 
         with _lock:
             if not res.get("ok"):

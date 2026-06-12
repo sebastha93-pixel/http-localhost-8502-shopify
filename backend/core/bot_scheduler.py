@@ -19,14 +19,14 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-# Config (env vars)
+# Config (env vars) — MODO LENTO para no disparar bloqueo de Melonn
 BOT_AUTO_ENABLED = os.environ.get("BOT_AUTO_ENABLED", "false").lower() == "true"
-BOT_INTERVAL_SEC = int(os.environ.get("BOT_INTERVAL_SEC", 20 * 60))   # cada 20 min
-BOT_LOTE         = int(os.environ.get("BOT_LOTE", 25))                # 25 por lote
-BOT_INITIAL_DELAY = 120                                               # 2 min tras boot
+BOT_INTERVAL_SEC = int(os.environ.get("BOT_INTERVAL_SEC", 60 * 60))   # cada 1 HORA
+BOT_LOTE         = int(os.environ.get("BOT_LOTE", 5))                 # 5 por lote (lento)
+BOT_INITIAL_DELAY = 180                                               # 3 min tras boot
 
-# Tope diario de seguridad: no procesar más de N pedidos por día
-BOT_MAX_DIARIO = int(os.environ.get("BOT_MAX_DIARIO", 250))
+# Tope diario de seguridad
+BOT_MAX_DIARIO = int(os.environ.get("BOT_MAX_DIARIO", 60))
 
 _thread: Optional[threading.Thread] = None
 _stop = threading.Event()
