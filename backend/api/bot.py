@@ -244,6 +244,17 @@ def status(_: CurrentUser = Depends(require_role("admin", "operador"))) -> dict:
         return dict(_bot_state)
 
 
+@router.post("/stop")
+def stop(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Marca el run como detenido (libera el lock para un nuevo run)."""
+    with _lock:
+        _bot_state["running"] = False
+        _bot_state["finished_at"] = time.time()
+        _bot_state["error"] = "Detenido manualmente"
+        _bot_state["log"].append("⏹ Detenido manualmente por admin")
+    return {"ok": True, "message": "Estado liberado. El thread previo terminará solo."}
+
+
 @router.get("/diagnostico")
 def diagnostico(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     """
