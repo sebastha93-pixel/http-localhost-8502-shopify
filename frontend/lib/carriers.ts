@@ -13,12 +13,21 @@ const CARRIERS: CarrierDef[] = [
   {
     match: /coordinadora/i,
     label: "Coordinadora",
-    url: (g) => `https://www.coordinadora.com/rastreo/rastreo-de-guia/detalle-de-rastreo/?guia=${encodeURIComponent(g)}`,
+    // URL real confirmada: .../detalle-de-rastreo-de-guia/?guia=X
+    url: (g) => `https://coordinadora.com/rastreo/rastreo-de-guia/detalle-de-rastreo-de-guia/?guia=${encodeURIComponent(g)}`,
+  },
+  {
+    match: /servientrega/i,
+    label: "Servientrega",
+    // URL real confirmada
+    url: (g) => `https://www.servientrega.com/wps/portal/rastreo-envio?guia=${encodeURIComponent(g)}`,
   },
   {
     match: /env[íi]a/i,
     label: "Envía",
-    url: (g) => `https://envia.co/seguimiento-de-envios?guia=${encodeURIComponent(g)}`,
+    // Envía no acepta guía por query param → abre su home de rastreo
+    // (el operador pega la guía, ya va copiada al portapapeles)
+    url: () => `https://envia.co`,
   },
   {
     match: /interrap/i,
@@ -31,11 +40,6 @@ const CARRIERS: CarrierDef[] = [
     url: (g) => `https://tcc.com.co/rastreo-de-envios/?guia=${encodeURIComponent(g)}`,
   },
   {
-    match: /servientrega/i,
-    label: "Servientrega",
-    url: (g) => `https://www.servientrega.com/wps/portal/rastreo-envio?guia=${encodeURIComponent(g)}`,
-  },
-  {
     match: /domina/i,
     label: "Domina",
     url: (g) => `https://domina.com.co/rastreo-de-envios?guia=${encodeURIComponent(g)}`,
@@ -46,10 +50,9 @@ const CARRIERS: CarrierDef[] = [
  * Devuelve la URL de rastreo directo para una guía + transportadora.
  * Si no reconoce la transportadora, retorna null (se usa fallback Melonn).
  */
-// DESACTIVADO temporalmente: las URLs de rastreo directo de las
-// transportadoras dan 404 (sus rutas cambiaron). Hasta confirmar las
-// URLs reales, devolvemos null → la guía se muestra como texto + copiar.
-const LINKS_DIRECTOS_ACTIVOS = false;
+// Links directos ACTIVOS con URLs reales confirmadas (Coordinadora,
+// Servientrega, etc.). Envía abre su home (no acepta guía por query).
+const LINKS_DIRECTOS_ACTIVOS = true;
 
 export function trackingUrl(carrier?: string, guia?: string): string | null {
   if (!LINKS_DIRECTOS_ACTIVOS) return null;
