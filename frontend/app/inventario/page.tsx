@@ -49,6 +49,37 @@ function shopifyAdminUrl(handle: string): string {
   return `https://admin.shopify.com/store/me-fits/products?query=${encodeURIComponent(handle)}`;
 }
 
+/**
+ * Devuelve el SKU "raíz" común de todas las variantes de un producto.
+ * Ej: ["93617-1T6","93617-1T8","93617-1T10"] → "93617-1T"
+ * Si solo hay 1 variante o no comparten prefijo, devuelve el SKU principal.
+ */
+function skuAgrupado(p: Producto): string {
+  const skus = p.variantes.map((v) => v.sku).filter(Boolean);
+  if (skus.length <= 1) return p.sku_principal || "—";
+  // Prefijo común más largo
+  let prefijo = skus[0];
+  for (let i = 1; i < skus.length; i++) {
+    let j = 0;
+    while (j < prefijo.length && j < skus[i].length && prefijo[j] === skus[i][j]) j++;
+    prefijo = prefijo.slice(0, j);
+    if (!prefijo) break;
+  }
+  // Limpia separadores colgantes al final (- _ /) y dígitos sueltos
+  prefijo = prefijo.replace(/[-_/]+$/, "");
+  if (prefijo.length < 3) return p.sku_principal || "—";  // muy corto → mejor mostrar el principal
+  return prefijo;
+}
+
+/** Extrae la "talla" o sufijo único de una variante quitando el prefijo común. */
+function tallaDeVariante(skuVariante: string, raiz: string): string {
+  if (!skuVariante) return "—";
+  if (!raiz || raiz === "—") return skuVariante;
+  let resto = skuVariante.startsWith(raiz) ? skuVariante.slice(raiz.length) : skuVariante;
+  resto = resto.replace(/^[-_/]+/, "");
+  return resto || skuVariante;
+}
+
 function TablaProductos({ productos, mostrarStock = true }: { productos: Producto[]; mostrarStock?: boolean }) {
   const [q, setQ] = useState("");
   const [filtro, setFiltro] = useState<Filtro>("todos");
@@ -142,7 +173,7 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                         <p className="font-medium text-ink">{p.titulo}</p>
                         <p className="text-xs text-graphite">{p.vendor || "—"}</p>
                       </td>
-                      <td className="px-3 py-2.5 text-xs text-graphite tabular-nums">{p.sku_principal || "—"}</td>
+                      <td className="px-3 py-2.5 text-xs text-graphite tabular-nums">{skuAgrupado(p)}</td>
                       <td className="px-3 py-2.5 text-xs text-graphite">{p.tipo || "—"}</td>
                       <td className="px-3 py-2.5 text-right tabular-nums">{p.num_variantes}</td>
                       {mostrarStock && (
@@ -174,25 +205,33 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                     {expandido === p.id && (
                       <tr key={`${p.id}-vars`} className="bg-concrete/20">
                         <td colSpan={8} className="px-6 py-3">
-                          <p className="text-[0.65rem] uppercase tracking-wider text-graphite mb-2">Variantes</p>
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-[0.65rem] uppercase tracking-wider text-graphite">Tallas del SKU <span className="font-bold text-ink">{skuAgrupado(p)}</span></p>
+                            <p className="text-[0.65rem] text-graphite">{p.variantes.length} {p.variantes.length === 1 ? "variante" : "variantes"}</p>
+                          </div>
                           <table className="w-full text-xs">
                             <thead className="text-graphite">
                               <tr>
+                                <th className="text-left py-1 font-medium">Talla</th>
                                 <th className="text-left py-1 font-medium">Variante</th>
-                                <th className="text-left py-1 font-medium">SKU</th>
+                                <th className="text-left py-1 font-medium">SKU completo</th>
                                 <th className="text-right py-1 font-medium">Precio</th>
                                 <th className="text-right py-1 font-medium">Stock</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {p.variantes.map((v) => (
-                                <tr key={v.id}>
-                                  <td className="py-1 text-ink">{v.titulo || "—"}</td>
-                                  <td className="py-1 text-graphite tabular-nums">{v.sku || "—"}</td>
-                                  <td className="py-1 text-right text-ink tabular-nums">${v.precio.toLocaleString()}</td>
-                                  <td className={`py-1 text-right tabular-nums ${v.stock <= 0 ? "text-rust font-semibold" : v.stock <= 5 ? "text-khaki" : "text-ink"}`}>{v.stock}</td>
-                                </tr>
-                              ))}
+                              {p.variantes.map((v) => {
+                                const raiz = skuAgrupado(p);
+                                return (
+                                  <tr key={v.id}>
+                                    <td className="py-1 text-ink font-semibold">{tallaDeVariante(v.sku, raiz)}</td>
+                                    <td className="py-1 text-graphite">{v.titulo || "—"}</td>
+                                    <td className="py-1 text-graphite tabular-nums">{v.sku || "—"}</td>
+                                    <td className="py-1 text-right text-ink tabular-nums">${v.precio.toLocaleString()}</td>
+                                    <td className={`py-1 text-right tabular-nums ${v.stock <= 0 ? "text-rust font-semibold" : v.stock <= 5 ? "text-khaki" : "text-ink"}`}>{v.stock}</td>
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </td>
