@@ -72,24 +72,33 @@ def _seleccionar_pedidos(req: ScrapeRequest) -> list[str]:
 
     overrides = overrides_svc.cargar_map()
 
-    # Prioridad: novedad (1) > en_transito (2) > pendiente_despacho (3).
-    # Entregados se EXCLUYEN (ya no necesitan guía).
-    prioridad = {"novedad": 1, "en_transito": 2, "pendiente_despacho": 3}
+    # Solo procesar pedidos que REALMENTE pueden tener guía en Melonn:
+    # estados de despacho/tránsito (5=Packed, 7=Shipped, 8=Delivered, 24=Prepared,
+    # 28=Ready for packing). Excluimos:
+    #   - entregados (no necesitan)
+    #   - code 26/29 (hold, sin transportadora asignada aún)
+    #   - code 1/2 (prepago en alistamiento, sin despachar)
+    CODES_CON_GUIA = {5, 7, 8, 24, 28}
+    # Prioridad: novedad visible (1) > en_transito (2)
     candidatos: list[tuple[int, dict]] = []
     for p in pedidos:
         sub = p.get("sub_estado_logistico")
         if sub == "entregado":
             continue  # nunca procesar entregados
-        if sub not in prioridad:
-            continue  # solo activos conocidos
+        code = int(p.get("estado_melonn_code") or 0)
+        es_novedad = bool(p.get("es_novedad_visible"))
+        # Procesar si: está en estado con guía O es novedad visible
+        if code not in CODES_CON_GUIA and not es_novedad:
+            continue
         orden = p.get("orden_tienda") or ""
         if not orden:
             continue
         ov = overrides.get(orden) or overrides.get(p.get("orden_melonn", ""))
         if req.solo_sin_guia and ov and ov.get("carrier_real"):
             continue  # ya tiene guía guardada → saltar (incremental)
+        prio = 1 if es_novedad else 2
         candidatos.append((
-            prioridad[sub],
+            prio,
             {"orden_tienda": orden, "melonn_id": str(p.get("orden_melonn") or "")},
         ))
 
