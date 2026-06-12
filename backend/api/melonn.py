@@ -27,12 +27,12 @@ async def webhook_receiver(request: Request, secret: Optional[str] = Query(None)
     Receptor de webhooks de Melonn.
 
     Configurar en admin.melonn.com → Integraciones → Webhooks:
-        URL: https://<backend>.up.railway.app/api/melonn/webhook?secret=<SECRET>
-        Eventos: Orden de venta (todos) + Devolución (los que importen)
+        URL:    https://<backend>.up.railway.app/api/melonn/webhook
+        Header: X-Webhook-Secret = <MELONN_WEBHOOK_SECRET>
+        (alternativa menos segura: pasar ?secret=X en la URL)
 
     Cuando llega un evento, refrescamos SOLO ese pedido en el caché
-    (sin tener que descargar toda la lista). Ahorra >90% de llamadas al
-    list endpoint.
+    (sin descargar toda la lista). Ahorra >90% de llamadas al list endpoint.
 
     El secret se valida contra la env var MELONN_WEBHOOK_SECRET. Si no
     está configurada, el endpoint responde 503 (fail-closed).
@@ -40,8 +40,17 @@ async def webhook_receiver(request: Request, secret: Optional[str] = Query(None)
     expected = os.environ.get("MELONN_WEBHOOK_SECRET", "").strip()
     if not expected:
         raise HTTPException(503, "MELONN_WEBHOOK_SECRET no configurado en Railway")
-    if secret != expected:
-        log.warning(f"Webhook con secret inválido")
+
+    # Aceptar el secret en HEADER (recomendado) o en query param (fallback).
+    header_secret = (
+        request.headers.get("x-webhook-secret")
+        or request.headers.get("X-Webhook-Secret")
+        or request.headers.get("x-melonn-secret")
+        or ""
+    ).strip()
+    provisto = header_secret or (secret or "").strip()
+    if provisto != expected:
+        log.warning(f"Webhook con secret inválido (header={'sí' if header_secret else 'no'}, query={'sí' if secret else 'no'})")
         raise HTTPException(401, "Secret inválido")
 
     try:
