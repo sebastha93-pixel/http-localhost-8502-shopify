@@ -240,7 +240,27 @@ class MelonnBot:
         url = f"{ADMIN_URL}/sell-orders/{internal_id}"
         loaded = False
         try:
-            self._page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+            # El SPA usa client-side routing: un goto directo a la ruta
+            # profunda devuelve 404 del CDN (NoSuchKey index.html).
+            # Solución: cargar la raíz primero (si no estamos ya en el SPA),
+            # luego navegar por la History API del cliente.
+            cur = self._page.url
+            if "admin.melonn.com" not in cur or "404" in self._page.content()[:200].lower():
+                self._page.goto(f"{ADMIN_URL}/", wait_until="domcontentloaded", timeout=20_000)
+                time.sleep(2)
+            # Navegación SPA interna (no recarga, evita el 404 del CDN)
+            try:
+                self._page.evaluate(
+                    "u => window.history.pushState({}, '', u)", f"/sell-orders/{internal_id}"
+                )
+                # Disparar evento de routing que React/Vue escucha
+                self._page.evaluate("window.dispatchEvent(new PopStateEvent('popstate'))")
+                time.sleep(3)
+            except Exception:
+                pass
+            # Si el routing por history no funcionó, intentar goto normal igual
+            if "sell-orders" not in self._page.url:
+                self._page.goto(url, wait_until="domcontentloaded", timeout=20_000)
             # Esperar a algo ESPECÍFICO del detalle (NO el menú lateral que
             # también tiene "Incidencias"). "Información de la orden" o el
             # número de orden_tienda solo aparecen en el detalle real.
