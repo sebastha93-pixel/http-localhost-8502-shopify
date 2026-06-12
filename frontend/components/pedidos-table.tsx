@@ -133,28 +133,7 @@ export function PedidosTable({
         <PedidoDetalle pedido={expanded} onClose={() => setExpanded(null)} />
       )}
 
-      {/* Barra de selección */}
-      {selectable && selected.size > 0 && (
-        <div className="flex items-center justify-between rounded-md border border-steel/40 bg-steel/10 px-4 py-2.5">
-          <p className="text-sm font-semibold text-ink">
-            {selected.size} {selected.size === 1 ? "pedido seleccionado" : "pedidos seleccionados"}
-          </p>
-          <div className="flex gap-2">
-            <button
-              onClick={abrirGuiasSeleccionadas}
-              className="rounded-md bg-navy px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-white hover:bg-ink"
-            >
-              Abrir guías ({selected.size})
-            </button>
-            <button
-              onClick={() => setSelected(new Set())}
-              className="rounded-md border border-border bg-white px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-graphite hover:bg-concrete"
-            >
-              Limpiar
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Barra de selección eliminada — la info del pedido se ve al tocarlo */}
 
       {/* Resultados */}
       <p className="text-xs text-graphite">

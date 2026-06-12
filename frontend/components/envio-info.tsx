@@ -23,8 +23,6 @@ interface CarrierDef {
 const CARRIERS: CarrierDef[] = [
   { name: "Coordinadora",     short: "Coord.",  url: "https://coordinadora.com/portafolio-de-servicios/servicios-en-linea/rastreo-de-mercancia/", color: "bg-rust",    match: /coordinadora/i },
   { name: "Envía",            short: "Envía",   url: "https://www.envia.co/rastreo-de-envios",                                                       color: "bg-navy",    match: /env[ií]a/i },
-  { name: "Interrapidísimo",  short: "Inter.",  url: "https://www.interrapidisimo.com/sigue-tu-envio/",                                              color: "bg-crimson", match: /interrap/i },
-  { name: "TCC",              short: "TCC",     url: "https://tcc.com.co/rastreo-envios/",                                                            color: "bg-teal",    match: /\btcc\b/i },
   { name: "Servientrega",     short: "Servi.",  url: "https://www.servientrega.com/wps/portal/inicio/rastrea-tu-envio",                              color: "bg-khaki",   match: /servientrega/i },
 ];
 
