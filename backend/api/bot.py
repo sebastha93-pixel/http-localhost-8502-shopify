@@ -170,7 +170,7 @@ def _run_bot(task_id: str, ordenes: list[str], autor: str):
 
     try:
         # Delay entre pedidos configurable (modo lento evita bloqueo Melonn)
-        _delay = float(os.environ.get("BOT_DELAY_SEC", "8"))
+        _delay = float(os.environ.get("BOT_DELAY_SEC", "3"))
         res = scrape_batch(ordenes, delay_seconds=_delay, on_result=_persistir)
 
         with _lock:
