@@ -152,3 +152,216 @@ def top_productos(n: int = 5, dias: int = 30) -> list:
             p["pct_del_total"] = round(p["revenue"] / total * 100, 1)
         return ranked
     return _cached(key, _calc, ttl=1800)   # 30 min — datos diarios estables
+
+
+# ─── Comparativas temporales ──────────────────────────────────────────────────
+def _suma_periodo(desde: date, hasta: date) -> dict:
+    """Suma ventas + pedidos entre dos fechas inclusive. Cacheado por rango."""
+    key = f"sp_{desde.isoformat()}_{hasta.isoformat()}"
+
+    def _calc():
+        total = 0.0
+        pedidos = 0
+        d = desde
+        while d <= hasta:
+            v = ventas_del_dia(d)
+            total += v.get("total", 0.0)
+            pedidos += v.get("num_pedidos", 0)
+            d = d + timedelta(days=1)
+        return {"total": total, "num_pedidos": pedidos,
+                "ticket_promedio": (total / pedidos) if pedidos else 0.0}
+
+    return _cached(key, _calc, ttl=1800)
+
+
+def comparativas() -> dict:
+    """
+    Devuelve 3 comparativas temporales:
+      - semana_actual vs semana_pasada (mismo día acumulado)
+      - mes_actual vs mes_pasado (a la misma fecha del mes)
+      - yoy: mes actual vs mismo mes año pasado
+    Cada bloque: {actual, anterior, pct, up}
+    """
+    hoy = date.today()
+
+    # Semana ISO: del lunes al día actual
+    lunes_actual    = hoy - timedelta(days=hoy.weekday())
+    lunes_pasado    = lunes_actual - timedelta(days=7)
+    domingo_pasado  = lunes_actual - timedelta(days=1)
+    dia_equivalente_pasado = lunes_pasado + timedelta(days=hoy.weekday())
+
+    semana_act = _suma_periodo(lunes_actual, hoy)
+    semana_pas = _suma_periodo(lunes_pasado, dia_equivalente_pasado)
+
+    # Mes a la fecha vs mes anterior a la misma fecha
+    primer_dia_mes = hoy.replace(day=1)
+    mes_pasado_fin = primer_dia_mes - timedelta(days=1)
+    mes_pasado_inicio = mes_pasado_fin.replace(day=1)
+    mes_pasado_misma_fecha = min(
+        mes_pasado_inicio + timedelta(days=hoy.day - 1),
+        mes_pasado_fin,
+    )
+    mes_act = _suma_periodo(primer_dia_mes, hoy)
+    mes_pas = _suma_periodo(mes_pasado_inicio, mes_pasado_misma_fecha)
+
+    # YoY: mismo rango del año pasado
+    try:
+        primer_dia_mes_yoy = primer_dia_mes.replace(year=primer_dia_mes.year - 1)
+        hoy_yoy = hoy.replace(year=hoy.year - 1)
+        yoy_pas = _suma_periodo(primer_dia_mes_yoy, hoy_yoy)
+    except ValueError:
+        yoy_pas = {"total": 0.0, "num_pedidos": 0, "ticket_promedio": 0.0}
+
+    def _delta(a, b):
+        ta, tb = a.get("total", 0.0), b.get("total", 0.0)
+        pct = ((ta - tb) / tb * 100) if tb else 0.0
+        return {"actual": a, "anterior": b, "pct": round(pct, 1), "up": pct >= 0}
+
+    return {
+        "semana": _delta(semana_act, semana_pas),
+        "mes":    _delta(mes_act, mes_pas),
+        "yoy":    _delta(mes_act, yoy_pas),
+    }
+
+
+# ─── Análisis de clientes ─────────────────────────────────────────────────────
+def _fetch_orders_periodo(desde: date, hasta: date, fields: str = "id,total_price,customer,created_at") -> list:
+    """Fetch órdenes en un rango. Cacheado."""
+    key = f"fop_{desde.isoformat()}_{hasta.isoformat()}_{fields}"
+
+    def _calc():
+        orders: list = []
+        params = {
+            "status": "any",
+            "created_at_min": _iso_inicio(desde),
+            "created_at_max": _iso_fin(hasta),
+            "limit": 250,
+            "fields": fields,
+        }
+        # Paginar con cursor — Shopify devuelve max 250 por página
+        try:
+            from shopify_client import paginar
+            for page in paginar("/orders.json", "orders", params):
+                orders.extend(page)
+        except Exception:
+            # Fallback sin paginar (limita a 250)
+            r = _get("/orders.json", params)
+            orders.extend(r.get("orders", []))
+        return orders
+
+    return _cached(key, _calc, ttl=1800)
+
+
+def analisis_clientes(dias: int = 90) -> dict:
+    """
+    Métricas de clientes en los últimos `dias`:
+      - total_clientes_unicos
+      - pct_recurrentes: % de pedidos hechos por clientes con ≥ 2 órdenes
+      - pct_nuevos: % de pedidos por clientes con 1 sola orden (en el período)
+      - ltv_promedio: revenue total / clientes únicos
+      - top_clientes: top 10 por revenue (anonimizado a nombre + ciudad si está)
+      - tasa_recompra_60d: % de clientes con orden en [hoy-90, hoy-60] que volvió en [hoy-60, hoy]
+    """
+    key = f"ac_{dias}_{date.today().isoformat()}"
+
+    def _calc():
+        hoy = date.today()
+        desde = hoy - timedelta(days=dias)
+        orders = _fetch_orders_periodo(desde, hoy)
+
+        # Agregar por cliente
+        por_cliente: dict = defaultdict(lambda: {"revenue": 0.0, "ordenes": 0, "nombre": "", "ciudad": "", "email": ""})
+        for o in orders:
+            c = o.get("customer") or {}
+            cid = c.get("id") or (c.get("email") or "").lower().strip()
+            if not cid:
+                continue
+            nombre = f"{c.get('first_name','')} {c.get('last_name','')}".strip() or "—"
+            por_cliente[cid]["revenue"] += float(o.get("total_price") or 0)
+            por_cliente[cid]["ordenes"] += 1
+            por_cliente[cid]["nombre"]   = nombre
+            por_cliente[cid]["email"]    = c.get("email") or ""
+
+        total_clientes = len(por_cliente)
+        total_ordenes  = sum(c["ordenes"] for c in por_cliente.values())
+        revenue_total  = sum(c["revenue"] for c in por_cliente.values())
+
+        ordenes_recurrentes = sum(c["ordenes"] for c in por_cliente.values() if c["ordenes"] >= 2)
+        ordenes_nuevos      = sum(c["ordenes"] for c in por_cliente.values() if c["ordenes"] == 1)
+
+        top = sorted(por_cliente.values(), key=lambda x: x["revenue"], reverse=True)[:10]
+
+        # Tasa de recompra: clientes con orden en ventana antigua que volvieron
+        ventana_vieja_ini = hoy - timedelta(days=90)
+        ventana_vieja_fin = hoy - timedelta(days=60)
+        ventana_reciente_ini = hoy - timedelta(days=60)
+        clientes_ventana_vieja = set()
+        clientes_volvieron = set()
+        for o in orders:
+            c = o.get("customer") or {}
+            cid = c.get("id") or (c.get("email") or "").lower().strip()
+            if not cid:
+                continue
+            fecha_str = (o.get("created_at") or "")[:10]
+            try:
+                fecha = datetime.fromisoformat(fecha_str).date()
+            except Exception:
+                continue
+            if ventana_vieja_ini <= fecha < ventana_vieja_fin:
+                clientes_ventana_vieja.add(cid)
+            if fecha >= ventana_reciente_ini:
+                if cid in clientes_ventana_vieja:
+                    clientes_volvieron.add(cid)
+
+        tasa_recompra = (
+            len(clientes_volvieron) / len(clientes_ventana_vieja) * 100
+            if clientes_ventana_vieja else 0.0
+        )
+
+        return {
+            "dias": dias,
+            "total_clientes_unicos": total_clientes,
+            "total_ordenes": total_ordenes,
+            "revenue_total": round(revenue_total, 0),
+            "pct_recurrentes": round(ordenes_recurrentes / total_ordenes * 100, 1) if total_ordenes else 0.0,
+            "pct_nuevos":      round(ordenes_nuevos      / total_ordenes * 100, 1) if total_ordenes else 0.0,
+            "ltv_promedio":    round(revenue_total / total_clientes, 0) if total_clientes else 0.0,
+            "tasa_recompra_60d": round(tasa_recompra, 1),
+            "top_clientes": [
+                {**c, "revenue": round(c["revenue"], 0)} for c in top
+            ],
+        }
+
+    return _cached(key, _calc, ttl=1800)
+
+
+def ventas_por_periodo(periodo: str = "30d") -> dict:
+    """
+    Resumen de ventas para un período predefinido.
+    `periodo`: "7d" | "30d" | "90d" | "ytd"
+    """
+    hoy = date.today()
+    if periodo == "7d":
+        desde = hoy - timedelta(days=6)
+    elif periodo == "30d":
+        desde = hoy - timedelta(days=29)
+    elif periodo == "90d":
+        desde = hoy - timedelta(days=89)
+    elif periodo == "ytd":
+        desde = date(hoy.year, 1, 1)
+    else:
+        desde = hoy - timedelta(days=29)
+
+    resumen = _suma_periodo(desde, hoy)
+    serie = []
+    d = desde
+    while d <= hoy:
+        serie.append({"fecha": d.isoformat(), "total": ventas_del_dia(d).get("total", 0.0)})
+        d = d + timedelta(days=1)
+    return {
+        "periodo": periodo,
+        "desde":   desde.isoformat(),
+        "hasta":   hoy.isoformat(),
+        "resumen": resumen,
+        "serie":   serie,
+    }

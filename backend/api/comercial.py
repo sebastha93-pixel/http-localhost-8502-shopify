@@ -103,3 +103,49 @@ def top_productos(
         return {"n": n, "dias": dias, "productos": sm.top_productos(n=n, dias=dias)}
     except Exception as e:
         raise HTTPException(503, f"Error consultando Shopify: {str(e)[:200]}")
+
+
+@router.get("/comparativas")
+def comparativas(
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """
+    Comparativas temporales:
+      - semana actual vs pasada (mismo día acumulado)
+      - mes actual vs mes anterior (a la misma fecha)
+      - YoY: mes actual vs mismo mes año pasado
+    """
+    try:
+        sm = _shopify_metrics()
+        return sm.comparativas()
+    except Exception as e:
+        raise HTTPException(503, f"Error: {str(e)[:200]}")
+
+
+@router.get("/clientes")
+def clientes(
+    dias: int = Query(90, ge=30, le=365),
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """
+    Análisis de clientes en los últimos `dias`:
+    recurrentes vs nuevos, LTV, tasa de recompra, top 10 por revenue.
+    """
+    try:
+        sm = _shopify_metrics()
+        return sm.analisis_clientes(dias=dias)
+    except Exception as e:
+        raise HTTPException(503, f"Error: {str(e)[:200]}")
+
+
+@router.get("/ventas-periodo")
+def ventas_periodo(
+    periodo: str = Query("30d", pattern="^(7d|30d|90d|ytd)$"),
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """Ventas para un período preset: 7d, 30d, 90d, ytd."""
+    try:
+        sm = _shopify_metrics()
+        return sm.ventas_por_periodo(periodo=periodo)
+    except Exception as e:
+        raise HTTPException(503, f"Error: {str(e)[:200]}")
