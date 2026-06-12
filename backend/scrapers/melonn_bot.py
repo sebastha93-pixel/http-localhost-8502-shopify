@@ -21,6 +21,7 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 ADMIN_URL = "https://admin.melonn.com"
+TRACKING_URL = "https://tracking.melonn.com"   # página pública, sin login
 SESSION_PATH = Path("/tmp/melonn_session.json")
 
 # Selectores y patrones a iterar según el HTML real de Melonn admin
@@ -223,146 +224,109 @@ class MelonnBot:
 
     def extract_order(self, orden_tienda: str, melonn_id: str = "") -> ExtractedOrder:
         """
-        Navega a la página del pedido y extrae carrier + guía + incidencias.
+        Extrae carrier + guía desde la página PÚBLICA de tracking de Melonn.
 
-        URL real confirmada: admin.melonn.com/sell-orders/{id_interno}
-        donde id_interno = internal_order_number sin la "M" inicial.
-        Ej: orden_melonn=M1781094268990396 → /sell-orders/1781094268990396
+        URL: https://tracking.melonn.com/{internal_order_number}
+        Ej: melonn_id=M1781196774156456 → tracking.melonn.com/M1781196774156456
+
+        Ventaja: pública (sin login), muestra transportadora + guía + historial.
+        El layout: "En tránsito / Tu pedido está en camino... / ENVÍA / Guía: 034057310824"
         """
         result = ExtractedOrder(orden_tienda=orden_tienda)
 
-        # Derivar el ID interno: quitar "M" del orden_melonn
-        internal_id = (melonn_id or "").lstrip("Mm").strip()
-        if not internal_id:
-            result.error = "Falta melonn_id para construir la URL"
+        mid = (melonn_id or "").strip()
+        if not mid:
+            result.error = "Falta melonn_id (internal_order_number)"
             return result
+        if not mid.upper().startswith("M"):
+            mid = "M" + mid.lstrip("Mm")
 
-        url = f"{ADMIN_URL}/sell-orders/{internal_id}"
+        url = f"{TRACKING_URL}/{mid}"
         loaded = False
-
-        ok_markers = [
-            f"text=#{orden_tienda}",
-            f"text={orden_tienda}",
-            "text=/Informaci[óo]n de la orden/i",
-            "text=/Informaci[óo]n del env[íi]o/i",
-            "text=Pago contra entrega",
-        ]
-
-        # Reintentar el goto directo: a veces Melonn sirve 404 NoSuchKey
-        # transitorio (CDN) que se resuelve recargando.
         for intento in range(3):
             try:
                 self._page.goto(url, wait_until="domcontentloaded", timeout=25_000)
-                time.sleep(3)
+                time.sleep(3)  # SPA render
+                # La página de tracking muestra "Seguimiento" o "Tu pedido"
+                txt = self._page.inner_text("body")
+                if "seguimiento" in txt.lower() or "tu pedido" in txt.lower() or orden_tienda in txt:
+                    loaded = True
+                    break
                 head = self._page.content()[:300].lower()
-                if "nosuchkey" in head or "404 not found" in head:
-                    log.warning(f"404 CDN en {url} (intento {intento+1}) — recargo")
+                if "nosuchkey" in head or "404" in head:
                     time.sleep(3)
                     self._page.reload(wait_until="domcontentloaded", timeout=25_000)
                     time.sleep(3)
-                # Buscar marcador del detalle
-                for marker in ok_markers:
-                    try:
-                        self._page.locator(marker).first.wait_for(state="visible", timeout=6_000)
-                        loaded = True
-                        break
-                    except Exception:
-                        continue
-                if loaded:
-                    break
-                # Si no cargó, revisar contenido completo
-                c = self._page.content()
-                if (orden_tienda in c and "contra entrega" in c.lower()) or "información de la orden" in c.lower():
-                    loaded = True
-                    break
             except Exception as e:
-                log.debug(f"goto {url} intento {intento+1}: {e}")
+                log.debug(f"tracking goto {url} intento {intento+1}: {e}")
             time.sleep(2)
 
         if not loaded:
-            result.error = f"No se pudo cargar el detalle (url: {url})"
+            result.error = f"No cargó tracking ({url})"
             return result
 
         try:
-            # ── 1. Tab TRANSPORTE: carrier + guía ──
-            # La info de transporte está en un tab separado. Click primero.
-            self._click_tab("Transporte")
-            time.sleep(1.2)
-            text_transporte = self._page.inner_text("body")
-
-            # Layout real del admin (label en una línea, valor en la siguiente):
-            #   Transportadora
-            #   Coordinadora Mercantil
-            #   Guía
-            #   16143081998
-            #
-            # inner_text separa con \n, así que el valor viene después del label.
-
-            # Carrier: "Transportadora" seguido del nombre en la línea siguiente
-            for pat in [
-                r"Transportadora\s*\n+\s*([A-Za-zÀ-ſ][^\n\r]{2,45})",
-                r"Transportadora:?\s*([A-Za-zÀ-ſ][^\n\r]{2,45})",
-                r"Entregada a:?\s*([A-Za-zÀ-ſ][^\n\r]{2,45})",
-            ]:
-                m = re.search(pat, text_transporte)
-                if m:
-                    carrier_raw = re.split(
-                        r"\s+(?:Gu[ií]a|Documento|Ver|Rastrear|Seguimiento|Intento)\b",
-                        m.group(1).strip(),
-                    )[0].strip()
-                    if carrier_raw and len(carrier_raw) > 2:
-                        result.carrier = carrier_raw
+            # Abrir el historial de seguimiento si hay botón (ahí está la guía)
+            for label in ["Ver historial de seguimiento", "Ver historial", "historial"]:
+                try:
+                    btn = self._page.get_by_text(re.compile(label, re.I)).first
+                    if btn.is_visible(timeout=2000):
+                        btn.click()
+                        time.sleep(1.5)
                         break
+                except Exception:
+                    continue
 
-            # Guía: "Guía" seguido del número (puede estar en línea siguiente)
+            text = self._page.inner_text("body")
+
+            # Estado actual (ej. "Tu pedido está en camino" / "No pudimos entregar")
             for pat in [
-                r"Gu[ií]a\s*\n+\s*([A-Z0-9][A-Z0-9-]{4,40})",
-                r"Gu[ií]a:?\s*([A-Z0-9][A-Z0-9-]{4,40})",
+                r"(Tu pedido está en camino)",
+                r"(No pudimos entregar[^\n.]*)",
+                r"(Entregado[^\n.]*)",
+                r"(En tránsito)",
             ]:
-                m2 = re.search(pat, text_transporte)
-                if m2:
-                    result.guia = m2.group(1).strip()
+                m = re.search(pat, text, re.I)
+                if m:
+                    result.estado = m.group(1).strip()
                     break
 
-            # Link directo "Seguimiento transportadora" (href del botón)
-            try:
-                btn = self._page.get_by_text(re.compile(r"Seguimiento transportadora", re.I)).first
-                href = btn.get_attribute("href", timeout=1500)
-                if not href:
-                    # puede ser un <a> padre o tener onclick; buscar href cercano
-                    href = self._page.eval_on_selector(
-                        "a:has-text('Seguimiento transportadora')",
-                        "el => el.href",
-                    )
-                if href and href.startswith("http"):
-                    result.tracking_url = href
-            except Exception:
-                pass
+            # Guía: "Guía: 034057310824"
+            mg = re.search(r"Gu[ií]a:?\s*([A-Z0-9][A-Z0-9-]{4,40})", text)
+            if mg:
+                result.guia = mg.group(1).strip()
 
-            # ── 2. Tab INCIDENCIAS ──
-            self._click_tab("Incidencias")
-            time.sleep(1.2)
-            text_inc = self._page.inner_text("body")
-            self._extract_incidencias(text_inc, result)
+            # Transportadora: nombre en MAYÚSCULAS o capitalizado justo ANTES de "Guía:"
+            # Layout: "ENVÍA\nGuía: 034057310824"  o  "Coordinadora\nGuía: ..."
+            mc = re.search(r"\n([A-ZÁÉÍÓÚÑ][A-Za-zÀ-ſ .]{1,38})\s*\n\s*Gu[ií]a:", text)
+            if mc:
+                result.carrier = mc.group(1).strip()
+            else:
+                # Fallback: buscar nombres de carriers conocidos en el texto
+                for c in ["Coordinadora", "Servientrega", "Interrapidísimo",
+                          "Interrapidisimo", "TCC", "Envía", "Envia", "Mercado Libre"]:
+                    if re.search(rf"\b{re.escape(c)}\b", text, re.I):
+                        result.carrier = c
+                        break
 
-            # ── 3. Estado de la orden (header, visible en ambos tabs) ──
-            m3 = re.search(r"El estado de tu orden es:?\s*([A-Za-zÀ-ſ ]{3,30})", text_transporte)
-            if m3:
-                result.estado = m3.group(1).strip()
+            # Novedad: si el tracking dice que no se pudo entregar
+            if re.search(r"no pudimos entregar|ser[áa] retornado|devuel", text, re.I):
+                result.incidencias.append({
+                    "numero": "TRACKING",
+                    "estado": "Sin gestionar",
+                    "descripcion": "Tracking Melonn: entrega fallida / retorno",
+                })
 
-            result.ok = bool(result.carrier or result.guia or result.incidencias)
+            result.ok = bool(result.guia or result.carrier)
             if not result.ok:
-                # Guardar HTML para diagnóstico
                 try:
-                    snap = Path(f"/tmp/melonn_{orden_tienda}.txt")
-                    snap.write_text(text_transporte[:5000], encoding="utf-8")
-                    self._page.screenshot(path=f"/tmp/melonn_{orden_tienda}.png")
+                    Path(f"/tmp/track_{orden_tienda}.txt").write_text(text[:4000], encoding="utf-8")
                 except Exception:
                     pass
-                result.error = "Página cargó pero no encontré carrier/guía/incidencias. Revisa /tmp para diagnóstico."
+                result.error = "Tracking cargó pero sin guía/carrier visible"
             return result
         except Exception as e:
-            log.exception(f"Error extrayendo {orden_tienda}")
+            log.exception(f"Error extrayendo tracking {orden_tienda}")
             result.error = str(e)
             return result
 
@@ -440,14 +404,10 @@ def scrape_batch(ordenes: list, delay_seconds: float = 2.0, on_result=None) -> d
     extrae (guardado incremental — no se pierde lo ya conseguido si el bot
     se cae a mitad).
     """
-    email = os.environ.get("MELONN_BOT_EMAIL", "").strip()
-    pwd   = os.environ.get("MELONN_BOT_PASSWORD", "").strip()
-    if not email or not pwd:
-        return {
-            "ok": False,
-            "error": "Faltan credenciales: configura MELONN_BOT_EMAIL y MELONN_BOT_PASSWORD en Railway.",
-            "resultados": [],
-        }
+    # El tracking público NO requiere credenciales. Solo se usan como
+    # fallback opcional si algún día volvemos al admin.
+    email = os.environ.get("MELONN_BOT_EMAIL", "").strip() or "publico"
+    pwd   = os.environ.get("MELONN_BOT_PASSWORD", "").strip() or "publico"
 
     # Normalizar a lista de (orden_tienda, melonn_id)
     pares: list[tuple[str, str]] = []
@@ -462,15 +422,7 @@ def scrape_batch(ordenes: list, delay_seconds: float = 2.0, on_result=None) -> d
     extracted: list[ExtractedOrder] = []
     try:
         with MelonnBot(email, pwd, headless=True) as bot:
-            login_res = bot.ensure_logged_in()
-            if not login_res.get("ok"):
-                return {
-                    "ok": False,
-                    "error": login_res.get("error"),
-                    "requires_2fa": login_res.get("requires_2fa", False),
-                    "resultados": [],
-                }
-
+            # Tracking público: NO necesita login. Saltamos ensure_logged_in.
             for i, (orden, mid) in enumerate(pares):
                 if i > 0:
                     time.sleep(delay_seconds)  # delay entre pedidos
