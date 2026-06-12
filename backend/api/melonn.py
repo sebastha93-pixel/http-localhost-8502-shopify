@@ -97,6 +97,68 @@ def sync_completo_endpoint(
     return SyncResponse(**result)
 
 
+@router.post("/enriquecer-faltantes")
+def enriquecer_faltantes_endpoint(
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """
+    Corre sync_completo en loop hasta que no queden faltantes o el conteo
+    deje de bajar. Para los pedidos manuales (sin external_order_id) que
+    aún no tienen datos del cliente.
+    """
+    import sys, time as _t
+    from pathlib import Path
+    _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+    import melonn_client as mc
+
+    total_completados = 0
+    faltantes_inicial = None
+    faltantes_final = None
+    iteraciones = 0
+    for _ in range(5):  # máx 5 iteraciones de sync_completo
+        iteraciones += 1
+        # Contar faltantes ANTES
+        data = svc.obtener_pedidos(forzar_refresh=False)
+        faltantes_antes = sum(
+            1 for p in data.get("pedidos", [])
+            if not p.get("nombre_comprador") and not p.get("telefono_comprador")
+        )
+        if faltantes_inicial is None:
+            faltantes_inicial = faltantes_antes
+        if faltantes_antes == 0:
+            faltantes_final = 0
+            break
+
+        # Ejecutar pasada
+        try:
+            mc.sync_completo()
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:200], "iteraciones": iteraciones,
+                    "completados": total_completados}
+
+        # Recontar
+        data = svc.obtener_pedidos(forzar_refresh=False)
+        faltantes_final = sum(
+            1 for p in data.get("pedidos", [])
+            if not p.get("nombre_comprador") and not p.get("telefono_comprador")
+        )
+        completados = faltantes_antes - faltantes_final
+        total_completados += completados
+        if completados == 0:
+            break  # no avanza más
+        _t.sleep(1)
+
+    return {
+        "ok": True,
+        "iteraciones": iteraciones,
+        "faltantes_inicial": faltantes_inicial or 0,
+        "faltantes_restantes": faltantes_final if faltantes_final is not None else 0,
+        "completados": total_completados,
+    }
+
+
 @router.get("/status", response_model=StatusResponse)
 def status() -> StatusResponse:
     """Estado de la integración Melonn — credenciales y caché."""

@@ -26,16 +26,28 @@ export function SyncButton() {
   const [msg, setMsg] = useState<string>("");
 
   const mut = useMutation({
-    mutationFn: () => api.post<SyncResponse>("/api/melonn/sync-completo"),
+    mutationFn: async () => {
+      // Doble pasada: sync_completo + enriquecer-faltantes (loop hasta 0)
+      const s = await api.post<SyncResponse>("/api/melonn/sync-completo");
+      try {
+        const f = await api.post<{
+          completados: number; faltantes_restantes: number;
+        }>("/api/melonn/enriquecer-faltantes");
+        return { ...s, extra_completados: f.completados, faltantes: f.faltantes_restantes };
+      } catch {
+        return { ...s, extra_completados: 0, faltantes: 0 };
+      }
+    },
     onSuccess: (data) => {
-      if (data.completados > 0) {
-        setMsg(`✓ ${data.completados} pedidos completados (${data.despues}/${data.total})`);
+      const totalComp = (data.completados || 0) + (data.extra_completados || 0);
+      if (totalComp > 0) {
+        setMsg(`✓ ${totalComp} completados · ${data.faltantes || 0} sin datos restantes`);
         qc.invalidateQueries({ queryKey: ["melonn"] });
         qc.invalidateQueries({ queryKey: ["metricas"] });
       } else {
-        setMsg(`✓ Ya sincronizado (${data.despues}/${data.total})`);
+        setMsg(`✓ Ya sincronizado · ${data.faltantes || 0} pendientes`);
       }
-      setTimeout(() => setMsg(""), 6000);
+      setTimeout(() => setMsg(""), 8000);
     },
     onError: (err: Error) => {
       setMsg(`✗ ${err.message}`);

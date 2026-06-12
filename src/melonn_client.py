@@ -982,7 +982,8 @@ def _lazy_enrich(pedidos: list, max_pedidos: int = 30) -> list:
         resultado[idx] = p_enr
 
     # Segundo paso: pedidos manuales sin external_order_id → Melonn detail endpoint
-    resultado = _enriquecer_desde_melonn(resultado, max_pedidos=max_pedidos)
+    # Aumentado a 60 para reducir backlog de pedidos sin datos
+    resultado = _enriquecer_desde_melonn(resultado, max_pedidos=max(60, max_pedidos))
 
     return resultado
 
@@ -1097,18 +1098,26 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
 
     for idx in indices:
         p = pedidos[idx]
-        # Melonn GET /sell-orders/{X} requiere el external_order_number
+        # Probar primero external_order_number; si falla, probar internal
+        # (orden_melonn sin "M") — útil para órdenes manuales con códigos
+        # cortos como "0031" que el external no resuelve.
         ext = p.get("orden_tienda")
-        if not ext:
-            continue
+        internal = str(p.get("orden_melonn") or "").lstrip("Mm").strip()
 
-        try:
-            detail = _get(f"sell-orders/{ext}")
-        except Exception as e:
-            log.warning(f"Error fetching detalle {ext}: {e}")
-            continue
+        detail = None
+        for candidato in [ext, internal]:
+            if not candidato:
+                continue
+            try:
+                detail = _get(f"sell-orders/{candidato}")
+                if detail:
+                    break
+            except Exception as e:
+                log.debug(f"detail {candidato}: {e}")
+                continue
 
         if not detail:
+            log.warning(f"Sin detalle Melonn para {ext} / {internal}")
             continue
 
         p = dict(p)
