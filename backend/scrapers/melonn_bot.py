@@ -240,20 +240,30 @@ class MelonnBot:
         url = f"{ADMIN_URL}/sell-orders/{internal_id}"
         loaded = False
         try:
-            # domcontentloaded (rápido) en vez de networkidle (lento en SPA)
             self._page.goto(url, wait_until="domcontentloaded", timeout=20_000)
-            # Esperar a que aparezca el tab Transporte/Incidencias (señal de render)
-            try:
-                self._page.get_by_text(
-                    re.compile(r"Transporte|Incidencias", re.I)
-                ).first.wait_for(state="visible", timeout=12_000)
-                loaded = True
-            except Exception:
-                # Fallback: revisar contenido tras breve espera
-                time.sleep(2)
-                txt_lower = self._page.content().lower()
-                loaded = ("transporte" in txt_lower or "incidencia" in txt_lower
-                          or "informaci" in txt_lower)
+            # Esperar a algo ESPECÍFICO del detalle (NO el menú lateral que
+            # también tiene "Incidencias"). "Información de la orden" o el
+            # número de orden_tienda solo aparecen en el detalle real.
+            ok_markers = [
+                f"text=#{orden_tienda}",
+                f"text={orden_tienda}",
+                "text=/Informaci[óo]n de la orden/i",
+                "text=/Informaci[óo]n del env[íi]o/i",
+                "text=Pago contra entrega",
+            ]
+            for marker in ok_markers:
+                try:
+                    self._page.locator(marker).first.wait_for(state="visible", timeout=8_000)
+                    loaded = True
+                    break
+                except Exception:
+                    continue
+            if not loaded:
+                # Última espera: dar tiempo al SPA y revisar contenido
+                time.sleep(4)
+                c = self._page.content()
+                loaded = (orden_tienda in c and "contra entrega" in c.lower()) \
+                         or "información de la orden" in c.lower()
         except Exception as e:
             log.debug(f"Falló URL {url}: {e}")
 
@@ -345,17 +355,35 @@ class MelonnBot:
             return result
 
     def _click_tab(self, nombre: str):
-        """Click en un tab (Transporte / Incidencias) si existe."""
+        """
+        Click en un tab del detalle (Transporte / Incidencias).
+        IMPORTANTE: evitar el item del menú lateral con el mismo nombre.
+        """
+        # 1. role=tab es lo más específico (el menú lateral usa role=link/menuitem)
         try:
             tab = self._page.get_by_role("tab", name=re.compile(nombre, re.I)).first
-            if tab.is_visible(timeout=2_000):
+            if tab.is_visible(timeout=2_500):
                 tab.click()
                 return
         except Exception:
             pass
-        # Fallback: buscar por texto
+        # 2. Buscar el tab por su ícono+texto dentro del área de detalle.
+        #    El menú lateral es un <nav>/<aside>; excluimos esa zona buscando
+        #    elementos cuyo texto sea EXACTO al nombre y no estén en el sidebar.
         try:
-            self._page.get_by_text(re.compile(rf"^{nombre}", re.I)).first.click(timeout=2_000)
+            # Los tabs del detalle suelen ser <button> o <div role=tab>.
+            loc = self._page.locator(
+                f"button:has-text('{nombre}'), [role=tab]:has-text('{nombre}')"
+            )
+            count = loc.count()
+            for i in range(count):
+                el = loc.nth(i)
+                try:
+                    if el.is_visible(timeout=800):
+                        el.click(timeout=2000)
+                        return
+                except Exception:
+                    continue
         except Exception:
             pass
 
