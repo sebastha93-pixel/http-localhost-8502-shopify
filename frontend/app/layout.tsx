@@ -7,8 +7,13 @@ import { AuthShell } from "@/components/auth-shell";
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
 
 export const metadata: Metadata = {
-  title: "MALE'DENIM OS",
-  description: "Sistema operativo de MALE'DENIM",
+  title: {
+    default: "Male Denim OS",
+    template: "%s · Male Denim OS",
+  },
+  description: "Sistema operativo de MALE'DENIM — logística, conciliación y operación.",
+  applicationName: "Male Denim OS",
+  appleWebApp: { title: "Male Denim OS", capable: true, statusBarStyle: "black-translucent" },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
