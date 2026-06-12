@@ -43,7 +43,7 @@ interface ProductosResp {
   productos: Producto[];
 }
 
-type Filtro = "todos" | "sin_stock" | "stock_bajo";
+type Filtro = "todos" | "con_stock" | "sin_stock" | "stock_bajo";
 
 function shopifyAdminUrl(handle: string): string {
   return `https://admin.shopify.com/store/me-fits/products?query=${encodeURIComponent(handle)}`;
@@ -88,6 +88,7 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
   const filtrados = useMemo(() => {
     const term = q.trim().toLowerCase();
     return productos.filter((p) => {
+      if (filtro === "con_stock" && p.sin_stock) return false;
       if (filtro === "sin_stock" && !p.sin_stock) return false;
       if (filtro === "stock_bajo" && !p.stock_bajo) return false;
       if (!term) return true;
@@ -116,6 +117,7 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
           <div className="flex gap-1">
             {([
               { id: "todos", label: "Todos" },
+              { id: "con_stock", label: "Con stock" },
               { id: "sin_stock", label: "Sin stock" },
               { id: "stock_bajo", label: "Stock bajo" },
             ] as Array<{ id: Filtro; label: string }>).map((f) => (
