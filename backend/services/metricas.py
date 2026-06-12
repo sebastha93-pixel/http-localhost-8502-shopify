@@ -43,7 +43,24 @@ NOVEDADES_VISIBLES = {
     # Errores genéricos
     "Error - not able to process",
     "Error - no es posible procesar",
+
+    # Órdenes inválidas
+    "Invalid order",
+    "Orden inválida",
+    "Orden invalida",
+    "Fixed-valid - to be processed",  # a veces marca problema de validación
 }
+
+# Keywords que SIEMPRE marcan novedad, sin importar el sub_estado.
+# Cubre variantes de texto de Melonn (sin stock, inválida, error, etc.)
+NOVEDAD_KEYWORDS = [
+    "no stock", "sin stock", "sin inventario",
+    "invalid", "inválid", "invalida",
+    "not able to fulfil", "no es posible procesar",
+    "delivery not posible", "entrega no posible",
+    "expired promise", "promesa vencida",
+    "sm restriction", "restricción método",
+]
 
 
 def es_novedad_visible(p: dict) -> bool:
@@ -64,8 +81,18 @@ def es_novedad_visible(p: dict) -> bool:
 
     sub = p.get("sub_estado_logistico")
     estado = (p.get("estado_melonn") or "").strip()
+    estado_low = estado.lower()
 
-    # 2) Novedad por estado Melonn
+    # 2a) Novedad por estado Melonn (match exacto en whitelist)
+    if estado in NOVEDADES_VISIBLES:
+        return True
+
+    # 2b) Novedad por keyword (sin stock, inválida, error, etc.) —
+    #     independiente del sub_estado, para no perder casos
+    if any(kw in estado_low for kw in NOVEDAD_KEYWORDS):
+        return True
+
+    # 2c) sub_estado novedad explícito
     if sub == "novedad" and estado in NOVEDADES_VISIBLES:
         return True
 

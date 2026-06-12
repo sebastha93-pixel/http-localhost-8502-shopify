@@ -18,8 +18,11 @@ export default function ContraentregaPage() {
     const code = (p: Pedido) => p.estado_melonn_code;
     return {
       todos:      cods,
-      pendientes: cods.filter((p) => [26, 29].includes(code(p))),
-      transito:   cods.filter((p) => [5, 7, 24, 28].includes(code(p))),
+      pendientes: cods.filter((p) => [26, 29].includes(code(p)) && !p.es_novedad_visible),
+      // En proceso: alistamiento → empacado → preparado, ANTES de transportadora
+      proceso:    cods.filter((p) => [1, 2, 5, 24, 28].includes(code(p)) && !p.es_novedad_visible),
+      // En tránsito: ya entregado a la transportadora (en ruta al cliente)
+      transito:   cods.filter((p) => code(p) === 7 && !p.es_novedad_visible),
       novedades:  cods.filter((p) => p.es_novedad_visible),
       entregados: cods.filter((p) => [6, 8].includes(code(p))),
     };
@@ -30,6 +33,7 @@ export default function ContraentregaPage() {
 
   const sumVal = (arr: Pedido[]) => arr.reduce((s, p) => s + (p.valor_num ?? 0), 0);
   const valTotal = sumVal(groups.todos);
+  const valProceso = sumVal(groups.proceso);
   const valTransito = sumVal(groups.transito);
   const valNovedades = sumVal(groups.novedades);
   const valEntregado = sumVal(groups.entregados);
@@ -42,16 +46,18 @@ export default function ContraentregaPage() {
       onRefresh={() => refetch()}
     >
       {/* KPIs COD */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
         <KpiCard label="Total COD"        value={groups.todos.length}        meta={formatMoneyShort(valTotal)}     accent="navy" />
         <KpiCard label="Pendientes"       value={groups.pendientes.length}   meta="Esperan despacho"               accent="khaki" />
-        <KpiCard label="En tránsito"      value={groups.transito.length}     meta={formatMoneyShort(valTransito)}  accent="steel" />
+        <KpiCard label="En proceso"       value={groups.proceso.length}      meta={formatMoneyShort(valProceso)}   accent="steel" />
+        <KpiCard label="En tránsito"      value={groups.transito.length}     meta={formatMoneyShort(valTransito)}  accent="navy" />
         <KpiCard label="Novedades"        value={groups.novedades.length}    meta={formatMoneyShort(valNovedades)} accent={groups.novedades.length ? "rust" : "steel"} danger={groups.novedades.length > 0} />
       </div>
 
       <Tabs defaultValue="pendientes">
         <TabsList>
           <TabsTrigger value="pendientes">Pendientes ({groups.pendientes.length})</TabsTrigger>
+          <TabsTrigger value="proceso">En proceso ({groups.proceso.length})</TabsTrigger>
           <TabsTrigger value="transito">Tránsito ({groups.transito.length})</TabsTrigger>
           <TabsTrigger value="novedades">Novedades ({groups.novedades.length})</TabsTrigger>
           <TabsTrigger value="entregados">Entregados ({groups.entregados.length})</TabsTrigger>
@@ -65,6 +71,15 @@ export default function ContraentregaPage() {
             columns={["nivel", "orden", "cliente", "telefono", "producto", "ciudad", "dias", "valor", "estado"]}
             selectable
             renderAction={(p) => <AutorizarDespachoButton pedido={p} />}
+          />
+        </TabsContent>
+        <TabsContent value="proceso">
+          <PedidosTable
+            pedidos={groups.proceso}
+            showTipoFilter={false}
+            emptyMessage="No hay pedidos en proceso"
+            columns={["nivel", "orden", "cliente", "telefono", "producto", "ciudad", "dias", "valor", "estado"]}
+            selectable
           />
         </TabsContent>
         <TabsContent value="transito">

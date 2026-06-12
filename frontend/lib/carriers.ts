@@ -46,7 +46,13 @@ const CARRIERS: CarrierDef[] = [
  * Devuelve la URL de rastreo directo para una guía + transportadora.
  * Si no reconoce la transportadora, retorna null (se usa fallback Melonn).
  */
+// DESACTIVADO temporalmente: las URLs de rastreo directo de las
+// transportadoras dan 404 (sus rutas cambiaron). Hasta confirmar las
+// URLs reales, devolvemos null → la guía se muestra como texto + copiar.
+const LINKS_DIRECTOS_ACTIVOS = false;
+
 export function trackingUrl(carrier?: string, guia?: string): string | null {
+  if (!LINKS_DIRECTOS_ACTIVOS) return null;
   if (!carrier || !guia) return null;
   const c = CARRIERS.find((x) => x.match.test(carrier));
   return c ? c.url(guia) : null;
