@@ -95,9 +95,23 @@ def _seleccionar_pedidos(req: ScrapeRequest) -> list[str]:
         if not orden:
             continue
         ov = overrides.get(orden) or overrides.get(p.get("orden_melonn", ""))
-        if req.solo_sin_guia and ov and ov.get("carrier_real"):
-            continue  # ya tiene guía guardada → saltar (incremental)
-        prio = 1 if es_novedad else 2
+        ya_procesado = ov and ov.get("carrier_real")
+        zona = (p.get("zona") or "").upper()
+        es_medellin = "MEDELLIN" in zona or "MEDELLÍN" in zona
+
+        # Medellín local: aunque ya tenga carrier="Mensajería local", lo
+        # seguimos revisando para detectar novedades (lo que importa ahí).
+        # El resto: si ya tiene guía, saltar (incremental).
+        if req.solo_sin_guia and ya_procesado and not es_medellin:
+            continue
+        # Medellín ya procesado pero SIN novedad → saltar también
+        # (solo re-revisamos los de Medellín que aún no se han chequeado
+        #  o que están en estado activo de tránsito)
+        if req.solo_sin_guia and ya_procesado and es_medellin and not es_novedad:
+            # Re-chequear solo si está en tránsito (puede surgir novedad)
+            if p.get("sub_estado_logistico") != "en_transito":
+                continue
+        prio = 1 if es_novedad else (2 if es_medellin else 3)
         candidatos.append((
             prio,
             {"orden_tienda": orden, "melonn_id": str(p.get("orden_melonn") or "")},
@@ -143,12 +157,17 @@ def _run_bot(task_id: str, ordenes: list[str], autor: str):
         if not orden:
             return
         try:
-            if r.get("carrier") or r.get("guia"):
+            # Guardar carrier/guía si los hay. Para envíos locales (Medellín
+            # con mensajería) no hay guía → guardamos "Mensajería local" como
+            # carrier para que NO se reprocese indefinidamente.
+            carrier = r.get("carrier") or ""
+            guia = r.get("guia") or ""
+            if carrier or guia:
                 overrides_svc.upsert(
                     orden,
                     autor=f"Bot ({autor})",
-                    carrier_real=r.get("carrier") or "",
-                    guia_real=r.get("guia") or "",
+                    carrier_real=carrier,
+                    guia_real=guia,
                 )
                 counters["guardados"] += 1
             incidencias = r.get("incidencias") or []

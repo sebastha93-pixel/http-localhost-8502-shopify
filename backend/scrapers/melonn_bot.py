@@ -348,13 +348,26 @@ class MelonnBot:
             if eventos:
                 result.eventos = eventos[:6]
 
-            result.ok = bool(result.guia or result.carrier)
+            # Detectar envío local con mensajería (Medellín / área metro):
+            # no tiene guía de transportadora — eso es NORMAL, no un fallo.
+            es_mensajeria_local = bool(
+                re.search(r"mensajer[íi]a|domicilio local|reparto local|local COL|"
+                          r"entrega local|recogida en (punto|tienda)", text, re.I)
+            )
+            if es_mensajeria_local and not result.carrier:
+                result.carrier = "Mensajería local"
+
+            # OK si conseguimos CUALQUIER dato útil: guía, carrier, estado o novedad.
+            # Para Medellín local lo que importa es el estado/novedad, no la guía.
+            result.ok = bool(
+                result.guia or result.carrier or result.estado or result.incidencias
+            )
             if not result.ok:
                 try:
                     Path(f"/tmp/track_{orden_tienda}.txt").write_text(text[:4000], encoding="utf-8")
                 except Exception:
                     pass
-                result.error = "Tracking cargó pero sin guía/carrier visible"
+                result.error = "Tracking cargó pero sin datos visibles"
             return result
         except Exception as e:
             log.exception(f"Error extrayendo tracking {orden_tienda}")
