@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { formatMoneyShort } from "@/lib/utils";
 import { Search, ExternalLink, Phone, MessageCircle } from "lucide-react";
 import { PedidoDetalle } from "@/components/pedido-detalle";
+import { trackingUrl } from "@/lib/carriers";
 
 const NIVELES: NivelRiesgo[] = ["CRITICO", "RIESGO", "NORMAL", "VENCIDO", "RESUELTO"];
 
@@ -354,17 +355,24 @@ function Row({
       )}
       {has("link") && (
         <Td>
-          {p.link_guia ? (
-            <a
-              href={p.link_guia as string}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center text-steel hover:text-navy"
-              title="Ver guía en Melonn"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-            </a>
-          ) : null}
+          {(() => {
+            // Si hay guía + carrier → link directo a la transportadora.
+            // Si no → fallback al tracking de Melonn.
+            const directo = trackingUrl(p.carrier_real as string, p.guia_real as string);
+            const href = directo || (p.link_guia as string) || "";
+            if (!href) return null;
+            return (
+              <a
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center text-steel hover:text-navy"
+                title={directo ? `Rastrear en ${p.carrier_real}` : "Ver en Melonn"}
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            );
+          })()}
         </Td>
       )}
       {has("action") && renderAction && (

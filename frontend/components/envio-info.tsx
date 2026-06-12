@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
 import { puedeEscribir } from "@/lib/auth";
 import { Pedido } from "@/lib/types";
+import { trackingUrl } from "@/lib/carriers";
 import {
   Truck, ExternalLink, Copy, Check, Edit3, Loader2, X,
 } from "lucide-react";
@@ -103,7 +104,25 @@ export function EnvioInfo({ pedido }: { pedido: Pedido }) {
             <div className="flex items-center gap-2 text-sm">
               <span className="h-3.5 w-3.5 flex-none" />
               <span className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Guía</span>
-              <span className="text-ink font-semibold tabular-nums">{guia}</span>
+              {(() => {
+                const url = trackingUrl(carrier, guia);
+                if (url) {
+                  return (
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={copyGuia}
+                      className="text-navy font-semibold tabular-nums underline decoration-dotted hover:text-ink inline-flex items-center gap-1"
+                      title={`Rastrear ${guia} en ${carrier}`}
+                    >
+                      {guia}
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  );
+                }
+                return <span className="text-ink font-semibold tabular-nums">{guia}</span>;
+              })()}
               <button
                 onClick={copyGuia}
                 className="ml-1 text-graphite hover:text-ink"
