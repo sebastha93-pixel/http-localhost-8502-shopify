@@ -401,6 +401,63 @@ def inventario_shopify() -> dict:
     return _cached(key, _calc, ttl=3600)  # 1 hora — inventario cambia lento
 
 
+def listar_productos(status: str = "active", limit: int = 250) -> list:
+    """
+    Lista productos con stock por variante. `status`: active | draft | archived.
+    Cada producto: { id, titulo, sku_principal, status, vendor, product_type,
+                     imagen, total_stock, num_variantes, sin_stock, variantes[] }
+    Cache 30 min.
+    """
+    key = f"prods_{status}_{date.today().isoformat()}"
+
+    def _calc():
+        from shopify_client import paginar
+        productos = []
+        try:
+            fields = "id,title,status,vendor,product_type,handle,image,variants,created_at,updated_at"
+            for page in paginar(
+                "/products.json",
+                "products",
+                {"status": status, "limit": min(limit, 250), "fields": fields},
+            ):
+                for p in page:
+                    variantes = p.get("variants") or []
+                    total_stock = sum(max(int(v.get("inventory_quantity") or 0), 0) for v in variantes)
+                    sin_stock = all(int(v.get("inventory_quantity") or 0) <= 0 for v in variantes)
+                    productos.append({
+                        "id":            p.get("id"),
+                        "titulo":        p.get("title") or "—",
+                        "handle":        p.get("handle") or "",
+                        "sku_principal": (variantes[0].get("sku") if variantes else "") or "",
+                        "status":        p.get("status"),
+                        "vendor":        p.get("vendor") or "",
+                        "tipo":          p.get("product_type") or "",
+                        "imagen":        (p.get("image") or {}).get("src") or "",
+                        "total_stock":   total_stock,
+                        "num_variantes": len(variantes),
+                        "sin_stock":     sin_stock,
+                        "stock_bajo":    not sin_stock and total_stock <= 5,
+                        "updated_at":    p.get("updated_at") or "",
+                        "variantes": [
+                            {
+                                "id":     v.get("id"),
+                                "sku":    v.get("sku") or "",
+                                "titulo": v.get("title") or "",
+                                "precio": float(v.get("price") or 0),
+                                "stock":  int(v.get("inventory_quantity") or 0),
+                            }
+                            for v in variantes
+                        ],
+                    })
+                if len(productos) >= limit:
+                    break
+        except Exception as e:
+            print(f"listar_productos error: {e}")
+        return productos[:limit]
+
+    return _cached(key, _calc, ttl=1800)
+
+
 def ventas_por_periodo(periodo: str = "30d") -> dict:
     """
     Resumen de ventas para un período predefinido.

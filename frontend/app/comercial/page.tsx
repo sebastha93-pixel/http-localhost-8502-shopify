@@ -37,16 +37,6 @@ interface ClientesResp {
   top_clientes: Array<{ nombre: string; email: string; revenue: number; ordenes: number }>;
 }
 
-interface InventarioResp {
-  activos: number;
-  borrador: number;
-  archivados: number;
-  total_skus: number;
-  total_unidades: number;
-  sin_stock: number;
-  stock_bajo: number;
-}
-
 interface VentasPeriodoResp {
   periodo: string;
   desde: string;
@@ -105,13 +95,6 @@ export default function ComercialPage() {
     refetchOnWindowFocus: false,
   });
 
-  const inv = useQuery<InventarioResp>({
-    queryKey: ["comercial-inventario"],
-    queryFn: () => api.get<InventarioResp>("/api/comercial/inventario"),
-    staleTime: 30 * 60_000,  // 30 min (inventario cambia lento)
-    refetchOnWindowFocus: false,
-  });
-
   const cli = useQuery<ClientesResp>({
     queryKey: ["comercial-clientes"],
     queryFn: () => api.get<ClientesResp>("/api/comercial/clientes?dias=90"),
@@ -134,7 +117,7 @@ export default function ComercialPage() {
       title="Comercial"
       subtitle="Ventas y clientes · Shopify"
       isFetching={overview.isFetching}
-      onRefresh={() => { overview.refetch(); comp.refetch(); ventasP.refetch(); cli.refetch(); inv.refetch(); }}
+      onRefresh={() => { overview.refetch(); comp.refetch(); ventasP.refetch(); cli.refetch(); }}
     >
       {data.errores?.length > 0 && (
         <div className="rounded-md border border-rust/30 bg-rust/5 px-3 py-2 text-xs text-rust">
@@ -149,7 +132,6 @@ export default function ComercialPage() {
           <TabsTrigger value="comp">Comparativas</TabsTrigger>
           <TabsTrigger value="periodo">Por período</TabsTrigger>
           <TabsTrigger value="clientes">Clientes</TabsTrigger>
-          <TabsTrigger value="inventario">Inventario Shopify</TabsTrigger>
         </TabsList>
 
         {/* ─── TAB HOY ─── */}
@@ -332,83 +314,6 @@ export default function ComercialPage() {
           )}
         </TabsContent>
 
-        {/* ─── TAB INVENTARIO SHOPIFY ─── */}
-        <TabsContent value="inventario" className="space-y-4">
-          {inv.isLoading || !inv.data ? (
-            <Card><CardContent className="p-8 text-center text-sm text-graphite">Cargando inventario…</CardContent></Card>
-          ) : (
-            <>
-              <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
-                <KpiCard
-                  label="Productos activos"
-                  value={String(inv.data.activos)}
-                  meta="Visibles en la tienda"
-                  accent="teal"
-                />
-                <KpiCard
-                  label="Productos en borrador"
-                  value={String(inv.data.borrador)}
-                  meta="Draft · sin publicar"
-                  accent="khaki"
-                />
-                <KpiCard
-                  label="Archivados"
-                  value={String(inv.data.archivados)}
-                  meta="Descontinuados"
-                  accent="steel"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-                <KpiCard
-                  label="SKUs activos"
-                  value={String(inv.data.total_skus)}
-                  meta="Variantes (tallas/colores)"
-                  accent="navy"
-                />
-                <KpiCard
-                  label="Unidades en stock"
-                  value={String(inv.data.total_unidades)}
-                  meta="Suma de inventario"
-                  accent="navy"
-                />
-                <KpiCard
-                  label="Sin stock"
-                  value={String(inv.data.sin_stock)}
-                  meta="SKUs en cero"
-                  accent={inv.data.sin_stock > 0 ? "rust" : "steel"}
-                  danger={inv.data.sin_stock > 10}
-                />
-                <KpiCard
-                  label="Stock bajo"
-                  value={String(inv.data.stock_bajo)}
-                  meta="1-5 unidades"
-                  accent={inv.data.stock_bajo > 0 ? "khaki" : "steel"}
-                />
-              </div>
-
-              <Card>
-                <CardContent className="p-5 space-y-2">
-                  <h3 className="text-sm font-bold uppercase tracking-wider text-graphite">Resumen del catálogo</h3>
-                  <p className="text-sm text-ink">
-                    Tienes <span className="font-semibold">{inv.data.activos}</span> productos publicados y{" "}
-                    <span className="font-semibold">{inv.data.borrador}</span> en borrador pendientes de revisar y publicar.
-                  </p>
-                  {inv.data.sin_stock > 0 && (
-                    <p className="text-sm text-rust">
-                      ⚠ <span className="font-semibold">{inv.data.sin_stock} SKUs sin stock</span> — estás perdiendo ventas potenciales.
-                    </p>
-                  )}
-                  {inv.data.stock_bajo > 0 && (
-                    <p className="text-sm text-khaki">
-                      • <span className="font-semibold">{inv.data.stock_bajo} SKUs con stock bajo</span> (≤5 unidades) — considera reponer.
-                    </p>
-                  )}
-                </CardContent>
-              </Card>
-            </>
-          )}
-        </TabsContent>
       </Tabs>
 
       <p className="text-[0.65rem] text-graphite/70 mt-2">
