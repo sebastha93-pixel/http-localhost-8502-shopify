@@ -138,6 +138,21 @@ def clientes(
         raise HTTPException(503, f"Error: {str(e)[:200]}")
 
 
+@router.get("/inventario")
+def inventario(
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """
+    Inventario Shopify: productos activos / borrador / archivados +
+    stock total + SKUs sin stock y con stock bajo.
+    """
+    try:
+        sm = _shopify_metrics()
+        return sm.inventario_shopify()
+    except Exception as e:
+        raise HTTPException(503, f"Error: {str(e)[:200]}")
+
+
 @router.get("/ventas-periodo")
 def ventas_periodo(
     periodo: str = Query("30d", pattern="^(7d|30d|90d|ytd)$"),

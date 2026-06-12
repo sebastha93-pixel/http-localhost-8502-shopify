@@ -335,6 +335,72 @@ def analisis_clientes(dias: int = 90) -> dict:
     return _cached(key, _calc, ttl=1800)
 
 
+def inventario_shopify() -> dict:
+    """
+    Conteo de productos en Shopify por status:
+      - activos:    visibles en la tienda
+      - borrador:   draft (no publicados)
+      - archivados: archived (descontinuados)
+    Y métricas de inventario:
+      - total_skus, total_unidades (sumando inventory_quantity de variantes)
+      - sin_stock:  variantes con inventory_quantity = 0
+      - stock_bajo: variantes con 1-5 unidades (umbral configurable)
+    """
+    key = f"inv_{date.today().isoformat()}"
+
+    def _calc():
+        from shopify_client import _get
+        # /products/count?status=X — endpoint barato (1 llamada x status)
+        try:
+            activos     = _get("/products/count.json", {"status": "active"}).get("count", 0)
+        except Exception:
+            activos = 0
+        try:
+            borrador    = _get("/products/count.json", {"status": "draft"}).get("count", 0)
+        except Exception:
+            borrador = 0
+        try:
+            archivados  = _get("/products/count.json", {"status": "archived"}).get("count", 0)
+        except Exception:
+            archivados = 0
+
+        # Inventario detallado: paginar productos activos para sumar variantes
+        total_skus = 0
+        total_unidades = 0
+        sin_stock = 0
+        stock_bajo = 0
+        try:
+            from shopify_client import paginar
+            for page in paginar(
+                "/products.json",
+                "products",
+                {"status": "active", "limit": 250, "fields": "id,variants"},
+            ):
+                for prod in page:
+                    for var in prod.get("variants", []) or []:
+                        total_skus += 1
+                        qty = int(var.get("inventory_quantity") or 0)
+                        total_unidades += max(qty, 0)
+                        if qty <= 0:
+                            sin_stock += 1
+                        elif qty <= 5:
+                            stock_bajo += 1
+        except Exception:
+            pass
+
+        return {
+            "activos":      activos,
+            "borrador":     borrador,
+            "archivados":   archivados,
+            "total_skus":   total_skus,
+            "total_unidades": total_unidades,
+            "sin_stock":    sin_stock,
+            "stock_bajo":   stock_bajo,
+        }
+
+    return _cached(key, _calc, ttl=3600)  # 1 hora — inventario cambia lento
+
+
 def ventas_por_periodo(periodo: str = "30d") -> dict:
     """
     Resumen de ventas para un período predefinido.
