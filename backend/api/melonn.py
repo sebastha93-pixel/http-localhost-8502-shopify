@@ -20,6 +20,41 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/melonn", tags=["melonn"])
 
 
+# Contador in-memory de webhooks (para verificar que están llegando)
+_webhook_stats: dict = {
+    "total_recibidos": 0,
+    "exitosos": 0,
+    "fallidos_auth": 0,
+    "sin_identificador": 0,
+    "errores_proc": 0,
+    "ultimos_eventos": [],   # lista circular, últimos 20
+    "primero_recibido_en": None,
+    "ultimo_recibido_en": None,
+}
+
+
+def _registrar_webhook(estado: str, evento: str, identificador: str, detalle: str = ""):
+    """Registra el evento del webhook en stats in-memory."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    _webhook_stats["total_recibidos"] += 1
+    _webhook_stats[estado] = _webhook_stats.get(estado, 0) + 1
+    if _webhook_stats["primero_recibido_en"] is None:
+        _webhook_stats["primero_recibido_en"] = now
+    _webhook_stats["ultimo_recibido_en"] = now
+    _webhook_stats["ultimos_eventos"].insert(0, {
+        "ts": now, "estado": estado, "evento": evento,
+        "id": identificador, "detalle": detalle[:100],
+    })
+    _webhook_stats["ultimos_eventos"] = _webhook_stats["ultimos_eventos"][:20]
+
+
+@router.get("/webhook-stats")
+def webhook_stats(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Estadísticas del receptor de webhooks. Solo admin."""
+    return dict(_webhook_stats)
+
+
 # ── Webhook receiver (público, validado por secret) ──────────────────────────
 @router.post("/webhook")
 async def webhook_receiver(request: Request, secret: Optional[str] = Query(None)) -> dict:
@@ -50,6 +85,7 @@ async def webhook_receiver(request: Request, secret: Optional[str] = Query(None)
     ).strip()
     provisto = header_secret or (secret or "").strip()
     if provisto != expected:
+        _registrar_webhook("fallidos_auth", "?", "?", "secret inválido")
         log.warning(f"Webhook con secret inválido (header={'sí' if header_secret else 'no'}, query={'sí' if secret else 'no'})")
         raise HTTPException(401, "Secret inválido")
 
@@ -82,6 +118,8 @@ async def webhook_receiver(request: Request, secret: Optional[str] = Query(None)
 
     identificador = external or internal
     if not identificador:
+        _registrar_webhook("sin_identificador", evento, "?",
+                           f"payload keys: {list(payload.keys()) if isinstance(payload, dict) else 'no-dict'}")
         log.warning(f"Webhook sin identificador. Payload keys: {list(payload.keys()) if isinstance(payload, dict) else 'no-dict'}")
         return {"ok": False, "error": "Sin identificador de pedido en el payload",
                 "payload_keys": list(payload.keys()) if isinstance(payload, dict) else []}
@@ -96,9 +134,11 @@ async def webhook_receiver(request: Request, secret: Optional[str] = Query(None)
         import melonn_client as mc
 
         resultado = mc.refrescar_un_pedido(identificador)
+        _registrar_webhook("exitosos", evento, identificador, str(resultado.get("accion", "")))
         log.info(f"Webhook {evento}: {identificador} → {resultado.get('accion')}")
         return {"ok": True, "evento": evento, "identificador": identificador, **resultado}
     except Exception as e:
+        _registrar_webhook("errores_proc", evento, identificador, str(e)[:100])
         log.exception(f"Error procesando webhook")
         # Retornamos 200 igual para que Melonn no reintente — el error queda en logs
         return {"ok": False, "error": str(e)[:200], "evento": evento}
