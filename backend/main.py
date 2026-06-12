@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.config import settings
-from backend.api import auditoria, auth, bot, conciliacion, dashboard, finanzas, health, melonn, metricas, pedidos
+from backend.api import auditoria, auth, bot, comercial, conciliacion, dashboard, finanzas, health, melonn, metricas, pedidos
 from backend.services import usuarios as usuarios_svc
 from backend.core.security import hash_password
 from backend.core import scheduler
@@ -102,6 +102,7 @@ app.include_router(auditoria.router)
 app.include_router(conciliacion.router)
 app.include_router(dashboard.router)
 app.include_router(bot.router)
+app.include_router(comercial.router)
 
 
 @app.get("/", include_in_schema=False)
