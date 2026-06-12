@@ -154,8 +154,8 @@ def _run_bot(task_id: str, ordenes: list[str], autor: str):
             incidencias = r.get("incidencias") or []
             pendientes = [i for i in incidencias if (i.get("estado") or "").lower().startswith("sin")]
             if pendientes:
-                motivo = "Bot Melonn detectó: " + "; ".join(
-                    f"{i['numero']} {i['descripcion'][:60]}" for i in pendientes[:3]
+                motivo = "Tracking Melonn: " + "; ".join(
+                    i["descripcion"][:80] for i in pendientes[:2]
                 )
                 overrides_svc.upsert(
                     orden, autor=f"Bot ({autor})",

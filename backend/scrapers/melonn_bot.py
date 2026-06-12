@@ -43,6 +43,7 @@ class ExtractedOrder:
     guia: Optional[str] = None
     tracking_url: Optional[str] = None
     incidencias: list[dict] = field(default_factory=list)  # [{tipo, estado, descripcion, fecha}]
+    eventos: list[str] = field(default_factory=list)        # historial del tracking
     estado: Optional[str] = None
     ok: bool = False
     error: Optional[str] = None
@@ -309,13 +310,43 @@ class MelonnBot:
                         result.carrier = c
                         break
 
-            # Novedad: si el tracking dice que no se pudo entregar
-            if re.search(r"no pudimos entregar|ser[áa] retornado|devuel", text, re.I):
-                result.incidencias.append({
-                    "numero": "TRACKING",
-                    "estado": "Sin gestionar",
-                    "descripcion": "Tracking Melonn: entrega fallida / retorno",
-                })
+            # ── Novedades / incidencias del tracking público ──
+            # Cada patrón mapea a un motivo legible. El tracking muestra
+            # mensajes como "No pudimos entregar tu pedido y será retornado".
+            NOVEDADES = [
+                (r"no pudimos entregar",            "Entrega fallida — varios intentos"),
+                (r"ser[áa] retornado a bodega",     "Será retornado a bodega"),
+                (r"devoluci[óo]n|devuel",           "En devolución"),
+                (r"direcci[óo]n (errada|incompleta|incorrecta)", "Dirección errada/incompleta"),
+                (r"cliente (no |)(se )?(encontr|ubic|localiz)",  "Cliente no localizado"),
+                (r"cliente rechaz",                 "Cliente rechazó el pedido"),
+                (r"no (contesta|responde|contactar)", "Cliente no contesta"),
+                (r"reprogramad|reagendad",          "Entrega reprogramada"),
+                (r"zona de dif[íi]cil acceso",      "Zona de difícil acceso"),
+                (r"novedad",                        "Novedad reportada por transportadora"),
+            ]
+            for pat, motivo in NOVEDADES:
+                if re.search(pat, text, re.I):
+                    result.incidencias.append({
+                        "numero": "TRACKING",
+                        "estado": "Sin gestionar",
+                        "descripcion": motivo,
+                    })
+                    break  # un motivo principal basta
+
+            # ── Historial de eventos (timeline del tracking) ──
+            # Capturamos las líneas del historial para guardar contexto.
+            eventos = []
+            for m in re.finditer(
+                r"(Tu pedido[^\n]{5,120}|En el centro de distribuci[óo]n[^\n]{0,80}|"
+                r"sali[óo] de la bodega[^\n]{0,80}|en reparto[^\n]{0,80})",
+                text, re.I,
+            ):
+                ev = m.group(1).strip()
+                if ev and ev not in eventos:
+                    eventos.append(ev)
+            if eventos:
+                result.eventos = eventos[:6]
 
             result.ok = bool(result.guia or result.carrier)
             if not result.ok:
