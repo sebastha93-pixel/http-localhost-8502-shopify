@@ -472,6 +472,87 @@ def _cache_guardar(pedidos: list, fuente: str = "api_live"):
     _sq_cache_guardar(pedidos, fuente)
 
 
+def refrescar_un_pedido(identificador: str) -> dict:
+    """
+    Refresca UN solo pedido en el caché desde Melonn detail endpoint.
+    Usado por el webhook receiver — evita refrescar toda la lista cada
+    vez que cambia un pedido.
+
+    `identificador`: external_order_number (orden_tienda) o internal_order_number
+                     (orden_melonn, con o sin "M").
+
+    Retorna {ok, encontrado, accion, orden}.
+    """
+    if not identificador:
+        return {"ok": False, "error": "Sin identificador"}
+
+    # Normalizar candidatos: probar el ID tal cual, sin "M", y como string
+    candidatos = []
+    raw = str(identificador).strip()
+    if raw:
+        candidatos.append(raw)
+    sin_m = raw.lstrip("Mm").strip()
+    if sin_m and sin_m != raw:
+        candidatos.append(sin_m)
+
+    # Llamar detail endpoint con cada candidato hasta que uno funcione
+    detail = None
+    usado = ""
+    for c in candidatos:
+        try:
+            d = _get(f"sell-orders/{c}")
+            if d:
+                detail = d
+                usado = c
+                break
+        except Exception:
+            continue
+
+    if not detail:
+        return {"ok": False, "error": f"Pedido no encontrado en Melonn: {identificador}", "candidatos": candidatos}
+
+    # Normalizar el detail al schema interno del caché.
+    # Reusamos la lógica del list normalizer si el detail tiene los campos.
+    try:
+        nuevo = _normalizar(detail)
+    except Exception:
+        # Fallback: estructura mínima
+        nuevo = {
+            "orden_melonn":   f"M{detail.get('internal_order_number') or usado}",
+            "orden_tienda":   detail.get("external_order_number") or usado,
+            "estado_melonn":  ((detail.get("state") or {}).get("name") or ""),
+            "estado_melonn_code": int(((detail.get("state") or {}).get("code") or 0)),
+            "_raw": True,
+        }
+
+    # Mezclar con caché actual
+    hit = _cache_leer(ignorar_ttl=True)
+    if not hit:
+        # No hay caché — guardamos solo este pedido (raro pero válido)
+        _cache_guardar([nuevo], fuente="webhook")
+        return {"ok": True, "accion": "creado", "orden": nuevo.get("orden_tienda")}
+
+    pedidos, _ft, _ts, fuente = hit
+    encontrado = False
+    nuevo_om = (nuevo.get("orden_melonn") or "").lstrip("Mm")
+    nuevo_ot = nuevo.get("orden_tienda") or ""
+    for i, p in enumerate(pedidos):
+        p_om = (p.get("orden_melonn") or "").lstrip("Mm")
+        p_ot = p.get("orden_tienda") or ""
+        if (nuevo_om and p_om == nuevo_om) or (nuevo_ot and p_ot == nuevo_ot):
+            pedidos[i] = nuevo
+            encontrado = True
+            break
+
+    accion = "actualizado"
+    if not encontrado:
+        pedidos.append(nuevo)
+        accion = "creado"
+
+    _cache_guardar(pedidos, fuente=fuente or "webhook")
+    return {"ok": True, "encontrado": encontrado, "accion": accion, "orden": nuevo.get("orden_tienda")}
+
+
 def limpiar_cache():
     """Limpia ambas cachés."""
     _sb_limpiar()

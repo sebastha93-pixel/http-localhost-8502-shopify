@@ -3,8 +3,10 @@ backend.api.melonn — Endpoints REST de logística (Melonn).
 """
 from __future__ import annotations
 
-from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+import os
+import logging
+from typing import Optional, Any
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from backend.core.security import CurrentUser, require_role
@@ -13,7 +15,84 @@ from backend.services import metricas as metricas_svc
 from backend.services import overrides as overrides_svc
 
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/melonn", tags=["melonn"])
+
+
+# ── Webhook receiver (público, validado por secret) ──────────────────────────
+@router.post("/webhook")
+async def webhook_receiver(request: Request, secret: Optional[str] = Query(None)) -> dict:
+    """
+    Receptor de webhooks de Melonn.
+
+    Configurar en admin.melonn.com → Integraciones → Webhooks:
+        URL: https://<backend>.up.railway.app/api/melonn/webhook?secret=<SECRET>
+        Eventos: Orden de venta (todos) + Devolución (los que importen)
+
+    Cuando llega un evento, refrescamos SOLO ese pedido en el caché
+    (sin tener que descargar toda la lista). Ahorra >90% de llamadas al
+    list endpoint.
+
+    El secret se valida contra la env var MELONN_WEBHOOK_SECRET. Si no
+    está configurada, el endpoint responde 503 (fail-closed).
+    """
+    expected = os.environ.get("MELONN_WEBHOOK_SECRET", "").strip()
+    if not expected:
+        raise HTTPException(503, "MELONN_WEBHOOK_SECRET no configurado en Railway")
+    if secret != expected:
+        log.warning(f"Webhook con secret inválido")
+        raise HTTPException(401, "Secret inválido")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        # Algunos webhooks vienen como form-data; tomamos lo que se pueda
+        payload = {}
+
+    # Extraer identificadores del payload. Melonn puede variar el shape,
+    # así que probamos varios paths conocidos.
+    def _buscar(d: Any, keys: list[str]) -> Optional[str]:
+        if not isinstance(d, dict):
+            return None
+        for k in keys:
+            if k in d and d[k]:
+                return str(d[k])
+        # Buscar en sub-objetos comunes
+        for sub_key in ("order", "sell_order", "data", "payload"):
+            sub = d.get(sub_key)
+            if isinstance(sub, dict):
+                r = _buscar(sub, keys)
+                if r:
+                    return r
+        return None
+
+    external = _buscar(payload, ["external_order_number", "external_id", "order_number"])
+    internal = _buscar(payload, ["internal_order_number", "internal_id", "sell_order_id", "id"])
+    evento   = _buscar(payload, ["event", "event_type", "type"]) or "?"
+
+    identificador = external or internal
+    if not identificador:
+        log.warning(f"Webhook sin identificador. Payload keys: {list(payload.keys()) if isinstance(payload, dict) else 'no-dict'}")
+        return {"ok": False, "error": "Sin identificador de pedido en el payload",
+                "payload_keys": list(payload.keys()) if isinstance(payload, dict) else []}
+
+    # Refrescar solo ese pedido
+    try:
+        import sys
+        from pathlib import Path
+        _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+        if str(_SRC) not in sys.path:
+            sys.path.insert(0, str(_SRC))
+        import melonn_client as mc
+
+        resultado = mc.refrescar_un_pedido(identificador)
+        log.info(f"Webhook {evento}: {identificador} → {resultado.get('accion')}")
+        return {"ok": True, "evento": evento, "identificador": identificador, **resultado}
+    except Exception as e:
+        log.exception(f"Error procesando webhook")
+        # Retornamos 200 igual para que Melonn no reintente — el error queda en logs
+        return {"ok": False, "error": str(e)[:200], "evento": evento}
 
 
 # ── Modelos de respuesta (Pydantic — auto-doc en /docs) ──────────────────────
