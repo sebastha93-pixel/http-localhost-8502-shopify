@@ -9,6 +9,7 @@ import { Search, ExternalLink, Phone, MessageCircle } from "lucide-react";
 import { PedidoDetalle } from "@/components/pedido-detalle";
 import { trackingUrl } from "@/lib/carriers";
 import { tipoEnvio } from "@/lib/envio-tipo";
+import { estadoMelonnCorto } from "@/lib/estado-melonn";
 
 const NIVELES: NivelRiesgo[] = ["CRITICO", "RIESGO", "NORMAL", "VENCIDO", "RESUELTO"];
 
@@ -335,7 +336,7 @@ function Row({
       {has("ciudad") && <Td>{p.ciudad_destino || "—"}</Td>}
       {has("zona")   && <Td className="text-xs text-graphite">{p.zona || "—"}</Td>}
       {has("envio") && (
-        <Td>
+        <Td className="whitespace-nowrap">
           {(() => {
             const te = tipoEnvio(p.transportadora as string);
             if (!te) return <span className="text-graphite">—</span>;
@@ -355,7 +356,13 @@ function Row({
           {p.valor_num ? formatMoneyShort(p.valor_num) : "—"}
         </Td>
       )}
-      {has("estado")  && <Td className="text-xs">{p.estado_melonn || "—"}</Td>}
+      {has("estado")  && (
+        <Td className="text-xs whitespace-nowrap">
+          <span title={p.estado_melonn || ""}>
+            {estadoMelonnCorto(p.estado_melonn, p.estado_melonn_code)}
+          </span>
+        </Td>
+      )}
       {has("novedad") && <Td className="text-xs">{(p.incidencia && p.incidencia !== "NINGUNO" ? p.incidencia : "—") as string}</Td>}
       {has("tipo") && (
         <Td>

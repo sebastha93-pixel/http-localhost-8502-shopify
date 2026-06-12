@@ -57,6 +57,50 @@ last_run: dict = {
 _last_full_at: float = 0.0   # timestamp del último FULL sync
 
 
+def _persistir_datos_cliente_en_overrides() -> None:
+    """
+    Recorre el caché y hace upsert en pedido_overrides para pedidos que
+    tienen nombre/teléfono/ciudad pero NO están aún en overrides (o el
+    override está vacío). Así los datos sobreviven cambios de estado.
+
+    Sin saturar API — todo viene del caché en memoria.
+    Solo procesa hasta 50 pedidos por tick para no saturar Supabase tampoco.
+    """
+    from backend.services import melonn as svc
+    from backend.services import overrides as overrides_svc
+
+    data = svc.obtener_pedidos(forzar_refresh=False)
+    pedidos = data.get("pedidos", [])
+    overrides = overrides_svc.cargar_map()
+
+    persistidos = 0
+    for p in pedidos:
+        if persistidos >= 50:
+            break
+        nombre = (p.get("nombre_comprador") or "").strip()
+        tel    = (p.get("telefono_comprador") or "").strip()
+        ciu    = (p.get("ciudad_destino") or "").strip()
+        if not (nombre or tel or ciu):
+            continue
+        orden = p.get("orden_tienda") or p.get("orden_melonn") or ""
+        if not orden:
+            continue
+        # Skip si ya hay un override completo
+        ov = overrides.get(orden) or overrides.get(p.get("orden_melonn", ""))
+        if ov and ov.get("nombre_comprador") and ov.get("telefono_comprador"):
+            continue
+        try:
+            overrides_svc.upsert(
+                orden, nombre=nombre, telefono=tel, ciudad=ciu,
+                autor="auto-enrich",
+            )
+            persistidos += 1
+        except Exception:
+            continue
+    if persistidos:
+        log.info(f"Scheduler: persistidos {persistidos} pedidos en overrides")
+
+
 def _refresh_once(full: bool = False) -> dict:
     """
     Una pasada de refresh.
@@ -91,6 +135,12 @@ def _refresh_once(full: bool = False) -> dict:
         mc.obtener_pedidos_activos(forzar_refresh=True)
 
         if not full:
+            # Persistir datos del cliente en overrides para que SOBREVIVAN
+            # cambios de estado. Sin llamadas a Melonn API (usa el caché).
+            try:
+                _persistir_datos_cliente_en_overrides()
+            except Exception as e:
+                log.debug(f"Persist overrides: {e}")
             last_run["ok"] = True
             log.info("Scheduler light: ✓")
             return {"ok": True, "type": "light"}

@@ -138,8 +138,26 @@ def enriquecer_faltantes_endpoint(
             return {"ok": False, "error": str(e)[:200], "iteraciones": iteraciones,
                     "completados": total_completados}
 
-        # Recontar
+        # Recontar Y persistir los recién enriquecidos en pedido_overrides
+        # para que SOBREVIVAN cambios de estado y refreshes del caché.
         data = svc.obtener_pedidos(forzar_refresh=False)
+        for p in data.get("pedidos", []):
+            nombre = (p.get("nombre_comprador") or "").strip()
+            tel    = (p.get("telefono_comprador") or "").strip()
+            ciu    = (p.get("ciudad_destino") or "").strip()
+            if not (nombre or tel or ciu):
+                continue
+            orden = p.get("orden_tienda") or p.get("orden_melonn") or ""
+            if not orden:
+                continue
+            try:
+                overrides_svc.upsert(
+                    orden, nombre=nombre, telefono=tel, ciudad=ciu,
+                    autor="auto-enrich",
+                )
+            except Exception:
+                pass  # no bloquear si Supabase falla
+
         faltantes_final = sum(
             1 for p in data.get("pedidos", [])
             if not p.get("nombre_comprador") and not p.get("telefono_comprador")
