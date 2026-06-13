@@ -95,16 +95,25 @@ async def webhook_receiver(request: Request, secret: Optional[str] = Query(None)
         # Algunos webhooks vienen como form-data; tomamos lo que se pueda
         payload = {}
 
-    # Extraer identificadores del payload. Melonn puede variar el shape,
-    # así que probamos varios paths conocidos.
+    # Extraer identificadores del payload. Melonn usa shape:
+    #   { eventDate, eventClassifier, eventData: {...} }
+    # y dentro de eventData están los IDs. Probamos múltiples paths y nombres.
     def _buscar(d: Any, keys: list[str]) -> Optional[str]:
         if not isinstance(d, dict):
             return None
+        # Match exacto (case-sensitive) primero, luego case-insensitive
         for k in keys:
             if k in d and d[k]:
                 return str(d[k])
-        # Buscar en sub-objetos comunes
-        for sub_key in ("order", "sell_order", "data", "payload"):
+        # Case-insensitive: comparar contra todas las claves del dict
+        d_lower = {str(kk).lower(): vv for kk, vv in d.items()}
+        for k in keys:
+            v = d_lower.get(k.lower())
+            if v:
+                return str(v)
+        # Buscar en sub-objetos comunes (Melonn usa eventData)
+        for sub_key in ("eventData", "event_data", "order", "sell_order", "sellOrder",
+                         "data", "payload"):
             sub = d.get(sub_key)
             if isinstance(sub, dict):
                 r = _buscar(sub, keys)
@@ -112,17 +121,37 @@ async def webhook_receiver(request: Request, secret: Optional[str] = Query(None)
                     return r
         return None
 
-    external = _buscar(payload, ["external_order_number", "external_id", "order_number"])
-    internal = _buscar(payload, ["internal_order_number", "internal_id", "sell_order_id", "id"])
-    evento   = _buscar(payload, ["event", "event_type", "type"]) or "?"
+    external = _buscar(payload, [
+        "external_order_number", "externalOrderNumber",
+        "external_id", "externalId", "order_number", "orderNumber",
+    ])
+    internal = _buscar(payload, [
+        "internal_order_number", "internalOrderNumber",
+        "internal_id", "internalId", "sell_order_id", "sellOrderId", "id",
+    ])
+    evento = (
+        payload.get("eventClassifier")
+        or _buscar(payload, ["event", "event_type", "eventType", "type"])
+        or "?"
+    )
 
     identificador = external or internal
     if not identificador:
-        _registrar_webhook("sin_identificador", evento, "?",
-                           f"payload keys: {list(payload.keys()) if isinstance(payload, dict) else 'no-dict'}")
-        log.warning(f"Webhook sin identificador. Payload keys: {list(payload.keys()) if isinstance(payload, dict) else 'no-dict'}")
+        # Loguear keys del payload Y de eventData para diagnóstico
+        top_keys = list(payload.keys()) if isinstance(payload, dict) else []
+        event_data = payload.get("eventData") if isinstance(payload, dict) else None
+        ed_keys = list(event_data.keys()) if isinstance(event_data, dict) else []
+        # Una muestra de valores (recortados) para entender la estructura
+        ed_muestra = ""
+        if isinstance(event_data, dict):
+            ed_muestra = " | values: " + ", ".join(
+                f"{k}={str(v)[:50]}" for k, v in list(event_data.items())[:5]
+            )
+        detalle = f"evento={evento} top={top_keys} eventData={ed_keys}{ed_muestra}"
+        _registrar_webhook("sin_identificador", evento, "?", detalle)
+        log.warning(f"Webhook sin id. {detalle}")
         return {"ok": False, "error": "Sin identificador de pedido en el payload",
-                "payload_keys": list(payload.keys()) if isinstance(payload, dict) else []}
+                "payload_keys": top_keys, "eventData_keys": ed_keys}
 
     # Refrescar solo ese pedido
     try:
