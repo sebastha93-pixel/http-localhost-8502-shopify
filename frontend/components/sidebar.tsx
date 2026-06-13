@@ -9,7 +9,6 @@ import { useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { ROL_LABEL, esAdmin } from "@/lib/auth";
 import { SyncButton } from "@/components/sync-button";
-import { BotButton } from "@/components/bot-button";
 
 interface NavItem {
   label: string;
@@ -105,8 +104,7 @@ export function Sidebar() {
         ))}
       </nav>
 
-      {/* Bot Melonn (admin) */}
-      <BotButton />
+      {/* Bot Melonn removido — los webhooks de Melonn ya cubren el flujo */}
       {/* Sync button (admin/operador) */}
       <SyncButton />
       {/* Footer — identidad del usuario (auditoría) */}

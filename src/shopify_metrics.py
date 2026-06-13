@@ -12,7 +12,7 @@ Cache local en memoria (5 min) para no golpear la API en cada navegación.
 from __future__ import annotations
 
 import time
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from typing import Optional
 from collections import defaultdict
 
@@ -42,6 +42,16 @@ def invalidar_cache() -> None:
 
 
 # ── Helpers de fechas ──────────────────────────────────────────────────────────
+# Colombia es UTC-5 todo el año. Usamos esto para que "hoy" en el servidor
+# (UTC) coincida con "hoy" del usuario en Colombia.
+_TZ_BOGOTA = timezone(timedelta(hours=-5))
+
+
+def hoy_bogota() -> date:
+    """Fecha actual en zona horaria Colombia (no UTC del servidor)."""
+    return datetime.now(_TZ_BOGOTA).date()
+
+
 def _iso_inicio(d: date) -> str:
     return f"{d.isoformat()}T00:00:00-05:00"   # UTC-5 = Colombia
 
@@ -51,11 +61,14 @@ def _iso_fin(d: date) -> str:
 
 
 def _fetch_orders_dia(d: date, status: str = "any") -> list:
-    """Trae todas las órdenes (pagadas) de un día específico."""
+    """
+    Trae TODAS las órdenes del día (creadas, sin filtrar por pago).
+    Antes filtraba financial_status=paid → omitía órdenes COD pendientes
+    que SÍ son ventas del día. Ahora cuenta todo lo facturado.
+    """
     orders = []
     params = {
         "status": status,
-        "financial_status": "paid",
         "created_at_min": _iso_inicio(d),
         "created_at_max": _iso_fin(d),
         "limit": 250,
@@ -72,7 +85,7 @@ def ventas_del_dia(d: Optional[date] = None) -> dict:
     Retorna métricas de ventas de un día (default = hoy):
       { fecha, total, num_pedidos, ticket_promedio }
     """
-    d = d or date.today()
+    d = d or hoy_bogota()
     key = f"vd_{d.isoformat()}"
 
     def _calc():
@@ -86,7 +99,7 @@ def ventas_del_dia(d: Optional[date] = None) -> dict:
             "ticket_promedio": (total / n) if n else 0.0,
         }
     # Cache corto para hoy (datos cambian), largo para días pasados
-    ttl = 180 if d == date.today() else 86400
+    ttl = 180 if d == hoy_bogota() else 86400
     return _cached(key, _calc, ttl=ttl)
 
 
@@ -95,11 +108,11 @@ def ventas_serie(dias_atras: int = 12) -> list:
     Lista de totales de ventas para los últimos `dias_atras` días (incluyendo hoy).
     Útil para el sparkline. El día más reciente queda al final.
     """
-    key = f"vs_{dias_atras}_{date.today().isoformat()}"
+    key = f"vs_{dias_atras}_{hoy_bogota().isoformat()}"
 
     def _calc():
         out = []
-        hoy = date.today()
+        hoy = hoy_bogota()
         for i in range(dias_atras - 1, -1, -1):
             d = hoy - timedelta(days=i)
             try:
@@ -112,8 +125,8 @@ def ventas_serie(dias_atras: int = 12) -> list:
 
 def delta_vs_ayer() -> dict:
     """Compara ventas de hoy vs ayer. Retorna pct y dirección."""
-    hoy   = ventas_del_dia(date.today())["total"]
-    ayer  = ventas_del_dia(date.today() - timedelta(days=1))["total"]
+    hoy   = ventas_del_dia(hoy_bogota())["total"]
+    ayer  = ventas_del_dia(hoy_bogota() - timedelta(days=1))["total"]
     pct   = ((hoy - ayer) / ayer * 100) if ayer else 0
     return {"hoy": hoy, "ayer": ayer, "pct": pct, "up": pct >= 0}
 
@@ -123,10 +136,10 @@ def top_productos(n: int = 5, dias: int = 30) -> list:
     Top N productos por revenue acumulado en los últimos `dias`.
     Retorna lista de dicts: { sku, nombre, revenue, unidades, pct_del_total }
     """
-    key = f"top_{n}_{dias}_{date.today().isoformat()}"
+    key = f"top_{n}_{dias}_{hoy_bogota().isoformat()}"
 
     def _calc():
-        hoy = date.today()
+        hoy = hoy_bogota()
         agregado: dict = defaultdict(lambda: {"revenue": 0.0, "unidades": 0, "nombre": "", "sku": ""})
 
         for i in range(dias):
@@ -182,7 +195,7 @@ def comparativas() -> dict:
       - yoy: mes actual vs mismo mes año pasado
     Cada bloque: {actual, anterior, pct, up}
     """
-    hoy = date.today()
+    hoy = hoy_bogota()
 
     # Semana ISO: del lunes al día actual
     lunes_actual    = hoy - timedelta(days=hoy.weekday())
@@ -262,10 +275,10 @@ def analisis_clientes(dias: int = 90) -> dict:
       - top_clientes: top 10 por revenue (anonimizado a nombre + ciudad si está)
       - tasa_recompra_60d: % de clientes con orden en [hoy-90, hoy-60] que volvió en [hoy-60, hoy]
     """
-    key = f"ac_{dias}_{date.today().isoformat()}"
+    key = f"ac_{dias}_{hoy_bogota().isoformat()}"
 
     def _calc():
-        hoy = date.today()
+        hoy = hoy_bogota()
         desde = hoy - timedelta(days=dias)
         orders = _fetch_orders_periodo(desde, hoy)
 
@@ -346,7 +359,7 @@ def inventario_shopify() -> dict:
       - sin_stock:  variantes con inventory_quantity = 0
       - stock_bajo: variantes con 1-5 unidades (umbral configurable)
     """
-    key = f"inv_{date.today().isoformat()}"
+    key = f"inv_{hoy_bogota().isoformat()}"
 
     def _calc():
         from shopify_client import _get
@@ -408,7 +421,7 @@ def listar_productos(status: str = "active", limit: int = 250) -> list:
                      imagen, total_stock, num_variantes, sin_stock, variantes[] }
     Cache 30 min.
     """
-    key = f"prods_{status}_{date.today().isoformat()}"
+    key = f"prods_{status}_{hoy_bogota().isoformat()}"
 
     def _calc():
         from shopify_client import paginar
@@ -463,7 +476,7 @@ def ventas_por_periodo(periodo: str = "30d") -> dict:
     Resumen de ventas para un período predefinido.
     `periodo`: "7d" | "30d" | "90d" | "ytd"
     """
-    hoy = date.today()
+    hoy = hoy_bogota()
     if periodo == "7d":
         desde = hoy - timedelta(days=6)
     elif periodo == "30d":

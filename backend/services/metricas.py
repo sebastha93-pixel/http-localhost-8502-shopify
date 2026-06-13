@@ -66,19 +66,27 @@ def es_novedad_visible(p: dict) -> bool:
     """
     True si el pedido aparece en Novedades/Incidencias del dashboard.
 
-    Criterios (cualquiera activa la novedad):
-    1. Override manual: marcado por operador como "tiene novedad"
+    REGLA DURA primero: si el pedido ya fue entregado, NUNCA aparece en
+    novedades — aunque tenga novedad_manual=True heredado de cuando
+    estaba en tránsito. La entrega resuelve cualquier incidencia.
+
+    Después, criterios para marcar como novedad:
+    1. Override manual del operador
     2. Estado Melonn explícito en NOVEDADES_VISIBLES
-    3. Heurístico SLA: pedido en tránsito que excede el SLA crítico de
-       su zona (aplica IGUAL a COD y Prepago — los prepagos también son
-       incidencias operativas cuando se tardan)
+    3. Heurístico SLA: pedido en tránsito que excede SLA crítico
     4. Heurístico VENCIDO: > 20 días sin confirmación
     """
+    sub = p.get("sub_estado_logistico")
+    code = int(p.get("estado_melonn_code") or 0)
+
+    # 0) ENTREGADO → JAMÁS es novedad. Esta regla gana sobre todo lo demás.
+    if sub == "entregado" or code in (6, 8):
+        return False
+
     # 1) Override manual
     if p.get("novedad_manual"):
         return True
 
-    sub = p.get("sub_estado_logistico")
     estado = (p.get("estado_melonn") or "").strip()
     estado_low = estado.lower()
 
