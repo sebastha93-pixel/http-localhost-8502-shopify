@@ -129,11 +129,15 @@ async def webhook_receiver(request: Request, secret: Optional[str] = Query(None)
         "internal_order_number", "internalOrderNumber",
         "internal_id", "internalId", "sell_order_id", "sellOrderId", "id",
     ])
-    evento = (
-        payload.get("eventClassifier")
-        or _buscar(payload, ["event", "event_type", "eventType", "type"])
-        or "?"
-    )
+    # eventClassifier puede venir como string o como dict {category, type, tags}.
+    # Si es dict, preferimos su .type (ej. "SELL_ORDER/DELIVERED_TO_BUYER").
+    raw_evento = payload.get("eventClassifier") if isinstance(payload, dict) else None
+    if isinstance(raw_evento, dict):
+        evento = str(raw_evento.get("type") or raw_evento.get("category") or "?")
+    elif isinstance(raw_evento, str):
+        evento = raw_evento
+    else:
+        evento = _buscar(payload, ["event", "event_type", "eventType", "type"]) or "?"
 
     identificador = external or internal
     if not identificador:
