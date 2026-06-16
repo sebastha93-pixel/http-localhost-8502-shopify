@@ -416,6 +416,13 @@ def autorizar_despacho(
     if not ok:
         raise HTTPException(status_code=400, detail=mensaje)
 
+    # Refrescar ESE pedido en el caché inmediatamente, para que la UI no
+    # siga mostrándolo en "Pendientes" hasta el próximo webhook/polling.
+    try:
+        mc.refrescar_un_pedido(orden_melonn)
+    except Exception as e:
+        log.warning(f"No se pudo refrescar pedido tras autorizar {orden_melonn}: {e}")
+
     # Audit trail: el usuario autenticado del JWT
     try:
         memoria.agregar_accion(
