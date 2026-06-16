@@ -10,14 +10,14 @@ import { PedidoDetalle } from "@/components/pedido-detalle";
 import { trackingUrl } from "@/lib/carriers";
 import { tipoEnvio } from "@/lib/envio-tipo";
 import { estadoMelonnCorto } from "@/lib/estado-melonn";
-import { ClienteBadge } from "@/components/cliente-badge";
+import { ClienteBadge, PrioridadCodBadge } from "@/components/cliente-badge";
 
 const NIVELES: NivelRiesgo[] = ["CRITICO", "RIESGO", "NORMAL", "VENCIDO", "RESUELTO"];
 
 type ColumnKey =
   | "select" | "nivel" | "orden" | "cliente" | "telefono" | "ciudad" | "zona"
   | "dias" | "valor" | "estado" | "tipo" | "novedad" | "link" | "action"
-  | "producto" | "envio" | "cliente_tier";
+  | "producto" | "envio" | "cliente_tier" | "prioridad_cod";
 
 interface Props {
   pedidos: Pedido[];
@@ -162,6 +162,7 @@ export function PedidosTable({
                   {has("orden")    && <Th>Orden</Th>}
                   {has("cliente")  && <Th>Cliente</Th>}
                   {has("cliente_tier") && <Th>Tier</Th>}
+                  {has("prioridad_cod") && <Th>Prioridad</Th>}
                   {has("telefono") && <Th>Teléfono</Th>}
                   {has("producto") && <Th>Producto</Th>}
                   {has("ciudad")   && <Th>Ciudad</Th>}
@@ -269,6 +270,11 @@ function Row({
       {has("cliente_tier") && (
         <Td>
           <ClienteBadge email={p.email_comprador as string} telefono={p.telefono_comprador} />
+        </Td>
+      )}
+      {has("prioridad_cod") && (
+        <Td>
+          <PrioridadCodBadge email={p.email_comprador as string} telefono={p.telefono_comprador} />
         </Td>
       )}
       {has("telefono") && (

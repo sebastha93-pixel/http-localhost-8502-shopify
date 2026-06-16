@@ -3,7 +3,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
-import { Crown, Repeat, Sparkles, AlertCircle, Star, HelpCircle } from "lucide-react";
+import { Crown, Repeat, Sparkles, AlertCircle, Star, HelpCircle, Send, CheckCircle, PhoneCall, Eye } from "lucide-react";
+import { calcularPrioridad } from "@/lib/prioridad-cod";
 
 interface Clasificacion {
   email: string;
@@ -153,6 +154,53 @@ export function ClienteHistorial({ email, telefono }: { email?: string; telefono
       )}
     </div>
   );
+}
+
+/**
+ * Badge de prioridad COD para la tabla de Pendientes.
+ * Reutiliza la misma query de clasificación (mismo queryKey + caché).
+ * Devuelve también el `orden` para sort.
+ */
+export function PrioridadCodBadge({ email, telefono }: { email?: string; telefono?: string }) {
+  const e = (email || "").trim().toLowerCase();
+  const t = (telefono || "").trim();
+  const key = e || `tel:${t}`;
+  const tieneInput = (e && e.includes("@")) || !!t;
+
+  const { data, isLoading } = useQuery<Clasificacion>({
+    queryKey: ["cliente-clasif", key],
+    queryFn: () => api.get<Clasificacion>(
+      `/api/clientes/clasificacion?email=${encodeURIComponent(e)}&telefono=${encodeURIComponent(t)}`,
+    ),
+    enabled: tieneInput,
+    staleTime: 60 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  });
+
+  if (!tieneInput) return <Badge tone="pendiente"><Eye className="h-3 w-3 mr-1 inline" />Verificar</Badge>;
+  if (isLoading) return <Badge tone="neutral">···</Badge>;
+
+  const prioridad = calcularPrioridad(data?.tier);
+  const Icon =
+    prioridad.nivel === "autorizar_ya" ? CheckCircle
+    : prioridad.nivel === "ok"         ? Send
+    : prioridad.nivel === "llamar_antes" ? PhoneCall
+    : Eye;
+
+  return (
+    <span title={prioridad.motivo} className="inline-flex">
+      <Badge tone={prioridad.tone}>
+        <Icon className="h-3 w-3 mr-1 inline" />
+        {prioridad.short}
+      </Badge>
+    </span>
+  );
+}
+
+/** Helper para ordenar pedidos por prioridad COD (mayor → autorizar_ya primero). */
+export function ordenPrioridadCod(tier?: string): number {
+  return calcularPrioridad(tier).orden;
 }
 
 function Stat({ label, value, tone = "ink" }: { label: string; value: number | string; tone?: "ink" | "teal" | "rust" | "graphite" }) {
