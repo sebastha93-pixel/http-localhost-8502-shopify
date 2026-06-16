@@ -58,7 +58,7 @@ interface DesgloseResp {
   por_asesor: Array<{ nombre: string; ventas: number; num_pedidos: number; pct: number }>;
 }
 
-type PeriodoDesglose = "hoy" | "7d" | "30d" | "mes" | "ytd";
+type PeriodoDesglose = "hoy" | "ayer" | "7d" | "30d" | "mes" | "ytd" | "custom";
 
 function Sparkline({ data, height = 60 }: { data: number[]; height?: number }) {
   if (!data?.length) return <div className="text-graphite text-xs">Sin datos</div>;
@@ -89,6 +89,11 @@ function DeltaBadge({ pct, up }: { pct: number; up: boolean }) {
 export default function ComercialPage() {
   const [periodo, setPeriodo] = useState<Periodo>("30d");
   const [periodoDesglose, setPeriodoDesglose] = useState<PeriodoDesglose>("30d");
+  // Rango personalizado para "Desglose → Personalizado"
+  const hoyISO = new Date().toISOString().slice(0, 10);
+  const hace30 = new Date(Date.now() - 29 * 86400_000).toISOString().slice(0, 10);
+  const [rangoDesde, setRangoDesde] = useState<string>(hace30);
+  const [rangoHasta, setRangoHasta] = useState<string>(hoyISO);
   // Tabs lazy: solo dispara la query del tab activo. Los demás esperan
   // a que el usuario los abra. Reduce queries paralelas a 1 en carga
   // inicial (los datos pesados de Shopify ya no bloquean ver "Hoy").
@@ -127,11 +132,17 @@ export default function ComercialPage() {
   });
 
   const desg = useQuery<DesgloseResp>({
-    queryKey: ["comercial-desglose", periodoDesglose],
-    queryFn: () => api.get<DesgloseResp>(`/api/comercial/desglose?periodo=${periodoDesglose}`),
+    queryKey: ["comercial-desglose", periodoDesglose, periodoDesglose === "custom" ? `${rangoDesde}_${rangoHasta}` : ""],
+    queryFn: () => {
+      const url =
+        periodoDesglose === "custom"
+          ? `/api/comercial/desglose?periodo=custom&desde=${rangoDesde}&hasta=${rangoHasta}`
+          : `/api/comercial/desglose?periodo=${periodoDesglose}`;
+      return api.get<DesgloseResp>(url);
+    },
     staleTime: 5 * 60_000,
     refetchOnWindowFocus: false,
-    enabled: tabActivo === "desglose",
+    enabled: tabActivo === "desglose" && (periodoDesglose !== "custom" || !!(rangoDesde && rangoHasta)),
   });
 
   if (overview.isLoading) return <LoadingState label="Cargando métricas comerciales..." />;
@@ -349,19 +360,45 @@ export default function ComercialPage() {
 
         {/* ─── TAB DESGLOSE ─── */}
         <TabsContent value="desglose" className="space-y-4">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs text-graphite uppercase tracking-wider">Período:</span>
-            {(["hoy","7d","30d","mes","ytd"] as PeriodoDesglose[]).map((p) => (
-              <button
-                key={p}
-                onClick={() => setPeriodoDesglose(p)}
-                className={`px-3 py-1.5 rounded-md text-xs font-semibold uppercase tracking-wider transition-colors ${
-                  periodoDesglose === p ? "bg-navy text-white" : "bg-concrete text-graphite hover:bg-concrete/70"
-                }`}
-              >
-                {p === "ytd" ? "YTD" : p === "hoy" ? "Hoy" : p === "mes" ? "Mes" : p}
-              </button>
-            ))}
+            {(["hoy","ayer","7d","30d","mes","ytd","custom"] as PeriodoDesglose[]).map((p) => {
+              const labels: Record<PeriodoDesglose, string> = {
+                hoy: "Hoy", ayer: "Ayer", "7d": "7d", "30d": "30d",
+                mes: "Mes", ytd: "YTD", custom: "Personalizado",
+              };
+              return (
+                <button
+                  key={p}
+                  onClick={() => setPeriodoDesglose(p)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold uppercase tracking-wider transition-colors ${
+                    periodoDesglose === p ? "bg-navy text-white" : "bg-concrete text-graphite hover:bg-concrete/70"
+                  }`}
+                >
+                  {labels[p]}
+                </button>
+              );
+            })}
+            {periodoDesglose === "custom" && (
+              <div className="flex items-center gap-2 ml-2 pl-2 border-l border-border">
+                <input
+                  type="date"
+                  value={rangoDesde}
+                  max={rangoHasta}
+                  onChange={(e) => setRangoDesde(e.target.value)}
+                  className="rounded-md border border-border bg-white px-2 py-1.5 text-xs text-ink focus:outline-none focus:ring-2 focus:ring-steel"
+                />
+                <span className="text-xs text-graphite">→</span>
+                <input
+                  type="date"
+                  value={rangoHasta}
+                  min={rangoDesde}
+                  max={hoyISO}
+                  onChange={(e) => setRangoHasta(e.target.value)}
+                  className="rounded-md border border-border bg-white px-2 py-1.5 text-xs text-ink focus:outline-none focus:ring-2 focus:ring-steel"
+                />
+              </div>
+            )}
           </div>
 
           {desg.isLoading || !desg.data ? (

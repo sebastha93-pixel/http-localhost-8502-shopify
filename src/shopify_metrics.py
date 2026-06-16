@@ -352,13 +352,47 @@ def analisis_clientes(dias: int = 90) -> dict:
 _USER_CACHE: dict = {}   # id → nombre
 
 
+def _cargar_users_map() -> dict:
+    """
+    Mapeo manual user_id (Shopify) → nombre, vía env var SHOPIFY_USERS_MAP.
+    Formato JSON: {"110649442624": "Juan Pérez", "110649344320": "María García"}
+
+    El endpoint /users/{id}.json solo está en Shopify Plus, así que para
+    cuentas regulares (la mayoría) usamos este mapa manual. Editar la env
+    var en Railway y redeploy.
+    """
+    import json as _json, os as _os
+    raw = _os.environ.get("SHOPIFY_USERS_MAP", "").strip()
+    if not raw:
+        return {}
+    try:
+        return _json.loads(raw)
+    except Exception:
+        return {}
+
+
 def _nombre_asesor(user_id) -> str:
-    """Resuelve el nombre del staff member que creó un draft order."""
+    """
+    Resuelve el nombre del staff member que creó un draft order.
+    Orden de búsqueda:
+      1) Cache en memoria (ya resuelto antes en esta sesión)
+      2) SHOPIFY_USERS_MAP (mapeo manual desde env var, recomendado)
+      3) /users/{id}.json (solo funciona en Shopify Plus)
+      4) Fallback: "User {id}"
+    """
     if not user_id:
         return ""
     uid = str(user_id)
     if uid in _USER_CACHE:
         return _USER_CACHE[uid]
+
+    # Mapa manual (Shopify NO Plus)
+    mapa = _cargar_users_map()
+    if uid in mapa:
+        _USER_CACHE[uid] = mapa[uid]
+        return mapa[uid]
+
+    # API /users (solo Shopify Plus — falla en cuentas regulares)
     try:
         r = _get(f"/users/{uid}.json")
         u = r.get("user") or {}
@@ -367,6 +401,12 @@ def _nombre_asesor(user_id) -> str:
         nombre = f"User {uid}"
     _USER_CACHE[uid] = nombre
     return nombre
+
+
+def asesores_raw_ids() -> list[str]:
+    """Devuelve los user_ids únicos vistos hasta ahora — útil para descubrir
+    qué IDs hay que mapear en SHOPIFY_USERS_MAP."""
+    return sorted(_USER_CACHE.keys())
 
 
 def _canal_label(source_name: str) -> str:
@@ -380,34 +420,47 @@ def _canal_label(source_name: str) -> str:
     return source_name or "Otros"
 
 
-def desglose_ventas(periodo: str = "30d") -> dict:
+def desglose_ventas(
+    periodo: str = "30d",
+    desde_custom: Optional[str] = None,
+    hasta_custom: Optional[str] = None,
+) -> dict:
     """
     Desglose de ventas por canal y asesor en el período pedido.
-    Devuelve:
-      {
-        periodo, desde, hasta,
-        bruto, neto, descuentos, num_pedidos,
-        por_canal:  [{label, ventas, num_pedidos, pct}, ...],
-        por_asesor: [{nombre, ventas, num_pedidos, pct}, ...]
-      }
-    `bruto` = subtotal_price (antes de descuentos)
-    `neto`  = total_price (lo que cobramos)
+
+    `periodo`: hoy | ayer | 7d | 30d | mes | ytd | custom
+    Si periodo=custom, usa desde_custom y hasta_custom (ISO YYYY-MM-DD).
     """
     hoy = hoy_bogota()
     if periodo == "hoy":
         desde = hoy
+        hasta = hoy
+    elif periodo == "ayer":
+        desde = hoy - timedelta(days=1)
+        hasta = desde
     elif periodo == "7d":
-        desde = hoy - timedelta(days=6)
+        desde = hoy - timedelta(days=6); hasta = hoy
     elif periodo == "30d":
-        desde = hoy - timedelta(days=29)
+        desde = hoy - timedelta(days=29); hasta = hoy
     elif periodo == "mes":
-        desde = hoy.replace(day=1)
+        desde = hoy.replace(day=1); hasta = hoy
     elif periodo == "ytd":
-        desde = date(hoy.year, 1, 1)
+        desde = date(hoy.year, 1, 1); hasta = hoy
+    elif periodo == "custom":
+        try:
+            desde = datetime.fromisoformat((desde_custom or "")[:10]).date()
+            hasta = datetime.fromisoformat((hasta_custom or "")[:10]).date()
+        except Exception:
+            desde = hoy - timedelta(days=29); hasta = hoy
+        if hasta < desde:
+            desde, hasta = hasta, desde
+        # Cap a 365 días para no explotar
+        if (hasta - desde).days > 365:
+            desde = hasta - timedelta(days=365)
     else:
-        desde = hoy - timedelta(days=29)
+        desde = hoy - timedelta(days=29); hasta = hoy
 
-    key = f"dv_{periodo}_{hoy.isoformat()}"
+    key = f"dv_{periodo}_{desde.isoformat()}_{hasta.isoformat()}"
 
     def _calc():
         bruto = 0.0
@@ -418,7 +471,7 @@ def desglose_ventas(periodo: str = "30d") -> dict:
         asesor_agg: dict = defaultdict(lambda: {"ventas": 0.0, "num_pedidos": 0})
 
         d = desde
-        while d <= hoy:
+        while d <= hasta:
             try:
                 params = {
                     "status": "any",
@@ -468,7 +521,7 @@ def desglose_ventas(periodo: str = "30d") -> dict:
         return {
             "periodo":     periodo,
             "desde":       desde.isoformat(),
-            "hasta":       hoy.isoformat(),
+            "hasta":       hasta.isoformat(),
             "bruto":       round(bruto, 0),
             "neto":        round(neto, 0),
             "descuentos":  round(descuentos, 0),
