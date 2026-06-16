@@ -123,17 +123,19 @@ def _consultar_shopify(email: str = "", telefono: str = "") -> Optional[dict]:
         total_spent  = float(c.get("total_spent") or 0)
         last_order   = c.get("last_order_name")
 
-        # Para entregados vs cancelados necesitamos los orders detalle
-        # (status any, fulfillment_status all). Limit 50 — cubre la
-        # inmensa mayoría de casos.
+        # Trae TODOS los orders del cliente. Antes traíamos solo los
+        # primeros 50 y faltaban pedidos archivados — la suma no cuadraba
+        # con orders_count del customer. Ahora paginamos completo y
+        # además consideramos un filtro más amplio.
         orders = []
         if sid:
             try:
+                # Pasada 1: status=any (open/closed/cancelled)
                 ro = _shopify_get("/orders.json", {
                     "customer_id": sid,
                     "status": "any",
-                    "limit": 50,
-                    "fields": "id,fulfillment_status,cancelled_at,created_at,total_price",
+                    "limit": 250,
+                    "fields": "id,fulfillment_status,cancelled_at,created_at,total_price,financial_status",
                 })
                 orders = ro.get("orders", []) or []
             except Exception as e:
@@ -155,6 +157,12 @@ def _consultar_shopify(email: str = "", telefono: str = "") -> Optional[dict]:
                 ultima = ca
 
         total = max(orders_count, len(orders))
+        # `otros` = gap entre lo que Shopify dice que tiene el cliente
+        # (orders_count) y lo que pudimos clasificar (entregados + en
+        # curso + cancelados). Si > 0 son pedidos archivados o que el
+        # endpoint /orders.json no devolvió en el filtro any.
+        clasificados = entregados + pendientes + cancelados
+        otros = max(0, total - clasificados)
         return {
             "shopify_id":    sid,
             "email":         email_shopify,
@@ -163,6 +171,7 @@ def _consultar_shopify(email: str = "", telefono: str = "") -> Optional[dict]:
             "entregados":    entregados,
             "cancelados":    cancelados,
             "pendientes":    pendientes,
+            "otros":         otros,
             "ltv":           total_spent,
             "ultima_compra": ultima,
         }
@@ -244,6 +253,16 @@ def _leer_cache_por_tel(telefono: str) -> Optional[dict]:
         return None
 
 
+def _con_otros(d: dict) -> dict:
+    """Asegura que el payload tenga el campo `otros` (gap clasificación)."""
+    total = int(d.get("total_pedidos") or 0)
+    e     = int(d.get("entregados")    or 0)
+    p     = int(d.get("pendientes")    or 0)
+    c     = int(d.get("cancelados")    or 0)
+    d["otros"] = max(0, total - e - p - c)
+    return d
+
+
 def clasificar(email: str = "", telefono: str = "") -> dict:
     """
     Clasifica un cliente por email Y/O teléfono. Si no hay email pero
@@ -254,19 +273,19 @@ def clasificar(email: str = "", telefono: str = "") -> dict:
     telefono = (telefono or "").strip()
 
     if not email and not telefono:
-        return {"email": "", "tier": "desconocido", "total_pedidos": 0,
-                "entregados": 0, "cancelados": 0, "ltv": 0, "from_cache": False}
+        return _con_otros({"email": "", "tier": "desconocido", "total_pedidos": 0,
+                "entregados": 0, "cancelados": 0, "pendientes": 0, "ltv": 0, "from_cache": False})
 
     # Cache hit por email
     if email and "@" in email:
         cached = _leer_cache(email)
         if cached:
-            return {**cached, "from_cache": True}
+            return _con_otros({**cached, "from_cache": True})
     # Cache hit por teléfono (si no hay email)
     if not (email and "@" in email) and telefono:
         cached_tel = _leer_cache_por_tel(telefono)
         if cached_tel:
-            return {**cached_tel, "from_cache": True}
+            return _con_otros({**cached_tel, "from_cache": True})
 
     # Miss → consultar Shopify
     datos = _consultar_shopify(email=email, telefono=telefono)
@@ -281,7 +300,7 @@ def clasificar(email: str = "", telefono: str = "") -> dict:
         # Solo cacheamos si hay email (la PK)
         if email and "@" in email:
             _guardar_cache(email, result, tier)
-        return result
+        return _con_otros(result)
 
     tier = _calc_tier(
         entregados=datos["entregados"],
@@ -292,7 +311,7 @@ def clasificar(email: str = "", telefono: str = "") -> dict:
     email_key = datos.get("email") or email
     if email_key and "@" in email_key:
         _guardar_cache(email_key, datos, tier)
-    return {"email": email_key, "tier": tier, **datos, "from_cache": False}
+    return _con_otros({"email": email_key, "tier": tier, **datos, "from_cache": False})
 
 
 def clasificar_bulk(items: list[dict]) -> dict[str, dict]:
