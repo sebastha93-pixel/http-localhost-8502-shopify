@@ -8,7 +8,7 @@ import { KpiCard } from "@/components/kpi-card";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { formatMoneyShort } from "@/lib/utils";
+import { formatMoneyShort, formatMoney } from "@/lib/utils";
 
 type Periodo = "7d" | "30d" | "90d" | "ytd";
 
@@ -465,19 +465,22 @@ export default function ComercialPage() {
                           <tr>
                             <th className="text-left py-2 font-medium">Asesor</th>
                             <th className="text-right py-2 font-medium">Pedidos</th>
-                            <th className="text-right py-2 font-medium">Ventas</th>
-                            <th className="text-right py-2 font-medium">% del neto</th>
+                            <th className="text-right py-2 font-medium">Ventas netas</th>
+                            <th className="text-right py-2 font-medium">Ticket promedio</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
-                          {desg.data.por_asesor.map((a) => (
-                            <tr key={a.nombre} className="hover:bg-concrete/30">
-                              <td className="py-2.5 text-ink font-medium">{a.nombre}</td>
-                              <td className="py-2.5 text-right text-ink tabular-nums">{a.num_pedidos}</td>
-                              <td className="py-2.5 text-right text-ink font-semibold tabular-nums">{formatMoneyShort(a.ventas)}</td>
-                              <td className="py-2.5 text-right text-graphite tabular-nums">{a.pct.toFixed(1)}%</td>
-                            </tr>
-                          ))}
+                          {desg.data.por_asesor.map((a) => {
+                            const ticket = a.num_pedidos > 0 ? a.ventas / a.num_pedidos : 0;
+                            return (
+                              <tr key={a.nombre} className="hover:bg-concrete/30">
+                                <td className="py-2.5 text-ink font-medium">{a.nombre}</td>
+                                <td className="py-2.5 text-right text-ink tabular-nums">{a.num_pedidos}</td>
+                                <td className="py-2.5 text-right text-ink font-semibold tabular-nums">{formatMoney(a.ventas)}</td>
+                                <td className="py-2.5 text-right text-graphite tabular-nums">{formatMoney(ticket)}</td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
