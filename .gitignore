@@ -22,3 +22,4 @@ data/marca/*.jpg
 # Archivos grandes (manual de marca)
 data/marca/*.pdf
 data/marca/*.jpg
+.gstack/

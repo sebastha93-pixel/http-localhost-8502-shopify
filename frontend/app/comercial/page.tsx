@@ -73,12 +73,17 @@ function DeltaBadge({ pct, up }: { pct: number; up: boolean }) {
 
 export default function ComercialPage() {
   const [periodo, setPeriodo] = useState<Periodo>("30d");
+  // Tabs lazy: solo dispara la query del tab activo. Los demás esperan
+  // a que el usuario los abra. Reduce 4 queries paralelas a 1 en carga
+  // inicial (los datos pesados de Shopify ya no bloquean ver "Hoy").
+  const [tabActivo, setTabActivo] = useState<"hoy" | "comp" | "periodo" | "clientes">("hoy");
 
   const overview = useQuery<OverviewResp>({
     queryKey: ["comercial-overview"],
     queryFn: () => api.get<OverviewResp>("/api/comercial/overview"),
     staleTime: 60_000,
     refetchOnWindowFocus: false,
+    enabled: tabActivo === "hoy",
   });
 
   const comp = useQuery<CompResp>({
@@ -86,6 +91,7 @@ export default function ComercialPage() {
     queryFn: () => api.get<CompResp>("/api/comercial/comparativas"),
     staleTime: 5 * 60_000,
     refetchOnWindowFocus: false,
+    enabled: tabActivo === "comp",
   });
 
   const ventasP = useQuery<VentasPeriodoResp>({
@@ -93,6 +99,7 @@ export default function ComercialPage() {
     queryFn: () => api.get<VentasPeriodoResp>(`/api/comercial/ventas-periodo?periodo=${periodo}`),
     staleTime: 5 * 60_000,
     refetchOnWindowFocus: false,
+    enabled: tabActivo === "periodo",
   });
 
   const cli = useQuery<ClientesResp>({
@@ -100,6 +107,7 @@ export default function ComercialPage() {
     queryFn: () => api.get<ClientesResp>("/api/comercial/clientes?dias=90"),
     staleTime: 10 * 60_000,
     refetchOnWindowFocus: false,
+    enabled: tabActivo === "clientes",
   });
 
   if (overview.isLoading) return <LoadingState label="Cargando métricas comerciales..." />;
@@ -126,7 +134,7 @@ export default function ComercialPage() {
       )}
 
       {/* Tabs: Hoy | Comparativas | Período | Clientes */}
-      <Tabs defaultValue="hoy">
+      <Tabs value={tabActivo} onValueChange={(v) => setTabActivo(v as typeof tabActivo)}>
         <TabsList>
           <TabsTrigger value="hoy">Hoy</TabsTrigger>
           <TabsTrigger value="comp">Comparativas</TabsTrigger>

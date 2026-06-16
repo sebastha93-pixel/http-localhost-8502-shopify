@@ -7,6 +7,7 @@ en hits repetidos pero refresca cada pocos minutos.
 """
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 from typing import Optional
@@ -28,18 +29,33 @@ def _shopify_metrics():
     return sm
 
 
+async def _run(fn, *args, **kwargs):
+    """Corre una función sync en un thread para no bloquear el event loop."""
+    return await asyncio.to_thread(fn, *args, **kwargs)
+
+
 @router.get("/overview")
-def overview(
+async def overview(
     _: CurrentUser = Depends(require_role("admin", "operador")),
 ) -> dict:
     """
     Overview comercial completo en una sola llamada.
-    Devuelve: ventas hoy, ayer, delta, serie 12 días, top productos.
+    Las 4 sub-queries corren EN PARALELO via asyncio.gather. Antes eran
+    secuenciales (~80s en cold start); ahora el endpoint termina en lo
+    que tarda la más lenta (~20-30s frío, <1s con cache caliente).
     """
     try:
         sm = _shopify_metrics()
     except Exception as e:
         raise HTTPException(503, f"Shopify metrics no disponible: {e}")
+
+    ventas_hoy, delta, serie_12d, top_productos = await asyncio.gather(
+        _run(sm.ventas_del_dia),
+        _run(sm.delta_vs_ayer),
+        _run(sm.ventas_serie, dias_atras=12),
+        _run(sm.top_productos, n=5, dias=30),
+        return_exceptions=True,
+    )
 
     payload: dict = {
         "ventas_hoy":   {},
@@ -48,28 +64,16 @@ def overview(
         "top_productos": [],
         "errores":      [],
     }
-
-    # Cada bloque en try independiente — si uno falla, los otros funcionan
-    try:
-        payload["ventas_hoy"] = sm.ventas_del_dia()
-    except Exception as e:
-        payload["errores"].append(f"ventas_hoy: {str(e)[:100]}")
-
-    try:
-        payload["delta"] = sm.delta_vs_ayer()
-    except Exception as e:
-        payload["errores"].append(f"delta: {str(e)[:100]}")
-
-    try:
-        payload["serie_12d"] = sm.ventas_serie(dias_atras=12)
-    except Exception as e:
-        payload["errores"].append(f"serie: {str(e)[:100]}")
-
-    try:
-        payload["top_productos"] = sm.top_productos(n=5, dias=30)
-    except Exception as e:
-        payload["errores"].append(f"top_productos: {str(e)[:100]}")
-
+    for nombre, slot, res in [
+        ("ventas_hoy",    "ventas_hoy",    ventas_hoy),
+        ("delta",         "delta",         delta),
+        ("serie",         "serie_12d",     serie_12d),
+        ("top_productos", "top_productos", top_productos),
+    ]:
+        if isinstance(res, Exception):
+            payload["errores"].append(f"{nombre}: {str(res)[:120]}")
+        else:
+            payload[slot] = res
     return payload
 
 
