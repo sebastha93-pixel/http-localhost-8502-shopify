@@ -12,8 +12,8 @@ interface Clasificacion {
   total_pedidos: number;
   entregados: number;
   cancelados: number;
-  pendientes?: number;
-  ltv?: number;
+  pendientes?: number;       // creados pero sin fulfilled ni cancelled
+  ltv?: number;              // total_spent del customer en Shopify
   ultima_compra?: string | null;
 }
 
@@ -147,11 +147,12 @@ export function ClienteHistorial({ email, telefono }: { email?: string; telefono
         </Badge>
       </div>
       <p className="text-xs text-graphite">{def.descripcion}</p>
-      <div className="grid grid-cols-4 gap-2 text-center pt-1">
-        <Stat label="Pedidos" value={data.total_pedidos} />
-        <Stat label="Entregados" value={data.entregados} tone="teal" />
-        <Stat label="Cancelados" value={data.cancelados} tone={data.cancelados > 0 ? "rust" : "graphite"} />
-        <Stat label="LTV" value={data.ltv ? `$${Math.round((data.ltv) / 1000)}K` : "—"} />
+      <div className="grid grid-cols-5 gap-2 text-center pt-1">
+        <Stat label="Pedidos" value={data.total_pedidos} hint="Total de pedidos creados en Shopify" />
+        <Stat label="Entregados" value={data.entregados} tone="teal" hint="Pedidos con fulfillment 'fulfilled' en Shopify" />
+        <Stat label="En curso" value={data.pendientes ?? 0} tone="ink" hint="Sin estado fulfilled ni cancelled — puede ser en tránsito o sin cerrar el ciclo" />
+        <Stat label="Cancelados" value={data.cancelados} tone={data.cancelados > 0 ? "rust" : "graphite"} hint="Pedidos cancelados en Shopify" />
+        <Stat label="LTV" value={data.ltv ? `$${Math.round((data.ltv) / 1000)}K` : "—"} hint="Lifetime Value · revenue total que el cliente ha generado" />
       </div>
       {data.ultima_compra && (
         <p className="text-[0.65rem] text-graphite text-right">
@@ -221,14 +222,24 @@ export function ordenPrioridadCod(tier?: string): number {
   return calcularPrioridad(tier).orden;
 }
 
-function Stat({ label, value, tone = "ink" }: { label: string; value: number | string; tone?: "ink" | "teal" | "rust" | "graphite" }) {
+function Stat({
+  label,
+  value,
+  tone = "ink",
+  hint,
+}: {
+  label: string;
+  value: number | string;
+  tone?: "ink" | "teal" | "rust" | "graphite";
+  hint?: string;
+}) {
   const colorClass =
     tone === "teal" ? "text-teal"
     : tone === "rust" ? "text-rust"
     : tone === "graphite" ? "text-graphite"
     : "text-ink";
   return (
-    <div>
+    <div title={hint} className={hint ? "cursor-help" : undefined}>
       <p className="text-[0.6rem] uppercase tracking-wider text-graphite">{label}</p>
       <p className={`text-sm font-bold tabular-nums ${colorClass}`}>{value}</p>
     </div>
