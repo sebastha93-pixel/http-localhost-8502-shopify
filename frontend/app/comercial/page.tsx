@@ -467,6 +467,7 @@ export default function ComercialPage() {
                             <th className="text-right py-2 font-medium">Pedidos</th>
                             <th className="text-right py-2 font-medium">Ventas netas</th>
                             <th className="text-right py-2 font-medium">Ticket promedio</th>
+                            <th className="text-right py-2 font-medium">% participación</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
@@ -478,6 +479,7 @@ export default function ComercialPage() {
                                 <td className="py-2.5 text-right text-ink tabular-nums">{a.num_pedidos}</td>
                                 <td className="py-2.5 text-right text-ink font-semibold tabular-nums">{formatMoney(a.ventas)}</td>
                                 <td className="py-2.5 text-right text-graphite tabular-nums">{formatMoney(ticket)}</td>
+                                <td className="py-2.5 text-right text-graphite tabular-nums">{a.pct.toFixed(1)}%</td>
                               </tr>
                             );
                           })}
