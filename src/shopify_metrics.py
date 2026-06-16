@@ -604,9 +604,18 @@ def inventario_shopify() -> dict:
 
 def listar_productos(status: str = "active", limit: int = 250) -> list:
     """
-    Lista productos con stock por variante. `status`: active | draft | archived.
-    Cada producto: { id, titulo, sku_principal, status, vendor, product_type,
-                     imagen, total_stock, num_variantes, sin_stock, variantes[] }
+    Lista productos con stock por variante + precios + descuentos + lanzamiento.
+
+    Por variante:
+      - precio              (lo que cuesta hoy)
+      - precio_full         (compare_at_price si hay; precio tachado)
+      - descuento_pct       (calculado si precio_full > precio)
+
+    Por producto:
+      - precio_min / precio_max  (rango entre variantes con precio > 0)
+      - descuento_max_pct        (mayor descuento de sus variantes)
+      - published_at, dias_publicado  (lanzamiento en Shopify)
+
     Cache 30 min.
     """
     key = f"prods_{status}_{hoy_bogota().isoformat()}"
@@ -615,7 +624,7 @@ def listar_productos(status: str = "active", limit: int = 250) -> list:
         from shopify_client import paginar
         productos = []
         try:
-            fields = "id,title,status,vendor,product_type,handle,image,variants,created_at,updated_at"
+            fields = "id,title,status,vendor,product_type,handle,image,variants,created_at,updated_at,published_at"
             for page in paginar(
                 "/products.json",
                 "products",
@@ -625,6 +634,44 @@ def listar_productos(status: str = "active", limit: int = 250) -> list:
                     variantes = p.get("variants") or []
                     total_stock = sum(max(int(v.get("inventory_quantity") or 0), 0) for v in variantes)
                     sin_stock = all(int(v.get("inventory_quantity") or 0) <= 0 for v in variantes)
+
+                    # Precios + descuento por variante
+                    vars_enriched = []
+                    precios: list[float] = []
+                    descuento_max = 0.0
+                    for v in variantes:
+                        precio = float(v.get("price") or 0)
+                        compare_raw = v.get("compare_at_price")
+                        precio_full = float(compare_raw) if compare_raw else 0.0
+                        # Solo es descuento real si precio_full > precio actual
+                        if precio_full > precio > 0:
+                            desc_pct = round((precio_full - precio) / precio_full * 100, 1)
+                        else:
+                            desc_pct = 0.0
+                            precio_full = 0.0  # normalizar: 0 = sin precio tachado
+                        descuento_max = max(descuento_max, desc_pct)
+                        if precio > 0:
+                            precios.append(precio)
+                        vars_enriched.append({
+                            "id":             v.get("id"),
+                            "sku":            v.get("sku") or "",
+                            "titulo":         v.get("title") or "",
+                            "precio":         precio,
+                            "precio_full":    precio_full,
+                            "descuento_pct":  desc_pct,
+                            "stock":          int(v.get("inventory_quantity") or 0),
+                        })
+
+                    # Fecha de lanzamiento + días publicado
+                    pub_at = p.get("published_at") or ""
+                    dias_pub = None
+                    if pub_at:
+                        try:
+                            pub_d = datetime.fromisoformat(pub_at.replace("Z", "+00:00")).date()
+                            dias_pub = (hoy_bogota() - pub_d).days
+                        except Exception:
+                            pass
+
                     productos.append({
                         "id":            p.get("id"),
                         "titulo":        p.get("title") or "—",
@@ -638,17 +685,13 @@ def listar_productos(status: str = "active", limit: int = 250) -> list:
                         "num_variantes": len(variantes),
                         "sin_stock":     sin_stock,
                         "stock_bajo":    not sin_stock and total_stock <= 5,
+                        "precio_min":    min(precios) if precios else 0,
+                        "precio_max":    max(precios) if precios else 0,
+                        "descuento_max_pct": descuento_max,
+                        "published_at":   pub_at,
+                        "dias_publicado": dias_pub,
                         "updated_at":    p.get("updated_at") or "",
-                        "variantes": [
-                            {
-                                "id":     v.get("id"),
-                                "sku":    v.get("sku") or "",
-                                "titulo": v.get("title") or "",
-                                "precio": float(v.get("price") or 0),
-                                "stock":  int(v.get("inventory_quantity") or 0),
-                            }
-                            for v in variantes
-                        ],
+                        "variantes":     vars_enriched,
                     })
                 if len(productos) >= limit:
                     break

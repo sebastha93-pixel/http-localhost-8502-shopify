@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Search, ExternalLink } from "lucide-react";
+import { formatMoney } from "@/lib/utils";
 
 interface ResumenResp {
   activos: number;
@@ -33,8 +34,21 @@ interface Producto {
   num_variantes: number;
   sin_stock: boolean;
   stock_bajo: boolean;
+  precio_min?: number;
+  precio_max?: number;
+  descuento_max_pct?: number;
+  published_at?: string;
+  dias_publicado?: number | null;
   updated_at: string;
-  variantes: Array<{ id: number; sku: string; titulo: string; precio: number; stock: number }>;
+  variantes: Array<{
+    id: number;
+    sku: string;
+    titulo: string;
+    precio: number;
+    precio_full?: number;
+    descuento_pct?: number;
+    stock: number;
+  }>;
 }
 
 interface ProductosResp {
@@ -147,15 +161,19 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                   <th className="px-3 py-2.5">Producto</th>
                   <th className="px-3 py-2.5">SKU</th>
                   <th className="px-3 py-2.5">Tipo</th>
+                  <th className="px-3 py-2.5 text-right">Precio</th>
+                  <th className="px-3 py-2.5 text-right">Descuento</th>
                   <th className="px-3 py-2.5 text-right">Variantes</th>
                   {mostrarStock && <th className="px-3 py-2.5 text-right">Stock</th>}
+                  <th className="px-3 py-2.5 text-right" title="Días desde el lanzamiento en Shopify">Lanzamiento</th>
+                  <th className="px-3 py-2.5 text-right" title="Días en bodega Melonn — pendiente integración API inventario">Bodega</th>
                   <th className="px-3 py-2.5">Estado</th>
                   <th className="px-3 py-2.5"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {filtrados.length === 0 ? (
-                  <tr><td colSpan={8} className="px-3 py-8 text-center text-sm text-graphite">Sin resultados.</td></tr>
+                  <tr><td colSpan={12} className="px-3 py-8 text-center text-sm text-graphite">Sin resultados.</td></tr>
                 ) : filtrados.map((p) => (
                   <>
                     <tr
@@ -177,6 +195,37 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                       </td>
                       <td className="px-3 py-2.5 text-xs text-graphite tabular-nums">{skuAgrupado(p)}</td>
                       <td className="px-3 py-2.5 text-xs text-graphite">{p.tipo || "—"}</td>
+                      <td className="px-3 py-2.5 text-right text-xs">
+                        {(() => {
+                          const min = p.precio_min || 0;
+                          const max = p.precio_max || 0;
+                          if (!min && !max) return <span className="text-graphite">—</span>;
+                          const tienePrecioFull = (p.descuento_max_pct || 0) > 0;
+                          return (
+                            <div className="flex flex-col items-end">
+                              <span className="font-semibold text-ink tabular-nums">
+                                {min === max ? formatMoney(min) : `${formatMoney(min)} – ${formatMoney(max)}`}
+                              </span>
+                              {tienePrecioFull && (
+                                <span className="text-[0.65rem] text-graphite line-through tabular-nums">
+                                  {/* precio full más alto entre variantes con descuento */}
+                                  {(() => {
+                                    const fulls = (p.variantes || []).map(v => v.precio_full || 0).filter(x => x > 0);
+                                    return fulls.length ? formatMoney(Math.max(...fulls)) : "";
+                                  })()}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-3 py-2.5 text-right">
+                        {(p.descuento_max_pct || 0) > 0 ? (
+                          <Badge tone="riesgo">-{(p.descuento_max_pct || 0).toFixed(0)}%</Badge>
+                        ) : (
+                          <span className="text-graphite">—</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2.5 text-right tabular-nums">{p.num_variantes}</td>
                       {mostrarStock && (
                         <td className="px-3 py-2.5 text-right tabular-nums">
@@ -185,6 +234,16 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                           </span>
                         </td>
                       )}
+                      <td className="px-3 py-2.5 text-right text-xs">
+                        {p.dias_publicado != null ? (
+                          <span className="text-ink tabular-nums" title={p.published_at}>{p.dias_publicado}d</span>
+                        ) : (
+                          <span className="text-graphite">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-xs">
+                        <span className="text-graphite italic" title="Pendiente integración API inventario Melonn">—</span>
+                      </td>
                       <td className="px-3 py-2.5">
                         {p.sin_stock ? <Badge tone="critico">Sin stock</Badge> :
                          p.stock_bajo ? <Badge tone="riesgo">Stock bajo</Badge> :
@@ -206,7 +265,7 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                     </tr>
                     {expandido === p.id && (
                       <tr key={`${p.id}-vars`} className="bg-concrete/20">
-                        <td colSpan={8} className="px-6 py-3">
+                        <td colSpan={12} className="px-6 py-3">
                           <div className="flex items-center justify-between mb-2">
                             <p className="text-[0.65rem] uppercase tracking-wider text-graphite">Tallas del SKU <span className="font-bold text-ink">{skuAgrupado(p)}</span></p>
                             <p className="text-[0.65rem] text-graphite">{p.variantes.length} {p.variantes.length === 1 ? "variante" : "variantes"}</p>
@@ -218,18 +277,28 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                                 <th className="text-left py-1 font-medium">Variante</th>
                                 <th className="text-left py-1 font-medium">SKU completo</th>
                                 <th className="text-right py-1 font-medium">Precio</th>
+                                <th className="text-right py-1 font-medium">Precio full</th>
+                                <th className="text-right py-1 font-medium">Descuento</th>
                                 <th className="text-right py-1 font-medium">Stock</th>
                               </tr>
                             </thead>
                             <tbody>
                               {p.variantes.map((v) => {
                                 const raiz = skuAgrupado(p);
+                                const desc = v.descuento_pct || 0;
+                                const full = v.precio_full || 0;
                                 return (
                                   <tr key={v.id}>
                                     <td className="py-1 text-ink font-semibold">{tallaDeVariante(v.sku, raiz)}</td>
                                     <td className="py-1 text-graphite">{v.titulo || "—"}</td>
                                     <td className="py-1 text-graphite tabular-nums">{v.sku || "—"}</td>
-                                    <td className="py-1 text-right text-ink tabular-nums">${v.precio.toLocaleString()}</td>
+                                    <td className="py-1 text-right text-ink font-semibold tabular-nums">{formatMoney(v.precio)}</td>
+                                    <td className="py-1 text-right text-graphite tabular-nums">
+                                      {full > 0 ? <span className="line-through">{formatMoney(full)}</span> : "—"}
+                                    </td>
+                                    <td className="py-1 text-right tabular-nums">
+                                      {desc > 0 ? <span className="text-rust font-semibold">-{desc.toFixed(0)}%</span> : <span className="text-graphite">—</span>}
+                                    </td>
                                     <td className={`py-1 text-right tabular-nums ${v.stock <= 0 ? "text-rust font-semibold" : v.stock <= 5 ? "text-khaki" : "text-ink"}`}>{v.stock}</td>
                                   </tr>
                                 );
