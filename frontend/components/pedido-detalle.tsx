@@ -13,6 +13,7 @@ import {
   Edit3, Flag, FlagOff, Package,
 } from "lucide-react";
 import { EnvioInfo } from "@/components/envio-info";
+import { ClienteHistorial } from "@/components/cliente-badge";
 
 interface Accion {
   tipo: string;
@@ -206,6 +207,9 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
               <span className="ml-auto text-sm tabular-nums text-graphite">{pedido.telefono_comprador}</span>
             </div>
           )}
+
+          {/* Historial del cliente (Shopify) — base para decidir autorizar/exigir prepago */}
+          <ClienteHistorial email={pedido.email_comprador as string} />
 
           {/* Envío: transportadora + guía (editable) + acceso directo */}
           <EnvioInfo pedido={pedido} />
