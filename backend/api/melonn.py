@@ -169,6 +169,26 @@ async def webhook_receiver(request: Request, secret: Optional[str] = Query(None)
         resultado = mc.refrescar_un_pedido(identificador)
         _registrar_webhook("exitosos", evento, identificador, str(resultado.get("accion", "")))
         log.info(f"Webhook {evento}: {identificador} → {resultado.get('accion')}")
+
+        # Si el evento es de entrega, archivar el pedido en /historico.
+        # Eventos Melonn relevantes: DELIVERED_TO_BUYER, COLLECTED_BY_BUYER.
+        ev_str = str(evento).upper()
+        if "DELIVER" in ev_str or "COLLECT" in ev_str or "ENTREG" in ev_str:
+            try:
+                from backend.services import archivo as archivo_svc
+                from backend.services import melonn as melonn_svc
+                # Buscar el pedido recién refrescado en el caché para tener
+                # todos los campos enriquecidos.
+                cache = melonn_svc.obtener_pedidos(forzar_refresh=False)
+                for p in cache.get("pedidos", []):
+                    if (p.get("orden_tienda") == identificador
+                            or p.get("orden_melonn") == identificador
+                            or str(p.get("orden_melonn") or "").lstrip("Mm") == str(identificador).lstrip("Mm")):
+                        archivo_svc.archivar_si_entregado(p)
+                        break
+            except Exception as e:
+                log.warning(f"Webhook {evento}: no se pudo archivar {identificador}: {e}")
+
         return {"ok": True, "evento": evento, "identificador": identificador, **resultado}
     except Exception as e:
         _registrar_webhook("errores_proc", evento, identificador, str(e)[:100])
