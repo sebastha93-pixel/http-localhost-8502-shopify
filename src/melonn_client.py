@@ -1428,7 +1428,37 @@ def _enriquecer_y_filtrar(pedidos: list) -> list:
         if sub in ("pendiente_despacho", "en_transito", "novedad", "entregado"):
             resultado.append(p)
 
-    return resultado
+    # ── Deduplicar por orden_tienda ──────────────────────────────────────
+    # Un mismo external_order_number puede tener varias órdenes Melonn
+    # (devolución/reposición/segundo envío). Nos quedamos con UNA por
+    # orden_tienda — la más relevante:
+    #   1) Si hay una activa (no entregado) y otra entregada/cerrada,
+    #      gana la activa.
+    #   2) Si todas están en el mismo bucket, gana la más reciente por
+    #      fecha_creacion (la M-id más nueva refleja el envío vigente).
+    # Esto arregla casos donde el pedido más viejo (ya entregado meses
+    # atrás) aparecía marcado como crítico por tener muchos días.
+    def _rank(p: dict) -> tuple:
+        # Mayor = mejor. Activos sobre entregados, recientes sobre viejos.
+        sub = p.get("sub_estado_logistico")
+        activo = 0 if sub == "entregado" else 1
+        fc = p.get("fecha_creacion")
+        # Comparamos como str ISO para no romper si viene de cache JSON.
+        fc_key = str(fc) if fc else ""
+        return (activo, fc_key)
+
+    por_orden: dict[str, dict] = {}
+    sin_orden: list[dict] = []
+    for p in resultado:
+        ot = p.get("orden_tienda") or ""
+        if not ot:
+            sin_orden.append(p)
+            continue
+        existente = por_orden.get(ot)
+        if existente is None or _rank(p) > _rank(existente):
+            por_orden[ot] = p
+
+    return list(por_orden.values()) + sin_orden
 
 
 def _cache_novedad_vencido() -> bool:
