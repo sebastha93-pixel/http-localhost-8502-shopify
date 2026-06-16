@@ -130,6 +130,12 @@ export function ClienteHistorial({ email, telefono }: { email?: string; telefono
 
   const def = TIERS[data.tier];
   const Icon = def.icon;
+  const prioridad = calcularPrioridad(data.tier);
+  const PrioIcon =
+    prioridad.nivel === "autorizar_ya" ? CheckCircle
+    : prioridad.nivel === "ok"         ? Send
+    : prioridad.nivel === "llamar_antes" ? PhoneCall
+    : Eye;
 
   return (
     <div className="rounded-md bg-concrete/40 border border-border px-3 py-2 space-y-2">
@@ -152,6 +158,18 @@ export function ClienteHistorial({ email, telefono }: { email?: string; telefono
           Última compra: <span className="font-medium text-ink">{data.ultima_compra}</span>
         </p>
       )}
+
+      {/* Recomendación de acción — qué hacer con este pedido */}
+      <div className="flex items-center justify-between pt-2 mt-2 border-t border-border">
+        <p className="text-[0.6rem] uppercase tracking-wider text-graphite">Recomendación</p>
+        <span title={prioridad.motivo} className="inline-flex">
+          <Badge tone={prioridad.tone}>
+            <PrioIcon className="h-3 w-3 mr-1 inline" />
+            {prioridad.label}
+          </Badge>
+        </span>
+      </div>
+      <p className="text-[0.65rem] text-graphite italic">{prioridad.motivo}</p>
     </div>
   );
 }
