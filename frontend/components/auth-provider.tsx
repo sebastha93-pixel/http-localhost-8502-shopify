@@ -24,10 +24,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const qc = useQueryClient();
   const [token, setLocalToken] = useState<string | null>(null);
+  // hydrated=true cuando ya leímos localStorage; antes NO decidimos nada.
+  // Evita una race: el useEffect de redirect veía token=null en el primer
+  // render y mandaba al /login a usuarios que SÍ tenían sesión, antes de
+  // que llegáramos a leer el token. Resultado: F5/bookmark/link-directo
+  // en cualquier ruta privada terminaba en /centro-control.
+  const [hydrated, setHydrated] = useState(false);
 
   // Hidratamos el token client-side para evitar mismatch SSR
   useEffect(() => {
     setLocalToken(getToken());
+    setHydrated(true);
   }, [pathname]);
 
   const meQ = useQuery({
@@ -39,17 +46,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   });
 
   const isPublic = PUBLIC_PATHS.includes(pathname);
-  const loading = !!token && meQ.isLoading;
+  const loading = !hydrated || (!!token && meQ.isLoading);
 
-  // Redirige a /login si no hay token y no es ruta pública
+  // Redirige a /login si no hay token y no es ruta pública.
+  // GATE: solo después de hidratar para no expulsar usuarios con sesión.
   useEffect(() => {
+    if (!hydrated) return;
     if (!token && !isPublic) {
       router.replace("/login");
     }
     if (token && isPublic && meQ.data) {
       router.replace("/centro-control");
     }
-  }, [token, isPublic, router, meQ.data]);
+  }, [hydrated, token, isPublic, router, meQ.data]);
 
   const logout = () => {
     clearToken();
