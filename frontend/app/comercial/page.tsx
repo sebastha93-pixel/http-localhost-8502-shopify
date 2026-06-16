@@ -484,6 +484,23 @@ export default function ComercialPage() {
                             );
                           })}
                         </tbody>
+                        <tfoot className="border-t-2 border-ink/20 bg-concrete/30">
+                          {(() => {
+                            const totalPedidos = desg.data.por_asesor.reduce((s, a) => s + a.num_pedidos, 0);
+                            const totalVentas  = desg.data.por_asesor.reduce((s, a) => s + a.ventas, 0);
+                            const ticketProm   = totalPedidos > 0 ? totalVentas / totalPedidos : 0;
+                            const totalPct     = desg.data.por_asesor.reduce((s, a) => s + a.pct, 0);
+                            return (
+                              <tr>
+                                <td className="py-2.5 text-ink font-bold uppercase tracking-wider text-[0.7rem]">Total</td>
+                                <td className="py-2.5 text-right text-ink font-bold tabular-nums">{totalPedidos}</td>
+                                <td className="py-2.5 text-right text-ink font-bold tabular-nums">{formatMoney(totalVentas)}</td>
+                                <td className="py-2.5 text-right text-ink font-bold tabular-nums">{formatMoney(ticketProm)}</td>
+                                <td className="py-2.5 text-right text-ink font-bold tabular-nums">{totalPct.toFixed(1)}%</td>
+                              </tr>
+                            );
+                          })()}
+                        </tfoot>
                       </table>
                     </div>
                   )}
