@@ -678,18 +678,25 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
 def _post(path: str, body: dict = None) -> tuple:
     """
     POST con rate limiting + retry agresivo en 429/503.
-    Importante: las acciones del usuario (autorizar, etc.) DEBEN suceder.
-    Si Melonn devuelve 429, esperamos progresivamente más para no fallar.
+
+    Para acciones del usuario (autorizar despacho, etc.) ampliamos el
+    presupuesto de reintentos: hasta ~60s con backoffs progresivos. Si
+    Melonn está saturado un momento, el botón "Autorizar" igual triunfa.
+
+    NO disparamos cooldown del scheduler por un solo POST 429 — eso era
+    desproporcionado (pausaba 30 min de polling porque un click falló).
+    Solo registramos el contador para detectar saturación SOSTENIDA.
+
     Retorna (ok: bool, data: dict | None, error_msg: str).
     """
     url = f"{_BASE_URL}/{path.lstrip('/')}"
-    # Retry budget corto — no congelar UI más de ~15s.
-    # Si Melonn está saturado, mejor decirle al usuario para que reintente.
-    post_backoff = [2, 5, 8]   # total max 15s
+    # Presupuesto ampliado: 5 intentos con backoff progresivo (~62s total).
+    # Vale la pena esperar — la acción del usuario es crítica.
+    post_backoff = [3, 8, 15, 25, 35]
 
     for attempt, backoff in enumerate([0] + post_backoff):
         if backoff:
-            log.warning(f"POST rate-limit — esperando {backoff}s (intento {attempt+1}/{_RETRY_MAX+1})")
+            log.warning(f"POST rate-limit — esperando {backoff}s (intento {attempt+1}/{len(post_backoff)+1})")
             time.sleep(backoff)
 
         _rate_limiter.wait()
@@ -706,13 +713,13 @@ def _post(path: str, body: dict = None) -> tuple:
             )
             if r.status_code in (200, 201, 204):
                 data = r.json() if r.content else {}
+                _registrar_429(False)
                 return True, data, ""
 
             # Rate limit / temporal: reintentar
             if r.status_code in (429, 503):
-                # Solo respetar Retry-After si es razonable (<30s); ignorar si Melonn pide más
                 retry_after_hdr = r.headers.get("Retry-After")
-                if retry_after_hdr and retry_after_hdr.isdigit() and int(retry_after_hdr) <= 30:
+                if retry_after_hdr and retry_after_hdr.isdigit() and int(retry_after_hdr) <= 60:
                     wait = int(retry_after_hdr)
                 else:
                     wait = post_backoff[min(attempt, len(post_backoff)-1)]
@@ -720,13 +727,14 @@ def _post(path: str, body: dict = None) -> tuple:
                 if attempt < len(post_backoff):
                     time.sleep(wait)
                     continue
-                # Tras agotar reintentos: pausar scheduler para liberar cuota
-                try:
-                    from backend.core import scheduler as _sched
-                    _sched.trigger_cooldown()
-                except Exception:
-                    pass
-                return False, None, "Melonn saturado. Esperando 30 min para liberar cuota. Reintenta más tarde."
+                # Tras agotar TODOS los reintentos: registrar el 429 sostenido.
+                # SOLO si vemos >5 fallos en 5 min, ahí sí pausamos scheduler
+                # (no por una sola acción del usuario).
+                _registrar_429(True)
+                return False, None, (
+                    "Melonn está saturado en este momento. "
+                    "Espera ~2 minutos y vuelve a intentar — debería liberar pronto."
+                )
 
             try:
                 msg = r.json().get("message") or r.text[:200]
@@ -739,6 +747,29 @@ def _post(path: str, body: dict = None) -> tuple:
             if attempt < len(post_backoff):
                 continue
             return False, None, str(e)
+
+
+# Tracker de 429 sostenidos. Si vemos >5 en 5 min → ahí sí cooldown.
+_recent_429: list[float] = []
+_RECENT_429_WINDOW = 300  # 5 min
+_RECENT_429_THRESHOLD = 5
+
+
+def _registrar_429(fallido: bool):
+    """Registra un POST resultado. Si vemos saturación sostenida, pausa scheduler."""
+    global _recent_429
+    now = time.time()
+    _recent_429 = [t for t in _recent_429 if now - t < _RECENT_429_WINDOW]
+    if fallido:
+        _recent_429.append(now)
+        if len(_recent_429) >= _RECENT_429_THRESHOLD:
+            log.warning(f"{len(_recent_429)} POSTs fallidos en {_RECENT_429_WINDOW}s → pausando scheduler")
+            try:
+                from backend.core import scheduler as _sched
+                _sched.trigger_cooldown(15 * 60)  # 15 min, no 30
+            except Exception:
+                pass
+            _recent_429 = []  # reset
 
     return False, None, "POST agotó reintentos"
 
