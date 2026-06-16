@@ -268,7 +268,7 @@ function Row({
       )}
       {has("cliente_tier") && (
         <Td>
-          <ClienteBadge email={p.email_comprador as string} />
+          <ClienteBadge email={p.email_comprador as string} telefono={p.telefono_comprador} />
         </Td>
       )}
       {has("telefono") && (

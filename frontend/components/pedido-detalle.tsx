@@ -209,7 +209,7 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
           )}
 
           {/* Historial del cliente (Shopify) — base para decidir autorizar/exigir prepago */}
-          <ClienteHistorial email={pedido.email_comprador as string} />
+          <ClienteHistorial email={pedido.email_comprador as string} telefono={pedido.telefono_comprador} />
 
           {/* Envío: transportadora + guía (editable) + acceso directo */}
           <EnvioInfo pedido={pedido} />

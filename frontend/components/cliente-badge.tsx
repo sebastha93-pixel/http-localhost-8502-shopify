@@ -55,19 +55,24 @@ const TIERS = {
   },
 };
 
-export function ClienteBadge({ email, compact = false }: { email?: string; compact?: boolean }) {
+export function ClienteBadge({ email, telefono, compact = false }: { email?: string; telefono?: string; compact?: boolean }) {
   const e = (email || "").trim().toLowerCase();
+  const t = (telefono || "").trim();
+  const key = e || `tel:${t}`;
+  const tieneInput = (e && e.includes("@")) || !!t;
 
   const { data, isLoading } = useQuery<Clasificacion>({
-    queryKey: ["cliente-clasif", e],
-    queryFn: () => api.get<Clasificacion>(`/api/clientes/clasificacion?email=${encodeURIComponent(e)}`),
-    enabled: !!e && e.includes("@"),
+    queryKey: ["cliente-clasif", key],
+    queryFn: () => api.get<Clasificacion>(
+      `/api/clientes/clasificacion?email=${encodeURIComponent(e)}&telefono=${encodeURIComponent(t)}`,
+    ),
+    enabled: tieneInput,
     staleTime: 60 * 60_000,        // 1h client-side (server tiene 24h en Supabase)
     refetchOnWindowFocus: false,
     retry: 1,
   });
 
-  if (!e || !e.includes("@")) {
+  if (!tieneInput) {
     return compact ? <Badge tone="neutral">—</Badge> : null;
   }
 
@@ -91,21 +96,26 @@ export function ClienteBadge({ email, compact = false }: { email?: string; compa
 }
 
 /** Versión expandida para el panel detalle del pedido. */
-export function ClienteHistorial({ email }: { email?: string }) {
+export function ClienteHistorial({ email, telefono }: { email?: string; telefono?: string }) {
   const e = (email || "").trim().toLowerCase();
+  const t = (telefono || "").trim();
+  const key = e || `tel:${t}`;
+  const tieneInput = (e && e.includes("@")) || !!t;
 
   const { data, isLoading } = useQuery<Clasificacion>({
-    queryKey: ["cliente-clasif", e],
-    queryFn: () => api.get<Clasificacion>(`/api/clientes/clasificacion?email=${encodeURIComponent(e)}`),
-    enabled: !!e && e.includes("@"),
+    queryKey: ["cliente-clasif", key],
+    queryFn: () => api.get<Clasificacion>(
+      `/api/clientes/clasificacion?email=${encodeURIComponent(e)}&telefono=${encodeURIComponent(t)}`,
+    ),
+    enabled: tieneInput,
     staleTime: 60 * 60_000,
     refetchOnWindowFocus: false,
   });
 
-  if (!e || !e.includes("@")) {
+  if (!tieneInput) {
     return (
       <div className="rounded-md bg-concrete/40 border border-border px-3 py-2 text-xs text-graphite">
-        Sin email del cliente — no se puede clasificar.
+        Sin email ni teléfono del cliente — no se puede clasificar.
       </div>
     );
   }
