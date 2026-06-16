@@ -314,6 +314,24 @@ def clasificar(email: str = "", telefono: str = "") -> dict:
     return _con_otros({"email": email_key, "tier": tier, **datos, "from_cache": False})
 
 
+def purgar_cache() -> dict:
+    """
+    Borra TODOS los registros de clientes_clasificacion. Útil cuando
+    cambia la lógica de cálculo (ej. añadimos `otros`) y queremos
+    forzar refetch desde Shopify en la próxima consulta.
+    """
+    sb = _sb()
+    if sb is None:
+        return {"ok": False, "error": "Supabase no configurado"}
+    try:
+        # Necesitamos un filtro: borrar todo donde email != '' (truco)
+        r = sb.table("clientes_clasificacion").delete().neq("email", "__never__").execute()
+        n = len(r.data) if r.data else 0
+        return {"ok": True, "borrados": n}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
 def clasificar_bulk(items: list[dict]) -> dict[str, dict]:
     """
     Clasifica varios clientes. `items` es lista de dicts con keys

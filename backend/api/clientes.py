@@ -41,3 +41,9 @@ def clasificacion_bulk(
     """Clasifica varios clientes. Cada item con email y/o teléfono. Max 100."""
     items = [{"email": i.email, "telefono": i.telefono} for i in body.items[:100]]
     return {"clasificaciones": svc.clasificar_bulk(items)}
+
+
+@router.post("/cache/purgar")
+def cache_purgar(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Borra TODO el caché de clasificaciones (admin only)."""
+    return svc.purgar_cache()
