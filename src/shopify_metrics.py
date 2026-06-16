@@ -348,6 +348,141 @@ def analisis_clientes(dias: int = 90) -> dict:
     return _cached(key, _calc, ttl=1800)
 
 
+# ─── Desglose de ventas: bruto / neto / canal / asesor ────────────────────────
+_USER_CACHE: dict = {}   # id → nombre
+
+
+def _nombre_asesor(user_id) -> str:
+    """Resuelve el nombre del staff member que creó un draft order."""
+    if not user_id:
+        return ""
+    uid = str(user_id)
+    if uid in _USER_CACHE:
+        return _USER_CACHE[uid]
+    try:
+        r = _get(f"/users/{uid}.json")
+        u = r.get("user") or {}
+        nombre = f"{u.get('first_name','')} {u.get('last_name','')}".strip() or u.get("email", "") or f"User {uid}"
+    except Exception:
+        nombre = f"User {uid}"
+    _USER_CACHE[uid] = nombre
+    return nombre
+
+
+def _canal_label(source_name: str) -> str:
+    """Normaliza source_name de Shopify a etiqueta legible."""
+    s = (source_name or "").lower()
+    if "draft" in s:        return "Draft (manual)"
+    if "web" in s:          return "Online store"
+    if "pos" in s:          return "POS"
+    if "mobile" in s:       return "App móvil"
+    if "shopify_draft" in s: return "Draft (manual)"
+    return source_name or "Otros"
+
+
+def desglose_ventas(periodo: str = "30d") -> dict:
+    """
+    Desglose de ventas por canal y asesor en el período pedido.
+    Devuelve:
+      {
+        periodo, desde, hasta,
+        bruto, neto, descuentos, num_pedidos,
+        por_canal:  [{label, ventas, num_pedidos, pct}, ...],
+        por_asesor: [{nombre, ventas, num_pedidos, pct}, ...]
+      }
+    `bruto` = subtotal_price (antes de descuentos)
+    `neto`  = total_price (lo que cobramos)
+    """
+    hoy = hoy_bogota()
+    if periodo == "hoy":
+        desde = hoy
+    elif periodo == "7d":
+        desde = hoy - timedelta(days=6)
+    elif periodo == "30d":
+        desde = hoy - timedelta(days=29)
+    elif periodo == "mes":
+        desde = hoy.replace(day=1)
+    elif periodo == "ytd":
+        desde = date(hoy.year, 1, 1)
+    else:
+        desde = hoy - timedelta(days=29)
+
+    key = f"dv_{periodo}_{hoy.isoformat()}"
+
+    def _calc():
+        bruto = 0.0
+        neto  = 0.0
+        descuentos = 0.0
+        num = 0
+        canal_agg: dict = defaultdict(lambda: {"ventas": 0.0, "num_pedidos": 0})
+        asesor_agg: dict = defaultdict(lambda: {"ventas": 0.0, "num_pedidos": 0})
+
+        d = desde
+        while d <= hoy:
+            try:
+                params = {
+                    "status": "any",
+                    "created_at_min": _iso_inicio(d),
+                    "created_at_max": _iso_fin(d),
+                    "limit": 250,
+                    "fields": "id,total_price,subtotal_price,total_discounts,source_name,user_id,cancelled_at",
+                }
+                resp = _get("/orders.json", params)
+                orders = resp.get("orders", []) or []
+            except Exception:
+                orders = []
+
+            for o in orders:
+                # Excluir cancelados del cálculo de revenue
+                if o.get("cancelled_at"):
+                    continue
+                tot   = float(o.get("total_price")    or 0)
+                sub   = float(o.get("subtotal_price") or tot)
+                desc  = float(o.get("total_discounts") or 0)
+                bruto      += sub + desc  # bruto = lo que sería sin descuento
+                neto       += tot
+                descuentos += desc
+                num        += 1
+
+                canal = _canal_label(o.get("source_name", ""))
+                canal_agg[canal]["ventas"]       += tot
+                canal_agg[canal]["num_pedidos"]  += 1
+
+                # Solo los draft orders tienen user_id (creados por staff)
+                uid = o.get("user_id")
+                if uid:
+                    nombre = _nombre_asesor(uid)
+                    asesor_agg[nombre]["ventas"]      += tot
+                    asesor_agg[nombre]["num_pedidos"] += 1
+
+            d += timedelta(days=1)
+
+        # Ordenar por ventas desc y calcular pct
+        def _rankear(agg: dict, key_nombre: str) -> list:
+            items = [{key_nombre: k, **v} for k, v in agg.items()]
+            items.sort(key=lambda x: x["ventas"], reverse=True)
+            for it in items:
+                it["pct"] = round(it["ventas"] / neto * 100, 1) if neto else 0
+            return items
+
+        return {
+            "periodo":     periodo,
+            "desde":       desde.isoformat(),
+            "hasta":       hoy.isoformat(),
+            "bruto":       round(bruto, 0),
+            "neto":        round(neto, 0),
+            "descuentos":  round(descuentos, 0),
+            "num_pedidos": num,
+            "ticket_promedio": round(neto / num, 0) if num else 0,
+            "por_canal":   _rankear(canal_agg, "label"),
+            "por_asesor":  _rankear(asesor_agg, "nombre"),
+        }
+
+    # Cache 10 min para hoy, 30 min para periodos cerrados
+    ttl = 600 if periodo == "hoy" else 1800
+    return _cached(key, _calc, ttl=ttl)
+
+
 def inventario_shopify() -> dict:
     """
     Conteo de productos en Shopify por status:

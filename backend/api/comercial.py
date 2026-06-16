@@ -142,6 +142,19 @@ def clientes(
         raise HTTPException(503, f"Error: {str(e)[:200]}")
 
 
+@router.get("/desglose")
+def desglose(
+    periodo: str = Query("30d", pattern="^(hoy|7d|30d|mes|ytd)$"),
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """Desglose de ventas: bruto, neto, descuentos, por canal y por asesor."""
+    try:
+        sm = _shopify_metrics()
+        return sm.desglose_ventas(periodo=periodo)
+    except Exception as e:
+        raise HTTPException(503, f"Error: {str(e)[:200]}")
+
+
 @router.get("/inventario")
 def inventario(
     _: CurrentUser = Depends(require_role("admin", "operador")),

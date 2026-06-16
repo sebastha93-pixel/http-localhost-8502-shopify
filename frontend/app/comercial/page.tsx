@@ -45,6 +45,21 @@ interface VentasPeriodoResp {
   serie: Array<{ fecha: string; total: number }>;
 }
 
+interface DesgloseResp {
+  periodo: string;
+  desde: string;
+  hasta: string;
+  bruto: number;
+  neto: number;
+  descuentos: number;
+  num_pedidos: number;
+  ticket_promedio: number;
+  por_canal:  Array<{ label: string;  ventas: number; num_pedidos: number; pct: number }>;
+  por_asesor: Array<{ nombre: string; ventas: number; num_pedidos: number; pct: number }>;
+}
+
+type PeriodoDesglose = "hoy" | "7d" | "30d" | "mes" | "ytd";
+
 function Sparkline({ data, height = 60 }: { data: number[]; height?: number }) {
   if (!data?.length) return <div className="text-graphite text-xs">Sin datos</div>;
   const max = Math.max(...data, 1);
@@ -73,10 +88,11 @@ function DeltaBadge({ pct, up }: { pct: number; up: boolean }) {
 
 export default function ComercialPage() {
   const [periodo, setPeriodo] = useState<Periodo>("30d");
+  const [periodoDesglose, setPeriodoDesglose] = useState<PeriodoDesglose>("30d");
   // Tabs lazy: solo dispara la query del tab activo. Los demás esperan
-  // a que el usuario los abra. Reduce 4 queries paralelas a 1 en carga
+  // a que el usuario los abra. Reduce queries paralelas a 1 en carga
   // inicial (los datos pesados de Shopify ya no bloquean ver "Hoy").
-  const [tabActivo, setTabActivo] = useState<"hoy" | "comp" | "periodo" | "clientes">("hoy");
+  const [tabActivo, setTabActivo] = useState<"hoy" | "comp" | "periodo" | "clientes" | "desglose">("hoy");
 
   const overview = useQuery<OverviewResp>({
     queryKey: ["comercial-overview"],
@@ -110,6 +126,14 @@ export default function ComercialPage() {
     enabled: tabActivo === "clientes",
   });
 
+  const desg = useQuery<DesgloseResp>({
+    queryKey: ["comercial-desglose", periodoDesglose],
+    queryFn: () => api.get<DesgloseResp>(`/api/comercial/desglose?periodo=${periodoDesglose}`),
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    enabled: tabActivo === "desglose",
+  });
+
   if (overview.isLoading) return <LoadingState label="Cargando métricas comerciales..." />;
   if (overview.error || !overview.data) return <ErrorState error={overview.error} onRetry={() => overview.refetch()} />;
 
@@ -140,6 +164,7 @@ export default function ComercialPage() {
           <TabsTrigger value="comp">Comparativas</TabsTrigger>
           <TabsTrigger value="periodo">Por período</TabsTrigger>
           <TabsTrigger value="clientes">Clientes</TabsTrigger>
+          <TabsTrigger value="desglose">Desglose</TabsTrigger>
         </TabsList>
 
         {/* ─── TAB HOY ─── */}
@@ -322,10 +347,114 @@ export default function ComercialPage() {
           )}
         </TabsContent>
 
+        {/* ─── TAB DESGLOSE ─── */}
+        <TabsContent value="desglose" className="space-y-4">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-graphite uppercase tracking-wider">Período:</span>
+            {(["hoy","7d","30d","mes","ytd"] as PeriodoDesglose[]).map((p) => (
+              <button
+                key={p}
+                onClick={() => setPeriodoDesglose(p)}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold uppercase tracking-wider transition-colors ${
+                  periodoDesglose === p ? "bg-navy text-white" : "bg-concrete text-graphite hover:bg-concrete/70"
+                }`}
+              >
+                {p === "ytd" ? "YTD" : p === "hoy" ? "Hoy" : p === "mes" ? "Mes" : p}
+              </button>
+            ))}
+          </div>
+
+          {desg.isLoading || !desg.data ? (
+            <Card><CardContent className="p-8 text-center text-sm text-graphite">Cargando desglose...</CardContent></Card>
+          ) : (
+            <>
+              {/* KPIs principales: bruto / descuentos / neto / pedidos */}
+              <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+                <KpiCard label="Ventas brutas"  value={formatMoneyShort(desg.data.bruto)}        meta={`${desg.data.desde} → ${desg.data.hasta}`} accent="steel" />
+                <KpiCard label="Descuentos"     value={formatMoneyShort(desg.data.descuentos)}   meta={desg.data.bruto ? `${(desg.data.descuentos / desg.data.bruto * 100).toFixed(1)}% del bruto` : "—"} accent="khaki" />
+                <KpiCard label="Ventas netas"   value={formatMoneyShort(desg.data.neto)}         meta={`${desg.data.num_pedidos} pedidos`} accent="navy" />
+                <KpiCard label="Ticket promedio" value={formatMoneyShort(desg.data.ticket_promedio)} meta="Neto / pedido" accent="navy" />
+              </div>
+
+              {/* Por canal */}
+              <Card>
+                <CardContent className="p-5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold uppercase tracking-wider text-graphite">Ventas por canal</h3>
+                    <span className="text-[0.65rem] text-graphite">% sobre neto</span>
+                  </div>
+                  {desg.data.por_canal.length === 0 ? (
+                    <p className="text-sm text-graphite text-center py-4">Sin ventas en el período.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="border-b border-border text-xs uppercase tracking-wider text-graphite">
+                          <tr>
+                            <th className="text-left py-2 font-medium">Canal</th>
+                            <th className="text-right py-2 font-medium">Pedidos</th>
+                            <th className="text-right py-2 font-medium">Ventas</th>
+                            <th className="text-right py-2 font-medium">%</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {desg.data.por_canal.map((c) => (
+                            <tr key={c.label} className="hover:bg-concrete/30">
+                              <td className="py-2.5 text-ink font-medium">{c.label}</td>
+                              <td className="py-2.5 text-right text-ink tabular-nums">{c.num_pedidos}</td>
+                              <td className="py-2.5 text-right text-ink font-semibold tabular-nums">{formatMoneyShort(c.ventas)}</td>
+                              <td className="py-2.5 text-right text-graphite tabular-nums">{c.pct.toFixed(1)}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Por asesor (solo draft orders tienen user_id) */}
+              <Card>
+                <CardContent className="p-5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold uppercase tracking-wider text-graphite">Ventas por asesor</h3>
+                    <span className="text-[0.65rem] text-graphite">Solo órdenes creadas por staff</span>
+                  </div>
+                  {desg.data.por_asesor.length === 0 ? (
+                    <p className="text-sm text-graphite text-center py-4">Sin ventas registradas por asesor en este período.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="border-b border-border text-xs uppercase tracking-wider text-graphite">
+                          <tr>
+                            <th className="text-left py-2 font-medium">Asesor</th>
+                            <th className="text-right py-2 font-medium">Pedidos</th>
+                            <th className="text-right py-2 font-medium">Ventas</th>
+                            <th className="text-right py-2 font-medium">% del neto</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {desg.data.por_asesor.map((a) => (
+                            <tr key={a.nombre} className="hover:bg-concrete/30">
+                              <td className="py-2.5 text-ink font-medium">{a.nombre}</td>
+                              <td className="py-2.5 text-right text-ink tabular-nums">{a.num_pedidos}</td>
+                              <td className="py-2.5 text-right text-ink font-semibold tabular-nums">{formatMoneyShort(a.ventas)}</td>
+                              <td className="py-2.5 text-right text-graphite tabular-nums">{a.pct.toFixed(1)}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </>
+          )}
+        </TabsContent>
+
       </Tabs>
 
       <p className="text-[0.65rem] text-graphite/70 mt-2">
-        Próximamente v3: canal de venta (D2C / B2B / POS) · códigos de descuento · cohorts de retención.
+        Próximamente v3: códigos de descuento más usados · cohorts de retención.
       </p>
     </PageShell>
   );
