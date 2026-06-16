@@ -17,7 +17,7 @@ interface AutorizarResponse {
 export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
   const qc = useQueryClient();
   const { user } = useAuth();
-  const [feedback, setFeedback] = useState<"idle" | "ok" | "error">("idle");
+  const [feedback, setFeedback] = useState<"idle" | "confirm" | "ok" | "error">("idle");
   const [msg, setMsg] = useState<string>("");
 
   // Botón oculto si el usuario es solo lectura
@@ -35,9 +35,10 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
     onSuccess: (data) => {
       setFeedback("ok");
       setMsg(data.mensaje);
-      // Refresca pedidos en background — el pedido saldrá de "Pendientes"
-      setTimeout(() => qc.invalidateQueries({ queryKey: ["melonn", "pedidos", "all"] }), 1500);
-      setTimeout(() => qc.invalidateQueries({ queryKey: ["metricas"] }), 1500);
+      // Invalidación AGRESIVA inmediata — el backend ya refrescó el pedido
+      // en caché antes de responder, así que esto es seguro.
+      qc.invalidateQueries({ queryKey: ["melonn"] });
+      qc.invalidateQueries({ queryKey: ["metricas"] });
     },
     onError: (err: Error) => {
       setFeedback("error");
@@ -67,13 +68,34 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
     );
   }
 
+  // Confirmación inline (NO confirm() nativo) — iOS Safari invalida los
+  // diálogos nativos cuando el user activation se gastó en un tel:/wa.me
+  // previo, lo que hacía que el botón Autorizar pareciera no responder.
+  if (feedback === "confirm") {
+    return (
+      <div className="inline-flex items-center gap-1.5">
+        <button
+          onClick={() => { setFeedback("idle"); mutation.mutate(); }}
+          disabled={mutation.isPending}
+          className="inline-flex items-center gap-1 rounded-md bg-teal px-2.5 py-1.5 text-xs font-semibold uppercase tracking-wider text-white hover:bg-ink disabled:opacity-50"
+        >
+          <CheckCircle className="h-3 w-3" /> Sí, autorizar
+        </button>
+        <button
+          onClick={() => setFeedback("idle")}
+          className="rounded-md border border-border bg-white px-2.5 py-1.5 text-xs font-semibold uppercase tracking-wider text-graphite hover:bg-concrete"
+        >
+          Cancelar
+        </button>
+      </div>
+    );
+  }
+
   return (
     <button
       onClick={() => {
         if (!pedido.orden_melonn) return;
-        if (confirm(`¿Autorizar despacho del pedido ${pedido.orden_tienda || pedido.orden_melonn}?`)) {
-          mutation.mutate();
-        }
+        setFeedback("confirm");
       }}
       disabled={mutation.isPending || !pedido.orden_melonn}
       className="inline-flex items-center gap-1.5 rounded-md bg-ink px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-white hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed transition-colors"

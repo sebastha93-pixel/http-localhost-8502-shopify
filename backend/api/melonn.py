@@ -416,10 +416,15 @@ def autorizar_despacho(
     if not ok:
         raise HTTPException(status_code=400, detail=mensaje)
 
-    # Refrescar ESE pedido en el caché inmediatamente, para que la UI no
-    # siga mostrándolo en "Pendientes" hasta el próximo webhook/polling.
+    # Refrescar ESE pedido en el caché. Esperamos un instante porque Melonn
+    # puede tardar ~1s en propagar el cambio de estado entre su POST y su
+    # GET — si llamamos el detail inmediatamente, devuelve el estado viejo
+    # (hold) y el pedido sigue apareciendo en Pendientes.
+    import time as _t
+    _t.sleep(1.5)
     try:
-        mc.refrescar_un_pedido(orden_melonn)
+        r = mc.refrescar_un_pedido(orden_melonn)
+        log.info(f"Autorizar {orden_melonn}: refresh → {r.get('accion', 'sin cambio')}")
     except Exception as e:
         log.warning(f"No se pudo refrescar pedido tras autorizar {orden_melonn}: {e}")
 
