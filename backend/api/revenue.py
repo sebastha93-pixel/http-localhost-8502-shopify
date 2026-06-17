@@ -7,7 +7,12 @@ dashboard.
 from __future__ import annotations
 
 import logging
+import os
+from datetime import datetime, timezone, timedelta
+
+import requests
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import RedirectResponse
 
 from backend.core.security import CurrentUser, require_role
 from backend.services import kommo as kommo_svc
@@ -16,6 +21,141 @@ from backend.services import revenue_db as db
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/revenue", tags=["revenue"])
+
+
+# ── OAuth2 con Kommo (necesario para scope de chats) ─────────────────────────
+@router.get("/oauth/start")
+def oauth_start(
+    user: CurrentUser = Depends(require_role("admin")),
+) -> RedirectResponse:
+    """
+    Inicia el flujo OAuth2 redirigiendo al usuario al consentimiento de Kommo.
+    Pide explícitamente el scope `chat` que el long-lived token no tiene.
+    """
+    client_id    = os.environ.get("KOMMO_CLIENT_ID", "").strip()
+    redirect_uri = os.environ.get("KOMMO_REDIRECT_URI", "").strip()
+    subdomain    = os.environ.get("KOMMO_SUBDOMAIN", "").strip()
+    if not client_id or not redirect_uri or not subdomain:
+        raise HTTPException(503, "Falta KOMMO_CLIENT_ID / KOMMO_REDIRECT_URI / KOMMO_SUBDOMAIN")
+
+    # Kommo OAuth URL: el usuario aprueba en su CRM y Kommo redirige al
+    # redirect_uri con ?code=XXX&referer=subdomain.kommo.com
+    url = (
+        f"https://{subdomain}.kommo.com/oauth?"
+        f"client_id={client_id}&"
+        f"state=revenue&"
+        f"mode=post_message"
+    )
+    return RedirectResponse(url)
+
+
+@router.get("/oauth/callback")
+def oauth_callback(
+    code: str = Query(..., description="Code temporal devuelto por Kommo"),
+    referer: str = Query("", description="Subdomain.kommo.com de la cuenta"),
+    state: str = Query(""),
+) -> dict:
+    """
+    Recibe el authorization code de Kommo y lo intercambia por access_token
+    + refresh_token. Los guarda en Supabase (tabla kommo_oauth_tokens).
+
+    Endpoint público — no requiere auth de Male Denim OS porque Kommo
+    redirige aquí externamente.
+    """
+    client_id     = os.environ.get("KOMMO_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("KOMMO_CLIENT_SECRET", "").strip()
+    redirect_uri  = os.environ.get("KOMMO_REDIRECT_URI", "").strip()
+    subdomain     = os.environ.get("KOMMO_SUBDOMAIN", "").strip()
+    if not client_id or not client_secret or not redirect_uri:
+        raise HTTPException(503, "Falta config OAuth (CLIENT_ID / CLIENT_SECRET / REDIRECT_URI)")
+
+    # 1. Intercambiar code por tokens
+    url_token = f"https://{subdomain}.kommo.com/oauth2/access_token"
+    try:
+        r = requests.post(url_token, json={
+            "client_id":     client_id,
+            "client_secret": client_secret,
+            "grant_type":    "authorization_code",
+            "code":          code,
+            "redirect_uri":  redirect_uri,
+        }, timeout=15)
+    except Exception as e:
+        raise HTTPException(502, f"No se pudo contactar Kommo: {e}")
+
+    if not r.ok:
+        return {"ok": False, "status": r.status_code, "body": r.text[:400]}
+
+    data = r.json()
+    access_token  = data.get("access_token")
+    refresh_token = data.get("refresh_token")
+    expires_in    = int(data.get("expires_in") or 86400)
+    scope         = data.get("scope") or ""
+
+    # 2. Determinar account_id del nuevo token
+    account_id = None
+    try:
+        info = requests.get(
+            f"https://{subdomain}.kommo.com/api/v4/account",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10,
+        )
+        if info.ok:
+            account_id = info.json().get("id")
+    except Exception:
+        pass
+
+    if not account_id:
+        return {"ok": False, "error": "No se pudo determinar account_id con el nuevo token"}
+
+    # 3. Guardar en Supabase
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    sb.table("kommo_oauth_tokens").upsert({
+        "account_id":    account_id,
+        "access_token":  access_token,
+        "refresh_token": refresh_token,
+        "expires_at":    expires_at,
+        "scope":         scope,
+        "updated_at":    datetime.now(timezone.utc).isoformat(),
+    }, on_conflict="account_id").execute()
+
+    return {
+        "ok":         True,
+        "account_id": account_id,
+        "scope":      scope,
+        "expires_at": expires_at,
+        "msg":        "Token guardado. El sync ahora puede leer mensajes de chats.",
+    }
+
+
+@router.get("/oauth/status")
+def oauth_status(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Estado actual del token OAuth (si hay) sin exponer el valor."""
+    sb = db._sb()
+    if sb is None:
+        return {"ok": False, "error": "Supabase no configurado"}
+    r = sb.table("kommo_oauth_tokens").select("account_id,scope,expires_at,updated_at").execute()
+    if not r.data:
+        return {"ok": False, "error": "Sin token OAuth — usar /api/revenue/oauth/start"}
+    row = r.data[0]
+    # Calcular si está vigente
+    try:
+        exp = datetime.fromisoformat((row["expires_at"] or "").replace("Z", "+00:00"))
+        vigente = datetime.now(timezone.utc) < exp
+        minutos_restantes = int((exp - datetime.now(timezone.utc)).total_seconds() / 60)
+    except Exception:
+        vigente = False
+        minutos_restantes = 0
+    return {
+        "ok":               True,
+        "account_id":       row["account_id"],
+        "scope":            row.get("scope"),
+        "expires_at":       row["expires_at"],
+        "minutos_vigente":  minutos_restantes,
+        "updated_at":       row.get("updated_at"),
+    }
 
 
 # ── Health ────────────────────────────────────────────────────────────────────

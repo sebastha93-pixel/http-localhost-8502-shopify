@@ -58,10 +58,144 @@ def _subdomain() -> str:
 
 
 def _token() -> str:
+    """
+    Obtiene un access token válido para la API de Kommo.
+
+    Prioridad:
+      1. Token OAuth2 desde Supabase (tabla kommo_oauth_tokens) si está
+         vigente. Estos tokens incluyen el scope `chat` necesario para
+         /talks/{id}/messages.
+      2. Refresh automático si el OAuth token expiró.
+      3. Fallback al long-lived KOMMO_API_TOKEN (sin scope de chat).
+
+    Si nada funciona, RuntimeError.
+    """
+    # 1. Intentar OAuth token vigente
+    try:
+        oauth = _leer_oauth_token_vigente()
+        if oauth:
+            return oauth
+    except Exception as e:
+        log.debug(f"OAuth token check fallo: {e}")
+
+    # 3. Fallback long-lived
     t = os.environ.get("KOMMO_API_TOKEN", "").strip()
     if not t:
-        raise RuntimeError("KOMMO_API_TOKEN no configurado")
+        raise RuntimeError("KOMMO_API_TOKEN no configurado y sin OAuth token")
     return t
+
+
+def _leer_oauth_token_vigente() -> Optional[str]:
+    """
+    Lee el access_token OAuth de Supabase. Si está por expirar (<5 min),
+    lo refresca automáticamente.
+    """
+    import os as _os
+    from datetime import datetime, timezone, timedelta
+    from supabase import create_client
+
+    url = _os.environ.get("SUPABASE_URL", "").strip()
+    key = _os.environ.get("SUPABASE_KEY", "").strip()
+    if not url or not key:
+        return None
+
+    sb = create_client(url, key)
+    r = sb.table("kommo_oauth_tokens").select("*").order("updated_at", desc=True).limit(1).execute()
+    if not r.data:
+        return None
+
+    row = r.data[0]
+    expires_at_str = row.get("expires_at") or ""
+    try:
+        expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+    # Si quedan más de 5 min, usar el token actual
+    if datetime.now(timezone.utc) + timedelta(minutes=5) < expires_at:
+        return row.get("access_token")
+
+    # Token a punto de expirar → refrescar
+    refresh_token = row.get("refresh_token")
+    if not refresh_token:
+        return None
+
+    nuevo = _refrescar_oauth_token(refresh_token, row.get("account_id"))
+    return nuevo
+
+
+def _refrescar_oauth_token(refresh_token: str, account_id: Optional[int] = None) -> Optional[str]:
+    """
+    Intercambia refresh_token por nuevo access_token + refresh_token.
+    Guarda en Supabase y retorna el access_token nuevo.
+    """
+    import os as _os
+    from datetime import datetime, timezone, timedelta
+    from supabase import create_client
+
+    client_id     = _os.environ.get("KOMMO_CLIENT_ID", "").strip()
+    client_secret = _os.environ.get("KOMMO_CLIENT_SECRET", "").strip()
+    redirect_uri  = _os.environ.get("KOMMO_REDIRECT_URI", "").strip()
+    if not client_id or not client_secret:
+        log.warning("Refresh OAuth: falta CLIENT_ID o CLIENT_SECRET")
+        return None
+
+    url_token = f"https://{_subdomain()}.kommo.com/oauth2/access_token"
+    try:
+        r = requests.post(url_token, json={
+            "client_id":     client_id,
+            "client_secret": client_secret,
+            "grant_type":    "refresh_token",
+            "refresh_token": refresh_token,
+            "redirect_uri":  redirect_uri,
+        }, timeout=15)
+        if not r.ok:
+            log.warning(f"Refresh OAuth fallo {r.status_code}: {r.text[:200]}")
+            return None
+        data = r.json()
+    except Exception as e:
+        log.warning(f"Refresh OAuth exception: {e}")
+        return None
+
+    access_token  = data.get("access_token")
+    refresh_new   = data.get("refresh_token") or refresh_token
+    expires_in    = int(data.get("expires_in") or 86400)
+    scope         = data.get("scope") or ""
+    new_expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
+
+    # Guardar
+    url = _os.environ.get("SUPABASE_URL", "").strip()
+    key = _os.environ.get("SUPABASE_KEY", "").strip()
+    sb = create_client(url, key)
+
+    # Si no nos pasaron account_id, decodificar del JWT o consultar /account
+    if not account_id:
+        try:
+            test_r = requests.get(
+                f"https://{_subdomain()}.kommo.com/api/v4/account",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10,
+            )
+            if test_r.ok:
+                account_id = test_r.json().get("id")
+        except Exception:
+            pass
+
+    if not account_id:
+        log.warning("Refresh OAuth: no se pudo determinar account_id")
+        return None
+
+    sb.table("kommo_oauth_tokens").upsert({
+        "account_id":     account_id,
+        "access_token":   access_token,
+        "refresh_token":  refresh_new,
+        "expires_at":     new_expires_at,
+        "scope":          scope,
+        "updated_at":     datetime.now(timezone.utc).isoformat(),
+    }, on_conflict="account_id").execute()
+
+    log.info(f"OAuth token refrescado para account {account_id} (expira {new_expires_at})")
+    return access_token
 
 
 def _base_url() -> str:
