@@ -157,8 +157,18 @@ def debug_ordenes_hoy(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     import shopify_metrics as sm
 
     hoy = sm.hoy_bogota()
+    # Para debug: pedir TODOS los fields relevantes
     try:
-        orders = sm._fetch_orders_dia(hoy)
+        params = {
+            "status": "any",
+            "created_at_min": sm._iso_inicio(hoy),
+            "created_at_max": sm._iso_fin(hoy),
+            "limit": 250,
+            "fields": "id,name,source_name,source_identifier,channel_id,test,total_price,subtotal_price,total_tax,taxes_included,total_discounts,financial_status,cancelled_at,confirmed,closed_at",
+        }
+        from shopify_client import _get
+        resp = _get("/orders.json", params)
+        orders = resp.get("orders", []) if resp else []
     except Exception as e:
         raise HTTPException(503, f"Error: {e}")
 
@@ -180,7 +190,13 @@ def debug_ordenes_hoy(_: CurrentUser = Depends(require_role("admin"))) -> dict:
         rev         = sm._revenue_sin_iva(o)
         rows.append({
             "id":               o.get("id"),
-            "source":           o.get("source_name"),
+            "name":             o.get("name"),
+            "source_name":      o.get("source_name"),
+            "source_id":        o.get("source_identifier"),
+            "channel_id":       o.get("channel_id"),
+            "test":             o.get("test"),
+            "confirmed":        o.get("confirmed"),
+            "closed_at":        o.get("closed_at"),
             "financial":        o.get("financial_status"),
             "cancelled":        cancelled,
             "taxes_included":   o.get("taxes_included"),
