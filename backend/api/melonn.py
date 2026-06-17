@@ -256,50 +256,6 @@ def debug_detalle(
         raise HTTPException(502, f"Error: {e}")
 
 
-@router.get("/debug/probar")
-def debug_probar(
-    path: str = Query(..., description="Path Melonn a probar, ej. 'inventory' o 'products'"),
-    _: CurrentUser = Depends(require_role("admin")),
-) -> dict:
-    """
-    Diagnóstico crudo: hace GET directo al API de Melonn con la API key
-    y devuelve el status HTTP + body. Saltea el wrapper _get que oculta
-    los 404 retornando None.
-    """
-    import os as _os, requests as _req, json as _json
-    api_key = _os.environ.get("MELONN_API_KEY", "")
-    if not api_key:
-        return {"ok": False, "error": "MELONN_API_KEY no configurado"}
-
-    base = "https://api.orbita.melonn.com"
-    url = f"{base}/{path.lstrip('/')}"
-    try:
-        r = _req.get(url, headers={"x-api-key": api_key, "Accept": "application/json"}, timeout=10)
-        body_text = r.text[:2000]
-        try:
-            body_json = r.json()
-            top_keys = list(body_json.keys()) if isinstance(body_json, dict) else None
-            first_item_keys = []
-            if isinstance(body_json, dict):
-                for k, v in body_json.items():
-                    if isinstance(v, list) and v and isinstance(v[0], dict):
-                        first_item_keys = list(v[0].keys())
-                        break
-        except Exception:
-            top_keys = None
-            first_item_keys = []
-        return {
-            "ok": True,
-            "url": url,
-            "status_code": r.status_code,
-            "top_keys": top_keys,
-            "first_item_keys": first_item_keys,
-            "body_preview": body_text,
-        }
-    except Exception as e:
-        return {"ok": False, "url": url, "error": str(e)[:300]}
-
-
 @router.post("/sync-completo", response_model=SyncResponse)
 def sync_completo_endpoint(
     user: CurrentUser = Depends(require_role("admin", "operador")),

@@ -472,6 +472,40 @@ def _cache_guardar(pedidos: list, fuente: str = "api_live"):
     _sq_cache_guardar(pedidos, fuente)
 
 
+def stock_por_warehouse(warehouse_code: str = "MED-2") -> dict[str, int]:
+    """
+    Trae el stock REAL por SKU desde Melonn (GET /stock?warehouse_code=X).
+    Pagina automáticamente (Melonn usa per_page con default 10).
+
+    Retorna {sku: qty_available}. Cache en memoria limitado a 1 ejecución
+    por proceso — el caller hace su propio caching.
+    """
+    out: dict[str, int] = {}
+    page = 1
+    per_page = 250
+    max_paginas = 50  # 50 * 250 = 12500 SKUs, suficiente
+    while page <= max_paginas:
+        try:
+            r = _get(f"stock?warehouse_code={warehouse_code}&page={page}&per_page={per_page}")
+        except Exception as e:
+            log.warning(f"stock_por_warehouse error page {page}: {e}")
+            break
+        if not r:
+            break
+        items = r.get("data", []) or []
+        if not items:
+            break
+        for it in items:
+            sku = (it.get("sku") or "").strip()
+            if sku:
+                out[sku] = int(it.get("qty_available") or 0)
+        # Si la página vino con menos items que per_page, no hay más
+        if len(items) < per_page:
+            break
+        page += 1
+    return out
+
+
 def refrescar_un_pedido(identificador: str) -> dict:
     """
     Refresca UN solo pedido en el caché desde Melonn detail endpoint.

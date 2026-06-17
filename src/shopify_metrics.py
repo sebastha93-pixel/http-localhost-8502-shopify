@@ -622,6 +622,18 @@ def listar_productos(status: str = "active", limit: int = 250) -> list:
 
     def _calc():
         from shopify_client import paginar
+        # Cruzar con stock real Melonn por SKU (vacío si falla la API)
+        try:
+            import sys as _sys
+            from pathlib import Path as _Path
+            _src = _Path(__file__).resolve().parent
+            if str(_src) not in _sys.path:
+                _sys.path.insert(0, str(_src))
+            from melonn_client import stock_por_warehouse
+            stock_melonn = stock_por_warehouse("MED-2")
+        except Exception:
+            stock_melonn = {}
+
         productos = []
         try:
             fields = "id,title,status,vendor,product_type,handle,image,variants,created_at,updated_at,published_at"
@@ -635,31 +647,40 @@ def listar_productos(status: str = "active", limit: int = 250) -> list:
                     total_stock = sum(max(int(v.get("inventory_quantity") or 0), 0) for v in variantes)
                     sin_stock = all(int(v.get("inventory_quantity") or 0) <= 0 for v in variantes)
 
-                    # Precios + descuento por variante
+                    # Precios + descuento + cruce con stock Melonn por variante
                     vars_enriched = []
                     precios: list[float] = []
                     descuento_max = 0.0
+                    total_stock_melonn = 0
+                    melonn_match = False
                     for v in variantes:
                         precio = float(v.get("price") or 0)
                         compare_raw = v.get("compare_at_price")
                         precio_full = float(compare_raw) if compare_raw else 0.0
-                        # Solo es descuento real si precio_full > precio actual
                         if precio_full > precio > 0:
                             desc_pct = round((precio_full - precio) / precio_full * 100, 1)
                         else:
                             desc_pct = 0.0
-                            precio_full = 0.0  # normalizar: 0 = sin precio tachado
+                            precio_full = 0.0
                         descuento_max = max(descuento_max, desc_pct)
                         if precio > 0:
                             precios.append(precio)
+
+                        # Match SKU contra stock Melonn
+                        sku_norm = (v.get("sku") or "").strip()
+                        stock_m = stock_melonn.get(sku_norm)
+                        if stock_m is not None:
+                            melonn_match = True
+                            total_stock_melonn += max(stock_m, 0)
                         vars_enriched.append({
                             "id":             v.get("id"),
-                            "sku":            v.get("sku") or "",
+                            "sku":            sku_norm,
                             "titulo":         v.get("title") or "",
                             "precio":         precio,
                             "precio_full":    precio_full,
                             "descuento_pct":  desc_pct,
                             "stock":          int(v.get("inventory_quantity") or 0),
+                            "stock_melonn":   stock_m,  # None si no hay match
                         })
 
                     # Fecha de lanzamiento + días publicado
@@ -691,6 +712,9 @@ def listar_productos(status: str = "active", limit: int = 250) -> list:
                         "published_at":   pub_at,
                         "dias_publicado": dias_pub,
                         "updated_at":    p.get("updated_at") or "",
+                        # Match Melonn — None si no se cruzó ninguna variante
+                        "stock_melonn":          total_stock_melonn if melonn_match else None,
+                        "diferencia_shopify_melonn": (total_stock - total_stock_melonn) if melonn_match else None,
                         "variantes":     vars_enriched,
                     })
                 if len(productos) >= limit:

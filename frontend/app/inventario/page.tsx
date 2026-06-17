@@ -39,6 +39,8 @@ interface Producto {
   descuento_max_pct?: number;
   published_at?: string;
   dias_publicado?: number | null;
+  stock_melonn?: number | null;             // null si no se cruzó con Melonn
+  diferencia_shopify_melonn?: number | null; // Shopify - Melonn (positivo = Shopify dice más)
   updated_at: string;
   variantes: Array<{
     id: number;
@@ -48,6 +50,7 @@ interface Producto {
     precio_full?: number;
     descuento_pct?: number;
     stock: number;
+    stock_melonn?: number | null;
   }>;
 }
 
@@ -166,7 +169,7 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                   <th className="px-3 py-2.5 text-right">Variantes</th>
                   {mostrarStock && <th className="px-3 py-2.5 text-right">Stock</th>}
                   <th className="px-3 py-2.5 text-right" title="Días desde el lanzamiento en Shopify">Lanzamiento</th>
-                  <th className="px-3 py-2.5 text-right" title="Días en bodega Melonn — pendiente integración API inventario">Bodega</th>
+                  <th className="px-3 py-2.5 text-right" title="Stock real en bodega Melonn (MED-2). Comparación con Stock Shopify para detectar discrepancias.">Stock Melonn</th>
                   <th className="px-3 py-2.5">Estado</th>
                   <th className="px-3 py-2.5"></th>
                 </tr>
@@ -242,7 +245,23 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                         )}
                       </td>
                       <td className="px-3 py-2.5 text-right text-xs">
-                        <span className="text-graphite italic" title="Pendiente integración API inventario Melonn">—</span>
+                        {p.stock_melonn != null ? (
+                          (() => {
+                            const diff = p.diferencia_shopify_melonn ?? 0;
+                            const hayDif = Math.abs(diff) > 0;
+                            return (
+                              <span
+                                className={hayDif ? "text-rust font-semibold tabular-nums" : "text-ink tabular-nums"}
+                                title={hayDif ? `Shopify dice ${p.total_stock}, Melonn tiene ${p.stock_melonn}. Diferencia ${diff > 0 ? "+" : ""}${diff}.` : "Cuadra con Shopify"}
+                              >
+                                {p.stock_melonn}
+                                {hayDif && <span className="ml-1 text-[0.65rem]">({diff > 0 ? "+" : ""}{diff})</span>}
+                              </span>
+                            );
+                          })()
+                        ) : (
+                          <span className="text-graphite italic" title="SKU sin match en Melonn (no está en bodega o el SKU no coincide)">—</span>
+                        )}
                       </td>
                       <td className="px-3 py-2.5">
                         {p.sin_stock ? <Badge tone="critico">Sin stock</Badge> :
@@ -279,7 +298,8 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                                 <th className="text-right py-1 font-medium">Precio</th>
                                 <th className="text-right py-1 font-medium">Precio full</th>
                                 <th className="text-right py-1 font-medium">Descuento</th>
-                                <th className="text-right py-1 font-medium">Stock</th>
+                                <th className="text-right py-1 font-medium">Stock Shopify</th>
+                                <th className="text-right py-1 font-medium">Stock Melonn</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -287,6 +307,8 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                                 const raiz = skuAgrupado(p);
                                 const desc = v.descuento_pct || 0;
                                 const full = v.precio_full || 0;
+                                const sm = v.stock_melonn;
+                                const diff = sm != null ? v.stock - sm : 0;
                                 return (
                                   <tr key={v.id}>
                                     <td className="py-1 text-ink font-semibold">{tallaDeVariante(v.sku, raiz)}</td>
@@ -300,6 +322,18 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                                       {desc > 0 ? <span className="text-rust font-semibold">-{desc.toFixed(0)}%</span> : <span className="text-graphite">—</span>}
                                     </td>
                                     <td className={`py-1 text-right tabular-nums ${v.stock <= 0 ? "text-rust font-semibold" : v.stock <= 5 ? "text-khaki" : "text-ink"}`}>{v.stock}</td>
+                                    <td className="py-1 text-right tabular-nums">
+                                      {sm == null ? (
+                                        <span className="text-graphite italic" title="Sin match en Melonn">—</span>
+                                      ) : (
+                                        <span
+                                          className={diff !== 0 ? "text-rust font-semibold" : "text-ink"}
+                                          title={diff !== 0 ? `Shopify: ${v.stock} · Melonn: ${sm} · Diferencia ${diff > 0 ? "+" : ""}${diff}` : "Cuadra"}
+                                        >
+                                          {sm}{diff !== 0 && <span className="ml-1 text-[0.65rem]">({diff > 0 ? "+" : ""}{diff})</span>}
+                                        </span>
+                                      )}
+                                    </td>
                                   </tr>
                                 );
                               })}
