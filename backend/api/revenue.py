@@ -139,35 +139,204 @@ _webhook_stats: dict = {
     "leads_evento":      0,
     "mensajes_evento":   0,
     "otros":             0,
+    "mensajes_guardados": 0,
+    "convs_upserteadas":  0,
+    "leads_actualizados": 0,
+    "errores_parser":     0,
     "primero_en":        None,
     "ultimo_en":         None,
     "ultimos_payloads":  [],
+    "ultimos_errores":   [],
 }
 
 
 from fastapi import Request
 
 
+def _kommo_form_to_nested(flat: dict) -> dict:
+    """Convierte claves dot-notation tipo "message[add][0][text]" en estructura anidada.
+    Después colapsa diccionarios con claves numéricas a listas."""
+    out: dict = {}
+    for k, v in flat.items():
+        parts: list[str] = []
+        buf = ""
+        for c in k:
+            if c == '[' or c == ']':
+                if buf:
+                    parts.append(buf)
+                    buf = ""
+            else:
+                buf += c
+        if buf:
+            parts.append(buf)
+        cur = out
+        for j, p in enumerate(parts):
+            if j == len(parts) - 1:
+                cur[p] = v
+            else:
+                if p not in cur or not isinstance(cur[p], dict):
+                    cur[p] = {}
+                cur = cur[p]
+
+    def listify(obj):
+        if isinstance(obj, dict):
+            keys = list(obj.keys())
+            if keys and all(str(k).isdigit() for k in keys):
+                return [listify(obj[k]) for k in sorted(keys, key=int)]
+            return {k: listify(v) for k, v in obj.items()}
+        return obj
+    return listify(out)
+
+
+def _sender_type_from(msg: dict) -> str:
+    """Clasifica el mensaje: customer / advisor / system."""
+    t = (msg.get("type") or "").lower()
+    author = msg.get("author") or {}
+    author_type = (author.get("type") or "").lower()
+    if t == "incoming" or author_type == "external":
+        return "customer"
+    if t == "outgoing" or author_type in ("internal", "user", "bot"):
+        return "advisor"
+    return "system"
+
+
+def _procesar_webhook(parsed: dict) -> dict:
+    """Procesa un payload Kommo ya parseado a estructura anidada.
+    Persiste mensajes, conversaciones y cambios de lead en Supabase.
+    Retorna contadores."""
+    from datetime import datetime as _dt, timezone as _tz
+    sb = db._sb()
+    if sb is None:
+        return {"error": "supabase_no_configurado"}
+
+    msgs_guardados = 0
+    convs_up = 0
+    leads_up = 0
+
+    # 1) message[add] → tabla messages
+    msg_block = (parsed.get("message") or {})
+    adds = msg_block.get("add") or []
+    if isinstance(adds, dict):
+        adds = [adds]
+    for m in adds:
+        if not isinstance(m, dict):
+            continue
+        try:
+            talk_id = m.get("talk_id")
+            entity_id = m.get("entity_id") or m.get("element_id")
+            entity_type = m.get("entity_type") or "lead"
+            created = int(m.get("created_at") or 0) or None
+            text = m.get("text") or ""
+            conv_id = f"talk-{talk_id}" if talk_id else None
+
+            # Asegurar conversation existe (FK)
+            if conv_id and entity_type == "lead" and entity_id:
+                try:
+                    existe = sb.table("conversations").select("conversation_id").eq("conversation_id", conv_id).limit(1).execute()
+                    if not existe.data:
+                        sb.table("conversations").upsert({
+                            "conversation_id":  conv_id,
+                            "lead_id":          int(entity_id),
+                            "channel":          m.get("origin") or "unknown",
+                            "started_at":       _dt.fromtimestamp(created, tz=_tz.utc).isoformat() if created else None,
+                            "last_message_at":  _dt.fromtimestamp(created, tz=_tz.utc).isoformat() if created else None,
+                            "status":           "in_work",
+                            "audit_status":     "pending",
+                            "synced_at":        _dt.now(tz=_tz.utc).isoformat(),
+                        }, on_conflict="conversation_id").execute()
+                        convs_up += 1
+                except Exception:
+                    pass
+
+            if not conv_id or not m.get("id"):
+                continue
+
+            row = {
+                "message_id":      str(m["id"]),
+                "conversation_id": conv_id,
+                "sender_type":     _sender_type_from(m),
+                "sender_id":       str((m.get("author") or {}).get("id") or ""),
+                "sender_name":     (m.get("author") or {}).get("name") or "",
+                "text":            text,
+                "created_at":      _dt.fromtimestamp(created, tz=_tz.utc).isoformat() if created else _dt.now(tz=_tz.utc).isoformat(),
+                "message_type":    m.get("message_type") or "text",
+            }
+            sb.table("messages").upsert(row, on_conflict="message_id").execute()
+            msgs_guardados += 1
+        except Exception as e:
+            _webhook_stats["errores_parser"] += 1
+            _webhook_stats["ultimos_errores"] = ([f"msg: {str(e)[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
+
+    # 2) talk[add|update] → tabla conversations
+    talk_block = (parsed.get("talk") or {})
+    for accion in ("add", "update"):
+        talks = talk_block.get(accion) or []
+        if isinstance(talks, dict):
+            talks = [talks]
+        for t in talks:
+            if not isinstance(t, dict):
+                continue
+            try:
+                talk_id = t.get("talk_id")
+                entity_id = t.get("entity_id")
+                entity_type = t.get("entity_type") or "lead"
+                if not talk_id or entity_type != "lead" or not entity_id:
+                    continue
+                created = int(t.get("created_at") or 0) or None
+                updated = int(t.get("updated_at") or 0) or None
+                row = {
+                    "conversation_id":  f"talk-{talk_id}",
+                    "lead_id":          int(entity_id),
+                    "channel":          t.get("origin") or "unknown",
+                    "started_at":       _dt.fromtimestamp(created, tz=_tz.utc).isoformat() if created else None,
+                    "last_message_at":  _dt.fromtimestamp(updated, tz=_tz.utc).isoformat() if updated else None,
+                    "status":           "in_work" if (t.get("is_in_work") in ("1", 1, True)) else "closed",
+                    "audit_status":     "pending",
+                    "synced_at":        _dt.now(tz=_tz.utc).isoformat(),
+                }
+                sb.table("conversations").upsert(row, on_conflict="conversation_id").execute()
+                convs_up += 1
+            except Exception as e:
+                _webhook_stats["errores_parser"] += 1
+                _webhook_stats["ultimos_errores"] = ([f"talk: {str(e)[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
+
+    # 3) leads[status|update|add] → tabla kommo_leads (refrescar estado)
+    leads_block = (parsed.get("leads") or {})
+    for accion in ("status", "update", "add"):
+        items = leads_block.get(accion) or []
+        if isinstance(items, dict):
+            items = [items]
+        for ld in items:
+            if not isinstance(ld, dict):
+                continue
+            try:
+                lead_id = ld.get("id")
+                if not lead_id:
+                    continue
+                row = {
+                    "lead_id":    int(lead_id),
+                    "pipeline_id": int(ld["pipeline_id"]) if ld.get("pipeline_id") else None,
+                    "stage_id":    int(ld["status_id"]) if ld.get("status_id") else None,
+                    "status":      db._map_status(ld.get("status_id")),
+                    "responsible_user_id": int(ld["responsible_user_id"]) if ld.get("responsible_user_id") else None,
+                    "synced_at":   _dt.now(tz=_tz.utc).isoformat(),
+                }
+                row = {k: v for k, v in row.items() if v is not None}
+                sb.table("kommo_leads").upsert(row, on_conflict="lead_id").execute()
+                leads_up += 1
+            except Exception as e:
+                _webhook_stats["errores_parser"] += 1
+                _webhook_stats["ultimos_errores"] = ([f"lead: {str(e)[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
+
+    return {"messages": msgs_guardados, "conversations": convs_up, "leads": leads_up}
+
+
 @router.post("/kommo-webhook")
 async def kommo_webhook(request: Request) -> dict:
-    """
-    Receptor de eventos de Kommo. PÚBLICO.
-
-    Tipos esperados:
-      - leads[add|update|delete|status]
-      - contacts[add|update|delete]
-      - message[add]  (chat messages, si el plan de Kommo lo expone)
-      - account[unsorted]
-      - Otros
-
-    Por defecto registra para diagnóstico. Para eventos conocidos hace
-    refresh de la entidad correspondiente.
-    """
+    """Receptor de eventos de Kommo. PÚBLICO. Parsea y persiste en Supabase."""
     from datetime import datetime as _dt, timezone as _tz
-
     now_iso = _dt.now(tz=_tz.utc).isoformat()
 
-    # Kommo manda como form-urlencoded por default, JSON en algunos casos
     body_dict: dict = {}
     try:
         ct = (request.headers.get("content-type") or "").lower()
@@ -184,11 +353,9 @@ async def kommo_webhook(request: Request) -> dict:
         _webhook_stats["primero_en"] = now_iso
     _webhook_stats["ultimo_en"] = now_iso
 
-    # Detectar tipo de evento por las keys del body
     keys = " ".join(body_dict.keys()) if isinstance(body_dict, dict) else ""
-    es_msg = "message" in keys or "chat" in keys
+    es_msg = "message" in keys or "talk" in keys
     es_lead = "leads" in keys
-
     if es_msg:
         _webhook_stats["mensajes_evento"] += 1
     elif es_lead:
@@ -196,7 +363,17 @@ async def kommo_webhook(request: Request) -> dict:
     else:
         _webhook_stats["otros"] += 1
 
-    # Guardar último payload (preview) para diagnóstico
+    # Persistir en DB
+    try:
+        parsed = _kommo_form_to_nested(body_dict) if isinstance(body_dict, dict) else {}
+        result = _procesar_webhook(parsed)
+        _webhook_stats["mensajes_guardados"] += result.get("messages", 0)
+        _webhook_stats["convs_upserteadas"] += result.get("conversations", 0)
+        _webhook_stats["leads_actualizados"] += result.get("leads", 0)
+    except Exception as e:
+        _webhook_stats["errores_parser"] += 1
+        _webhook_stats["ultimos_errores"] = ([f"top: {str(e)[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
+
     preview = {k: (str(v)[:200] if not isinstance(v, (dict, list)) else "<obj>")
                for k, v in body_dict.items()}
     _webhook_stats["ultimos_payloads"].insert(0, {
@@ -207,9 +384,6 @@ async def kommo_webhook(request: Request) -> dict:
     })
     _webhook_stats["ultimos_payloads"] = _webhook_stats["ultimos_payloads"][:10]
 
-    log.info(f"Kommo webhook: {es_msg=} {es_lead=} keys={list(body_dict.keys())[:10]}")
-
-    # Respondemos 200 SIEMPRE para que Kommo no reintente
     return {"ok": True}
 
 
