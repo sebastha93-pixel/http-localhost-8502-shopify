@@ -398,10 +398,14 @@ def sync_talks_backfill_completo() -> None:
         _backfill_state["running"] = False
 
 
-def sync_messages_de_lead(lead_id: int) -> dict:
+def sync_messages_de_lead(lead_id: int, conversation_id_override: Optional[str] = None) -> dict:
     """
     Trae todas las notes (mensajes) del lead y las inserta en messages.
     Construye/actualiza la fila correspondiente en conversations.
+
+    Si conversation_id_override se pasa, usa ese ID (p.ej "talk-XXX") en lugar
+    del default "lead-XXX". Esto permite asociar mensajes históricos a la
+    conversation ya existente creada via sync_talks.
 
     Idempotente: se basa en el message_id de Kommo (note.id).
     """
@@ -466,7 +470,7 @@ def sync_messages_de_lead(lead_id: int) -> dict:
 
         messages_dicts.append({
             "message_id":            f"kommo-{n.get('id')}",
-            "conversation_id":       f"lead-{lead_id}",
+            "conversation_id":       conversation_id_override or f"lead-{lead_id}",
             "lead_id":               lead_id,
             "sender_type":           sender_type,
             "sender_name":           sender_name[:80] if sender_name else None,

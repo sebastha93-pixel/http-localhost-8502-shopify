@@ -752,6 +752,51 @@ def conversation_detail(
     }
 
 
+@router.post("/sync/messages-historicos")
+def sync_messages_historicos(
+    limit: int = Query(50, ge=1, le=300, description="Cuántas conversaciones procesar"),
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Toma conversations sin mensajes, llama /leads/{lead_id}/notes para cada una
+    y persiste los mensajes históricos (note_type amochat_message/attachment)."""
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    # Conversations con message_count=0 o null, donde sabemos lead_id
+    convs = (sb.table("conversations").select("conversation_id,lead_id,message_count")
+               .or_("message_count.is.null,message_count.eq.0")
+               .not_.is_("lead_id", "null")
+               .limit(limit).execute().data) or []
+    if not convs:
+        return {"ok": True, "candidatos": 0, "procesadas": 0}
+
+    procesadas = 0
+    con_mensajes = 0
+    total_mensajes = 0
+    errores = []
+    for c in convs:
+        lead_id = c.get("lead_id")
+        if not lead_id:
+            continue
+        try:
+            res = kommo_svc.sync_messages_de_lead(lead_id, conversation_id_override=c["conversation_id"])
+            procesadas += 1
+            if res.get("ok") and res.get("mensajes", 0) > 0:
+                con_mensajes += 1
+                total_mensajes += res["mensajes"]
+        except Exception as e:
+            if len(errores) < 3:
+                errores.append(f"lead={lead_id}: {str(e)[:200]}")
+    return {
+        "ok": True,
+        "candidatos": len(convs),
+        "procesadas": procesadas,
+        "con_mensajes": con_mensajes,
+        "total_mensajes_nuevos": total_mensajes,
+        "errores": errores,
+    }
+
+
 @router.post("/enrich/conversations-advisors")
 def enrich_conversations_advisors(
     limit: int = Query(2000, ge=10, le=10000),

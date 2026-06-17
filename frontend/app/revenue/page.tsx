@@ -602,10 +602,14 @@ export default function RevenuePage() {
                       {(convsQ.data?.conversations || []).map((c) => (
                         <tr key={c.conversation_id} className="border-b hover:bg-cloud/40 cursor-pointer" onClick={() => setSelectedConv(c.conversation_id)}>
                           <td className="py-2 pr-3">
-                            <div className="font-medium">{c.customer_name || "—"}</div>
-                            <div className="text-xs text-graphite">{c.customer_phone || ""}</div>
+                            <div className="font-medium">
+                              {c.customer_name?.trim() || c.customer_phone || <span className="text-graphite italic">Lead #{c.lead_id}</span>}
+                            </div>
+                            {c.customer_name?.trim() && c.customer_phone && (
+                              <div className="text-xs text-graphite">{c.customer_phone}</div>
+                            )}
                           </td>
-                          <td className="py-2 pr-3">{c.advisor_name || <span className="text-graphite">—</span>}</td>
+                          <td className="py-2 pr-3">{c.advisor_name || <span className="text-graphite italic">Sin asignar</span>}</td>
                           <td className="py-2 pr-3">{CHANNEL_LABEL[c.channel] || c.channel}</td>
                           <td className="py-2 pr-3 whitespace-nowrap">{fmtRelative(c.last_message_at)}</td>
                           <td className="py-2 pr-3"><StatusBadge status={c.status} /></td>
