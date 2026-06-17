@@ -30,28 +30,34 @@ MAX_OUTPUT_TOKENS  = 1500
 
 SYSTEM_PROMPT = """Eres un auditor comercial experto en ventas conversacionales por WhatsApp e Instagram para una marca de jeans premium (MALE DENIM).
 
-Recibirás una conversación entre una asesora de ventas y un cliente potencial. Tu tarea es analizarla objetivamente y devolver SOLO un JSON válido con esta estructura exacta:
+Recibirás una conversación entre una asesora de ventas y un cliente potencial. Devuelve SOLO un JSON válido con esta estructura exacta:
 
 {
   "result_classification": "venta_lograda" | "venta_perdida" | "inconclusa",
-  "calidad_servicio": <entero 1-10>,
-  "tiempo_respuesta_score": <entero 1-10>,
-  "tono_score": <entero 1-10>,
-  "resumen": "<2-3 frases describiendo la conversación>",
-  "motivos_perdida": ["precio", "talla_no_disponible", "no_responde_cliente", "asesora_lenta", "competencia", "otro"],
-  "loss_reason_principal": "<uno de los anteriores o null>",
-  "oportunidades_perdidas": ["<frase específica de algo que la asesora pudo haber hecho>"],
-  "frases_positivas": ["<frase textual donde la asesora hizo algo bien>"],
-  "frases_negativas": ["<frase textual donde la asesora pudo haber hecho mejor>"],
-  "recomendaciones": ["<consejo accionable para la asesora>"],
-  "señales_compra": ["<frase del cliente mostrando interés>"]
+  "sale_status": "ganada" | "perdida" | "en_proceso" | "abandonada_cliente" | "abandonada_asesora",
+  "main_loss_reason": "precio" | "talla_no_disponible" | "no_responde_cliente" | "asesora_lenta" | "competencia" | "envio_lento" | "metodo_pago" | "otro" | null,
+  "response_time_score": <1-10>,
+  "attention_score": <1-10>,
+  "follow_up_score": <1-10>,
+  "closing_score": <1-10>,
+  "overall_score": <1-10>,
+  "lost_moment": "<frase textual exacta del momento donde se perdió la venta, o null>",
+  "recommended_response": "<lo que la asesora debió responder en el momento crítico, o null>",
+  "economic_impact_estimate": <COP estimado de la venta perdida o 0>,
+  "confidence_score": <0-1, qué tan seguro estás del análisis>,
+  "ai_summary_internal": "<2-4 frases describiendo qué pasó>",
+  "oportunidades_perdidas": ["<frases accionables>"],
+  "frases_positivas": ["<lo que la asesora hizo bien, textual>"],
+  "frases_negativas": ["<lo que pudo hacer mejor, textual>"],
+  "señales_compra": ["<frase del cliente mostrando interés>"],
+  "recomendaciones": ["<consejos para la asesora>"]
 }
 
 Reglas:
-- Si la conversación tiene menos de 4 mensajes Y el lead no está cerrado, usa "inconclusa".
-- Sé directo. No inventes frases que no estén en la conversación.
-- Si un campo no aplica, devuelve [] o null.
-- NO uses markdown ni texto fuera del JSON."""
+- Si conversación tiene <4 mensajes y lead no está cerrado → "inconclusa" + "en_proceso".
+- NO inventes frases. Cita textual.
+- Si campo no aplica → [] o null.
+- NO uses markdown. Solo JSON puro."""
 
 
 def _api_key() -> Optional[str]:
@@ -115,8 +121,8 @@ def _formato_thread(data: dict) -> str:
     return "\n".join(lines)
 
 
-def _llamar_haiku(thread_text: str) -> Optional[dict]:
-    """Llama Claude Haiku 4.5 y retorna el JSON parseado. None si falla."""
+def _llamar_haiku(thread_text: str) -> Optional[tuple[dict, float]]:
+    """Llama Claude Haiku 4.5 y retorna (JSON parseado, costo_usd). None si falla."""
     key = _api_key()
     if not key:
         log.warning("ANTHROPIC_API_KEY no configurado")
@@ -140,7 +146,6 @@ def _llamar_haiku(thread_text: str) -> Optional[dict]:
             log.warning(f"Haiku {r.status_code}: {r.text[:300]}")
             return None
         resp = r.json()
-        # Anthropic devuelve content[].text
         text = ""
         for c in resp.get("content", []):
             if c.get("type") == "text":
@@ -150,7 +155,11 @@ def _llamar_haiku(thread_text: str) -> Optional[dict]:
             text = text.strip("`")
             if text.startswith("json"):
                 text = text[4:].strip()
-        return json.loads(text)
+        parsed = json.loads(text)
+        usage = resp.get("usage") or {}
+        # Haiku 4.5: $1/MTok input, $5/MTok output
+        cost = (usage.get("input_tokens", 0) / 1_000_000) * 1.0 + (usage.get("output_tokens", 0) / 1_000_000) * 5.0
+        return parsed, round(cost, 6)
     except Exception as e:
         log.exception("Haiku call failed")
         return None
@@ -165,30 +174,34 @@ def auditar_conversation(conv_id: str) -> dict:
         return {"ok": False, "error": "sin_mensajes"}
 
     thread = _formato_thread(data)
-    parsed = _llamar_haiku(thread)
-    if not parsed:
+    res = _llamar_haiku(thread)
+    if not res:
         return {"ok": False, "error": "haiku_fallo_o_no_json"}
+    parsed, cost_usd = res
 
     audit_row = {
-        "conversation_id":       conv_id,
-        "lead_id":               data["conv"].get("lead_id"),
-        "advisor_id":            data["conv"].get("advisor_id"),
-        "result_classification": parsed.get("result_classification"),
-        "calidad_servicio":      parsed.get("calidad_servicio"),
-        "tiempo_respuesta_score": parsed.get("tiempo_respuesta_score"),
-        "tono_score":            parsed.get("tono_score"),
-        "resumen":               parsed.get("resumen"),
-        "loss_reason_code":      parsed.get("loss_reason_principal"),
-        "motivos_perdida":       parsed.get("motivos_perdida") or [],
-        "oportunidades_perdidas": parsed.get("oportunidades_perdidas") or [],
-        "frases_positivas":      parsed.get("frases_positivas") or [],
-        "frases_negativas":      parsed.get("frases_negativas") or [],
-        "recomendaciones":       parsed.get("recomendaciones") or [],
-        "señales_compra":        parsed.get("señales_compra") or [],
-        "model":                 ANTHROPIC_MODEL,
-        "analyzed_at":           datetime.now(tz=timezone.utc).isoformat(),
-        "raw_response":          parsed,
+        "conversation_id":         conv_id,
+        "lead_id":                 data["conv"].get("lead_id"),
+        "advisor_id":              data["conv"].get("advisor_id"),
+        "audit_date":              datetime.now(tz=timezone.utc).isoformat(),
+        "result_classification":   parsed.get("result_classification"),
+        "sale_status":             parsed.get("sale_status"),
+        "main_loss_reason":        parsed.get("main_loss_reason"),
+        "response_time_score":     parsed.get("response_time_score"),
+        "attention_score":         parsed.get("attention_score"),
+        "follow_up_score":         parsed.get("follow_up_score"),
+        "closing_score":           parsed.get("closing_score"),
+        "overall_score":           parsed.get("overall_score"),
+        "lost_moment":             parsed.get("lost_moment"),
+        "recommended_response":    parsed.get("recommended_response"),
+        "economic_impact_estimate": parsed.get("economic_impact_estimate") or 0,
+        "confidence_score":        parsed.get("confidence_score"),
+        "ai_summary_internal":     parsed.get("ai_summary_internal"),
+        "raw_analysis":            parsed,
+        "modelo_ia":               ANTHROPIC_MODEL,
+        "costo_analisis_usd":      cost_usd,
     }
+    audit_row = {k: v for k, v in audit_row.items() if v is not None}
     audit_id = db.insertar_audit(audit_row)
     if not audit_id:
         return {"ok": False, "error": "insert_fallo", "audit_data": audit_row}
