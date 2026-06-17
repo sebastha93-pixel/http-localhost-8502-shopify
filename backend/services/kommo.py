@@ -129,6 +129,96 @@ def sync_leads(full: bool = False, limit_total: int = 5000) -> dict:
 _NOTE_TYPES_MENSAJE = {25, 26, "amochat_message", "amochat_attachment"}
 
 
+def sync_talks(full: bool = False, limit_total: int = 5000) -> dict:
+    """
+    Sync incremental de talks → tabla conversations.
+
+    Cada talk se convierte en 1 conversation con:
+      - conversation_id = "talk-{talk_id}"
+      - lead_id        = talk.entity_id (si entity_type=="lead")
+      - advisor_id     = uuid del responsible del lead asociado
+      - channel        = talk.origin (waba, instagram_business, etc.)
+      - started_at     = talk.created_at
+      - last_message_at = talk.updated_at
+      - status         = talk.status
+      - audit_status   = 'pending'
+
+    NO inserta mensajes individuales (la API no los expone). Esos se
+    capturan vía webhook cuando se activa la Opción A.
+    """
+    import kommo_client as kc
+
+    desde_ts: Optional[int] = None
+    if not full:
+        last = db.leer_sync_state("kommo_talks_last_sync")
+        if last:
+            try:
+                desde_ts = int(last)
+            except Exception:
+                pass
+
+    nuevo_corte_ts = int(datetime.now(tz=timezone.utc).timestamp())
+
+    procesados = 0
+    upserted = 0
+    sb = db._sb()
+    if sb is None:
+        return {"ok": False, "error": "Supabase no configurado"}
+
+    # Cache leads → advisor_id para no consultar Supabase 1 por talk
+    advisors_por_lead: dict[int, Optional[str]] = {}
+
+    try:
+        for talk in kc.listar_talks(updated_after_ts=desde_ts, limit_total=limit_total):
+            procesados += 1
+            entity_type = talk.get("entity_type")
+            if entity_type != "lead":
+                continue   # solo lead-attached talks
+            lead_id = talk.get("entity_id")
+            if not lead_id:
+                continue
+
+            # Buscar advisor_id del lead
+            if lead_id not in advisors_por_lead:
+                try:
+                    r = sb.table("kommo_leads").select("advisor_id").eq("lead_id", lead_id).limit(1).execute()
+                    advisors_por_lead[lead_id] = r.data[0]["advisor_id"] if r.data else None
+                except Exception:
+                    advisors_por_lead[lead_id] = None
+
+            started_ts = talk.get("created_at")
+            updated_ts = talk.get("updated_at")
+            conv = {
+                "conversation_id":  f"talk-{talk['talk_id']}",
+                "lead_id":          lead_id,
+                "advisor_id":       advisors_por_lead.get(lead_id),
+                "channel":          talk.get("origin") or "unknown",
+                "started_at":       datetime.fromtimestamp(int(started_ts), tz=timezone.utc).isoformat() if started_ts else None,
+                "last_message_at":  datetime.fromtimestamp(int(updated_ts), tz=timezone.utc).isoformat() if updated_ts else None,
+                "status":           talk.get("status"),
+                "message_count":    0,
+                "audit_status":     "pending",
+                "synced_at":        datetime.now(tz=timezone.utc).isoformat(),
+            }
+            if db.upsert_conversation(conv):
+                upserted += 1
+    except Exception as e:
+        log.exception("sync_talks error")
+        return {"ok": False, "error": str(e)[:300], "procesados": procesados}
+
+    if procesados > 0 or desde_ts is None:
+        db.guardar_sync_state("kommo_talks_last_sync", str(nuevo_corte_ts))
+
+    return {
+        "ok":          True,
+        "procesados":  procesados,
+        "upserted":    upserted,
+        "modo":        "full" if full else "incremental",
+        "desde_ts":    desde_ts,
+        "hasta_ts":    nuevo_corte_ts,
+    }
+
+
 def sync_messages_de_lead(lead_id: int) -> dict:
     """
     Trae todas las notes (mensajes) del lead y las inserta en messages.
@@ -256,7 +346,10 @@ def sync_completo(full: bool = False, lead_limit: int = 1000,
     # 2. Leads
     res["steps"]["leads"] = sync_leads(full=full, limit_total=lead_limit)
 
-    # 3. Mensajes — solo de leads que se actualizaron en este sync
+    # 3. Talks (metadata de conversaciones — funciona hoy)
+    res["steps"]["talks"] = sync_talks(full=full, limit_total=lead_limit)
+
+    # 4. Mensajes — solo de leads que se actualizaron en este sync
     # Por ahora hacemos un fetch simple de leads recientes y sus mensajes.
     # En producción esto debería ser una cola, pero para v1 sirve.
     sb = db._sb()

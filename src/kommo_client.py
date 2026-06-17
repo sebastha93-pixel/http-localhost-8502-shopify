@@ -380,6 +380,38 @@ def listar_notes_de_lead(lead_id: int,
             yield note
 
 
+def listar_talks(updated_after_ts: Optional[int] = None,
+                  limit_total: int = 5000) -> Iterator[dict]:
+    """
+    Itera talks (conversaciones de chat). Cada talk es un "thread" entre
+    un asesor y un cliente, ligado a un lead/contacto.
+
+    Para esta cuenta (integración Widget), NO podemos acceder a los
+    mensajes individuales del talk, pero sí a su metadata:
+      - talk_id, chat_id
+      - contact_id, entity_id (lead), entity_type
+      - rate (calificación)
+      - origin (waba, instagram_business, etc.)
+      - status, is_in_work, is_read
+      - created_at, updated_at
+      - source_id
+    Suficiente para análisis de tiempo, abandono, ranking por asesor.
+
+    `updated_after_ts`: epoch seconds para incremental.
+    """
+    params: dict = {"limit": 250}
+    if updated_after_ts:
+        params["filter[updated_at][from]"] = int(updated_after_ts)
+
+    enviados = 0
+    for page in _paginar("talks", "talks", params):
+        for talk in page:
+            yield talk
+            enviados += 1
+            if enviados >= limit_total:
+                return
+
+
 def listar_eventos_de_lead(lead_id: int) -> Iterator[dict]:
     """
     Eventos del lead (cambios de stage, asignaciones, etc.).

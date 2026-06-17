@@ -130,6 +130,95 @@ def oauth_callback(
     }
 
 
+# ── Receptor de webhooks Kommo ────────────────────────────────────────────────
+# Kommo POST eventos aquí. PÚBLICO (Kommo no soporta auth Bearer custom).
+# Captura cualquier evento que se configure en Kommo → Ajustes → Webhooks.
+
+_webhook_stats: dict = {
+    "total":             0,
+    "leads_evento":      0,
+    "mensajes_evento":   0,
+    "otros":             0,
+    "primero_en":        None,
+    "ultimo_en":         None,
+    "ultimos_payloads":  [],
+}
+
+
+from fastapi import Request
+
+
+@router.post("/kommo-webhook")
+async def kommo_webhook(request: Request) -> dict:
+    """
+    Receptor de eventos de Kommo. PÚBLICO.
+
+    Tipos esperados:
+      - leads[add|update|delete|status]
+      - contacts[add|update|delete]
+      - message[add]  (chat messages, si el plan de Kommo lo expone)
+      - account[unsorted]
+      - Otros
+
+    Por defecto registra para diagnóstico. Para eventos conocidos hace
+    refresh de la entidad correspondiente.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+
+    now_iso = _dt.now(tz=_tz.utc).isoformat()
+
+    # Kommo manda como form-urlencoded por default, JSON en algunos casos
+    body_dict: dict = {}
+    try:
+        ct = (request.headers.get("content-type") or "").lower()
+        if "json" in ct:
+            body_dict = await request.json()
+        else:
+            form = await request.form()
+            body_dict = dict(form)
+    except Exception as e:
+        body_dict = {"_parse_error": str(e)[:200]}
+
+    _webhook_stats["total"] += 1
+    if _webhook_stats["primero_en"] is None:
+        _webhook_stats["primero_en"] = now_iso
+    _webhook_stats["ultimo_en"] = now_iso
+
+    # Detectar tipo de evento por las keys del body
+    keys = " ".join(body_dict.keys()) if isinstance(body_dict, dict) else ""
+    es_msg = "message" in keys or "chat" in keys
+    es_lead = "leads" in keys
+
+    if es_msg:
+        _webhook_stats["mensajes_evento"] += 1
+    elif es_lead:
+        _webhook_stats["leads_evento"] += 1
+    else:
+        _webhook_stats["otros"] += 1
+
+    # Guardar último payload (preview) para diagnóstico
+    preview = {k: (str(v)[:200] if not isinstance(v, (dict, list)) else "<obj>")
+               for k, v in body_dict.items()}
+    _webhook_stats["ultimos_payloads"].insert(0, {
+        "ts": now_iso,
+        "tipo": "message" if es_msg else "lead" if es_lead else "otro",
+        "keys": list(body_dict.keys())[:20],
+        "preview": preview,
+    })
+    _webhook_stats["ultimos_payloads"] = _webhook_stats["ultimos_payloads"][:10]
+
+    log.info(f"Kommo webhook: {es_msg=} {es_lead=} keys={list(body_dict.keys())[:10]}")
+
+    # Respondemos 200 SIEMPRE para que Kommo no reintente
+    return {"ok": True}
+
+
+@router.get("/kommo-webhook/stats")
+def kommo_webhook_stats(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Estadísticas + últimos 10 payloads del receptor de webhooks Kommo."""
+    return _webhook_stats
+
+
 @router.get("/oauth/status")
 def oauth_status(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     """Estado actual del token OAuth (si hay) sin exponer el valor."""
@@ -195,6 +284,19 @@ def sync_leads_endpoint(
     desde el último sync). Con full=True trae todos.
     """
     return kommo_svc.sync_leads(full=full, limit_total=limit)
+
+
+@router.post("/sync/talks")
+def sync_talks_endpoint(
+    full: bool = Query(False),
+    limit: int = Query(1000, ge=1, le=5000),
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """
+    Sync de talks (conversaciones) desde Kommo. Trae metadata: origin,
+    rate, is_read, timestamps, lead asociado. NO trae texto de mensajes.
+    """
+    return kommo_svc.sync_talks(full=full, limit_total=limit)
 
 
 @router.post("/sync/lead/{lead_id}/messages")
