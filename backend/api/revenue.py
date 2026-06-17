@@ -200,6 +200,31 @@ def _sender_type_from(msg: dict) -> str:
     return "system"
 
 
+def _asegurar_lead_en_db(sb, lead_id: int) -> bool:
+    """Si el lead no existe en kommo_leads, lo trae de Kommo y lo upsertea.
+    Retorna True si existe (o quedó) en DB."""
+    try:
+        r = sb.table("kommo_leads").select("lead_id").eq("lead_id", lead_id).limit(1).execute()
+        if r.data:
+            return True
+    except Exception:
+        return False
+    try:
+        import sys
+        from pathlib import Path
+        _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+        if str(_SRC) not in sys.path:
+            sys.path.insert(0, str(_SRC))
+        import kommo_client as kc
+        lead_data = kc.obtener_lead(lead_id)
+        if lead_data:
+            db.upsert_lead(lead_data)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _procesar_webhook(parsed: dict) -> dict:
     """Procesa un payload Kommo ya parseado a estructura anidada.
     Persiste mensajes, conversaciones y cambios de lead en Supabase.
@@ -231,6 +256,7 @@ def _procesar_webhook(parsed: dict) -> dict:
 
             # Asegurar conversation existe (FK)
             if conv_id and entity_type == "lead" and entity_id:
+                _asegurar_lead_en_db(sb, int(entity_id))
                 try:
                     existe = sb.table("conversations").select("conversation_id").eq("conversation_id", conv_id).limit(1).execute()
                     if not existe.data:
@@ -254,13 +280,23 @@ def _procesar_webhook(parsed: dict) -> dict:
             row = {
                 "message_id":      str(m["id"]),
                 "conversation_id": conv_id,
+                "lead_id":         int(entity_id) if entity_id else None,
                 "sender_type":     _sender_type_from(m),
-                "sender_id":       str((m.get("author") or {}).get("id") or ""),
                 "sender_name":     (m.get("author") or {}).get("name") or "",
-                "text":            text,
-                "created_at":      _dt.fromtimestamp(created, tz=_tz.utc).isoformat() if created else _dt.now(tz=_tz.utc).isoformat(),
-                "message_type":    m.get("message_type") or "text",
+                "message_text":    text,
+                "sent_at":         _dt.fromtimestamp(created, tz=_tz.utc).isoformat() if created else _dt.now(tz=_tz.utc).isoformat(),
+                "topic":           m.get("message_type") or "text",
+                "event":           m.get("type") or "",
+                "extension":       m.get("origin") or "",
+                "payload":         {
+                    "author_id":   (m.get("author") or {}).get("id"),
+                    "author_type": (m.get("author") or {}).get("type"),
+                    "chat_id":     m.get("chat_id"),
+                    "talk_id":     m.get("talk_id"),
+                    "contact_id":  m.get("contact_id"),
+                },
             }
+            row = {k: v for k, v in row.items() if v is not None}
             sb.table("messages").upsert(row, on_conflict="message_id").execute()
             msgs_guardados += 1
         except Exception as e:
@@ -282,6 +318,7 @@ def _procesar_webhook(parsed: dict) -> dict:
                 entity_type = t.get("entity_type") or "lead"
                 if not talk_id or entity_type != "lead" or not entity_id:
                     continue
+                _asegurar_lead_en_db(sb, int(entity_id))
                 created = int(t.get("created_at") or 0) or None
                 updated = int(t.get("updated_at") or 0) or None
                 row = {
