@@ -166,29 +166,25 @@ def debug_explorar_chats(_: CurrentUser = Depends(require_role("admin"))) -> dic
             lead_id = r.data[0]["lead_id"]
 
     paths = [
-        # Talks (sabemos que funciona)
-        "talks?limit=3",
-        # Detalle de un talk específico — tomar el primero
-        "_TALK_DETAIL_",
-        "_TALK_WITH_MESSAGES_",
-        # Filtro talks correcto
-        f"talks?filter[entity_type]=lead&filter[entity_id]={lead_id}" if lead_id else None,
-        # Messages global
-        "messages?limit=5",
-        # Customer-facing: contacts → contact tiene chats
-        "contacts?limit=2&with=chats",
-        # Account info para ver amojo_id
-        "account?with=amojo_id",
+        "_TALK_MESSAGES_",          # /talks/{id}/messages
+        "_TALK_HISTORY_",           # /talks/{id}/history
+        "_TALK_WITH_NOTES_",        # /talks/{id}?with=note_messages
+        "_CHAT_DETAIL_",            # /chats/{chat_uuid}
+        "_CHAT_HISTORY_",           # /chats/{chat_uuid}/messages
+        # Customer chats embed
+        "contacts?limit=1&with=chats,catalog_elements",
     ]
 
-    # Primer talk_id que aparezca (para usar en _TALK_DETAIL_ etc.)
+    # Primer talk_id y chat_id que aparezca
     primer_talk_id = None
+    primer_chat_uuid = None
     try:
         r0 = requests.get(f"{base}/talks?limit=1", headers=headers, timeout=15)
         if r0.ok:
             talks = ((r0.json().get("_embedded") or {}).get("talks") or [])
             if talks:
                 primer_talk_id = talks[0].get("talk_id")
+                primer_chat_uuid = talks[0].get("chat_id")
     except Exception:
         pass
 
@@ -196,10 +192,16 @@ def debug_explorar_chats(_: CurrentUser = Depends(require_role("admin"))) -> dic
     for p in paths:
         if not p:
             continue
-        if p == "_TALK_DETAIL_" and primer_talk_id:
-            resolved_paths.append(f"talks/{primer_talk_id}")
-        elif p == "_TALK_WITH_MESSAGES_" and primer_talk_id:
-            resolved_paths.append(f"talks/{primer_talk_id}?with=messages")
+        if p == "_TALK_MESSAGES_" and primer_talk_id:
+            resolved_paths.append(f"talks/{primer_talk_id}/messages")
+        elif p == "_TALK_HISTORY_" and primer_talk_id:
+            resolved_paths.append(f"talks/{primer_talk_id}/history")
+        elif p == "_TALK_WITH_NOTES_" and primer_talk_id:
+            resolved_paths.append(f"talks/{primer_talk_id}?with=note_messages")
+        elif p == "_CHAT_DETAIL_" and primer_chat_uuid:
+            resolved_paths.append(f"chats/{primer_chat_uuid}")
+        elif p == "_CHAT_HISTORY_" and primer_chat_uuid:
+            resolved_paths.append(f"chats/{primer_chat_uuid}/messages")
         elif p.startswith("_"):
             continue
         else:
@@ -226,7 +228,12 @@ def debug_explorar_chats(_: CurrentUser = Depends(require_role("admin"))) -> dic
         except Exception as e:
             resultados.append({"path": p, "error": str(e)[:120]})
 
-    return {"lead_id_usado": lead_id, "primer_talk_id": primer_talk_id, "resultados": resultados}
+    return {
+        "lead_id_usado":   lead_id,
+        "primer_talk_id":  primer_talk_id,
+        "primer_chat_uuid": primer_chat_uuid,
+        "resultados":      resultados,
+    }
 def debug_lead_con_chat(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     """
     Busca el primer lead con MUCHAS notes (probablemente chat largo de
