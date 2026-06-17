@@ -18,6 +18,12 @@ log = logging.getLogger(__name__)
 _thread: threading.Thread | None = None
 _stop_event = threading.Event()
 
+# Cron de alertas Slack
+_alertas_thread: threading.Thread | None = None
+_alertas_stop = threading.Event()
+ALERTAS_INTERVAL_MIN = int(os.environ.get("REVENUE_ALERTAS_INTERVAL_MIN", "5"))
+ALERTAS_UMBRAL_MIN = int(os.environ.get("REVENUE_ALERTAS_UMBRAL_MIN", "30"))
+
 # Cron hora Bogotá (UTC-5). 3am Bogotá = 8am UTC
 HORA_OBJETIVO_BOG = int(os.environ.get("REVENUE_CRON_HOUR_BOG", "3"))
 TZ_BOG = timezone(timedelta(hours=-5))
@@ -166,21 +172,110 @@ def _loop():
         _stop_event.wait(timeout=120)
 
 
+def _detectar_alertas_y_notificar() -> dict:
+    """Detecta conversations donde el cliente está esperando > N min y notifica a Slack."""
+    from backend.services import slack_notifier as sn
+    from backend.services import revenue_db as _db
+    sb = _db._sb()
+    if sb is None:
+        return {"error": "supabase_no_configurado"}
+    if not sn._webhook_url():
+        return {"skip": "slack_webhook_no_configurado"}
+
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    cutoff = _dt.now(tz=_tz.utc) - _td(minutes=ALERTAS_UMBRAL_MIN)
+    desde_amplio = (_dt.now(tz=_tz.utc) - _td(days=2)).isoformat()
+    convs = (sb.table("conversations")
+               .select("conversation_id,lead_id,advisor_id,channel,last_message_at,status")
+               .eq("status", "in_work")
+               .gte("last_message_at", desde_amplio)
+               .lte("last_message_at", cutoff.isoformat())
+               .order("last_message_at", desc=True)
+               .limit(50).execute().data) or []
+    if not convs:
+        return {"alertas": 0, "enviadas": 0}
+
+    # Para cada conv, último mensaje
+    alertas = []
+    lead_ids = list({c["lead_id"] for c in convs if c.get("lead_id")})
+    advisor_ids = list({c["advisor_id"] for c in convs if c.get("advisor_id")})
+    leads_map = {}
+    advisors_map = {}
+    if lead_ids:
+        for l in (sb.table("kommo_leads").select("lead_id,customer_name,customer_phone").in_("lead_id", lead_ids).execute().data or []):
+            leads_map[l["lead_id"]] = l
+    if advisor_ids:
+        for a in (sb.table("advisors").select("advisor_id,name").in_("advisor_id", advisor_ids).execute().data or []):
+            advisors_map[a["advisor_id"]] = a
+
+    ahora = _dt.now(tz=_tz.utc)
+    for c in convs:
+        cid = c["conversation_id"]
+        m = (sb.table("messages").select("sender_type,message_text,sent_at")
+               .eq("conversation_id", cid)
+               .order("sent_at", desc=True)
+               .limit(1).execute().data) or []
+        if not m or m[0].get("sender_type") != "customer":
+            continue
+        try:
+            last_dt = _dt.fromisoformat(m[0]["sent_at"].replace("Z", "+00:00"))
+            mins = int((ahora - last_dt).total_seconds() / 60)
+        except Exception:
+            mins = None
+        lead = leads_map.get(c.get("lead_id"), {})
+        advisor = advisors_map.get(c.get("advisor_id"), {})
+        alertas.append({
+            "conversation_id":      cid,
+            "customer_name":        lead.get("customer_name"),
+            "customer_phone":       lead.get("customer_phone"),
+            "advisor_name":         advisor.get("name"),
+            "channel":              c.get("channel"),
+            "ultimo_mensaje":       (m[0].get("message_text") or "")[:300],
+            "minutos_sin_respuesta": mins,
+        })
+    res = sn.notificar_lote_alertas(alertas)
+    return {"alertas_detectadas": len(alertas), **res}
+
+
+def _loop_alertas():
+    """Loop del cron de alertas: cada N min revisa y notifica."""
+    while not _alertas_stop.is_set():
+        try:
+            res = _detectar_alertas_y_notificar()
+            log.info(f"alertas_loop: {res}")
+        except Exception as e:
+            log.exception(f"alertas_loop error: {e}")
+        # Dormir N min en bloques de 60s
+        seg_total = ALERTAS_INTERVAL_MIN * 60
+        while seg_total > 0 and not _alertas_stop.is_set():
+            tick = min(60.0, seg_total)
+            if _alertas_stop.wait(timeout=tick):
+                return
+            seg_total -= tick
+
+
 def start() -> threading.Thread | None:
-    """Arranca el scheduler si REVENUE_CRON_ENABLED=true (default true en prod)."""
-    global _thread
-    if os.environ.get("REVENUE_CRON_ENABLED", "true").lower() not in ("true", "1", "yes"):
+    """Arranca ambos schedulers (rankings nocturno + alertas Slack)."""
+    global _thread, _alertas_thread
+    enabled = os.environ.get("REVENUE_CRON_ENABLED", "true").lower() in ("true", "1", "yes")
+    if not enabled:
         log.info("revenue_scheduler deshabilitado por REVENUE_CRON_ENABLED")
         return None
-    if _thread is not None and _thread.is_alive():
-        return _thread
-    _stop_event.clear()
-    _thread = threading.Thread(target=_loop, daemon=True, name="revenue_scheduler")
-    _thread.start()
+    if _thread is None or not _thread.is_alive():
+        _stop_event.clear()
+        _thread = threading.Thread(target=_loop, daemon=True, name="revenue_scheduler")
+        _thread.start()
+    if _alertas_thread is None or not _alertas_thread.is_alive():
+        _alertas_stop.clear()
+        _alertas_thread = threading.Thread(target=_loop_alertas, daemon=True, name="revenue_alertas")
+        _alertas_thread.start()
     return _thread
 
 
 def stop():
     _stop_event.set()
+    _alertas_stop.set()
     if _thread is not None:
         _thread.join(timeout=5)
+    if _alertas_thread is not None:
+        _alertas_thread.join(timeout=5)

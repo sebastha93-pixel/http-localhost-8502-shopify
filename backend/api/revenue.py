@@ -1103,6 +1103,28 @@ def cron_status(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     return rsch.get_state()
 
 
+@router.get("/notifications/slack/status")
+def slack_status(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Estado del notificador Slack."""
+    from backend.services import slack_notifier as sn
+    return sn.get_stats()
+
+
+@router.post("/notifications/slack/test")
+def slack_test(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Manda un mensaje de prueba a Slack."""
+    from backend.services import slack_notifier as sn
+    ok = sn.enviar_mensaje(":wave: Test de notificación desde MALE'DENIM OS")
+    return {"ok": ok, "stats": sn.get_stats()}
+
+
+@router.post("/notifications/slack/check-alertas")
+def slack_check_alertas(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Ejecuta manualmente el detector de alertas + envío a Slack."""
+    from backend.core import revenue_scheduler as rsch
+    return rsch._detectar_alertas_y_notificar()
+
+
 @router.get("/rankings/historico")
 def rankings_historico(
     advisor_id: str | None = Query(None),
