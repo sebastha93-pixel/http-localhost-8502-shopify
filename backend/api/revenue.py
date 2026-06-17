@@ -489,6 +489,151 @@ def stats(_: CurrentUser = Depends(require_role("admin", "operador"))) -> dict:
     return db.stats_revenue()
 
 
+# ── Dashboard endpoints ───────────────────────────────────────────────────────
+@router.get("/conversations")
+def list_conversations(
+    advisor_id: str | None = Query(None),
+    status: str | None = Query(None, description="in_work|closed"),
+    channel: str | None = Query(None),
+    days_back: int = Query(30, ge=1, le=365),
+    limit: int = Query(100, ge=1, le=500),
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """Lista de conversations con filtros, enriquecida con datos de lead y advisor."""
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    desde = (datetime.now(tz=timezone.utc) - timedelta(days=days_back)).isoformat()
+    q = sb.table("conversations").select(
+        "conversation_id,lead_id,advisor_id,channel,started_at,last_message_at,status,message_count,audit_status"
+    ).gte("last_message_at", desde).order("last_message_at", desc=True).limit(limit)
+    if advisor_id:
+        q = q.eq("advisor_id", advisor_id)
+    if status:
+        q = q.eq("status", status)
+    if channel:
+        q = q.eq("channel", channel)
+    convs = q.execute().data or []
+
+    advisor_ids = list({c["advisor_id"] for c in convs if c.get("advisor_id")})
+    lead_ids = list({c["lead_id"] for c in convs if c.get("lead_id")})
+    advisors_map: dict = {}
+    leads_map: dict = {}
+    if advisor_ids:
+        for a in (sb.table("advisors").select("advisor_id,name,email").in_("advisor_id", advisor_ids).execute().data or []):
+            advisors_map[a["advisor_id"]] = a
+    if lead_ids:
+        for l in (sb.table("kommo_leads").select("lead_id,status,lead_value,customer_name,customer_phone").in_("lead_id", lead_ids).execute().data or []):
+            leads_map[l["lead_id"]] = l
+
+    enriched = []
+    for c in convs:
+        adv = advisors_map.get(c.get("advisor_id"), {})
+        lead = leads_map.get(c.get("lead_id"), {})
+        enriched.append({
+            **c,
+            "advisor_name": adv.get("name"),
+            "lead_status":  lead.get("status"),
+            "lead_value":   lead.get("lead_value"),
+            "customer_name": lead.get("customer_name"),
+            "customer_phone": lead.get("customer_phone"),
+        })
+    return {"ok": True, "total": len(enriched), "conversations": enriched}
+
+
+@router.get("/advisors/ranking")
+def advisors_ranking(
+    days_back: int = Query(30, ge=1, le=365),
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """Ranking de asesores: conversaciones, won/lost, tasa, último activo."""
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    desde = (datetime.now(tz=timezone.utc) - timedelta(days=days_back)).isoformat()
+
+    advisors = sb.table("advisors").select("advisor_id,name,email,active").execute().data or []
+    convs = sb.table("conversations").select("conversation_id,advisor_id,lead_id,last_message_at,channel").gte("last_message_at", desde).execute().data or []
+    lead_ids = list({c["lead_id"] for c in convs if c.get("lead_id")})
+    leads_map: dict = {}
+    if lead_ids:
+        for l in (sb.table("kommo_leads").select("lead_id,status").in_("lead_id", lead_ids).execute().data or []):
+            leads_map[l["lead_id"]] = l.get("status")
+
+    by_advisor: dict = {}
+    for c in convs:
+        adv_id = c.get("advisor_id")
+        if not adv_id:
+            continue
+        r = by_advisor.setdefault(adv_id, {
+            "conversations": 0, "won": 0, "lost": 0, "in_progress": 0,
+            "last_activity": None, "channels": {},
+        })
+        r["conversations"] += 1
+        ch = c.get("channel") or "unknown"
+        r["channels"][ch] = r["channels"].get(ch, 0) + 1
+        st = leads_map.get(c.get("lead_id"))
+        if st == "won":   r["won"] += 1
+        elif st == "lost": r["lost"] += 1
+        else:              r["in_progress"] += 1
+        lm = c.get("last_message_at")
+        if lm and (r["last_activity"] is None or lm > r["last_activity"]):
+            r["last_activity"] = lm
+
+    rows = []
+    for adv in advisors:
+        stats = by_advisor.get(adv["advisor_id"], {
+            "conversations": 0, "won": 0, "lost": 0, "in_progress": 0,
+            "last_activity": None, "channels": {},
+        })
+        cerradas = stats["won"] + stats["lost"]
+        conv_rate = round(100 * stats["won"] / cerradas, 1) if cerradas else None
+        rows.append({
+            "advisor_id":     adv["advisor_id"],
+            "name":           adv["name"],
+            "email":          adv.get("email"),
+            "active":         adv.get("active"),
+            "conversations":  stats["conversations"],
+            "won":            stats["won"],
+            "lost":           stats["lost"],
+            "in_progress":    stats["in_progress"],
+            "conversion_rate": conv_rate,
+            "last_activity":  stats["last_activity"],
+            "channels":       stats["channels"],
+        })
+    rows.sort(key=lambda r: (r["conversations"], r["won"]), reverse=True)
+    return {"ok": True, "total": len(rows), "rows": rows, "days_back": days_back}
+
+
+@router.get("/messages/recent")
+def messages_recent(
+    limit: int = Query(50, ge=1, le=300),
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """Feed cronológico de los últimos mensajes."""
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    msgs = sb.table("messages").select(
+        "message_id,conversation_id,lead_id,sender_type,sender_name,message_text,sent_at,topic"
+    ).order("sent_at", desc=True).limit(limit).execute().data or []
+    lead_ids = list({m["lead_id"] for m in msgs if m.get("lead_id")})
+    leads_map: dict = {}
+    if lead_ids:
+        for l in (sb.table("kommo_leads").select("lead_id,customer_name,customer_phone,status").in_("lead_id", lead_ids).execute().data or []):
+            leads_map[l["lead_id"]] = l
+    enriched = []
+    for m in msgs:
+        lead = leads_map.get(m.get("lead_id"), {})
+        enriched.append({
+            **m,
+            "customer_name":  lead.get("customer_name"),
+            "customer_phone": lead.get("customer_phone"),
+            "lead_status":    lead.get("status"),
+        })
+    return {"ok": True, "total": len(enriched), "messages": enriched}
+
+
 # ── Sync ──────────────────────────────────────────────────────────────────────
 @router.post("/sync/advisors")
 def sync_advisors_endpoint(
