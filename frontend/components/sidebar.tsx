@@ -52,6 +52,7 @@ const NAV: { home: NavItem; groups: NavGroup[] } = {
       items: [
         { label: "Comercial",  href: "/comercial" },
         { label: "Inventario", href: "/inventario" },
+        { label: "Revenue IA", href: "/revenue" },
       ],
     },
     {
