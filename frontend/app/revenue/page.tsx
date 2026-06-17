@@ -236,6 +236,36 @@ function ConversationDetailModal({
 }
 
 
+function CalcularRankingsBtn({ daysBack }: { daysBack: number }) {
+  const qc = useQueryClient();
+  const [last, setLast] = useState<{ ts: string; ok: number; total: number } | null>(null);
+  const mut = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; persistidos: number; total_advisors: number }>(`/api/revenue/rankings/calcular?days_back=${daysBack}`),
+    onSuccess: (data) => {
+      setLast({ ts: new Date().toLocaleTimeString("es-CO"), ok: data.persistidos, total: data.total_advisors });
+      qc.invalidateQueries({ queryKey: ["revenue", "advisors"] });
+    },
+  });
+  return (
+    <div className="flex items-center gap-3 mb-4 pb-3 border-b">
+      <button
+        onClick={() => mut.mutate()}
+        disabled={mut.isPending}
+        className="px-3 py-1.5 rounded bg-navy text-white text-sm disabled:opacity-50"
+      >
+        {mut.isPending ? "Calculando..." : "Persistir snapshot del periodo"}
+      </button>
+      {last && (
+        <div className="text-xs text-graphite">
+          ✓ {last.ts} · {last.ok}/{last.total} asesoras guardadas en histórico
+        </div>
+      )}
+      {mut.isError && <div className="text-xs text-rose-700">Error: {String(mut.error)}</div>}
+    </div>
+  );
+}
+
+
 function TendenciasTab({ daysBack }: { daysBack: number }) {
   const q = useQuery<any>({
     queryKey: ["revenue", "tendencias", daysBack],
@@ -596,6 +626,7 @@ export default function RevenuePage() {
         <TabsContent value="asesoras">
           <Card>
             <CardContent className="p-4">
+              <CalcularRankingsBtn daysBack={daysBack} />
               {advisorsQ.isLoading ? <LoadingState /> : advisorsQ.isError ? <ErrorState error={advisorsQ.error} /> : (
                 <div className="overflow-x-auto">
                   <table className="min-w-full text-sm">
