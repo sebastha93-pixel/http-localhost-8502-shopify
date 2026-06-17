@@ -63,8 +63,8 @@ def _iso_fin(d: date) -> str:
 def _fetch_orders_dia(d: date, status: str = "any") -> list:
     """
     Trae TODAS las órdenes del día (creadas, sin filtrar por pago).
-    Antes filtraba financial_status=paid → omitía órdenes COD pendientes
-    que SÍ son ventas del día. Ahora cuenta todo lo facturado.
+    Incluye total_tax y taxes_included para poder calcular ventas
+    SIN IVA en Shopify Colombia (donde precios vienen con IVA incluido).
     """
     orders = []
     params = {
@@ -72,11 +72,47 @@ def _fetch_orders_dia(d: date, status: str = "any") -> list:
         "created_at_min": _iso_inicio(d),
         "created_at_max": _iso_fin(d),
         "limit": 250,
-        "fields": "id,total_price,subtotal_price,line_items,created_at,financial_status",
+        "fields": "id,total_price,subtotal_price,total_tax,taxes_included,total_discounts,line_items,created_at,financial_status,cancelled_at",
     }
     resp = _get("/orders.json", params)
     orders.extend(resp.get("orders", []))
     return orders
+
+
+def _revenue_sin_iva(o: dict) -> float:
+    """
+    Revenue de UN orden SIN IVA y SIN envío.
+
+    Shopify Colombia: los precios tienen IVA incluido (`taxes_included=true`),
+    entonces subtotal_price YA incluye IVA. Hay que restarle total_tax.
+
+    Shopify USA: precios sin IVA (taxes_included=false), subtotal_price ya
+    no incluye IVA → se usa tal cual.
+    """
+    sub = float(o.get("subtotal_price") or 0)
+    if sub == 0:
+        sub = float(o.get("total_price") or 0)
+    if o.get("taxes_included"):
+        tax = float(o.get("total_tax") or 0)
+        return max(0.0, sub - tax)
+    return sub
+
+
+def _factor_sin_iva(o: dict) -> float:
+    """
+    Factor para convertir cualquier monto "con IVA" del orden a "sin IVA".
+    Útil para descontar IVA de descuentos prorrateadamente.
+
+    Ej: orden con sub=119 y tax=19 → factor 100/119 ≈ 0.8403
+        cualquier monto del orden se multiplica por 0.8403 para quitarle IVA.
+    """
+    if not o.get("taxes_included"):
+        return 1.0
+    sub = float(o.get("subtotal_price") or 0)
+    if sub <= 0:
+        return 1.0
+    tax = float(o.get("total_tax") or 0)
+    return (sub - tax) / sub if sub > tax else 1.0
 
 
 # ── API pública ────────────────────────────────────────────────────────────────
@@ -90,16 +126,12 @@ def ventas_del_dia(d: Optional[date] = None) -> dict:
 
     def _calc():
         orders = _fetch_orders_dia(d)
-        # subtotal_price = ventas SIN IVA y SIN envío (después de descuentos).
-        # NO usar total_price que incluye IVA. Fallback a total_price solo si
-        # subtotal viene vacío (raro).
-        def _sub(o):
-            s = o.get("subtotal_price")
-            if s is not None and s != "":
-                return float(s)
-            return float(o.get("total_price") or 0)
-        total = sum(_sub(o) for o in orders)
-        n = len(orders)
+        # Revenue SIN IVA: en Shopify Colombia los precios tienen IVA
+        # incluido, así que subtotal_price - total_tax = neto real.
+        # Excluir cancelados.
+        validos = [o for o in orders if not o.get("cancelled_at")]
+        total = sum(_revenue_sin_iva(o) for o in validos)
+        n = len(validos)
         return {
             "fecha": d.isoformat(),
             "total": total,
@@ -246,7 +278,7 @@ def comparativas() -> dict:
 
 
 # ─── Análisis de clientes ─────────────────────────────────────────────────────
-def _fetch_orders_periodo(desde: date, hasta: date, fields: str = "id,total_price,subtotal_price,customer,created_at") -> list:
+def _fetch_orders_periodo(desde: date, hasta: date, fields: str = "id,total_price,subtotal_price,total_tax,taxes_included,total_discounts,customer,created_at,cancelled_at") -> list:
     """Fetch órdenes en un rango. Cacheado."""
     key = f"fop_{desde.isoformat()}_{hasta.isoformat()}_{fields}"
 
@@ -298,9 +330,10 @@ def analisis_clientes(dias: int = 90) -> dict:
             if not cid:
                 continue
             nombre = f"{c.get('first_name','')} {c.get('last_name','')}".strip() or "—"
-            # Revenue del cliente SIN IVA (subtotal_price con fallback)
-            _sub = o.get("subtotal_price")
-            por_cliente[cid]["revenue"] += float(_sub if _sub not in (None, "") else o.get("total_price") or 0)
+            # Revenue del cliente SIN IVA (Shopify CO: subtotal - total_tax)
+            if o.get("cancelled_at"):
+                continue
+            por_cliente[cid]["revenue"] += _revenue_sin_iva(o)
             por_cliente[cid]["ordenes"] += 1
             por_cliente[cid]["nombre"]   = nombre
             por_cliente[cid]["email"]    = c.get("email") or ""
@@ -488,7 +521,7 @@ def desglose_ventas(
                     "created_at_min": _iso_inicio(d),
                     "created_at_max": _iso_fin(d),
                     "limit": 250,
-                    "fields": "id,total_price,subtotal_price,total_discounts,source_name,user_id,cancelled_at",
+                    "fields": "id,total_price,subtotal_price,total_tax,taxes_included,total_discounts,source_name,user_id,cancelled_at",
                 }
                 resp = _get("/orders.json", params)
                 orders = resp.get("orders", []) or []
@@ -499,28 +532,28 @@ def desglose_ventas(
                 # Excluir cancelados del cálculo de revenue
                 if o.get("cancelled_at"):
                     continue
-                # Todos los cálculos van SIN IVA y SIN envío:
-                #   sub  = subtotal_price (después de descuentos, sin IVA)
-                #   bruto = sub + descuentos  (antes de descuentos, sin IVA)
-                #   neto  = sub               (lo que efectivamente vendes, sin IVA)
-                # NO usar total_price (incluye IVA y envío) en ningún KPI.
-                _sub_raw = o.get("subtotal_price")
-                sub  = float(_sub_raw if _sub_raw not in (None, "") else o.get("total_price") or 0)
-                desc = float(o.get("total_discounts") or 0)
-                bruto      += sub + desc
-                neto       += sub
-                descuentos += desc
+
+                # En Shopify Colombia (taxes_included=true), los precios y
+                # descuentos vienen con IVA. Aplicamos factor proporcional
+                # para sacar el IVA de TODO consistentemente.
+                f = _factor_sin_iva(o)  # 1.0 si taxes NOT included
+                sub_neto  = _revenue_sin_iva(o)  # subtotal sin IVA
+                desc_neto = float(o.get("total_discounts") or 0) * f
+
+                bruto      += sub_neto + desc_neto
+                neto       += sub_neto
+                descuentos += desc_neto
                 num        += 1
 
                 canal = _canal_label(o.get("source_name", ""))
-                canal_agg[canal]["ventas"]       += sub
+                canal_agg[canal]["ventas"]       += sub_neto
                 canal_agg[canal]["num_pedidos"]  += 1
 
                 # Solo los draft orders tienen user_id (creados por staff)
                 uid = o.get("user_id")
                 if uid:
                     nombre = _nombre_asesor(uid)
-                    asesor_agg[nombre]["ventas"]      += sub
+                    asesor_agg[nombre]["ventas"]      += sub_neto
                     asesor_agg[nombre]["num_pedidos"] += 1
 
             d += timedelta(days=1)
