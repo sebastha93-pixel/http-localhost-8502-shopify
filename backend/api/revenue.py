@@ -109,3 +109,70 @@ def debug_lead(lead_id: int, _: CurrentUser = Depends(require_role("admin"))) ->
         return {"lead": kc.obtener_lead(lead_id)}
     except Exception as e:
         raise HTTPException(503, f"Error: {str(e)[:200]}")
+
+
+@router.get("/debug/lead/{lead_id}/notes")
+def debug_lead_notes(
+    lead_id: int,
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """
+    Todas las notes de un lead, SIN filtro de note_type, para descubrir
+    qué tipos usa esta cuenta de Kommo para los mensajes de WhatsApp.
+    """
+    import sys
+    from pathlib import Path
+    _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+    import kommo_client as kc
+    try:
+        notes = list(kc.listar_notes_de_lead(lead_id))
+        # Cuenta por note_type para ver la distribución
+        from collections import Counter
+        types = Counter(str(n.get("note_type")) for n in notes)
+        return {
+            "lead_id":          lead_id,
+            "total_notes":      len(notes),
+            "tipos_distintos":  dict(types),
+            "muestras":         notes[:5],   # primeros 5 con su payload completo
+        }
+    except Exception as e:
+        raise HTTPException(503, f"Error: {str(e)[:200]}")
+
+
+@router.get("/debug/lead-con-chat")
+def debug_lead_con_chat(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """
+    Busca el primer lead con MUCHAS notes (probablemente chat largo de
+    WhatsApp) entre los recién sincronizados. Devuelve su id y conteos
+    por note_type para que sepamos qué filtrar.
+    """
+    from backend.services import revenue_db as db
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    r = sb.table("kommo_leads").select("lead_id").order("synced_at", desc=True).limit(50).execute()
+    lead_ids = [row["lead_id"] for row in (r.data or [])]
+
+    import sys
+    from pathlib import Path
+    _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+    import kommo_client as kc
+    from collections import Counter
+
+    mejor = None
+    for lid in lead_ids:
+        notes = list(kc.listar_notes_de_lead(lid))
+        if len(notes) > (mejor["total"] if mejor else 0):
+            mejor = {
+                "lead_id":  lid,
+                "total":    len(notes),
+                "tipos":    dict(Counter(str(n.get("note_type")) for n in notes)),
+                "muestras": notes[:3],
+            }
+            if len(notes) >= 10:  # encontramos uno bueno, parar
+                break
+    return mejor or {"error": "ningún lead reciente tiene notes"}
