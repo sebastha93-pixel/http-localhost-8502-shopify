@@ -803,6 +803,156 @@ def rankings_calcular(
     return {"ok": True, "persistidos": persistidos, "total_advisors": len(rows_persistir), "period_key": period_key, "errores": errores}
 
 
+@router.get("/alertas")
+def alertas_activas(
+    sin_respuesta_min: int = Query(30, ge=5, le=720, description="Minutos sin respuesta asesora"),
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """Conversations activas donde:
+    1. El último mensaje fue del cliente
+    2. Pasaron > N minutos sin respuesta de la asesora
+    Útil para detectar clientes esperando.
+    """
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(minutes=sin_respuesta_min)
+    # Conversations activas (last_message_at en últimas 7 días pero hace > N min)
+    desde_amplio = (datetime.now(tz=timezone.utc) - timedelta(days=7)).isoformat()
+    convs = (sb.table("conversations")
+               .select("conversation_id,lead_id,advisor_id,channel,last_message_at,status")
+               .eq("status", "in_work")
+               .gte("last_message_at", desde_amplio)
+               .lte("last_message_at", cutoff.isoformat())
+               .order("last_message_at", desc=True)
+               .limit(200).execute().data) or []
+    if not convs:
+        return {"ok": True, "alertas": [], "total": 0}
+
+    conv_ids = [c["conversation_id"] for c in convs]
+    # Para cada conv, último mensaje
+    ultimos: dict = {}
+    for cid in conv_ids:
+        m = (sb.table("messages").select("sender_type,sender_name,message_text,sent_at")
+               .eq("conversation_id", cid)
+               .order("sent_at", desc=True)
+               .limit(1).execute().data) or []
+        if m:
+            ultimos[cid] = m[0]
+
+    # Filtrar: último mensaje debe ser del cliente
+    alertas = []
+    lead_ids = list({c["lead_id"] for c in convs if c.get("lead_id")})
+    advisor_ids = list({c["advisor_id"] for c in convs if c.get("advisor_id")})
+    leads_map = {}
+    advisors_map = {}
+    if lead_ids:
+        for l in (sb.table("kommo_leads").select("lead_id,customer_name,customer_phone").in_("lead_id", lead_ids).execute().data or []):
+            leads_map[l["lead_id"]] = l
+    if advisor_ids:
+        for a in (sb.table("advisors").select("advisor_id,name").in_("advisor_id", advisor_ids).execute().data or []):
+            advisors_map[a["advisor_id"]] = a
+
+    ahora = datetime.now(tz=timezone.utc)
+    for c in convs:
+        cid = c["conversation_id"]
+        last = ultimos.get(cid)
+        if not last or last.get("sender_type") != "customer":
+            continue
+        try:
+            last_dt = datetime.fromisoformat(last["sent_at"].replace("Z", "+00:00"))
+            mins = int((ahora - last_dt).total_seconds() / 60)
+        except Exception:
+            mins = None
+        lead = leads_map.get(c.get("lead_id"), {})
+        advisor = advisors_map.get(c.get("advisor_id"), {})
+        alertas.append({
+            "conversation_id": cid,
+            "advisor_id":      c.get("advisor_id"),
+            "advisor_name":    advisor.get("name"),
+            "customer_name":   lead.get("customer_name"),
+            "customer_phone":  lead.get("customer_phone"),
+            "channel":         c.get("channel"),
+            "ultimo_mensaje":  (last.get("message_text") or "")[:200],
+            "minutos_sin_respuesta": mins,
+            "ultima_actividad": last.get("sent_at"),
+        })
+    alertas.sort(key=lambda a: a.get("minutos_sin_respuesta") or 0, reverse=True)
+    return {"ok": True, "total": len(alertas), "alertas": alertas, "umbral_min": sin_respuesta_min}
+
+
+@router.get("/tendencias")
+def tendencias(
+    days_back: int = Query(30, ge=1, le=365),
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """Agrega conversations por canal, hora del día y día de semana.
+    Incluye breakdown won/lost para cada grupo."""
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    desde = (datetime.now(tz=timezone.utc) - timedelta(days=days_back)).isoformat()
+    convs = sb.table("conversations").select("conversation_id,lead_id,channel,started_at,last_message_at").gte("last_message_at", desde).execute().data or []
+    lead_ids = list({c["lead_id"] for c in convs if c.get("lead_id")})
+    leads_map: dict = {}
+    if lead_ids:
+        for l in (sb.table("kommo_leads").select("lead_id,status").in_("lead_id", lead_ids).execute().data or []):
+            leads_map[l["lead_id"]] = l.get("status")
+
+    por_canal: dict = {}
+    por_hora: dict = {h: {"total": 0, "won": 0, "lost": 0} for h in range(24)}
+    por_dia_semana: dict = {d: {"total": 0, "won": 0, "lost": 0} for d in range(7)}
+    DIAS_LABEL = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+
+    for c in convs:
+        canal = c.get("channel") or "unknown"
+        status = leads_map.get(c.get("lead_id"))
+        rc = por_canal.setdefault(canal, {"total": 0, "won": 0, "lost": 0, "en_proceso": 0})
+        rc["total"] += 1
+        if status == "won":
+            rc["won"] += 1
+        elif status == "lost":
+            rc["lost"] += 1
+        else:
+            rc["en_proceso"] += 1
+        started = c.get("started_at") or c.get("last_message_at")
+        if started:
+            try:
+                d = datetime.fromisoformat(started.replace("Z", "+00:00"))
+                # Hora local Bogotá UTC-5
+                d_local = d.astimezone(timezone(timedelta(hours=-5)))
+                h = d_local.hour
+                dow = d_local.weekday()
+                por_hora[h]["total"] += 1
+                por_dia_semana[dow]["total"] += 1
+                if status == "won":
+                    por_hora[h]["won"] += 1
+                    por_dia_semana[dow]["won"] += 1
+                elif status == "lost":
+                    por_hora[h]["lost"] += 1
+                    por_dia_semana[dow]["lost"] += 1
+            except Exception:
+                pass
+
+    # Calcular tasa de conversión por bucket
+    def add_rate(d):
+        cerradas = d["won"] + d["lost"]
+        d["conv_rate"] = round(100 * d["won"] / cerradas, 1) if cerradas else None
+        return d
+    for d in por_canal.values(): add_rate(d)
+    for d in por_hora.values(): add_rate(d)
+    for d in por_dia_semana.values(): add_rate(d)
+
+    return {
+        "ok": True,
+        "days_back": days_back,
+        "total_conversations": len(convs),
+        "por_canal": [{"canal": k, **v} for k, v in por_canal.items()],
+        "por_hora":  [{"hora": h, **por_hora[h]} for h in range(24)],
+        "por_dia_semana": [{"dia": d, "dia_label": DIAS_LABEL[d], **por_dia_semana[d]} for d in range(7)],
+    }
+
+
 @router.get("/coaching/{advisor_id}")
 def coaching_asesora(
     advisor_id: str,
