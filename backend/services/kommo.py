@@ -161,6 +161,12 @@ def sync_talks(full: bool = False, limit_total: int = 5000) -> dict:
 
     procesados = 0
     upserted = 0
+    skip_not_lead = 0
+    skip_no_entity_id = 0
+    skip_lead_not_in_db = 0
+    upsert_failed = 0
+    entity_types_seen: dict[str, int] = {}
+    sample_errors: list[str] = []
     sb = db._sb()
     if sb is None:
         return {"ok": False, "error": "Supabase no configurado"}
@@ -171,27 +177,35 @@ def sync_talks(full: bool = False, limit_total: int = 5000) -> dict:
     try:
         for talk in kc.listar_talks(updated_after_ts=desde_ts, limit_total=limit_total):
             procesados += 1
-            entity_type = talk.get("entity_type")
+            entity_type = talk.get("entity_type") or "none"
+            entity_types_seen[entity_type] = entity_types_seen.get(entity_type, 0) + 1
             if entity_type != "lead":
-                continue   # solo lead-attached talks
+                skip_not_lead += 1
+                continue
             lead_id = talk.get("entity_id")
             if not lead_id:
+                skip_no_entity_id += 1
                 continue
 
             # Buscar advisor_id del lead
             if lead_id not in advisors_por_lead:
                 try:
                     r = sb.table("kommo_leads").select("advisor_id").eq("lead_id", lead_id).limit(1).execute()
-                    advisors_por_lead[lead_id] = r.data[0]["advisor_id"] if r.data else None
+                    advisors_por_lead[lead_id] = (r.data[0]["advisor_id"] if r.data else "__NOT_FOUND__")
                 except Exception:
-                    advisors_por_lead[lead_id] = None
+                    advisors_por_lead[lead_id] = "__NOT_FOUND__"
+
+            adv = advisors_por_lead.get(lead_id)
+            if adv == "__NOT_FOUND__":
+                skip_lead_not_in_db += 1
+                continue
 
             started_ts = talk.get("created_at")
             updated_ts = talk.get("updated_at")
             conv = {
                 "conversation_id":  f"talk-{talk['talk_id']}",
                 "lead_id":          lead_id,
-                "advisor_id":       advisors_por_lead.get(lead_id),
+                "advisor_id":       adv,
                 "channel":          talk.get("origin") or "unknown",
                 "started_at":       datetime.fromtimestamp(int(started_ts), tz=timezone.utc).isoformat() if started_ts else None,
                 "last_message_at":  datetime.fromtimestamp(int(updated_ts), tz=timezone.utc).isoformat() if updated_ts else None,
@@ -200,8 +214,13 @@ def sync_talks(full: bool = False, limit_total: int = 5000) -> dict:
                 "audit_status":     "pending",
                 "synced_at":        datetime.now(tz=timezone.utc).isoformat(),
             }
-            if db.upsert_conversation(conv):
+            try:
+                sb.table("conversations").upsert(conv, on_conflict="conversation_id").execute()
                 upserted += 1
+            except Exception as e:
+                upsert_failed += 1
+                if len(sample_errors) < 3:
+                    sample_errors.append(f"talk={talk.get('talk_id')} lead={lead_id}: {str(e)[:200]}")
     except Exception as e:
         log.exception("sync_talks error")
         return {"ok": False, "error": str(e)[:300], "procesados": procesados}
@@ -216,6 +235,14 @@ def sync_talks(full: bool = False, limit_total: int = 5000) -> dict:
         "modo":        "full" if full else "incremental",
         "desde_ts":    desde_ts,
         "hasta_ts":    nuevo_corte_ts,
+        "breakdown": {
+            "skip_not_lead":       skip_not_lead,
+            "skip_no_entity_id":   skip_no_entity_id,
+            "skip_lead_not_in_db": skip_lead_not_in_db,
+            "upsert_failed":       upsert_failed,
+            "entity_types":        entity_types_seen,
+            "sample_errors":       sample_errors,
+        },
     }
 
 
