@@ -166,29 +166,51 @@ def debug_explorar_chats(_: CurrentUser = Depends(require_role("admin"))) -> dic
             lead_id = r.data[0]["lead_id"]
 
     paths = [
-        # Endpoints generales de chat/talk en Kommo v4
-        "talks",
-        f"talks?filter[entity_id]={lead_id}&filter[entity_type]=lead" if lead_id else None,
-        "chats",
-        "inbox/messages",
-        # Específicos al lead
-        f"leads/{lead_id}/talks" if lead_id else None,
-        f"leads/{lead_id}/chats" if lead_id else None,
-        f"leads/{lead_id}/messages" if lead_id else None,
-        # Eventos del lead (timeline completo)
-        f"events?filter[entity_id]={lead_id}&filter[entity_type]=lead&limit=50" if lead_id else None,
-        # Account info para ver qué módulos hay
-        "account?with=amojo_id,amojo_rights,is_unsorted_on,is_loss_reason_enabled",
+        # Talks (sabemos que funciona)
+        "talks?limit=3",
+        # Detalle de un talk específico — tomar el primero
+        "_TALK_DETAIL_",
+        "_TALK_WITH_MESSAGES_",
+        # Filtro talks correcto
+        f"talks?filter[entity_type]=lead&filter[entity_id]={lead_id}" if lead_id else None,
+        # Messages global
+        "messages?limit=5",
+        # Customer-facing: contacts → contact tiene chats
+        "contacts?limit=2&with=chats",
+        # Account info para ver amojo_id
+        "account?with=amojo_id",
     ]
 
-    resultados = []
+    # Primer talk_id que aparezca (para usar en _TALK_DETAIL_ etc.)
+    primer_talk_id = None
+    try:
+        r0 = requests.get(f"{base}/talks?limit=1", headers=headers, timeout=15)
+        if r0.ok:
+            talks = ((r0.json().get("_embedded") or {}).get("talks") or [])
+            if talks:
+                primer_talk_id = talks[0].get("talk_id")
+    except Exception:
+        pass
+
+    resolved_paths = []
     for p in paths:
         if not p:
             continue
+        if p == "_TALK_DETAIL_" and primer_talk_id:
+            resolved_paths.append(f"talks/{primer_talk_id}")
+        elif p == "_TALK_WITH_MESSAGES_" and primer_talk_id:
+            resolved_paths.append(f"talks/{primer_talk_id}?with=messages")
+        elif p.startswith("_"):
+            continue
+        else:
+            resolved_paths.append(p)
+
+    resultados = []
+    for p in resolved_paths:
         url = f"{base}/{p}"
         try:
             r = requests.get(url, headers=headers, timeout=15)
-            body = r.text[:600] if r.status_code == 200 else r.text[:200]
+            body = r.text[:600] if r.status_code == 200 else r.text[:300]
             top_keys = []
             try:
                 j = r.json()
@@ -196,14 +218,15 @@ def debug_explorar_chats(_: CurrentUser = Depends(require_role("admin"))) -> dic
                     top_keys = list(j.keys())
                     if "_embedded" in j:
                         emb = j["_embedded"]
-                        top_keys = list(emb.keys()) if isinstance(emb, dict) else top_keys
+                        emb_keys = list(emb.keys()) if isinstance(emb, dict) else []
+                        top_keys = top_keys + [f"_embedded.{k}" for k in emb_keys]
             except Exception:
                 pass
             resultados.append({"path": p, "status": r.status_code, "top": top_keys, "body": body})
         except Exception as e:
             resultados.append({"path": p, "error": str(e)[:120]})
 
-    return {"lead_id_usado": lead_id, "resultados": resultados}
+    return {"lead_id_usado": lead_id, "primer_talk_id": primer_talk_id, "resultados": resultados}
 def debug_lead_con_chat(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     """
     Busca el primer lead con MUCHAS notes (probablemente chat largo de
