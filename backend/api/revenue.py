@@ -1096,6 +1096,13 @@ def coaching_asesora(
     return audit_ia.coaching_para_asesora(advisor_id, days_back=days_back)
 
 
+@router.get("/cron/status")
+def cron_status(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Estado del cron nocturno de rankings."""
+    from backend.core import revenue_scheduler as rsch
+    return rsch.get_state()
+
+
 @router.get("/rankings/historico")
 def rankings_historico(
     advisor_id: str | None = Query(None),

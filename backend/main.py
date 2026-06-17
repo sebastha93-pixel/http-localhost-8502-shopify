@@ -23,6 +23,7 @@ from backend.services import usuarios as usuarios_svc
 from backend.core.security import hash_password
 from backend.core import scheduler
 from backend.core import bot_scheduler
+from backend.core import revenue_scheduler
 
 
 # ── Lifespan: bootstrap / cleanup ─────────────────────────────────────────────
@@ -62,10 +63,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"   ⚠️  Bot scheduler no arrancó: {e}")
 
+    # Cron nocturno del módulo Revenue (rankings)
+    try:
+        if revenue_scheduler.start():
+            print(f"   📊 Revenue cron activo · hora objetivo {revenue_scheduler.HORA_OBJETIVO_BOG}am Bogotá")
+    except Exception as e:
+        print(f"   ⚠️  Revenue scheduler no arrancó: {e}")
+
     yield
     # Shutdown
     scheduler.stop()
     bot_scheduler.stop()
+    revenue_scheduler.stop()
     print("👋 API detenida")
 
 
