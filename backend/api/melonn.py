@@ -256,6 +256,48 @@ def debug_detalle(
         raise HTTPException(502, f"Error: {e}")
 
 
+@router.get("/debug/probar")
+def debug_probar(
+    path: str = Query(..., description="Path Melonn a probar, ej. 'inventory' o 'products'"),
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """
+    Diagnóstico: llama el path dado al API de Melonn y devuelve la
+    respuesta (o el error HTTP). Útil para descubrir qué endpoints
+    expone Melonn sin documentación.
+    """
+    import sys
+    from pathlib import Path
+    _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+    import melonn_client as mc
+
+    try:
+        r = mc._get(path)
+        # Recortar a 2KB para no inundar
+        import json as _json
+        body_str = _json.dumps(r, default=str)[:2000] if r else ""
+        keys = list(r.keys()) if isinstance(r, dict) else []
+        # Si la respuesta es una lista anidada, también las claves del primer item
+        first_item_keys = []
+        if isinstance(r, dict):
+            for k in keys:
+                v = r.get(k)
+                if isinstance(v, list) and v and isinstance(v[0], dict):
+                    first_item_keys = list(v[0].keys())
+                    break
+        return {
+            "ok": True,
+            "path": path,
+            "top_keys": keys,
+            "first_item_keys": first_item_keys,
+            "preview": body_str,
+        }
+    except Exception as e:
+        return {"ok": False, "path": path, "error": str(e)[:300]}
+
+
 @router.post("/sync-completo", response_model=SyncResponse)
 def sync_completo_endpoint(
     user: CurrentUser = Depends(require_role("admin", "operador")),
