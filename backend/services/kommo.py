@@ -259,6 +259,145 @@ def sync_talks(full: bool = False, limit_total: int = 5000) -> dict:
     }
 
 
+# Estado del backfill en memoria + persistente
+_backfill_state: dict = {
+    "running":      False,
+    "started_at":   None,
+    "finished_at":  None,
+    "procesados":   0,
+    "upserted":     0,
+    "leads_traidos": 0,
+    "skip_lead_not_found": 0,
+    "last_updated_ts": None,
+    "error":        None,
+}
+
+
+def get_backfill_state() -> dict:
+    """Estado actual del job de backfill (read-only)."""
+    return dict(_backfill_state)
+
+
+def sync_talks_backfill_completo() -> None:
+    """Backfill de TODOS los talks históricos. Para usar dentro de BackgroundTasks.
+
+    Pagina sin límite usando filtro updated_at[from] avanzando con el max
+    updated_at del último talk procesado. Trae leads on-the-fly.
+    """
+    import kommo_client as kc
+    from datetime import datetime as _dt, timezone as _tz
+
+    if _backfill_state["running"]:
+        return
+    _backfill_state.update({
+        "running": True,
+        "started_at": _dt.now(tz=_tz.utc).isoformat(),
+        "finished_at": None,
+        "procesados": 0,
+        "upserted": 0,
+        "leads_traidos": 0,
+        "skip_lead_not_found": 0,
+        "error": None,
+    })
+    sb = db._sb()
+    if sb is None:
+        _backfill_state["error"] = "supabase_no_configurado"
+        _backfill_state["running"] = False
+        return
+
+    last_updated_ts: Optional[int] = None
+    last_saved = db.leer_sync_state("kommo_talks_backfill_cursor")
+    if last_saved:
+        try:
+            last_updated_ts = int(last_saved)
+        except Exception:
+            pass
+
+    try:
+        while True:
+            procesados_lote = 0
+            upserted_lote = 0
+            max_ts_lote: Optional[int] = None
+            for talk in kc.listar_talks(updated_after_ts=last_updated_ts, limit_total=500):
+                procesados_lote += 1
+                _backfill_state["procesados"] += 1
+                ts = talk.get("updated_at")
+                if ts is not None:
+                    ts = int(ts)
+                    if max_ts_lote is None or ts > max_ts_lote:
+                        max_ts_lote = ts
+
+                if talk.get("entity_type") != "lead":
+                    continue
+                lead_id = talk.get("entity_id")
+                if not lead_id:
+                    continue
+
+                # Asegurar lead existe
+                try:
+                    r = sb.table("kommo_leads").select("lead_id,advisor_id").eq("lead_id", lead_id).limit(1).execute()
+                    adv_id = None
+                    if r.data:
+                        adv_id = r.data[0].get("advisor_id")
+                    else:
+                        try:
+                            lead_data = kc.obtener_lead(lead_id)
+                            if lead_data:
+                                db.upsert_lead(lead_data)
+                                _backfill_state["leads_traidos"] += 1
+                                r2 = sb.table("kommo_leads").select("advisor_id").eq("lead_id", lead_id).limit(1).execute()
+                                adv_id = r2.data[0].get("advisor_id") if r2.data else None
+                            else:
+                                _backfill_state["skip_lead_not_found"] += 1
+                                continue
+                        except Exception:
+                            _backfill_state["skip_lead_not_found"] += 1
+                            continue
+                except Exception:
+                    continue
+
+                created = talk.get("created_at")
+                updated = talk.get("updated_at")
+                row = {
+                    "conversation_id":  f"talk-{talk['talk_id']}",
+                    "lead_id":          int(lead_id),
+                    "advisor_id":       adv_id,
+                    "channel":          talk.get("origin") or "unknown",
+                    "started_at":       _dt.fromtimestamp(int(created), tz=_tz.utc).isoformat() if created else None,
+                    "last_message_at":  _dt.fromtimestamp(int(updated), tz=_tz.utc).isoformat() if updated else None,
+                    "status":           talk.get("status"),
+                    "message_count":    0,
+                    "audit_status":     "pending",
+                    "synced_at":        _dt.now(tz=_tz.utc).isoformat(),
+                }
+                try:
+                    sb.table("conversations").upsert(row, on_conflict="conversation_id").execute()
+                    upserted_lote += 1
+                    _backfill_state["upserted"] += 1
+                except Exception:
+                    pass
+
+            log.info(f"backfill lote: procesados={procesados_lote} upserted={upserted_lote} max_ts={max_ts_lote}")
+            if procesados_lote == 0:
+                break
+            if max_ts_lote is None:
+                break
+            # Avanzar cursor: el siguiente lote debe partir desde max_ts + 1
+            new_ts = max_ts_lote + 1
+            if last_updated_ts is not None and new_ts <= last_updated_ts:
+                break
+            last_updated_ts = new_ts
+            _backfill_state["last_updated_ts"] = new_ts
+            db.guardar_sync_state("kommo_talks_backfill_cursor", str(new_ts))
+
+    except Exception as e:
+        log.exception("backfill error")
+        _backfill_state["error"] = str(e)[:300]
+    finally:
+        _backfill_state["finished_at"] = _dt.now(tz=_tz.utc).isoformat()
+        _backfill_state["running"] = False
+
+
 def sync_messages_de_lead(lead_id: int) -> dict:
     """
     Trae todas las notes (mensajes) del lead y las inserta en messages.

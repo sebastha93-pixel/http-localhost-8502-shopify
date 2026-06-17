@@ -11,7 +11,7 @@ import os
 from datetime import datetime, timezone, timedelta
 
 import requests
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 
 from backend.core.security import CurrentUser, require_role
@@ -604,6 +604,27 @@ def advisors_ranking(
         })
     rows.sort(key=lambda r: (r["conversations"], r["won"]), reverse=True)
     return {"ok": True, "total": len(rows), "rows": rows, "days_back": days_back}
+
+
+# ── Backfill background de talks ──────────────────────────────────────────────
+@router.post("/sync/talks/backfill")
+def talks_backfill_start(
+    background_tasks: BackgroundTasks,
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Dispara un backfill completo de TODOS los talks históricos en background.
+    Pagina sin timeout HTTP. Estado consultable en /sync/talks/backfill/status."""
+    if kommo_svc.get_backfill_state().get("running"):
+        return {"ok": False, "error": "ya_corriendo", "state": kommo_svc.get_backfill_state()}
+    background_tasks.add_task(kommo_svc.sync_talks_backfill_completo)
+    return {"ok": True, "started": True}
+
+
+@router.get("/sync/talks/backfill/status")
+def talks_backfill_status(
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    return kommo_svc.get_backfill_state()
 
 
 # ── Auditoría IA ──────────────────────────────────────────────────────────────
