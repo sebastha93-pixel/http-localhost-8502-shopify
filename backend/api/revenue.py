@@ -286,15 +286,6 @@ def _procesar_webhook(parsed: dict) -> dict:
                 "message_text":    text,
                 "sent_at":         _dt.fromtimestamp(created, tz=_tz.utc).isoformat() if created else _dt.now(tz=_tz.utc).isoformat(),
                 "topic":           m.get("message_type") or "text",
-                "payload":         {
-                    "event":       m.get("type") or "",
-                    "extension":   m.get("origin") or "",
-                    "author_id":   (m.get("author") or {}).get("id"),
-                    "author_type": (m.get("author") or {}).get("type"),
-                    "chat_id":     m.get("chat_id"),
-                    "talk_id":     m.get("talk_id"),
-                    "contact_id":  m.get("contact_id"),
-                },
             }
             row = {k: v for k, v in row.items() if v is not None}
             sb.table("messages").upsert(row, on_conflict="message_id").execute()
