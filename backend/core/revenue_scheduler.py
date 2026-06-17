@@ -24,6 +24,11 @@ _alertas_stop = threading.Event()
 ALERTAS_INTERVAL_MIN = int(os.environ.get("REVENUE_ALERTAS_INTERVAL_MIN", "5"))
 ALERTAS_UMBRAL_MIN = int(os.environ.get("REVENUE_ALERTAS_UMBRAL_MIN", "30"))
 
+# Prewarmer del módulo comercial (Shopify)
+_warmup_thread: threading.Thread | None = None
+_warmup_stop = threading.Event()
+WARMUP_INTERVAL_MIN = int(os.environ.get("WARMUP_INTERVAL_MIN", "3"))
+
 # Cron hora Bogotá (UTC-5). 3am Bogotá = 8am UTC
 HORA_OBJETIVO_BOG = int(os.environ.get("REVENUE_CRON_HOUR_BOG", "3"))
 TZ_BOG = timezone(timedelta(hours=-5))
@@ -254,9 +259,62 @@ def _loop_alertas():
             seg_total -= tick
 
 
+def _prewarm_comercial() -> dict:
+    """Precalienta el cache interno de shopify_metrics para que los endpoints
+    de comercial respondan instantáneo aunque el cache haya expirado."""
+    out: dict = {}
+    try:
+        import sys
+        from pathlib import Path
+        _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+        if str(_SRC) not in sys.path:
+            sys.path.insert(0, str(_SRC))
+        import shopify_metrics as sm
+
+        # Calls que el frontend hace al cargar /comercial
+        for fname, fn, args in [
+            ("ventas_del_dia",    sm.ventas_del_dia,  ()),
+            ("delta_vs_ayer",     sm.delta_vs_ayer,   ()),
+            ("ventas_serie_12d",  sm.ventas_serie,    (12,)),
+            ("top_productos",     sm.top_productos,   ()),
+            ("comparativas",      sm.comparativas,    ()),
+            ("clientes_90d",      sm.analisis_clientes, (90,)),
+            ("desglose_30d",      sm.desglose_ventas, ("30d",)),
+        ]:
+            try:
+                fn(*args)
+                out[fname] = "ok"
+            except Exception as e:
+                out[fname] = f"err: {str(e)[:120]}"
+    except Exception as e:
+        out["_error"] = str(e)[:200]
+    return out
+
+
+def _loop_warmup():
+    """Loop del prewarmer: cada N min llama a los endpoints pesados para
+    mantener el cache interno caliente."""
+    # Espera inicial para que el servidor termine de bootear
+    if _warmup_stop.wait(timeout=30):
+        return
+    while not _warmup_stop.is_set():
+        try:
+            res = _prewarm_comercial()
+            ok_count = sum(1 for v in res.values() if v == "ok")
+            log.info(f"warmup comercial: {ok_count}/{len(res)} ok")
+        except Exception as e:
+            log.exception(f"warmup error: {e}")
+        seg_total = WARMUP_INTERVAL_MIN * 60
+        while seg_total > 0 and not _warmup_stop.is_set():
+            tick = min(60.0, seg_total)
+            if _warmup_stop.wait(timeout=tick):
+                return
+            seg_total -= tick
+
+
 def start() -> threading.Thread | None:
-    """Arranca ambos schedulers (rankings nocturno + alertas Slack)."""
-    global _thread, _alertas_thread
+    """Arranca los schedulers (rankings + alertas Slack + warmup comercial)."""
+    global _thread, _alertas_thread, _warmup_thread
     enabled = os.environ.get("REVENUE_CRON_ENABLED", "true").lower() in ("true", "1", "yes")
     if not enabled:
         log.info("revenue_scheduler deshabilitado por REVENUE_CRON_ENABLED")
@@ -269,13 +327,21 @@ def start() -> threading.Thread | None:
         _alertas_stop.clear()
         _alertas_thread = threading.Thread(target=_loop_alertas, daemon=True, name="revenue_alertas")
         _alertas_thread.start()
+    warmup_enabled = os.environ.get("WARMUP_ENABLED", "true").lower() in ("true", "1", "yes")
+    if warmup_enabled and (_warmup_thread is None or not _warmup_thread.is_alive()):
+        _warmup_stop.clear()
+        _warmup_thread = threading.Thread(target=_loop_warmup, daemon=True, name="warmup_comercial")
+        _warmup_thread.start()
     return _thread
 
 
 def stop():
     _stop_event.set()
     _alertas_stop.set()
+    _warmup_stop.set()
     if _thread is not None:
         _thread.join(timeout=5)
     if _alertas_thread is not None:
         _alertas_thread.join(timeout=5)
+    if _warmup_thread is not None:
+        _warmup_thread.join(timeout=5)
