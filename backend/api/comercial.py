@@ -142,6 +142,80 @@ def clientes(
         raise HTTPException(503, f"Error: {str(e)[:200]}")
 
 
+@router.get("/debug/ordenes-hoy")
+def debug_ordenes_hoy(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """
+    DEBUG: lista todas las órdenes de HOY con sus campos crudos para
+    comparar contra Shopify Home y entender de dónde sale la diferencia.
+    """
+    import sys
+    from pathlib import Path
+    from datetime import date, datetime, timedelta, timezone
+    _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+    import shopify_metrics as sm
+
+    hoy = sm.hoy_bogota()
+    try:
+        orders = sm._fetch_orders_dia(hoy)
+    except Exception as e:
+        raise HTTPException(503, f"Error: {e}")
+
+    rows = []
+    suma_total_price       = 0.0
+    suma_subtotal_price    = 0.0
+    suma_total_tax         = 0.0
+    suma_total_discounts   = 0.0
+    suma_revenue_sin_iva   = 0.0
+    incluidos = 0
+    excluidos_cancel = 0
+
+    for o in orders:
+        total_price = float(o.get("total_price") or 0)
+        subtotal    = float(o.get("subtotal_price") or 0)
+        tax         = float(o.get("total_tax") or 0)
+        discounts   = float(o.get("total_discounts") or 0)
+        cancelled   = bool(o.get("cancelled_at"))
+        rev         = sm._revenue_sin_iva(o)
+        rows.append({
+            "id":               o.get("id"),
+            "source":           o.get("source_name"),
+            "financial":        o.get("financial_status"),
+            "cancelled":        cancelled,
+            "taxes_included":   o.get("taxes_included"),
+            "total_price":      total_price,
+            "subtotal_price":   subtotal,
+            "total_tax":        tax,
+            "total_discounts":  discounts,
+            "revenue_sin_iva":  rev,
+        })
+        if cancelled:
+            excluidos_cancel += 1
+            continue
+        suma_total_price     += total_price
+        suma_subtotal_price  += subtotal
+        suma_total_tax       += tax
+        suma_total_discounts += discounts
+        suma_revenue_sin_iva += rev
+        incluidos += 1
+
+    return {
+        "fecha": hoy.isoformat(),
+        "total_ordenes": len(orders),
+        "incluidos": incluidos,
+        "excluidos_cancelled": excluidos_cancel,
+        "sumas": {
+            "total_price":      round(suma_total_price, 0),
+            "subtotal_price":   round(suma_subtotal_price, 0),
+            "total_tax":        round(suma_total_tax, 0),
+            "total_discounts":  round(suma_total_discounts, 0),
+            "revenue_sin_iva":  round(suma_revenue_sin_iva, 0),
+        },
+        "ordenes": rows,
+    }
+
+
 @router.get("/desglose")
 def desglose(
     periodo: str = Query("30d", pattern="^(hoy|ayer|7d|30d|mes|ytd|custom)$"),
