@@ -81,38 +81,38 @@ def _fetch_orders_dia(d: date, status: str = "any") -> list:
 
 def _revenue_sin_iva(o: dict) -> float:
     """
-    Revenue de UN orden SIN IVA y SIN envío.
+    Revenue de UN orden SIN IVA — alineado con "Total sales" de Shopify Home.
 
-    Shopify Colombia: los precios tienen IVA incluido (`taxes_included=true`),
-    entonces subtotal_price YA incluye IVA. Hay que restarle total_tax.
+    Fórmula: total_price - total_tax
+    - total_price: TODO lo cobrado al cliente (productos + envío - descuentos
+      + impuestos si taxes_not_included)
+    - total_tax: monto de impuestos
 
-    Shopify USA: precios sin IVA (taxes_included=false), subtotal_price ya
-    no incluye IVA → se usa tal cual.
+    Resultado: lo facturado realmente, menos solo los impuestos. Incluye
+    envío. Coincide con la métrica "Ventas totales" de Shopify reports.
+
+    Funciona tanto en Shopify CO (taxes_included=true) como USA
+    (taxes_included=false) porque total_tax siempre representa el tax
+    aplicado, independiente de si vino dentro o fuera del precio.
     """
-    sub = float(o.get("subtotal_price") or 0)
-    if sub == 0:
-        sub = float(o.get("total_price") or 0)
-    if o.get("taxes_included"):
-        tax = float(o.get("total_tax") or 0)
-        return max(0.0, sub - tax)
-    return sub
+    total = float(o.get("total_price") or 0)
+    tax   = float(o.get("total_tax")   or 0)
+    return max(0.0, total - tax)
 
 
 def _factor_sin_iva(o: dict) -> float:
     """
-    Factor para convertir cualquier monto "con IVA" del orden a "sin IVA".
-    Útil para descontar IVA de descuentos prorrateadamente.
+    Factor para convertir cualquier monto del orden de "con IVA" a "sin IVA".
+    Útil para descontar IVA proporcional a descuentos.
 
-    Ej: orden con sub=119 y tax=19 → factor 100/119 ≈ 0.8403
-        cualquier monto del orden se multiplica por 0.8403 para quitarle IVA.
+    Basado en la relación total_price → revenue_sin_iva:
+      factor = (total - tax) / total
     """
-    if not o.get("taxes_included"):
-        return 1.0
-    sub = float(o.get("subtotal_price") or 0)
-    if sub <= 0:
+    total = float(o.get("total_price") or 0)
+    if total <= 0:
         return 1.0
     tax = float(o.get("total_tax") or 0)
-    return (sub - tax) / sub if sub > tax else 1.0
+    return (total - tax) / total if total > tax else 1.0
 
 
 # ── API pública ────────────────────────────────────────────────────────────────
