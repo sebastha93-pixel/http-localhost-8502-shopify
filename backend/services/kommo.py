@@ -187,11 +187,24 @@ def sync_talks(full: bool = False, limit_total: int = 5000) -> dict:
                 skip_no_entity_id += 1
                 continue
 
-            # Buscar advisor_id del lead
+            # Buscar advisor_id del lead. Si no está en DB, lo traemos de Kommo on-the-fly.
             if lead_id not in advisors_por_lead:
                 try:
                     r = sb.table("kommo_leads").select("advisor_id").eq("lead_id", lead_id).limit(1).execute()
-                    advisors_por_lead[lead_id] = (r.data[0]["advisor_id"] if r.data else "__NOT_FOUND__")
+                    if r.data:
+                        advisors_por_lead[lead_id] = r.data[0]["advisor_id"]
+                    else:
+                        # Lead no está sincronizado: traerlo on-the-fly
+                        try:
+                            lead_data = kc.obtener_lead(lead_id)
+                            if lead_data:
+                                db.upsert_lead(lead_data)
+                                r2 = sb.table("kommo_leads").select("advisor_id").eq("lead_id", lead_id).limit(1).execute()
+                                advisors_por_lead[lead_id] = r2.data[0]["advisor_id"] if r2.data else None
+                            else:
+                                advisors_por_lead[lead_id] = "__NOT_FOUND__"
+                        except Exception:
+                            advisors_por_lead[lead_id] = "__NOT_FOUND__"
                 except Exception:
                     advisors_por_lead[lead_id] = "__NOT_FOUND__"
 
