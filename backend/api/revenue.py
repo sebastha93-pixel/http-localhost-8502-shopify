@@ -652,9 +652,12 @@ def messages_recent(
     sb = db._sb()
     if sb is None:
         raise HTTPException(503, "Supabase no configurado")
-    msgs = sb.table("messages").select(
-        "message_id,conversation_id,lead_id,sender_type,sender_name,message_text,sent_at,topic"
-    ).order("sent_at", desc=True).limit(limit).execute().data or []
+    try:
+        msgs = sb.table("messages").select(
+            "message_id,conversation_id,lead_id,sender_type,sender_name,message_text,sent_at"
+        ).order("sent_at", desc=True).limit(limit).execute().data or []
+    except Exception as e:
+        raise HTTPException(503, f"select messages: {str(e)[:300]}")
     lead_ids = list({m["lead_id"] for m in msgs if m.get("lead_id")})
     leads_map: dict = {}
     if lead_ids:
