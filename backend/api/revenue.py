@@ -331,6 +331,20 @@ def _procesar_webhook(parsed: dict) -> dict:
     return {"messages": msgs_guardados, "conversations": convs_up, "leads": leads_up}
 
 
+@router.get("/debug/schema/{table}")
+def debug_schema(table: str, _: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Inspecciona columnas de una tabla via select limit 1."""
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    try:
+        r = sb.table(table).select("*").limit(1).execute()
+        cols = list(r.data[0].keys()) if r.data else []
+        return {"table": table, "columns": cols, "n_rows": len(r.data)}
+    except Exception as e:
+        return {"table": table, "error": str(e)[:300]}
+
+
 @router.post("/kommo-webhook")
 async def kommo_webhook(request: Request) -> dict:
     """Receptor de eventos de Kommo. PÚBLICO. Parsea y persiste en Supabase."""
