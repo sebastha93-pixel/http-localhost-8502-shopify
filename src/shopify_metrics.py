@@ -90,7 +90,15 @@ def ventas_del_dia(d: Optional[date] = None) -> dict:
 
     def _calc():
         orders = _fetch_orders_dia(d)
-        total = sum(float(o.get("total_price") or 0) for o in orders)
+        # subtotal_price = ventas SIN IVA y SIN envío (después de descuentos).
+        # NO usar total_price que incluye IVA. Fallback a total_price solo si
+        # subtotal viene vacío (raro).
+        def _sub(o):
+            s = o.get("subtotal_price")
+            if s is not None and s != "":
+                return float(s)
+            return float(o.get("total_price") or 0)
+        total = sum(_sub(o) for o in orders)
         n = len(orders)
         return {
             "fecha": d.isoformat(),
@@ -238,7 +246,7 @@ def comparativas() -> dict:
 
 
 # ─── Análisis de clientes ─────────────────────────────────────────────────────
-def _fetch_orders_periodo(desde: date, hasta: date, fields: str = "id,total_price,customer,created_at") -> list:
+def _fetch_orders_periodo(desde: date, hasta: date, fields: str = "id,total_price,subtotal_price,customer,created_at") -> list:
     """Fetch órdenes en un rango. Cacheado."""
     key = f"fop_{desde.isoformat()}_{hasta.isoformat()}_{fields}"
 
@@ -290,7 +298,9 @@ def analisis_clientes(dias: int = 90) -> dict:
             if not cid:
                 continue
             nombre = f"{c.get('first_name','')} {c.get('last_name','')}".strip() or "—"
-            por_cliente[cid]["revenue"] += float(o.get("total_price") or 0)
+            # Revenue del cliente SIN IVA (subtotal_price con fallback)
+            _sub = o.get("subtotal_price")
+            por_cliente[cid]["revenue"] += float(_sub if _sub not in (None, "") else o.get("total_price") or 0)
             por_cliente[cid]["ordenes"] += 1
             por_cliente[cid]["nombre"]   = nombre
             por_cliente[cid]["email"]    = c.get("email") or ""
@@ -489,23 +499,28 @@ def desglose_ventas(
                 # Excluir cancelados del cálculo de revenue
                 if o.get("cancelled_at"):
                     continue
-                tot   = float(o.get("total_price")    or 0)
-                sub   = float(o.get("subtotal_price") or tot)
-                desc  = float(o.get("total_discounts") or 0)
-                bruto      += sub + desc  # bruto = lo que sería sin descuento
-                neto       += tot
+                # Todos los cálculos van SIN IVA y SIN envío:
+                #   sub  = subtotal_price (después de descuentos, sin IVA)
+                #   bruto = sub + descuentos  (antes de descuentos, sin IVA)
+                #   neto  = sub               (lo que efectivamente vendes, sin IVA)
+                # NO usar total_price (incluye IVA y envío) en ningún KPI.
+                _sub_raw = o.get("subtotal_price")
+                sub  = float(_sub_raw if _sub_raw not in (None, "") else o.get("total_price") or 0)
+                desc = float(o.get("total_discounts") or 0)
+                bruto      += sub + desc
+                neto       += sub
                 descuentos += desc
                 num        += 1
 
                 canal = _canal_label(o.get("source_name", ""))
-                canal_agg[canal]["ventas"]       += tot
+                canal_agg[canal]["ventas"]       += sub
                 canal_agg[canal]["num_pedidos"]  += 1
 
                 # Solo los draft orders tienen user_id (creados por staff)
                 uid = o.get("user_id")
                 if uid:
                     nombre = _nombre_asesor(uid)
-                    asesor_agg[nombre]["ventas"]      += tot
+                    asesor_agg[nombre]["ventas"]      += sub
                     asesor_agg[nombre]["num_pedidos"] += 1
 
             d += timedelta(days=1)
