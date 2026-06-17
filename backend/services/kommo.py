@@ -26,6 +26,7 @@ from backend.services import revenue_db as db
 
 
 log = logging.getLogger(__name__)
+# touch: force railway redeploy con env vars nuevas
 
 
 # ── Health check ─────────────────────────────────────────────────────────────
