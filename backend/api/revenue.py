@@ -258,22 +258,25 @@ def _procesar_webhook(parsed: dict) -> dict:
             # Asegurar conversation existe (FK)
             if conv_id and entity_type == "lead" and entity_id:
                 _asegurar_lead_en_db(sb, int(entity_id))
-                # Enriquecer customer_name del lead si está vacío
-                author = m.get("author") or {}
-                if author.get("type") == "external" and author.get("name"):
-                    try:
-                        r = sb.table("kommo_leads").select("customer_name").eq("lead_id", int(entity_id)).limit(1).execute()
-                        cur = (r.data[0].get("customer_name") if r.data else "") or ""
-                        if not cur.strip():
-                            sb.table("kommo_leads").update({"customer_name": author["name"]}).eq("lead_id", int(entity_id)).execute()
-                    except Exception:
-                        pass
+                # Enriquecer customer_name del lead si está vacío + obtener advisor_id
+                advisor_id_lead = None
                 try:
-                    existe = sb.table("conversations").select("conversation_id").eq("conversation_id", conv_id).limit(1).execute()
+                    r = sb.table("kommo_leads").select("customer_name,advisor_id").eq("lead_id", int(entity_id)).limit(1).execute()
+                    if r.data:
+                        advisor_id_lead = r.data[0].get("advisor_id")
+                        cur = (r.data[0].get("customer_name") or "")
+                        author = m.get("author") or {}
+                        if author.get("type") == "external" and author.get("name") and not cur.strip():
+                            sb.table("kommo_leads").update({"customer_name": author["name"]}).eq("lead_id", int(entity_id)).execute()
+                except Exception:
+                    pass
+                try:
+                    existe = sb.table("conversations").select("conversation_id,advisor_id").eq("conversation_id", conv_id).limit(1).execute()
                     if not existe.data:
                         sb.table("conversations").upsert({
                             "conversation_id":  conv_id,
                             "lead_id":          int(entity_id),
+                            "advisor_id":       advisor_id_lead,
                             "channel":          m.get("origin") or "unknown",
                             "started_at":       _dt.fromtimestamp(created, tz=_tz.utc).isoformat() if created else None,
                             "last_message_at":  _dt.fromtimestamp(created, tz=_tz.utc).isoformat() if created else None,
@@ -282,6 +285,9 @@ def _procesar_webhook(parsed: dict) -> dict:
                             "synced_at":        _dt.now(tz=_tz.utc).isoformat(),
                         }, on_conflict="conversation_id").execute()
                         convs_up += 1
+                    elif advisor_id_lead and not existe.data[0].get("advisor_id"):
+                        # Backfill: si la conv ya existe sin advisor_id, lo populamos
+                        sb.table("conversations").update({"advisor_id": advisor_id_lead}).eq("conversation_id", conv_id).execute()
                 except Exception:
                     pass
 
@@ -330,11 +336,19 @@ def _procesar_webhook(parsed: dict) -> dict:
                 if not talk_id or entity_type != "lead" or not entity_id:
                     continue
                 _asegurar_lead_en_db(sb, int(entity_id))
+                advisor_id_lead = None
+                try:
+                    rr = sb.table("kommo_leads").select("advisor_id").eq("lead_id", int(entity_id)).limit(1).execute()
+                    if rr.data:
+                        advisor_id_lead = rr.data[0].get("advisor_id")
+                except Exception:
+                    pass
                 created = int(t.get("created_at") or 0) or None
                 updated = int(t.get("updated_at") or 0) or None
                 row = {
                     "conversation_id":  f"talk-{talk_id}",
                     "lead_id":          int(entity_id),
+                    "advisor_id":       advisor_id_lead,
                     "channel":          t.get("origin") or "unknown",
                     "started_at":       _dt.fromtimestamp(created, tz=_tz.utc).isoformat() if created else None,
                     "last_message_at":  _dt.fromtimestamp(updated, tz=_tz.utc).isoformat() if updated else None,
@@ -342,6 +356,7 @@ def _procesar_webhook(parsed: dict) -> dict:
                     "audit_status":     "pending",
                     "synced_at":        _dt.now(tz=_tz.utc).isoformat(),
                 }
+                row = {k: v for k, v in row.items() if v is not None}
                 sb.table("conversations").upsert(row, on_conflict="conversation_id").execute()
                 convs_up += 1
             except Exception as e:
@@ -735,6 +750,38 @@ def conversation_detail(
         "messages": msgs,
         "audit": audits[0] if audits else None,
     }
+
+
+@router.post("/enrich/conversations-advisors")
+def enrich_conversations_advisors(
+    limit: int = Query(2000, ge=10, le=10000),
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Llena advisor_id en conversations donde está null, leyendo de kommo_leads.advisor_id"""
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    convs = (sb.table("conversations").select("conversation_id,lead_id,advisor_id")
+               .is_("advisor_id", "null").limit(limit).execute().data) or []
+    lead_ids = list({c["lead_id"] for c in convs if c.get("lead_id")})
+    leads_map: dict = {}
+    if lead_ids:
+        for batch_start in range(0, len(lead_ids), 200):
+            batch = lead_ids[batch_start:batch_start + 200]
+            r = sb.table("kommo_leads").select("lead_id,advisor_id").in_("lead_id", batch).execute().data or []
+            for ld in r:
+                if ld.get("advisor_id"):
+                    leads_map[ld["lead_id"]] = ld["advisor_id"]
+    actualizados = 0
+    for c in convs:
+        adv = leads_map.get(c.get("lead_id"))
+        if adv:
+            try:
+                sb.table("conversations").update({"advisor_id": adv}).eq("conversation_id", c["conversation_id"]).execute()
+                actualizados += 1
+            except Exception:
+                pass
+    return {"ok": True, "candidatos": len(convs), "actualizados": actualizados, "leads_con_advisor": len(leads_map)}
 
 
 @router.post("/enrich/leads-customers")
