@@ -287,11 +287,22 @@ def debug_explorar_chats(_: CurrentUser = Depends(require_role("admin"))) -> dic
     Explora varios endpoints de Kommo para encontrar dónde están los
     mensajes de WhatsApp en esta cuenta.
     """
-    import os, requests, urllib.parse
+    import os, requests, urllib.parse, sys
+    from pathlib import Path
+    _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+    import kommo_client as kc
+
     subdomain = os.environ.get("KOMMO_SUBDOMAIN", "")
-    token = os.environ.get("KOMMO_API_TOKEN", "")
-    if not subdomain or not token:
-        return {"error": "creds no configuradas"}
+    if not subdomain:
+        return {"error": "KOMMO_SUBDOMAIN no configurado"}
+
+    # Usar el helper _token() que prioriza el OAuth token sobre el long-lived
+    try:
+        token = kc._token()
+    except RuntimeError as e:
+        return {"error": str(e)}
 
     base = f"https://{subdomain}.kommo.com/api/v4"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
