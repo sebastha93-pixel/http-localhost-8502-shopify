@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import requests
@@ -215,6 +215,160 @@ def auditar_conversation(conv_id: str) -> dict:
         pass
 
     return {"ok": True, "audit_id": audit_id, "result": parsed}
+
+
+COACHING_SYSTEM_PROMPT = """Eres un coach de ventas experto. Tu rol es analizar el desempeño de UNA asesora de MALE DENIM basándote en múltiples auditorías de conversaciones (ya pre-analizadas por IA) y generar un reporte de coaching ACCIONABLE.
+
+Recibirás un resumen estadístico + extractos textuales (frases positivas, negativas, recomendaciones) de varias auditorías de la misma asesora.
+
+Devuelve SOLO JSON válido con esta estructura:
+
+{
+  "diagnostico_general": "<3-4 frases del estado general>",
+  "fortalezas": ["<patrón positivo recurrente>"],
+  "areas_de_mejora": ["<patrón problemático recurrente>"],
+  "momento_critico_recurrente": "<si hay un patrón de dónde se pierden las ventas, descríbelo>",
+  "plan_accion_30_dias": [
+    {"semana": 1, "objetivo": "<>", "ejercicio": "<>"},
+    {"semana": 2, "objetivo": "<>", "ejercicio": "<>"},
+    {"semana": 3, "objetivo": "<>", "ejercicio": "<>"},
+    {"semana": 4, "objetivo": "<>", "ejercicio": "<>"}
+  ],
+  "frases_modelo": ["<3-5 frases ejemplo que debería usar más>"],
+  "frases_a_evitar": ["<3-5 frases o patrones que debe dejar de usar>"],
+  "kpi_objetivo": {"conv_rate_target": <0-100>, "overall_score_target": <1-10>},
+  "prioridad_urgente": "<la UNA cosa más importante a corregir esta semana>"
+}
+
+Sé directo, específico y accionable. Cita frases textuales cuando sea posible. NO uses markdown."""
+
+
+def coaching_para_asesora(advisor_id: str, days_back: int = 60) -> dict:
+    """Genera reporte de coaching IA basado en todas las auditorías de una asesora.
+    Toma el dataset, lo resume estadísticamente y pasa a Haiku para sintetizar."""
+    sb = db._sb()
+    if sb is None:
+        return {"ok": False, "error": "supabase_no_configurado"}
+
+    adv = sb.table("advisors").select("name,email").eq("advisor_id", advisor_id).limit(1).execute().data
+    if not adv:
+        return {"ok": False, "error": "asesora_no_encontrada"}
+    advisor_name = adv[0]["name"]
+
+    desde = (datetime.now(tz=timezone.utc) - timedelta(days=days_back)).isoformat()
+    audits = (sb.table("chat_audits").select("*")
+                .eq("advisor_id", advisor_id)
+                .gte("audit_date", desde)
+                .order("audit_date", desc=True)
+                .limit(50).execute().data) or []
+    if not audits:
+        return {"ok": False, "error": "sin_auditorias"}
+
+    # Agregados estadísticos
+    n = len(audits)
+    won = sum(1 for a in audits if a.get("result_classification") == "venta_lograda")
+    lost = sum(1 for a in audits if a.get("result_classification") == "venta_perdida")
+    inconclusas = n - won - lost
+    impact_perdido = sum(float(a.get("economic_impact_estimate") or 0) for a in audits if a.get("result_classification") == "venta_perdida")
+
+    def avg(field):
+        vals = [float(a[field]) for a in audits if a.get(field) is not None]
+        return round(sum(vals) / len(vals), 2) if vals else None
+
+    # Recopilar frases / motivos
+    motivos = {}
+    frases_pos = []
+    frases_neg = []
+    recomendaciones = []
+    momentos = []
+    for a in audits:
+        m = a.get("main_loss_reason")
+        if m:
+            motivos[m] = motivos.get(m, 0) + 1
+        if a.get("lost_moment"):
+            momentos.append(a["lost_moment"])
+        raw = a.get("raw_analysis") or {}
+        for f in (raw.get("frases_positivas") or [])[:2]:
+            frases_pos.append(f)
+        for f in (raw.get("frases_negativas") or [])[:2]:
+            frases_neg.append(f)
+        for r in (raw.get("recomendaciones") or [])[:1]:
+            recomendaciones.append(r)
+
+    resumen_para_ia = f"""Asesora: {advisor_name}
+Periodo: últimos {days_back} días, {n} conversaciones auditadas.
+
+Resultados:
+- Ventas ganadas: {won}
+- Ventas perdidas: {lost}
+- Inconclusas: {inconclusas}
+- Tasa de conversión: {round(100 * won / (won + lost), 1) if (won + lost) else 0}%
+- Impacto económico de ventas perdidas: COP ${int(impact_perdido):,}
+
+Scores promedio (1-10):
+- Overall: {avg('overall_score')}
+- Tiempo de respuesta: {avg('response_time_score')}
+- Atención al cliente: {avg('attention_score')}
+- Follow-up: {avg('follow_up_score')}
+- Cierre: {avg('closing_score')}
+
+Motivos de pérdida más frecuentes: {motivos}
+
+Frases POSITIVAS detectadas (cosas que hace bien): {frases_pos[:15]}
+
+Frases NEGATIVAS detectadas (cosas que hace mal): {frases_neg[:15]}
+
+Momentos donde perdió ventas: {momentos[:10]}
+
+Recomendaciones previas de las auditorías: {recomendaciones[:15]}
+"""
+
+    # Llamada a Haiku con system prompt coaching
+    key = _api_key()
+    if not key:
+        return {"ok": False, "error": "no_api_key"}
+    headers = {"x-api-key": key, "anthropic-version": ANTHROPIC_VER, "content-type": "application/json"}
+    body = {
+        "model":      ANTHROPIC_MODEL,
+        "max_tokens": 2000,
+        "system":     COACHING_SYSTEM_PROMPT,
+        "messages":   [{"role": "user", "content": resumen_para_ia}],
+    }
+    try:
+        r = requests.post(ANTHROPIC_API, headers=headers, json=body, timeout=60)
+        if r.status_code != 200:
+            return {"ok": False, "error": f"haiku_{r.status_code}", "body": r.text[:300]}
+        resp = r.json()
+        text = ""
+        for c in resp.get("content", []):
+            if c.get("type") == "text":
+                text += c.get("text", "")
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.strip("`")
+            if text.startswith("json"):
+                text = text[4:].strip()
+        parsed = json.loads(text)
+        usage = resp.get("usage") or {}
+        cost = (usage.get("input_tokens", 0) / 1_000_000) * 1.0 + (usage.get("output_tokens", 0) / 1_000_000) * 5.0
+        return {
+            "ok": True,
+            "advisor_id": advisor_id,
+            "advisor_name": advisor_name,
+            "n_auditorias": n,
+            "stats": {
+                "won": won, "lost": lost, "inconclusas": inconclusas,
+                "conversion_rate": round(100 * won / (won + lost), 1) if (won + lost) else 0,
+                "impact_perdido_cop": int(impact_perdido),
+                "avg_overall": avg('overall_score'),
+            },
+            "coaching": parsed,
+            "modelo": ANTHROPIC_MODEL,
+            "costo_usd": round(cost, 6),
+        }
+    except Exception as e:
+        log.exception("coaching failed")
+        return {"ok": False, "error": str(e)[:300]}
 
 
 def auditar_pendientes(limit: int = 10, solo_cerradas: bool = True) -> dict:

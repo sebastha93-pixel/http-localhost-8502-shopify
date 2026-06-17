@@ -339,6 +339,8 @@ def _procesar_webhook(parsed: dict) -> dict:
                 _webhook_stats["ultimos_errores"] = ([f"talk: {str(e)[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
 
     # 3) leads[status|update|add] → tabla kommo_leads (refrescar estado)
+    # Si cambia a won/lost, encolar conversations para audit IA automático
+    conv_ids_para_auditar: list[str] = []
     leads_block = (parsed.get("leads") or {})
     for accion in ("status", "update", "add"):
         items = leads_block.get(accion) or []
@@ -351,22 +353,47 @@ def _procesar_webhook(parsed: dict) -> dict:
                 lead_id = ld.get("id")
                 if not lead_id:
                     continue
+                nuevo_status = db._map_status(ld.get("status_id"))
                 row = {
                     "lead_id":    int(lead_id),
                     "pipeline_id": int(ld["pipeline_id"]) if ld.get("pipeline_id") else None,
                     "stage_id":    int(ld["status_id"]) if ld.get("status_id") else None,
-                    "status":      db._map_status(ld.get("status_id")),
+                    "status":      nuevo_status,
                     "responsible_user_id": int(ld["responsible_user_id"]) if ld.get("responsible_user_id") else None,
                     "synced_at":   _dt.now(tz=_tz.utc).isoformat(),
                 }
                 row = {k: v for k, v in row.items() if v is not None}
                 sb.table("kommo_leads").upsert(row, on_conflict="lead_id").execute()
                 leads_up += 1
+
+                # Si el lead se cerró (won/lost), buscar sus conversations y encolar audit
+                if nuevo_status in ("won", "lost"):
+                    try:
+                        convs_lead = sb.table("conversations").select("conversation_id,audit_status").eq("lead_id", int(lead_id)).execute().data or []
+                        for cv in convs_lead:
+                            if cv.get("audit_status") != "completed":
+                                conv_ids_para_auditar.append(cv["conversation_id"])
+                    except Exception:
+                        pass
             except Exception as e:
                 _webhook_stats["errores_parser"] += 1
                 _webhook_stats["ultimos_errores"] = ([f"lead: {str(e)[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
 
-    return {"messages": msgs_guardados, "conversations": convs_up, "leads": leads_up}
+    return {
+        "messages": msgs_guardados,
+        "conversations": convs_up,
+        "leads": leads_up,
+        "audit_queue": conv_ids_para_auditar,
+    }
+
+
+def _auditar_en_background(conv_ids: list[str]) -> None:
+    """Wrapper para correr audit IA dentro de BackgroundTasks."""
+    for cid in conv_ids:
+        try:
+            audit_ia.auditar_conversation(cid)
+        except Exception as e:
+            log.warning(f"audit auto {cid}: {e}")
 
 
 @router.get("/debug/schema/{table}")
@@ -384,8 +411,9 @@ def debug_schema(table: str, _: CurrentUser = Depends(require_role("admin"))) ->
 
 
 @router.post("/kommo-webhook")
-async def kommo_webhook(request: Request) -> dict:
-    """Receptor de eventos de Kommo. PÚBLICO. Parsea y persiste en Supabase."""
+async def kommo_webhook(request: Request, background_tasks: BackgroundTasks) -> dict:
+    """Receptor de eventos de Kommo. PÚBLICO. Parsea y persiste en Supabase.
+    Si detecta cierre de lead (won/lost), dispara audit IA en background."""
     from datetime import datetime as _dt, timezone as _tz
     now_iso = _dt.now(tz=_tz.utc).isoformat()
 
@@ -415,13 +443,17 @@ async def kommo_webhook(request: Request) -> dict:
     else:
         _webhook_stats["otros"] += 1
 
-    # Persistir en DB
+    # Persistir en DB y disparar audit IA en background si aplica
     try:
         parsed = _kommo_form_to_nested(body_dict) if isinstance(body_dict, dict) else {}
         result = _procesar_webhook(parsed)
         _webhook_stats["mensajes_guardados"] += result.get("messages", 0)
         _webhook_stats["convs_upserteadas"] += result.get("conversations", 0)
         _webhook_stats["leads_actualizados"] += result.get("leads", 0)
+        audit_queue = result.get("audit_queue") or []
+        if audit_queue:
+            background_tasks.add_task(_auditar_en_background, audit_queue)
+            _webhook_stats["auto_audits_disparados"] = _webhook_stats.get("auto_audits_disparados", 0) + len(audit_queue)
     except Exception as e:
         _webhook_stats["errores_parser"] += 1
         _webhook_stats["ultimos_errores"] = ([f"top: {str(e)[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
@@ -688,6 +720,113 @@ def conversation_detail(
         "messages": msgs,
         "audit": audits[0] if audits else None,
     }
+
+
+@router.post("/rankings/calcular")
+def rankings_calcular(
+    days_back: int = Query(30, ge=1, le=365),
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Calcula advisor_rankings para el periodo y los persiste.
+    Pensado para correr nocturno (cron). Idempotente: upserts por advisor_id + period."""
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    desde_dt = datetime.now(tz=timezone.utc) - timedelta(days=days_back)
+    desde = desde_dt.isoformat()
+    period_key = f"{desde_dt.date().isoformat()}_to_{datetime.now(tz=timezone.utc).date().isoformat()}"
+
+    advisors = sb.table("advisors").select("advisor_id,name,active").execute().data or []
+    convs = sb.table("conversations").select("conversation_id,advisor_id,lead_id,last_message_at,started_at,channel").gte("last_message_at", desde).execute().data or []
+    lead_ids = list({c["lead_id"] for c in convs if c.get("lead_id")})
+    leads_map: dict = {}
+    if lead_ids:
+        for l in (sb.table("kommo_leads").select("lead_id,status,lead_value").in_("lead_id", lead_ids).execute().data or []):
+            leads_map[l["lead_id"]] = l
+
+    # Auditorías promedios por asesor
+    audits_map: dict = {}
+    audits = sb.table("chat_audits").select("advisor_id,overall_score,response_time_score,attention_score,follow_up_score,closing_score,economic_impact_estimate").gte("audit_date", desde).execute().data or []
+    for a in audits:
+        adv = a.get("advisor_id")
+        if not adv:
+            continue
+        r = audits_map.setdefault(adv, {"count": 0, "overall": [], "response": [], "attention": [], "follow_up": [], "closing": [], "impact_perdido": 0})
+        r["count"] += 1
+        for k_src, k_dst in [("overall_score","overall"),("response_time_score","response"),("attention_score","attention"),("follow_up_score","follow_up"),("closing_score","closing")]:
+            v = a.get(k_src)
+            if v is not None:
+                r[k_dst].append(float(v))
+        r["impact_perdido"] += float(a.get("economic_impact_estimate") or 0)
+
+    rows_persistir = []
+    ahora_iso = datetime.now(tz=timezone.utc).isoformat()
+    for adv in advisors:
+        adv_id = adv["advisor_id"]
+        convs_adv = [c for c in convs if c.get("advisor_id") == adv_id]
+        won = sum(1 for c in convs_adv if leads_map.get(c.get("lead_id"), {}).get("status") == "won")
+        lost = sum(1 for c in convs_adv if leads_map.get(c.get("lead_id"), {}).get("status") == "lost")
+        revenue = sum(float(leads_map.get(c.get("lead_id"), {}).get("lead_value") or 0) for c in convs_adv if leads_map.get(c.get("lead_id"), {}).get("status") == "won")
+        cerradas = won + lost
+        conv_rate = round(100 * won / cerradas, 2) if cerradas else None
+        a = audits_map.get(adv_id, {})
+        def avg(lst): return round(sum(lst) / len(lst), 2) if lst else None
+        rows_persistir.append({
+            "advisor_id":       adv_id,
+            "period_key":       period_key,
+            "period_days":      days_back,
+            "calculated_at":    ahora_iso,
+            "conversations":    len(convs_adv),
+            "won":              won,
+            "lost":             lost,
+            "conversion_rate":  conv_rate,
+            "revenue_generated": revenue,
+            "audits_count":     a.get("count", 0),
+            "avg_overall_score": avg(a.get("overall", [])),
+            "avg_response_score": avg(a.get("response", [])),
+            "avg_attention_score": avg(a.get("attention", [])),
+            "avg_follow_up_score": avg(a.get("follow_up", [])),
+            "avg_closing_score": avg(a.get("closing", [])),
+            "impact_perdido":   a.get("impact_perdido", 0),
+        })
+
+    persistidos = 0
+    errores = []
+    for row in rows_persistir:
+        clean = {k: v for k, v in row.items() if v is not None}
+        try:
+            sb.table("advisor_rankings").upsert(clean, on_conflict="advisor_id,period_key").execute()
+            persistidos += 1
+        except Exception as e:
+            if len(errores) < 3:
+                errores.append(str(e)[:200])
+    return {"ok": True, "persistidos": persistidos, "total_advisors": len(rows_persistir), "period_key": period_key, "errores": errores}
+
+
+@router.get("/coaching/{advisor_id}")
+def coaching_asesora(
+    advisor_id: str,
+    days_back: int = Query(60, ge=7, le=365),
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Genera reporte de coaching IA para una asesora basado en sus auditorías."""
+    return audit_ia.coaching_para_asesora(advisor_id, days_back=days_back)
+
+
+@router.get("/rankings/historico")
+def rankings_historico(
+    advisor_id: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """Histórico de rankings persistidos."""
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    q = sb.table("advisor_rankings").select("*").order("calculated_at", desc=True).limit(limit)
+    if advisor_id:
+        q = q.eq("advisor_id", advisor_id)
+    return {"ok": True, "rows": q.execute().data or []}
 
 
 @router.get("/audit/list")
