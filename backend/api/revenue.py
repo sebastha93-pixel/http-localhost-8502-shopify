@@ -17,6 +17,7 @@ from fastapi.responses import RedirectResponse
 from backend.core.security import CurrentUser, require_role
 from backend.services import kommo as kommo_svc
 from backend.services import revenue_db as db
+from backend.services import audit_ia
 
 
 log = logging.getLogger(__name__)
@@ -603,6 +604,43 @@ def advisors_ranking(
         })
     rows.sort(key=lambda r: (r["conversations"], r["won"]), reverse=True)
     return {"ok": True, "total": len(rows), "rows": rows, "days_back": days_back}
+
+
+# ── Auditoría IA ──────────────────────────────────────────────────────────────
+@router.post("/audit/run/{conversation_id}")
+def audit_run_one(
+    conversation_id: str,
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Audita 1 conversation específica con Claude Haiku 4.5."""
+    return audit_ia.auditar_conversation(conversation_id)
+
+
+@router.post("/audit/run-pending")
+def audit_run_pending(
+    limit: int = Query(5, ge=1, le=30),
+    solo_cerradas: bool = Query(True),
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Audita hasta N conversations pendientes (cerradas por defecto)."""
+    return audit_ia.auditar_pendientes(limit=limit, solo_cerradas=solo_cerradas)
+
+
+@router.get("/audit/list")
+def audit_list(
+    limit: int = Query(50, ge=1, le=200),
+    classification: str | None = Query(None),
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """Lista de auditorías recientes."""
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    q = sb.table("chat_audits").select("*").order("analyzed_at", desc=True).limit(limit)
+    if classification:
+        q = q.eq("result_classification", classification)
+    rows = q.execute().data or []
+    return {"ok": True, "total": len(rows), "audits": rows}
 
 
 @router.get("/messages/recent")
