@@ -357,6 +357,36 @@ def obtener_contacto(contact_id: int) -> Optional[dict]:
     return _get(f"contacts/{contact_id}")
 
 
+def listar_contactos_por_ids(contact_ids: list[int]) -> list[dict]:
+    """Trae varios contactos en un solo request usando filter[id][]=X&filter[id][]=Y.
+    Kommo soporta hasta ~250 por página. Hace batches de 100 para seguridad."""
+    if not contact_ids:
+        return []
+    import requests as _rq
+    sub = os.environ.get("KOMMO_SUBDOMAIN", "").strip()
+    if not sub:
+        return []
+    base = f"https://{sub}.kommo.com/api/v4/contacts"
+    result: list[dict] = []
+    BATCH = 100
+    for i in range(0, len(contact_ids), BATCH):
+        chunk = contact_ids[i:i + BATCH]
+        params: list = [("limit", "250")]
+        for cid in chunk:
+            params.append(("filter[id][]", str(cid)))
+        try:
+            tok = _token()
+            r = _rq.get(base, params=params, headers={"Authorization": f"Bearer {tok}"}, timeout=30)
+            if r.status_code != 200:
+                continue
+            data = r.json()
+            contacts = ((data.get("_embedded") or {}).get("contacts") or [])
+            result.extend(contacts)
+        except Exception:
+            continue
+    return result
+
+
 # ── Conversaciones / mensajes ─────────────────────────────────────────────────
 # Kommo expone los chats vía endpoint /chats (Chats API) en el dominio
 # api.kommo.com (no en el subdomain). Los mensajes históricos también se

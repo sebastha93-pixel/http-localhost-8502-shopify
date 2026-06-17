@@ -258,6 +258,16 @@ def _procesar_webhook(parsed: dict) -> dict:
             # Asegurar conversation existe (FK)
             if conv_id and entity_type == "lead" and entity_id:
                 _asegurar_lead_en_db(sb, int(entity_id))
+                # Enriquecer customer_name del lead si está vacío
+                author = m.get("author") or {}
+                if author.get("type") == "external" and author.get("name"):
+                    try:
+                        r = sb.table("kommo_leads").select("customer_name").eq("lead_id", int(entity_id)).limit(1).execute()
+                        cur = (r.data[0].get("customer_name") if r.data else "") or ""
+                        if not cur.strip():
+                            sb.table("kommo_leads").update({"customer_name": author["name"]}).eq("lead_id", int(entity_id)).execute()
+                    except Exception:
+                        pass
                 try:
                     existe = sb.table("conversations").select("conversation_id").eq("conversation_id", conv_id).limit(1).execute()
                     if not existe.data:
@@ -577,15 +587,20 @@ def list_conversations(
 @router.get("/advisors/ranking")
 def advisors_ranking(
     days_back: int = Query(30, ge=1, le=365),
+    incluir_inactivos: bool = Query(False),
     _: CurrentUser = Depends(require_role("admin", "operador")),
 ) -> dict:
-    """Ranking de asesores: conversaciones, won/lost, tasa, último activo."""
+    """Ranking de asesores: conversaciones, won/lost, tasa, último activo.
+    Por defecto solo asesoras activas. Use incluir_inactivos=true para ver todas."""
     sb = db._sb()
     if sb is None:
         raise HTTPException(503, "Supabase no configurado")
     desde = (datetime.now(tz=timezone.utc) - timedelta(days=days_back)).isoformat()
 
-    advisors = sb.table("advisors").select("advisor_id,name,email,active").execute().data or []
+    adv_q = sb.table("advisors").select("advisor_id,name,email,active")
+    if not incluir_inactivos:
+        adv_q = adv_q.eq("active", True)
+    advisors = adv_q.execute().data or []
     convs = sb.table("conversations").select("conversation_id,advisor_id,lead_id,last_message_at,channel").gte("last_message_at", desde).execute().data or []
     lead_ids = list({c["lead_id"] for c in convs if c.get("lead_id")})
     leads_map: dict = {}
@@ -722,6 +737,77 @@ def conversation_detail(
     }
 
 
+@router.post("/enrich/leads-customers")
+def enrich_leads_customers(
+    limit: int = Query(500, ge=10, le=2000, description="Cuántos leads sin nombre procesar"),
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Toma leads con customer_name vacío, lee contact_id desde campo raw,
+    bulk fetch a /contacts y actualiza customer_name + customer_phone."""
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    import sys
+    from pathlib import Path
+    _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+    import kommo_client as kc
+
+    # Leads sin nombre
+    leads = (sb.table("kommo_leads").select("lead_id,customer_name,customer_phone,raw")
+               .or_("customer_name.is.null,customer_name.eq.")
+               .limit(limit).execute().data) or []
+    contact_to_lead: dict = {}
+    for ld in leads:
+        raw = ld.get("raw") or {}
+        contacts = ((raw.get("_embedded") or {}).get("contacts") or [])
+        if contacts:
+            cid = contacts[0].get("id")
+            if cid:
+                contact_to_lead[int(cid)] = ld["lead_id"]
+    if not contact_to_lead:
+        return {"ok": True, "candidatos": len(leads), "enriquecidos": 0, "msg": "ningún lead tiene contact_id en raw"}
+
+    contact_ids = list(contact_to_lead.keys())
+    contactos = kc.listar_contactos_por_ids(contact_ids)
+
+    enriquecidos = 0
+    errores = []
+    for c in contactos:
+        try:
+            cid = int(c.get("id"))
+            lead_id = contact_to_lead.get(cid)
+            if not lead_id:
+                continue
+            name = c.get("name") or ""
+            # Teléfono está en custom_fields_values con field_code=PHONE
+            phone = None
+            for cf in (c.get("custom_fields_values") or []):
+                if cf.get("field_code") == "PHONE":
+                    vals = cf.get("values") or []
+                    if vals:
+                        phone = vals[0].get("value")
+                    break
+            updates = {}
+            if name: updates["customer_name"] = name
+            if phone: updates["customer_phone"] = str(phone)
+            if updates:
+                sb.table("kommo_leads").update(updates).eq("lead_id", lead_id).execute()
+                enriquecidos += 1
+        except Exception as e:
+            if len(errores) < 3:
+                errores.append(str(e)[:200])
+    return {
+        "ok": True,
+        "candidatos": len(leads),
+        "contact_ids_consultados": len(contact_ids),
+        "contactos_devueltos": len(contactos),
+        "enriquecidos": enriquecidos,
+        "errores": errores,
+    }
+
+
 @router.post("/rankings/calcular")
 def rankings_calcular(
     days_back: int = Query(30, ge=1, le=365),
@@ -736,7 +822,7 @@ def rankings_calcular(
     desde = desde_dt.isoformat()
     period_key = f"{desde_dt.date().isoformat()}_to_{datetime.now(tz=timezone.utc).date().isoformat()}"
 
-    advisors = sb.table("advisors").select("advisor_id,name,active").execute().data or []
+    advisors = sb.table("advisors").select("advisor_id,name,active").eq("active", True).execute().data or []
     convs = sb.table("conversations").select("conversation_id,advisor_id,lead_id,last_message_at,started_at,channel").gte("last_message_at", desde).execute().data or []
     lead_ids = list({c["lead_id"] for c in convs if c.get("lead_id")})
     leads_map: dict = {}

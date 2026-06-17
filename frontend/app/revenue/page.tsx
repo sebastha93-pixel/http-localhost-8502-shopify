@@ -642,7 +642,7 @@ export default function RevenuePage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(advisorsQ.data?.rows || []).filter(r => r.conversations > 0 || r.active).map((r) => (
+                      {(advisorsQ.data?.rows || []).map((r) => (
                         <tr key={r.advisor_id} className="border-b">
                           <td className="py-2 pr-3">
                             <div className="font-medium">{r.name}</div>
