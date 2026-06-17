@@ -217,8 +217,12 @@ def guardar_sync_state(key: str, value: str) -> None:
 
 
 # ── Stats / queries para el dashboard ─────────────────────────────────────────
+from backend.core.cache import cached_ttl
+
+
+@cached_ttl(ttl_seconds=60, max_size=4)
 def stats_revenue() -> dict:
-    """KPIs del módulo: cuántos leads, conversations, audits, etc."""
+    """KPIs del módulo. Cache 60s para reducir COUNT queries a Supabase."""
     sb = _sb()
     if sb is None:
         return {"ok": False, "error": "Supabase no configurado"}

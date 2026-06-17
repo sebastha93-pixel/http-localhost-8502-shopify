@@ -347,7 +347,7 @@ function AlertasTab({ onSelect }: { onSelect: (id: string) => void }) {
   const q = useQuery<any>({
     queryKey: ["revenue", "alertas", umbral],
     queryFn: () => api.get(`/api/revenue/alertas?sin_respuesta_min=${umbral}`),
-    refetchInterval: 30000,
+    refetchInterval: 60_000,
   });
   return (
     <Card>
@@ -361,7 +361,7 @@ function AlertasTab({ onSelect }: { onSelect: (id: string) => void }) {
             <option value={120}>2 horas</option>
             <option value={240}>4 horas</option>
           </select>
-          <div className="ml-auto text-xs text-graphite">Auto-refresh 30s</div>
+          <div className="ml-auto text-xs text-graphite">Auto-refresh 60s</div>
         </div>
         {q.isLoading ? <LoadingState /> : q.isError ? <ErrorState error={q.error} /> : (
           <div className="space-y-2">
@@ -495,15 +495,19 @@ export default function RevenuePage() {
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [channelFilter, setChannelFilter] = useState<string>("");
   const [selectedConv, setSelectedConv] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<string>("conversaciones");
 
+  // Stats: refresh moderado cada 2 min (era 30s)
   const statsQ = useQuery<StatsResp>({
     queryKey: ["revenue", "stats"],
     queryFn: () => api.get("/api/revenue/stats"),
-    refetchInterval: 30000,
+    refetchInterval: 2 * 60_000,
   });
 
+  // Conversaciones: solo si la tab activa la usa
   const convsQ = useQuery<{ conversations: Conversation[]; total: number }>({
     queryKey: ["revenue", "conversations", daysBack, advisorFilter, statusFilter, channelFilter],
+    enabled: activeTab === "conversaciones",
     queryFn: () => {
       const params = new URLSearchParams({ days_back: String(daysBack), limit: "200" });
       if (advisorFilter) params.set("advisor_id", advisorFilter);
@@ -513,15 +517,19 @@ export default function RevenuePage() {
     },
   });
 
+  // Asesoras: si está activa o si conversaciones la necesita para el dropdown
   const advisorsQ = useQuery<{ rows: AdvisorRow[]; total: number }>({
     queryKey: ["revenue", "advisors", "ranking", daysBack],
     queryFn: () => api.get(`/api/revenue/advisors/ranking?days_back=${daysBack}`),
+    enabled: activeTab === "asesoras" || activeTab === "conversaciones" || activeTab === "coaching",
   });
 
+  // Mensajes: refresh suave cada 60s (era 15s) y solo si la tab está activa
   const msgsQ = useQuery<{ messages: MessageRow[]; total: number }>({
     queryKey: ["revenue", "messages", "recent"],
     queryFn: () => api.get("/api/revenue/messages/recent?limit=100"),
-    refetchInterval: 15000,
+    enabled: activeTab === "mensajes",
+    refetchInterval: 60_000,
   });
 
   const stats = statsQ.data;
@@ -549,7 +557,7 @@ export default function RevenuePage() {
         </select>
       </div>
 
-      <Tabs defaultValue="conversaciones">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="conversaciones">Conversaciones</TabsTrigger>
           <TabsTrigger value="asesoras">Ranking asesoras</TabsTrigger>
@@ -673,7 +681,7 @@ export default function RevenuePage() {
         <TabsContent value="mensajes">
           <Card>
             <CardContent className="p-4">
-              <div className="text-xs text-graphite mb-3">Auto-actualiza cada 15s</div>
+              <div className="text-xs text-graphite mb-3">Auto-actualiza cada 60s</div>
               {msgsQ.isLoading ? <LoadingState /> : msgsQ.isError ? <ErrorState error={msgsQ.error} /> : (
                 <div className="space-y-2">
                   {(msgsQ.data?.messages || []).map((m) => (

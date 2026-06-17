@@ -9,12 +9,13 @@ export function Providers({ children }: { children: React.ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            staleTime: 2 * 60_000,           // 2 min — datos frescos sin refetch
-            gcTime: 30 * 60_000,             // 30 min — basura recolectada
-            refetchOnWindowFocus: true,      // volver a la pestaña → refresca
-            refetchOnMount: false,           // navegar entre páginas no refetcha
-            refetchInterval: 2 * 60_000,     // auto-refresh cada 2 min
-            refetchIntervalInBackground: false,  // pausa si la pestaña no está visible
+            staleTime: 5 * 60_000,           // 5 min — datos frescos sin refetch
+            gcTime: 30 * 60_000,             // 30 min cache en memoria
+            refetchOnWindowFocus: false,     // cambiar de tab del browser NO refetcha
+            refetchOnMount: false,           // navegar entre páginas usa caché
+            refetchOnReconnect: true,        // reconexión de red sí refetcha
+            refetchInterval: false,          // sin polling global; solo donde se declare explícito
+            refetchIntervalInBackground: false,
             retry: 1,
           },
         },
