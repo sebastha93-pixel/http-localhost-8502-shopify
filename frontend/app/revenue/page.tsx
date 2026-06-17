@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { KpiCard } from "@/components/kpi-card";
@@ -9,6 +9,19 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { formatMoney } from "@/lib/utils";
+
+interface DetailResp {
+  conversation: any;
+  lead: any;
+  advisor: { name: string; email?: string } | null;
+  messages: Array<{ message_id: string; sender_type: string; sender_name: string; message_text: string; sent_at: string }>;
+  audit: any | null;
+}
+
+function fmtCop(n: any) {
+  if (n == null) return "—";
+  return `COP $${Number(n).toLocaleString("es-CO")}`;
+}
 
 interface StatsResp {
   ok: boolean;
@@ -105,11 +118,130 @@ function StatusBadge({ status }: { status: string | null | undefined }) {
   return <Badge tone={cfg.tone}>{cfg.label}</Badge>;
 }
 
+function ConversationDetailModal({
+  conversationId,
+  onClose,
+}: {
+  conversationId: string;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const detailQ = useQuery<DetailResp>({
+    queryKey: ["revenue", "detail", conversationId],
+    queryFn: () => api.get(`/api/revenue/conversations/${conversationId}/detail`),
+  });
+  const auditMut = useMutation({
+    mutationFn: () => api.post(`/api/revenue/audit/run/${conversationId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["revenue", "detail", conversationId] });
+      qc.invalidateQueries({ queryKey: ["revenue", "stats"] });
+    },
+  });
+
+  const d = detailQ.data;
+  const audit = d?.audit;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-stretch justify-end" onClick={onClose}>
+      <div className="bg-white w-full max-w-3xl h-full overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="p-4 border-b sticky top-0 bg-white flex items-center gap-3">
+          <button onClick={onClose} className="text-graphite hover:text-navy text-2xl leading-none">×</button>
+          <div className="flex-1">
+            <div className="font-semibold">{d?.lead?.customer_name || "Cliente sin nombre"}</div>
+            <div className="text-xs text-graphite">{conversationId} · {d?.advisor?.name || "Sin asesora"}</div>
+          </div>
+          <button
+            onClick={() => auditMut.mutate()}
+            disabled={auditMut.isPending}
+            className="px-3 py-1.5 rounded bg-navy text-white text-sm disabled:opacity-50"
+          >
+            {auditMut.isPending ? "Auditando..." : audit ? "Re-auditar" : "Auditar con IA"}
+          </button>
+        </div>
+
+        {detailQ.isLoading ? <div className="p-6"><LoadingState /></div> : detailQ.isError ? <div className="p-6"><ErrorState error={detailQ.error} /></div> : (
+          <div className="p-4 space-y-4">
+            {audit && (
+              <Card>
+                <CardContent className="p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="font-semibold">Auditoría IA</div>
+                    <Badge tone={audit.result_classification === "venta_lograda" ? "normal" : audit.result_classification === "venta_perdida" ? "critico" : "riesgo"}>
+                      {audit.result_classification?.replace("_", " ") || "—"}
+                    </Badge>
+                  </div>
+                  <p className="text-sm">{audit.ai_summary_internal}</p>
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+                    <div><span className="text-graphite">Overall:</span> <span className="font-medium">{audit.overall_score ?? "—"}/10</span></div>
+                    <div><span className="text-graphite">Respuesta:</span> <span className="font-medium">{audit.response_time_score ?? "—"}/10</span></div>
+                    <div><span className="text-graphite">Atención:</span> <span className="font-medium">{audit.attention_score ?? "—"}/10</span></div>
+                    <div><span className="text-graphite">Follow-up:</span> <span className="font-medium">{audit.follow_up_score ?? "—"}/10</span></div>
+                    <div><span className="text-graphite">Cierre:</span> <span className="font-medium">{audit.closing_score ?? "—"}/10</span></div>
+                  </div>
+                  {audit.main_loss_reason && (
+                    <div className="text-sm"><span className="text-graphite">Motivo principal:</span> <span className="font-medium">{audit.main_loss_reason}</span></div>
+                  )}
+                  {audit.lost_moment && (
+                    <div className="text-sm bg-rose-50 border-l-2 border-rose-400 p-2">
+                      <div className="text-xs text-graphite">Momento crítico:</div>
+                      <div>"{audit.lost_moment}"</div>
+                      {audit.recommended_response && (
+                        <div className="mt-2">
+                          <div className="text-xs text-graphite">Debió responder:</div>
+                          <div className="text-emerald-800">"{audit.recommended_response}"</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {audit.economic_impact_estimate > 0 && (
+                    <div className="text-sm"><span className="text-graphite">Impacto económico estimado:</span> <span className="font-medium">{fmtCop(audit.economic_impact_estimate)}</span></div>
+                  )}
+                  {audit.raw_analysis?.recomendaciones?.length > 0 && (
+                    <div>
+                      <div className="text-xs text-graphite mb-1">Recomendaciones:</div>
+                      <ul className="list-disc list-inside text-sm space-y-1">
+                        {audit.raw_analysis.recomendaciones.map((r: string, i: number) => <li key={i}>{r}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  <div className="text-xs text-graphite border-t pt-2">
+                    {audit.modelo_ia} · costo ${audit.costo_analisis_usd?.toFixed(4)} USD · confianza {((audit.confidence_score ?? 0) * 100).toFixed(0)}%
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            <Card>
+              <CardContent className="p-4">
+                <div className="text-xs text-graphite mb-3">Thread completo ({d?.messages?.length || 0} mensajes)</div>
+                <div className="space-y-2 max-h-[60vh] overflow-y-auto">
+                  {(d?.messages || []).map((m) => (
+                    <div key={m.message_id} className={`flex ${m.sender_type === "customer" ? "justify-start" : "justify-end"}`}>
+                      <div className={`max-w-[75%] rounded px-3 py-2 text-sm ${m.sender_type === "customer" ? "bg-cloud" : "bg-navy text-white"}`}>
+                        <div className="text-xs opacity-70 mb-0.5">{m.sender_name || m.sender_type}</div>
+                        <div>{m.message_text || <em>(sin texto)</em>}</div>
+                        <div className="text-xs opacity-60 mt-1">{new Date(m.sent_at).toLocaleString("es-CO")}</div>
+                      </div>
+                    </div>
+                  ))}
+                  {!d?.messages?.length && <div className="text-center text-graphite py-8">Sin mensajes</div>}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 export default function RevenuePage() {
   const [daysBack, setDaysBack] = useState(30);
   const [advisorFilter, setAdvisorFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [channelFilter, setChannelFilter] = useState<string>("");
+  const [selectedConv, setSelectedConv] = useState<string | null>(null);
 
   const statsQ = useQuery<StatsResp>({
     queryKey: ["revenue", "stats"],
@@ -212,7 +344,7 @@ export default function RevenuePage() {
                     </thead>
                     <tbody>
                       {(convsQ.data?.conversations || []).map((c) => (
-                        <tr key={c.conversation_id} className="border-b hover:bg-cloud/40">
+                        <tr key={c.conversation_id} className="border-b hover:bg-cloud/40 cursor-pointer" onClick={() => setSelectedConv(c.conversation_id)}>
                           <td className="py-2 pr-3">
                             <div className="font-medium">{c.customer_name || "—"}</div>
                             <div className="text-xs text-graphite">{c.customer_phone || ""}</div>
@@ -284,7 +416,7 @@ export default function RevenuePage() {
               {msgsQ.isLoading ? <LoadingState /> : msgsQ.isError ? <ErrorState error={msgsQ.error} /> : (
                 <div className="space-y-2">
                   {(msgsQ.data?.messages || []).map((m) => (
-                    <div key={m.message_id} className={`border-l-2 pl-3 py-1 ${m.sender_type === "customer" ? "border-navy" : m.sender_type === "advisor" ? "border-emerald-600" : "border-graphite"}`}>
+                    <div key={m.message_id} className={`border-l-2 pl-3 py-1 cursor-pointer hover:bg-cloud/40 ${m.sender_type === "customer" ? "border-navy" : m.sender_type === "advisor" ? "border-emerald-600" : "border-graphite"}`} onClick={() => setSelectedConv(m.conversation_id)}>
                       <div className="flex items-baseline justify-between gap-2">
                         <div className="text-xs text-graphite">
                           <span className="font-medium">
@@ -307,6 +439,13 @@ export default function RevenuePage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {selectedConv && (
+        <ConversationDetailModal
+          conversationId={selectedConv}
+          onClose={() => setSelectedConv(null)}
+        />
+      )}
     </PageShell>
   );
 }

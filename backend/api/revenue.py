@@ -647,6 +647,49 @@ def audit_run_pending(
     return audit_ia.auditar_pendientes(limit=limit, solo_cerradas=solo_cerradas)
 
 
+@router.get("/conversations/{conversation_id}/detail")
+def conversation_detail(
+    conversation_id: str,
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """Detalle completo: conversation + lead + mensajes (ordenados) + última auditoría."""
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    convs = sb.table("conversations").select("*").eq("conversation_id", conversation_id).limit(1).execute().data or []
+    if not convs:
+        raise HTTPException(404, "Conversación no encontrada")
+    conv = convs[0]
+    lead = {}
+    if conv.get("lead_id"):
+        ld = sb.table("kommo_leads").select("*").eq("lead_id", conv["lead_id"]).limit(1).execute().data
+        if ld:
+            lead = ld[0]
+    advisor = None
+    if conv.get("advisor_id"):
+        adv = sb.table("advisors").select("name,email").eq("advisor_id", conv["advisor_id"]).limit(1).execute().data
+        if adv:
+            advisor = adv[0]
+    msgs = (sb.table("messages")
+              .select("message_id,sender_type,sender_name,message_text,sent_at")
+              .eq("conversation_id", conversation_id)
+              .order("sent_at")
+              .limit(500)
+              .execute().data) or []
+    audits = (sb.table("chat_audits").select("*")
+                .eq("conversation_id", conversation_id)
+                .order("audit_date", desc=True)
+                .limit(1).execute().data) or []
+    return {
+        "ok": True,
+        "conversation": conv,
+        "lead": lead,
+        "advisor": advisor,
+        "messages": msgs,
+        "audit": audits[0] if audits else None,
+    }
+
+
 @router.get("/audit/list")
 def audit_list(
     limit: int = Query(50, ge=1, le=200),
