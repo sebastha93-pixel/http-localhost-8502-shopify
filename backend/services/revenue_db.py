@@ -237,7 +237,8 @@ def stats_revenue() -> dict:
     try:
         return {
             "ok":             True,
-            "advisors":       _count(sb, "advisors"),
+            # Solo asesoras activas (operativas). Las inactivas no aportan al ranking.
+            "advisors":       _count(sb, "advisors", {"active": True}),
             "leads":          _count(sb, "kommo_leads"),
             "conversations":  _count(sb, "conversations"),
             "messages":       _count(sb, "messages"),
