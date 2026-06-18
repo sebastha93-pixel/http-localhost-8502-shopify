@@ -47,3 +47,14 @@ def clasificacion_bulk(
 def cache_purgar(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     """Borra TODO el caché de clasificaciones (admin only)."""
     return svc.purgar_cache()
+
+
+@router.get("/debug/pedidos-crudos")
+def debug_pedidos_crudos(
+    email: str = Query("", description="Email del cliente"),
+    telefono: str = Query("", description="Teléfono del cliente"),
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """DEBUG: lista todos los pedidos crudos de Shopify para un cliente.
+    Útil para diagnosticar por qué hay 'otros' en el historial."""
+    return svc.debug_pedidos_crudos(email=email, telefono=telefono)

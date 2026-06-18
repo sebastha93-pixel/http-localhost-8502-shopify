@@ -129,17 +129,33 @@ def _consultar_shopify(email: str = "", telefono: str = "") -> Optional[dict]:
         # además consideramos un filtro más amplio.
         orders = []
         if sid:
+            seen_ids: set = set()
+            base_params = {
+                "customer_id": sid,
+                "limit": 250,
+                "fields": "id,fulfillment_status,cancelled_at,created_at,total_price,financial_status,closed_at",
+                # created_at_min muy antiguo fuerza a Shopify a NO aplicar
+                # el filtro default de últimos 60 días → trae histórico completo
+                "created_at_min": "2018-01-01T00:00:00-05:00",
+            }
+            # Pasada 1: status=any (abiertos + cerrados + cancelados, no archivados)
             try:
-                # Pasada 1: status=any (open/closed/cancelled)
-                ro = _shopify_get("/orders.json", {
-                    "customer_id": sid,
-                    "status": "any",
-                    "limit": 250,
-                    "fields": "id,fulfillment_status,cancelled_at,created_at,total_price,financial_status",
-                })
-                orders = ro.get("orders", []) or []
+                ro = _shopify_get("/orders.json", {**base_params, "status": "any"})
+                for o in (ro.get("orders") or []):
+                    if o.get("id") not in seen_ids:
+                        orders.append(o)
+                        seen_ids.add(o.get("id"))
             except Exception as e:
-                log.debug(f"orders del cliente {sid}: {e}")
+                log.debug(f"orders any del cliente {sid}: {e}")
+            # Pasada 2: status=closed (incluye archivados manualmente cerrados en Shopify)
+            try:
+                ro = _shopify_get("/orders.json", {**base_params, "status": "closed"})
+                for o in (ro.get("orders") or []):
+                    if o.get("id") not in seen_ids:
+                        orders.append(o)
+                        seen_ids.add(o.get("id"))
+            except Exception as e:
+                log.debug(f"orders closed del cliente {sid}: {e}")
 
         entregados = 0
         cancelados = 0
@@ -351,3 +367,93 @@ def clasificar_bulk(items: list[dict]) -> dict[str, dict]:
             continue
         out[key] = clasificar(email=em, telefono=tel)
     return out
+
+
+def debug_pedidos_crudos(email: str = "", telefono: str = "") -> dict:
+    """Devuelve los pedidos crudos de Shopify para un cliente.
+    Útil para diagnosticar 'otros' — muestra exactamente qué Shopify devuelve."""
+    em = (email or "").strip().lower()
+    tel = (telefono or "").strip()
+    if not em and not tel:
+        return {"ok": False, "error": "falta email o telefono"}
+
+    # Buscar customer en Shopify
+    try:
+        clients = []
+        if em and "@" in em:
+            r = _shopify_get("/customers/search.json", {"query": f"email:{em}"})
+            clients = r.get("customers", []) or []
+        if not clients and tel:
+            tel_norm = _normalizar_tel(tel)
+            for q in (f"phone:+57{tel_norm}", f"phone:57{tel_norm}", f"phone:{tel_norm}"):
+                try:
+                    r = _shopify_get("/customers/search.json", {"query": q})
+                    clients = r.get("customers", []) or []
+                    if clients: break
+                except Exception:
+                    continue
+        if not clients:
+            return {"ok": False, "error": "cliente no encontrado en Shopify"}
+
+        c = clients[0]
+        sid = c.get("id")
+        orders_count = int(c.get("orders_count") or 0)
+
+        # Traer pedidos con TODOS los campos relevantes
+        base = {
+            "customer_id": sid,
+            "limit": 250,
+            "created_at_min": "2018-01-01T00:00:00-05:00",
+            "fields": "id,name,fulfillment_status,cancelled_at,closed_at,financial_status,created_at,total_price,tags,source_name,test",
+        }
+        orders: list = []
+        seen: set = set()
+        for status in ("any", "closed", "open"):
+            try:
+                ro = _shopify_get("/orders.json", {**base, "status": status})
+                for o in (ro.get("orders") or []):
+                    if o.get("id") not in seen:
+                        orders.append(o); seen.add(o.get("id"))
+            except Exception as e:
+                pass
+
+        # Clasificar
+        rows = []
+        bucket_counts = {"entregado": 0, "cancelado": 0, "pendiente": 0}
+        for o in orders:
+            if o.get("cancelled_at"):
+                bucket = "cancelado"
+            elif (o.get("fulfillment_status") or "") == "fulfilled":
+                bucket = "entregado"
+            else:
+                bucket = "pendiente"
+            bucket_counts[bucket] += 1
+            rows.append({
+                "id":                o.get("id"),
+                "name":               o.get("name"),
+                "created_at":         (o.get("created_at") or "")[:10],
+                "fulfillment_status": o.get("fulfillment_status"),
+                "financial_status":   o.get("financial_status"),
+                "cancelled_at":       o.get("cancelled_at"),
+                "closed_at":          o.get("closed_at"),
+                "total_price":        o.get("total_price"),
+                "tags":               o.get("tags"),
+                "source_name":        o.get("source_name"),
+                "test":               o.get("test"),
+                "_bucket":            bucket,
+            })
+
+        otros = max(0, orders_count - len(orders))
+        return {
+            "ok":              True,
+            "shopify_id":      sid,
+            "email_shopify":   c.get("email"),
+            "telefono_shopify": c.get("phone"),
+            "orders_count_segun_shopify": orders_count,
+            "orders_devueltos_por_endpoint": len(orders),
+            "diferencia_otros": otros,
+            "clasificacion": bucket_counts,
+            "pedidos":         sorted(rows, key=lambda r: r["created_at"], reverse=True),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:300]}
