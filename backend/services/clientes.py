@@ -113,8 +113,16 @@ def _orders_via_graphql(customer_gid: str) -> list[dict]:
     return orders
 
 
-def _calc_tier(entregados: int, cancelados: int, total: int) -> str:
-    """Decide el tier del cliente según sus números."""
+def _calc_tier(entregados: int, cancelados: int, total: int, ltv: float = 0) -> str:
+    """Decide el tier del cliente según sus números.
+    Si LTV es alto (>= 500K COP), el cliente es VIP aunque el ratio
+    visible sea malo: probablemente tiene historial antiguo borrado en
+    Shopify que solo se refleja en total_spent."""
+    # Override por LTV alto: cliente con $500K+ en historial es VIP/recurrente
+    if ltv >= 1_000_000:
+        return "vip"
+    if ltv >= 500_000 and entregados >= 1:
+        return "recurrente"
     if total == 0:
         return "primer_pedido"
     if cancelados >= max(entregados, 1) and total >= 2:
@@ -246,11 +254,13 @@ def _consultar_shopify(email: str = "", telefono: str = "") -> Optional[dict]:
             except Exception as e:
                 log.debug(f"draft_orders {sid}: {e}")
 
-        total = max(orders_count, len(orders))
-        # `otros` = gap entre lo que Shopify dice que tiene el cliente
-        # (orders_count) y lo que pudimos clasificar (entregados + en curso + cancelados).
-        # Cotizaciones son una categoría APARTE (no se restan de otros).
+        # total_pedidos = solo los visibles en API (no orders_count).
+        # orders_count de Shopify incluye pedidos eliminados/archivados que no
+        # podemos auditar ni operar, así que reportarlos confunde al usuario.
+        # El LTV (total_spent) sí refleja el revenue real incluyendo antiguos.
+        total = len(orders)
         clasificados = entregados + pendientes + cancelados
+        # `otros` = gap dentro de los visibles (debería ser 0 ahora que clasificamos todos)
         otros = max(0, total - clasificados)
         return {
             "shopify_id":    sid,
@@ -396,6 +406,7 @@ def clasificar(email: str = "", telefono: str = "") -> dict:
         entregados=datos["entregados"],
         cancelados=datos["cancelados"],
         total=datos["total_pedidos"],
+        ltv=float(datos.get("ltv") or 0),
     )
     # Usar email que devuelve Shopify si lo encontramos por teléfono
     email_key = datos.get("email") or email

@@ -148,27 +148,13 @@ export function ClienteHistorial({ email, telefono }: { email?: string; telefono
         </Badge>
       </div>
       <p className="text-xs text-graphite">{def.descripcion}</p>
-      {(() => {
-        const otros = data.otros ?? 0;
-        const cols = 5 + (otros > 0 ? 1 : 0);
-        return (
-          <div className={`grid gap-2 text-center pt-1`} style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
-            <Stat label="Pedidos" value={data.total_pedidos} hint="Total de pedidos creados en Shopify (orders_count)" />
-            <Stat label="Entregados" value={data.entregados} tone="teal" hint="Pedidos con fulfillment 'fulfilled' en Shopify" />
-            <Stat label="En curso" value={data.pendientes ?? 0} tone="ink" hint="Sin estado fulfilled ni cancelled — pueden estar en tránsito" />
-            <Stat label="Cancelados" value={data.cancelados} tone={data.cancelados > 0 ? "rust" : "graphite"} hint="Pedidos cancelados en Shopify" />
-            {otros > 0 && (
-              <Stat
-                label="Antiguos"
-                value={otros}
-                tone="graphite"
-                hint="Pedidos eliminados/archivados en Shopify (ni REST ni GraphQL los exponen). Su valor SÍ está incluido en el LTV total de Shopify."
-              />
-            )}
-            <Stat label="LTV" value={data.ltv ? `$${Math.round((data.ltv) / 1000)}K` : "—"} hint="Lifetime Value · revenue total que el cliente ha generado en Shopify (incluye pedidos antiguos)" />
-          </div>
-        );
-      })()}
+      <div className="grid grid-cols-5 gap-2 text-center pt-1">
+        <Stat label="Pedidos" value={data.total_pedidos} hint="Pedidos visibles del cliente en Shopify" />
+        <Stat label="Entregados" value={data.entregados} tone="teal" hint="Pedidos con fulfillment 'fulfilled' en Shopify" />
+        <Stat label="En curso" value={data.pendientes ?? 0} tone="ink" hint="Sin estado fulfilled ni cancelled — pueden estar en tránsito" />
+        <Stat label="Cancelados" value={data.cancelados} tone={data.cancelados > 0 ? "rust" : "graphite"} hint="Pedidos cancelados en Shopify" />
+        <Stat label="LTV" value={data.ltv ? `$${Math.round((data.ltv) / 1000)}K` : "—"} hint="Lifetime Value · revenue total que el cliente ha generado en Shopify (incluye historial completo)" />
+      </div>
       {data.ultima_compra && (
         <p className="text-[0.65rem] text-graphite text-right">
           Última compra: <span className="font-medium text-ink">{data.ultima_compra}</span>
