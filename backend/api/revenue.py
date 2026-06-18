@@ -26,12 +26,11 @@ router = APIRouter(prefix="/api/revenue", tags=["revenue"])
 
 # ── OAuth2 con Kommo (necesario para scope de chats) ─────────────────────────
 @router.get("/oauth/start")
-def oauth_start(
-    user: CurrentUser = Depends(require_role("admin")),
-) -> RedirectResponse:
+def oauth_start() -> RedirectResponse:
     """
     Inicia el flujo OAuth2 redirigiendo al usuario al consentimiento de Kommo.
-    Pide explícitamente el scope `chat` que el long-lived token no tiene.
+    PÚBLICO: el endpoint solo redirige a Kommo, no expone info sensible.
+    El intercambio del code por tokens en /oauth/callback sí valida.
     """
     client_id    = os.environ.get("KOMMO_CLIENT_ID", "").strip()
     redirect_uri = os.environ.get("KOMMO_REDIRECT_URI", "").strip()
