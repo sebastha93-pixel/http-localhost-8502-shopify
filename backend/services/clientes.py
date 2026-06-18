@@ -172,11 +172,24 @@ def _consultar_shopify(email: str = "", telefono: str = "") -> Optional[dict]:
             if ca and (ultima is None or ca > ultima):
                 ultima = ca
 
+        # Pasada extra: draft_orders (cotizaciones, abandoned carts convertidos a draft)
+        # No se cuentan en orders_count pero a veces el cliente sí tiene varios.
+        cotizaciones = 0
+        if sid:
+            try:
+                rd = _shopify_get("/draft_orders.json", {
+                    "customer_id": sid,
+                    "limit": 250,
+                    "fields": "id,name,status,created_at",
+                })
+                cotizaciones = len((rd.get("draft_orders") or []))
+            except Exception as e:
+                log.debug(f"draft_orders {sid}: {e}")
+
         total = max(orders_count, len(orders))
         # `otros` = gap entre lo que Shopify dice que tiene el cliente
-        # (orders_count) y lo que pudimos clasificar (entregados + en
-        # curso + cancelados). Si > 0 son pedidos archivados o que el
-        # endpoint /orders.json no devolvió en el filtro any.
+        # (orders_count) y lo que pudimos clasificar (entregados + en curso + cancelados).
+        # Cotizaciones son una categoría APARTE (no se restan de otros).
         clasificados = entregados + pendientes + cancelados
         otros = max(0, total - clasificados)
         return {
@@ -187,6 +200,7 @@ def _consultar_shopify(email: str = "", telefono: str = "") -> Optional[dict]:
             "entregados":    entregados,
             "cancelados":    cancelados,
             "pendientes":    pendientes,
+            "cotizaciones":  cotizaciones,
             "otros":         otros,
             "ltv":           total_spent,
             "ultima_compra": ultima,
@@ -443,6 +457,26 @@ def debug_pedidos_crudos(email: str = "", telefono: str = "") -> dict:
                 "_bucket":            bucket,
             })
 
+        # Draft orders (cotizaciones)
+        drafts: list = []
+        try:
+            rd = _shopify_get("/draft_orders.json", {
+                "customer_id": sid,
+                "limit": 250,
+                "fields": "id,name,status,created_at,updated_at,total_price,tags",
+            })
+            for d in (rd.get("draft_orders") or []):
+                drafts.append({
+                    "id":         d.get("id"),
+                    "name":       d.get("name"),
+                    "status":     d.get("status"),
+                    "created_at": (d.get("created_at") or "")[:10],
+                    "total_price": d.get("total_price"),
+                    "tags":       d.get("tags"),
+                })
+        except Exception as e:
+            drafts.append({"_error": str(e)[:200]})
+
         otros = max(0, orders_count - len(orders))
         return {
             "ok":              True,
@@ -451,9 +485,11 @@ def debug_pedidos_crudos(email: str = "", telefono: str = "") -> dict:
             "telefono_shopify": c.get("phone"),
             "orders_count_segun_shopify": orders_count,
             "orders_devueltos_por_endpoint": len(orders),
+            "draft_orders_count": len(drafts),
             "diferencia_otros": otros,
             "clasificacion": bucket_counts,
             "pedidos":         sorted(rows, key=lambda r: r["created_at"], reverse=True),
+            "cotizaciones":    drafts,
         }
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}

@@ -150,18 +150,29 @@ export function ClienteHistorial({ email, telefono }: { email?: string; telefono
       <p className="text-xs text-graphite">{def.descripcion}</p>
       {(() => {
         const otros = data.otros ?? 0;
+        const cotiz = (data as any).cotizaciones ?? 0;
+        const extras = (otros > 0 ? 1 : 0) + (cotiz > 0 ? 1 : 0);
+        const cols = 5 + extras;
         return (
-          <div className={`grid ${otros > 0 ? "grid-cols-6" : "grid-cols-5"} gap-2 text-center pt-1`}>
+          <div className={`grid gap-2 text-center pt-1`} style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
             <Stat label="Pedidos" value={data.total_pedidos} hint="Total de pedidos creados en Shopify" />
             <Stat label="Entregados" value={data.entregados} tone="teal" hint="Pedidos con fulfillment 'fulfilled' en Shopify" />
             <Stat label="En curso" value={data.pendientes ?? 0} tone="ink" hint="Sin estado fulfilled ni cancelled — pueden estar en tránsito" />
             <Stat label="Cancelados" value={data.cancelados} tone={data.cancelados > 0 ? "rust" : "graphite"} hint="Pedidos cancelados en Shopify" />
+            {cotiz > 0 && (
+              <Stat
+                label="Cotizaciones"
+                value={cotiz}
+                tone="graphite"
+                hint="Draft orders (cotizaciones / carritos abandonados convertidos a draft) — no son ventas todavía"
+              />
+            )}
             {otros > 0 && (
               <Stat
                 label="Otros"
                 value={otros}
                 tone="graphite"
-                hint="Pedidos archivados en Shopify o que no aparecen en el endpoint de orders — se cuentan en Pedidos pero no en los demás buckets"
+                hint="Pedidos que Shopify cuenta en orders_count pero no devuelve en /orders.json — eliminados o test orders"
               />
             )}
             <Stat label="LTV" value={data.ltv ? `$${Math.round((data.ltv) / 1000)}K` : "—"} hint="Lifetime Value · revenue total que el cliente ha generado" />
