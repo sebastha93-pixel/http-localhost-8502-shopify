@@ -178,11 +178,19 @@ def upsert_messages_batch(messages: list[dict]) -> int:
 
 # ── chat_audits ───────────────────────────────────────────────────────────────
 def insertar_audit(audit: dict) -> Optional[str]:
-    """Inserta un análisis IA. Retorna audit_id si OK."""
+    """Inserta un análisis IA. Si ya existe un audit para esa conversation_id,
+    lo borra primero (permite re-auditar). Retorna audit_id si OK."""
     sb = _sb()
     if sb is None:
         return None
+    conv_id = audit.get("conversation_id")
     try:
+        # Borrar audits anteriores de la misma conversation (re-audit reemplaza)
+        if conv_id:
+            try:
+                sb.table("chat_audits").delete().eq("conversation_id", conv_id).execute()
+            except Exception as e:
+                log.debug(f"insertar_audit: delete previo falló (ok si no existía): {e}")
         r = sb.table("chat_audits").insert(audit).execute()
         return r.data[0]["audit_id"] if r.data else None
     except Exception as e:
