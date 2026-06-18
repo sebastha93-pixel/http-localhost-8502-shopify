@@ -260,8 +260,8 @@ def _loop_alertas():
 
 
 def _prewarm_comercial() -> dict:
-    """Precalienta el cache interno de shopify_metrics para que los endpoints
-    de comercial respondan instantáneo aunque el cache haya expirado."""
+    """Precalienta el cache interno de shopify_metrics, melonn y dashboard.
+    Mantiene caliente: /comercial, /inventario, /centro-control, /contraentrega."""
     out: dict = {}
     try:
         import sys
@@ -271,7 +271,7 @@ def _prewarm_comercial() -> dict:
             sys.path.insert(0, str(_SRC))
         import shopify_metrics as sm
 
-        # Calls que el frontend hace al cargar /comercial
+        # Comercial (Shopify metrics)
         for fname, fn, args in [
             ("ventas_del_dia",    sm.ventas_del_dia,  ()),
             ("delta_vs_ayer",     sm.delta_vs_ayer,   ()),
@@ -286,6 +286,26 @@ def _prewarm_comercial() -> dict:
                 out[fname] = "ok"
             except Exception as e:
                 out[fname] = f"err: {str(e)[:120]}"
+
+        # Inventario (catálogo Shopify)
+        try:
+            sm.inventario_shopify()
+            out["inventario_shopify"] = "ok"
+        except Exception as e:
+            out["inventario_shopify"] = f"err: {str(e)[:120]}"
+        try:
+            sm.listar_productos(status="active", limit=250)
+            out["productos_activos"] = "ok"
+        except Exception as e:
+            out["productos_activos"] = f"err: {str(e)[:120]}"
+
+        # Dashboard centro-control (Melonn pedidos)
+        try:
+            from backend.services import melonn as melonn_svc
+            melonn_svc.obtener_pedidos(forzar_refresh=False)
+            out["melonn_pedidos"] = "ok"
+        except Exception as e:
+            out["melonn_pedidos"] = f"err: {str(e)[:120]}"
     except Exception as e:
         out["_error"] = str(e)[:200]
     return out
