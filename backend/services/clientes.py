@@ -385,51 +385,90 @@ def clasificar_bulk(items: list[dict]) -> dict[str, dict]:
 
 def debug_pedidos_crudos(email: str = "", telefono: str = "") -> dict:
     """Devuelve los pedidos crudos de Shopify para un cliente.
-    Útil para diagnosticar 'otros' — muestra exactamente qué Shopify devuelve."""
+    Útil para diagnosticar 'otros' — muestra exactamente qué Shopify devuelve.
+    AHORA: busca TODOS los customers que matchean (por email y por tel) y
+    consulta orders de todos ellos."""
     em = (email or "").strip().lower()
     tel = (telefono or "").strip()
     if not em and not tel:
         return {"ok": False, "error": "falta email o telefono"}
 
-    # Buscar customer en Shopify
+    # Buscar TODOS los customer records que matcheen
     try:
-        clients = []
+        clients: list = []
+        seen_cids: set = set()
         if em and "@" in em:
-            r = _shopify_get("/customers/search.json", {"query": f"email:{em}"})
-            clients = r.get("customers", []) or []
-        if not clients and tel:
+            try:
+                r = _shopify_get("/customers/search.json", {"query": f"email:{em}"})
+                for cc in (r.get("customers") or []):
+                    if cc.get("id") not in seen_cids:
+                        clients.append(cc); seen_cids.add(cc.get("id"))
+            except Exception:
+                pass
+        if tel:
             tel_norm = _normalizar_tel(tel)
             for q in (f"phone:+57{tel_norm}", f"phone:57{tel_norm}", f"phone:{tel_norm}"):
                 try:
                     r = _shopify_get("/customers/search.json", {"query": q})
-                    clients = r.get("customers", []) or []
-                    if clients: break
+                    for cc in (r.get("customers") or []):
+                        if cc.get("id") not in seen_cids:
+                            clients.append(cc); seen_cids.add(cc.get("id"))
                 except Exception:
                     continue
         if not clients:
             return {"ok": False, "error": "cliente no encontrado en Shopify"}
 
+        # Sumar orders_count de TODOS los customers
+        customers_info = [{
+            "id": cc.get("id"),
+            "email": cc.get("email"),
+            "phone": cc.get("phone"),
+            "orders_count": int(cc.get("orders_count") or 0),
+            "total_spent": cc.get("total_spent"),
+            "created_at": cc.get("created_at"),
+        } for cc in clients]
+        orders_count = sum(int(cc.get("orders_count") or 0) for cc in clients)
+
+        # Para retrocompat: c y sid del primero (el debug singular)
         c = clients[0]
         sid = c.get("id")
-        orders_count = int(c.get("orders_count") or 0)
 
-        # Traer pedidos con TODOS los campos relevantes
-        base = {
-            "customer_id": sid,
-            "limit": 250,
-            "created_at_min": "2018-01-01T00:00:00-05:00",
-            "fields": "id,name,fulfillment_status,cancelled_at,closed_at,financial_status,created_at,total_price,tags,source_name,test",
-        }
+        # Traer pedidos de TODOS los customer_ids encontrados, varios filtros y endpoints
         orders: list = []
         seen: set = set()
-        for status in ("any", "closed", "open"):
+        intentos: list = []
+
+        for cust in clients:
+            cust_id = cust.get("id")
+            if not cust_id:
+                continue
+            base = {
+                "customer_id": cust_id,
+                "limit": 250,
+                "created_at_min": "2015-01-01T00:00:00-05:00",  # más antiguo
+                "fields": "id,name,fulfillment_status,cancelled_at,closed_at,financial_status,created_at,total_price,tags,source_name,test,customer",
+            }
+            # 3 pasadas por status para cada customer
+            for status in ("any", "closed", "open"):
+                try:
+                    ro = _shopify_get("/orders.json", {**base, "status": status})
+                    found = ro.get("orders") or []
+                    intentos.append({"customer_id": cust_id, "status": status, "endpoint": "/orders.json", "count": len(found)})
+                    for o in found:
+                        if o.get("id") not in seen:
+                            orders.append(o); seen.add(o.get("id"))
+                except Exception as e:
+                    intentos.append({"customer_id": cust_id, "status": status, "endpoint": "/orders.json", "error": str(e)[:100]})
+            # Endpoint alternativo: /customers/{id}/orders.json
             try:
-                ro = _shopify_get("/orders.json", {**base, "status": status})
-                for o in (ro.get("orders") or []):
+                ro = _shopify_get(f"/customers/{cust_id}/orders.json", {"limit": 250, "status": "any"})
+                found = ro.get("orders") or []
+                intentos.append({"customer_id": cust_id, "endpoint": f"/customers/{cust_id}/orders.json", "count": len(found)})
+                for o in found:
                     if o.get("id") not in seen:
                         orders.append(o); seen.add(o.get("id"))
             except Exception as e:
-                pass
+                intentos.append({"customer_id": cust_id, "endpoint": f"/customers/{cust_id}/orders.json", "error": str(e)[:100]})
 
         # Clasificar
         rows = []
@@ -457,39 +496,16 @@ def debug_pedidos_crudos(email: str = "", telefono: str = "") -> dict:
                 "_bucket":            bucket,
             })
 
-        # Draft orders (cotizaciones)
-        drafts: list = []
-        try:
-            rd = _shopify_get("/draft_orders.json", {
-                "customer_id": sid,
-                "limit": 250,
-                "fields": "id,name,status,created_at,updated_at,total_price,tags",
-            })
-            for d in (rd.get("draft_orders") or []):
-                drafts.append({
-                    "id":         d.get("id"),
-                    "name":       d.get("name"),
-                    "status":     d.get("status"),
-                    "created_at": (d.get("created_at") or "")[:10],
-                    "total_price": d.get("total_price"),
-                    "tags":       d.get("tags"),
-                })
-        except Exception as e:
-            drafts.append({"_error": str(e)[:200]})
-
         otros = max(0, orders_count - len(orders))
         return {
             "ok":              True,
-            "shopify_id":      sid,
-            "email_shopify":   c.get("email"),
-            "telefono_shopify": c.get("phone"),
-            "orders_count_segun_shopify": orders_count,
+            "customers_encontrados": customers_info,
+            "orders_count_total": orders_count,
             "orders_devueltos_por_endpoint": len(orders),
-            "draft_orders_count": len(drafts),
             "diferencia_otros": otros,
             "clasificacion": bucket_counts,
+            "intentos":         intentos,
             "pedidos":         sorted(rows, key=lambda r: r["created_at"], reverse=True),
-            "cotizaciones":    drafts,
         }
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}
