@@ -38,10 +38,10 @@ def oauth_start() -> RedirectResponse:
     if not client_id or not redirect_uri or not subdomain:
         raise HTTPException(503, "Falta KOMMO_CLIENT_ID / KOMMO_REDIRECT_URI / KOMMO_SUBDOMAIN")
 
-    # Kommo OAuth URL: el usuario aprueba en su CRM y Kommo redirige al
-    # redirect_uri con ?code=XXX&referer=subdomain.kommo.com
+    # Kommo OAuth URL: usar www.kommo.com (no subdomain.kommo.com que da
+    # "Nothing here"). Kommo redirige al redirect_uri con ?code=XXX&referer=subdomain.
     url = (
-        f"https://{subdomain}.kommo.com/oauth?"
+        f"https://www.kommo.com/oauth?"
         f"client_id={client_id}&"
         f"state=revenue&"
         f"mode=post_message"
