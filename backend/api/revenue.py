@@ -319,9 +319,11 @@ def _procesar_webhook(parsed: dict) -> dict:
                 "message_text":    text,
                 "sent_at":         _dt.fromtimestamp(created, tz=_tz.utc).isoformat() if created else _dt.now(tz=_tz.utc).isoformat(),
                 "topic":           m.get("message_type") or "text",
-                "extension":       m.get("origin") or "",
-                "event":           m.get("type") or "",
+                # extension y event van en payload jsonb para evitar
+                # romper el upsert cuando el cache de PostgREST está stale.
                 "payload":         {
+                    "extension":   m.get("origin") or "",
+                    "event":       m.get("type") or "",
                     "author_id":   (m.get("author") or {}).get("id"),
                     "author_type": (m.get("author") or {}).get("type"),
                     "chat_id":     m.get("chat_id"),
