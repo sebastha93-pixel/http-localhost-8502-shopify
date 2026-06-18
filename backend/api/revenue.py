@@ -414,6 +414,143 @@ def _procesar_webhook(parsed: dict) -> dict:
                 _webhook_stats["errores_parser"] += 1
                 _webhook_stats["ultimos_errores"] = ([f"talk: {str(e)[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
 
+    # 2.5) note[add] → mensajes SALIENTES de asesoras (vía notas amochat_message)
+    # Kommo no expone webhook "mensaje saliente" directo. Las respuestas de
+    # asesoras vía Kommo se registran como notas con note_type=25/26.
+    NOTE_TYPES_MSG = {"25", "26", "amochat_message", "amochat_attachment", 25, 26}
+    note_block = (parsed.get("note") or {})
+    for accion in ("add",):
+        notes = note_block.get(accion) or []
+        if isinstance(notes, dict):
+            notes = [notes]
+        for n in notes:
+            if not isinstance(n, dict):
+                continue
+            try:
+                nt = n.get("note_type")
+                if nt not in NOTE_TYPES_MSG and str(nt) not in NOTE_TYPES_MSG:
+                    continue  # No es mensaje de chat
+                element_id = n.get("element_id") or n.get("entity_id")
+                element_type = n.get("element_type")
+                # element_type=2 = lead en Kommo
+                if not element_id or str(element_type) not in ("2",):
+                    continue
+                lead_id = int(element_id)
+                # Texto del mensaje: viene en params.text o text
+                params = n.get("params") or {}
+                if isinstance(params, str):
+                    try:
+                        import json as _json
+                        params = _json.loads(params)
+                    except Exception:
+                        params = {}
+                msg_text = (params.get("text") or n.get("text") or "").strip()
+                if not msg_text:
+                    mt_inner = (params.get("type") or "").lower()
+                    placeholders = {
+                        "audio":"🎤 [audio]", "voice":"🎤 [audio]", "picture":"🖼️ [imagen]",
+                        "image":"🖼️ [imagen]", "video":"🎬 [video]", "file":"📎 [archivo]",
+                        "document":"📄 [documento]", "sticker":"🟣 [sticker]",
+                        "location":"📍 [ubicación]", "contact":"👤 [contacto]",
+                    }
+                    msg_text = placeholders.get(mt_inner, "[sin texto]")
+                # Determinar talk_id si existe (para mapear a la conversation correcta)
+                talk_id = params.get("talk_id") or n.get("talk_id")
+                conv_id = f"talk-{talk_id}" if talk_id else f"lead-{lead_id}"
+                # Asegurar lead y conversation existen
+                _asegurar_lead_en_db(sb, lead_id)
+                advisor_id_lead = None
+                try:
+                    r = sb.table("kommo_leads").select("advisor_id").eq("lead_id", lead_id).limit(1).execute()
+                    if r.data:
+                        advisor_id_lead = r.data[0].get("advisor_id")
+                except Exception:
+                    pass
+                try:
+                    existe = sb.table("conversations").select("conversation_id").eq("conversation_id", conv_id).limit(1).execute()
+                    if not existe.data:
+                        created_ts = int(n.get("created_at") or 0) or None
+                        sb.table("conversations").upsert({
+                            "conversation_id":  conv_id,
+                            "lead_id":          lead_id,
+                            "advisor_id":       advisor_id_lead,
+                            "channel":          params.get("origin") or "unknown",
+                            "started_at":       _dt.fromtimestamp(created_ts, tz=_tz.utc).isoformat() if created_ts else None,
+                            "last_message_at":  _dt.fromtimestamp(created_ts, tz=_tz.utc).isoformat() if created_ts else None,
+                            "status":           "in_work",
+                            "audit_status":     "pending",
+                            "synced_at":        _dt.now(tz=_tz.utc).isoformat(),
+                        }, on_conflict="conversation_id").execute()
+                        convs_up += 1
+                except Exception:
+                    pass
+
+                created_ts = int(n.get("created_at") or 0) or None
+                # Sender: si type=outgoing en params es asesora; si incoming es cliente
+                params_type = (params.get("type") or "").lower()
+                if params_type == "outgoing":
+                    sender_type = "advisor"
+                elif params_type == "incoming":
+                    sender_type = "customer"
+                else:
+                    # En las notas de asesoras, generalmente created_by != 0 = asesora
+                    sender_type = "advisor" if n.get("created_by") else "system"
+
+                # Sender name desde author o params
+                sender_name = (params.get("name") or params.get("author_name") or "").strip()
+                # Si no, lookup del advisor por created_by (kommo_user_id)
+                if not sender_name and n.get("created_by"):
+                    try:
+                        adv_lookup = sb.table("advisors").select("name").eq("kommo_user_id", int(n.get("created_by"))).limit(1).execute()
+                        if adv_lookup.data:
+                            sender_name = adv_lookup.data[0].get("name") or ""
+                    except Exception:
+                        pass
+
+                msg_row = {
+                    "message_id":      f"note-{n.get('id')}",
+                    "conversation_id": conv_id,
+                    "lead_id":         lead_id,
+                    "sender_type":     sender_type,
+                    "sender_name":     sender_name[:80] if sender_name else "",
+                    "message_text":    msg_text[:5000],
+                    "sent_at":         _dt.fromtimestamp(created_ts, tz=_tz.utc).isoformat() if created_ts else _dt.now(tz=_tz.utc).isoformat(),
+                    "topic":           "text",
+                    "payload":         {
+                        "via":           "note",
+                        "note_type":     nt,
+                        "kommo_user_id": n.get("created_by"),
+                        "params":        params,
+                    },
+                }
+                # Quitar columnas problemáticas conocidas
+                for _col in _columnas_problematicas_messages:
+                    msg_row.pop(_col, None)
+                msg_row = {k: v for k, v in msg_row.items() if v is not None}
+                try:
+                    sb.table("messages").upsert(msg_row, on_conflict="message_id").execute()
+                    msgs_guardados += 1
+                except Exception as e:
+                    # Reutilizar la lógica de retry simple: si PGRST204, marcar columna
+                    err = str(e)
+                    if "PGRST204" in err:
+                        import re as _re
+                        m_col = _re.search(r"'(\w+)' column", err)
+                        if m_col:
+                            _columnas_problematicas_messages.add(m_col.group(1))
+                            msg_row.pop(m_col.group(1), None)
+                            try:
+                                sb.table("messages").upsert(msg_row, on_conflict="message_id").execute()
+                                msgs_guardados += 1
+                            except Exception:
+                                pass
+                    else:
+                        _webhook_stats["errores_parser"] += 1
+                        _webhook_stats["ultimos_errores"] = ([f"note: {err[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
+            except Exception as e:
+                _webhook_stats["errores_parser"] += 1
+                _webhook_stats["ultimos_errores"] = ([f"note: {str(e)[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
+
     # 3) leads[status|update|add] → tabla kommo_leads (refrescar estado)
     # Si cambia a won/lost, encolar conversations para audit IA automático
     conv_ids_para_auditar: list[str] = []
