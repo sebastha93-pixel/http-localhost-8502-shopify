@@ -252,7 +252,23 @@ def _procesar_webhook(parsed: dict) -> dict:
             entity_id = m.get("entity_id") or m.get("element_id")
             entity_type = m.get("entity_type") or "lead"
             created = int(m.get("created_at") or 0) or None
-            text = m.get("text") or ""
+            text = (m.get("text") or "").strip()
+            # Placeholder visible para mensajes no-texto (audio, imagen, sticker, ubicación)
+            if not text:
+                mt = (m.get("message_type") or "").lower()
+                placeholders = {
+                    "audio":    "🎤 [audio]",
+                    "voice":    "🎤 [audio]",
+                    "picture":  "🖼️ [imagen]",
+                    "image":    "🖼️ [imagen]",
+                    "video":    "🎬 [video]",
+                    "file":     "📎 [archivo]",
+                    "document": "📄 [documento]",
+                    "sticker":  "🟣 [sticker]",
+                    "location": "📍 [ubicación]",
+                    "contact":  "👤 [contacto]",
+                }
+                text = placeholders.get(mt, f"[{mt or 'sin texto'}]")
             conv_id = f"talk-{talk_id}" if talk_id else None
 
             # Asegurar conversation existe (FK)

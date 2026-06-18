@@ -550,6 +550,8 @@ export default function RevenuePage() {
       <div className="flex flex-wrap gap-3 items-center mb-4">
         <label className="text-sm text-graphite">Periodo:</label>
         <select value={daysBack} onChange={(e) => setDaysBack(Number(e.target.value))} className="border rounded px-2 py-1 text-sm">
+          <option value={1}>Hoy</option>
+          <option value={2}>Últimas 48h</option>
           <option value={7}>7 días</option>
           <option value={30}>30 días</option>
           <option value={90}>90 días</option>
