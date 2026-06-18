@@ -372,12 +372,27 @@ Recomendaciones previas de las auditorías: {recomendaciones[:15]}
 
 
 def auditar_pendientes(limit: int = 10, solo_cerradas: bool = True) -> dict:
-    """Procesa hasta N conversations con audit_status=pending."""
+    """Procesa hasta N conversations con audit_status=pending que TENGAN
+    mensajes capturados. Las que no tienen mensajes se omiten silenciosamente
+    (esperan a que el webhook acumule data)."""
     sb = db._sb()
     if sb is None:
         return {"ok": False, "error": "supabase_no_configurado"}
 
-    q = sb.table("conversations").select("conversation_id,status,lead_id,message_count").eq("audit_status", "pending").order("last_message_at", desc=True).limit(limit * 3)
+    # Buscar conversation_ids únicos con al menos 1 mensaje en la tabla messages
+    msgs = sb.table("messages").select("conversation_id").limit(1000).execute().data or []
+    conv_ids_con_mensajes = list({m["conversation_id"] for m in msgs if m.get("conversation_id")})
+    if not conv_ids_con_mensajes:
+        return {"ok": True, "procesadas": 0, "exitosas": 0, "fallidas": 0,
+                "razon": "sin_mensajes_en_db", "detalle": []}
+
+    # Filtrar pendientes que estén en esa lista
+    q = (sb.table("conversations")
+           .select("conversation_id,status,lead_id,message_count")
+           .eq("audit_status", "pending")
+           .in_("conversation_id", conv_ids_con_mensajes)
+           .order("last_message_at", desc=True)
+           .limit(limit * 3))
     pendientes = q.execute().data or []
     procesadas = []
     ok = 0
@@ -393,4 +408,11 @@ def auditar_pendientes(limit: int = 10, solo_cerradas: bool = True) -> dict:
             ok += 1
         else:
             err += 1
-    return {"ok": True, "procesadas": len(procesadas), "exitosas": ok, "fallidas": err, "detalle": procesadas}
+    return {
+        "ok": True,
+        "candidatos_con_mensajes": len(conv_ids_con_mensajes),
+        "procesadas": len(procesadas),
+        "exitosas": ok,
+        "fallidas": err,
+        "detalle": procesadas,
+    }
