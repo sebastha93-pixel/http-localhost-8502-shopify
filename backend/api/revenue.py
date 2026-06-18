@@ -135,6 +135,12 @@ def oauth_callback(
 # Kommo POST eventos aquí. PÚBLICO (Kommo no soporta auth Bearer custom).
 # Captura cualquier evento que se configure en Kommo → Ajustes → Webhooks.
 
+# Columnas que PostgREST cache rechaza con PGRST204. Las descubrimos en runtime
+# y las excluimos del row en mensajes subsecuentes hasta que se reinicie el proceso
+# (o se corra NOTIFY pgrst, 'reload schema' en Supabase).
+_columnas_problematicas_messages: set = set()
+
+
 _webhook_stats: dict = {
     "total":             0,
     "leads_evento":      0,
@@ -331,36 +337,36 @@ def _procesar_webhook(parsed: dict) -> dict:
                     "contact_id":  m.get("contact_id"),
                 },
             }
+            # Quitar columnas que ya sabemos que el cache de PostgREST rechaza
+            for _col in _columnas_problematicas_messages:
+                row.pop(_col, None)
             row = {k: v for k, v in row.items() if v is not None}
-            # Robusto a cache PostgREST stale: si una columna no existe en cache,
-            # la quito y reintento. Así el mensaje SIEMPRE se guarda aunque
-            # falte metadata extra.
-            try:
-                sb.table("messages").upsert(row, on_conflict="message_id").execute()
-                msgs_guardados += 1
-            except Exception as e:
-                # Detectar columna faltante en cache (PGRST204) y reintentar sin ella
-                err_str = str(e)
-                if "PGRST204" in err_str or "schema cache" in err_str:
-                    import re as _re
-                    match = _re.search(r"'(\w+)' column", err_str)
-                    if match:
-                        col = match.group(1)
-                        row.pop(col, None)
-                        try:
-                            sb.table("messages").upsert(row, on_conflict="message_id").execute()
-                            msgs_guardados += 1
-                            _webhook_stats["errores_parser"] += 1
-                            _webhook_stats["ultimos_errores"] = ([f"col '{col}' faltante en cache, msg guardado sin ella"] + _webhook_stats["ultimos_errores"])[:5]
-                        except Exception as e2:
-                            _webhook_stats["errores_parser"] += 1
-                            _webhook_stats["ultimos_errores"] = ([f"msg retry: {str(e2)[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
-                    else:
+
+            # Intentar upsert con retry adaptativo: si falla con PGRST204,
+            # detectamos qué columna y la agregamos al set global para futuros msgs.
+            def _intentar_upsert(r: dict, intentos_max: int = 5) -> bool:
+                import re as _re
+                for _ in range(intentos_max):
+                    try:
+                        sb.table("messages").upsert(r, on_conflict="message_id").execute()
+                        return True
+                    except Exception as ex:
+                        err = str(ex)
+                        if "PGRST204" in err or "schema cache" in err:
+                            m_col = _re.search(r"'(\w+)' column", err)
+                            if m_col:
+                                col_bad = m_col.group(1)
+                                _columnas_problematicas_messages.add(col_bad)
+                                r.pop(col_bad, None)
+                                continue
+                        # Cualquier otro error: salir y reportar
                         _webhook_stats["errores_parser"] += 1
-                        _webhook_stats["ultimos_errores"] = ([f"msg: {err_str[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
-                else:
-                    _webhook_stats["errores_parser"] += 1
-                    _webhook_stats["ultimos_errores"] = ([f"msg: {err_str[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
+                        _webhook_stats["ultimos_errores"] = ([f"msg: {err[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
+                        return False
+                return False
+
+            if _intentar_upsert(row):
+                msgs_guardados += 1
         except Exception as e:
             _webhook_stats["errores_parser"] += 1
             _webhook_stats["ultimos_errores"] = ([f"msg: {str(e)[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
