@@ -53,6 +53,66 @@ def _shopify_get(endpoint: str, params: Optional[dict] = None) -> dict:
     return _get(endpoint, params)
 
 
+def _shopify_graphql(query: str, variables: dict | None = None) -> dict:
+    """POST a /graphql.json de Shopify Admin API.
+    Necesario para acceder a orders que el REST API ya no devuelve."""
+    import requests
+    store = os.environ.get("SHOPIFY_STORE", "").strip()
+    token = os.environ.get("SHOPIFY_ACCESS_TOKEN", "").strip()
+    api_version = os.environ.get("SHOPIFY_API_VERSION", "2024-01")
+    if not store or not token:
+        return {"errors": [{"message": "SHOPIFY_STORE o SHOPIFY_ACCESS_TOKEN no configurado"}]}
+    url = f"https://{store}/admin/api/{api_version}/graphql.json"
+    r = requests.post(
+        url,
+        json={"query": query, "variables": variables or {}},
+        headers={"X-Shopify-Access-Token": token, "Content-Type": "application/json"},
+        timeout=30,
+    )
+    return r.json()
+
+
+def _orders_via_graphql(customer_gid: str) -> list[dict]:
+    """Lista TODOS los orders de un customer via GraphQL (incluye los ocultos del REST)."""
+    query = """
+    query CustomerOrders($cid: ID!, $cursor: String) {
+      customer(id: $cid) {
+        orders(first: 50, after: $cursor, sortKey: CREATED_AT, reverse: true) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id
+            name
+            createdAt
+            displayFinancialStatus
+            displayFulfillmentStatus
+            cancelledAt
+            closed
+            test
+            currentTotalPriceSet { shopMoney { amount } }
+            tags
+            sourceName
+          }
+        }
+      }
+    }
+    """
+    orders: list = []
+    cursor: str | None = None
+    for _ in range(20):  # max 1000 orders
+        res = _shopify_graphql(query, {"cid": customer_gid, "cursor": cursor})
+        cust = (res.get("data") or {}).get("customer")
+        if not cust:
+            break
+        page = cust.get("orders") or {}
+        for n in (page.get("nodes") or []):
+            orders.append(n)
+        info = page.get("pageInfo") or {}
+        if not info.get("hasNextPage"):
+            break
+        cursor = info.get("endCursor")
+    return orders
+
+
 def _calc_tier(entregados: int, cancelados: int, total: int) -> str:
     """Decide el tier del cliente según sus números."""
     if total == 0:
@@ -433,7 +493,7 @@ def debug_pedidos_crudos(email: str = "", telefono: str = "") -> dict:
         c = clients[0]
         sid = c.get("id")
 
-        # Traer pedidos de TODOS los customer_ids encontrados, varios filtros y endpoints
+        # Traer pedidos de TODOS los customer_ids vía GraphQL (REST oculta algunos)
         orders: list = []
         seen: set = set()
         intentos: list = []
@@ -442,33 +502,30 @@ def debug_pedidos_crudos(email: str = "", telefono: str = "") -> dict:
             cust_id = cust.get("id")
             if not cust_id:
                 continue
-            base = {
-                "customer_id": cust_id,
-                "limit": 250,
-                "created_at_min": "2015-01-01T00:00:00-05:00",  # más antiguo
-                "fields": "id,name,fulfillment_status,cancelled_at,closed_at,financial_status,created_at,total_price,tags,source_name,test,customer",
-            }
-            # 3 pasadas por status para cada customer
-            for status in ("any", "closed", "open"):
-                try:
-                    ro = _shopify_get("/orders.json", {**base, "status": status})
-                    found = ro.get("orders") or []
-                    intentos.append({"customer_id": cust_id, "status": status, "endpoint": "/orders.json", "count": len(found)})
-                    for o in found:
-                        if o.get("id") not in seen:
-                            orders.append(o); seen.add(o.get("id"))
-                except Exception as e:
-                    intentos.append({"customer_id": cust_id, "status": status, "endpoint": "/orders.json", "error": str(e)[:100]})
-            # Endpoint alternativo: /customers/{id}/orders.json
             try:
-                ro = _shopify_get(f"/customers/{cust_id}/orders.json", {"limit": 250, "status": "any"})
-                found = ro.get("orders") or []
-                intentos.append({"customer_id": cust_id, "endpoint": f"/customers/{cust_id}/orders.json", "count": len(found)})
-                for o in found:
-                    if o.get("id") not in seen:
-                        orders.append(o); seen.add(o.get("id"))
+                gql_orders = _orders_via_graphql(f"gid://shopify/Customer/{cust_id}")
+                intentos.append({"customer_id": cust_id, "endpoint": "GraphQL customer.orders", "count": len(gql_orders)})
+                for n in gql_orders:
+                    # Normalizar a formato REST-like para reusar la clasificación
+                    gid = n.get("id", "")
+                    o_id = gid.split("/")[-1] if gid else None
+                    o = {
+                        "id":                 o_id,
+                        "name":               n.get("name"),
+                        "created_at":         n.get("createdAt"),
+                        "fulfillment_status": (n.get("displayFulfillmentStatus") or "").lower() if n.get("displayFulfillmentStatus") else None,
+                        "financial_status":   (n.get("displayFinancialStatus") or "").lower() if n.get("displayFinancialStatus") else None,
+                        "cancelled_at":       n.get("cancelledAt"),
+                        "closed_at":          ("yes" if n.get("closed") else None),
+                        "total_price":        (((n.get("currentTotalPriceSet") or {}).get("shopMoney") or {}).get("amount")),
+                        "tags":               n.get("tags"),
+                        "source_name":        n.get("sourceName"),
+                        "test":               n.get("test"),
+                    }
+                    if o["id"] not in seen:
+                        orders.append(o); seen.add(o["id"])
             except Exception as e:
-                intentos.append({"customer_id": cust_id, "endpoint": f"/customers/{cust_id}/orders.json", "error": str(e)[:100]})
+                intentos.append({"customer_id": cust_id, "endpoint": "GraphQL", "error": str(e)[:200]})
 
         # Clasificar
         rows = []
