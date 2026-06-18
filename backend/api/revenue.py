@@ -314,8 +314,35 @@ def _procesar_webhook(parsed: dict) -> dict:
                 },
             }
             row = {k: v for k, v in row.items() if v is not None}
-            sb.table("messages").upsert(row, on_conflict="message_id").execute()
-            msgs_guardados += 1
+            # Robusto a cache PostgREST stale: si una columna no existe en cache,
+            # la quito y reintento. Así el mensaje SIEMPRE se guarda aunque
+            # falte metadata extra.
+            try:
+                sb.table("messages").upsert(row, on_conflict="message_id").execute()
+                msgs_guardados += 1
+            except Exception as e:
+                # Detectar columna faltante en cache (PGRST204) y reintentar sin ella
+                err_str = str(e)
+                if "PGRST204" in err_str or "schema cache" in err_str:
+                    import re as _re
+                    match = _re.search(r"'(\w+)' column", err_str)
+                    if match:
+                        col = match.group(1)
+                        row.pop(col, None)
+                        try:
+                            sb.table("messages").upsert(row, on_conflict="message_id").execute()
+                            msgs_guardados += 1
+                            _webhook_stats["errores_parser"] += 1
+                            _webhook_stats["ultimos_errores"] = ([f"col '{col}' faltante en cache, msg guardado sin ella"] + _webhook_stats["ultimos_errores"])[:5]
+                        except Exception as e2:
+                            _webhook_stats["errores_parser"] += 1
+                            _webhook_stats["ultimos_errores"] = ([f"msg retry: {str(e2)[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
+                    else:
+                        _webhook_stats["errores_parser"] += 1
+                        _webhook_stats["ultimos_errores"] = ([f"msg: {err_str[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
+                else:
+                    _webhook_stats["errores_parser"] += 1
+                    _webhook_stats["ultimos_errores"] = ([f"msg: {err_str[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
         except Exception as e:
             _webhook_stats["errores_parser"] += 1
             _webhook_stats["ultimos_errores"] = ([f"msg: {str(e)[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
