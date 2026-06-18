@@ -29,6 +29,78 @@ _warmup_thread: threading.Thread | None = None
 _warmup_stop = threading.Event()
 WARMUP_INTERVAL_MIN = int(os.environ.get("WARMUP_INTERVAL_MIN", "3"))
 
+# Polling de notas (mensajes salientes de asesoras vía Kommo notes)
+_notes_thread: threading.Thread | None = None
+_notes_stop = threading.Event()
+NOTES_POLL_INTERVAL_SEC = int(os.environ.get("NOTES_POLL_INTERVAL_SEC", "45"))
+NOTES_POLL_WINDOW_MIN = int(os.environ.get("NOTES_POLL_WINDOW_MIN", "10"))
+_notes_state: dict = {"running": False, "last_run_at": None, "last_result": None}
+
+
+def _poll_notes_de_conversaciones_activas() -> dict:
+    """Para cada conversation actualizada en los últimos N minutos, fetch
+    notes del lead y persiste mensajes nuevos (incluye outgoing de asesoras
+    que Kommo no expone vía webhook)."""
+    from backend.services import revenue_db as _db
+    from backend.services import kommo as _kommo_svc
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    sb = _db._sb()
+    if sb is None:
+        return {"error": "supabase_no_configurado"}
+    cutoff = (_dt.now(tz=_tz.utc) - _td(minutes=NOTES_POLL_WINDOW_MIN)).isoformat()
+    try:
+        convs = (sb.table("conversations")
+                   .select("conversation_id,lead_id,last_message_at")
+                   .gte("last_message_at", cutoff)
+                   .order("last_message_at", desc=True)
+                   .limit(50).execute().data) or []
+    except Exception as e:
+        return {"error": f"query: {str(e)[:200]}"}
+    procesadas = 0
+    msgs_total = 0
+    errores = []
+    for c in convs:
+        lead_id = c.get("lead_id")
+        cid = c.get("conversation_id")
+        if not lead_id or not cid:
+            continue
+        try:
+            res = _kommo_svc.sync_messages_de_lead(int(lead_id), conversation_id_override=cid)
+            procesadas += 1
+            msgs_total += int(res.get("mensajes", 0) or 0)
+        except Exception as e:
+            if len(errores) < 3:
+                errores.append(f"lead={lead_id}: {str(e)[:100]}")
+    return {"procesadas": procesadas, "msgs_total": msgs_total, "errores": errores}
+
+
+def _loop_notes_poll():
+    """Loop del poller de notas. Espera tras boot, después cada N seg."""
+    if _notes_stop.wait(timeout=20):
+        return
+    while not _notes_stop.is_set():
+        try:
+            _notes_state["running"] = True
+            _notes_state["last_run_at"] = datetime.now(tz=timezone.utc).isoformat()
+            res = _poll_notes_de_conversaciones_activas()
+            _notes_state["last_result"] = res
+            log.info(f"notes_poll: {res}")
+        except Exception as e:
+            log.exception(f"notes_poll error: {e}")
+        finally:
+            _notes_state["running"] = False
+        # Sleep en bloques de 10s
+        rem = NOTES_POLL_INTERVAL_SEC
+        while rem > 0 and not _notes_stop.is_set():
+            tick = min(10, rem)
+            if _notes_stop.wait(timeout=tick):
+                return
+            rem -= tick
+
+
+def get_notes_poll_state() -> dict:
+    return dict(_notes_state)
+
 # Cron hora Bogotá (UTC-5). 3am Bogotá = 8am UTC
 HORA_OBJETIVO_BOG = int(os.environ.get("REVENUE_CRON_HOUR_BOG", "3"))
 TZ_BOG = timezone(timedelta(hours=-5))
@@ -352,6 +424,12 @@ def start() -> threading.Thread | None:
         _warmup_stop.clear()
         _warmup_thread = threading.Thread(target=_loop_warmup, daemon=True, name="warmup_comercial")
         _warmup_thread.start()
+    notes_enabled = os.environ.get("NOTES_POLL_ENABLED", "true").lower() in ("true", "1", "yes")
+    global _notes_thread
+    if notes_enabled and (_notes_thread is None or not _notes_thread.is_alive()):
+        _notes_stop.clear()
+        _notes_thread = threading.Thread(target=_loop_notes_poll, daemon=True, name="notes_poll")
+        _notes_thread.start()
     return _thread
 
 
@@ -359,9 +437,12 @@ def stop():
     _stop_event.set()
     _alertas_stop.set()
     _warmup_stop.set()
+    _notes_stop.set()
     if _thread is not None:
         _thread.join(timeout=5)
     if _alertas_thread is not None:
         _alertas_thread.join(timeout=5)
     if _warmup_thread is not None:
         _warmup_thread.join(timeout=5)
+    if _notes_thread is not None:
+        _notes_thread.join(timeout=5)
