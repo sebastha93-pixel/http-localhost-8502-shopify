@@ -217,23 +217,75 @@ function ConversationDetailModal({
               </Card>
             )}
 
-            <Card>
-              <CardContent className="p-4">
-                <div className="text-xs text-graphite mb-3">Thread completo ({d?.messages?.length || 0} mensajes)</div>
-                <div className="space-y-2 max-h-[60vh] overflow-y-auto">
-                  {(d?.messages || []).map((m) => (
-                    <div key={m.message_id} className={`flex ${m.sender_type === "customer" ? "justify-start" : "justify-end"}`}>
-                      <div className={`max-w-[75%] rounded px-3 py-2 text-sm ${m.sender_type === "customer" ? "bg-cloud" : "bg-navy text-white"}`}>
-                        <div className="text-xs opacity-70 mb-0.5">{m.sender_name || m.sender_type}</div>
-                        <div>{m.message_text || <em>(sin texto)</em>}</div>
-                        <div className="text-xs opacity-60 mt-1">{new Date(m.sent_at).toLocaleString("es-CO")}</div>
+            <div className="rounded-lg overflow-hidden border" style={{
+              background: "#ECE5DD",
+              backgroundImage: "radial-gradient(circle at 20% 20%, rgba(255,255,255,0.15) 0, transparent 30%), radial-gradient(circle at 80% 60%, rgba(0,0,0,0.04) 0, transparent 30%)",
+            }}>
+              {/* Header tipo WhatsApp */}
+              <div className="bg-[#075E54] text-white px-4 py-3 flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center font-semibold">
+                  {(d?.lead?.customer_name || "?").charAt(0).toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium truncate">{d?.lead?.customer_name || "Cliente sin nombre"}</div>
+                  <div className="text-xs opacity-80 truncate">
+                    {d?.lead?.customer_phone || conversationId}
+                    {d?.conversation?.channel && ` · ${CHANNEL_LABEL[d.conversation.channel] || d.conversation.channel}`}
+                  </div>
+                </div>
+                <div className="text-xs opacity-80 text-right">
+                  <div>{d?.advisor?.name || "Sin asesora"}</div>
+                  <div className="text-[10px]">{d?.messages?.length || 0} mensajes</div>
+                </div>
+              </div>
+
+              {/* Mensajes con burbujas */}
+              <div className="px-3 py-4 space-y-1 max-h-[60vh] overflow-y-auto">
+                {(d?.messages || []).map((m, idx) => {
+                  const isCustomer = m.sender_type === "customer";
+                  const isSystem = m.sender_type === "system";
+                  const prev = idx > 0 ? (d?.messages || [])[idx - 1] : null;
+                  const sameAuthor = prev && prev.sender_type === m.sender_type;
+                  if (isSystem) {
+                    return (
+                      <div key={m.message_id} className="flex justify-center my-2">
+                        <div className="bg-[#E1F2FA] text-[#4a4a4a] text-xs px-3 py-1 rounded-md shadow-sm">
+                          {m.message_text || "—"}
+                        </div>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div key={m.message_id} className={`flex ${isCustomer ? "justify-start" : "justify-end"}`}>
+                      <div
+                        className={`max-w-[78%] px-3 py-1.5 text-sm shadow-sm ${
+                          isCustomer
+                            ? "bg-white text-[#111B21] rounded-r-lg rounded-bl-lg"
+                            : "bg-[#DCF8C6] text-[#111B21] rounded-l-lg rounded-br-lg"
+                        } ${sameAuthor ? "mt-0.5" : "mt-2"}`}
+                        style={{ minWidth: "60px" }}
+                      >
+                        {!sameAuthor && !isCustomer && (
+                          <div className="text-[11px] font-medium text-[#06624C] mb-0.5">
+                            {m.sender_name || "Asesora"}
+                          </div>
+                        )}
+                        <div className="whitespace-pre-wrap break-words">
+                          {m.message_text || <em className="text-graphite">(sin contenido)</em>}
+                        </div>
+                        <div className="text-[10px] text-[#667781] text-right mt-0.5 leading-none">
+                          {new Date(m.sent_at).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit", hour12: false })}
+                          {!isCustomer && <span className="ml-1">✓✓</span>}
+                        </div>
                       </div>
                     </div>
-                  ))}
-                  {!d?.messages?.length && <div className="text-center text-graphite py-8">Sin mensajes</div>}
-                </div>
-              </CardContent>
-            </Card>
+                  );
+                })}
+                {!d?.messages?.length && (
+                  <div className="text-center text-graphite py-12 text-sm">Sin mensajes capturados aún en esta conversación.</div>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </div>
