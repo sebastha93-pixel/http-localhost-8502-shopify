@@ -668,11 +668,27 @@ def advisors_ranking(
         adv_q = adv_q.eq("active", True)
     advisors = adv_q.execute().data or []
     convs = sb.table("conversations").select("conversation_id,advisor_id,lead_id,last_message_at,channel").gte("last_message_at", desde).execute().data or []
+    conv_ids = [c["conversation_id"] for c in convs]
     lead_ids = list({c["lead_id"] for c in convs if c.get("lead_id")})
     leads_map: dict = {}
     if lead_ids:
-        for l in (sb.table("kommo_leads").select("lead_id,status").in_("lead_id", lead_ids).execute().data or []):
-            leads_map[l["lead_id"]] = l.get("status")
+        for batch_start in range(0, len(lead_ids), 200):
+            batch = lead_ids[batch_start:batch_start + 200]
+            for l in (sb.table("kommo_leads").select("lead_id,status,lead_value").in_("lead_id", batch).execute().data or []):
+                leads_map[l["lead_id"]] = l
+
+    # Mensajes para calcular: atendidas (≥1 msg de advisor) y tiempo de respuesta promedio
+    msgs_por_conv: dict = {}  # conv_id → lista de mensajes ordenados
+    if conv_ids:
+        for batch_start in range(0, len(conv_ids), 100):
+            batch = conv_ids[batch_start:batch_start + 100]
+            ms = (sb.table("messages")
+                    .select("conversation_id,sender_type,sent_at")
+                    .in_("conversation_id", batch)
+                    .order("sent_at")
+                    .limit(5000).execute().data) or []
+            for m in ms:
+                msgs_por_conv.setdefault(m["conversation_id"], []).append(m)
 
     by_advisor: dict = {}
     for c in convs:
@@ -680,42 +696,86 @@ def advisors_ranking(
         if not adv_id:
             continue
         r = by_advisor.setdefault(adv_id, {
-            "conversations": 0, "won": 0, "lost": 0, "in_progress": 0,
-            "last_activity": None, "channels": {},
+            "asignadas": 0, "atendidas": 0, "won": 0, "lost": 0, "in_progress": 0,
+            "revenue_ganado": 0.0, "last_activity": None, "channels": {},
+            "response_times_seg": [],
         })
-        r["conversations"] += 1
+        r["asignadas"] += 1
         ch = c.get("channel") or "unknown"
         r["channels"][ch] = r["channels"].get(ch, 0) + 1
-        st = leads_map.get(c.get("lead_id"))
-        if st == "won":   r["won"] += 1
-        elif st == "lost": r["lost"] += 1
-        else:              r["in_progress"] += 1
+        lead = leads_map.get(c.get("lead_id")) or {}
+        st = lead.get("status")
+        if st == "won":
+            r["won"] += 1
+            r["revenue_ganado"] += float(lead.get("lead_value") or 0)
+        elif st == "lost":
+            r["lost"] += 1
+        else:
+            r["in_progress"] += 1
         lm = c.get("last_message_at")
         if lm and (r["last_activity"] is None or lm > r["last_activity"]):
             r["last_activity"] = lm
 
+        # Mensajes de esta conv: ¿hubo respuesta de la asesora? + tiempos
+        ms = msgs_por_conv.get(c["conversation_id"], [])
+        tiene_advisor_msg = any(m.get("sender_type") == "advisor" for m in ms)
+        if tiene_advisor_msg:
+            r["atendidas"] += 1
+        # Tiempo de respuesta: ms del primer mensaje advisor después de un customer
+        last_customer_ts = None
+        for m in ms:
+            sa = m.get("sent_at")
+            if not sa:
+                continue
+            try:
+                ts = datetime.fromisoformat(sa.replace("Z", "+00:00"))
+            except Exception:
+                continue
+            if m.get("sender_type") == "customer":
+                last_customer_ts = ts
+            elif m.get("sender_type") == "advisor" and last_customer_ts:
+                delta = (ts - last_customer_ts).total_seconds()
+                if 0 <= delta <= 86400:  # max 24h, descarta outliers
+                    r["response_times_seg"].append(delta)
+                last_customer_ts = None  # reset hasta próximo customer
+
     rows = []
     for adv in advisors:
-        stats = by_advisor.get(adv["advisor_id"], {
-            "conversations": 0, "won": 0, "lost": 0, "in_progress": 0,
-            "last_activity": None, "channels": {},
+        s = by_advisor.get(adv["advisor_id"], {
+            "asignadas": 0, "atendidas": 0, "won": 0, "lost": 0, "in_progress": 0,
+            "revenue_ganado": 0.0, "last_activity": None, "channels": {},
+            "response_times_seg": [],
         })
-        cerradas = stats["won"] + stats["lost"]
-        conv_rate = round(100 * stats["won"] / cerradas, 1) if cerradas else None
+        cerradas = s["won"] + s["lost"]
+        conv_rate = round(100 * s["won"] / cerradas, 1) if cerradas else None
+        # Tasa de respuesta: cuántas conversaciones recibió y efectivamente atendió
+        response_rate = round(100 * s["atendidas"] / s["asignadas"], 1) if s["asignadas"] else None
+        # Ticket promedio de las ganadas
+        ticket_promedio = round(s["revenue_ganado"] / s["won"], 0) if s["won"] else None
+        # Tiempo de respuesta promedio (minutos)
+        rts = s["response_times_seg"]
+        avg_response_min = round(sum(rts) / len(rts) / 60, 1) if rts else None
         rows.append({
-            "advisor_id":     adv["advisor_id"],
-            "name":           adv["name"],
-            "email":          adv.get("email"),
-            "active":         adv.get("active"),
-            "conversations":  stats["conversations"],
-            "won":            stats["won"],
-            "lost":           stats["lost"],
-            "in_progress":    stats["in_progress"],
-            "conversion_rate": conv_rate,
-            "last_activity":  stats["last_activity"],
-            "channels":       stats["channels"],
+            "advisor_id":         adv["advisor_id"],
+            "name":               adv["name"],
+            "email":              adv.get("email"),
+            "active":             adv.get("active"),
+            "asignadas":          s["asignadas"],
+            "atendidas":          s["atendidas"],
+            "won":                s["won"],
+            "lost":               s["lost"],
+            "in_progress":        s["in_progress"],
+            "response_rate":      response_rate,
+            "conversion_rate":    conv_rate,
+            "revenue_ganado":     s["revenue_ganado"],
+            "ticket_promedio":    ticket_promedio,
+            "avg_response_min":   avg_response_min,
+            "last_activity":      s["last_activity"],
+            "channels":           s["channels"],
+            # Compat: alias para no romper frontend que ya consume "conversations"
+            "conversations":      s["asignadas"],
         })
-    rows.sort(key=lambda r: (r["conversations"], r["won"]), reverse=True)
+    rows.sort(key=lambda r: (r["won"], r["asignadas"]), reverse=True)
     return {"ok": True, "total": len(rows), "rows": rows, "days_back": days_back}
 
 
@@ -1252,6 +1312,91 @@ def audit_list(
         q = q.eq("result_classification", classification)
     rows = q.execute().data or []
     return {"ok": True, "total": len(rows), "audits": rows}
+
+
+@router.get("/messages/stats")
+def messages_stats(
+    desde: str | None = Query(None, description="ISO YYYY-MM-DD (UTC)"),
+    hasta: str | None = Query(None, description="ISO YYYY-MM-DD (UTC, inclusive)"),
+    days_back: int = Query(7, ge=1, le=180, description="Si no se pasa desde/hasta, ventana de N días desde hoy"),
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """Contadores de mensajes por día en un rango. Si no se pasa desde/hasta usa
+    ventana de los últimos days_back días. Devuelve totales y serie diaria con
+    breakdown customer/advisor."""
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    from datetime import date as _date
+    if desde and hasta:
+        try:
+            dt_desde = datetime.fromisoformat(desde).replace(tzinfo=timezone.utc)
+            dt_hasta = datetime.fromisoformat(hasta).replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "desde/hasta deben ser YYYY-MM-DD")
+    else:
+        dt_hasta = datetime.now(tz=timezone.utc)
+        dt_desde = dt_hasta - timedelta(days=days_back - 1)
+        dt_desde = dt_desde.replace(hour=0, minute=0, second=0)
+
+    # Bajamos rows con sent_at en el rango
+    msgs = (sb.table("messages")
+              .select("message_id,sender_type,sent_at,conversation_id")
+              .gte("sent_at", dt_desde.isoformat())
+              .lte("sent_at", dt_hasta.isoformat())
+              .limit(50000).execute().data) or []
+
+    por_dia: dict = {}
+    total_customer = 0
+    total_advisor = 0
+    total_otros = 0
+    convs_unicas = set()
+    for m in msgs:
+        sa = m.get("sent_at") or ""
+        day = sa[:10]
+        if not day:
+            continue
+        r = por_dia.setdefault(day, {"total": 0, "customer": 0, "advisor": 0, "otros": 0, "conversations": set()})
+        r["total"] += 1
+        st = m.get("sender_type") or "otros"
+        if st == "customer":
+            r["customer"] += 1; total_customer += 1
+        elif st == "advisor":
+            r["advisor"] += 1; total_advisor += 1
+        else:
+            r["otros"] += 1; total_otros += 1
+        cid = m.get("conversation_id")
+        if cid:
+            r["conversations"].add(cid)
+            convs_unicas.add(cid)
+
+    # Serializar: convertir set a count
+    serie = []
+    cur = dt_desde
+    while cur.date() <= dt_hasta.date():
+        key = cur.date().isoformat()
+        r = por_dia.get(key, {"total": 0, "customer": 0, "advisor": 0, "otros": 0, "conversations": set()})
+        serie.append({
+            "fecha": key,
+            "total": r["total"],
+            "customer": r["customer"],
+            "advisor": r["advisor"],
+            "otros": r["otros"],
+            "conversations": len(r["conversations"]) if isinstance(r["conversations"], set) else 0,
+        })
+        cur = cur + timedelta(days=1)
+
+    return {
+        "ok": True,
+        "desde": dt_desde.date().isoformat(),
+        "hasta": dt_hasta.date().isoformat(),
+        "total_mensajes": len(msgs),
+        "total_customer": total_customer,
+        "total_advisor": total_advisor,
+        "total_otros":   total_otros,
+        "conversaciones_unicas": len(convs_unicas),
+        "serie": serie,
+    }
 
 
 @router.get("/messages/recent")

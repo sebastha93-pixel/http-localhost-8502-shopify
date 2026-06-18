@@ -55,8 +55,14 @@ interface AdvisorRow {
   name: string;
   email?: string;
   active: boolean;
+  asignadas?: number;
+  atendidas?: number;
   conversations: number;
   won: number;
+  response_rate?: number | null;
+  revenue_ganado?: number;
+  ticket_promedio?: number | null;
+  avg_response_min?: number | null;
   lost: number;
   in_progress: number;
   conversion_rate: number | null;
@@ -532,6 +538,13 @@ export default function RevenuePage() {
     refetchInterval: 60_000,
   });
 
+  // Stats de mensajes (totales por día) en el periodo seleccionado
+  const msgsStatsQ = useQuery<any>({
+    queryKey: ["revenue", "messages", "stats", daysBack],
+    queryFn: () => api.get(`/api/revenue/messages/stats?days_back=${Math.min(daysBack, 30)}`),
+    refetchInterval: 60_000,
+  });
+
   const stats = statsQ.data;
 
   return (
@@ -539,11 +552,15 @@ export default function RevenuePage() {
       title="Revenue Intelligence"
       subtitle="Auditoría comercial: conversaciones, asesoras y conversión"
     >
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-        <KpiCard label="Asesoras" value={stats?.advisors ?? "—"} />
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
+        <KpiCard label="Asesoras activas" value={stats?.advisors ?? "—"} />
         <KpiCard label="Leads" value={stats?.leads?.toLocaleString("es-CO") ?? "—"} />
         <KpiCard label="Conversaciones" value={stats?.conversations?.toLocaleString("es-CO") ?? "—"} />
-        <KpiCard label="Mensajes" value={stats?.messages?.toLocaleString("es-CO") ?? "—"} />
+        <KpiCard label="Mensajes (total)" value={stats?.messages?.toLocaleString("es-CO") ?? "—"} />
+        <KpiCard
+          label={`Mensajes ${daysBack === 1 ? "hoy" : daysBack === 2 ? "48h" : `${daysBack}d`}`}
+          value={msgsStatsQ.data?.total_mensajes?.toLocaleString("es-CO") ?? "—"}
+        />
         <KpiCard label="Auditorías pend." value={stats?.pending_audits?.toLocaleString("es-CO") ?? "—"} />
       </div>
 
@@ -647,11 +664,14 @@ export default function RevenuePage() {
                     <thead className="text-left text-graphite border-b">
                       <tr>
                         <th className="py-2 pr-3">Asesora</th>
-                        <th className="py-2 pr-3 text-right">Conv.</th>
+                        <th className="py-2 pr-3 text-right" title="Conversaciones asignadas en el periodo">Asignadas</th>
+                        <th className="py-2 pr-3 text-right" title="Donde la asesora respondió al menos 1 vez">Atendidas</th>
+                        <th className="py-2 pr-3 text-right" title="% Atendidas / Asignadas">% Respuesta</th>
                         <th className="py-2 pr-3 text-right">Ganadas</th>
                         <th className="py-2 pr-3 text-right">Perdidas</th>
-                        <th className="py-2 pr-3 text-right">En curso</th>
-                        <th className="py-2 pr-3 text-right">% Conv.</th>
+                        <th className="py-2 pr-3 text-right" title="Ganadas / (Ganadas + Perdidas)">% Conv.</th>
+                        <th className="py-2 pr-3 text-right" title="Promedio del valor de las ventas ganadas">Ticket prom.</th>
+                        <th className="py-2 pr-3 text-right" title="Tiempo medio de respuesta al cliente">Tiempo resp.</th>
                         <th className="py-2 pr-3">Último activo</th>
                       </tr>
                     </thead>
@@ -662,12 +682,19 @@ export default function RevenuePage() {
                             <div className="font-medium">{r.name}</div>
                             <div className="text-xs text-graphite">{r.email}</div>
                           </td>
-                          <td className="py-2 pr-3 text-right">{r.conversations}</td>
+                          <td className="py-2 pr-3 text-right">{r.asignadas ?? r.conversations}</td>
+                          <td className="py-2 pr-3 text-right">{r.atendidas ?? 0}</td>
+                          <td className="py-2 pr-3 text-right font-medium">{r.response_rate != null ? `${r.response_rate}%` : "—"}</td>
                           <td className="py-2 pr-3 text-right text-emerald-700">{r.won}</td>
                           <td className="py-2 pr-3 text-right text-rose-700">{r.lost}</td>
-                          <td className="py-2 pr-3 text-right">{r.in_progress}</td>
                           <td className="py-2 pr-3 text-right font-medium">
                             {r.conversion_rate != null ? `${r.conversion_rate}%` : "—"}
+                          </td>
+                          <td className="py-2 pr-3 text-right whitespace-nowrap">
+                            {r.ticket_promedio ? `$${Math.round(r.ticket_promedio / 1000)}K` : "—"}
+                          </td>
+                          <td className="py-2 pr-3 text-right whitespace-nowrap">
+                            {r.avg_response_min != null ? (r.avg_response_min < 60 ? `${r.avg_response_min}m` : `${(r.avg_response_min/60).toFixed(1)}h`) : "—"}
                           </td>
                           <td className="py-2 pr-3 whitespace-nowrap">{fmtRelative(r.last_activity)}</td>
                         </tr>
