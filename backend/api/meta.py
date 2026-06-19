@@ -449,47 +449,60 @@ def config_check(_: CurrentUser = Depends(require_role("admin"))) -> dict:
 
 @router.get("/discover")
 def discover_assets(_: CurrentUser = Depends(require_role("admin"))) -> dict:
-    """Descubre WABAs, números, Pages e IG accounts accesibles con el token actual."""
+    """Descubre Pages e IG accounts via /me/accounts (funciona con System User Token).
+    WABAs/phone_numbers requieren conocer el WABA_ID por env var (META_WABA_ID)."""
     import requests
     token = _system_token()
     if not token:
         raise HTTPException(503, "META_SYSTEM_USER_TOKEN no configurado")
-    out: dict = {"businesses": [], "wabas": [], "phone_numbers": [], "pages": [], "errors": []}
+    out: dict = {"pages": [], "instagram_accounts": [], "phone_numbers": [], "errors": []}
+
+    # 1. Pages via /me/accounts (esto SÍ funciona con System User Token)
     try:
-        # 1. Businesses
-        r = requests.get("https://graph.facebook.com/v23.0/me/businesses",
-                         params={"access_token": token, "fields": "id,name"}, timeout=20)
-        data = r.json() if r.status_code == 200 else {"error": r.text[:300]}
-        if "data" in data:
-            out["businesses"] = data["data"]
-            for b in data["data"]:
-                # 2. WABAs por business
-                rw = requests.get(f"https://graph.facebook.com/v23.0/{b['id']}/owned_whatsapp_business_accounts",
-                                  params={"access_token": token}, timeout=20)
-                if rw.status_code == 200:
-                    for w in (rw.json().get("data") or []):
-                        out["wabas"].append({"business_id": b["id"], "business_name": b.get("name"), "waba_id": w["id"], "waba_name": w.get("name")})
-                        # 3. Phone numbers de cada WABA
-                        rn = requests.get(f"https://graph.facebook.com/v23.0/{w['id']}/phone_numbers",
-                                          params={"access_token": token}, timeout=20)
-                        if rn.status_code == 200:
-                            for n in (rn.json().get("data") or []):
-                                out["phone_numbers"].append({
-                                    "waba_id": w["id"],
-                                    "phone_number_id": n["id"],
-                                    "display": n.get("display_phone_number"),
-                                    "verified_name": n.get("verified_name"),
-                                })
-                # 4. Pages del business
-                rp = requests.get(f"https://graph.facebook.com/v23.0/{b['id']}/owned_pages",
-                                  params={"access_token": token, "fields": "id,name"}, timeout=20)
-                if rp.status_code == 200:
-                    for p in (rp.json().get("data") or []):
-                        out["pages"].append({"business_id": b["id"], "page_id": p["id"], "page_name": p.get("name")})
+        r = requests.get("https://graph.facebook.com/v23.0/me/accounts",
+                         params={"access_token": token, "fields": "id,name,access_token,instagram_business_account"},
+                         timeout=20)
+        if r.status_code == 200:
+            for p in (r.json().get("data") or []):
+                out["pages"].append({
+                    "page_id":          p["id"],
+                    "page_name":        p.get("name"),
+                    "page_access_token": p.get("access_token"),
+                })
+                # 2. Instagram Business vinculado a la Page
+                ig = p.get("instagram_business_account") or {}
+                if ig.get("id"):
+                    out["instagram_accounts"].append({
+                        "ig_id":      ig["id"],
+                        "page_id":    p["id"],
+                        "page_name":  p.get("name"),
+                    })
         else:
-            out["errors"].append({"step": "/me/businesses", "response": data})
+            out["errors"].append({"step": "/me/accounts", "status": r.status_code, "body": r.text[:300]})
     except Exception as e:
-        out["errors"].append({"step": "discover", "error": str(e)[:300]})
+        out["errors"].append({"step": "/me/accounts", "error": str(e)[:200]})
+
+    # 3. WABA: si está en env, descubrir phone_numbers
+    waba_id = os.environ.get("META_WABA_ID", "").strip()
+    if waba_id:
+        try:
+            r = requests.get(f"https://graph.facebook.com/v23.0/{waba_id}/phone_numbers",
+                             params={"access_token": token}, timeout=20)
+            if r.status_code == 200:
+                for n in (r.json().get("data") or []):
+                    out["phone_numbers"].append({
+                        "waba_id":          waba_id,
+                        "phone_number_id":  n["id"],
+                        "display":          n.get("display_phone_number"),
+                        "verified_name":    n.get("verified_name"),
+                    })
+            else:
+                out["errors"].append({"step": f"/{waba_id}/phone_numbers", "status": r.status_code, "body": r.text[:300]})
+        except Exception as e:
+            out["errors"].append({"step": "phone_numbers", "error": str(e)[:200]})
+    else:
+        out["errors"].append({"step": "waba", "info": "META_WABA_ID no configurado en env vars"})
+
     return out
 
 
