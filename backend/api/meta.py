@@ -372,25 +372,37 @@ def _normalizar_phone(phone: str) -> str:
     return "".join(c for c in (phone or "") if c.isdigit())
 
 
+_cross_ref_cache: dict = {}  # wa_id → (ts, resultado o None)
+_CROSS_REF_TTL = 300  # 5 min
+
+
 def _buscar_lead_kommo_por_phone(wa_id: str) -> Optional[dict]:
     """Busca un lead de Kommo que tenga customer_phone matching el wa_id.
     wa_id de Meta viene tipo '573103021444' (sin + ni espacios).
+    Cachea resultado 5 min para no consultar Supabase por cada mensaje.
     Retorna {lead_id, advisor_id, customer_name, conversation_id_existente}
     o None si no hay match."""
+    import time as _t
     sb = db._sb()
     if sb is None or not wa_id:
         return None
     wa_norm = _normalizar_phone(wa_id)
     if not wa_norm:
         return None
+    # Cache check
+    hit = _cross_ref_cache.get(wa_norm)
+    if hit and (_t.time() - hit[0]) < _CROSS_REF_TTL:
+        return hit[1]
     # Estrategias: probar varias variantes del número
     variants = {wa_norm}
     if wa_norm.startswith("57"):
         variants.add(wa_norm[2:])  # sin código país
     variants.add(f"+{wa_norm}")
     variants.add(f"+57{wa_norm[2:]}" if wa_norm.startswith("57") else f"+{wa_norm}")
+    import time as _t
+    result: Optional[dict] = None
     try:
-        # Buscar en kommo_leads por customer_phone
+        # Buscar en kommo_leads por customer_phone (variants)
         for v in variants:
             r = sb.table("kommo_leads").select("lead_id,advisor_id,customer_name,customer_phone").eq("customer_phone", v).limit(1).execute()
             if r.data:
@@ -398,15 +410,21 @@ def _buscar_lead_kommo_por_phone(wa_id: str) -> Optional[dict]:
                 # Buscar conversation existente tipo talk-* del lead
                 cr = sb.table("conversations").select("conversation_id").eq("lead_id", lead["lead_id"]).like("conversation_id", "talk-%").order("last_message_at", desc=True).limit(1).execute()
                 conv_existente = cr.data[0]["conversation_id"] if cr.data else None
-                return {
+                result = {
                     "lead_id":                 lead["lead_id"],
                     "advisor_id":              lead.get("advisor_id"),
                     "customer_name":           lead.get("customer_name"),
                     "conversation_id_existente": conv_existente,
                 }
+                break
     except Exception:
-        pass
-    return None
+        result = None
+    # Cache (incluso si es None, para no re-consultar leads que no matchean)
+    _cross_ref_cache[wa_norm] = (_t.time(), result)
+    # Limpieza simple si crece mucho
+    if len(_cross_ref_cache) > 2000:
+        _cross_ref_cache.clear()
+    return result
 
 
 def _conv_id_for_whatsapp(wa_id: str, phone_number_id: str) -> str:
