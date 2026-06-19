@@ -508,31 +508,22 @@ def discover_assets(_: CurrentUser = Depends(require_role("admin"))) -> dict:
 
 @router.post("/subscribe-numbers")
 def subscribe_numbers(_: CurrentUser = Depends(require_role("admin"))) -> dict:
-    """Suscribe cada phone_number_id de la WABA al webhook de la App.
-    Esto es lo que falta para que Meta empiece a mandar mensajes reales."""
+    """Suscribe la WABA completa al webhook (la API moderna lo hace a nivel
+    WABA, no por phone_number)."""
     import requests
     token = _system_token()
     if not token:
         raise HTTPException(503, "META_SYSTEM_USER_TOKEN no configurado")
-    # Descubrir números
-    discovery = discover_assets()
-    results: list = []
-    for n in discovery.get("phone_numbers", []):
-        pid = n["phone_number_id"]
-        try:
-            r = requests.post(f"https://graph.facebook.com/v23.0/{pid}/subscribed_apps",
-                              params={"access_token": token}, timeout=20)
-            ok = (r.status_code == 200) and (r.json().get("success") is True)
-            results.append({
-                "phone_number_id": pid,
-                "display":         n.get("display"),
-                "status_code":     r.status_code,
-                "ok":              ok,
-                "response":        r.text[:300],
-            })
-        except Exception as e:
-            results.append({"phone_number_id": pid, "ok": False, "error": str(e)[:200]})
-    return {"ok": True, "results": results}
+    waba_id = os.environ.get("META_WABA_ID", "").strip()
+    if not waba_id:
+        raise HTTPException(503, "META_WABA_ID no configurado")
+    try:
+        r = requests.post(f"https://graph.facebook.com/v23.0/{waba_id}/subscribed_apps",
+                          params={"access_token": token}, timeout=20)
+        ok = (r.status_code == 200) and (r.json().get("success") is True)
+        return {"ok": True, "results": [{"level": "waba", "waba_id": waba_id, "status_code": r.status_code, "ok": ok, "response": r.text[:500]}]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:300]}
 
 
 @router.get("/debug/token")
@@ -579,18 +570,20 @@ def subscribe_by_id(
 
 @router.post("/subscribe-pages")
 def subscribe_pages(_: CurrentUser = Depends(require_role("admin"))) -> dict:
-    """Suscribe la App a webhooks de cada Page (necesario para Messenger e Instagram)."""
+    """Suscribe la App a webhooks de cada Page usando page_access_token específico
+    (Meta requiere ese token para suscribir Pages, no el System User Token)."""
     import requests
-    token = _system_token()
-    if not token:
-        raise HTTPException(503, "META_SYSTEM_USER_TOKEN no configurado")
     discovery = discover_assets()
     results: list = []
     for p in discovery.get("pages", []):
         pid = p["page_id"]
+        page_token = p.get("page_access_token")
+        if not page_token:
+            results.append({"page_id": pid, "name": p.get("page_name"), "ok": False, "error": "sin page_access_token"})
+            continue
         try:
             r = requests.post(f"https://graph.facebook.com/v23.0/{pid}/subscribed_apps",
-                              params={"access_token": token,
+                              params={"access_token": page_token,
                                       "subscribed_fields": "messages,messaging_postbacks,message_deliveries,message_reads"},
                               timeout=20)
             ok = (r.status_code == 200) and (r.json().get("success") is True)
