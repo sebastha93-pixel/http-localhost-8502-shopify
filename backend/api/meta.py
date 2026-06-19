@@ -522,6 +522,48 @@ def subscribe_numbers(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     return {"ok": True, "results": results}
 
 
+@router.get("/debug/token")
+def debug_token(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Diagnostica qué puede ver el System User Token actual."""
+    import requests
+    token = _system_token()
+    if not token:
+        return {"error": "no_token"}
+    out: dict = {}
+    paths = [
+        ("/me",                     "?fields=id,name"),
+        ("/me/accounts",            "?fields=id,name,access_token"),
+        ("/debug_token",            f"?input_token={token}"),
+    ]
+    for path, qs in paths:
+        try:
+            r = requests.get(f"https://graph.facebook.com/v23.0{path}{qs}",
+                             params={"access_token": token}, timeout=15)
+            out[path] = {"status": r.status_code, "body": r.text[:600]}
+        except Exception as e:
+            out[path] = {"error": str(e)[:200]}
+    return out
+
+
+@router.post("/subscribe-by-id")
+def subscribe_by_id(
+    phone_number_id: str = Query(..., description="Phone number ID de Meta (no el número telefónico)"),
+    _: CurrentUser = Depends(require_role("admin"))
+) -> dict:
+    """Suscribe un phone_number_id específico al webhook de la App.
+    Útil si discover automático no funciona — pasa el ID manualmente."""
+    import requests
+    token = _system_token()
+    if not token:
+        raise HTTPException(503, "META_SYSTEM_USER_TOKEN no configurado")
+    try:
+        r = requests.post(f"https://graph.facebook.com/v23.0/{phone_number_id}/subscribed_apps",
+                          params={"access_token": token}, timeout=20)
+        return {"phone_number_id": phone_number_id, "status_code": r.status_code, "body": r.text[:500]}
+    except Exception as e:
+        return {"error": str(e)[:300]}
+
+
 @router.post("/subscribe-pages")
 def subscribe_pages(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     """Suscribe la App a webhooks de cada Page (necesario para Messenger e Instagram)."""
