@@ -581,6 +581,26 @@ def debug_token(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     return out
 
 
+@router.post("/subscribe-waba")
+def subscribe_waba(
+    waba_id: str = Query(..., description="WABA ID a suscribir al webhook"),
+    _: CurrentUser = Depends(require_role("admin"))
+) -> dict:
+    """Suscribe una WABA específica al webhook de la App.
+    Útil cuando tienes múltiples WABAs (los 3 números de MALE DENIM viven en 2 WABAs distintas)."""
+    import requests
+    token = _system_token()
+    if not token:
+        raise HTTPException(503, "META_SYSTEM_USER_TOKEN no configurado")
+    try:
+        r = requests.post(f"https://graph.facebook.com/v23.0/{waba_id}/subscribed_apps",
+                          params={"access_token": token}, timeout=20)
+        ok = (r.status_code == 200) and (r.json().get("success") is True)
+        return {"waba_id": waba_id, "status_code": r.status_code, "ok": ok, "body": r.text[:500]}
+    except Exception as e:
+        return {"waba_id": waba_id, "ok": False, "error": str(e)[:300]}
+
+
 @router.post("/subscribe-by-id")
 def subscribe_by_id(
     phone_number_id: str = Query(..., description="Phone number ID de Meta (no el número telefónico)"),
