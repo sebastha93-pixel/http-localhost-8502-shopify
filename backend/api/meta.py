@@ -672,6 +672,45 @@ def debug_token(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     return out
 
 
+@router.get("/debug/cross-ref")
+def debug_cross_ref(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Diagnostica por qué el cross-reference no matchea."""
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "no_sb")
+    out: dict = {"conversations_meta_sin_lead": [], "muestra_kommo_phones": []}
+
+    # Tomar algunas conversations meta-wa-* sin lead
+    convs = (sb.table("conversations").select("conversation_id,lead_id")
+               .like("conversation_id", "meta-wa-%")
+               .is_("lead_id", "null")
+               .limit(5).execute().data) or []
+    for c in convs:
+        cid = c["conversation_id"]
+        partes = cid.split("-")
+        wa_id = partes[2] if len(partes) >= 3 else "?"
+        wa_norm = _normalizar_phone(wa_id)
+        ultimos = wa_norm[-10:] if len(wa_norm) >= 10 else wa_norm
+        # Buscar matches potenciales
+        r = sb.table("kommo_leads").select("lead_id,customer_phone,customer_name").like("customer_phone", f"%{ultimos}%").limit(3).execute()
+        out["conversations_meta_sin_lead"].append({
+            "conversation_id": cid,
+            "wa_id_extraido": wa_id,
+            "wa_norm": wa_norm,
+            "ultimos_10": ultimos,
+            "kommo_matches_por_like": [{"lead_id": l["lead_id"], "customer_phone": l.get("customer_phone"), "customer_name": l.get("customer_name")} for l in (r.data or [])]
+        })
+
+    # Muestra de phones que sí están en kommo_leads
+    sample = (sb.table("kommo_leads").select("customer_phone,customer_name")
+                .not_.is_("customer_phone", "null")
+                .neq("customer_phone", "")
+                .limit(10).execute().data) or []
+    out["muestra_kommo_phones"] = [{"phone": l.get("customer_phone"), "name": l.get("customer_name")} for l in sample]
+
+    return out
+
+
 @router.post("/enrich-conversations")
 def enrich_conversations(
     limit: int = Query(500, ge=10, le=5000),
