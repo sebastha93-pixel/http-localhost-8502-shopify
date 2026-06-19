@@ -672,6 +672,39 @@ def debug_token(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     return out
 
 
+@router.post("/normalizar-phones-kommo")
+def normalizar_phones_kommo(
+    limit: int = Query(10000, ge=10, le=50000),
+    _: CurrentUser = Depends(require_role("admin"))
+) -> dict:
+    """Normaliza el customer_phone de kommo_leads (quita espacios, guiones, +).
+    Ej: '+57 300 4789094' → '573004789094'. Necesario para que el cross-reference
+    con Meta wa_id funcione (Meta envía solo dígitos)."""
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "no_sb")
+    leads = (sb.table("kommo_leads").select("lead_id,customer_phone")
+               .not_.is_("customer_phone", "null")
+               .neq("customer_phone", "")
+               .limit(limit).execute().data) or []
+    normalizados = 0
+    sin_cambio = 0
+    for ld in leads:
+        original = ld.get("customer_phone") or ""
+        normalizado = _normalizar_phone(original)
+        if not normalizado:
+            continue
+        if normalizado == original:
+            sin_cambio += 1
+            continue
+        try:
+            sb.table("kommo_leads").update({"customer_phone": normalizado}).eq("lead_id", ld["lead_id"]).execute()
+            normalizados += 1
+        except Exception:
+            pass
+    return {"ok": True, "total": len(leads), "normalizados": normalizados, "sin_cambio": sin_cambio}
+
+
 @router.get("/debug/cross-ref")
 def debug_cross_ref(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     """Diagnostica por qué el cross-reference no matchea."""
