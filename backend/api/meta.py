@@ -367,9 +367,55 @@ def _placeholder_for_type(t: str) -> str:
     }.get(t, f"[{t or 'sin texto'}]")
 
 
+def _normalizar_phone(phone: str) -> str:
+    """Normaliza un número: solo dígitos, sin + ni espacios."""
+    return "".join(c for c in (phone or "") if c.isdigit())
+
+
+def _buscar_lead_kommo_por_phone(wa_id: str) -> Optional[dict]:
+    """Busca un lead de Kommo que tenga customer_phone matching el wa_id.
+    wa_id de Meta viene tipo '573103021444' (sin + ni espacios).
+    Retorna {lead_id, advisor_id, customer_name, conversation_id_existente}
+    o None si no hay match."""
+    sb = db._sb()
+    if sb is None or not wa_id:
+        return None
+    wa_norm = _normalizar_phone(wa_id)
+    if not wa_norm:
+        return None
+    # Estrategias: probar varias variantes del número
+    variants = {wa_norm}
+    if wa_norm.startswith("57"):
+        variants.add(wa_norm[2:])  # sin código país
+    variants.add(f"+{wa_norm}")
+    variants.add(f"+57{wa_norm[2:]}" if wa_norm.startswith("57") else f"+{wa_norm}")
+    try:
+        # Buscar en kommo_leads por customer_phone
+        for v in variants:
+            r = sb.table("kommo_leads").select("lead_id,advisor_id,customer_name,customer_phone").eq("customer_phone", v).limit(1).execute()
+            if r.data:
+                lead = r.data[0]
+                # Buscar conversation existente tipo talk-* del lead
+                cr = sb.table("conversations").select("conversation_id").eq("lead_id", lead["lead_id"]).like("conversation_id", "talk-%").order("last_message_at", desc=True).limit(1).execute()
+                conv_existente = cr.data[0]["conversation_id"] if cr.data else None
+                return {
+                    "lead_id":                 lead["lead_id"],
+                    "advisor_id":              lead.get("advisor_id"),
+                    "customer_name":           lead.get("customer_name"),
+                    "conversation_id_existente": conv_existente,
+                }
+    except Exception:
+        pass
+    return None
+
+
 def _conv_id_for_whatsapp(wa_id: str, phone_number_id: str) -> str:
-    """ID de conversation para WhatsApp: meta-wa-{customer_wa_id}-{phone_number_id}.
-    Estable por par (cliente, número del negocio)."""
+    """ID de conversation para WhatsApp. Si el wa_id matchea un lead en Kommo
+    con conversation existente (talk-*), USA ESE — así Meta y Kommo unifican
+    en la misma conversación. Sino crea uno nuevo meta-wa-*."""
+    match = _buscar_lead_kommo_por_phone(wa_id)
+    if match and match.get("conversation_id_existente"):
+        return match["conversation_id_existente"]
     return f"meta-wa-{wa_id or 'unknown'}-{phone_number_id or 'na'}"
 
 
@@ -400,19 +446,20 @@ def _build_message_row(*, message_id, conversation_id, sender_type, sender_name,
 
 
 def _asegurar_conversation(sb, conversation_id: str, payload: dict) -> None:
-    """Asegura que conversation_id exista en conversations table (FK requirement).
-    Si no existe, la crea con metadata mínima del payload."""
+    """Asegura que conversation_id exista en conversations (FK requirement).
+    Si no existe, la crea con metadata. Si es WhatsApp con wa_id, busca lead
+    en Kommo y enriquece con lead_id/advisor_id."""
     if not conversation_id:
         return
     try:
         r = sb.table("conversations").select("conversation_id").eq("conversation_id", conversation_id).limit(1).execute()
         if r.data:
-            return  # Ya existe
+            return  # Ya existe (no la sobrescribimos para no perder metadata Kommo)
     except Exception:
         return
-    # Crear conversation nueva. lead_id queda null (no tenemos cross-reference con Kommo aún)
+
     channel = (payload or {}).get("channel") or "unknown"
-    row = {
+    row: dict = {
         "conversation_id":  conversation_id,
         "channel":          channel,
         "started_at":       datetime.now(tz=timezone.utc).isoformat(),
@@ -421,6 +468,14 @@ def _asegurar_conversation(sb, conversation_id: str, payload: dict) -> None:
         "audit_status":     "pending",
         "synced_at":        datetime.now(tz=timezone.utc).isoformat(),
     }
+    # Cross-reference con Kommo: si el conv_id es meta-wa-* extraer wa_id y buscar lead
+    if channel == "whatsapp" and conversation_id.startswith("meta-wa-"):
+        wa_id = (payload or {}).get("wa_id") or ""
+        if wa_id:
+            match = _buscar_lead_kommo_por_phone(wa_id)
+            if match:
+                row["lead_id"] = match.get("lead_id")
+                row["advisor_id"] = match.get("advisor_id")
     try:
         sb.table("conversations").upsert(row, on_conflict="conversation_id").execute()
     except Exception as e:
