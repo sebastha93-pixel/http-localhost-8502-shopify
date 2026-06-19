@@ -1,0 +1,447 @@
+"""
+backend.api.meta — Webhook unificado de Meta (WhatsApp + Messenger + Instagram).
+
+Una sola App de Meta cubre los 3 canales. Meta envía todos los eventos al
+mismo endpoint, distinguiendo por el campo `object`:
+  - "whatsapp_business_account" → WhatsApp Cloud API
+  - "page"                      → Facebook Messenger
+  - "instagram"                 → Instagram DMs
+
+A diferencia del webhook de Kommo (que solo nos entrega INCOMING), Meta nos
+da INCOMING y OUTGOING — exactamente lo que nos faltaba para auditar
+respuestas de las asesoras.
+"""
+from __future__ import annotations
+
+import hashlib
+import hmac
+import logging
+import os
+from datetime import datetime, timezone
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
+from backend.core.security import CurrentUser, require_role
+from backend.services import revenue_db as db
+
+
+log = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/meta", tags=["meta"])
+
+_stats: dict = {
+    "total":             0,
+    "whatsapp_events":   0,
+    "messenger_events":  0,
+    "instagram_events":  0,
+    "otros":             0,
+    "mensajes_guardados": 0,
+    "errores":           0,
+    "ultimo_error":      None,
+    "primero_en":        None,
+    "ultimo_en":         None,
+    "ultimos_payloads":  [],
+}
+
+
+def _verify_token() -> str:
+    return os.environ.get("META_WEBHOOK_VERIFY_TOKEN", "").strip()
+
+
+def _app_secret() -> str:
+    return os.environ.get("META_APP_SECRET", "").strip()
+
+
+def _system_token() -> str:
+    return os.environ.get("META_SYSTEM_USER_TOKEN", "").strip()
+
+
+def _verify_signature(body: bytes, header_signature: str) -> bool:
+    """Verifica que el webhook venga firmado por Meta usando META_APP_SECRET.
+    Header: X-Hub-Signature-256: sha256=HEX"""
+    secret = _app_secret()
+    if not secret or not header_signature:
+        return False
+    if not header_signature.startswith("sha256="):
+        return False
+    expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    received = header_signature[7:]
+    return hmac.compare_digest(expected, received)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Webhook: GET (verificación) + POST (eventos)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/webhook")
+def webhook_verify(
+    hub_mode: str = Query(default="", alias="hub.mode"),
+    hub_verify_token: str = Query(default="", alias="hub.verify_token"),
+    hub_challenge: str = Query(default="", alias="hub.challenge"),
+):
+    """Verificación inicial del webhook por Meta.
+    Meta hace GET con hub.mode=subscribe&hub.verify_token=X&hub.challenge=Y
+    Si verify_token coincide, devolvemos el challenge en plaintext."""
+    if hub_mode != "subscribe":
+        raise HTTPException(400, "hub.mode debe ser 'subscribe'")
+    if hub_verify_token != _verify_token() or not _verify_token():
+        raise HTTPException(403, "verify_token incorrecto")
+    # Devolver el challenge EXACTO como int o string (Meta espera plain text)
+    return int(hub_challenge) if hub_challenge.isdigit() else hub_challenge
+
+
+@router.post("/webhook")
+async def webhook_receive(request: Request) -> dict:
+    """Receptor de eventos de Meta. PÚBLICO (Meta no autentica con Bearer).
+    Valida firma X-Hub-Signature-256 con META_APP_SECRET."""
+    body = await request.body()
+    sig = request.headers.get("x-hub-signature-256") or ""
+    now_iso = datetime.now(tz=timezone.utc).isoformat()
+
+    _stats["total"] += 1
+    if _stats["primero_en"] is None:
+        _stats["primero_en"] = now_iso
+    _stats["ultimo_en"] = now_iso
+
+    # Validar firma (solo si tenemos APP_SECRET configurado)
+    if _app_secret() and not _verify_signature(body, sig):
+        _stats["errores"] += 1
+        _stats["ultimo_error"] = "firma_invalida"
+        # Responder 200 igual para que Meta no desactive el webhook,
+        # pero log el evento como sospechoso
+        log.warning("Meta webhook: firma inválida")
+        return {"ok": True, "warning": "signature_invalid"}
+
+    try:
+        payload = await request.json()
+    except Exception as e:
+        _stats["errores"] += 1
+        _stats["ultimo_error"] = f"json_parse: {str(e)[:200]}"
+        return {"ok": True}
+
+    obj = payload.get("object") or ""
+    if obj == "whatsapp_business_account":
+        _stats["whatsapp_events"] += 1
+        result = _procesar_whatsapp(payload)
+    elif obj == "page":
+        _stats["messenger_events"] += 1
+        result = _procesar_messenger(payload)
+    elif obj == "instagram":
+        _stats["instagram_events"] += 1
+        result = _procesar_instagram(payload)
+    else:
+        _stats["otros"] += 1
+        result = {"skip": "objeto_desconocido", "obj": obj}
+
+    _stats["mensajes_guardados"] += int(result.get("messages_saved", 0) or 0)
+
+    # Guardar preview del último payload (debug)
+    keys = list(payload.keys())[:5]
+    preview = {"object": obj, "entry_count": len(payload.get("entry", []) or [])}
+    _stats["ultimos_payloads"].insert(0, {"ts": now_iso, "obj": obj, "result": result, "preview": preview})
+    _stats["ultimos_payloads"] = _stats["ultimos_payloads"][:10]
+
+    return {"ok": True, **result}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Parsers por canal
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _procesar_whatsapp(payload: dict) -> dict:
+    """Parsea evento de WhatsApp Cloud API.
+    Estructura: payload.entry[].changes[].value.messages[] (incoming)
+                                       .value.statuses[] (delivery/read)
+    """
+    sb = db._sb()
+    if sb is None:
+        return {"error": "supabase_no_configurado"}
+    msgs_saved = 0
+    for entry in (payload.get("entry") or []):
+        for change in (entry.get("changes") or []):
+            value = change.get("value") or {}
+            messaging_product = value.get("messaging_product")
+            if messaging_product != "whatsapp":
+                continue
+            phone_number_id = (value.get("metadata") or {}).get("phone_number_id")
+            display_phone = (value.get("metadata") or {}).get("display_phone_number")
+            # Contactos para enriquecer nombre
+            contacts_map: dict = {}
+            for c in (value.get("contacts") or []):
+                wa_id = c.get("wa_id")
+                if wa_id:
+                    contacts_map[wa_id] = (c.get("profile") or {}).get("name") or ""
+
+            # Mensajes (incoming SIEMPRE; outgoing solo si configuramos echo en la App)
+            for m in (value.get("messages") or []):
+                wa_id_from = m.get("from")  # número del cliente
+                msg_id = m.get("id")
+                msg_type = m.get("type") or "text"
+                ts = m.get("timestamp")
+                sent_at = _epoch_to_iso(ts)
+                text = (m.get("text") or {}).get("body") or ""
+                if not text:
+                    text = _placeholder_for_type(msg_type)
+                sender_name = contacts_map.get(wa_id_from) or wa_id_from or ""
+                row = _build_message_row(
+                    message_id=f"meta-wa-{msg_id}",
+                    conversation_id=_conv_id_for_whatsapp(wa_id_from, phone_number_id),
+                    sender_type="customer",
+                    sender_name=sender_name,
+                    message_text=text,
+                    sent_at=sent_at,
+                    payload={
+                        "channel": "whatsapp",
+                        "wa_id": wa_id_from,
+                        "phone_number_id": phone_number_id,
+                        "display_phone_number": display_phone,
+                        "type": msg_type,
+                        "raw": m,
+                    },
+                )
+                if _upsert_message(sb, row):
+                    msgs_saved += 1
+
+            # Statuses (sent/delivered/read) — son los eventos para OUTGOING
+            # Meta los envía con el id del mensaje saliente. Si NO lo teníamos
+            # registrado lo creamos como outgoing-stub.
+            for s in (value.get("statuses") or []):
+                wa_id_to = s.get("recipient_id")
+                msg_id = s.get("id")
+                status_type = s.get("status")  # sent | delivered | read | failed
+                ts = s.get("timestamp")
+                sent_at = _epoch_to_iso(ts)
+                # Solo creamos el mensaje cuando llega status=sent (el primero).
+                # Status posteriores (delivered/read) son updates de estado.
+                if status_type != "sent":
+                    continue
+                row = _build_message_row(
+                    message_id=f"meta-wa-{msg_id}",
+                    conversation_id=_conv_id_for_whatsapp(wa_id_to, phone_number_id),
+                    sender_type="advisor",
+                    sender_name="",  # Meta no nos dice qué asesora envió; se resuelve después por advisor del lead
+                    message_text="",  # Meta solo nos da el ID. Texto no viene en statuses.
+                    sent_at=sent_at,
+                    payload={
+                        "channel": "whatsapp",
+                        "wa_id": wa_id_to,
+                        "phone_number_id": phone_number_id,
+                        "display_phone_number": display_phone,
+                        "status": status_type,
+                        "raw": s,
+                    },
+                )
+                if _upsert_message(sb, row):
+                    msgs_saved += 1
+
+    return {"messages_saved": msgs_saved}
+
+
+def _procesar_messenger(payload: dict) -> dict:
+    """Facebook Messenger: payload.entry[].messaging[]"""
+    sb = db._sb()
+    if sb is None:
+        return {"error": "supabase_no_configurado"}
+    msgs_saved = 0
+    for entry in (payload.get("entry") or []):
+        page_id = entry.get("id")
+        for ev in (entry.get("messaging") or []):
+            sender_id = (ev.get("sender") or {}).get("id")
+            recipient_id = (ev.get("recipient") or {}).get("id")
+            ts = ev.get("timestamp")
+            sent_at = _epoch_to_iso(int(ts / 1000) if ts and ts > 9_999_999_999 else ts)
+            msg = ev.get("message") or {}
+            if not msg:
+                continue
+            msg_id = msg.get("mid")
+            text = msg.get("text") or ""
+            is_echo = bool(msg.get("is_echo"))
+            attachments = msg.get("attachments") or []
+            if not text:
+                if attachments:
+                    att_type = (attachments[0] or {}).get("type", "")
+                    text = _placeholder_for_type(att_type)
+                else:
+                    text = "[sin contenido]"
+            # is_echo=True significa que fue enviado por la Page → asesora
+            sender_type = "advisor" if is_echo else "customer"
+            # El "otro lado" (cliente) es el recipient si es echo, sender si no
+            user_id = recipient_id if is_echo else sender_id
+            row = _build_message_row(
+                message_id=f"meta-fb-{msg_id}",
+                conversation_id=_conv_id_for_messenger(user_id, page_id),
+                sender_type=sender_type,
+                sender_name=user_id or "",
+                message_text=text,
+                sent_at=sent_at,
+                payload={
+                    "channel": "facebook",
+                    "page_id": page_id,
+                    "user_id": user_id,
+                    "is_echo": is_echo,
+                    "raw": ev,
+                },
+            )
+            if _upsert_message(sb, row):
+                msgs_saved += 1
+    return {"messages_saved": msgs_saved}
+
+
+def _procesar_instagram(payload: dict) -> dict:
+    """Instagram DMs: estructura igual a Messenger (payload.entry[].messaging[])
+    pero con object='instagram'."""
+    sb = db._sb()
+    if sb is None:
+        return {"error": "supabase_no_configurado"}
+    msgs_saved = 0
+    for entry in (payload.get("entry") or []):
+        ig_account_id = entry.get("id")
+        for ev in (entry.get("messaging") or []):
+            sender_id = (ev.get("sender") or {}).get("id")
+            recipient_id = (ev.get("recipient") or {}).get("id")
+            ts = ev.get("timestamp")
+            sent_at = _epoch_to_iso(int(ts / 1000) if ts and ts > 9_999_999_999 else ts)
+            msg = ev.get("message") or {}
+            if not msg:
+                continue
+            msg_id = msg.get("mid")
+            text = msg.get("text") or ""
+            is_echo = bool(msg.get("is_echo"))
+            attachments = msg.get("attachments") or []
+            if not text:
+                if attachments:
+                    att_type = (attachments[0] or {}).get("type", "")
+                    text = _placeholder_for_type(att_type)
+                else:
+                    text = "[sin contenido]"
+            sender_type = "advisor" if is_echo else "customer"
+            user_id = recipient_id if is_echo else sender_id
+            row = _build_message_row(
+                message_id=f"meta-ig-{msg_id}",
+                conversation_id=_conv_id_for_instagram(user_id, ig_account_id),
+                sender_type=sender_type,
+                sender_name=user_id or "",
+                message_text=text,
+                sent_at=sent_at,
+                payload={
+                    "channel": "instagram",
+                    "ig_account_id": ig_account_id,
+                    "user_id": user_id,
+                    "is_echo": is_echo,
+                    "raw": ev,
+                },
+            )
+            if _upsert_message(sb, row):
+                msgs_saved += 1
+    return {"messages_saved": msgs_saved}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _epoch_to_iso(ts) -> str:
+    if not ts:
+        return datetime.now(tz=timezone.utc).isoformat()
+    try:
+        return datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()
+    except Exception:
+        return datetime.now(tz=timezone.utc).isoformat()
+
+
+def _placeholder_for_type(t: str) -> str:
+    t = (t or "").lower()
+    return {
+        "audio":    "🎤 [audio]",
+        "voice":    "🎤 [audio]",
+        "image":    "🖼️ [imagen]",
+        "picture":  "🖼️ [imagen]",
+        "video":    "🎬 [video]",
+        "file":     "📎 [archivo]",
+        "document": "📄 [documento]",
+        "sticker":  "🟣 [sticker]",
+        "location": "📍 [ubicación]",
+        "contacts": "👤 [contacto]",
+        "template": "📋 [plantilla]",
+        "interactive": "🔘 [interactivo]",
+    }.get(t, f"[{t or 'sin texto'}]")
+
+
+def _conv_id_for_whatsapp(wa_id: str, phone_number_id: str) -> str:
+    """ID de conversation para WhatsApp: meta-wa-{customer_wa_id}-{phone_number_id}.
+    Estable por par (cliente, número del negocio)."""
+    return f"meta-wa-{wa_id or 'unknown'}-{phone_number_id or 'na'}"
+
+
+def _conv_id_for_messenger(user_id: str, page_id: str) -> str:
+    return f"meta-fb-{user_id or 'unknown'}-{page_id or 'na'}"
+
+
+def _conv_id_for_instagram(user_id: str, ig_account_id: str) -> str:
+    return f"meta-ig-{user_id or 'unknown'}-{ig_account_id or 'na'}"
+
+
+_columnas_problematicas: set = set()
+
+
+def _build_message_row(*, message_id, conversation_id, sender_type, sender_name,
+                       message_text, sent_at, payload) -> dict:
+    row = {
+        "message_id":      message_id,
+        "conversation_id": conversation_id,
+        "sender_type":     sender_type,
+        "sender_name":     (sender_name or "")[:80],
+        "message_text":    (message_text or "")[:5000],
+        "sent_at":         sent_at,
+        "topic":           "text",
+        "payload":         payload,
+    }
+    return {k: v for k, v in row.items() if v is not None}
+
+
+def _upsert_message(sb, row: dict) -> bool:
+    """Upsert con auto-recuperación de PGRST204 (cache PostgREST stale)."""
+    # Quitar columnas conocidas como problemáticas
+    for col in _columnas_problematicas:
+        row.pop(col, None)
+    for _ in range(5):
+        try:
+            sb.table("messages").upsert(row, on_conflict="message_id").execute()
+            return True
+        except Exception as e:
+            err = str(e)
+            if "PGRST204" in err or "schema cache" in err:
+                import re as _re
+                m = _re.search(r"'(\w+)' column", err)
+                if m:
+                    col = m.group(1)
+                    _columnas_problematicas.add(col)
+                    row.pop(col, None)
+                    continue
+            _stats["errores"] += 1
+            _stats["ultimo_error"] = err[:200]
+            return False
+    return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Endpoints de debug y stats
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/webhook/stats")
+def webhook_stats(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Estadísticas del receiver Meta."""
+    return {**_stats, "verify_token_configurado": bool(_verify_token()),
+            "app_secret_configurado": bool(_app_secret()),
+            "system_token_configurado": bool(_system_token())}
+
+
+@router.get("/config/check")
+def config_check(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Verifica qué env vars de Meta están configuradas (sin exponer valores)."""
+    return {
+        "META_APP_ID":               bool(os.environ.get("META_APP_ID", "").strip()),
+        "META_APP_SECRET":           bool(_app_secret()),
+        "META_WEBHOOK_VERIFY_TOKEN": bool(_verify_token()),
+        "META_SYSTEM_USER_TOKEN":    bool(_system_token()),
+    }
