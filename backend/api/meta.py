@@ -399,8 +399,40 @@ def _build_message_row(*, message_id, conversation_id, sender_type, sender_name,
     return {k: v for k, v in row.items() if v is not None}
 
 
+def _asegurar_conversation(sb, conversation_id: str, payload: dict) -> None:
+    """Asegura que conversation_id exista en conversations table (FK requirement).
+    Si no existe, la crea con metadata mínima del payload."""
+    if not conversation_id:
+        return
+    try:
+        r = sb.table("conversations").select("conversation_id").eq("conversation_id", conversation_id).limit(1).execute()
+        if r.data:
+            return  # Ya existe
+    except Exception:
+        return
+    # Crear conversation nueva. lead_id queda null (no tenemos cross-reference con Kommo aún)
+    channel = (payload or {}).get("channel") or "unknown"
+    row = {
+        "conversation_id":  conversation_id,
+        "channel":          channel,
+        "started_at":       datetime.now(tz=timezone.utc).isoformat(),
+        "last_message_at":  datetime.now(tz=timezone.utc).isoformat(),
+        "status":           "in_work",
+        "audit_status":     "pending",
+        "synced_at":        datetime.now(tz=timezone.utc).isoformat(),
+    }
+    try:
+        sb.table("conversations").upsert(row, on_conflict="conversation_id").execute()
+    except Exception as e:
+        _stats["errores"] += 1
+        _stats["ultimo_error"] = f"conv: {str(e)[:200]}"
+
+
 def _upsert_message(sb, row: dict) -> bool:
-    """Upsert con auto-recuperación de PGRST204 (cache PostgREST stale)."""
+    """Upsert con auto-recuperación de PGRST204 (cache PostgREST stale) +
+    asegura conversation existe para no romper FK."""
+    # Asegurar conversation antes del insert
+    _asegurar_conversation(sb, row.get("conversation_id") or "", row.get("payload") or {})
     # Quitar columnas conocidas como problemáticas
     for col in _columnas_problematicas:
         row.pop(col, None)
