@@ -424,7 +424,9 @@ def start() -> threading.Thread | None:
         _warmup_stop.clear()
         _warmup_thread = threading.Thread(target=_loop_warmup, daemon=True, name="warmup_comercial")
         _warmup_thread.start()
-    notes_enabled = os.environ.get("NOTES_POLL_ENABLED", "true").lower() in ("true", "1", "yes")
+    # En modo híbrido con Meta, ya no necesitamos pollear notas de Kommo.
+    # Meta nos da mensajes directamente (incluyendo outgoing via App Review).
+    notes_enabled = os.environ.get("NOTES_POLL_ENABLED", "false").lower() in ("true", "1", "yes")
     global _notes_thread
     if notes_enabled and (_notes_thread is None or not _notes_thread.is_alive()):
         _notes_stop.clear()
