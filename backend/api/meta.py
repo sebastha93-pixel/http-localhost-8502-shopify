@@ -445,3 +445,101 @@ def config_check(_: CurrentUser = Depends(require_role("admin"))) -> dict:
         "META_WEBHOOK_VERIFY_TOKEN": bool(_verify_token()),
         "META_SYSTEM_USER_TOKEN":    bool(_system_token()),
     }
+
+
+@router.get("/discover")
+def discover_assets(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Descubre WABAs, números, Pages e IG accounts accesibles con el token actual."""
+    import requests
+    token = _system_token()
+    if not token:
+        raise HTTPException(503, "META_SYSTEM_USER_TOKEN no configurado")
+    out: dict = {"businesses": [], "wabas": [], "phone_numbers": [], "pages": [], "errors": []}
+    try:
+        # 1. Businesses
+        r = requests.get("https://graph.facebook.com/v23.0/me/businesses",
+                         params={"access_token": token, "fields": "id,name"}, timeout=20)
+        data = r.json() if r.status_code == 200 else {"error": r.text[:300]}
+        if "data" in data:
+            out["businesses"] = data["data"]
+            for b in data["data"]:
+                # 2. WABAs por business
+                rw = requests.get(f"https://graph.facebook.com/v23.0/{b['id']}/owned_whatsapp_business_accounts",
+                                  params={"access_token": token}, timeout=20)
+                if rw.status_code == 200:
+                    for w in (rw.json().get("data") or []):
+                        out["wabas"].append({"business_id": b["id"], "business_name": b.get("name"), "waba_id": w["id"], "waba_name": w.get("name")})
+                        # 3. Phone numbers de cada WABA
+                        rn = requests.get(f"https://graph.facebook.com/v23.0/{w['id']}/phone_numbers",
+                                          params={"access_token": token}, timeout=20)
+                        if rn.status_code == 200:
+                            for n in (rn.json().get("data") or []):
+                                out["phone_numbers"].append({
+                                    "waba_id": w["id"],
+                                    "phone_number_id": n["id"],
+                                    "display": n.get("display_phone_number"),
+                                    "verified_name": n.get("verified_name"),
+                                })
+                # 4. Pages del business
+                rp = requests.get(f"https://graph.facebook.com/v23.0/{b['id']}/owned_pages",
+                                  params={"access_token": token, "fields": "id,name"}, timeout=20)
+                if rp.status_code == 200:
+                    for p in (rp.json().get("data") or []):
+                        out["pages"].append({"business_id": b["id"], "page_id": p["id"], "page_name": p.get("name")})
+        else:
+            out["errors"].append({"step": "/me/businesses", "response": data})
+    except Exception as e:
+        out["errors"].append({"step": "discover", "error": str(e)[:300]})
+    return out
+
+
+@router.post("/subscribe-numbers")
+def subscribe_numbers(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Suscribe cada phone_number_id de la WABA al webhook de la App.
+    Esto es lo que falta para que Meta empiece a mandar mensajes reales."""
+    import requests
+    token = _system_token()
+    if not token:
+        raise HTTPException(503, "META_SYSTEM_USER_TOKEN no configurado")
+    # Descubrir números
+    discovery = discover_assets()
+    results: list = []
+    for n in discovery.get("phone_numbers", []):
+        pid = n["phone_number_id"]
+        try:
+            r = requests.post(f"https://graph.facebook.com/v23.0/{pid}/subscribed_apps",
+                              params={"access_token": token}, timeout=20)
+            ok = (r.status_code == 200) and (r.json().get("success") is True)
+            results.append({
+                "phone_number_id": pid,
+                "display":         n.get("display"),
+                "status_code":     r.status_code,
+                "ok":              ok,
+                "response":        r.text[:300],
+            })
+        except Exception as e:
+            results.append({"phone_number_id": pid, "ok": False, "error": str(e)[:200]})
+    return {"ok": True, "results": results}
+
+
+@router.post("/subscribe-pages")
+def subscribe_pages(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Suscribe la App a webhooks de cada Page (necesario para Messenger e Instagram)."""
+    import requests
+    token = _system_token()
+    if not token:
+        raise HTTPException(503, "META_SYSTEM_USER_TOKEN no configurado")
+    discovery = discover_assets()
+    results: list = []
+    for p in discovery.get("pages", []):
+        pid = p["page_id"]
+        try:
+            r = requests.post(f"https://graph.facebook.com/v23.0/{pid}/subscribed_apps",
+                              params={"access_token": token,
+                                      "subscribed_fields": "messages,messaging_postbacks,message_deliveries,message_reads"},
+                              timeout=20)
+            ok = (r.status_code == 200) and (r.json().get("success") is True)
+            results.append({"page_id": pid, "name": p.get("page_name"), "status_code": r.status_code, "ok": ok, "response": r.text[:300]})
+        except Exception as e:
+            results.append({"page_id": pid, "ok": False, "error": str(e)[:200]})
+    return {"ok": True, "results": results}
