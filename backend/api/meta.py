@@ -402,21 +402,39 @@ def _buscar_lead_kommo_por_phone(wa_id: str) -> Optional[dict]:
     import time as _t
     result: Optional[dict] = None
     try:
-        # Buscar en kommo_leads por customer_phone (variants)
+        # 1. Match exacto por variantes comunes
         for v in variants:
             r = sb.table("kommo_leads").select("lead_id,advisor_id,customer_name,customer_phone").eq("customer_phone", v).limit(1).execute()
             if r.data:
                 lead = r.data[0]
-                # Buscar conversation existente tipo talk-* del lead
                 cr = sb.table("conversations").select("conversation_id").eq("lead_id", lead["lead_id"]).like("conversation_id", "talk-%").order("last_message_at", desc=True).limit(1).execute()
-                conv_existente = cr.data[0]["conversation_id"] if cr.data else None
                 result = {
                     "lead_id":                 lead["lead_id"],
                     "advisor_id":              lead.get("advisor_id"),
                     "customer_name":           lead.get("customer_name"),
-                    "conversation_id_existente": conv_existente,
+                    "conversation_id_existente": cr.data[0]["conversation_id"] if cr.data else None,
                 }
                 break
+
+        # 2. Match por dígitos finales si el exacto no funcionó (los últimos 10
+        # dígitos cubren el número sin código país). Necesario porque Kommo
+        # guarda phones con espacios/guiones/formatos inconsistentes.
+        if not result and len(wa_norm) >= 7:
+            ultimos = wa_norm[-10:] if len(wa_norm) >= 10 else wa_norm
+            # Buscar leads cuyo customer_phone CONTENGA esos dígitos
+            r = sb.table("kommo_leads").select("lead_id,advisor_id,customer_name,customer_phone").like("customer_phone", f"%{ultimos}%").limit(5).execute()
+            for lead in (r.data or []):
+                # Verificar normalizando: que coincidan los últimos N dígitos
+                lead_phone_norm = _normalizar_phone(lead.get("customer_phone") or "")
+                if lead_phone_norm and lead_phone_norm[-10:] == ultimos:
+                    cr = sb.table("conversations").select("conversation_id").eq("lead_id", lead["lead_id"]).like("conversation_id", "talk-%").order("last_message_at", desc=True).limit(1).execute()
+                    result = {
+                        "lead_id":                 lead["lead_id"],
+                        "advisor_id":              lead.get("advisor_id"),
+                        "customer_name":           lead.get("customer_name"),
+                        "conversation_id_existente": cr.data[0]["conversation_id"] if cr.data else None,
+                    }
+                    break
     except Exception:
         result = None
     # Cache (incluso si es None, para no re-consultar leads que no matchean)
@@ -652,6 +670,48 @@ def debug_token(_: CurrentUser = Depends(require_role("admin"))) -> dict:
         except Exception as e:
             out[path] = {"error": str(e)[:200]}
     return out
+
+
+@router.post("/enrich-conversations")
+def enrich_conversations(
+    limit: int = Query(500, ge=10, le=5000),
+    _: CurrentUser = Depends(require_role("admin"))
+) -> dict:
+    """Toma conversations meta-wa-* sin lead_id y las cruza con kommo_leads
+    para asignar lead_id, advisor_id. Útil para re-enriquecer las conversations
+    que ya se crearon antes de que el matching fuera robusto."""
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    # Buscar conversations meta-wa-* sin lead_id
+    convs = (sb.table("conversations").select("conversation_id,lead_id,advisor_id")
+               .like("conversation_id", "meta-wa-%")
+               .is_("lead_id", "null")
+               .limit(limit).execute().data) or []
+    if not convs:
+        return {"ok": True, "candidatos": 0, "enriquecidos": 0}
+    enriquecidos = 0
+    sin_match = 0
+    for c in convs:
+        cid = c["conversation_id"]
+        # Extraer wa_id del conversation_id: meta-wa-{wa_id}-{phone_id}
+        partes = cid.split("-")
+        if len(partes) < 4:
+            continue
+        wa_id = partes[2]
+        match = _buscar_lead_kommo_por_phone(wa_id)
+        if match and match.get("lead_id"):
+            try:
+                update = {"lead_id": match["lead_id"]}
+                if match.get("advisor_id"):
+                    update["advisor_id"] = match["advisor_id"]
+                sb.table("conversations").update(update).eq("conversation_id", cid).execute()
+                enriquecidos += 1
+            except Exception:
+                pass
+        else:
+            sin_match += 1
+    return {"ok": True, "candidatos": len(convs), "enriquecidos": enriquecidos, "sin_match": sin_match}
 
 
 @router.post("/subscribe-waba")
