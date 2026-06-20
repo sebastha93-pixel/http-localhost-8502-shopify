@@ -672,6 +672,144 @@ def debug_token(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     return out
 
 
+@router.post("/cycle-enrichment")
+def cycle_enrichment(
+    max_iterations: int = Query(5, ge=1, le=20, description="Max ciclos antes de parar"),
+    _: CurrentUser = Depends(require_role("admin"))
+) -> dict:
+    """Corre el ciclo completo de enrichment: sync leads → bulk customers → normalize → re-cross-ref.
+    Repite hasta que no haya más cambios o llegue al límite. Útil para recuperar
+    todos los clientes que aún están sin asociar."""
+    import requests
+    from backend.services import kommo as _kommo_svc
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "no_sb")
+
+    log_steps: list = []
+    convs_total_enriched = 0
+
+    for iteration in range(max_iterations):
+        step: dict = {"iteration": iteration + 1}
+
+        # 1. Sync incremental leads
+        try:
+            res_sync = _kommo_svc.sync_leads(full=False, limit_total=2000)
+            step["sync_leads"] = {"upserted": res_sync.get("upserted", 0)}
+        except Exception as e:
+            step["sync_leads"] = {"error": str(e)[:200]}
+
+        # 2. Bulk enrich customers (lotes hasta 0 candidatos)
+        try:
+            import sys
+            from pathlib import Path
+            _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+            if str(_SRC) not in sys.path:
+                sys.path.insert(0, str(_SRC))
+            import kommo_client as kc
+            total_enriquecidos = 0
+            for _ in range(8):  # max 8 lotes de 500 = 4000 leads por iteración
+                leads = (sb.table("kommo_leads").select("lead_id,customer_phone,raw")
+                           .or_("customer_name.is.null,customer_name.eq.")
+                           .limit(500).execute().data) or []
+                contact_to_lead: dict = {}
+                for ld in leads:
+                    raw = ld.get("raw") or {}
+                    contacts = ((raw.get("_embedded") or {}).get("contacts") or [])
+                    if contacts:
+                        cid = contacts[0].get("id")
+                        if cid:
+                            contact_to_lead[int(cid)] = ld["lead_id"]
+                if not contact_to_lead:
+                    break
+                contactos = kc.listar_contactos_por_ids(list(contact_to_lead.keys()))
+                for c in contactos:
+                    try:
+                        cid = int(c.get("id"))
+                        lead_id = contact_to_lead.get(cid)
+                        if not lead_id:
+                            continue
+                        name = c.get("name") or ""
+                        phone = None
+                        for cf in (c.get("custom_fields_values") or []):
+                            if cf.get("field_code") == "PHONE":
+                                vals = cf.get("values") or []
+                                if vals:
+                                    phone = vals[0].get("value")
+                                break
+                        updates = {}
+                        if name: updates["customer_name"] = name
+                        if phone: updates["customer_phone"] = _normalizar_phone(str(phone)) or str(phone)
+                        if updates:
+                            sb.table("kommo_leads").update(updates).eq("lead_id", lead_id).execute()
+                            total_enriquecidos += 1
+                    except Exception:
+                        pass
+            step["bulk_enrich_customers"] = total_enriquecidos
+        except Exception as e:
+            step["bulk_enrich_customers"] = {"error": str(e)[:200]}
+
+        # 3. Normalizar phones que no estén normalizados
+        total_normalizados = 0
+        for _ in range(8):
+            leads = (sb.table("kommo_leads").select("lead_id,customer_phone")
+                       .not_.is_("customer_phone", "null")
+                       .neq("customer_phone", "")
+                       .limit(1000).execute().data) or []
+            cnt = 0
+            for ld in leads:
+                orig = ld.get("customer_phone") or ""
+                norm = _normalizar_phone(orig)
+                if norm and norm != orig:
+                    try:
+                        sb.table("kommo_leads").update({"customer_phone": norm}).eq("lead_id", ld["lead_id"]).execute()
+                        cnt += 1
+                    except Exception:
+                        pass
+            total_normalizados += cnt
+            if cnt == 0:
+                break
+        step["normalizados"] = total_normalizados
+
+        # 4. Re-enrich conversations Meta (limpiar cache primero)
+        _cross_ref_cache.clear()
+        try:
+            convs = (sb.table("conversations").select("conversation_id,lead_id,advisor_id")
+                       .like("conversation_id", "meta-wa-%")
+                       .is_("lead_id", "null")
+                       .limit(2000).execute().data) or []
+            enriquecidos = 0
+            for c in convs:
+                cid = c["conversation_id"]
+                partes = cid.split("-")
+                if len(partes) < 4:
+                    continue
+                wa_id = partes[2]
+                match = _buscar_lead_kommo_por_phone(wa_id)
+                if match and match.get("lead_id"):
+                    update = {"lead_id": match["lead_id"]}
+                    if match.get("advisor_id"):
+                        update["advisor_id"] = match["advisor_id"]
+                    try:
+                        sb.table("conversations").update(update).eq("conversation_id", cid).execute()
+                        enriquecidos += 1
+                    except Exception:
+                        pass
+            step["meta_convs_candidatos"] = len(convs)
+            step["meta_convs_enriquecidos"] = enriquecidos
+            convs_total_enriched += enriquecidos
+        except Exception as e:
+            step["meta_re_enrich"] = {"error": str(e)[:200]}
+            enriquecidos = 0
+
+        log_steps.append(step)
+        # Convergencia: si esta iteración no enriqueció nada nuevo, paramos
+        if step.get("meta_convs_enriquecidos", 0) == 0 and step.get("bulk_enrich_customers", 0) == 0:
+            break
+
+    return {"ok": True, "convs_total_enriched": convs_total_enriched, "iteraciones": log_steps}
+
+
 @router.post("/normalizar-phones-kommo")
 def normalizar_phones_kommo(
     limit: int = Query(10000, ge=10, le=50000),

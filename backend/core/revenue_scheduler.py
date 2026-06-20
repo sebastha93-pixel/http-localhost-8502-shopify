@@ -36,6 +36,45 @@ NOTES_POLL_INTERVAL_SEC = int(os.environ.get("NOTES_POLL_INTERVAL_SEC", "45"))
 NOTES_POLL_WINDOW_MIN = int(os.environ.get("NOTES_POLL_WINDOW_MIN", "10"))
 _notes_state: dict = {"running": False, "last_run_at": None, "last_result": None}
 
+# Ciclo de enrichment Meta↔Kommo cada N horas
+_enrich_thread: threading.Thread | None = None
+_enrich_stop = threading.Event()
+ENRICH_CYCLE_HOURS = int(os.environ.get("ENRICH_CYCLE_HOURS", "6"))
+_enrich_state: dict = {"running": False, "last_run_at": None, "last_result": None}
+
+
+def _correr_cycle_enrichment() -> dict:
+    """Wrapper para correr el endpoint de enrichment desde el cron."""
+    try:
+        from backend.api.meta import cycle_enrichment
+        return cycle_enrichment(max_iterations=5)
+    except Exception as e:
+        return {"error": str(e)[:300]}
+
+
+def _loop_enrich():
+    """Loop del cron de enrichment: cada N horas dispara el ciclo completo."""
+    if _enrich_stop.wait(timeout=300):  # esperar 5 min después del boot
+        return
+    while not _enrich_stop.is_set():
+        try:
+            _enrich_state["running"] = True
+            _enrich_state["last_run_at"] = datetime.now(tz=timezone.utc).isoformat()
+            res = _correr_cycle_enrichment()
+            _enrich_state["last_result"] = res
+            log.info(f"cycle_enrichment: {res.get('convs_total_enriched', 0)} convs enriquecidas")
+        except Exception as e:
+            log.exception(f"cycle_enrich error: {e}")
+        finally:
+            _enrich_state["running"] = False
+        # Dormir N horas en bloques de 60s
+        rem = ENRICH_CYCLE_HOURS * 3600
+        while rem > 0 and not _enrich_stop.is_set():
+            tick = min(60.0, rem)
+            if _enrich_stop.wait(timeout=tick):
+                return
+            rem -= tick
+
 
 def _poll_notes_de_conversaciones_activas() -> dict:
     """Para cada conversation actualizada en los últimos N minutos, fetch
@@ -432,6 +471,14 @@ def start() -> threading.Thread | None:
         _notes_stop.clear()
         _notes_thread = threading.Thread(target=_loop_notes_poll, daemon=True, name="notes_poll")
         _notes_thread.start()
+
+    enrich_enabled = os.environ.get("ENRICH_CYCLE_ENABLED", "true").lower() in ("true", "1", "yes")
+    global _enrich_thread
+    if enrich_enabled and (_enrich_thread is None or not _enrich_thread.is_alive()):
+        _enrich_stop.clear()
+        _enrich_thread = threading.Thread(target=_loop_enrich, daemon=True, name="cycle_enrich")
+        _enrich_thread.start()
+
     return _thread
 
 
@@ -440,6 +487,7 @@ def stop():
     _alertas_stop.set()
     _warmup_stop.set()
     _notes_stop.set()
+    _enrich_stop.set()
     if _thread is not None:
         _thread.join(timeout=5)
     if _alertas_thread is not None:
@@ -448,3 +496,5 @@ def stop():
         _warmup_thread.join(timeout=5)
     if _notes_thread is not None:
         _notes_thread.join(timeout=5)
+    if _enrich_thread is not None:
+        _enrich_thread.join(timeout=5)
