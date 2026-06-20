@@ -223,16 +223,36 @@ function ConversationDetailModal({
             }}>
               {/* Header tipo WhatsApp */}
               <div className="bg-[#075E54] text-white px-4 py-3 flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center font-semibold">
-                  {(d?.lead?.customer_name || "?").charAt(0).toUpperCase()}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium truncate">{d?.lead?.customer_name || "Cliente sin nombre"}</div>
-                  <div className="text-xs opacity-80 truncate">
-                    {d?.lead?.customer_phone || conversationId}
-                    {d?.conversation?.channel && ` · ${CHANNEL_LABEL[d.conversation.channel] || d.conversation.channel}`}
-                  </div>
-                </div>
+                {(() => {
+                  // Extraer wa_id del conversation_id si es meta-wa-*
+                  const cid = d?.conversation?.conversation_id || conversationId;
+                  const isMetaWa = cid.startsWith("meta-wa-");
+                  const waId = isMetaWa ? cid.split("-")[2] : null;
+                  // Formato bonito del phone
+                  const fmtPhone = (raw: string | null | undefined) => {
+                    if (!raw) return null;
+                    const digits = raw.replace(/\D/g, "");
+                    if (digits.startsWith("57") && digits.length === 12) {
+                      return `+57 ${digits.slice(2,5)} ${digits.slice(5,8)} ${digits.slice(8)}`;
+                    }
+                    return raw;
+                  };
+                  const phoneDisplay = fmtPhone(d?.lead?.customer_phone) || (waId ? fmtPhone(waId) : null);
+                  const displayName = d?.lead?.customer_name?.trim() || phoneDisplay || "Cliente WhatsApp";
+                  const initial = (d?.lead?.customer_name?.trim() || "C").charAt(0).toUpperCase();
+                  return (
+                    <>
+                      <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center font-semibold">{initial}</div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate">{displayName}</div>
+                        <div className="text-xs opacity-80 truncate">
+                          {phoneDisplay && d?.lead?.customer_name && `${phoneDisplay} · `}
+                          {d?.conversation?.channel && (CHANNEL_LABEL[d.conversation.channel] || d.conversation.channel)}
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
                 <div className="text-xs opacity-80 text-right">
                   <div>{d?.advisor?.name || "Sin asesora"}</div>
                   <div className="text-[10px]">{d?.messages?.length || 0} mensajes</div>
@@ -271,7 +291,11 @@ function ConversationDetailModal({
                           </div>
                         )}
                         <div className="whitespace-pre-wrap break-words">
-                          {m.message_text || <em className="text-graphite">(sin contenido)</em>}
+                          {m.message_text
+                            ? m.message_text
+                            : isCustomer
+                              ? <em className="text-graphite">(sin contenido)</em>
+                              : <em className="opacity-70 text-[12px]">✓ Mensaje enviado · texto pendiente App Review</em>}
                         </div>
                         <div className="text-[10px] text-[#667781] text-right mt-0.5 leading-none">
                           {new Date(m.sent_at).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit", hour12: false })}
