@@ -548,7 +548,7 @@ function CoachingTab({ advisors }: { advisors: AdvisorRow[] }) {
 
 
 export default function RevenuePage() {
-  const [daysBack, setDaysBack] = useState(30);
+  const [daysBack, setDaysBack] = useState(1);  // Default: solo HOY
   const [advisorFilter, setAdvisorFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [channelFilter, setChannelFilter] = useState<string>("");

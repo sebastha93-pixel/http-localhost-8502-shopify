@@ -672,6 +672,40 @@ def debug_token(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     return out
 
 
+@router.post("/purge-conversations-and-messages")
+def purge_conversations_and_messages(
+    confirm: str = Query(..., description="Debe ser 'YES_PURGE_ALL' para ejecutar"),
+    _: CurrentUser = Depends(require_role("admin"))
+) -> dict:
+    """⚠️ PURGA TODA la data de conversations + messages + chat_audits.
+    Mantiene: advisors, kommo_leads, kommo_oauth_tokens, revenue_sync_state.
+    Útil para empezar de cero con mensajes 100% via Meta webhook."""
+    if confirm != "YES_PURGE_ALL":
+        raise HTTPException(400, "Confirm con ?confirm=YES_PURGE_ALL")
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "no_sb")
+    results: dict = {}
+    # Orden importa: messages → audits → conversations (por FK)
+    for table in ["messages", "chat_audits", "conversations"]:
+        try:
+            # Truncado vía delete con filtro tautológico
+            r = sb.table(table).delete().neq("conversation_id" if table != "chat_audits" else "audit_id", "__nunca_existe__").execute()
+            results[table] = {"borrados": len(r.data) if r.data else "ok"}
+        except Exception as e:
+            results[table] = {"error": str(e)[:200]}
+    # También limpiar el cache en memoria del cross-ref
+    _cross_ref_cache.clear()
+    # Resetear cursor de sync de talks para que mañana empiece limpio
+    try:
+        sb.table("revenue_sync_state").delete().eq("key", "kommo_talks_last_sync").execute()
+        sb.table("revenue_sync_state").delete().eq("key", "kommo_talks_backfill_cursor").execute()
+        results["sync_state_reset"] = "ok"
+    except Exception:
+        pass
+    return {"ok": True, "results": results, "next": "A partir de ahora todos los mensajes vienen vía Meta webhook. Empieza limpio."}
+
+
 @router.post("/cycle-enrichment")
 def cycle_enrichment(
     max_iterations: int = Query(5, ge=1, le=20, description="Max ciclos antes de parar"),
