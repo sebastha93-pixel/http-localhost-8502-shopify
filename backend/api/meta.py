@@ -677,33 +677,74 @@ def purge_conversations_and_messages(
     confirm: str = Query(..., description="Debe ser 'YES_PURGE_ALL' para ejecutar"),
     _: CurrentUser = Depends(require_role("admin"))
 ) -> dict:
-    """⚠️ PURGA TODA la data de conversations + messages + chat_audits.
-    Mantiene: advisors, kommo_leads, kommo_oauth_tokens, revenue_sync_state.
-    Útil para empezar de cero con mensajes 100% via Meta webhook."""
+    """⚠️ PURGA messages + chat_audits + conversations.
+    Mantiene: advisors, kommo_leads, kommo_oauth_tokens, revenue_sync_state."""
     if confirm != "YES_PURGE_ALL":
         raise HTTPException(400, "Confirm con ?confirm=YES_PURGE_ALL")
     sb = db._sb()
     if sb is None:
         raise HTTPException(503, "no_sb")
     results: dict = {}
-    # Orden importa: messages → audits → conversations (por FK)
-    for table in ["messages", "chat_audits", "conversations"]:
+    # Orden importa por FK: messages → audits → conversations
+    deletes = [
+        ("messages",       "message_id",      "__nunca__"),
+        ("chat_audits",    "conversation_id", "__nunca__"),  # uuid no es la PK, usa otro filtro
+        ("conversations",  "conversation_id", "__nunca__"),
+    ]
+    for table, col, val in deletes:
         try:
-            # Truncado vía delete con filtro tautológico
-            r = sb.table(table).delete().neq("conversation_id" if table != "chat_audits" else "audit_id", "__nunca_existe__").execute()
+            r = sb.table(table).delete().neq(col, val).execute()
             results[table] = {"borrados": len(r.data) if r.data else "ok"}
         except Exception as e:
             results[table] = {"error": str(e)[:200]}
-    # También limpiar el cache en memoria del cross-ref
     _cross_ref_cache.clear()
-    # Resetear cursor de sync de talks para que mañana empiece limpio
     try:
         sb.table("revenue_sync_state").delete().eq("key", "kommo_talks_last_sync").execute()
         sb.table("revenue_sync_state").delete().eq("key", "kommo_talks_backfill_cursor").execute()
         results["sync_state_reset"] = "ok"
     except Exception:
         pass
-    return {"ok": True, "results": results, "next": "A partir de ahora todos los mensajes vienen vía Meta webhook. Empieza limpio."}
+    return {"ok": True, "results": results}
+
+
+@router.post("/purge-kommo-data")
+def purge_kommo_data(
+    confirm: str = Query(..., description="Debe ser 'YES_PURGE_KOMMO' para ejecutar"),
+    _: CurrentUser = Depends(require_role("admin"))
+) -> dict:
+    """⚠️ PURGA TOTAL: kommo_leads + clientes_clasificacion + advisor_rankings + sync_state.
+    Después de esto, todo arranca cuando llega el primer mensaje Meta. Las
+    asesoras (advisors) se mantienen para el ranking. OAuth tokens se mantienen
+    para que la API siga funcionando."""
+    if confirm != "YES_PURGE_KOMMO":
+        raise HTTPException(400, "Confirm con ?confirm=YES_PURGE_KOMMO")
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "no_sb")
+    results: dict = {}
+    tables = [
+        ("kommo_leads",            "lead_id"),
+        ("clientes_clasificacion", "email"),
+        ("advisor_rankings",       "advisor_id"),
+    ]
+    for table, col in tables:
+        try:
+            r = sb.table(table).delete().neq(col, "__nunca_existe__").execute()
+            results[table] = {"borrados": len(r.data) if r.data else "ok"}
+        except Exception as e:
+            results[table] = {"error": str(e)[:200]}
+    # Resetear TODOS los sync_state (no solo talks)
+    try:
+        sb.table("revenue_sync_state").delete().neq("key", "__nunca__").execute()
+        results["sync_state"] = "fully_reset"
+    except Exception as e:
+        results["sync_state"] = {"error": str(e)[:200]}
+    _cross_ref_cache.clear()
+    return {
+        "ok": True,
+        "results": results,
+        "next": "Todo arranca desde el primer mensaje Meta. Las asesoras se conservan. El cross-reference irá llenando kommo_leads on-demand cuando llegue tráfico Kommo (talk[update], leads[status])."
+    }
 
 
 @router.post("/cycle-enrichment")
