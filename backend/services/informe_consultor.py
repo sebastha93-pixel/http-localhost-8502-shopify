@@ -7,7 +7,6 @@ matan, 20 mejores prácticas, comparativa por asesora.
 
 Uso típico:
     informe = generar_informe(days_back=7)
-    # → {"resumen": {...}, "seccion_a": [...], ..., "comparativa_asesoras": [...]}
 """
 from __future__ import annotations
 
@@ -19,18 +18,15 @@ from zoneinfo import ZoneInfo
 
 import anthropic
 
-from backend.core.supabase import sb
+from backend.services import revenue_db as db
 
-# ── Config ───────────────────────────────────────────────────────────────────
+
 MODELO = "claude-haiku-4-5-20251001"
-MAX_TOKENS = 16000  # Informe largo
+MAX_TOKENS = 16000
 TZ_BOG = ZoneInfo("America/Bogota")
-
-# Máximo de conversaciones a enviar al modelo. >80 puede saturar contexto.
 MAX_CONVERSACIONES = 80
 
 
-# ── Prompt del director comercial ───────────────────────────────────────────
 SYSTEM_PROMPT = """Eres un director comercial senior con 20+ años de experiencia en \
 ecommerce, ventas por WhatsApp, moda femenina y optimización de conversión.
 
@@ -51,14 +47,13 @@ Output SIEMPRE en JSON válido siguiendo el esquema indicado por el usuario."""
 
 
 def _resumir_conversacion(conv: dict) -> str:
-    """Resume una conv para que el prompt no explote en tokens."""
     msgs = conv.get("messages", []) or []
-    # Truncar a últimos 40 mensajes para evitar tokens infinitos
     msgs = msgs[-40:]
     lineas = []
     for m in msgs:
-        direccion = "ASESORA" if m.get("direction") == "outgoing" else "CLIENTA"
-        texto = (m.get("text") or "").strip().replace("\n", " ")
+        sender = m.get("sender_type") or ""
+        direccion = "ASESORA" if sender == "advisor" else "CLIENTA" if sender == "customer" else "SISTEMA"
+        texto = (m.get("message_text") or "").strip().replace("\n", " ")
         if not texto:
             continue
         lineas.append(f"{direccion}: {texto[:300]}")
@@ -70,47 +65,66 @@ def _fetch_conversaciones(
     advisor_id: str | None = None,
     limit: int = MAX_CONVERSACIONES,
 ) -> list[dict]:
-    """Trae conversaciones con sus mensajes desde Supabase."""
+    sb = db._sb()
+    if sb is None:
+        return []
     desde = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
 
     q = (
         sb.table("conversations")
-        .select("id, customer_name, customer_phone, advisor_id, status, lead_value, updated_at, advisors(nombre)")
-        .gte("updated_at", desde)
-        .order("updated_at", desc=True)
+        .select("conversation_id, lead_id, advisor_id, channel, status, last_message_at")
+        .gte("last_message_at", desde)
+        .order("last_message_at", desc=True)
         .limit(limit)
     )
     if advisor_id:
         q = q.eq("advisor_id", advisor_id)
 
     convs = q.execute().data or []
+    if not convs:
+        return []
 
-    # Pegar mensajes de cada conv
+    lead_ids = list({c["lead_id"] for c in convs if c.get("lead_id")})
+    advisor_ids = list({c["advisor_id"] for c in convs if c.get("advisor_id")})
+    leads_map: dict = {}
+    advisors_map: dict = {}
+    if lead_ids:
+        for l in (sb.table("kommo_leads").select("lead_id,customer_name,status,lead_value").in_("lead_id", lead_ids).execute().data or []):
+            leads_map[l["lead_id"]] = l
+    if advisor_ids:
+        for a in (sb.table("advisors").select("advisor_id,name").in_("advisor_id", advisor_ids).execute().data or []):
+            advisors_map[a["advisor_id"]] = a
+
     for c in convs:
+        lead = leads_map.get(c.get("lead_id"), {})
+        adv = advisors_map.get(c.get("advisor_id"), {})
+        c["customer_name"] = lead.get("customer_name") or "sin nombre"
+        c["lead_status"] = lead.get("status") or "open"
+        c["lead_value"] = lead.get("lead_value") or 0
+        c["asesora_nombre"] = adv.get("name") or "Sin asignar"
+
         msgs = (
             sb.table("messages")
-            .select("direction, text, created_at")
-            .eq("conversation_id", c["id"])
-            .order("created_at")
+            .select("sender_type, message_text, sent_at")
+            .eq("conversation_id", c["conversation_id"])
+            .order("sent_at")
             .limit(60)
             .execute()
             .data
             or []
         )
         c["messages"] = msgs
-        c["asesora_nombre"] = (c.get("advisors") or {}).get("nombre") or "Sin asignar"
 
     return convs
 
 
 def _build_user_prompt(convs: list[dict]) -> str:
-    """Arma el prompt con todas las conversaciones."""
     bloques = []
     for i, c in enumerate(convs, 1):
         bloques.append(
-            f"### CONV {i} — Lead {c['id']} | Asesora: {c['asesora_nombre']} | "
-            f"Cliente: {c.get('customer_name') or 'sin nombre'} | "
-            f"Status: {c.get('status') or 'open'} | Valor: ${c.get('lead_value') or 0:,}\n"
+            f"### CONV {i} — Lead {c.get('lead_id')} | Asesora: {c['asesora_nombre']} | "
+            f"Cliente: {c['customer_name']} | "
+            f"Status: {c['lead_status']} | Valor: ${c['lead_value']:,}\n"
             f"{_resumir_conversacion(c)}"
         )
 
@@ -188,7 +202,6 @@ def generar_informe(
     days_back: int = 7,
     advisor_id: str | None = None,
 ) -> dict[str, Any]:
-    """Genera el informe completo. Retorna dict con todas las secciones + metadata."""
     convs = _fetch_conversaciones(days_back=days_back, advisor_id=advisor_id)
 
     if not convs:
@@ -203,7 +216,6 @@ def generar_informe(
         return {"error": "ANTHROPIC_API_KEY no configurada"}
 
     client = anthropic.Anthropic(api_key=api_key)
-
     prompt = _build_user_prompt(convs)
 
     resp = client.messages.create(
@@ -214,7 +226,6 @@ def generar_informe(
     )
 
     raw = resp.content[0].text.strip()
-    # Limpiar posible markdown
     if raw.startswith("```"):
         raw = raw.split("```", 2)[1]
         if raw.startswith("json"):
@@ -243,7 +254,9 @@ def generar_informe(
 
 
 def guardar_informe(informe: dict[str, Any]) -> str | None:
-    """Persiste el informe en tabla revenue_informes. Retorna informe_id."""
+    sb = db._sb()
+    if sb is None:
+        return None
     try:
         row = {
             "generado_at": informe["_metadata"]["generado_at"],
