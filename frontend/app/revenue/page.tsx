@@ -191,6 +191,17 @@ function ConversationDetailModal({
             <div className="font-semibold">{d?.lead?.customer_name || "Cliente sin nombre"}</div>
             <div className="text-xs text-graphite">{conversationId} · {d?.advisor?.name || "Sin asesora"}</div>
           </div>
+          {d?.lead?.lead_id && (
+            <a
+              href={`https://drtjeans.kommo.com/leads/detail/${d.lead.lead_id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-1.5 rounded border text-sm hover:bg-cloud"
+              title="Abrir lead en Kommo"
+            >
+              🔗 Kommo
+            </a>
+          )}
           <button
             onClick={() => auditMut.mutate()}
             disabled={auditMut.isPending}
@@ -199,6 +210,34 @@ function ConversationDetailModal({
             {auditMut.isPending ? "Auditando..." : audit ? "Re-auditar" : "Auditar con IA"}
           </button>
         </div>
+
+        {/* Info panel del lead */}
+        {d?.lead && (
+          <div className="px-4 py-3 bg-cloud/50 border-b grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+            <div>
+              <div className="text-graphite">Estado venta</div>
+              <div className="font-medium mt-0.5"><StatusBadge status={d.lead.status} /></div>
+            </div>
+            <div>
+              <div className="text-graphite">Valor</div>
+              <div className="font-medium mt-0.5">
+                {d.lead.lead_value
+                  ? `$${Number(d.lead.lead_value).toLocaleString("es-CO")}`
+                  : <span className="text-graphite">—</span>}
+              </div>
+            </div>
+            <div>
+              <div className="text-graphite">Teléfono</div>
+              <div className="font-medium mt-0.5 truncate">
+                {d.lead.customer_phone || <span className="text-graphite">—</span>}
+              </div>
+            </div>
+            <div>
+              <div className="text-graphite">Lead ID</div>
+              <div className="font-medium mt-0.5">#{d.lead.lead_id}</div>
+            </div>
+          </div>
+        )}
 
         {detailQ.isLoading ? <div className="p-6"><LoadingState /></div> : detailQ.isError ? <div className="p-6"><ErrorState error={detailQ.error} /></div> : (
           <div className="p-4 space-y-4">
