@@ -86,9 +86,37 @@ interface MessageRow {
 
 const CHANNEL_LABEL: Record<string, string> = {
   waba: "WhatsApp",
+  whatsapp: "WhatsApp",
+  whatsapp_business: "WhatsApp",
+  wa_business: "WhatsApp",
+  wa: "WhatsApp",
   instagram_business: "Instagram",
+  instagram: "Instagram",
+  instagram_dm: "Instagram",
+  ig: "Instagram",
+  dm: "Instagram",
+  messenger: "Messenger",
+  facebook: "Messenger",
+  fb: "Messenger",
+  tiktok: "TikTok",
+  tt: "TikTok",
   unknown: "—",
 };
+
+const CHANNEL_ICON: Record<string, string> = {
+  WhatsApp:  "💬",
+  Instagram: "📸",
+  Messenger: "💬",
+  TikTok:    "🎵",
+};
+
+function channelDisplay(channel: string | null | undefined): { label: string; icon: string } {
+  if (!channel) return { label: "—", icon: "" };
+  const lower = channel.toLowerCase();
+  const label = CHANNEL_LABEL[lower] || channel;
+  const icon  = CHANNEL_ICON[label] || "";
+  return { label, icon };
+}
 
 function fmtDate(s: string | null | undefined): string {
   if (!s) return "—";
@@ -114,13 +142,16 @@ function fmtRelative(s: string | null | undefined): string {
 function StatusBadge({ status }: { status: string | null | undefined }) {
   if (!status) return <span className="text-graphite text-xs">—</span>;
   const map: Record<string, { tone: "normal" | "riesgo" | "critico"; label: string }> = {
+    // Estados de venta
     won:         { tone: "normal",  label: "Ganada" },
     lost:        { tone: "critico", label: "Perdida" },
+    open:        { tone: "riesgo",  label: "Abierta" },
+    // Estados de conversación
     in_progress: { tone: "riesgo",  label: "En curso" },
     in_work:     { tone: "riesgo",  label: "Activa" },
     closed:      { tone: "normal",  label: "Cerrada" },
   };
-  const cfg = map[status] || { tone: "riesgo" as const, label: status };
+  const cfg = map[status.toLowerCase()] || { tone: "riesgo" as const, label: status };
   return <Badge tone={cfg.tone}>{cfg.label}</Badge>;
 }
 
@@ -247,7 +278,10 @@ function ConversationDetailModal({
                         <div className="font-medium truncate">{displayName}</div>
                         <div className="text-xs opacity-80 truncate">
                           {phoneDisplay && d?.lead?.customer_name && `${phoneDisplay} · `}
-                          {d?.conversation?.channel && (CHANNEL_LABEL[d.conversation.channel] || d.conversation.channel)}
+                          {d?.conversation?.channel && (() => {
+                            const ch = channelDisplay(d.conversation.channel);
+                            return `${ch.icon} ${ch.label}`.trim();
+                          })()}
                         </div>
                       </div>
                     </>
@@ -646,15 +680,15 @@ export default function RevenuePage() {
       subtitle="Auditoría comercial: conversaciones, asesoras y conversión"
     >
       <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
-        <KpiCard label="Asesoras activas" value={stats?.advisors ?? "—"} />
-        <KpiCard label="Leads" value={stats?.leads?.toLocaleString("es-CO") ?? "—"} />
-        <KpiCard label="Conversaciones" value={stats?.conversations?.toLocaleString("es-CO") ?? "—"} />
-        <KpiCard label="Mensajes (total)" value={stats?.messages?.toLocaleString("es-CO") ?? "—"} />
+        <KpiCard label="Asesoras activas" value={statsQ.isLoading ? "…" : (stats?.advisors ?? 0)} />
+        <KpiCard label="Leads"             value={statsQ.isLoading ? "…" : (stats?.leads ?? 0).toLocaleString("es-CO")} />
+        <KpiCard label="Conversaciones"    value={statsQ.isLoading ? "…" : (stats?.conversations ?? 0).toLocaleString("es-CO")} />
+        <KpiCard label="Mensajes (total)"  value={statsQ.isLoading ? "…" : (stats?.messages ?? 0).toLocaleString("es-CO")} />
         <KpiCard
           label={`Mensajes ${daysBack === 1 ? "hoy" : daysBack === 2 ? "48h" : `${daysBack}d`}`}
-          value={msgsStatsQ.data?.total_mensajes?.toLocaleString("es-CO") ?? "—"}
+          value={msgsStatsQ.isLoading ? "…" : (msgsStatsQ.data?.total_mensajes ?? 0).toLocaleString("es-CO")}
         />
-        <KpiCard label="Auditorías pend." value={stats?.pending_audits?.toLocaleString("es-CO") ?? "—"} />
+        <KpiCard label="Auditorías pend."  value={statsQ.isLoading ? "…" : (stats?.pending_audits ?? 0).toLocaleString("es-CO")} />
       </div>
 
       <div className="flex flex-wrap gap-3 items-center mb-4">
@@ -781,7 +815,17 @@ export default function RevenuePage() {
                             )}
                           </td>
                           <td className="py-2 pr-3">{c.advisor_name || <span className="text-graphite italic">Sin asignar</span>}</td>
-                          <td className="py-2 pr-3">{CHANNEL_LABEL[c.channel] || c.channel}</td>
+                          <td className="py-2 pr-3">
+                            {(() => {
+                              const ch = channelDisplay(c.channel);
+                              return (
+                                <span className="inline-flex items-center gap-1">
+                                  {ch.icon && <span>{ch.icon}</span>}
+                                  <span>{ch.label}</span>
+                                </span>
+                              );
+                            })()}
+                          </td>
                           <td className="py-2 pr-3 whitespace-nowrap">{fmtRelative(c.last_message_at)}</td>
                           <td className="py-2 pr-3"><StatusBadge status={c.status} /></td>
                           <td className="py-2 pr-3"><StatusBadge status={c.lead_status || undefined} /></td>
