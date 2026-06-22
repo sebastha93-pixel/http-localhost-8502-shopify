@@ -1096,12 +1096,26 @@ def conversation_detail(
         adv = sb.table("advisors").select("name,email").eq("advisor_id", conv["advisor_id"]).limit(1).execute().data
         if adv:
             advisor = adv[0]
-    msgs = (sb.table("messages")
-              .select("message_id,sender_type,sender_name,message_text,sent_at")
-              .eq("conversation_id", conversation_id)
-              .order("sent_at")
-              .limit(500)
-              .execute().data) or []
+    # Traer TODOS los mensajes del lead — no solo los del conversation_id exacto.
+    # Razón: incoming WhatsApp llega como meta-wa-*, pero las respuestas de la
+    # asesora desde Kommo entran como talk-* o lead-*. Unificando por lead_id
+    # se ven cliente + asesora en orden cronológico, sin importar el canal.
+    lead_id_conv = conv.get("lead_id")
+    if lead_id_conv:
+        msgs = (sb.table("messages")
+                  .select("message_id,conversation_id,sender_type,sender_name,message_text,sent_at")
+                  .eq("lead_id", lead_id_conv)
+                  .order("sent_at")
+                  .limit(500)
+                  .execute().data) or []
+    else:
+        # Fallback: si no hay lead_id (raro), usar conversation_id directo.
+        msgs = (sb.table("messages")
+                  .select("message_id,conversation_id,sender_type,sender_name,message_text,sent_at")
+                  .eq("conversation_id", conversation_id)
+                  .order("sent_at")
+                  .limit(500)
+                  .execute().data) or []
     audits = (sb.table("chat_audits").select("*")
                 .eq("conversation_id", conversation_id)
                 .order("audit_date", desc=True)
