@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
-import { KpiCard } from "@/components/kpi-card";
+import { KpiStrip } from "@/components/kpi-card";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatMoney, formatMoneyShort, fmtDateTime } from "@/lib/utils";
 
@@ -32,7 +32,7 @@ export default function FinanzasPage() {
     queryFn: () => api.get<ResumenFinanzas>("/api/finanzas/resumen"),
   });
 
-  if (isLoading) return <LoadingState label="Cargando finanzas..." />;
+  if (isLoading) return <LoadingState label="Cargando finanzas…" />;
   if (error || !data) return <ErrorState error={error} onRetry={() => refetch()} />;
 
   return (
@@ -42,19 +42,19 @@ export default function FinanzasPage() {
       isFetching={isFetching}
       onRefresh={() => refetch()}
     >
-      {/* Bloque COD */}
       <section>
         <p className="section-label mb-3">Portafolio Contraentrega</p>
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
-          <KpiCard label="Total COD"     value={formatMoneyShort(data.cod_total)}      meta={`${data.n_cod_total} pedidos`}    accent="navy" />
-          <KpiCard label="Pendientes"    value={formatMoneyShort(data.cod_pendientes)} meta={`${data.n_cod_pendientes} despacho`} accent="khaki" />
-          <KpiCard label="En tránsito"   value={formatMoneyShort(data.cod_transito)}   meta={`${data.n_cod_transito} pedidos`}    accent="steel" />
-          <KpiCard label="Novedades"     value={formatMoneyShort(data.cod_novedades)}  meta={`${data.n_cod_novedades} comprometidos`} accent={data.n_cod_novedades ? "rust" : "steel"} danger={data.n_cod_novedades > 0} />
-          <KpiCard label="Entregados"    value={formatMoneyShort(data.cod_entregados)} meta={`${data.n_cod_entregados} cobrados`} accent="teal" />
-        </div>
+        <KpiStrip
+          items={[
+            { label: "Total COD",   value: formatMoneyShort(data.cod_total) },
+            { label: "Pendientes",  value: formatMoneyShort(data.cod_pendientes) },
+            { label: "En tránsito", value: formatMoneyShort(data.cod_transito) },
+            { label: "Novedades",   value: formatMoneyShort(data.cod_novedades),  tone: data.n_cod_novedades > 0 ? "danger" : "default" },
+            { label: "Entregados",  value: formatMoneyShort(data.cod_entregados), tone: "success" },
+          ]}
+        />
       </section>
 
-      {/* Detalle COD */}
       <section>
         <p className="section-label mb-3">Detalle COD</p>
         <Card>
@@ -62,22 +62,23 @@ export default function FinanzasPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="text-left py-2 text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Estado</th>
-                  <th className="text-right py-2 text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Pedidos</th>
-                  <th className="text-right py-2 text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Valor COD</th>
-                  <th className="text-right py-2 text-[0.6rem] font-bold uppercase tracking-wider text-graphite">% del total</th>
+                  {["Estado", "Pedidos", "Valor COD", "% del total"].map((h, i) => (
+                    <th key={h} className={`py-2 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i === 0 ? "text-left" : "text-right"}`}>
+                      {h}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
                 <DetailRow label="Pendientes despacho" n={data.n_cod_pendientes} v={data.cod_pendientes} total={data.cod_total} />
                 <DetailRow label="En tránsito"         n={data.n_cod_transito}   v={data.cod_transito}   total={data.cod_total} />
-                <DetailRow label="Con novedades"       n={data.n_cod_novedades}  v={data.cod_novedades}  total={data.cod_total} accent="rust" />
-                <DetailRow label="Entregados"          n={data.n_cod_entregados} v={data.cod_entregados} total={data.cod_total} accent="teal" />
-                <tr className="border-t-2 border-ink font-bold">
-                  <td className="py-2 text-ink">Total portafolio</td>
-                  <td className="text-right tabular-nums text-ink">{data.n_cod_total}</td>
-                  <td className="text-right tabular-nums text-ink">{formatMoney(data.cod_total)}</td>
-                  <td className="text-right tabular-nums text-ink">100%</td>
+                <DetailRow label="Con novedades"       n={data.n_cod_novedades}  v={data.cod_novedades}  total={data.cod_total} accent="terracotta" />
+                <DetailRow label="Entregados"          n={data.n_cod_entregados} v={data.cod_entregados} total={data.cod_total} accent="sage" />
+                <tr className="border-t-2 border-ink-900/15 bg-cloud/50">
+                  <td className="py-2 font-medium text-ink-900">Total portafolio</td>
+                  <td className="py-2 text-right font-medium text-ink-900 tabular-nums">{data.n_cod_total}</td>
+                  <td className="py-2 text-right font-medium text-ink-900 tabular-nums">{formatMoney(data.cod_total)}</td>
+                  <td className="py-2 text-right font-medium text-ink-900 tabular-nums">100%</td>
                 </tr>
               </tbody>
             </table>
@@ -85,15 +86,16 @@ export default function FinanzasPage() {
         </Card>
       </section>
 
-      {/* MercadoPago */}
       <section>
         <p className="section-label mb-3">MercadoPago · últimos 30 días</p>
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <KpiCard label="Transacciones"    value={data.n_mp}                              meta="Pagos aprobados"      accent="navy" />
-          <KpiCard label="Valor bruto"      value={formatMoneyShort(data.mp_total)}        meta="Recaudo total"        accent="steel" />
-          <KpiCard label="Valor neto"       value={formatMoneyShort(data.mp_neto)}         meta="Después de comisión"  accent="teal" />
-          <KpiCard label="Comisiones"       value={formatMoneyShort(data.mp_comisiones)}   meta="Cobrado por MP"       accent="khaki" />
-        </div>
+        <KpiStrip
+          items={[
+            { label: "Transacciones", value: data.n_mp },
+            { label: "Valor bruto",   value: formatMoneyShort(data.mp_total) },
+            { label: "Valor neto",    value: formatMoneyShort(data.mp_neto), tone: "success" },
+            { label: "Comisiones",    value: formatMoneyShort(data.mp_comisiones) },
+          ]}
+        />
       </section>
     </PageShell>
   );
@@ -102,16 +104,16 @@ export default function FinanzasPage() {
 function DetailRow({
   label, n, v, total, accent,
 }: {
-  label: string; n: number; v: number; total: number; accent?: "rust" | "teal";
+  label: string; n: number; v: number; total: number; accent?: "terracotta" | "sage";
 }) {
   const pct = total > 0 ? Math.round((v / total) * 100) : 0;
-  const colorCls = accent === "rust" ? "text-rust" : accent === "teal" ? "text-teal" : "text-ink";
+  const colorCls = accent === "terracotta" ? "text-terracotta" : accent === "sage" ? "text-sage" : "text-ink-900";
   return (
-    <tr className="border-b border-border hover:bg-concrete/30">
+    <tr className="border-b border-border transition-colors hover:bg-cloud/50">
       <td className={`py-2 ${colorCls}`}>{label}</td>
-      <td className="text-right tabular-nums">{n}</td>
-      <td className="text-right tabular-nums">{formatMoney(v)}</td>
-      <td className="text-right tabular-nums text-graphite">{pct}%</td>
+      <td className="py-2 text-right tabular-nums">{n}</td>
+      <td className="py-2 text-right tabular-nums">{formatMoney(v)}</td>
+      <td className="py-2 text-right tabular-nums text-graphite">{pct}%</td>
     </tr>
   );
 }

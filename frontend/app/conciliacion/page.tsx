@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
 import { puedeEscribir } from "@/lib/auth";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
-import { KpiCard } from "@/components/kpi-card";
+import { KpiStrip } from "@/components/kpi-card";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -76,7 +76,7 @@ export default function ConciliacionPage() {
     };
   }, [data, q]);
 
-  if (isLoading) return <LoadingState label="Cargando conciliación..." />;
+  if (isLoading) return <LoadingState label="Cargando conciliación…" />;
   if (error || !data) return <ErrorState error={error} onRetry={() => refetch()} />;
 
   const r = data.resumen;
@@ -88,35 +88,14 @@ export default function ConciliacionPage() {
       isFetching={isFetching}
       onRefresh={() => refetch()}
     >
-      {/* KPIs */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <KpiCard
-          label="Entregado total"
-          value={formatMoneyShort(r.total_entregado)}
-          meta={`${r.n_total} pedidos COD`}
-          accent="navy"
-        />
-        <KpiCard
-          label="Pendiente cobrar"
-          value={formatMoneyShort(r.total_pendiente)}
-          meta={`${r.n_pendientes} sin liquidar`}
-          accent={r.total_pendiente > 0 ? "rust" : "steel"}
-          danger={r.n_pendientes > 0}
-        />
-        <KpiCard
-          label="Ya recibido"
-          value={formatMoneyShort(r.total_liquidado)}
-          meta={`${r.n_liquidados} liquidados`}
-          accent="teal"
-        />
-        <KpiCard
-          label="Con diferencia"
-          value={r.n_con_diferencia}
-          meta="Monto ≠ esperado"
-          accent={r.n_con_diferencia ? "crimson" : "steel"}
-          danger={r.n_con_diferencia > 0}
-        />
-      </div>
+      <KpiStrip
+        items={[
+          { label: "Entregado total",  value: formatMoneyShort(r.total_entregado) },
+          { label: "Pendiente cobrar", value: formatMoneyShort(r.total_pendiente),  tone: r.n_pendientes > 0 ? "danger" : "default" },
+          { label: "Ya recibido",      value: formatMoneyShort(r.total_liquidado), tone: "success" },
+          { label: "Con diferencia",   value: r.n_con_diferencia, tone: r.n_con_diferencia > 0 ? "danger" : "default" },
+        ]}
+      />
 
       {/* Buscador */}
       <div className="relative">
@@ -124,8 +103,8 @@ export default function ConciliacionPage() {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Buscar por orden, cliente o ciudad..."
-          className="w-full rounded-md border border-border bg-white pl-9 pr-3 py-2 text-sm text-ink placeholder:text-graphite/60 focus:outline-none focus:ring-2 focus:ring-steel"
+          placeholder="Buscar (/) orden, cliente o ciudad"
+          className="w-full rounded-sm border border-border bg-card pl-9 pr-3 py-2 text-sm text-ink-900 placeholder:text-graphite/60 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
         />
       </div>
 
@@ -196,7 +175,7 @@ function Tabla({
     return (
       <Card>
         <CardContent className="p-12 text-center text-graphite">
-          {modo === "pendientes" ? "✓ Sin pedidos pendientes" : "Sin pedidos"}
+          {modo === "pendientes" ? "Sin pedidos pendientes. Todo conciliado." : "Sin pedidos en este filtro."}
         </CardContent>
       </Card>
     );
@@ -206,7 +185,7 @@ function Tabla({
     <Card>
       <CardContent className="p-0 overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-concrete/50 border-b border-border">
+          <thead className="bg-cloud/60 border-b border-border">
             <tr>
               <Th>Orden</Th>
               <Th>Cliente</Th>
@@ -229,19 +208,19 @@ function Tabla({
               const orden = p.orden_tienda || p.orden_melonn;
               const diff = p.diferencia ?? 0;
               return (
-                <tr key={orden} className="border-b border-border hover:bg-concrete/30">
-                  <td className="px-3 py-2.5 font-semibold text-ink whitespace-nowrap">{orden}</td>
+                <tr key={orden} className="border-b border-border transition-colors hover:bg-cloud/50">
+                  <td className="px-3 py-2.5 font-medium text-ink-900 tabular-nums whitespace-nowrap">{orden}</td>
                   <td className="px-3 py-2.5 max-w-[180px] truncate">{p.nombre_comprador || "—"}</td>
                   <td className="px-3 py-2.5">{p.ciudad_destino || "—"}</td>
                   <td className="px-3 py-2.5 text-xs tabular-nums text-graphite">
                     {p.fecha_entrega || "—"}
                   </td>
-                  <td className="px-3 py-2.5 text-right tabular-nums font-semibold">
+                  <td className="px-3 py-2.5 text-right tabular-nums font-medium text-ink-900">
                     {formatMoney(p.valor_cod)}
                   </td>
                   {modo !== "pendientes" && (
                     <>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-teal font-semibold">
+                      <td className="px-3 py-2.5 text-right tabular-nums text-sage font-medium">
                         {p.monto_liquidado != null ? formatMoney(p.monto_liquidado) : "—"}
                       </td>
                       <td className="px-3 py-2.5 text-xs tabular-nums">
@@ -253,13 +232,13 @@ function Tabla({
                     </>
                   )}
                   {modo === "diferencias" && (
-                    <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${diff < 0 ? "text-crimson" : "text-teal"}`}>
+                    <td className={`px-3 py-2.5 text-right tabular-nums font-medium ${diff < 0 ? "text-terracotta" : "text-sage"}`}>
                       {diff > 0 ? "+" : ""}{formatMoney(diff)}
                     </td>
                   )}
                   {modo === "pendientes" && (
                     <td className="px-3 py-2.5 text-right">
-                      <span className={p.dias_desde_entrega > 14 ? "text-crimson font-semibold tabular-nums" : "tabular-nums"}>
+                      <span className={p.dias_desde_entrega > 14 ? "text-terracotta font-semibold tabular-nums" : "tabular-nums"}>
                         {p.dias_desde_entrega}d
                       </span>
                     </td>
@@ -268,10 +247,10 @@ function Tabla({
                     {canWrite && (
                       <button
                         onClick={() => onLiquidar(orden)}
-                        className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-semibold ${
+                        className={`inline-flex items-center gap-1 rounded-sm px-2.5 py-1 text-xs font-medium transition-colors ${
                           p.liquidado
-                            ? "border border-border bg-white text-graphite hover:bg-concrete"
-                            : "bg-ink text-white hover:bg-black"
+                            ? "border border-border bg-card text-graphite hover:bg-cloud"
+                            : "bg-navy-600 text-white hover:bg-navy-700"
                         }`}
                       >
                         {p.liquidado ? "Editar" : <><DollarSign className="h-3 w-3" /> Liquidar</>}
@@ -290,7 +269,7 @@ function Tabla({
 
 function Th({ children, align = "left" }: { children?: React.ReactNode; align?: "left" | "right" }) {
   const cls = align === "right" ? "text-right" : "text-left";
-  return <th className={`px-3 py-2.5 text-[0.6rem] font-bold uppercase tracking-[0.15em] text-graphite ${cls}`}>{children}</th>;
+  return <th className={`px-3 py-2.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${cls}`}>{children}</th>;
 }
 
 // ── Modal de liquidación ─────────────────────────────────────────────
@@ -327,24 +306,27 @@ function LiquidarModal({
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4">
-      <div className="w-full max-w-md rounded-lg bg-white shadow-xl overflow-hidden">
-        <div className="flex items-center justify-between bg-ink text-white px-5 py-3">
+    <div className="fixed inset-0 z-50 flex items-stretch justify-end bg-ink-950/40 animate-fade-in" onClick={onClose}>
+      <div
+        className="flex w-full max-w-md flex-col bg-card shadow-2xl animate-slide-in-right"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between bg-ink-900 px-5 py-4 text-white">
           <div>
-            <p className="text-[0.6rem] font-bold uppercase tracking-[0.2em] text-steel/70">
+            <p className="text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-steel-300/70">
               {pedido.liquidado ? "Editar liquidación" : "Registrar liquidación"}
             </p>
-            <p className="text-base font-bold">Orden {orden}</p>
+            <p className="font-display text-base font-medium tabular-nums">Orden {orden}</p>
           </div>
-          <button onClick={onClose} className="text-white/70 hover:text-white">
+          <button onClick={onClose} className="text-white/70 hover:text-white" aria-label="Cerrar">
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <div className="p-5 space-y-3">
-          <div className="rounded-md bg-concrete/50 px-3 py-2 text-sm">
-            <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Valor esperado</p>
-            <p className="text-base font-bold text-navy">{formatMoney(pedido.valor_cod)}</p>
+        <div className="flex-1 space-y-3 overflow-y-auto p-5">
+          <div className="rounded-sm bg-cloud/60 px-3 py-2 text-sm">
+            <p className="section-label">Valor esperado</p>
+            <p className="font-display tabular-nums text-base font-medium text-navy-600">{formatMoney(pedido.valor_cod)}</p>
           </div>
 
           <Field label="Monto recibido" type="number" value={monto} onChange={setMonto} />
@@ -353,7 +335,7 @@ function LiquidarModal({
           <Field label="Nota" value={nota} onChange={setNota} placeholder="opcional" />
 
           {saveMut.error && (
-            <div className="flex items-center gap-2 rounded-md bg-crimson/10 border border-crimson/30 px-3 py-2 text-xs text-crimson">
+            <div className="flex items-center gap-2 rounded-sm border border-terracotta/30 bg-terracotta/[0.05] px-3 py-2 text-xs text-terracotta">
               <AlertTriangle className="h-3.5 w-3.5" />
               {(saveMut.error as Error).message}
             </div>
@@ -366,19 +348,19 @@ function LiquidarModal({
                   if (confirm("¿Eliminar esta liquidación?")) delMut.mutate();
                 }}
                 disabled={delMut.isPending}
-                className="rounded-md border border-crimson/40 bg-white px-3 py-2 text-xs font-semibold text-crimson hover:bg-crimson/5 disabled:opacity-50"
+                className="rounded-sm border border-terracotta/40 bg-card px-3 py-2 text-xs font-medium text-terracotta transition-colors hover:bg-terracotta/[0.05] disabled:opacity-50"
               >
                 {delMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Eliminar"}
               </button>
             ) : <div />}
             <div className="flex gap-2">
-              <button onClick={onClose} className="rounded-md border border-border bg-white px-3 py-2 text-xs font-semibold text-graphite hover:bg-concrete">
+              <button onClick={onClose} className="rounded-sm border border-border bg-card px-3 py-2 text-xs font-medium text-graphite transition-colors hover:bg-cloud">
                 Cancelar
               </button>
               <button
                 onClick={() => saveMut.mutate()}
                 disabled={saveMut.isPending || !monto || !fecha}
-                className="inline-flex items-center gap-1.5 rounded-md bg-ink px-4 py-2 text-xs font-semibold uppercase tracking-wider text-white hover:bg-black disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-sm bg-navy-600 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-navy-700 disabled:opacity-50"
               >
                 {saveMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <><CheckCircle className="h-3 w-3" /> Guardar</>}
               </button>
@@ -398,13 +380,13 @@ function Field({
 }) {
   return (
     <div>
-      <label className="block text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-1">{label}</label>
+      <label className="mb-1 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
       <input
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-md border border-border bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-steel"
+        className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
       />
     </div>
   );

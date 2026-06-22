@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
-import { KpiCard } from "@/components/kpi-card";
+import { KpiStrip } from "@/components/kpi-card";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatMoney, formatMoneyShort, fmtDateTime } from "@/lib/utils";
 import { Search } from "lucide-react";
@@ -59,7 +59,7 @@ export default function MercadoPagoPage() {
     );
   }, [data, q]);
 
-  if (isLoading) return <LoadingState label="Consultando MercadoPago..." />;
+  if (isLoading) return <LoadingState label="Consultando MercadoPago…" />;
   if (error || !data) return <ErrorState error={error} onRetry={() => refetch()} />;
 
   return (
@@ -69,13 +69,14 @@ export default function MercadoPagoPage() {
       isFetching={isFetching}
       onRefresh={() => refetch()}
     >
-      {/* KPIs */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <KpiCard label="Transacciones" value={data.total}                                meta="Aprobadas"           accent="navy" />
-        <KpiCard label="Valor bruto"   value={formatMoneyShort(data.valor_bruto_total)}  meta="Recaudo total"       accent="steel" />
-        <KpiCard label="Valor neto"    value={formatMoneyShort(data.valor_neto_total)}   meta="Después de comisión" accent="teal" />
-        <KpiCard label="Comisión MP"   value={formatMoneyShort(data.comision_total)}     meta={`${data.valor_bruto_total > 0 ? ((data.comision_total / data.valor_bruto_total) * 100).toFixed(2) : 0}% del bruto`} accent="khaki" />
-      </div>
+      <KpiStrip
+        items={[
+          { label: "Transacciones", value: data.total },
+          { label: "Valor bruto",   value: formatMoneyShort(data.valor_bruto_total) },
+          { label: "Valor neto",    value: formatMoneyShort(data.valor_neto_total), tone: "success" },
+          { label: "Comisión MP",   value: formatMoneyShort(data.comision_total) },
+        ]}
+      />
 
       {/* Filtros */}
       <div className="flex flex-wrap items-center gap-3">
@@ -84,16 +85,16 @@ export default function MercadoPagoPage() {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Buscar por pagador, email, descripción, MP ID..."
-            className="w-full rounded-md border border-border bg-white pl-9 pr-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-steel"
+            placeholder="Buscar (/) pagador, email, descripción o MP ID"
+            className="w-full rounded-sm border border-border bg-card pl-9 pr-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
           />
         </div>
         <label className="flex items-center gap-2 text-xs text-graphite">
-          <span className="font-semibold uppercase tracking-wider text-[0.6rem]">Periodo</span>
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.12em]">Periodo</span>
           <select
             value={dias}
             onChange={(e) => setDias(Number(e.target.value))}
-            className="rounded-md border border-border bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-steel"
+            className="rounded-sm border border-border bg-card px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
           >
             <option value={7}>Últimos 7 días</option>
             <option value={30}>Últimos 30 días</option>
@@ -103,8 +104,8 @@ export default function MercadoPagoPage() {
         </label>
       </div>
 
-      <p className="text-xs text-graphite">
-        Mostrando {filtered.length} de {data.total} pagos
+      <p className="text-xs text-graphite tabular-nums">
+        {filtered.length} de {data.total} pagos
       </p>
 
       {/* Tabla */}
@@ -112,7 +113,7 @@ export default function MercadoPagoPage() {
         <CardContent className="p-0 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-concrete/50 border-b border-border">
+              <thead className="bg-cloud/60 border-b border-border">
                 <tr>
                   <Th>Fecha</Th>
                   <Th>Pagador</Th>
@@ -128,20 +129,20 @@ export default function MercadoPagoPage() {
                 {filtered.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="text-center py-12 text-graphite">
-                      Sin pagos en este periodo
+                      Sin pagos en este periodo. Cambia el rango o limpia los filtros.
                     </td>
                   </tr>
                 ) : (
                   filtered.slice(0, 500).map((p) => (
-                    <tr key={p.mp_id} className="border-b border-border hover:bg-concrete/30">
+                    <tr key={p.mp_id} className="border-b border-border transition-colors hover:bg-cloud/50">
                       <Td className="text-xs tabular-nums">{p.fecha_aprobado}</Td>
-                      <Td><span className="font-semibold text-ink">{p.nombre_pagador || "—"}</span></Td>
+                      <Td><span className="font-medium text-ink-900">{p.nombre_pagador || "—"}</span></Td>
                       <Td className="text-xs text-graphite">{p.email || "—"}</Td>
                       <td className="px-3 py-2 text-left text-xs max-w-[200px] truncate" title={p.descripcion}>{p.descripcion || "—"}</td>
                       <Td className="text-[0.7rem] text-graphite tabular-nums">{p.external_reference || "—"}</Td>
-                      <Td align="right" className="tabular-nums font-semibold">{formatMoney(p.valor_bruto)}</Td>
-                      <Td align="right" className="tabular-nums text-rust">{formatMoney(p.comision)}</Td>
-                      <Td align="right" className="tabular-nums text-teal font-semibold">{formatMoney(p.valor_neto)}</Td>
+                      <Td align="right" className="tabular-nums font-medium">{formatMoney(p.valor_bruto)}</Td>
+                      <Td align="right" className="tabular-nums text-terracotta">{formatMoney(p.comision)}</Td>
+                      <Td align="right" className="tabular-nums text-sage font-medium">{formatMoney(p.valor_neto)}</Td>
                     </tr>
                   ))
                 )}
@@ -156,7 +157,7 @@ export default function MercadoPagoPage() {
 
 function Th({ children, align = "left" }: { children: React.ReactNode; align?: "left" | "right" }) {
   const cls = align === "right" ? "text-right" : "text-left";
-  return <th className={`px-3 py-2.5 text-[0.6rem] font-bold uppercase tracking-[0.15em] text-graphite ${cls}`}>{children}</th>;
+  return <th className={`px-3 py-2.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${cls}`}>{children}</th>;
 }
 
 function Td({
