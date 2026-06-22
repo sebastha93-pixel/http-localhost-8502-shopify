@@ -32,8 +32,8 @@ WARMUP_INTERVAL_MIN = int(os.environ.get("WARMUP_INTERVAL_MIN", "3"))
 # Polling de notas (mensajes salientes de asesoras vía Kommo notes)
 _notes_thread: threading.Thread | None = None
 _notes_stop = threading.Event()
-NOTES_POLL_INTERVAL_SEC = int(os.environ.get("NOTES_POLL_INTERVAL_SEC", "45"))
-NOTES_POLL_WINDOW_MIN = int(os.environ.get("NOTES_POLL_WINDOW_MIN", "10"))
+NOTES_POLL_INTERVAL_SEC = int(os.environ.get("NOTES_POLL_INTERVAL_SEC", "15"))
+NOTES_POLL_WINDOW_MIN = int(os.environ.get("NOTES_POLL_WINDOW_MIN", "5"))
 _notes_state: dict = {"running": False, "last_run_at": None, "last_result": None}
 
 # Ciclo de enrichment Meta↔Kommo cada N horas
@@ -91,8 +91,9 @@ def _poll_notes_de_conversaciones_activas() -> dict:
         convs = (sb.table("conversations")
                    .select("conversation_id,lead_id,last_message_at")
                    .gte("last_message_at", cutoff)
+                   .not_.is_("lead_id", "null")
                    .order("last_message_at", desc=True)
-                   .limit(50).execute().data) or []
+                   .limit(30).execute().data) or []
     except Exception as e:
         return {"error": f"query: {str(e)[:200]}"}
     procesadas = 0
