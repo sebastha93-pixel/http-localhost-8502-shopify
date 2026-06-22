@@ -616,9 +616,20 @@ def _asegurar_conversation(sb, conversation_id: str, payload: dict) -> None:
 
 def _upsert_message(sb, row: dict) -> bool:
     """Upsert con auto-recuperación de PGRST204 (cache PostgREST stale) +
-    asegura conversation existe para no romper FK."""
-    # Asegurar conversation antes del insert
-    _asegurar_conversation(sb, row.get("conversation_id") or "", row.get("payload") or {})
+    asegura conversation existe para no romper FK + propaga lead_id desde la
+    conversation para que el filtro 'Atendidas' por lead_id funcione."""
+    conv_id = row.get("conversation_id") or ""
+    # Asegurar conversation antes del insert (la crea con cross-ref Kommo si no existe)
+    _asegurar_conversation(sb, conv_id, row.get("payload") or {})
+    # Propagar lead_id desde la conversation al message (si no viene seteado).
+    # Esto permite filtrar 'Atendidas/Pendientes' por lead_id de forma confiable.
+    if conv_id and not row.get("lead_id"):
+        try:
+            r = sb.table("conversations").select("lead_id").eq("conversation_id", conv_id).limit(1).execute()
+            if r.data and r.data[0].get("lead_id"):
+                row["lead_id"] = r.data[0]["lead_id"]
+        except Exception:
+            pass
     # Quitar columnas conocidas como problemáticas
     for col in _columnas_problematicas:
         row.pop(col, None)
