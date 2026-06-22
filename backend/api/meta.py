@@ -482,7 +482,49 @@ def _buscar_lead_kommo_por_phone(wa_id: str) -> Optional[dict]:
                     pass
         except Exception:
             pass
-    
+
+    # FASE C2: Si NI EN KOMMO existe el lead, crearlo automáticamente.
+    # El sales bot del pipeline asignará la asesora. Activable vía env var
+    # AUTO_CREAR_LEAD_META=true para evitar crear basura accidentalmente.
+    if not result and os.environ.get("AUTO_CREAR_LEAD_META", "false").lower() in ("true", "1", "yes"):
+        try:
+            import sys
+            from pathlib import Path
+            _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+            if str(_SRC) not in sys.path:
+                sys.path.insert(0, str(_SRC))
+            import kommo_client as kc
+            pipeline_id_env = os.environ.get("KOMMO_PIPELINE_DEFAULT_ID")
+            pipeline_id = int(pipeline_id_env) if pipeline_id_env and pipeline_id_env.isdigit() else None
+            nuevo_lead = kc.crear_lead_con_contacto(
+                phone=wa_norm,
+                pipeline_id=pipeline_id,
+                source_name="WhatsApp",
+            )
+            if nuevo_lead and nuevo_lead.get("id"):
+                # Upsert a nuestra DB
+                try:
+                    db.upsert_lead(nuevo_lead)
+                except Exception:
+                    pass
+                # Releer del DB para tener advisor_id resuelto (si el sales bot ya asignó)
+                try:
+                    r = sb.table("kommo_leads").select(
+                        "lead_id,advisor_id,customer_name,customer_phone"
+                    ).eq("lead_id", int(nuevo_lead["id"])).limit(1).execute()
+                    if r.data:
+                        lead = r.data[0]
+                        result = {
+                            "lead_id":                  lead["lead_id"],
+                            "advisor_id":               lead.get("advisor_id"),
+                            "customer_name":            lead.get("customer_name"),
+                            "conversation_id_existente": None,
+                        }
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     # Cache (incluso si es None, para no re-consultar leads que no matchean)
     _cross_ref_cache[wa_norm] = (_t.time(), result)
 

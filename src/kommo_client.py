@@ -243,6 +243,39 @@ def _get(path: str, params: Optional[dict] = None) -> Optional[dict]:
     return None
 
 
+def _post(path: str, body: dict | list) -> Optional[dict]:
+    """POST a Kommo con rate limit + retry. Retorna respuesta JSON o None."""
+    url = f"{_base_url()}/{path.lstrip('/')}"
+    for attempt, backoff in enumerate([0] + _RETRY_BACKOFF):
+        if backoff:
+            log.warning(f"Kommo POST retry — esperando {backoff}s (intento {attempt+1})")
+            time.sleep(backoff)
+        _rate_limiter.wait()
+        try:
+            r = requests.post(url, headers=_headers(), json=body, timeout=_TIMEOUT)
+            if r.status_code in (429, 503):
+                ra = r.headers.get("Retry-After")
+                wait = int(ra) if (ra and ra.isdigit() and int(ra) <= 60) else _RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF)-1)]
+                log.warning(f"Kommo POST {r.status_code} — Retry-After {wait}s")
+                if attempt < _RETRY_MAX:
+                    time.sleep(wait)
+                    continue
+                return None
+            if not r.ok:
+                log.warning(f"Kommo POST {r.status_code} en {url}: {r.text[:300]}")
+                return None
+            try:
+                return r.json()
+            except Exception:
+                return {}
+        except Exception as e:
+            log.warning(f"Kommo POST error en {url}: {e}")
+            if attempt < _RETRY_MAX:
+                continue
+            return None
+    return None
+
+
 def _paginar(path: str, embedded_key: str, params: Optional[dict] = None,
              max_paginas: int = 500) -> Iterator[list]:
     """
@@ -385,6 +418,61 @@ def buscar_leads_por_phone(phone: str, limit: int = 5) -> list[dict]:
         return leads
     except Exception:
         return []
+
+def crear_lead_con_contacto(
+    phone: str,
+    pipeline_id: Optional[int] = None,
+    source_name: str = "WhatsApp",
+) -> Optional[dict]:
+    """Crea un lead en Kommo con un contacto que tiene el teléfono indicado.
+
+    El sales bot de Kommo (si está configurado en el pipeline) asignará la
+    asesora automáticamente. Retorna el lead creado (dict) o None si falla.
+
+    `phone`: teléfono normalizado (solo dígitos, ej. '573102039183').
+    `pipeline_id`: si None, Kommo usa el pipeline default.
+    `source_name`: nombre descriptivo de la fuente.
+    """
+    if not phone:
+        return None
+    phone_plus = phone if phone.startswith("+") else f"+{phone}"
+    # Nombre del lead: identificable rápido en Kommo
+    lead_name = f"{source_name} {phone_plus}"
+    contact_name = f"Cliente {source_name}"
+    lead_body: dict = {
+        "name": lead_name,
+        "_embedded": {
+            "contacts": [
+                {
+                    "first_name": contact_name,
+                    "custom_fields_values": [
+                        {
+                            "field_code": "PHONE",
+                            "values": [
+                                {"value": phone_plus, "enum_code": "MOB"}
+                            ],
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+    if pipeline_id:
+        lead_body["pipeline_id"] = int(pipeline_id)
+
+    res = _post("leads/complex", [lead_body])
+    # La respuesta es una lista con el lead creado: [{"id": 12345, ...}]
+    if not res:
+        return None
+    items = res if isinstance(res, list) else ((res.get("_embedded") or {}).get("leads")) or []
+    if not items:
+        return None
+    lead_id_int = items[0].get("id")
+    if not lead_id_int:
+        return None
+    # Traer el lead completo (con contactos y campos) para upsert
+    return obtener_lead(int(lead_id_int))
+
 
 def listar_contactos_de_lead(lead_id: int) -> list[dict]:
     """Contactos asociados a un lead."""
