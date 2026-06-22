@@ -73,18 +73,18 @@ export default function AuditoriaPage() {
   if (!esAdmin(user)) {
     return (
       <PageShell title="Auditoría">
-        <Card>
+        <Card className="border-terracotta/25 bg-terracotta/[0.03]">
           <CardContent className="p-10 text-center">
-            <Shield className="h-10 w-10 mx-auto text-crimson mb-3" />
-            <p className="text-ink font-semibold">Acceso restringido</p>
-            <p className="text-sm text-graphite mt-1">Solo administradores pueden ver el log de auditoría.</p>
+            <Shield className="mx-auto mb-3 h-10 w-10 text-terracotta" />
+            <p className="font-display text-base font-medium text-ink-900">Acceso restringido</p>
+            <p className="mt-1 text-sm text-graphite">Solo administradores pueden ver el log de auditoría.</p>
           </CardContent>
         </Card>
       </PageShell>
     );
   }
 
-  if (isLoading) return <LoadingState label="Cargando auditoría..." />;
+  if (isLoading) return <LoadingState label="Cargando auditoría…" />;
   if (error || !data) return <ErrorState error={error} onRetry={() => refetch()} />;
 
   return (
@@ -101,17 +101,17 @@ export default function AuditoriaPage() {
           <input
             value={orden}
             onChange={(e) => setOrden(e.target.value)}
-            placeholder="Filtrar por orden..."
-            className="w-full rounded-md border border-border bg-white pl-9 pr-3 py-2 text-sm text-ink placeholder:text-graphite/60 focus:outline-none focus:ring-2 focus:ring-steel"
+            placeholder="Filtrar por orden"
+            className="w-full rounded-sm border border-border bg-card pl-9 pr-3 py-2 text-sm text-ink-900 placeholder:text-graphite/60 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
           />
         </div>
 
         <label className="flex items-center gap-2 text-xs text-graphite">
-          <span className="font-semibold uppercase tracking-wider text-[0.6rem]">Usuario</span>
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.12em]">Usuario</span>
           <select
             value={autor}
             onChange={(e) => setAutor(e.target.value)}
-            className="rounded-md border border-border bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-steel"
+            className="rounded-sm border border-border bg-card px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
           >
             <option value="">Todos</option>
             {data.autores.map((a) => <option key={a} value={a}>{a}</option>)}
@@ -119,11 +119,11 @@ export default function AuditoriaPage() {
         </label>
 
         <label className="flex items-center gap-2 text-xs text-graphite">
-          <span className="font-semibold uppercase tracking-wider text-[0.6rem]">Tipo</span>
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.12em]">Tipo</span>
           <select
             value={tipo}
             onChange={(e) => setTipo(e.target.value)}
-            className="rounded-md border border-border bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-steel"
+            className="rounded-sm border border-border bg-card px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
           >
             <option value="">Todos</option>
             {data.tipos.map((t) => (
@@ -137,31 +137,29 @@ export default function AuditoriaPage() {
       <Card>
         <CardContent className="p-0">
           {data.eventos.length === 0 ? (
-            <p className="text-center py-12 text-sm text-graphite">
-              Sin eventos con los filtros aplicados
+            <p className="py-12 text-center text-sm text-graphite">
+              Sin eventos con estos filtros. Limpia los filtros o cambia el período.
             </p>
           ) : (
             <table className="w-full text-sm">
-              <thead className="bg-concrete/50 border-b border-border">
+              <thead className="bg-cloud/60 border-b border-border">
                 <tr>
-                  <th className="px-4 py-2.5 text-left text-[0.6rem] font-bold uppercase tracking-[0.15em] text-graphite">Fecha · hora</th>
-                  <th className="px-4 py-2.5 text-left text-[0.6rem] font-bold uppercase tracking-[0.15em] text-graphite">Usuario</th>
-                  <th className="px-4 py-2.5 text-left text-[0.6rem] font-bold uppercase tracking-[0.15em] text-graphite">Tipo</th>
-                  <th className="px-4 py-2.5 text-left text-[0.6rem] font-bold uppercase tracking-[0.15em] text-graphite">Orden</th>
-                  <th className="px-4 py-2.5 text-left text-[0.6rem] font-bold uppercase tracking-[0.15em] text-graphite">Detalle</th>
+                  {["Fecha · hora", "Usuario", "Tipo", "Orden", "Detalle"].map(h => (
+                    <th key={h} className="px-4 py-2.5 text-left text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">{h}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
                 {data.eventos.map((e, i) => (
-                  <tr key={i} className="border-b border-border hover:bg-concrete/30">
+                  <tr key={i} className="border-b border-border transition-colors hover:bg-cloud/50">
                     <td className="px-4 py-2.5 text-xs tabular-nums text-graphite whitespace-nowrap">
                       {fmtDateTime(e.creada_en)}
                     </td>
-                    <td className="px-4 py-2.5 font-semibold text-ink whitespace-nowrap">{e.autor || "—"}</td>
+                    <td className="px-4 py-2.5 font-medium text-ink-900 whitespace-nowrap">{e.autor || "—"}</td>
                     <td className="px-4 py-2.5">
                       <Badge tone={tipoTone(e.tipo)}>{TIPO_LABEL[e.tipo] || e.tipo}</Badge>
                     </td>
-                    <td className="px-4 py-2.5 tabular-nums font-semibold text-ink whitespace-nowrap">{e.orden}</td>
+                    <td className="px-4 py-2.5 tabular-nums font-medium text-ink-900 whitespace-nowrap">{e.orden}</td>
                     <td className="px-4 py-2.5 text-graphite max-w-[320px] truncate" title={e.descripcion}>
                       {e.descripcion || "—"}
                     </td>

@@ -35,18 +35,18 @@ export default function UsuariosPage() {
   if (!esAdmin(user)) {
     return (
       <PageShell title="Usuarios">
-        <Card>
+        <Card className="border-terracotta/25 bg-terracotta/[0.03]">
           <CardContent className="p-10 text-center">
-            <Shield className="h-10 w-10 mx-auto text-crimson mb-3" />
-            <p className="text-ink font-semibold">Acceso restringido</p>
-            <p className="text-sm text-graphite mt-1">Solo administradores pueden gestionar usuarios.</p>
+            <Shield className="mx-auto mb-3 h-10 w-10 text-terracotta" />
+            <p className="font-display text-base font-medium text-ink-900">Acceso restringido</p>
+            <p className="mt-1 text-sm text-graphite">Solo administradores pueden gestionar usuarios.</p>
           </CardContent>
         </Card>
       </PageShell>
     );
   }
 
-  if (usuariosQ.isLoading) return <LoadingState label="Cargando usuarios..." />;
+  if (usuariosQ.isLoading) return <LoadingState label="Cargando usuarios…" />;
   if (usuariosQ.error) return <ErrorState error={usuariosQ.error} onRetry={() => usuariosQ.refetch()} />;
 
   const usuarios = usuariosQ.data || [];
@@ -60,7 +60,7 @@ export default function UsuariosPage() {
       <div className="flex justify-end">
         <button
           onClick={() => { setShowForm(!showForm); setEditId(null); }}
-          className="inline-flex items-center gap-2 rounded-md bg-ink px-4 py-2 text-xs font-semibold uppercase tracking-wider text-white hover:bg-black"
+          className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-4 py-2 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-white transition-colors hover:bg-navy-700"
         >
           <UserPlus className="h-3.5 w-3.5" />
           {showForm ? "Cancelar" : "Nuevo usuario"}
@@ -80,13 +80,13 @@ export default function UsuariosPage() {
       <Card>
         <CardContent className="p-0">
           <table className="w-full text-sm">
-            <thead className="bg-concrete/50 border-b border-border">
+            <thead className="bg-cloud/60 border-b border-border">
               <tr>
-                <th className="px-4 py-3 text-left text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Nombre</th>
-                <th className="px-4 py-3 text-left text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Email</th>
-                <th className="px-4 py-3 text-left text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Rol</th>
-                <th className="px-4 py-3 text-left text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Estado</th>
-                <th className="px-4 py-3 text-right text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Acciones</th>
+                {[
+                  ["Nombre", "left"], ["Email", "left"], ["Rol", "left"], ["Estado", "left"], ["Acciones", "right"],
+                ].map(([h, align]) => (
+                  <th key={h} className={`px-4 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite text-${align}`}>{h}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -127,7 +127,7 @@ function UsuarioForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: (
   return (
     <Card>
       <CardContent className="p-5">
-        <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-3">Crear usuario</p>
+        <p className="section-label mb-3">Crear usuario</p>
         <form
           onSubmit={(e) => { e.preventDefault(); setErr(""); mut.mutate(); }}
           className="grid grid-cols-1 md:grid-cols-2 gap-3"
@@ -136,11 +136,11 @@ function UsuarioForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: (
           <Field label="Email" type="email" value={email} onChange={setEmail} required />
           <Field label="Contraseña (mín. 8)" type="password" value={password} onChange={setPassword} required />
           <div>
-            <label className="block text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-1.5">Rol</label>
+            <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Rol</label>
             <select
               value={rol}
               onChange={(e) => setRol(e.target.value as Usuario["rol"])}
-              className="w-full rounded-md border border-border bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-steel"
+              className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
             >
               <option value="admin">Administrador</option>
               <option value="operador">Operador</option>
@@ -148,13 +148,13 @@ function UsuarioForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: (
             </select>
           </div>
 
-          {err && <p className="md:col-span-2 text-sm text-crimson">{err}</p>}
+          {err && <p className="md:col-span-2 text-sm text-terracotta">{err}</p>}
 
-          <div className="md:col-span-2 flex gap-2 justify-end">
-            <button type="button" onClick={onClose} className="rounded-md border border-border bg-white px-4 py-2 text-xs font-semibold uppercase tracking-wider text-graphite hover:bg-concrete">
+          <div className="flex justify-end gap-2 md:col-span-2">
+            <button type="button" onClick={onClose} className="rounded-sm border border-border bg-card px-4 py-2 text-[0.7rem] font-medium uppercase tracking-[0.12em] text-graphite transition-colors hover:bg-cloud">
               Cancelar
             </button>
-            <button type="submit" disabled={mut.isPending} className="rounded-md bg-ink px-4 py-2 text-xs font-semibold uppercase tracking-wider text-white hover:bg-black disabled:opacity-50">
+            <button type="submit" disabled={mut.isPending} className="rounded-sm bg-navy-600 px-4 py-2 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-white transition-colors hover:bg-navy-700 disabled:opacity-50">
               {mut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Crear"}
             </button>
           </div>
@@ -185,13 +185,13 @@ function UsuarioRow({
 
   if (isEditing) {
     return (
-      <tr className="border-b border-border bg-steel/5">
+      <tr className="border-b border-border bg-steel-300/15">
         <td className="px-4 py-2">
-          <input value={nombre} onChange={(e) => setNombre(e.target.value)} className="w-full rounded border border-border bg-white px-2 py-1 text-sm" />
+          <input value={nombre} onChange={(e) => setNombre(e.target.value)} className="w-full rounded-sm border border-border bg-card px-2 py-1 text-sm" />
         </td>
         <td className="px-4 py-2 text-xs text-graphite">{u.email}</td>
         <td className="px-4 py-2">
-          <select value={rol} onChange={(e) => setRol(e.target.value as Usuario["rol"])} className="rounded border border-border bg-white px-2 py-1 text-sm">
+          <select value={rol} onChange={(e) => setRol(e.target.value as Usuario["rol"])} className="rounded-sm border border-border bg-card px-2 py-1 text-sm">
             <option value="admin">Admin</option>
             <option value="operador">Operador</option>
             <option value="lectura">Lectura</option>
@@ -210,12 +210,12 @@ function UsuarioRow({
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Nueva contraseña (opcional)"
-              className="rounded border border-border bg-white px-2 py-1 text-xs w-44"
+              className="w-44 rounded-sm border border-border bg-card px-2 py-1 text-xs"
             />
-            <button onClick={() => mut.mutate()} disabled={mut.isPending} className="rounded bg-ink p-1.5 text-white hover:bg-black disabled:opacity-50" title="Guardar">
+            <button onClick={() => mut.mutate()} disabled={mut.isPending} className="rounded-sm bg-navy-600 p-1.5 text-white transition-colors hover:bg-navy-700 disabled:opacity-50" title="Guardar">
               {mut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
             </button>
-            <button onClick={onEdit} className="rounded border border-border p-1.5 text-graphite hover:bg-concrete" title="Cancelar">
+            <button onClick={onEdit} className="rounded-sm border border-border p-1.5 text-graphite transition-colors hover:bg-cloud" title="Cancelar">
               <X className="h-3 w-3" />
             </button>
           </div>
@@ -225,9 +225,9 @@ function UsuarioRow({
   }
 
   return (
-    <tr className="border-b border-border hover:bg-concrete/30">
-      <td className="px-4 py-3 font-semibold text-ink">
-        {u.nombre} {isCurrentUser && <span className="text-[0.6rem] text-steel ml-1">(tú)</span>}
+    <tr className="border-b border-border transition-colors hover:bg-cloud/50">
+      <td className="px-4 py-3 font-medium text-ink-900">
+        {u.nombre} {isCurrentUser && <span className="ml-1 text-[0.6rem] text-steel-500">(tú)</span>}
       </td>
       <td className="px-4 py-3 text-graphite">{u.email}</td>
       <td className="px-4 py-3">
@@ -239,7 +239,7 @@ function UsuarioRow({
         <Badge tone={u.activo ? "normal" : "neutral"}>{u.activo ? "Activo" : "Inactivo"}</Badge>
       </td>
       <td className="px-4 py-3 text-right">
-        <button onClick={onEdit} className="inline-flex items-center gap-1 text-xs font-semibold text-ink hover:text-navy">
+        <button onClick={onEdit} className="inline-flex items-center gap-1 text-xs font-medium text-ink-900 transition-colors hover:text-navy-600">
           <Edit className="h-3 w-3" /> Editar
         </button>
       </td>
@@ -252,14 +252,14 @@ function Field({
 }: { label: string; value: string; onChange: (v: string) => void; type?: string; required?: boolean }) {
   return (
     <div>
-      <label className="block text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-1.5">{label}</label>
+      <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
       <input
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         required={required}
         minLength={type === "password" ? 8 : undefined}
-        className="w-full rounded-md border border-border bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-steel"
+        className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
       />
     </div>
   );
