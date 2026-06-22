@@ -672,20 +672,26 @@ async def kommo_webhook(request: Request, background_tasks: BackgroundTasks) -> 
     else:
         _webhook_stats["otros"] += 1
 
-    # Persistir en DB y disparar audit IA en background si aplica
-    try:
-        parsed = _kommo_form_to_nested(body_dict) if isinstance(body_dict, dict) else {}
-        result = _procesar_webhook(parsed)
-        _webhook_stats["mensajes_guardados"] += result.get("messages", 0)
-        _webhook_stats["convs_upserteadas"] += result.get("conversations", 0)
-        _webhook_stats["leads_actualizados"] += result.get("leads", 0)
-        audit_queue = result.get("audit_queue") or []
-        if audit_queue:
-            background_tasks.add_task(_auditar_en_background, audit_queue)
-            _webhook_stats["auto_audits_disparados"] = _webhook_stats.get("auto_audits_disparados", 0) + len(audit_queue)
-    except Exception as e:
-        _webhook_stats["errores_parser"] += 1
-        _webhook_stats["ultimos_errores"] = ([f"top: {str(e)[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
+    # Procesamiento en background para responder rápido a Kommo (evita timeouts
+    # que desactivan el webhook). Las llamadas a Kommo API en fases C1/C2 pueden
+    # tomar varios segundos, no podemos bloquear la respuesta del webhook.
+    def _procesar_en_background(body: dict) -> None:
+        try:
+            parsed = _kommo_form_to_nested(body) if isinstance(body, dict) else {}
+            result = _procesar_webhook(parsed)
+            _webhook_stats["mensajes_guardados"] += result.get("messages", 0)
+            _webhook_stats["convs_upserteadas"] += result.get("conversations", 0)
+            _webhook_stats["leads_actualizados"] += result.get("leads", 0)
+            audit_queue = result.get("audit_queue") or []
+            if audit_queue:
+                _auditar_en_background(audit_queue)
+                _webhook_stats["auto_audits_disparados"] = _webhook_stats.get("auto_audits_disparados", 0) + len(audit_queue)
+        except Exception as e:
+            _webhook_stats["errores_parser"] += 1
+            _webhook_stats["ultimos_errores"] = ([f"bg: {str(e)[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
+
+    if isinstance(body_dict, dict) and not body_dict.get("_parse_error"):
+        background_tasks.add_task(_procesar_en_background, body_dict)
 
     preview = {k: (str(v)[:200] if not isinstance(v, (dict, list)) else "<obj>")
                for k, v in body_dict.items()}
