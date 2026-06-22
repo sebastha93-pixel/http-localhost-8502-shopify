@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { usePedidos } from "@/lib/hooks";
 import { PedidosTable } from "@/components/pedidos-table";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
-import { KpiCard } from "@/components/kpi-card";
+import { KpiStrip } from "@/components/kpi-card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Pedido } from "@/lib/types";
 
@@ -25,7 +25,7 @@ export default function EnviosPage() {
     };
   }, [data]);
 
-  if (isLoading) return <LoadingState label="Cargando envíos prepago..." />;
+  if (isLoading) return <LoadingState label="Cargando envíos prepago…" />;
   if (error || !data) return <ErrorState error={error} onRetry={() => refetch()} />;
 
   return (
@@ -35,13 +35,15 @@ export default function EnviosPage() {
       isFetching={isFetching}
       onRefresh={() => refetch()}
     >
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
-        <KpiCard label="Total prepago" value={groups.todos.length}      meta="Ya cobrados"           accent="navy" />
-        <KpiCard label="En proceso"    value={groups.proceso.length}    meta="Alistamiento → listo"  accent="steel" />
-        <KpiCard label="En tránsito"   value={groups.transito.length}   meta="Camino al cliente"     accent="navy" />
-        <KpiCard label="Novedades"     value={groups.novedades.length}  meta="No entregados"         accent={groups.novedades.length ? "rust" : "steel"} danger={groups.novedades.length > 0} />
-        <KpiCard label="Entregados"    value={groups.entregados.length} meta="Completados"           accent="teal" />
-      </div>
+      <KpiStrip
+        items={[
+          { label: "Total prepago", value: groups.todos.length },
+          { label: "En proceso",    value: groups.proceso.length },
+          { label: "En tránsito",   value: groups.transito.length },
+          { label: "Novedades",     value: groups.novedades.length, tone: groups.novedades.length > 0 ? "danger" : "default" },
+          { label: "Entregados",    value: groups.entregados.length, tone: "success" },
+        ]}
+      />
 
       <Tabs defaultValue="transito">
         <TabsList>
@@ -55,7 +57,7 @@ export default function EnviosPage() {
           <PedidosTable
             pedidos={groups.proceso}
             showTipoFilter={false}
-            emptyMessage="No hay envíos en proceso"
+            emptyMessage="Sin envíos en proceso."
             columns={["nivel", "orden", "cliente", "telefono", "producto", "ciudad", "envio", "dias", "estado"]}
             selectable
           />
@@ -64,7 +66,7 @@ export default function EnviosPage() {
           <PedidosTable
             pedidos={groups.transito}
             showTipoFilter={false}
-            emptyMessage="No hay envíos en tránsito"
+            emptyMessage="Sin envíos en tránsito."
             columns={["nivel", "orden", "cliente", "telefono", "ciudad", "zona", "envio", "dias", "estado", "link"]}
             selectable
           />
@@ -73,7 +75,7 @@ export default function EnviosPage() {
           <PedidosTable
             pedidos={groups.novedades}
             showTipoFilter={false}
-            emptyMessage="✓ Sin novedades en prepago"
+            emptyMessage="Sin novedades en prepago. Todo va al día."
             columns={["nivel", "orden", "cliente", "telefono", "ciudad", "dias", "novedad", "link"]}
             selectable
           />
@@ -83,7 +85,7 @@ export default function EnviosPage() {
             pedidos={groups.entregados}
             showTipoFilter={false}
             showNivelFilter={false}
-            emptyMessage="Sin entregas registradas"
+            emptyMessage="Sin entregas registradas todavía."
             columns={["orden", "cliente", "telefono", "ciudad", "dias", "estado", "link"]}
             selectable
           />

@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { usePedidos } from "@/lib/hooks";
 import { PedidosTable } from "@/components/pedidos-table";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
-import { KpiCard } from "@/components/kpi-card";
+import { KpiStrip } from "@/components/kpi-card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Pedido } from "@/lib/types";
 
@@ -23,7 +23,7 @@ export default function IncidenciasPage() {
     };
   }, [data]);
 
-  if (isLoading) return <LoadingState label="Cargando incidencias..." />;
+  if (isLoading) return <LoadingState label="Cargando incidencias…" />;
   if (error || !data) return <ErrorState error={error} onRetry={() => refetch()} />;
 
   const cols: Array<"nivel" | "orden" | "cliente" | "telefono" | "ciudad" | "dias" | "valor" | "novedad" | "tipo" | "link"> = [
@@ -37,12 +37,14 @@ export default function IncidenciasPage() {
       isFetching={isFetching}
       onRefresh={() => refetch()}
     >
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <KpiCard label="Total"           value={groups.todas.length}          meta="Pedidos con novedad"        accent={groups.todas.length ? "rust" : "steel"} danger={groups.todas.length > 0} />
-        <KpiCard label="Cliente"         value={groups.cliente.length}        meta="Requiere contactar"         accent="khaki" />
-        <KpiCard label="Transportadora"  value={groups.transportadora.length} meta="Problema operador"          accent="navy" />
-        <KpiCard label="Seguimiento"     value={groups.seguimiento.length}    meta="Verificar estado"           accent="steel" />
-      </div>
+      <KpiStrip
+        items={[
+          { label: "Total",          value: groups.todas.length, tone: groups.todas.length > 0 ? "danger" : "default" },
+          { label: "Cliente",        value: groups.cliente.length },
+          { label: "Transportadora", value: groups.transportadora.length },
+          { label: "Seguimiento",    value: groups.seguimiento.length },
+        ]}
+      />
 
       <Tabs defaultValue="todas">
         <TabsList>
@@ -54,13 +56,13 @@ export default function IncidenciasPage() {
         </TabsList>
 
         <TabsContent value="todas">
-          <PedidosTable pedidos={groups.todas} emptyMessage="✓ Sin incidencias activas" columns={cols} selectable />
+          <PedidosTable pedidos={groups.todas} emptyMessage="Sin incidencias activas. Equipo al día." columns={cols} selectable />
         </TabsContent>
         <TabsContent value="cliente">
           <PedidosTable
             pedidos={groups.cliente}
             showTipoFilter={false}
-            emptyMessage="✓ Sin incidencias de cliente"
+            emptyMessage="Sin incidencias de cliente."
             columns={cols}
             selectable
           />
@@ -69,7 +71,7 @@ export default function IncidenciasPage() {
           <PedidosTable
             pedidos={groups.transportadora}
             showTipoFilter={false}
-            emptyMessage="✓ Sin incidencias de transportadora"
+            emptyMessage="Sin incidencias de transportadora."
             columns={cols}
             selectable
           />
@@ -78,7 +80,7 @@ export default function IncidenciasPage() {
           <PedidosTable
             pedidos={groups.seguimiento}
             showTipoFilter={false}
-            emptyMessage="✓ Sin incidencias de seguimiento"
+            emptyMessage="Sin incidencias de seguimiento."
             columns={cols}
             selectable
           />
