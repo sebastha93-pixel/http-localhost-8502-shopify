@@ -7,7 +7,7 @@ import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 export default function LogisticaPage() {
   const { data, isLoading, error, refetch, isFetching } = usePedidos();
 
-  if (isLoading) return <LoadingState label="Cargando pedidos..." />;
+  if (isLoading) return <LoadingState label="Cargando pedidos…" />;
   if (error || !data) return <ErrorState error={error} onRetry={() => refetch()} />;
 
   return (

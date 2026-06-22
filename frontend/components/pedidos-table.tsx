@@ -48,7 +48,7 @@ export function PedidosTable({
   pedidos,
   showNivelFilter = true,
   showTipoFilter = true,
-  emptyMessage = "Sin resultados con los filtros aplicados",
+  emptyMessage = "Sin pedidos con estos filtros. Cambia el período o limpia los filtros.",
   limit = 200,
   columns = DEFAULT_COLS,
   selectable = false,
@@ -116,8 +116,8 @@ export function PedidosTable({
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Buscar por orden, cliente, ciudad o teléfono..."
-            className="w-full rounded-md border border-border bg-white pl-9 pr-3 py-2 text-sm text-ink placeholder:text-graphite/60 focus:outline-none focus:ring-2 focus:ring-steel"
+            placeholder="Buscar (/) orden, cliente, ciudad o teléfono"
+            className="w-full rounded-sm border border-border bg-card pl-9 pr-3 py-2 text-sm text-ink-900 placeholder:text-graphite/60 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
           />
         </div>
         {showNivelFilter && (
@@ -137,7 +137,7 @@ export function PedidosTable({
       {/* Barra de selección eliminada — la info del pedido se ve al tocarlo */}
 
       {/* Resultados */}
-      <p className="text-xs text-graphite">
+      <p className="text-xs text-graphite tabular-nums">
         {filtered.length} de {pedidos.length} pedidos
       </p>
 
@@ -146,7 +146,7 @@ export function PedidosTable({
         <CardContent className="p-0 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-concrete/50 border-b border-border">
+              <thead className="bg-cloud/60 border-b border-border">
                 <tr>
                   {has("select")   && (
                     <Th>
@@ -242,7 +242,7 @@ function Row({
   return (
     <tr
       onClick={handleRowClick}
-      className={`border-b border-border hover:bg-concrete/30 transition-colors cursor-pointer ${isSelected ? "bg-steel/5" : ""} ${isExpanded ? "bg-steel/15 border-l-2 border-l-steel" : ""}`}>
+      className={`border-b border-border hover:bg-cloud/50 transition-colors cursor-pointer ${isSelected ? "bg-steel-300/10" : ""} ${isExpanded ? "bg-steel-300/20 border-l-2 border-l-navy-600" : ""}`}>
       {has("select") && (
         <Td>
           <input
@@ -256,7 +256,7 @@ function Row({
       {has("nivel") && <Td><NivelBadge nivel={p.nivel} /></Td>}
       {has("orden") && (
         <Td>
-          <div className="font-semibold text-ink">{p.orden_tienda || p.orden_melonn}</div>
+          <div className="font-medium text-ink-900 tabular-nums">{p.orden_tienda || p.orden_melonn}</div>
           {p.orden_tienda && p.orden_melonn && p.orden_tienda !== p.orden_melonn && (
             <div className="text-[0.65rem] text-graphite">{p.orden_melonn}</div>
           )}
@@ -281,14 +281,14 @@ function Row({
         <Td>
           {tel ? (
             <div className="flex items-center gap-1.5">
-              <a href={`tel:+57${tel}`} className="text-ink hover:text-navy" title="Llamar">
+              <a href={`tel:+57${tel}`} className="text-ink-900 hover:text-navy-600" title="Llamar">
                 <Phone className="h-3.5 w-3.5" />
               </a>
               <a
                 href={`https://wa.me/57${tel}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-teal hover:text-ink"
+                className="text-sage hover:text-ink-900"
                 title="WhatsApp"
               >
                 <MessageCircle className="h-3.5 w-3.5" />
@@ -312,11 +312,11 @@ function Row({
               />
             ) : null}
             <div className="min-w-0 text-xs">
-              <div className="font-semibold text-ink truncate max-w-[150px]">{p.sku || "—"}</div>
+              <div className="font-medium text-ink-900 truncate max-w-[150px]">{p.sku || "—"}</div>
               <div className="text-graphite">
                 {p.variante && <span>Talla {p.variante}</span>}
                 {p.items && p.items.length > 1 && (
-                  <span className="ml-1 inline-block rounded bg-steel/15 px-1 py-0.5 text-[0.6rem] font-bold text-navy">
+                  <span className="ml-1 inline-block rounded-sm bg-steel-300/20 px-1 py-0.5 text-[0.6rem] font-semibold text-navy-700">
                     +{p.items.length - 1} más
                   </span>
                 )}
@@ -338,7 +338,7 @@ function Row({
       )}
       {has("dias") && (
         <Td align="right">
-          <span className={overSla ? "text-crimson font-semibold tabular-nums" : "tabular-nums"}>
+          <span className={overSla ? "text-terracotta font-semibold tabular-nums" : "tabular-nums"}>
             {dias}d{sla > 0 && ` / ${sla}`}
           </span>
         </Td>
@@ -376,7 +376,7 @@ function Row({
                 href={href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center text-steel hover:text-navy"
+                className="inline-flex items-center text-graphite hover:text-navy-600"
                 title={directo ? `Rastrear en ${p.carrier_real}` : "Ver en Melonn"}
               >
                 <ExternalLink className="h-3.5 w-3.5" />
@@ -394,20 +394,21 @@ function Row({
 
 function NivelBadge({ nivel }: { nivel?: NivelRiesgo }) {
   if (!nivel) return <span className="text-graphite">—</span>;
-  const map: Record<NivelRiesgo, "critico" | "riesgo" | "normal" | "neutral"> = {
-    CRITICO: "critico",
-    RIESGO:  "riesgo",
-    NORMAL:  "normal",
-    VENCIDO: "critico",
-    RESUELTO:"neutral",
+  const map: Record<NivelRiesgo, { tone: "critico" | "riesgo" | "normal" | "neutral"; label: string }> = {
+    CRITICO:  { tone: "critico", label: "Crítico" },
+    RIESGO:   { tone: "riesgo",  label: "Riesgo"  },
+    NORMAL:   { tone: "normal",  label: "Normal"  },
+    VENCIDO:  { tone: "critico", label: "Vencido" },
+    RESUELTO: { tone: "neutral", label: "Resuelto" },
   };
-  return <Badge tone={map[nivel]}>{nivel}</Badge>;
+  const cfg = map[nivel];
+  return <Badge tone={cfg.tone}>{cfg.label}</Badge>;
 }
 
 function Th({ children, align = "left" }: { children?: React.ReactNode; align?: "left" | "right" }) {
   const alignCls = align === "right" ? "text-right" : "text-left";
   return (
-    <th className={`px-3 py-2.5 text-[0.6rem] font-bold uppercase tracking-[0.15em] text-graphite ${alignCls}`}>
+    <th className={`px-3 py-2.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${alignCls}`}>
       {children}
     </th>
   );
@@ -429,11 +430,11 @@ function Select({
 }) {
   return (
     <label className="flex items-center gap-2 text-xs text-graphite">
-      <span className="font-semibold uppercase tracking-wider text-[0.6rem]">{label}</span>
+      <span className="font-semibold uppercase tracking-[0.12em] text-[0.62rem]">{label}</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded-md border border-border bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-steel"
+        className="rounded-sm border border-border bg-card px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
       >
         {options.map((o) => (
           <option key={o} value={o}>{o}</option>
