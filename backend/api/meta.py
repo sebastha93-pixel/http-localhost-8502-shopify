@@ -433,16 +433,56 @@ def _buscar_lead_kommo_por_phone(wa_id: str) -> Optional[dict]:
                         "advisor_id":              lead.get("advisor_id"),
                         "customer_name":           lead.get("customer_name"),
                         "conversation_id_existente": cr.data[0]["conversation_id"] if cr.data else None,
-                    }
-                    break
-    except Exception:
+     except Exception:
         result = None
+    
+    # FASE C1: Si NO encontramos en DB local, preguntar a Kommo API en vivo.
+    # Esto resuelve el caso típico: lead recién creado en Kommo (vía sales bot o
+    # contacto WhatsApp Business) que aún no se ha sincronizado a nuestra DB.
+    if not result:
+        try:
+            import sys
+            from pathlib import Path
+            _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+            if str(_SRC) not in sys.path:
+                sys.path.insert(0, str(_SRC))
+            import kommo_client as kc
+            # Probar variantes en Kommo (con y sin código país)
+            for q in (wa_norm, wa_norm[2:] if wa_norm.startswith("57") else wa_norm):
+                leads_kommo = kc.buscar_leads_por_phone(q, limit=3)
+                if not leads_kommo:
+                    continue
+                # Tomar el lead más reciente (Kommo los devuelve ordenados desc)
+                lead_kommo = leads_kommo[0]
+                lead_id_int = lead_kommo.get("id")
+                if not lead_id_int:
+                    continue
+                # Upsert el lead a nuestra DB para futuras búsquedas
+                try:
+                    db.upsert_lead(lead_kommo)
+                except Exception:
+                    pass
+                # Releer del DB para obtener advisor_id resuelto
+                try:
+                    r = sb.table("kommo_leads").select(
+                        "lead_id,advisor_id,customer_name,customer_phone"
+                    ).eq("lead_id", int(lead_id_int)).limit(1).execute()
+                    if r.data:
+                        lead = r.data[0]
+                        result = {
+                            "lead_id":                  lead["lead_id"],
+                            "advisor_id":               lead.get("advisor_id"),
+                            "customer_name":            lead.get("customer_name"),
+                            "conversation_id_existente": None,
+                        }
+                        break
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    
     # Cache (incluso si es None, para no re-consultar leads que no matchean)
     _cross_ref_cache[wa_norm] = (_t.time(), result)
-    # Limpieza simple si crece mucho
-    if len(_cross_ref_cache) > 2000:
-        _cross_ref_cache.clear()
-    return result
 
 
 def _conv_id_for_whatsapp(wa_id: str, phone_number_id: str) -> str:
