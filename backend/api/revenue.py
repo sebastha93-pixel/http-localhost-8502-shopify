@@ -245,18 +245,27 @@ def _procesar_webhook(parsed: dict) -> dict:
     convs_up = 0
     leads_up = 0
 
-    # 1) message[add] de Kommo → DESACTIVADO en modo híbrido con Meta.
-    # Meta Cloud API es ahora la fuente única de mensajes (texto + media).
-    # Kommo solo se usa para metadata de leads (status won/lost, advisor, pipeline).
-    # Se mantiene el código por si en el futuro queremos reactivar incoming via Kommo.
+    # 1) message[add] de Kommo → en modo híbrido Meta:
+    #    - WhatsApp lo manejamos via webhook Meta directo (Meta nos da texto completo).
+    #    - Instagram, Messenger, TikTok y otros canales NO los recibimos por Meta,
+    #      así que SÍ los procesamos desde el webhook de Kommo para no perderlos.
     HIBRIDO_META_ACTIVO = os.environ.get("HIBRIDO_META_ACTIVO", "true").lower() in ("true", "1", "yes")
+
+    # Orígenes/canales que vienen por Meta directo → los saltamos en webhook Kommo
+    # para evitar duplicados. El resto SÍ se procesa.
+    WHATSAPP_ORIGINS = {"whatsapp", "whatsapp_business", "wa_business", "waba", "wa"}
 
     msg_block = (parsed.get("message") or {})
     adds = msg_block.get("add") or []
     if isinstance(adds, dict):
         adds = [adds]
     if HIBRIDO_META_ACTIVO:
-        adds = []  # Saltamos procesamiento de mensajes desde Kommo
+        # Filtrar: dejar pasar IG, Messenger, TikTok y demás. Solo saltar WhatsApp.
+        adds = [
+            m for m in adds
+            if isinstance(m, dict)
+            and (m.get("origin") or "").lower() not in WHATSAPP_ORIGINS
+        ]
     for m in adds:
         if not isinstance(m, dict):
             continue
