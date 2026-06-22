@@ -773,11 +773,16 @@ def list_conversations(
     page_size: int = Query(50, ge=1, le=200),
     _: CurrentUser = Depends(require_role("admin", "operador")),
 ) -> dict:
-    """Lista de conversations con filtros + paginación + búsqueda + filtro respondidas."""
+    """Lista de conversations con filtros + paginación + búsqueda + filtro respondidas.
+    'Hoy' (days_back=1) = desde 00:00 Bogotá hasta ahora."""
     sb = db._sb()
     if sb is None:
         raise HTTPException(503, "Supabase no configurado")
-    desde = (datetime.now(tz=timezone.utc) - timedelta(days=days_back)).isoformat()
+    from zoneinfo import ZoneInfo
+    TZ_BOG = ZoneInfo("America/Bogota")
+    now_bog = datetime.now(tz=TZ_BOG)
+    start_bog = now_bog.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_back - 1)
+    desde = start_bog.astimezone(timezone.utc).isoformat()
 
     # 1. Si hay search, primero matchear leads por nombre/teléfono.
     lead_ids_filter: list[int] | None = None
@@ -1743,21 +1748,28 @@ def messages_stats(
 ) -> dict:
     """Contadores de mensajes por día en un rango. Si no se pasa desde/hasta usa
     ventana de los últimos days_back días. Devuelve totales y serie diaria con
-    breakdown customer/advisor."""
+    breakdown customer/advisor. 'Hoy' = 00:00 a 23:59 hora Bogotá (UTC-5)."""
     sb = db._sb()
     if sb is None:
         raise HTTPException(503, "Supabase no configurado")
     from datetime import date as _date
+    from zoneinfo import ZoneInfo
+    TZ_BOG = ZoneInfo("America/Bogota")
     if desde and hasta:
         try:
-            dt_desde = datetime.fromisoformat(desde).replace(tzinfo=timezone.utc)
-            dt_hasta = datetime.fromisoformat(hasta).replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
+            # Interpretar desde/hasta como fecha Bogotá (no UTC).
+            d_des = datetime.fromisoformat(desde).replace(tzinfo=TZ_BOG)
+            d_has = datetime.fromisoformat(hasta).replace(hour=23, minute=59, second=59, tzinfo=TZ_BOG)
+            dt_desde = d_des.astimezone(timezone.utc)
+            dt_hasta = d_has.astimezone(timezone.utc)
         except Exception:
             raise HTTPException(400, "desde/hasta deben ser YYYY-MM-DD")
     else:
-        dt_hasta = datetime.now(tz=timezone.utc)
-        dt_desde = dt_hasta - timedelta(days=days_back - 1)
-        dt_desde = dt_desde.replace(hour=0, minute=0, second=0)
+        # 'Hoy' = desde 00:00 Bogotá hasta ahora.
+        now_bog = datetime.now(tz=TZ_BOG)
+        start_bog = now_bog.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_back - 1)
+        dt_desde = start_bog.astimezone(timezone.utc)
+        dt_hasta = now_bog.astimezone(timezone.utc)
 
     # Bajamos rows con sent_at en el rango
     msgs = (sb.table("messages")
