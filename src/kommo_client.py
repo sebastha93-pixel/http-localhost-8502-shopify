@@ -344,24 +344,44 @@ def obtener_lead(lead_id: int) -> Optional[dict]:
     return _get(f"leads/{lead_id}", {"with": "contacts,catalog_elements,loss_reason"})
 def buscar_leads_por_phone(phone: str, limit: int = 5) -> list[dict]:
     """Busca leads en Kommo cuyo contacto tenga ese teléfono.
-    
-    Usa el query param `query` de la API de leads que busca en todos los
-    campos de los contactos asociados (incluido phone). Retorna lista
-    de leads (puede ser vacía si no encuentra).
-    
+
+    Kommo NO busca por phone en /leads?query=. Hay que buscar primero el
+    contacto con /contacts?query=PHONE (sí indexa teléfono) y luego traer
+    los leads asociados. Retorna lista de leads (puede ser vacía).
+
     `phone`: teléfono como string. Kommo es flexible con formato.
     """
     if not phone:
         return []
     try:
-        d = _get("leads", {
+        # 1. Buscar contactos con ese teléfono, incluyendo leads asociados.
+        d = _get("contacts", {
             "query": phone,
             "limit": limit,
-            "with": "contacts",
+            "with": "leads",
         })
         if not d:
             return []
-        leads = ((d.get("_embedded") or {}).get("leads")) or []
+        contactos = ((d.get("_embedded") or {}).get("contacts")) or []
+        if not contactos:
+            return []
+        # 2. Recolectar lead_ids únicos de los contactos encontrados.
+        lead_ids: list[int] = []
+        seen: set = set()
+        for c in contactos:
+            for ld in ((c.get("_embedded") or {}).get("leads")) or []:
+                lid = ld.get("id")
+                if lid and lid not in seen:
+                    seen.add(lid)
+                    lead_ids.append(int(lid))
+        if not lead_ids:
+            return []
+        # 3. Traer los leads completos (uno por uno; suelen ser pocos).
+        leads: list[dict] = []
+        for lid in lead_ids[:limit]:
+            ld = obtener_lead(lid)
+            if ld:
+                leads.append(ld)
         return leads
     except Exception:
         return []
