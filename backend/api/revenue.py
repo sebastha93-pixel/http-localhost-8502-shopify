@@ -822,50 +822,66 @@ def list_conversations(
             return {"ok": True, "total": 0, "page": page, "page_size": page_size, "pages": 0, "conversations": []}
         q = q.in_("lead_id", lead_ids_filter)
 
-    # 3. Para filtro pending/attended traemos un set más amplio y filtramos en Python.
-    # (Supabase/PostgREST no soporta fácil sub-queries en EXISTS.)
-    apply_reply_filter = reply_filter in ("pending", "attended")
-    fetch_limit = max(page * page_size * 4, 200) if apply_reply_filter else page * page_size
-    fetch_limit = min(fetch_limit, 2000)
+    # 3. Traemos un set amplio para hacer dedup por lead_id + filtros en Python.
+    # Cada lead puede tener varias conversations en nuestra DB (meta-wa-*, talk-*,
+    # lead-*) — pero el negocio piensa por LEAD, no por canal. Unificamos.
+    fetch_limit = 2000
     q = q.limit(fetch_limit)
 
     res = q.execute()
     convs_all = res.data or []
-    total_in_filter = res.count if res.count is not None else len(convs_all)
 
-    # 4. Si reply_filter, marcar cada conv con flag has_advisor_reply.
-    if apply_reply_filter and convs_all:
-        conv_ids = [c["conversation_id"] for c in convs_all]
-        with_reply: set = set()
-        for i in range(0, len(conv_ids), 100):
-            batch = conv_ids[i:i+100]
+    # 4. Dedup por lead_id: nos quedamos con la conversation más reciente por lead.
+    # Si no hay lead_id (raro), conservamos por conversation_id como fallback.
+    convs_all.sort(key=lambda c: c.get("last_message_at") or "", reverse=True)
+    convs_dedup: list[dict] = []
+    seen_leads: set = set()
+    seen_no_lead: set = set()
+    for c in convs_all:
+        lid = c.get("lead_id")
+        if lid:
+            if lid in seen_leads:
+                continue
+            seen_leads.add(lid)
+        else:
+            cid = c.get("conversation_id")
+            if cid in seen_no_lead:
+                continue
+            seen_no_lead.add(cid)
+        convs_dedup.append(c)
+
+    # 5. Filtro pending/attended sobre la lista deduped.
+    apply_reply_filter = reply_filter in ("pending", "attended")
+    if apply_reply_filter and convs_dedup:
+        # Buscar advisor reply por lead_id (no por conversation_id) porque los
+        # mensajes pueden estar en cualquiera de las conv del mismo lead.
+        lead_ids_check = [c["lead_id"] for c in convs_dedup if c.get("lead_id")]
+        leads_with_reply: set = set()
+        for i in range(0, len(lead_ids_check), 200):
+            batch = lead_ids_check[i:i+200]
             try:
                 ms = (sb.table("messages")
-                        .select("conversation_id,sender_type")
-                        .in_("conversation_id", batch)
+                        .select("lead_id,sender_type")
+                        .in_("lead_id", batch)
                         .eq("sender_type", "advisor")
                         .limit(5000)
                         .execute().data) or []
                 for m in ms:
-                    with_reply.add(m["conversation_id"])
+                    if m.get("lead_id"):
+                        leads_with_reply.add(m["lead_id"])
             except Exception:
                 pass
         if reply_filter == "pending":
-            convs_filtered = [c for c in convs_all if c["conversation_id"] not in with_reply]
+            convs_filtered = [c for c in convs_dedup if c.get("lead_id") not in leads_with_reply]
         else:  # attended
-            convs_filtered = [c for c in convs_all if c["conversation_id"] in with_reply]
-        total_filtered = len(convs_filtered)
+            convs_filtered = [c for c in convs_dedup if c.get("lead_id") in leads_with_reply]
     else:
-        convs_filtered = convs_all
-        total_filtered = total_in_filter
+        convs_filtered = convs_dedup
 
-    # 5. Paginar el resultado final.
-    start = (page - 1) * page_size
-    end = start + page_size
-    convs = convs_filtered[start:end] if apply_reply_filter else convs_filtered
-    if not apply_reply_filter:
-        # En este caso convs_filtered ya tiene page * page_size items; sólo cortamos los de la página.
-        convs = convs_filtered[(page - 1) * page_size : page * page_size]
+    total_filtered = len(convs_filtered)
+
+    # 6. Paginar el resultado final.
+    convs = convs_filtered[(page - 1) * page_size : page * page_size]
 
     # 6. Enriquecer.
     advisor_ids = list({c["advisor_id"] for c in convs if c.get("advisor_id")})
