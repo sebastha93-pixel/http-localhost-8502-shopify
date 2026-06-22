@@ -48,6 +48,10 @@ interface Conversation {
   lead_value?: number | null;
   customer_name?: string | null;
   customer_phone?: string | null;
+  msgs_customer?: number;
+  msgs_advisor?: number;
+  avg_response_min?: number | null;
+  is_vip?: boolean;
 }
 
 interface AdvisorRow {
@@ -612,11 +616,12 @@ export default function RevenuePage() {
   const [channelFilter, setChannelFilter] = useState<string>("");
   const [selectedConv, setSelectedConv] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string>("conversaciones");
-  // Buscador + paginación + filtro pendientes/atendidas
+  // Buscador + paginación + filtro pendientes/atendidas + sin asesora
   const [convSearch, setConvSearch] = useState<string>("");
   const [convSearchInput, setConvSearchInput] = useState<string>("");
   const [convPage, setConvPage] = useState<number>(1);
   const [replyFilter, setReplyFilter] = useState<string>("");  // "" | "pending" | "attended"
+  const [onlyUnassigned, setOnlyUnassigned] = useState<boolean>(false);
 
   // Stats: refresh moderado cada 2 min (era 30s)
   const statsQ = useQuery<StatsResp>({
@@ -716,8 +721,8 @@ export default function RevenuePage() {
         <TabsContent value="conversaciones">
           <Card>
             <CardContent className="p-4">
-              {/* Sub-tabs pendientes / atendidas / todas */}
-              <div className="flex gap-2 mb-3 border-b">
+              {/* Sub-tabs pendientes / atendidas / todas + quick filter sin asesora */}
+              <div className="flex gap-2 mb-3 border-b flex-wrap items-center">
                 {[
                   { val: "pending",  label: "🔴 Sin respuesta",   color: "text-red-600" },
                   { val: "attended", label: "✅ Atendidas",       color: "text-emerald-600" },
@@ -735,6 +740,17 @@ export default function RevenuePage() {
                     {t.label}
                   </button>
                 ))}
+                <button
+                  onClick={() => { setOnlyUnassigned(!onlyUnassigned); setConvPage(1); }}
+                  className={`ml-auto px-3 py-1.5 text-sm border rounded transition ${
+                    onlyUnassigned
+                      ? "bg-amber-100 border-amber-400 text-amber-800 font-semibold"
+                      : "border-graphite/30 text-graphite hover:bg-cloud"
+                  }`}
+                  title="Mostrar solo conversaciones sin asesora asignada"
+                >
+                  ⚠️ Sin asesora {onlyUnassigned ? "(activo)" : ""}
+                </button>
               </div>
 
               {/* Filtros + buscador */}
@@ -798,23 +814,32 @@ export default function RevenuePage() {
                         <th className="py-2 pr-3">Cliente</th>
                         <th className="py-2 pr-3">Asesora</th>
                         <th className="py-2 pr-3">Canal</th>
+                        <th className="py-2 pr-3">Mensajes</th>
+                        <th className="py-2 pr-3" title="Tiempo promedio que tarda la asesora en responder al cliente">Resp. prom.</th>
                         <th className="py-2 pr-3">Último mensaje</th>
                         <th className="py-2 pr-3">Estado conv.</th>
                         <th className="py-2 pr-3">Estado venta</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {(convsQ.data?.conversations || []).map((c) => (
+                      {(convsQ.data?.conversations || [])
+                        .filter(c => !onlyUnassigned || !c.advisor_id)
+                        .map((c) => (
                         <tr key={c.conversation_id} className="border-b hover:bg-cloud/40 cursor-pointer" onClick={() => setSelectedConv(c.conversation_id)}>
                           <td className="py-2 pr-3">
-                            <div className="font-medium">
-                              {c.customer_name?.trim() || c.customer_phone || <span className="text-graphite italic">Lead #{c.lead_id}</span>}
+                            <div className="font-medium flex items-center gap-1.5">
+                              {c.is_vip && <span title="Cliente VIP: 3+ ventas ganadas">⭐</span>}
+                              <span>
+                                {c.customer_name?.trim() || c.customer_phone || <span className="text-graphite italic">Lead #{c.lead_id}</span>}
+                              </span>
                             </div>
                             {c.customer_name?.trim() && c.customer_phone && (
                               <div className="text-xs text-graphite">{c.customer_phone}</div>
                             )}
                           </td>
-                          <td className="py-2 pr-3">{c.advisor_name || <span className="text-graphite italic">Sin asignar</span>}</td>
+                          <td className="py-2 pr-3">
+                            {c.advisor_name || <span className="text-amber-700 font-medium">⚠️ Sin asignar</span>}
+                          </td>
                           <td className="py-2 pr-3">
                             {(() => {
                               const ch = channelDisplay(c.channel);
@@ -825,6 +850,20 @@ export default function RevenuePage() {
                                 </span>
                               );
                             })()}
+                          </td>
+                          <td className="py-2 pr-3 text-xs whitespace-nowrap">
+                            <span className="text-blue-700">{c.msgs_customer ?? 0}</span>
+                            <span className="text-graphite mx-1">/</span>
+                            <span className="text-emerald-700">{c.msgs_advisor ?? 0}</span>
+                          </td>
+                          <td className="py-2 pr-3 text-xs whitespace-nowrap">
+                            {c.avg_response_min != null
+                              ? (c.avg_response_min < 5
+                                  ? <span className="text-emerald-700 font-medium">{c.avg_response_min}m</span>
+                                  : c.avg_response_min < 30
+                                    ? <span className="text-amber-700">{c.avg_response_min}m</span>
+                                    : <span className="text-red-700 font-medium">{c.avg_response_min}m</span>)
+                              : <span className="text-graphite">—</span>}
                           </td>
                           <td className="py-2 pr-3 whitespace-nowrap">{fmtRelative(c.last_message_at)}</td>
                           <td className="py-2 pr-3"><StatusBadge status={c.status} /></td>

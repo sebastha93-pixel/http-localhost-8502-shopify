@@ -895,17 +895,101 @@ def list_conversations(
         for l in (sb.table("kommo_leads").select("lead_id,status,lead_value,customer_name,customer_phone").in_("lead_id", lead_ids).execute().data or []):
             leads_map[l["lead_id"]] = l
 
+    # Contador de mensajes (cliente / asesora) + tiempo respuesta promedio por lead.
+    msg_counts: dict = {}  # lead_id → {customer, advisor, avg_response_min}
+    if lead_ids:
+        for batch_start in range(0, len(lead_ids), 100):
+            batch = lead_ids[batch_start:batch_start + 100]
+            try:
+                ms = (sb.table("messages")
+                        .select("lead_id,sender_type,sent_at")
+                        .in_("lead_id", batch)
+                        .order("sent_at")
+                        .limit(5000)
+                        .execute().data) or []
+            except Exception:
+                ms = []
+            # Agrupar por lead
+            by_lead: dict = {}
+            for m in ms:
+                lid = m.get("lead_id")
+                if lid is None:
+                    continue
+                by_lead.setdefault(lid, []).append(m)
+            for lid, msgs_lead in by_lead.items():
+                cust = sum(1 for m in msgs_lead if m.get("sender_type") == "customer")
+                adv  = sum(1 for m in msgs_lead if m.get("sender_type") == "advisor")
+                # Tiempo de respuesta: del último customer al siguiente advisor
+                rts: list = []
+                last_cust_ts = None
+                for m in msgs_lead:
+                    sa = m.get("sent_at")
+                    if not sa:
+                        continue
+                    try:
+                        ts = datetime.fromisoformat(sa.replace("Z", "+00:00"))
+                    except Exception:
+                        continue
+                    st = m.get("sender_type")
+                    if st == "customer":
+                        last_cust_ts = ts
+                    elif st == "advisor" and last_cust_ts:
+                        delta = (ts - last_cust_ts).total_seconds()
+                        if 0 <= delta <= 86400:
+                            rts.append(delta)
+                        last_cust_ts = None
+                avg_min = round(sum(rts) / len(rts) / 60, 1) if rts else None
+                msg_counts[lid] = {"customer": cust, "advisor": adv, "avg_response_min": avg_min}
+
+    # Clientes VIP: aquellos con ≥3 órdenes ganadas (proxy de cliente recurrente).
+    # Si la columna existe en kommo_leads la usamos; sino derivamos de count(leads).
+    vip_lead_ids: set = set()
+    if lead_ids:
+        try:
+            # Contar leads ganados por customer_phone para identificar recurrentes
+            r = (sb.table("kommo_leads")
+                   .select("customer_phone")
+                   .in_("lead_id", lead_ids)
+                   .execute().data) or []
+            phones_in_page = list({x["customer_phone"] for x in r if x.get("customer_phone")})
+            if phones_in_page:
+                # Para cada phone, contar leads históricos won
+                for batch_start in range(0, len(phones_in_page), 50):
+                    batch = phones_in_page[batch_start:batch_start + 50]
+                    rr = (sb.table("kommo_leads")
+                            .select("customer_phone,lead_id,status")
+                            .in_("customer_phone", batch)
+                            .eq("status", "won")
+                            .execute().data) or []
+                    cnt: dict = {}
+                    for x in rr:
+                        ph = x.get("customer_phone")
+                        if ph:
+                            cnt[ph] = cnt.get(ph, 0) + 1
+                    phones_vip = {ph for ph, n in cnt.items() if n >= 3}
+                    # Marcar como VIP los leads cuyo phone está en phones_vip
+                    for lid, lead in leads_map.items():
+                        if lead.get("customer_phone") in phones_vip:
+                            vip_lead_ids.add(lid)
+        except Exception:
+            pass
+
     enriched = []
     for c in convs:
         adv = advisors_map.get(c.get("advisor_id"), {})
         lead = leads_map.get(c.get("lead_id"), {})
+        counts = msg_counts.get(c.get("lead_id"), {})
         enriched.append({
             **c,
-            "advisor_name": adv.get("name"),
-            "lead_status":  lead.get("status"),
-            "lead_value":   lead.get("lead_value"),
-            "customer_name": lead.get("customer_name"),
-            "customer_phone": lead.get("customer_phone"),
+            "advisor_name":    adv.get("name"),
+            "lead_status":     lead.get("status"),
+            "lead_value":      lead.get("lead_value"),
+            "customer_name":   lead.get("customer_name"),
+            "customer_phone":  lead.get("customer_phone"),
+            "msgs_customer":   counts.get("customer", 0),
+            "msgs_advisor":    counts.get("advisor", 0),
+            "avg_response_min": counts.get("avg_response_min"),
+            "is_vip":          c.get("lead_id") in vip_lead_ids,
         })
 
     pages = max(1, (total_filtered + page_size - 1) // page_size) if total_filtered else 0
