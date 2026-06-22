@@ -342,7 +342,29 @@ def listar_leads(updated_after_ts: Optional[int] = None,
 def obtener_lead(lead_id: int) -> Optional[dict]:
     """Detalle completo de un lead específico."""
     return _get(f"leads/{lead_id}", {"with": "contacts,catalog_elements,loss_reason"})
-
+def buscar_leads_por_phone(phone: str, limit: int = 5) -> list[dict]:
+    """Busca leads en Kommo cuyo contacto tenga ese teléfono.
+    
+    Usa el query param `query` de la API de leads que busca en todos los
+    campos de los contactos asociados (incluido phone). Retorna lista
+    de leads (puede ser vacía si no encuentra).
+    
+    `phone`: teléfono como string. Kommo es flexible con formato.
+    """
+    if not phone:
+        return []
+    try:
+        d = _get("leads", {
+            "query": phone,
+            "limit": limit,
+            "with": "contacts",
+        })
+        if not d:
+            return []
+        leads = ((d.get("_embedded") or {}).get("leads")) or []
+        return leads
+    except Exception:
+        return []
 
 def listar_contactos_de_lead(lead_id: int) -> list[dict]:
     """Contactos asociados a un lead."""
