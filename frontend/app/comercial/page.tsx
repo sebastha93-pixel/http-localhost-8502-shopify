@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
-import { KpiCard } from "@/components/kpi-card";
+import { KpiStrip } from "@/components/kpi-card";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -65,8 +65,8 @@ function Sparkline({ data, height = 60 }: { data: number[]; height?: number }) {
   const lastY = height - ((data[data.length - 1] - min) / range) * height;
   return (
     <svg viewBox={`0 0 ${w} ${height}`} className="w-full h-full" preserveAspectRatio="none">
-      <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.5" className="text-navy" />
-      <circle cx={lastX} cy={lastY} r="2" className="fill-navy" />
+      <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.5" className="text-navy-600" />
+      <circle cx={lastX} cy={lastY} r="2" className="fill-navy-600" />
     </svg>
   );
 }
@@ -76,19 +76,28 @@ function DeltaBadge({ pct, up }: { pct: number; up: boolean }) {
   return <Badge tone={tone}>{up ? "↑" : "↓"} {Math.abs(pct).toFixed(1)}%</Badge>;
 }
 
+const PERIODO_LABELS: Record<PeriodoDesglose, string> = {
+  hoy: "Hoy", ayer: "Ayer", "7d": "7d", "30d": "30d",
+  mes: "Mes", ytd: "YTD", custom: "Personalizado",
+};
+
+function SectionHeading({ title, hint }: { title: string; hint?: React.ReactNode }) {
+  return (
+    <div className="mb-3 flex items-center justify-between">
+      <h3 className="font-display text-base font-medium text-ink-900">{title}</h3>
+      {hint && <span className="text-[0.7rem] text-graphite">{hint}</span>}
+    </div>
+  );
+}
+
 export default function ComercialPage() {
   const [periodoDesglose, setPeriodoDesglose] = useState<PeriodoDesglose>("30d");
-  // Rango personalizado para "Desglose → Personalizado"
   const hoyISO = new Date().toISOString().slice(0, 10);
   const hace30 = new Date(Date.now() - 29 * 86400_000).toISOString().slice(0, 10);
   const [rangoDesde, setRangoDesde] = useState<string>(hace30);
   const [rangoHasta, setRangoHasta] = useState<string>(hoyISO);
-  // Tabs lazy: solo dispara la query del tab activo. Los demás esperan
-  // a que el usuario los abra.
   const [tabActivo, setTabActivo] = useState<"ventas" | "comp" | "clientes">("ventas");
 
-  // Overview trae sparkline 12d + top productos (siempre últimos 30d
-  // como ranking estable, independiente del filtro de período).
   const overview = useQuery<OverviewResp>({
     queryKey: ["comercial-overview"],
     queryFn: () => api.get<OverviewResp>("/api/comercial/overview"),
@@ -113,8 +122,6 @@ export default function ComercialPage() {
     enabled: tabActivo === "clientes",
   });
 
-  // Desglose: KPIs (bruto/neto/desc) + canal + asesor según el período
-  // del filtro. Es el core del tab Ventas.
   const desg = useQuery<DesgloseResp>({
     queryKey: ["comercial-desglose", periodoDesglose, periodoDesglose === "custom" ? `${rangoDesde}_${rangoHasta}` : ""],
     queryFn: () => {
@@ -129,11 +136,10 @@ export default function ComercialPage() {
     enabled: tabActivo === "ventas" && (periodoDesglose !== "custom" || !!(rangoDesde && rangoHasta)),
   });
 
-  if (overview.isLoading) return <LoadingState label="Cargando métricas comerciales..." />;
+  if (overview.isLoading) return <LoadingState label="Cargando métricas comerciales…" />;
   if (overview.error || !overview.data) return <ErrorState error={overview.error} onRetry={() => overview.refetch()} />;
 
   const data = overview.data;
-  const v = data.ventas_hoy || {};
   const d = data.delta || {};
   const up = !!d.up;
   const pct = d.pct || 0;
@@ -147,12 +153,11 @@ export default function ComercialPage() {
       onRefresh={() => { overview.refetch(); comp.refetch(); desg.refetch(); cli.refetch(); }}
     >
       {data.errores?.length > 0 && (
-        <div className="rounded-md border border-rust/30 bg-rust/5 px-3 py-2 text-xs text-rust">
+        <div className="rounded-md border border-terracotta/30 bg-terracotta/[0.04] px-3 py-2 text-xs text-terracotta">
           Algunos bloques no cargaron: {data.errores.join(" · ")}
         </div>
       )}
 
-      {/* Tabs: Ventas | Comparativas | Clientes */}
       <Tabs value={tabActivo} onValueChange={(v) => setTabActivo(v as typeof tabActivo)}>
         <TabsList>
           <TabsTrigger value="ventas">Ventas</TabsTrigger>
@@ -160,36 +165,35 @@ export default function ComercialPage() {
           <TabsTrigger value="clientes">Clientes</TabsTrigger>
         </TabsList>
 
-        {/* ─── TAB VENTAS (fusión Hoy + Desglose + Por período) ─── */}
+        {/* ─── TAB VENTAS ─── */}
         <TabsContent value="ventas" className="space-y-4">
           {/* Selector de período */}
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-graphite uppercase tracking-wider">Período:</span>
-            {(["hoy","ayer","7d","30d","mes","ytd","custom"] as PeriodoDesglose[]).map((p) => {
-              const labels: Record<PeriodoDesglose, string> = {
-                hoy: "Hoy", ayer: "Ayer", "7d": "7d", "30d": "30d",
-                mes: "Mes", ytd: "YTD", custom: "Personalizado",
-              };
-              return (
-                <button
-                  key={p}
-                  onClick={() => setPeriodoDesglose(p)}
-                  className={`px-3 py-1.5 rounded-md text-xs font-semibold uppercase tracking-wider transition-colors ${
-                    periodoDesglose === p ? "bg-navy text-white" : "bg-concrete text-graphite hover:bg-concrete/70"
-                  }`}
-                >
-                  {labels[p]}
-                </button>
-              );
-            })}
+            <span className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Periodo</span>
+            <div className="inline-flex overflow-hidden rounded-sm border border-border bg-card">
+              {(["hoy","ayer","7d","30d","mes","ytd","custom"] as PeriodoDesglose[]).map((p) => {
+                const active = periodoDesglose === p;
+                return (
+                  <button
+                    key={p}
+                    onClick={() => setPeriodoDesglose(p)}
+                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                      active ? "bg-ink-900 text-white" : "text-graphite hover:bg-cloud"
+                    }`}
+                  >
+                    {PERIODO_LABELS[p]}
+                  </button>
+                );
+              })}
+            </div>
             {periodoDesglose === "custom" && (
-              <div className="flex items-center gap-2 ml-2 pl-2 border-l border-border">
+              <div className="ml-2 flex items-center gap-2 border-l border-border pl-2">
                 <input
                   type="date"
                   value={rangoDesde}
                   max={rangoHasta}
                   onChange={(e) => setRangoDesde(e.target.value)}
-                  className="rounded-md border border-border bg-white px-2 py-1.5 text-xs text-ink focus:outline-none focus:ring-2 focus:ring-steel"
+                  className="rounded-sm border border-border bg-card px-2 py-1.5 text-xs text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
                 />
                 <span className="text-xs text-graphite">→</span>
                 <input
@@ -198,7 +202,7 @@ export default function ComercialPage() {
                   min={rangoDesde}
                   max={hoyISO}
                   onChange={(e) => setRangoHasta(e.target.value)}
-                  className="rounded-md border border-border bg-white px-2 py-1.5 text-xs text-ink focus:outline-none focus:ring-2 focus:ring-steel"
+                  className="rounded-sm border border-border bg-card px-2 py-1.5 text-xs text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
                 />
               </div>
             )}
@@ -208,67 +212,73 @@ export default function ComercialPage() {
             <Card><CardContent className="p-8 text-center text-sm text-graphite">Cargando ventas…</CardContent></Card>
           ) : (
             <>
-              {/* KPIs principales (5): Bruto · Descuentos · Neto · Pedidos · Ticket */}
-              <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
-                <KpiCard label="Ventas brutas"   value={formatMoney(desg.data.bruto)}        meta="Antes de descuentos · sin IVA" accent="steel" />
-                <KpiCard label="Descuentos"      value={formatMoney(desg.data.descuentos)}   meta={desg.data.bruto ? `${(desg.data.descuentos / desg.data.bruto * 100).toFixed(1)}% del bruto` : "—"} accent="khaki" />
-                <KpiCard label="Ventas netas"    value={formatMoney(desg.data.neto)}         meta={`${desg.data.desde} → ${desg.data.hasta}`} accent="navy" />
-                <KpiCard label="Pedidos"         value={String(desg.data.num_pedidos)}       meta="En el período" accent="steel" />
-                <KpiCard label="Ticket promedio" value={formatMoney(desg.data.ticket_promedio)} meta="Neto / pedido" accent="navy" />
-              </div>
+              {/* KPIs principales (5) → KpiStrip */}
+              <KpiStrip
+                items={[
+                  { label: "Ventas brutas",   value: formatMoney(desg.data.bruto) },
+                  { label: "Descuentos",      value: formatMoney(desg.data.descuentos) },
+                  { label: "Ventas netas",    value: formatMoney(desg.data.neto) },
+                  { label: "Pedidos",         value: desg.data.num_pedidos },
+                  { label: "Ticket promedio", value: formatMoney(desg.data.ticket_promedio) },
+                ]}
+              />
 
-              {/* Delta vs ayer (solo cuando el período es "hoy") */}
+              <p className="text-[0.7rem] text-graphite">
+                {desg.data.desde} → {desg.data.hasta} · Neto = Bruto − Descuentos · Sin IVA
+              </p>
+
+              {/* Delta vs ayer */}
               {periodoDesglose === "hoy" && overview.data?.delta && (
                 <Card>
-                  <CardContent className="p-5 flex items-center justify-between">
+                  <CardContent className="flex items-center justify-between p-5">
                     <div>
-                      <p className="text-[0.6rem] uppercase tracking-wider text-graphite mb-1">Vs ayer</p>
-                      <p className={`text-xl font-bold ${up ? "text-teal" : "text-rust"}`}>
+                      <p className="section-label mb-1">Vs ayer</p>
+                      <p className={`font-display text-xl font-medium ${up ? "text-sage" : "text-terracotta"}`}>
                         {up ? "↑" : "↓"} {Math.abs(pct).toFixed(1)}%
                       </p>
                     </div>
-                    <p className="text-xs text-graphite">Ayer: <span className="font-semibold text-ink">{formatMoney(d.ayer || 0)}</span></p>
+                    <p className="text-xs text-graphite">
+                      Ayer <span className="font-medium text-ink-900 tabular-nums">{formatMoney(d.ayer || 0)}</span>
+                    </p>
                   </CardContent>
                 </Card>
               )}
 
-              {/* Sparkline 12 días (referencia histórica, no depende del filtro) */}
+              {/* Sparkline 12 días */}
               <Card>
-                <CardContent className="p-5 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-bold uppercase tracking-wider text-graphite">Ventas últimos 12 días</h3>
-                    <span className="text-xs text-graphite">Total: <span className="font-semibold text-ink">{formatMoney(serie.reduce((a, b) => a + b, 0))}</span></span>
-                  </div>
+                <CardContent className="space-y-3 p-5">
+                  <SectionHeading
+                    title="Ventas últimos 12 días"
+                    hint={<>Total <span className="font-medium text-ink-900 tabular-nums">{formatMoney(serie.reduce((a, b) => a + b, 0))}</span></>}
+                  />
                   <div className="h-20"><Sparkline data={serie} height={60} /></div>
                 </CardContent>
               </Card>
 
               {/* Por canal */}
               <Card>
-                <CardContent className="p-5 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-bold uppercase tracking-wider text-graphite">Ventas por canal</h3>
-                    <span className="text-[0.65rem] text-graphite">% sobre neto</span>
-                  </div>
+                <CardContent className="space-y-3 p-5">
+                  <SectionHeading title="Ventas por canal" hint="% sobre neto" />
                   {desg.data.por_canal.length === 0 ? (
-                    <p className="text-sm text-graphite text-center py-4">Sin ventas en el período.</p>
+                    <p className="py-4 text-center text-sm text-graphite">Sin ventas en este período.</p>
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
-                        <thead className="border-b border-border text-xs uppercase tracking-wider text-graphite">
+                        <thead className="border-b border-border">
                           <tr>
-                            <th className="text-left py-2 font-medium">Canal</th>
-                            <th className="text-right py-2 font-medium">Pedidos</th>
-                            <th className="text-right py-2 font-medium">Ventas</th>
-                            <th className="text-right py-2 font-medium">%</th>
+                            {["Canal", "Pedidos", "Ventas", "%"].map((h, i) => (
+                              <th key={h} className={`py-2 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i === 0 ? "text-left" : "text-right"}`}>
+                                {h}
+                              </th>
+                            ))}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
                           {desg.data.por_canal.map((c) => (
-                            <tr key={c.label} className="hover:bg-concrete/30">
-                              <td className="py-2.5 text-ink font-medium">{c.label}</td>
-                              <td className="py-2.5 text-right text-ink tabular-nums">{c.num_pedidos}</td>
-                              <td className="py-2.5 text-right text-ink font-semibold tabular-nums">{formatMoney(c.ventas)}</td>
+                            <tr key={c.label} className="transition-colors hover:bg-cloud/50">
+                              <td className="py-2.5 font-medium text-ink-900">{c.label}</td>
+                              <td className="py-2.5 text-right text-ink-900 tabular-nums">{c.num_pedidos}</td>
+                              <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{formatMoney(c.ventas)}</td>
                               <td className="py-2.5 text-right text-graphite tabular-nums">{c.pct.toFixed(1)}%</td>
                             </tr>
                           ))}
@@ -281,40 +291,37 @@ export default function ComercialPage() {
 
               {/* Por asesor */}
               <Card>
-                <CardContent className="p-5 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-bold uppercase tracking-wider text-graphite">Ventas por asesor</h3>
-                    <span className="text-[0.65rem] text-graphite">Solo órdenes creadas por staff</span>
-                  </div>
+                <CardContent className="space-y-3 p-5">
+                  <SectionHeading title="Ventas por asesor" hint="Solo órdenes creadas por staff" />
                   {desg.data.por_asesor.length === 0 ? (
-                    <p className="text-sm text-graphite text-center py-4">Sin ventas registradas por asesor en este período.</p>
+                    <p className="py-4 text-center text-sm text-graphite">Sin ventas registradas por asesor en este período.</p>
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
-                        <thead className="border-b border-border text-xs uppercase tracking-wider text-graphite">
+                        <thead className="border-b border-border">
                           <tr>
-                            <th className="text-left py-2 font-medium">Asesor</th>
-                            <th className="text-right py-2 font-medium">Pedidos</th>
-                            <th className="text-right py-2 font-medium">Ventas netas</th>
-                            <th className="text-right py-2 font-medium">Ticket promedio</th>
-                            <th className="text-right py-2 font-medium">% participación</th>
+                            {["Asesor", "Pedidos", "Ventas netas", "Ticket promedio", "% participación"].map((h, i) => (
+                              <th key={h} className={`py-2 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i === 0 ? "text-left" : "text-right"}`}>
+                                {h}
+                              </th>
+                            ))}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
                           {desg.data.por_asesor.map((a) => {
                             const ticket = a.num_pedidos > 0 ? a.ventas / a.num_pedidos : 0;
                             return (
-                              <tr key={a.nombre} className="hover:bg-concrete/30">
-                                <td className="py-2.5 text-ink font-medium">{a.nombre}</td>
-                                <td className="py-2.5 text-right text-ink tabular-nums">{a.num_pedidos}</td>
-                                <td className="py-2.5 text-right text-ink font-semibold tabular-nums">{formatMoney(a.ventas)}</td>
+                              <tr key={a.nombre} className="transition-colors hover:bg-cloud/50">
+                                <td className="py-2.5 font-medium text-ink-900">{a.nombre}</td>
+                                <td className="py-2.5 text-right text-ink-900 tabular-nums">{a.num_pedidos}</td>
+                                <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{formatMoney(a.ventas)}</td>
                                 <td className="py-2.5 text-right text-graphite tabular-nums">{formatMoney(ticket)}</td>
                                 <td className="py-2.5 text-right text-graphite tabular-nums">{a.pct.toFixed(1)}%</td>
                               </tr>
                             );
                           })}
                         </tbody>
-                        <tfoot className="border-t-2 border-ink/20 bg-concrete/30">
+                        <tfoot className="border-t-2 border-ink-900/15 bg-cloud/60">
                           {(() => {
                             const totalPedidos = desg.data.por_asesor.reduce((s, a) => s + a.num_pedidos, 0);
                             const totalVentas  = desg.data.por_asesor.reduce((s, a) => s + a.ventas, 0);
@@ -322,11 +329,11 @@ export default function ComercialPage() {
                             const totalPct     = desg.data.por_asesor.reduce((s, a) => s + a.pct, 0);
                             return (
                               <tr>
-                                <td className="py-2.5 text-ink font-bold uppercase tracking-wider text-[0.7rem]">Total</td>
-                                <td className="py-2.5 text-right text-ink font-bold tabular-nums">{totalPedidos}</td>
-                                <td className="py-2.5 text-right text-ink font-bold tabular-nums">{formatMoney(totalVentas)}</td>
-                                <td className="py-2.5 text-right text-ink font-bold tabular-nums">{formatMoney(ticketProm)}</td>
-                                <td className="py-2.5 text-right text-ink font-bold tabular-nums">{totalPct.toFixed(1)}%</td>
+                                <td className="py-2.5 font-medium text-ink-900">Total</td>
+                                <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{totalPedidos}</td>
+                                <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{formatMoney(totalVentas)}</td>
+                                <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{formatMoney(ticketProm)}</td>
+                                <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{totalPct.toFixed(1)}%</td>
                               </tr>
                             );
                           })()}
@@ -337,31 +344,30 @@ export default function ComercialPage() {
                 </CardContent>
               </Card>
 
-              {/* Top productos — siempre últimos 30 días (ranking estable) */}
+              {/* Top productos */}
               {overview.data?.top_productos && overview.data.top_productos.length > 0 && (
                 <Card>
                   <CardContent className="p-5">
-                    <h3 className="text-sm font-bold uppercase tracking-wider text-graphite mb-3">Top productos (últimos 30 días)</h3>
+                    <SectionHeading title="Top productos (últimos 30 días)" />
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
-                        <thead className="border-b border-border text-xs uppercase tracking-wider text-graphite">
+                        <thead className="border-b border-border">
                           <tr>
-                            <th className="text-left py-2 font-medium">#</th>
-                            <th className="text-left py-2 font-medium">Producto</th>
-                            <th className="text-left py-2 font-medium">SKU</th>
-                            <th className="text-right py-2 font-medium">Unidades</th>
-                            <th className="text-right py-2 font-medium">Revenue</th>
-                            <th className="text-right py-2 font-medium">% total</th>
+                            {["#", "Producto", "SKU", "Unidades", "Revenue", "% total"].map((h, i) => (
+                              <th key={h} className={`py-2 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i <= 2 ? "text-left" : "text-right"}`}>
+                                {h}
+                              </th>
+                            ))}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
                           {overview.data.top_productos.map((p, i) => (
-                            <tr key={`${p.sku}-${i}`} className="hover:bg-concrete/30">
+                            <tr key={`${p.sku}-${i}`} className="transition-colors hover:bg-cloud/50">
                               <td className="py-2.5 text-graphite tabular-nums">{i + 1}</td>
-                              <td className="py-2.5 text-ink font-medium">{p.nombre || "—"}</td>
-                              <td className="py-2.5 text-graphite text-xs tabular-nums">{p.sku || "—"}</td>
-                              <td className="py-2.5 text-right text-ink tabular-nums">{p.unidades || 0}</td>
-                              <td className="py-2.5 text-right text-ink font-semibold tabular-nums">{formatMoney(p.revenue || 0)}</td>
+                              <td className="py-2.5 font-medium text-ink-900">{p.nombre || "—"}</td>
+                              <td className="py-2.5 text-xs text-graphite tabular-nums">{p.sku || "—"}</td>
+                              <td className="py-2.5 text-right text-ink-900 tabular-nums">{p.unidades || 0}</td>
+                              <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{formatMoney(p.revenue || 0)}</td>
                               <td className="py-2.5 text-right text-graphite tabular-nums">{(p.pct_del_total || 0).toFixed(1)}%</td>
                             </tr>
                           ))}
@@ -388,22 +394,22 @@ export default function ComercialPage() {
               ].map(({ titulo, c, sub }) => (
                 <Card key={titulo}>
                   <CardContent className="p-5">
-                    <div className="flex items-center justify-between mb-3">
+                    <div className="mb-3 flex items-center justify-between">
                       <div>
-                        <h3 className="text-sm font-bold uppercase tracking-wider text-graphite">{titulo}</h3>
-                        <p className="text-xs text-graphite/70 mt-0.5">{sub}</p>
+                        <h3 className="font-display text-base font-medium text-ink-900">{titulo}</h3>
+                        <p className="mt-0.5 text-xs text-graphite/70">{sub}</p>
                       </div>
                       <DeltaBadge pct={c.pct} up={c.up} />
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div className="border-r border-border pr-4">
-                        <p className="text-[0.65rem] uppercase tracking-wider text-graphite mb-1">Actual</p>
-                        <p className="text-2xl font-bold text-ink tabular-nums">{formatMoneyShort(c.actual.total)}</p>
+                        <p className="section-label mb-1">Actual</p>
+                        <p className="font-display tabular-nums text-2xl font-medium text-ink-900">{formatMoneyShort(c.actual.total)}</p>
                         <p className="text-xs text-graphite">{c.actual.num_pedidos} pedidos</p>
                       </div>
                       <div>
-                        <p className="text-[0.65rem] uppercase tracking-wider text-graphite mb-1">Anterior</p>
-                        <p className="text-2xl font-bold text-graphite tabular-nums">{formatMoneyShort(c.anterior.total)}</p>
+                        <p className="section-label mb-1">Anterior</p>
+                        <p className="font-display tabular-nums text-2xl font-medium text-graphite">{formatMoneyShort(c.anterior.total)}</p>
                         <p className="text-xs text-graphite">{c.anterior.num_pedidos} pedidos</p>
                       </div>
                     </div>
@@ -420,38 +426,40 @@ export default function ComercialPage() {
             <Card><CardContent className="p-8 text-center text-sm text-graphite">Cargando análisis de clientes…</CardContent></Card>
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-                <KpiCard label="Clientes únicos" value={String(cli.data.total_clientes_unicos)} meta={`Últimos ${90} días`} accent="navy" />
-                <KpiCard label="LTV promedio" value={formatMoneyShort(cli.data.ltv_promedio)} meta="Revenue / cliente" accent="steel" />
-                <KpiCard label="% Recurrentes" value={`${cli.data.pct_recurrentes.toFixed(1)}%`} meta={`Nuevos: ${cli.data.pct_nuevos.toFixed(1)}%`} accent="teal" />
-                <KpiCard label="Recompra 60d" value={`${cli.data.tasa_recompra_60d.toFixed(1)}%`} meta="Volvieron a comprar" accent="khaki" />
-              </div>
+              <KpiStrip
+                items={[
+                  { label: "Clientes únicos", value: cli.data.total_clientes_unicos },
+                  { label: "LTV promedio",    value: formatMoneyShort(cli.data.ltv_promedio) },
+                  { label: "% Recurrentes",   value: `${cli.data.pct_recurrentes.toFixed(1)}%` },
+                  { label: "Recompra 60d",    value: `${cli.data.tasa_recompra_60d.toFixed(1)}%` },
+                ]}
+              />
 
               <Card>
                 <CardContent className="p-5">
-                  <h3 className="text-sm font-bold uppercase tracking-wider text-graphite mb-3">Top 10 clientes por revenue</h3>
+                  <SectionHeading title="Top 10 clientes por revenue" />
                   {cli.data.top_clientes.length === 0 ? (
-                    <p className="text-sm text-graphite text-center py-6">Sin datos.</p>
+                    <p className="py-6 text-center text-sm text-graphite">Sin datos de clientes en este período.</p>
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
-                        <thead className="border-b border-border text-xs uppercase tracking-wider text-graphite">
+                        <thead className="border-b border-border">
                           <tr>
-                            <th className="text-left py-2 font-medium">#</th>
-                            <th className="text-left py-2 font-medium">Cliente</th>
-                            <th className="text-left py-2 font-medium">Email</th>
-                            <th className="text-right py-2 font-medium">Pedidos</th>
-                            <th className="text-right py-2 font-medium">Revenue</th>
+                            {["#", "Cliente", "Email", "Pedidos", "Revenue"].map((h, i) => (
+                              <th key={h} className={`py-2 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i <= 2 ? "text-left" : "text-right"}`}>
+                                {h}
+                              </th>
+                            ))}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
                           {cli.data.top_clientes.map((c, i) => (
-                            <tr key={`${c.email}-${i}`} className="hover:bg-concrete/30">
+                            <tr key={`${c.email}-${i}`} className="transition-colors hover:bg-cloud/50">
                               <td className="py-2.5 text-graphite tabular-nums">{i + 1}</td>
-                              <td className="py-2.5 text-ink font-medium">{c.nombre || "—"}</td>
-                              <td className="py-2.5 text-graphite text-xs">{c.email || "—"}</td>
-                              <td className="py-2.5 text-right text-ink tabular-nums">{c.ordenes}</td>
-                              <td className="py-2.5 text-right text-ink font-semibold tabular-nums">{formatMoneyShort(c.revenue)}</td>
+                              <td className="py-2.5 font-medium text-ink-900">{c.nombre || "—"}</td>
+                              <td className="py-2.5 text-xs text-graphite">{c.email || "—"}</td>
+                              <td className="py-2.5 text-right text-ink-900 tabular-nums">{c.ordenes}</td>
+                              <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{formatMoneyShort(c.revenue)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -463,12 +471,10 @@ export default function ComercialPage() {
             </>
           )}
         </TabsContent>
-
-
       </Tabs>
 
-      <p className="text-[0.65rem] text-graphite/70 mt-2">
-        Próximamente v3: códigos de descuento más usados · cohorts de retención.
+      <p className="mt-2 text-[0.65rem] text-graphite/70">
+        Próximamente: códigos de descuento más usados · cohorts de retención.
       </p>
     </PageShell>
   );
