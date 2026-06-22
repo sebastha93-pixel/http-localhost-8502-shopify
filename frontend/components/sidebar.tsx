@@ -86,13 +86,13 @@ export function Sidebar() {
   }));
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-30 flex w-60 flex-col bg-gradient-to-b from-black via-[#1A2B2F] to-ink text-concrete">
+    <aside className="fixed inset-y-0 left-0 z-30 flex w-60 flex-col bg-ink-950 text-concrete">
       {/* Logo */}
-      <div className="px-5 pt-6 pb-5 border-b border-white/5">
-        <p className="text-[0.95rem] font-extrabold tracking-[0.3em] text-white leading-none">
-          MALE'DENIM
+      <div className="relative px-5 pt-6 pb-5 border-b border-white/5">
+        <p className="font-display text-[1.1rem] font-medium tracking-[0.28em] text-white leading-none">
+          MALE&apos;DENIM
         </p>
-        <p className="mt-1 text-[0.5rem] font-semibold tracking-[0.4em] text-steel/70 uppercase">
+        <p className="mt-1.5 text-[0.5rem] font-semibold tracking-[0.4em] text-steel-300/70 uppercase">
           That Fits
         </p>
       </div>
@@ -181,9 +181,9 @@ function NavLink({
     <Link
       href={item.href}
       className={cn(
-        "block rounded-md px-3 py-2 text-[0.7rem] font-semibold uppercase tracking-[0.15em] transition-colors",
+        "relative block rounded-sm px-3 py-2 text-[0.7rem] font-semibold uppercase tracking-[0.15em] transition-colors",
         active
-          ? "bg-white/10 text-white border-l-2 border-steel"
+          ? "stitch-rail bg-white/[0.06] text-white pl-4"
           : "text-concrete/75 hover:bg-white/5 hover:text-white",
         highlight && !active && "text-white/90",
       )}

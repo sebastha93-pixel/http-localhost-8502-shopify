@@ -4,34 +4,64 @@
 
 @layer base {
   :root {
-    --background:           36 14% 96%;     /* #F7F7F5 */
-    --foreground:           195 21% 16%;    /* #213033 ink */
+    --background:           36 14% 96%;     /* raw #FAF9F6 */
+    --foreground:           195 21% 12%;    /* ink-900 */
     --card:                 0 0% 100%;
-    --card-foreground:      195 21% 16%;
+    --card-foreground:      195 21% 12%;
     --popover:              0 0% 100%;
-    --popover-foreground:   195 21% 16%;
-    --primary:              195 21% 16%;    /* ink */
+    --popover-foreground:   195 21% 12%;
+    --primary:              211 53% 31%;    /* navy-600 #2C5074 */
     --primary-foreground:   0 0% 100%;
-    --secondary:            36 14% 92%;
-    --secondary-foreground: 195 21% 16%;
-    --muted:                36 14% 92%;
-    --muted-foreground:     0 0% 38%;
-    --accent:               202 28% 62%;    /* steel blue */
-    --accent-foreground:    195 21% 16%;
-    --destructive:          351 99% 30%;    /* crimson */
+    --secondary:            42 10% 92%;     /* cloud */
+    --secondary-foreground: 195 21% 12%;
+    --muted:                42 10% 92%;
+    --muted-foreground:     0 0% 38%;       /* graphite */
+    --accent:               202 28% 53%;    /* steel-500 */
+    --accent-foreground:    0 0% 100%;
+    --destructive:          10 47% 47%;     /* terracotta */
     --destructive-foreground: 0 0% 100%;
-    --border:               36 14% 90%;
-    --input:                36 14% 90%;
-    --ring:                 202 28% 62%;
-    --radius:               0.875rem;
+    --border:               42 10% 88%;
+    --input:                42 10% 88%;
+    --ring:                 211 53% 31%;
+    --radius:               0.375rem;       /* 6px sastre */
+  }
+
+  .dark {
+    --background:           197 31% 7%;     /* ink-950 */
+    --foreground:           42 10% 95%;
+    --card:                 196 26% 10%;    /* ink-900 */
+    --card-foreground:      42 10% 95%;
+    --popover:              196 26% 10%;
+    --popover-foreground:   42 10% 95%;
+    --primary:              207 41% 56%;    /* steel-500 in dark mode */
+    --primary-foreground:   197 31% 7%;
+    --secondary:            195 23% 13%;    /* ink-800 */
+    --secondary-foreground: 42 10% 95%;
+    --muted:                195 23% 13%;
+    --muted-foreground:     202 21% 70%;
+    --accent:               207 41% 56%;
+    --accent-foreground:    197 31% 7%;
+    --destructive:          10 47% 50%;
+    --destructive-foreground: 42 10% 95%;
+    --border:               195 17% 17%;
+    --input:                195 17% 17%;
+    --ring:                 207 41% 56%;
   }
 
   * { @apply border-border; }
   body {
     @apply bg-background text-foreground antialiased;
-    font-feature-settings: "rlig" 1, "calt" 1;
+    font-feature-settings: "rlig" 1, "calt" 1, "ss01" 1;
   }
   html { scroll-behavior: smooth; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
 }
 
 /* Scrollbar fino */
@@ -44,3 +74,70 @@
 .section-label {
   @apply text-[0.62rem] font-bold tracking-[0.18em] uppercase text-graphite;
 }
+
+/* === MARCA: pespunte selvedge ============================================= */
+/* Doble puntada vertical — usar en hero "Fugas activas" y card destacado */
+.stitch-rail { position: relative; }
+.stitch-rail::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 12%;
+  bottom: 12%;
+  width: 2px;
+  border-radius: 1px;
+  background: repeating-linear-gradient(
+    to bottom,
+    #C8412B 0 5px,
+    transparent 5px 10px
+  );
+}
+
+/* Pespunte horizontal — subrayado de tab activa */
+.tab-active {
+  position: relative;
+}
+.tab-active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: repeating-linear-gradient(
+    to right,
+    #C8412B 0 6px,
+    transparent 6px 11px
+  );
+}
+
+/* Banda doble pespunte horizontal (top) — para hero "Fugas activas" */
+.stitch-top {
+  background-image: repeating-linear-gradient(
+    to right,
+    #C8412B 0 6px,
+    transparent 6px 11px
+  );
+  background-repeat: no-repeat;
+  background-position: top left;
+  background-size: 100% 2px;
+  padding-top: 1px;
+}
+
+/* === Shimmer loading ====================================================== */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(135, 166, 184, 0.06) 0%,
+    rgba(135, 166, 184, 0.18) 50%,
+    rgba(135, 166, 184, 0.06) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+/* === Tipografía display utility =========================================== */
+.font-display { font-family: "Futura PT", "Jost", system-ui, sans-serif; letter-spacing: -0.01em; }
+
+/* Numeric tabular — para KPIs y métricas */
+.tabular { font-variant-numeric: tabular-nums; }

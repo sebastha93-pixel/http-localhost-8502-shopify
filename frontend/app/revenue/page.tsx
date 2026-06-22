@@ -1,14 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
-import { KpiCard } from "@/components/kpi-card";
+import { KpiStrip } from "@/components/kpi-card";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { formatMoney } from "@/lib/utils";
+import { StatusBadge as ConvStatusBadge } from "@/components/status-badge";
+import { ExternalLink, Search, X, Sparkles, Filter, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, AlertCircle } from "lucide-react";
 
 interface DetailResp {
   conversation: any;
@@ -16,11 +17,6 @@ interface DetailResp {
   advisor: { name: string; email?: string } | null;
   messages: Array<{ message_id: string; sender_type: string; sender_name: string; message_text: string; sent_at: string }>;
   audit: any | null;
-}
-
-function fmtCop(n: any) {
-  if (n == null) return "—";
-  return `COP $${Number(n).toLocaleString("es-CO")}`;
 }
 
 interface StatsResp {
@@ -89,77 +85,185 @@ interface MessageRow {
 }
 
 const CHANNEL_LABEL: Record<string, string> = {
-  waba: "WhatsApp",
-  whatsapp: "WhatsApp",
-  whatsapp_business: "WhatsApp",
-  wa_business: "WhatsApp",
-  wa: "WhatsApp",
-  instagram_business: "Instagram",
-  instagram: "Instagram",
-  instagram_dm: "Instagram",
-  ig: "Instagram",
-  dm: "Instagram",
-  messenger: "Messenger",
-  facebook: "Messenger",
-  fb: "Messenger",
-  tiktok: "TikTok",
-  tt: "TikTok",
+  waba: "WhatsApp", whatsapp: "WhatsApp", whatsapp_business: "WhatsApp", wa_business: "WhatsApp", wa: "WhatsApp",
+  instagram_business: "Instagram", instagram: "Instagram", instagram_dm: "Instagram", ig: "Instagram", dm: "Instagram",
+  messenger: "Messenger", facebook: "Messenger", fb: "Messenger",
+  tiktok: "TikTok", tt: "TikTok",
   unknown: "—",
 };
 
-const CHANNEL_ICON: Record<string, string> = {
-  WhatsApp:  "💬",
-  Instagram: "📸",
-  Messenger: "💬",
-  TikTok:    "🎵",
-};
+function channelLabel(channel: string | null | undefined): string {
+  if (!channel) return "—";
+  return CHANNEL_LABEL[channel.toLowerCase()] || channel;
+}
 
-function channelDisplay(channel: string | null | undefined): { label: string; icon: string } {
-  if (!channel) return { label: "—", icon: "" };
-  const lower = channel.toLowerCase();
-  const label = CHANNEL_LABEL[lower] || channel;
-  const icon  = CHANNEL_ICON[label] || "";
-  return { label, icon };
+function fmtCop(n: any) {
+  if (n == null) return "—";
+  return `$${Number(n).toLocaleString("es-CO")}`;
 }
 
 function fmtDate(s: string | null | undefined): string {
   if (!s) return "—";
   try {
-    const d = new Date(s);
-    return d.toLocaleString("es-CO", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+    return new Date(s).toLocaleString("es-CO", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
   } catch { return "—"; }
 }
 
 function fmtRelative(s: string | null | undefined): string {
   if (!s) return "—";
   const d = new Date(s);
-  const diff = Date.now() - d.getTime();
-  const min = Math.floor(diff / 60000);
+  const min = Math.floor((Date.now() - d.getTime()) / 60000);
   if (min < 1) return "ahora";
   if (min < 60) return `${min}m`;
   const h = Math.floor(min / 60);
   if (h < 24) return `${h}h`;
-  const days = Math.floor(h / 24);
-  return `${days}d`;
+  return `${Math.floor(h / 24)}d`;
 }
 
-function StatusBadge({ status }: { status: string | null | undefined }) {
+function ageInMin(s: string | null | undefined): number {
+  if (!s) return 0;
+  return Math.floor((Date.now() - new Date(s).getTime()) / 60000);
+}
+
+/** Mapa estado de venta o conversación → variante del badge nuevo. */
+function SaleStatusBadge({ status }: { status: string | null | undefined }) {
   if (!status) return <span className="text-graphite text-xs">—</span>;
-  const map: Record<string, { tone: "normal" | "riesgo" | "critico"; label: string }> = {
-    // Estados de venta
+  const map: Record<string, { tone: "normal" | "riesgo" | "critico" | "info"; label: string }> = {
     won:         { tone: "normal",  label: "Ganada" },
     lost:        { tone: "critico", label: "Perdida" },
     open:        { tone: "riesgo",  label: "Abierta" },
-    // Estados de conversación
-    in_progress: { tone: "riesgo",  label: "En curso" },
-    in_work:     { tone: "riesgo",  label: "Activa" },
+    in_progress: { tone: "info",    label: "En curso" },
+    in_work:     { tone: "info",    label: "Activa" },
     closed:      { tone: "normal",  label: "Cerrada" },
   };
-  const cfg = map[status.toLowerCase()] || { tone: "riesgo" as const, label: status };
-  return <Badge tone={cfg.tone}>{cfg.label}</Badge>;
+  const cfg = map[status.toLowerCase()] || { tone: "neutral" as any, label: status };
+  return <Badge tone={cfg.tone as any}>{cfg.label}</Badge>;
 }
 
-function ConversationDetailModal({
+// ============================================================================
+// HERO — Fugas activas
+// ============================================================================
+
+interface FugaCard {
+  conv: Conversation;
+  esperandoMin: number;
+  motivo: string;
+}
+
+function buildFugas(convs: Conversation[]): FugaCard[] {
+  const HORA = 60;
+  return convs
+    .filter(c => {
+      if (!c.last_message_at) return false;
+      const min = ageInMin(c.last_message_at);
+      if (min < 40) return false;
+      // "Esperando" = sin respuesta de asesora ó cliente fue el último ó status activo
+      const lowAdvisorMsgs = (c.msgs_advisor ?? 0) === 0;
+      const isOpen = c.status?.toLowerCase() !== "closed";
+      return isOpen && (lowAdvisorMsgs || min > 2 * HORA);
+    })
+    .sort((a, b) => ageInMin(b.last_message_at) - ageInMin(a.last_message_at))
+    .slice(0, 4)
+    .map(c => {
+      const min = ageInMin(c.last_message_at);
+      const motivos: string[] = [];
+      if (!c.advisor_id) motivos.push("sin asignar");
+      if ((c.msgs_advisor ?? 0) === 0) motivos.push("sin respuesta del equipo");
+      else if ((c.avg_response_min ?? 0) > 30) motivos.push("respuesta lenta");
+      if (min > 240) motivos.push("más de 4 horas");
+      else if (min > 120) motivos.push("más de 2 horas");
+      if (motivos.length === 0) motivos.push("conversación de alta intención");
+      return { conv: c, esperandoMin: min, motivo: motivos.join(" · ") };
+    });
+}
+
+function FugasHero({
+  convs,
+  loading,
+  onSelect,
+}: {
+  convs: Conversation[];
+  loading: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const fugas = buildFugas(convs);
+  const totalRiesgo = fugas.reduce((acc, f) => acc + (f.conv.lead_value ?? 0), 0);
+
+  return (
+    <section
+      className="stitch-top rounded-md border border-terracotta/30 bg-card overflow-hidden"
+      aria-labelledby="fugas-heading"
+    >
+      <div className="flex flex-col gap-2 border-b border-border px-5 py-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 id="fugas-heading" className="font-display text-lg font-medium tracking-tight text-ink-900">
+            Fugas activas
+          </h2>
+          <p className="text-xs text-graphite">
+            Conversaciones de alta intención que llevan rato sin atención. Atiéndelas primero.
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-graphite">
+            Plata en riesgo ahora
+          </p>
+          <p className="font-display tabular text-xl font-medium leading-none text-terracotta">
+            {totalRiesgo > 0 ? fmtCop(totalRiesgo) : <span className="text-graphite">—</span>}
+          </p>
+        </div>
+      </div>
+
+      <div className="p-5">
+        {loading ? (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="h-32 rounded-md border border-border bg-cloud/40 shimmer" />
+            ))}
+          </div>
+        ) : fugas.length === 0 ? (
+          <p className="py-6 text-center text-sm text-graphite">
+            Sin fugas activas en este momento. El equipo va al día.
+          </p>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {fugas.map(f => (
+              <button
+                key={f.conv.conversation_id}
+                onClick={() => onSelect(f.conv.conversation_id)}
+                className="group stitch-rail pl-3 text-left rounded-md border border-border bg-card p-3 transition-colors hover:bg-cloud focus:outline-none focus:ring-2 focus:ring-terracotta/40"
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="truncate font-medium text-sm text-ink-900">
+                    {f.conv.is_vip && <span className="mr-1 text-ochre" aria-label="VIP">★</span>}
+                    {f.conv.customer_name?.trim() || f.conv.customer_phone || `Lead #${f.conv.lead_id}`}
+                  </p>
+                  <span className="font-display tabular text-sm font-medium text-terracotta whitespace-nowrap">
+                    +{f.esperandoMin}m
+                  </span>
+                </div>
+                <p className="mt-0.5 text-[0.7rem] text-graphite">
+                  {channelLabel(f.conv.channel)} · {f.conv.advisor_name || "Sin asignar"}
+                </p>
+                {f.conv.lead_value != null && f.conv.lead_value > 0 && (
+                  <p className="mt-1 font-display tabular text-sm text-ink-900">
+                    {fmtCop(f.conv.lead_value)}
+                  </p>
+                )}
+                <p className="mt-1.5 line-clamp-2 text-[0.7rem] text-graphite">{f.motivo}</p>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// ============================================================================
+// PANEL LATERAL de detalle (reemplaza modal)
+// ============================================================================
+
+function ConversationDetailPanel({
   conversationId,
   onClose,
 }: {
@@ -179,165 +283,146 @@ function ConversationDetailModal({
     },
   });
 
+  // ESC para cerrar
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const d = detailQ.data;
   const audit = d?.audit;
 
+  const fmtPhone = (raw: string | null | undefined) => {
+    if (!raw) return null;
+    const digits = raw.replace(/\D/g, "");
+    if (digits.startsWith("57") && digits.length === 12) {
+      return `+57 ${digits.slice(2, 5)} ${digits.slice(5, 8)} ${digits.slice(8)}`;
+    }
+    return raw;
+  };
+  const phoneDisplay = fmtPhone(d?.lead?.customer_phone);
+  const displayName = d?.lead?.customer_name?.trim() || phoneDisplay || "Cliente";
+  const initial = (d?.lead?.customer_name?.trim() || displayName).charAt(0).toUpperCase();
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-stretch justify-end" onClick={onClose}>
-      <div className="bg-white w-full max-w-3xl h-full overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="p-4 border-b sticky top-0 bg-white flex items-center gap-3">
-          <button onClick={onClose} className="text-graphite hover:text-navy text-2xl leading-none">×</button>
-          <div className="flex-1">
-            <div className="font-semibold">{d?.lead?.customer_name || "Cliente sin nombre"}</div>
-            <div className="text-xs text-graphite">{conversationId} · {d?.advisor?.name || "Sin asesora"}</div>
+    <div
+      className="fixed inset-0 z-50 flex items-stretch justify-end bg-ink-950/40 animate-fade-in"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Detalle de conversación con ${displayName}`}
+    >
+      <div
+        className="flex w-full max-w-2xl flex-col bg-card shadow-2xl animate-slide-in-right"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* HEADER */}
+        <div className="flex items-center gap-3 border-b border-border bg-card px-5 py-4">
+          <div className="flex h-10 w-10 items-center justify-center rounded-sm bg-navy-600 font-display text-base font-medium text-white">
+            {initial}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-medium text-ink-900">
+              {displayName}
+              {d?.lead?.lead_value != null && d.lead.lead_value > 0 && (
+                <span className="ml-2 font-display tabular text-sm text-ochre">
+                  · {fmtCop(d.lead.lead_value)}
+                </span>
+              )}
+            </p>
+            <p className="truncate text-xs text-graphite">
+              {channelLabel(d?.conversation?.channel)}
+              {d?.advisor?.name ? ` · ${d.advisor.name}` : " · Sin asignar"}
+              {phoneDisplay && ` · ${phoneDisplay}`}
+            </p>
           </div>
           {d?.lead?.lead_id && (
             <a
               href={`https://drtjeans.kommo.com/leads/detail/${d.lead.lead_id}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="px-3 py-1.5 rounded border text-sm hover:bg-cloud"
+              className="inline-flex items-center gap-1 rounded-sm border border-border px-2.5 py-1 text-xs text-graphite transition-colors hover:bg-cloud hover:text-ink-900"
               title="Abrir lead en Kommo"
             >
-              🔗 Kommo
+              <ExternalLink className="h-3 w-3" /> Kommo
             </a>
           )}
           <button
             onClick={() => auditMut.mutate()}
             disabled={auditMut.isPending}
-            className="px-3 py-1.5 rounded bg-navy text-white text-sm disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded-sm bg-navy-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-navy-700 disabled:opacity-50"
           >
-            {auditMut.isPending ? "Auditando..." : audit ? "Re-auditar" : "Auditar con IA"}
+            <Sparkles className="h-3.5 w-3.5" />
+            {auditMut.isPending ? "Auditando…" : audit ? "Re-auditar" : "Auditar IA"}
+          </button>
+          <button
+            onClick={onClose}
+            className="text-graphite hover:text-ink-900 transition-colors"
+            aria-label="Cerrar"
+          >
+            <X className="h-5 w-5" />
           </button>
         </div>
 
-        {/* Info panel del lead */}
-        {d?.lead && (
-          <div className="px-4 py-3 bg-cloud/50 border-b grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-            <div>
-              <div className="text-graphite">Estado venta</div>
-              <div className="font-medium mt-0.5"><StatusBadge status={d.lead.status} /></div>
-            </div>
-            <div>
-              <div className="text-graphite">Valor</div>
-              <div className="font-medium mt-0.5">
-                {d.lead.lead_value
-                  ? `$${Number(d.lead.lead_value).toLocaleString("es-CO")}`
-                  : <span className="text-graphite">—</span>}
-              </div>
-            </div>
-            <div>
-              <div className="text-graphite">Teléfono</div>
-              <div className="font-medium mt-0.5 truncate">
-                {d.lead.customer_phone || <span className="text-graphite">—</span>}
-              </div>
-            </div>
-            <div>
-              <div className="text-graphite">Lead ID</div>
-              <div className="font-medium mt-0.5">#{d.lead.lead_id}</div>
-            </div>
-          </div>
-        )}
-
-        {detailQ.isLoading ? <div className="p-6"><LoadingState /></div> : detailQ.isError ? <div className="p-6"><ErrorState error={detailQ.error} /></div> : (
-          <div className="p-4 space-y-4">
+        {detailQ.isLoading ? (
+          <div className="p-5"><LoadingState /></div>
+        ) : detailQ.isError ? (
+          <div className="p-5"><ErrorState error={detailQ.error} /></div>
+        ) : (
+          <div className="flex-1 overflow-y-auto">
+            {/* DIAGNÓSTICO IA */}
             {audit && (
-              <Card>
-                <CardContent className="p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="font-semibold">Auditoría IA</div>
-                    <Badge tone={audit.result_classification === "venta_lograda" ? "normal" : audit.result_classification === "venta_perdida" ? "critico" : "riesgo"}>
-                      {audit.result_classification?.replace("_", " ") || "—"}
-                    </Badge>
-                  </div>
-                  <p className="text-sm">{audit.ai_summary_internal}</p>
-                  <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
-                    <div><span className="text-graphite">Overall:</span> <span className="font-medium">{audit.overall_score ?? "—"}/10</span></div>
-                    <div><span className="text-graphite">Respuesta:</span> <span className="font-medium">{audit.response_time_score ?? "—"}/10</span></div>
-                    <div><span className="text-graphite">Atención:</span> <span className="font-medium">{audit.attention_score ?? "—"}/10</span></div>
-                    <div><span className="text-graphite">Follow-up:</span> <span className="font-medium">{audit.follow_up_score ?? "—"}/10</span></div>
-                    <div><span className="text-graphite">Cierre:</span> <span className="font-medium">{audit.closing_score ?? "—"}/10</span></div>
-                  </div>
+              <section className="border-b border-border bg-cloud/40 px-5 py-4">
+                <div className="flex items-center justify-between">
+                  <p className="section-label">Diagnóstico IA</p>
+                  <Badge tone={audit.result_classification === "venta_lograda" ? "normal" : audit.result_classification === "venta_perdida" ? "critico" : "riesgo"}>
+                    {audit.result_classification?.replace("_", " ") || "—"}
+                  </Badge>
+                </div>
+                <div className="mt-3 flex items-baseline gap-3">
+                  <p className="font-display tabular text-3xl font-medium leading-none text-ink-900">
+                    {audit.overall_score ?? "—"}<span className="text-base text-graphite">/10</span>
+                  </p>
                   {audit.main_loss_reason && (
-                    <div className="text-sm"><span className="text-graphite">Motivo principal:</span> <span className="font-medium">{audit.main_loss_reason}</span></div>
+                    <p className="text-sm text-graphite">{audit.main_loss_reason}</p>
                   )}
-                  {audit.lost_moment && (
-                    <div className="text-sm bg-rose-50 border-l-2 border-rose-400 p-2">
-                      <div className="text-xs text-graphite">Momento crítico:</div>
-                      <div>"{audit.lost_moment}"</div>
-                      {audit.recommended_response && (
-                        <div className="mt-2">
-                          <div className="text-xs text-graphite">Debió responder:</div>
-                          <div className="text-emerald-800">"{audit.recommended_response}"</div>
-                        </div>
-                      )}
+                </div>
+                {audit.ai_summary_internal && (
+                  <p className="mt-2 text-sm text-ink-900">{audit.ai_summary_internal}</p>
+                )}
+                <div className="mt-3 grid grid-cols-4 gap-2 text-xs tabular">
+                  {([
+                    ["Respuesta", audit.response_time_score],
+                    ["Atención",  audit.attention_score],
+                    ["Follow-up", audit.follow_up_score],
+                    ["Cierre",    audit.closing_score],
+                  ] as const).map(([k, v]) => (
+                    <div key={k} className="rounded-sm border border-border bg-card px-2 py-1.5">
+                      <p className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite">{k}</p>
+                      <p className="font-display text-sm font-medium text-ink-900">{v ?? "—"}</p>
                     </div>
-                  )}
-                  {audit.economic_impact_estimate > 0 && (
-                    <div className="text-sm"><span className="text-graphite">Impacto económico estimado:</span> <span className="font-medium">{fmtCop(audit.economic_impact_estimate)}</span></div>
-                  )}
-                  {audit.raw_analysis?.recomendaciones?.length > 0 && (
-                    <div>
-                      <div className="text-xs text-graphite mb-1">Recomendaciones:</div>
-                      <ul className="list-disc list-inside text-sm space-y-1">
-                        {audit.raw_analysis.recomendaciones.map((r: string, i: number) => <li key={i}>{r}</li>)}
-                      </ul>
-                    </div>
-                  )}
-                  <div className="text-xs text-graphite border-t pt-2">
-                    {audit.modelo_ia} · costo ${audit.costo_analisis_usd?.toFixed(4)} USD · confianza {((audit.confidence_score ?? 0) * 100).toFixed(0)}%
+                  ))}
+                </div>
+                {audit.lost_moment && (
+                  <div className="mt-3 stitch-rail pl-3 rounded-sm bg-terracotta/[0.06] py-2 pr-3">
+                    <p className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite">Momento crítico</p>
+                    <p className="mt-0.5 text-sm italic text-ink-900">&ldquo;{audit.lost_moment}&rdquo;</p>
+                    {audit.recommended_response && (
+                      <>
+                        <p className="mt-2 text-[0.62rem] uppercase tracking-[0.1em] text-graphite">Debió responder</p>
+                        <p className="mt-0.5 text-sm italic text-sage">&ldquo;{audit.recommended_response}&rdquo;</p>
+                      </>
+                    )}
                   </div>
-                </CardContent>
-              </Card>
+                )}
+              </section>
             )}
 
-            <div className="rounded-lg overflow-hidden border" style={{
-              background: "#ECE5DD",
-              backgroundImage: "radial-gradient(circle at 20% 20%, rgba(255,255,255,0.15) 0, transparent 30%), radial-gradient(circle at 80% 60%, rgba(0,0,0,0.04) 0, transparent 30%)",
-            }}>
-              {/* Header tipo WhatsApp */}
-              <div className="bg-[#075E54] text-white px-4 py-3 flex items-center gap-3">
-                {(() => {
-                  // Extraer wa_id del conversation_id si es meta-wa-*
-                  const cid = d?.conversation?.conversation_id || conversationId;
-                  const isMetaWa = cid.startsWith("meta-wa-");
-                  const waId = isMetaWa ? cid.split("-")[2] : null;
-                  // Formato bonito del phone
-                  const fmtPhone = (raw: string | null | undefined) => {
-                    if (!raw) return null;
-                    const digits = raw.replace(/\D/g, "");
-                    if (digits.startsWith("57") && digits.length === 12) {
-                      return `+57 ${digits.slice(2,5)} ${digits.slice(5,8)} ${digits.slice(8)}`;
-                    }
-                    return raw;
-                  };
-                  const phoneDisplay = fmtPhone(d?.lead?.customer_phone) || (waId ? fmtPhone(waId) : null);
-                  const displayName = d?.lead?.customer_name?.trim() || phoneDisplay || "Cliente WhatsApp";
-                  const initial = (d?.lead?.customer_name?.trim() || "C").charAt(0).toUpperCase();
-                  return (
-                    <>
-                      <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center font-semibold">{initial}</div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium truncate">{displayName}</div>
-                        <div className="text-xs opacity-80 truncate">
-                          {phoneDisplay && d?.lead?.customer_name && `${phoneDisplay} · `}
-                          {d?.conversation?.channel && (() => {
-                            const ch = channelDisplay(d.conversation.channel);
-                            return `${ch.icon} ${ch.label}`.trim();
-                          })()}
-                        </div>
-                      </div>
-                    </>
-                  );
-                })()}
-                <div className="text-xs opacity-80 text-right">
-                  <div>{d?.advisor?.name || "Sin asesora"}</div>
-                  <div className="text-[10px]">{d?.messages?.length || 0} mensajes</div>
-                </div>
-              </div>
-
-              {/* Mensajes con burbujas */}
-              <div className="px-3 py-4 space-y-1 max-h-[60vh] overflow-y-auto">
+            {/* CHAT */}
+            <section className="px-5 py-4">
+              <p className="section-label mb-3">Conversación</p>
+              <div className="space-y-1">
                 {(d?.messages || []).map((m, idx) => {
                   const isCustomer = m.sender_type === "customer";
                   const isSystem = m.sender_type === "system";
@@ -345,8 +430,8 @@ function ConversationDetailModal({
                   const sameAuthor = prev && prev.sender_type === m.sender_type;
                   if (isSystem) {
                     return (
-                      <div key={m.message_id} className="flex justify-center my-2">
-                        <div className="bg-[#E1F2FA] text-[#4a4a4a] text-xs px-3 py-1 rounded-md shadow-sm">
+                      <div key={m.message_id} className="my-2 flex justify-center">
+                        <div className="rounded-sm bg-steel-300/20 px-3 py-1 text-xs text-graphite">
                           {m.message_text || "—"}
                         </div>
                       </div>
@@ -355,75 +440,78 @@ function ConversationDetailModal({
                   return (
                     <div key={m.message_id} className={`flex ${isCustomer ? "justify-start" : "justify-end"}`}>
                       <div
-                        className={`max-w-[78%] px-3 py-1.5 text-sm shadow-sm ${
+                        className={`max-w-[78%] px-3 py-2 text-sm ${
                           isCustomer
-                            ? "bg-white text-[#111B21] rounded-r-lg rounded-bl-lg"
-                            : "bg-[#DCF8C6] text-[#111B21] rounded-l-lg rounded-br-lg"
+                            ? "bg-cloud text-ink-900 rounded-tr-md rounded-tl-md rounded-br-md"
+                            : "bg-navy-600 text-white rounded-tl-md rounded-tr-md rounded-bl-md"
                         } ${sameAuthor ? "mt-0.5" : "mt-2"}`}
-                        style={{ minWidth: "60px" }}
                       >
                         {!sameAuthor && !isCustomer && (
-                          <div className="text-[11px] font-medium text-[#06624C] mb-0.5">
+                          <p className="mb-0.5 text-[0.7rem] font-medium opacity-80">
                             {m.sender_name || "Asesora"}
-                          </div>
+                          </p>
                         )}
-                        <div className="whitespace-pre-wrap break-words">
+                        <p className="whitespace-pre-wrap break-words">
                           {m.message_text
                             ? m.message_text
                             : isCustomer
-                              ? <em className="text-graphite">(sin contenido)</em>
-                              : <em className="opacity-70 text-[12px]">✓ Mensaje enviado · texto pendiente App Review</em>}
-                        </div>
-                        <div className="text-[10px] text-[#667781] text-right mt-0.5 leading-none">
+                              ? <em className="opacity-60">(sin contenido)</em>
+                              : <em className="text-[0.75rem] opacity-70">✓ enviado · texto pendiente App Review</em>}
+                        </p>
+                        <p className="mt-0.5 text-right text-[0.65rem] opacity-60 tabular">
                           {new Date(m.sent_at).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit", hour12: false })}
-                          {!isCustomer && <span className="ml-1">✓✓</span>}
-                        </div>
+                        </p>
                       </div>
                     </div>
                   );
                 })}
                 {!d?.messages?.length && (
-                  <div className="text-center text-graphite py-12 text-sm">Sin mensajes capturados aún en esta conversación.</div>
+                  <p className="py-12 text-center text-sm text-graphite">
+                    Sin mensajes capturados todavía en esta conversación.
+                  </p>
                 )}
               </div>
-            </div>
+            </section>
           </div>
         )}
+
+        {/* FOOTER */}
+        <div className="border-t border-border bg-cloud/50 px-5 py-3">
+          <button
+            disabled
+            title="Próximamente"
+            className="w-full rounded-sm border border-border bg-card px-3 py-2 text-xs font-medium text-graphite"
+          >
+            Nota interna — enviar coaching
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
+// ============================================================================
+// TENDENCIAS — embudo + por canal + por hora
+// ============================================================================
 
-function CalcularRankingsBtn({ daysBack }: { daysBack: number }) {
-  const qc = useQueryClient();
-  const [last, setLast] = useState<{ ts: string; ok: number; total: number } | null>(null);
-  const mut = useMutation({
-    mutationFn: () => api.post<{ ok: boolean; persistidos: number; total_advisors: number }>(`/api/revenue/rankings/calcular?days_back=${daysBack}`),
-    onSuccess: (data) => {
-      setLast({ ts: new Date().toLocaleTimeString("es-CO"), ok: data.persistidos, total: data.total_advisors });
-      qc.invalidateQueries({ queryKey: ["revenue", "advisors"] });
-    },
-  });
+function FunnelBar({ etiqueta, valor, pct }: { etiqueta: string; valor: number; pct: number }) {
   return (
-    <div className="flex items-center gap-3 mb-4 pb-3 border-b">
-      <button
-        onClick={() => mut.mutate()}
-        disabled={mut.isPending}
-        className="px-3 py-1.5 rounded bg-navy text-white text-sm disabled:opacity-50"
-      >
-        {mut.isPending ? "Calculando..." : "Persistir snapshot del periodo"}
-      </button>
-      {last && (
-        <div className="text-xs text-graphite">
-          ✓ {last.ts} · {last.ok}/{last.total} asesoras guardadas en histórico
-        </div>
-      )}
-      {mut.isError && <div className="text-xs text-rose-700">Error: {String(mut.error)}</div>}
+    <div className="space-y-1">
+      <div className="flex items-baseline justify-between">
+        <p className="text-xs font-medium text-ink-900">{etiqueta}</p>
+        <p className="font-display tabular text-sm font-medium text-ink-900">
+          {valor.toLocaleString("es-CO")}
+        </p>
+      </div>
+      <div className="h-2 rounded-full bg-cloud overflow-hidden">
+        <div
+          className="h-full bg-navy-600 transition-all duration-300"
+          style={{ width: `${Math.max(2, pct)}%` }}
+        />
+      </div>
     </div>
   );
 }
-
 
 function TendenciasTab({ daysBack }: { daysBack: number }) {
   const q = useQuery<any>({
@@ -433,73 +521,144 @@ function TendenciasTab({ daysBack }: { daysBack: number }) {
   if (q.isLoading) return <LoadingState />;
   if (q.isError) return <ErrorState error={q.error} />;
   const d = q.data;
+
+  // Funnel a partir de por_canal agregado
+  const totales = (d?.por_canal || []).reduce(
+    (acc: any, c: any) => ({
+      total: acc.total + (c.total || 0),
+      en_proceso: acc.en_proceso + (c.en_proceso || 0),
+      won: acc.won + (c.won || 0),
+      lost: acc.lost + (c.lost || 0),
+    }),
+    { total: 0, en_proceso: 0, won: 0, lost: 0 },
+  );
+  const conversaron = totales.en_proceso + totales.won + totales.lost;
+  const conCotizacion = totales.won + totales.lost; // proxy: tuvo cierre o pérdida ⇒ hubo cotización
+  const cierre = totales.won;
+
   const maxHora = Math.max(1, ...(d?.por_hora || []).map((h: any) => h.total));
-  const maxDia = Math.max(1, ...(d?.por_dia_semana || []).map((h: any) => h.total));
+  const maxDia  = Math.max(1, ...(d?.por_dia_semana || []).map((h: any) => h.total));
+  const maxCanal = Math.max(1, ...(d?.por_canal || []).map((c: any) => c.total));
 
   return (
-    <div className="space-y-4">
-      <Card><CardContent className="p-4">
-        <div className="text-sm font-semibold mb-3">Por canal</div>
-        <table className="min-w-full text-sm">
-          <thead className="text-left text-graphite border-b">
-            <tr><th className="py-2">Canal</th><th className="text-right">Total</th><th className="text-right">Ganadas</th><th className="text-right">Perdidas</th><th className="text-right">En curso</th><th className="text-right">% Conv.</th></tr>
-          </thead>
-          <tbody>
-            {(d?.por_canal || []).map((c: any) => (
-              <tr key={c.canal} className="border-b">
-                <td className="py-2">{c.canal}</td>
-                <td className="text-right">{c.total}</td>
-                <td className="text-right text-emerald-700">{c.won}</td>
-                <td className="text-right text-rose-700">{c.lost}</td>
-                <td className="text-right">{c.en_proceso}</td>
-                <td className="text-right font-medium">{c.conv_rate != null ? `${c.conv_rate}%` : "—"}</td>
-              </tr>
+    <div className="space-y-5">
+      {/* EMBUDO */}
+      <Card>
+        <CardContent className="p-5">
+          <p className="section-label mb-4">Embudo de fuga</p>
+          <div className="grid gap-4 md:grid-cols-4">
+            <FunnelBar etiqueta="Leads"      valor={totales.total} pct={100} />
+            <FunnelBar etiqueta="Conversó"   valor={conversaron}    pct={totales.total ? (conversaron / totales.total) * 100 : 0} />
+            <FunnelBar etiqueta="Cotización" valor={conCotizacion}  pct={totales.total ? (conCotizacion / totales.total) * 100 : 0} />
+            <FunnelBar etiqueta="Cierre"     valor={cierre}         pct={totales.total ? (cierre / totales.total) * 100 : 0} />
+          </div>
+          <div className="mt-4 grid grid-cols-3 gap-3 text-xs">
+            {[
+              ["Leads → Conversó",     totales.total ? Math.round((1 - conversaron / totales.total) * 100) : 0],
+              ["Conversó → Cotización", conversaron ? Math.round((1 - conCotizacion / conversaron) * 100) : 0],
+              ["Cotización → Cierre",   conCotizacion ? Math.round((1 - cierre / conCotizacion) * 100) : 0],
+            ].map(([label, pct]) => (
+              <div key={label as string} className="rounded-sm border border-terracotta/25 bg-terracotta/[0.04] px-3 py-2">
+                <p className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite">{label}</p>
+                <p className="font-display tabular text-base font-medium text-terracotta">
+                  {pct}% se fuga
+                </p>
+              </div>
             ))}
-          </tbody>
-        </table>
-      </CardContent></Card>
+          </div>
+        </CardContent>
+      </Card>
 
-      <Card><CardContent className="p-4">
-        <div className="text-sm font-semibold mb-3">Por hora del día (Bogotá UTC-5)</div>
-        <div className="flex items-end gap-1 h-32">
-          {(d?.por_hora || []).map((h: any) => {
-            const total = h.total;
-            const heightPct = total > 0 ? (total / maxHora) * 100 : 0;
-            const wonPct = total > 0 ? (h.won / total) * heightPct : 0;
-            return (
-              <div key={h.hora} className="flex-1 flex flex-col items-center" title={`${h.hora}h: ${total} (${h.won} won, ${h.lost} lost)`}>
-                <div className="w-full flex flex-col-reverse" style={{ height: `${heightPct}%` }}>
-                  <div className="bg-emerald-500" style={{ height: `${wonPct}%`, minHeight: h.won ? "2px" : 0 }} />
-                  <div className="bg-navy/40 flex-1" />
+      {/* POR CANAL */}
+      <Card>
+        <CardContent className="p-5">
+          <p className="section-label mb-4">Fuga por canal</p>
+          <div className="space-y-3">
+            {(d?.por_canal || []).map((c: any) => {
+              const fuga = c.total ? Math.round(((c.total - c.won) / c.total) * 100) : 0;
+              return (
+                <div key={c.canal} className="grid grid-cols-12 items-center gap-3 text-sm">
+                  <p className="col-span-3 truncate font-medium text-ink-900">{channelLabel(c.canal)}</p>
+                  <div className="col-span-7">
+                    <div className="h-2 rounded-full bg-cloud overflow-hidden">
+                      <div
+                        className="h-full bg-terracotta transition-all"
+                        style={{ width: `${(c.total / maxCanal) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                  <p className="col-span-2 text-right font-display tabular text-sm">
+                    <span className="text-graphite">{c.total}</span>
+                    <span className="ml-2 text-terracotta">{fuga}%</span>
+                  </p>
                 </div>
-                <div className="text-[10px] text-graphite mt-1">{h.hora}</div>
-              </div>
-            );
-          })}
-        </div>
-        <div className="text-xs text-graphite mt-2">Verde = ganadas, gris = total. Hora donde concentras más conversaciones.</div>
-      </CardContent></Card>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
 
-      <Card><CardContent className="p-4">
-        <div className="text-sm font-semibold mb-3">Por día de la semana</div>
-        <div className="flex items-end gap-2 h-32">
-          {(d?.por_dia_semana || []).map((dia: any) => {
-            const total = dia.total;
-            const heightPct = total > 0 ? (total / maxDia) * 100 : 0;
-            return (
-              <div key={dia.dia} className="flex-1 flex flex-col items-center">
-                <div className="w-full bg-navy/40" style={{ height: `${heightPct}%`, minHeight: total ? "2px" : 0 }} />
-                <div className="text-xs mt-1">{dia.dia_label}</div>
-                <div className="text-[10px] text-graphite">{total} · {dia.conv_rate != null ? `${dia.conv_rate}%` : "—"}</div>
-              </div>
-            );
-          })}
-        </div>
-      </CardContent></Card>
+      {/* POR HORA */}
+      <Card>
+        <CardContent className="p-5">
+          <p className="section-label mb-4">Fuga por franja horaria (Bogotá UTC-5)</p>
+          <div className="flex h-32 items-end gap-1">
+            {(d?.por_hora || []).map((h: any) => {
+              const total = h.total;
+              const pct = total > 0 ? (total / maxHora) * 100 : 0;
+              const fugaPct = total ? ((total - h.won) / total) * 100 : 0;
+              const isPico = fugaPct > 70 && total > 3;
+              return (
+                <div
+                  key={h.hora}
+                  className="flex flex-1 flex-col items-center"
+                  title={`${h.hora}h · ${total} conversaciones · ${h.won} ganadas`}
+                >
+                  <div
+                    className={`w-full rounded-sm ${isPico ? "bg-terracotta" : "bg-steel-400"}`}
+                    style={{ height: `${pct}%`, minHeight: total ? "2px" : 0 }}
+                  />
+                  <p className="mt-1 text-[0.6rem] tabular text-graphite">{h.hora}</p>
+                </div>
+              );
+            })}
+          </div>
+          <p className="mt-2 text-xs text-graphite">
+            Barras en terracotta = picos de fuga (más del 70 % no convierte). Atiende ese rango primero.
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* POR DÍA */}
+      <Card>
+        <CardContent className="p-5">
+          <p className="section-label mb-4">Por día de la semana</p>
+          <div className="flex h-32 items-end gap-2">
+            {(d?.por_dia_semana || []).map((dia: any) => {
+              const pct = dia.total > 0 ? (dia.total / maxDia) * 100 : 0;
+              return (
+                <div key={dia.dia} className="flex flex-1 flex-col items-center">
+                  <div
+                    className="w-full rounded-sm bg-navy-600"
+                    style={{ height: `${pct}%`, minHeight: dia.total ? "2px" : 0 }}
+                  />
+                  <p className="mt-1 text-xs">{dia.dia_label}</p>
+                  <p className="text-[0.6rem] tabular text-graphite">
+                    {dia.total} · {dia.conv_rate != null ? `${dia.conv_rate}%` : "—"}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
 
+// ============================================================================
+// ALERTAS
+// ============================================================================
 
 function AlertasTab({ onSelect }: { onSelect: (id: string) => void }) {
   const [umbral, setUmbral] = useState(30);
@@ -510,32 +669,48 @@ function AlertasTab({ onSelect }: { onSelect: (id: string) => void }) {
   });
   return (
     <Card>
-      <CardContent className="p-4">
-        <div className="flex items-center gap-3 mb-3">
-          <label className="text-sm text-graphite">Umbral sin respuesta:</label>
-          <select value={umbral} onChange={(e) => setUmbral(Number(e.target.value))} className="border rounded px-2 py-1 text-sm">
+      <CardContent className="p-5">
+        <div className="mb-4 flex items-center gap-3">
+          <label className="text-xs text-graphite">Umbral sin respuesta</label>
+          <select
+            value={umbral}
+            onChange={(e) => setUmbral(Number(e.target.value))}
+            className="rounded-sm border border-border bg-card px-2 py-1 text-sm"
+          >
             <option value={15}>15 min</option>
             <option value={30}>30 min</option>
             <option value={60}>1 hora</option>
             <option value={120}>2 horas</option>
             <option value={240}>4 horas</option>
           </select>
-          <div className="ml-auto text-xs text-graphite">Auto-refresh 60s</div>
+          <p className="ml-auto text-[0.62rem] uppercase tracking-[0.1em] text-graphite">
+            Refresca cada 60 s
+          </p>
         </div>
         {q.isLoading ? <LoadingState /> : q.isError ? <ErrorState error={q.error} /> : (
           <div className="space-y-2">
             {(q.data?.alertas || []).map((a: any) => (
-              <div key={a.conversation_id} onClick={() => onSelect(a.conversation_id)} className="border-l-4 border-rose-500 bg-rose-50/60 hover:bg-rose-50 cursor-pointer p-3 rounded">
+              <button
+                key={a.conversation_id}
+                onClick={() => onSelect(a.conversation_id)}
+                className="stitch-rail pl-3 block w-full rounded-sm border border-border bg-card p-3 text-left transition-colors hover:bg-cloud"
+              >
                 <div className="flex items-baseline justify-between gap-2">
-                  <div className="font-medium">{a.customer_name || a.customer_phone || "—"}</div>
+                  <p className="font-medium text-ink-900">
+                    {a.customer_name || a.customer_phone || "—"}
+                  </p>
                   <Badge tone="critico">{a.minutos_sin_respuesta}m sin respuesta</Badge>
                 </div>
-                <div className="text-xs text-graphite mt-1">{a.advisor_name} · {a.channel}</div>
-                <div className="text-sm mt-2 italic">"{a.ultimo_mensaje}"</div>
-              </div>
+                <p className="mt-1 text-xs text-graphite">
+                  {a.advisor_name || "Sin asignar"} · {channelLabel(a.channel)}
+                </p>
+                <p className="mt-2 text-sm italic text-ink-900">&ldquo;{a.ultimo_mensaje}&rdquo;</p>
+              </button>
             ))}
             {!q.data?.alertas?.length && (
-              <div className="text-center text-graphite py-8">Ninguna conversación con cliente esperando.</div>
+              <p className="py-8 text-center text-sm text-graphite">
+                Nadie está esperando. El equipo va al día.
+              </p>
             )}
           </div>
         )}
@@ -544,6 +719,9 @@ function AlertasTab({ onSelect }: { onSelect: (id: string) => void }) {
   );
 }
 
+// ============================================================================
+// COACHING IA
+// ============================================================================
 
 function CoachingTab({ advisors }: { advisors: AdvisorRow[] }) {
   const [selectedAdvisor, setSelectedAdvisor] = useState<string>("");
@@ -553,123 +731,193 @@ function CoachingTab({ advisors }: { advisors: AdvisorRow[] }) {
     enabled: !!selectedAdvisor,
   });
   return (
-    <Card><CardContent className="p-4">
-      <div className="flex gap-3 items-center mb-4">
-        <label className="text-sm text-graphite">Asesora:</label>
-        <select value={selectedAdvisor} onChange={(e) => setSelectedAdvisor(e.target.value)} className="border rounded px-2 py-1 text-sm">
-          <option value="">— Selecciona —</option>
-          {advisors.filter(a => a.conversations > 0).map(a => (
-            <option key={a.advisor_id} value={a.advisor_id}>{a.name} ({a.conversations})</option>
-          ))}
-        </select>
-      </div>
-      {!selectedAdvisor && <div className="text-center text-graphite py-8">Selecciona una asesora para generar coaching IA basado en sus auditorías.</div>}
-      {selectedAdvisor && q.isLoading && <LoadingState />}
-      {selectedAdvisor && q.isError && <ErrorState error={q.error} />}
-      {q.data && !q.data.ok && (
-        <div className="text-center text-graphite py-8">{q.data.error === "sin_auditorias" ? "Esta asesora aún no tiene auditorías." : `Error: ${q.data.error}`}</div>
-      )}
-      {q.data?.ok && (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
-            <div><div className="text-graphite text-xs">Auditorías</div><div className="font-medium">{q.data.n_auditorias}</div></div>
-            <div><div className="text-graphite text-xs">% Conversión</div><div className="font-medium">{q.data.stats.conversion_rate}%</div></div>
-            <div><div className="text-graphite text-xs">Won / Lost</div><div className="font-medium text-emerald-700">{q.data.stats.won}</div></div>
-            <div><div className="text-graphite text-xs">Impacto perdido</div><div className="font-medium text-rose-700">{q.data.stats.impact_perdido_cop ? `COP $${q.data.stats.impact_perdido_cop.toLocaleString("es-CO")}` : "—"}</div></div>
-            <div><div className="text-graphite text-xs">Overall avg</div><div className="font-medium">{q.data.stats.avg_overall ?? "—"}/10</div></div>
-          </div>
-
-          <div className="bg-cloud/50 p-3 rounded">
-            <div className="text-xs text-graphite mb-1">Diagnóstico general</div>
-            <div className="text-sm">{q.data.coaching?.diagnostico_general}</div>
-          </div>
-
-          {q.data.coaching?.prioridad_urgente && (
-            <div className="bg-amber-50 border-l-4 border-amber-500 p-3">
-              <div className="text-xs text-graphite mb-1">⚡ Prioridad urgente esta semana</div>
-              <div className="text-sm font-medium">{q.data.coaching.prioridad_urgente}</div>
-            </div>
-          )}
-
-          <div className="grid md:grid-cols-2 gap-3">
-            <div>
-              <div className="text-sm font-semibold mb-1 text-emerald-700">Fortalezas</div>
-              <ul className="text-sm list-disc list-inside space-y-1">
-                {(q.data.coaching?.fortalezas || []).map((s: string, i: number) => <li key={i}>{s}</li>)}
-              </ul>
-            </div>
-            <div>
-              <div className="text-sm font-semibold mb-1 text-rose-700">Áreas de mejora</div>
-              <ul className="text-sm list-disc list-inside space-y-1">
-                {(q.data.coaching?.areas_de_mejora || []).map((s: string, i: number) => <li key={i}>{s}</li>)}
-              </ul>
-            </div>
-          </div>
-
-          {q.data.coaching?.plan_accion_30_dias?.length > 0 && (
-            <div>
-              <div className="text-sm font-semibold mb-2">Plan de acción 30 días</div>
-              <div className="grid md:grid-cols-2 gap-2">
-                {q.data.coaching.plan_accion_30_dias.map((s: any, i: number) => (
-                  <div key={i} className="border rounded p-3">
-                    <div className="text-xs text-graphite">Semana {s.semana}</div>
-                    <div className="font-medium text-sm">{s.objetivo}</div>
-                    <div className="text-xs mt-1">{s.ejercicio}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="grid md:grid-cols-2 gap-3">
-            {q.data.coaching?.frases_modelo?.length > 0 && (
-              <div>
-                <div className="text-sm font-semibold mb-1 text-emerald-700">Frases modelo (usar más)</div>
-                <ul className="text-sm list-disc list-inside space-y-1">
-                  {q.data.coaching.frases_modelo.map((s: string, i: number) => <li key={i} className="italic">"{s}"</li>)}
-                </ul>
-              </div>
-            )}
-            {q.data.coaching?.frases_a_evitar?.length > 0 && (
-              <div>
-                <div className="text-sm font-semibold mb-1 text-rose-700">Frases a evitar</div>
-                <ul className="text-sm list-disc list-inside space-y-1">
-                  {q.data.coaching.frases_a_evitar.map((s: string, i: number) => <li key={i} className="italic">"{s}"</li>)}
-                </ul>
-              </div>
-            )}
-          </div>
-
-          <div className="text-xs text-graphite border-t pt-2">{q.data.modelo} · costo ${q.data.costo_usd?.toFixed(4)} USD</div>
+    <Card>
+      <CardContent className="p-5">
+        <div className="mb-4 flex items-center gap-3">
+          <label className="text-xs text-graphite">Asesora</label>
+          <select
+            value={selectedAdvisor}
+            onChange={(e) => setSelectedAdvisor(e.target.value)}
+            className="rounded-sm border border-border bg-card px-2 py-1 text-sm"
+          >
+            <option value="">— Selecciona —</option>
+            {advisors.filter(a => a.conversations > 0).map(a => (
+              <option key={a.advisor_id} value={a.advisor_id}>
+                {a.name} ({a.conversations})
+              </option>
+            ))}
+          </select>
         </div>
-      )}
-    </CardContent></Card>
+
+        {!selectedAdvisor && (
+          <p className="py-8 text-center text-sm text-graphite">
+            Selecciona una asesora para generar coaching IA basado en sus auditorías.
+          </p>
+        )}
+        {selectedAdvisor && q.isLoading && <LoadingState />}
+        {selectedAdvisor && q.isError && <ErrorState error={q.error} />}
+        {q.data && !q.data.ok && (
+          <p className="py-8 text-center text-sm text-graphite">
+            {q.data.error === "sin_auditorias" ? "Esta asesora aún no tiene auditorías." : `Error: ${q.data.error}`}
+          </p>
+        )}
+        {q.data?.ok && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+              {[
+                ["Auditorías",       q.data.n_auditorias],
+                ["Conversión",       `${q.data.stats.conversion_rate}%`],
+                ["Ganadas",          q.data.stats.won, "sage"],
+                ["Impacto perdido",  q.data.stats.impact_perdido_cop ? fmtCop(q.data.stats.impact_perdido_cop) : "—", "terracotta"],
+                ["Overall",          `${q.data.stats.avg_overall ?? "—"}/10`],
+              ].map((row, i) => {
+                const [label, value, tone] = row as [string, any, string?];
+                return (
+                  <div key={i} className="rounded-sm border border-border bg-card px-3 py-2">
+                    <p className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite">{label}</p>
+                    <p className={`mt-1 font-display tabular text-base font-medium ${
+                      tone === "sage" ? "text-sage" : tone === "terracotta" ? "text-terracotta" : "text-ink-900"
+                    }`}>
+                      {value}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+
+            {q.data.coaching?.diagnostico_general && (
+              <div className="rounded-sm bg-cloud/60 p-4">
+                <p className="section-label mb-1">Diagnóstico</p>
+                <p className="text-sm text-ink-900">{q.data.coaching.diagnostico_general}</p>
+              </div>
+            )}
+
+            {q.data.coaching?.prioridad_urgente && (
+              <div className="stitch-rail pl-3 rounded-sm bg-terracotta/[0.06] p-3">
+                <p className="section-label mb-1">Prioridad esta semana</p>
+                <p className="text-sm font-medium text-ink-900">{q.data.coaching.prioridad_urgente}</p>
+              </div>
+            )}
+
+            <div className="grid gap-3 md:grid-cols-2">
+              {q.data.coaching?.fortalezas?.length > 0 && (
+                <div>
+                  <p className="section-label mb-2 text-sage">Fortalezas</p>
+                  <ul className="space-y-1 text-sm">
+                    {q.data.coaching.fortalezas.map((s: string, i: number) => (
+                      <li key={i} className="flex gap-2"><span className="text-sage">•</span>{s}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {q.data.coaching?.areas_de_mejora?.length > 0 && (
+                <div>
+                  <p className="section-label mb-2 text-terracotta">Áreas de mejora</p>
+                  <ul className="space-y-1 text-sm">
+                    {q.data.coaching.areas_de_mejora.map((s: string, i: number) => (
+                      <li key={i} className="flex gap-2"><span className="text-terracotta">•</span>{s}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            {q.data.coaching?.plan_accion_30_dias?.length > 0 && (
+              <div>
+                <p className="section-label mb-2">Plan 30 días</p>
+                <div className="grid gap-2 md:grid-cols-2">
+                  {q.data.coaching.plan_accion_30_dias.map((s: any, i: number) => (
+                    <div key={i} className="rounded-sm border border-border bg-card p-3">
+                      <p className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite">Semana {s.semana}</p>
+                      <p className="mt-0.5 text-sm font-medium text-ink-900">{s.objetivo}</p>
+                      <p className="mt-1 text-xs text-graphite">{s.ejercicio}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <p className="border-t border-border pt-2 text-[0.62rem] uppercase tracking-[0.1em] text-graphite">
+              {q.data.modelo} · costo {q.data.costo_usd ? `$${q.data.costo_usd.toFixed(4)}` : "—"} USD
+            </p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
+// ============================================================================
+// CALCULAR RANKINGS BUTTON
+// ============================================================================
+
+function CalcularRankingsBtn({ daysBack }: { daysBack: number }) {
+  const qc = useQueryClient();
+  const [last, setLast] = useState<{ ts: string; ok: number; total: number } | null>(null);
+  const mut = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; persistidos: number; total_advisors: number }>(
+      `/api/revenue/rankings/calcular?days_back=${daysBack}`,
+    ),
+    onSuccess: (data) => {
+      setLast({ ts: new Date().toLocaleTimeString("es-CO"), ok: data.persistidos, total: data.total_advisors });
+      qc.invalidateQueries({ queryKey: ["revenue", "advisors"] });
+    },
+  });
+  return (
+    <div className="mb-4 flex items-center gap-3 border-b border-border pb-3">
+      <button
+        onClick={() => mut.mutate()}
+        disabled={mut.isPending}
+        className="rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-medium text-ink-900 transition-colors hover:bg-cloud disabled:opacity-50"
+      >
+        {mut.isPending ? "Calculando…" : "Persistir snapshot"}
+      </button>
+      {last && (
+        <p className="text-xs text-graphite">
+          {last.ts} · {last.ok}/{last.total} asesoras guardadas en histórico
+        </p>
+      )}
+      {mut.isError && <p className="text-xs text-terracotta">Error: {String(mut.error)}</p>}
+    </div>
+  );
+}
+
+// ============================================================================
+// PÁGINA
+// ============================================================================
 
 export default function RevenuePage() {
-  const [daysBack, setDaysBack] = useState(1);  // Default: solo HOY
+  const [daysBack, setDaysBack] = useState(1);
   const [advisorFilter, setAdvisorFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [channelFilter, setChannelFilter] = useState<string>("");
   const [selectedConv, setSelectedConv] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string>("conversaciones");
-  // Buscador + paginación + filtro pendientes/atendidas + sin asesora
   const [convSearch, setConvSearch] = useState<string>("");
   const [convSearchInput, setConvSearchInput] = useState<string>("");
   const [convPage, setConvPage] = useState<number>(1);
-  const [replyFilter, setReplyFilter] = useState<string>("");  // "" | "pending" | "attended"
+  const [replyFilter, setReplyFilter] = useState<string>("");
   const [onlyUnassigned, setOnlyUnassigned] = useState<boolean>(false);
+  const searchRef = useRef<HTMLInputElement>(null);
 
-  // Stats: refresh moderado cada 2 min (era 30s)
+  // "/" atajo para enfocar buscador
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "/" && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const statsQ = useQuery<StatsResp>({
     queryKey: ["revenue", "stats"],
     queryFn: () => api.get("/api/revenue/stats"),
     refetchInterval: 2 * 60_000,
   });
 
-  // Conversaciones: con paginación + búsqueda + filtro pendientes/atendidas
   const convsQ = useQuery<{
     conversations: Conversation[];
     total: number;
@@ -694,14 +942,19 @@ export default function RevenuePage() {
     },
   });
 
-  // Asesoras: si está activa o si conversaciones la necesita para el dropdown
+  // Query separada para el hero — siempre pendientes top 4, no depende de filtros visibles
+  const fugasQ = useQuery<{ conversations: Conversation[] }>({
+    queryKey: ["revenue", "fugas", daysBack],
+    queryFn: () => api.get(`/api/revenue/conversations?days_back=${daysBack}&reply_filter=pending&page=1&page_size=25`),
+    refetchInterval: 60_000,
+  });
+
   const advisorsQ = useQuery<{ rows: AdvisorRow[]; total: number }>({
     queryKey: ["revenue", "advisors", "ranking", daysBack],
     queryFn: () => api.get(`/api/revenue/advisors/ranking?days_back=${daysBack}`),
     enabled: activeTab === "asesoras" || activeTab === "conversaciones" || activeTab === "coaching",
   });
 
-  // Mensajes: refresh suave cada 60s (era 15s) y solo si la tab está activa
   const msgsQ = useQuery<{ messages: MessageRow[]; total: number }>({
     queryKey: ["revenue", "messages", "recent"],
     queryFn: () => api.get("/api/revenue/messages/recent?limit=100"),
@@ -709,7 +962,6 @@ export default function RevenuePage() {
     refetchInterval: 60_000,
   });
 
-  // Stats de mensajes (totales por día) en el periodo seleccionado
   const msgsStatsQ = useQuery<any>({
     queryKey: ["revenue", "messages", "stats", daysBack],
     queryFn: () => api.get(`/api/revenue/messages/stats?days_back=${Math.min(daysBack, 30)}`),
@@ -721,264 +973,296 @@ export default function RevenuePage() {
   return (
     <PageShell
       title="Revenue Intelligence"
-      subtitle="Auditoría comercial: conversaciones, asesoras y conversión"
+      subtitle="Auditoría comercial: conversaciones, equipo, conversión"
+      isFetching={statsQ.isFetching}
     >
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
-        <KpiCard label="Asesoras activas" value={statsQ.isLoading ? "…" : (stats?.advisors ?? 0)} />
-        <KpiCard label="Leads"             value={statsQ.isLoading ? "…" : (stats?.leads ?? 0).toLocaleString("es-CO")} />
-        <KpiCard label="Conversaciones"    value={statsQ.isLoading ? "…" : (stats?.conversations ?? 0).toLocaleString("es-CO")} />
-        <KpiCard label="Mensajes (total)"  value={statsQ.isLoading ? "…" : (stats?.messages ?? 0).toLocaleString("es-CO")} />
-        <KpiCard
-          label={`Mensajes ${daysBack === 1 ? "hoy" : daysBack === 2 ? "48h" : `${daysBack}d`}`}
-          value={msgsStatsQ.isLoading ? "…" : (msgsStatsQ.data?.total_mensajes ?? 0).toLocaleString("es-CO")}
-        />
-        <KpiCard label="Auditorías pend."  value={statsQ.isLoading ? "…" : (stats?.pending_audits ?? 0).toLocaleString("es-CO")} />
+      {/* HERO — Fugas activas */}
+      <FugasHero
+        convs={fugasQ.data?.conversations || []}
+        loading={fugasQ.isLoading}
+        onSelect={setSelectedConv}
+      />
+
+      {/* KPI STRIP */}
+      <KpiStrip
+        items={[
+          { label: "Asesoras en línea", value: statsQ.isLoading ? "…" : (stats?.advisors ?? 0) },
+          { label: "Leads",             value: statsQ.isLoading ? "…" : (stats?.leads ?? 0).toLocaleString("es-CO") },
+          { label: "Conversaciones",    value: statsQ.isLoading ? "…" : (stats?.conversations ?? 0).toLocaleString("es-CO") },
+          { label: `Mensajes ${daysBack === 1 ? "hoy" : daysBack === 2 ? "48h" : `${daysBack}d`}`,
+            value: msgsStatsQ.isLoading ? "…" : (msgsStatsQ.data?.total_mensajes ?? 0).toLocaleString("es-CO") },
+          { label: "Mensajes (total)",  value: statsQ.isLoading ? "…" : (stats?.messages ?? 0).toLocaleString("es-CO") },
+          { label: "Por auditar",       value: statsQ.isLoading ? "…" : (stats?.pending_audits ?? 0).toLocaleString("es-CO"),
+            tone: (stats?.pending_audits ?? 0) > 10 ? "danger" : "default" },
+        ]}
+      />
+
+      {/* SELECTOR DE PERÍODO */}
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Periodo</label>
+        <div className="inline-flex rounded-sm border border-border bg-card overflow-hidden">
+          {[
+            [1,   "Hoy"],
+            [2,   "48h"],
+            [7,   "7d"],
+            [30,  "30d"],
+            [90,  "90d"],
+            [365, "1 año"],
+          ].map(([v, l]) => {
+            const active = daysBack === (v as number);
+            return (
+              <button
+                key={v as number}
+                onClick={() => setDaysBack(v as number)}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  active ? "bg-ink-900 text-white" : "text-graphite hover:bg-cloud"
+                }`}
+              >
+                {l}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      <div className="flex flex-wrap gap-3 items-center mb-4">
-        <label className="text-sm text-graphite">Periodo:</label>
-        <select value={daysBack} onChange={(e) => setDaysBack(Number(e.target.value))} className="border rounded px-2 py-1 text-sm">
-          <option value={1}>Hoy</option>
-          <option value={2}>Últimas 48h</option>
-          <option value={7}>7 días</option>
-          <option value={30}>30 días</option>
-          <option value={90}>90 días</option>
-          <option value={365}>1 año</option>
-        </select>
-      </div>
-
+      {/* TABS */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="conversaciones">Conversaciones</TabsTrigger>
-          <TabsTrigger value="asesoras">Ranking asesoras</TabsTrigger>
+          <TabsTrigger value="asesoras">Ranking del equipo</TabsTrigger>
           <TabsTrigger value="mensajes">Mensajes recientes</TabsTrigger>
           <TabsTrigger value="tendencias">Tendencias</TabsTrigger>
           <TabsTrigger value="alertas">Alertas</TabsTrigger>
           <TabsTrigger value="coaching">Coaching IA</TabsTrigger>
         </TabsList>
 
+        {/* === Conversaciones === */}
         <TabsContent value="conversaciones">
           <Card>
-            <CardContent className="p-4">
-              {/* Sub-tabs pendientes / atendidas / todas + quick filter sin asesora */}
-              <div className="flex gap-2 mb-3 border-b flex-wrap items-center">
+            <CardContent className="p-5">
+              {/* Sub-tabs */}
+              <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-border">
                 {[
-                  { val: "pending",  label: "🔴 Sin respuesta",   color: "text-red-600" },
-                  { val: "attended", label: "✅ Atendidas",       color: "text-emerald-600" },
-                  { val: "",         label: "Todas",              color: "" },
+                  { val: "pending",  label: "Esperando respuesta" },
+                  { val: "attended", label: "Atendidas" },
+                  { val: "",         label: "Todas" },
                 ].map(t => (
                   <button
                     key={t.val}
                     onClick={() => { setReplyFilter(t.val); setConvPage(1); }}
-                    className={`px-3 py-2 text-sm border-b-2 transition ${
+                    className={`relative px-3 py-2 text-sm font-medium transition-colors ${
                       replyFilter === t.val
-                        ? "border-graphite font-semibold"
-                        : "border-transparent text-graphite hover:text-black"
-                    } ${replyFilter === t.val ? t.color : ""}`}
+                        ? "tab-active text-ink-900"
+                        : "text-graphite hover:text-ink-900"
+                    }`}
                   >
                     {t.label}
                   </button>
                 ))}
                 <button
                   onClick={() => { setOnlyUnassigned(!onlyUnassigned); setConvPage(1); }}
-                  className={`ml-auto px-3 py-1.5 text-sm border rounded transition ${
+                  className={`ml-auto inline-flex items-center gap-1.5 rounded-sm border px-3 py-1.5 text-xs font-medium transition-colors ${
                     onlyUnassigned
-                      ? "bg-amber-100 border-amber-400 text-amber-800 font-semibold"
-                      : "border-graphite/30 text-graphite hover:bg-cloud"
+                      ? "border-terracotta/40 bg-terracotta/10 text-terracotta"
+                      : "border-border text-graphite hover:bg-cloud"
                   }`}
                   title="Mostrar solo conversaciones sin asesora asignada"
                 >
-                  ⚠️ Sin asesora {onlyUnassigned ? "(activo)" : ""}
+                  <AlertCircle className="h-3.5 w-3.5" /> Sin asignar
                 </button>
               </div>
 
               {/* Filtros + buscador */}
-              <div className="flex flex-wrap gap-3 mb-3 items-center">
-                <input
-                  type="text"
-                  value={convSearchInput}
-                  onChange={(e) => setConvSearchInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      setConvSearch(convSearchInput);
-                      setConvPage(1);
-                    }
-                  }}
-                  placeholder="🔍 Buscar nombre, teléfono o lead ID..."
-                  className="border rounded px-3 py-1.5 text-sm w-72"
-                />
-                <button
-                  onClick={() => { setConvSearch(convSearchInput); setConvPage(1); }}
-                  className="border rounded px-3 py-1.5 text-sm bg-graphite text-white hover:opacity-90"
-                >
-                  Buscar
-                </button>
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-graphite" />
+                  <input
+                    ref={searchRef}
+                    type="text"
+                    value={convSearchInput}
+                    onChange={(e) => setConvSearchInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { setConvSearch(convSearchInput); setConvPage(1); }
+                    }}
+                    placeholder="Buscar (/) cliente, teléfono o lead"
+                    className="w-72 rounded-sm border border-border bg-card pl-8 pr-3 py-1.5 text-sm placeholder:text-graphite/60 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
+                  />
+                </div>
                 {convSearch && (
                   <button
                     onClick={() => { setConvSearchInput(""); setConvSearch(""); setConvPage(1); }}
-                    className="text-sm text-graphite underline"
+                    className="text-xs text-graphite underline-offset-2 hover:underline"
                   >
                     Limpiar
                   </button>
                 )}
-                <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setConvPage(1); }} className="border rounded px-2 py-1 text-sm">
+                <select
+                  value={statusFilter}
+                  onChange={(e) => { setStatusFilter(e.target.value); setConvPage(1); }}
+                  className="rounded-sm border border-border bg-card px-2 py-1 text-sm"
+                >
                   <option value="">Todos los estados</option>
                   <option value="in_work">Activas</option>
                   <option value="closed">Cerradas</option>
                 </select>
-                <select value={channelFilter} onChange={(e) => { setChannelFilter(e.target.value); setConvPage(1); }} className="border rounded px-2 py-1 text-sm">
+                <select
+                  value={channelFilter}
+                  onChange={(e) => { setChannelFilter(e.target.value); setConvPage(1); }}
+                  className="rounded-sm border border-border bg-card px-2 py-1 text-sm"
+                >
                   <option value="">Todos los canales</option>
                   <option value="waba">WhatsApp</option>
                   <option value="instagram_business">Instagram</option>
                 </select>
                 {advisorsQ.data && (
-                  <select value={advisorFilter} onChange={(e) => { setAdvisorFilter(e.target.value); setConvPage(1); }} className="border rounded px-2 py-1 text-sm">
+                  <select
+                    value={advisorFilter}
+                    onChange={(e) => { setAdvisorFilter(e.target.value); setConvPage(1); }}
+                    className="rounded-sm border border-border bg-card px-2 py-1 text-sm"
+                  >
                     <option value="">Todas las asesoras</option>
                     {advisorsQ.data.rows.map((a) => (
                       <option key={a.advisor_id} value={a.advisor_id}>{a.name}</option>
                     ))}
                   </select>
                 )}
-                <div className="ml-auto text-sm text-graphite">
+                <p className="ml-auto text-xs text-graphite tabular">
                   {convsQ.data
-                    ? `${convsQ.data.total} resultados${convsQ.data.pages > 1 ? ` · pág. ${convsQ.data.page}/${convsQ.data.pages}` : ""}`
+                    ? `${convsQ.data.total} ${convsQ.data.total === 1 ? "resultado" : "resultados"}${convsQ.data.pages > 1 ? ` · pág. ${convsQ.data.page}/${convsQ.data.pages}` : ""}`
                     : ""}
-                </div>
+                </p>
               </div>
+
+              {/* Tabla */}
               {convsQ.isLoading ? <LoadingState /> : convsQ.isError ? <ErrorState error={convsQ.error} /> : (
                 <div className="overflow-x-auto">
                   <table className="min-w-full text-sm">
-                    <thead className="text-left text-graphite border-b">
-                      <tr>
-                        <th className="py-2 pr-3">Cliente</th>
-                        <th className="py-2 pr-3">Asesora</th>
-                        <th className="py-2 pr-3">Canal</th>
-                        <th className="py-2 pr-3">Mensajes</th>
-                        <th className="py-2 pr-3" title="Tiempo promedio que tarda la asesora en responder al cliente">Resp. prom.</th>
-                        <th className="py-2 pr-3">Último mensaje</th>
-                        <th className="py-2 pr-3">Estado conv.</th>
-                        <th className="py-2 pr-3">Estado venta</th>
+                    <thead>
+                      <tr className="border-b border-border text-left">
+                        {["Cliente", "Canal", "Asesora", "Estado", "Mensajes", "Última actividad", "Score IA"].map(h => (
+                          <th key={h} className="py-2 pr-3 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                            {h}
+                          </th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>
                       {(convsQ.data?.conversations || [])
                         .filter(c => !onlyUnassigned || !c.advisor_id)
                         .sort((a, b) => {
-                          // En tab Pendientes, ordenar por urgencia (más viejos arriba)
                           if (replyFilter === "pending") {
                             const ta = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
                             const tb = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
-                            return ta - tb;  // ascendente = más antiguos primero
+                            return ta - tb;
                           }
                           return 0;
                         })
                         .map((c) => {
-                          // Calcular urgencia para tab Pendientes
+                          const min = ageInMin(c.last_message_at);
                           const isPending = replyFilter === "pending";
-                          const ageMin = c.last_message_at
-                            ? Math.floor((Date.now() - new Date(c.last_message_at).getTime()) / 60000)
-                            : 0;
-                          const urgent = isPending && ageMin > 30;
-                          const veryUrgent = isPending && ageMin > 120;
-                          const rowClass = veryUrgent
-                            ? "bg-red-50 hover:bg-red-100"
-                            : urgent
-                              ? "bg-amber-50 hover:bg-amber-100"
-                              : "hover:bg-cloud/40";
+                          const overdue = isPending && min > 40;
+                          // Pseudo-score: solo lo mostramos si hay audit; aquí derivamos urgencia visual
                           return (
-                        <tr key={c.conversation_id} className={`border-b cursor-pointer ${rowClass}`} onClick={() => setSelectedConv(c.conversation_id)}>
-                          <td className="py-2 pr-3">
-                            <div className="font-medium flex items-center gap-1.5">
-                              {c.is_vip && <span title="Cliente VIP: 3+ ventas ganadas">⭐</span>}
-                              <span>
-                                {c.customer_name?.trim() || c.customer_phone || <span className="text-graphite italic">Lead #{c.lead_id}</span>}
-                              </span>
-                            </div>
-                            {c.customer_name?.trim() && c.customer_phone && (
-                              <div className="text-xs text-graphite">{c.customer_phone}</div>
-                            )}
-                          </td>
-                          <td className="py-2 pr-3">
-                            {c.advisor_name || <span className="text-amber-700 font-medium">⚠️ Sin asignar</span>}
-                          </td>
-                          <td className="py-2 pr-3">
-                            {(() => {
-                              const ch = channelDisplay(c.channel);
-                              return (
-                                <span className="inline-flex items-center gap-1">
-                                  {ch.icon && <span>{ch.icon}</span>}
-                                  <span>{ch.label}</span>
+                            <tr
+                              key={c.conversation_id}
+                              className="border-b border-border cursor-pointer transition-colors hover:bg-cloud/50"
+                              onClick={() => setSelectedConv(c.conversation_id)}
+                            >
+                              <td className="py-2.5 pr-3">
+                                <div className="flex items-center gap-1.5 font-medium text-ink-900">
+                                  {c.is_vip && <span className="text-ochre" title="Cliente VIP">★</span>}
+                                  <span className="truncate">
+                                    {c.customer_name?.trim() || c.customer_phone || (
+                                      <span className="italic text-graphite">Lead #{c.lead_id}</span>
+                                    )}
+                                  </span>
+                                </div>
+                                {c.customer_name?.trim() && c.customer_phone && (
+                                  <p className="text-[0.7rem] text-graphite tabular">{c.customer_phone}</p>
+                                )}
+                              </td>
+                              <td className="py-2.5 pr-3 text-sm text-graphite">
+                                {channelLabel(c.channel)}
+                              </td>
+                              <td className="py-2.5 pr-3 text-sm">
+                                {c.advisor_name || (
+                                  <span className="font-medium text-terracotta">Sin asignar</span>
+                                )}
+                              </td>
+                              <td className="py-2.5 pr-3">
+                                <ConvStatusBadge
+                                  status={!c.advisor_id ? "unassigned" : isPending && overdue ? "wait" : (c.msgs_advisor ?? 0) > 0 ? "done" : "wait"}
+                                />
+                              </td>
+                              <td className="py-2.5 pr-3 text-xs tabular whitespace-nowrap">
+                                <span className="text-graphite">{c.msgs_customer ?? 0}</span>
+                                <span className="mx-1 text-border">/</span>
+                                <span className="text-ink-900">{c.msgs_advisor ?? 0}</span>
+                              </td>
+                              <td className="py-2.5 pr-3 text-sm whitespace-nowrap">
+                                <span className={overdue ? "font-medium text-terracotta tabular" : "text-graphite tabular"}>
+                                  {fmtRelative(c.last_message_at)}
                                 </span>
-                              );
-                            })()}
-                          </td>
-                          <td className="py-2 pr-3 text-xs whitespace-nowrap">
-                            <span className="text-blue-700">{c.msgs_customer ?? 0}</span>
-                            <span className="text-graphite mx-1">/</span>
-                            <span className="text-emerald-700">{c.msgs_advisor ?? 0}</span>
-                          </td>
-                          <td className="py-2 pr-3 text-xs whitespace-nowrap">
-                            {c.avg_response_min != null
-                              ? (c.avg_response_min < 5
-                                  ? <span className="text-emerald-700 font-medium">{c.avg_response_min}m</span>
-                                  : c.avg_response_min < 30
-                                    ? <span className="text-amber-700">{c.avg_response_min}m</span>
-                                    : <span className="text-red-700 font-medium">{c.avg_response_min}m</span>)
-                              : <span className="text-graphite">—</span>}
-                          </td>
-                          <td className="py-2 pr-3 whitespace-nowrap">
-                            {isPending
-                              ? <span className={veryUrgent ? "text-red-700 font-semibold" : urgent ? "text-amber-700 font-medium" : ""}>
-                                  ⏱ {fmtRelative(c.last_message_at)}
-                                </span>
-                              : fmtRelative(c.last_message_at)}
-                          </td>
-                          <td className="py-2 pr-3"><StatusBadge status={c.status} /></td>
-                          <td className="py-2 pr-3"><StatusBadge status={c.lead_status || undefined} /></td>
-                        </tr>
-                        );
-                      })}
+                              </td>
+                              <td className="py-2.5 pr-3 text-sm tabular">
+                                {c.avg_response_min != null ? (
+                                  <span className={
+                                    c.avg_response_min < 5  ? "text-sage" :
+                                    c.avg_response_min < 30 ? "text-ochre" :
+                                                              "text-terracotta"
+                                  }>
+                                    {c.avg_response_min}m
+                                  </span>
+                                ) : (
+                                  <span className="text-graphite">—</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
                     </tbody>
                   </table>
                   {!convsQ.data?.conversations?.length && (
-                    <div className="text-center text-graphite py-8">Sin conversaciones en el rango.</div>
+                    <p className="py-8 text-center text-sm text-graphite">
+                      Sin conversaciones en este rango. Cambia el período o limpia los filtros.
+                    </p>
                   )}
                 </div>
               )}
 
-              {/* Controles de paginación */}
+              {/* Paginación */}
               {convsQ.data && convsQ.data.pages > 1 && (
-                <div className="flex items-center justify-center gap-2 mt-4">
+                <div className="mt-4 flex items-center justify-center gap-1">
                   <button
                     onClick={() => setConvPage(1)}
                     disabled={convPage === 1}
-                    className="border rounded px-2 py-1 text-sm disabled:opacity-30"
+                    className="rounded-sm border border-border p-1.5 text-graphite disabled:opacity-30 hover:bg-cloud"
                   >
-                    « Primera
+                    <ChevronsLeft className="h-4 w-4" />
                   </button>
                   <button
                     onClick={() => setConvPage(Math.max(1, convPage - 1))}
                     disabled={convPage === 1}
-                    className="border rounded px-3 py-1 text-sm disabled:opacity-30"
+                    className="rounded-sm border border-border p-1.5 text-graphite disabled:opacity-30 hover:bg-cloud"
                   >
-                    ← Anterior
+                    <ChevronLeft className="h-4 w-4" />
                   </button>
-                  <span className="text-sm text-graphite px-2">
-                    Página <strong>{convsQ.data.page}</strong> de <strong>{convsQ.data.pages}</strong>
+                  <span className="px-3 text-xs tabular text-graphite">
+                    Página <strong className="text-ink-900">{convsQ.data.page}</strong> de <strong className="text-ink-900">{convsQ.data.pages}</strong>
                   </span>
                   <button
                     onClick={() => setConvPage(Math.min(convsQ.data!.pages, convPage + 1))}
                     disabled={convPage >= convsQ.data.pages}
-                    className="border rounded px-3 py-1 text-sm disabled:opacity-30"
+                    className="rounded-sm border border-border p-1.5 text-graphite disabled:opacity-30 hover:bg-cloud"
                   >
-                    Siguiente →
+                    <ChevronRight className="h-4 w-4" />
                   </button>
                   <button
                     onClick={() => setConvPage(convsQ.data!.pages)}
                     disabled={convPage >= convsQ.data.pages}
-                    className="border rounded px-2 py-1 text-sm disabled:opacity-30"
+                    className="rounded-sm border border-border p-1.5 text-graphite disabled:opacity-30 hover:bg-cloud"
                   >
-                    Última »
+                    <ChevronsRight className="h-4 w-4" />
                   </button>
                 </div>
               )}
@@ -986,49 +1270,50 @@ export default function RevenuePage() {
           </Card>
         </TabsContent>
 
+        {/* === Ranking del equipo === */}
         <TabsContent value="asesoras">
           <Card>
-            <CardContent className="p-4">
+            <CardContent className="p-5">
               <CalcularRankingsBtn daysBack={daysBack} />
               {advisorsQ.isLoading ? <LoadingState /> : advisorsQ.isError ? <ErrorState error={advisorsQ.error} /> : (
                 <div className="overflow-x-auto">
                   <table className="min-w-full text-sm">
-                    <thead className="text-left text-graphite border-b">
-                      <tr>
-                        <th className="py-2 pr-3">Asesora</th>
-                        <th className="py-2 pr-3 text-right" title="Conversaciones asignadas en el periodo">Asignadas</th>
-                        <th className="py-2 pr-3 text-right" title="Donde la asesora respondió al menos 1 vez">Atendidas</th>
-                        <th className="py-2 pr-3 text-right" title="% Atendidas / Asignadas">% Respuesta</th>
-                        <th className="py-2 pr-3 text-right">Ganadas</th>
-                        <th className="py-2 pr-3 text-right">Perdidas</th>
-                        <th className="py-2 pr-3 text-right" title="Ganadas / (Ganadas + Perdidas)">% Conv.</th>
-                        <th className="py-2 pr-3 text-right" title="Promedio del valor de las ventas ganadas">Ticket prom.</th>
-                        <th className="py-2 pr-3 text-right" title="Tiempo medio de respuesta al cliente">Tiempo resp.</th>
-                        <th className="py-2 pr-3">Último activo</th>
+                    <thead>
+                      <tr className="border-b border-border text-left">
+                        {["#", "Asesora", "Asignadas", "Atendidas", "% Resp.", "Ganadas", "Perdidas", "% Conv.", "Ticket prom.", "Tiempo resp.", "Último activo"].map(h => (
+                          <th key={h} className="py-2 pr-3 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                            {h}
+                          </th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {(advisorsQ.data?.rows || []).map((r) => (
-                        <tr key={r.advisor_id} className="border-b">
-                          <td className="py-2 pr-3">
-                            <div className="font-medium">{r.name}</div>
-                            <div className="text-xs text-graphite">{r.email}</div>
+                      {(advisorsQ.data?.rows || []).map((r, i) => (
+                        <tr key={r.advisor_id} className={`border-b border-border ${i === 0 ? "stitch-rail bg-ochre/[0.04]" : ""}`}>
+                          <td className="py-2.5 pr-3 pl-3 font-display tabular text-base text-ink-900">{i + 1}</td>
+                          <td className="py-2.5 pr-3">
+                            <p className="font-medium text-ink-900">{r.name}</p>
+                            <p className="text-[0.7rem] text-graphite">{r.email}</p>
                           </td>
-                          <td className="py-2 pr-3 text-right">{r.asignadas ?? r.conversations}</td>
-                          <td className="py-2 pr-3 text-right">{r.atendidas ?? 0}</td>
-                          <td className="py-2 pr-3 text-right font-medium">{r.response_rate != null ? `${r.response_rate}%` : "—"}</td>
-                          <td className="py-2 pr-3 text-right text-emerald-700">{r.won}</td>
-                          <td className="py-2 pr-3 text-right text-rose-700">{r.lost}</td>
-                          <td className="py-2 pr-3 text-right font-medium">
-                            {r.conversion_rate != null ? `${r.conversion_rate}%` : "—"}
-                          </td>
-                          <td className="py-2 pr-3 text-right whitespace-nowrap">
+                          <td className="py-2.5 pr-3 tabular">{r.asignadas ?? r.conversations}</td>
+                          <td className="py-2.5 pr-3 tabular">{r.atendidas ?? 0}</td>
+                          <td className="py-2.5 pr-3 tabular font-medium">{r.response_rate != null ? `${r.response_rate}%` : "—"}</td>
+                          <td className="py-2.5 pr-3 tabular text-sage">{r.won}</td>
+                          <td className="py-2.5 pr-3 tabular text-terracotta">{r.lost}</td>
+                          <td className="py-2.5 pr-3 tabular font-medium">{r.conversion_rate != null ? `${r.conversion_rate}%` : "—"}</td>
+                          <td className="py-2.5 pr-3 tabular whitespace-nowrap">
                             {r.ticket_promedio ? `$${Math.round(r.ticket_promedio / 1000)}K` : "—"}
                           </td>
-                          <td className="py-2 pr-3 text-right whitespace-nowrap">
-                            {r.avg_response_min != null ? (r.avg_response_min < 60 ? `${r.avg_response_min}m` : `${(r.avg_response_min/60).toFixed(1)}h`) : "—"}
+                          <td className="py-2.5 pr-3 tabular whitespace-nowrap">
+                            {r.avg_response_min != null
+                              ? r.avg_response_min < 60
+                                ? `${r.avg_response_min}m`
+                                : `${(r.avg_response_min / 60).toFixed(1)}h`
+                              : "—"}
                           </td>
-                          <td className="py-2 pr-3 whitespace-nowrap">{fmtRelative(r.last_activity)}</td>
+                          <td className="py-2.5 pr-3 tabular whitespace-nowrap text-graphite">
+                            {fmtRelative(r.last_activity)}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -1039,29 +1324,39 @@ export default function RevenuePage() {
           </Card>
         </TabsContent>
 
+        {/* === Mensajes recientes === */}
         <TabsContent value="mensajes">
           <Card>
-            <CardContent className="p-4">
-              <div className="text-xs text-graphite mb-3">Auto-actualiza cada 60s</div>
+            <CardContent className="p-5">
+              <p className="mb-3 text-[0.62rem] uppercase tracking-[0.1em] text-graphite">Refresca cada 60 s</p>
               {msgsQ.isLoading ? <LoadingState /> : msgsQ.isError ? <ErrorState error={msgsQ.error} /> : (
-                <div className="space-y-2">
+                <div className="space-y-1">
                   {(msgsQ.data?.messages || []).map((m) => (
-                    <div key={m.message_id} className={`border-l-2 pl-3 py-1 cursor-pointer hover:bg-cloud/40 ${m.sender_type === "customer" ? "border-navy" : m.sender_type === "advisor" ? "border-emerald-600" : "border-graphite"}`} onClick={() => setSelectedConv(m.conversation_id)}>
+                    <button
+                      key={m.message_id}
+                      onClick={() => setSelectedConv(m.conversation_id)}
+                      className={`block w-full border-l-2 pl-3 py-1.5 pr-2 text-left transition-colors hover:bg-cloud/50 ${
+                        m.sender_type === "customer" ? "border-navy-600" :
+                        m.sender_type === "advisor"  ? "border-sage"     :
+                                                       "border-graphite"
+                      }`}
+                    >
                       <div className="flex items-baseline justify-between gap-2">
-                        <div className="text-xs text-graphite">
-                          <span className="font-medium">
-                            {m.sender_type === "customer" ? "👤 " : m.sender_type === "advisor" ? "💼 " : ""}
+                        <p className="text-xs text-graphite">
+                          <span className="font-medium text-ink-900">
                             {m.sender_name || m.customer_name || "—"}
                           </span>
-                          {m.customer_phone && <span className="ml-2">{m.customer_phone}</span>}
-                        </div>
-                        <div className="text-xs text-graphite whitespace-nowrap">{fmtDate(m.sent_at)}</div>
+                          {m.customer_phone && <span className="ml-2 tabular">{m.customer_phone}</span>}
+                        </p>
+                        <p className="whitespace-nowrap text-[0.7rem] text-graphite tabular">{fmtDate(m.sent_at)}</p>
                       </div>
-                      <div className="text-sm">{m.message_text || <em className="text-graphite">(sin texto)</em>}</div>
-                    </div>
+                      <p className="mt-0.5 text-sm text-ink-900">
+                        {m.message_text || <em className="text-graphite">(sin texto)</em>}
+                      </p>
+                    </button>
                   ))}
                   {!msgsQ.data?.messages?.length && (
-                    <div className="text-center text-graphite py-8">Aún no hay mensajes capturados.</div>
+                    <p className="py-8 text-center text-sm text-graphite">Aún no hay mensajes capturados.</p>
                   )}
                 </div>
               )}
@@ -1083,7 +1378,7 @@ export default function RevenuePage() {
       </Tabs>
 
       {selectedConv && (
-        <ConversationDetailModal
+        <ConversationDetailPanel
           conversationId={selectedConv}
           onClose={() => setSelectedConv(null)}
         />

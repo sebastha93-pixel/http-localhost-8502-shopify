@@ -7,12 +7,39 @@ const config: Config = {
     container: { center: true, padding: "2rem", screens: { "2xl": "1400px" } },
     extend: {
       colors: {
-        // MALE'DENIM brand palette
-        ink:      "#213033",
+        // MALE'DENIM Selvedge palette — DEFAULT keys preserve legacy single-name usage.
+        ink: {
+          DEFAULT: "#213033",
+          950: "#0E1417",
+          900: "#131B1F",
+          800: "#1A242A",
+          700: "#243036",
+          600: "#33424A",
+          500: "#4A5C66",
+        },
         graphite: "#606060",
+        steel: {
+          DEFAULT: "#87A6B8",
+          600: "#5E7E92",
+          500: "#6F92A6",
+          400: "#87A6B8",
+          300: "#A6BECC",
+        },
         concrete: "#E1E1DF",
-        steel:    "#87A6B8",
-        navy:     "#0C457A",
+        cloud:    "#F4F3F0",
+        raw:      "#FAF9F6",
+        navy: {
+          DEFAULT: "#0C457A",
+          700: "#23415C",
+          600: "#2C5074",
+          500: "#37618B",
+        },
+        terracotta: "#B4543F",
+        ochre:      "#8A6A22",   // WCAG AA vs raw (5.4:1) / cloud (5.2:1)
+        sage:       "#4F6B4C",   // WCAG AA-friendly vs raw/cloud (5.4:1)
+        selvedge:   "#C8412B",   // brand signature — solo pespunte
+
+        // Legacy aliases kept for non-Revenue pages
         cream:    "#F1EAD8",
         khaki:    "#7B6E42",
         teal:     "#036A73",
@@ -34,20 +61,28 @@ const config: Config = {
         card:        { DEFAULT: "hsl(var(--card))",        foreground: "hsl(var(--card-foreground))" },
       },
       borderRadius: {
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        DEFAULT: "6px",
+        lg: "10px",
+        md: "8px",
+        sm: "4px",
       },
       fontFamily: {
-        sans: ["var(--font-inter)", "system-ui", "sans-serif"],
+        display: ['"Futura PT"', "Jost", "system-ui", "sans-serif"],
+        sans:    ["var(--font-inter)", "Inter", "system-ui", "sans-serif"],
       },
       keyframes: {
         "accordion-down": { from: { height: "0" }, to: { height: "var(--radix-accordion-content-height)" } },
         "accordion-up":   { from: { height: "var(--radix-accordion-content-height)" }, to: { height: "0" } },
+        "shimmer":        { "0%": { backgroundPosition: "-200% 0" }, "100%": { backgroundPosition: "200% 0" } },
+        "fade-in":        { from: { opacity: "0" }, to: { opacity: "1" } },
+        "slide-in-right": { from: { transform: "translateX(100%)" }, to: { transform: "translateX(0)" } },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up":   "accordion-up 0.2s ease-out",
+        "shimmer":        "shimmer 1.4s ease-in-out infinite",
+        "fade-in":        "fade-in 200ms ease-out",
+        "slide-in-right": "slide-in-right 240ms cubic-bezier(0.32, 0.72, 0, 1)",
       },
     },
   },
