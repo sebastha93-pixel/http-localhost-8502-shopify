@@ -1130,6 +1130,59 @@ def conversation_detail(
     }
 
 
+@router.post("/sync/notas-recientes")
+def sync_notas_recientes(
+    horas: int = Query(48, ge=1, le=720, description="Ventana hacia atrás en horas"),
+    limit: int = Query(500, ge=10, le=2000, description="Máx conversations a procesar"),
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Pulla notas de Kommo para conversations activas en últimas N horas.
+    Sirve para recuperar mensajes outgoing de asesoras que Kommo no manda
+    por webhook (talk[update] llega sin texto). Mucho más amplio que el
+    poller cron (que solo mira últimos 10 min)."""
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+
+    cutoff = (datetime.now(tz=timezone.utc) - timedelta(hours=horas)).isoformat()
+    try:
+        convs = (sb.table("conversations")
+                   .select("conversation_id,lead_id,last_message_at")
+                   .gte("last_message_at", cutoff)
+                   .not_.is_("lead_id", "null")
+                   .order("last_message_at", desc=True)
+                   .limit(limit).execute().data) or []
+    except Exception as e:
+        raise HTTPException(503, f"query: {str(e)[:200]}")
+
+    if not convs:
+        return {"ok": True, "candidatos": 0, "procesadas": 0, "msgs_total": 0}
+
+    procesadas = 0
+    msgs_total = 0
+    errores = []
+    for c in convs:
+        lead_id = c.get("lead_id")
+        cid = c.get("conversation_id")
+        if not lead_id or not cid:
+            continue
+        try:
+            res = kommo_svc.sync_messages_de_lead(int(lead_id), conversation_id_override=cid)
+            procesadas += 1
+            msgs_total += int(res.get("mensajes", 0) or 0)
+        except Exception as e:
+            if len(errores) < 5:
+                errores.append(f"lead={lead_id}: {str(e)[:150]}")
+    return {
+        "ok": True,
+        "candidatos": len(convs),
+        "procesadas": procesadas,
+        "msgs_total": msgs_total,
+        "horas": horas,
+        "errores": errores,
+    }
+
+
 @router.post("/sync/messages-historicos")
 def sync_messages_historicos(
     limit: int = Query(50, ge=1, le=300, description="Cuántas conversaciones procesar"),
