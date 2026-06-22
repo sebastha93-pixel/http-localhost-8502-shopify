@@ -578,6 +578,11 @@ export default function RevenuePage() {
   const [channelFilter, setChannelFilter] = useState<string>("");
   const [selectedConv, setSelectedConv] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string>("conversaciones");
+  // Buscador + paginación + filtro pendientes/atendidas
+  const [convSearch, setConvSearch] = useState<string>("");
+  const [convSearchInput, setConvSearchInput] = useState<string>("");
+  const [convPage, setConvPage] = useState<number>(1);
+  const [replyFilter, setReplyFilter] = useState<string>("");  // "" | "pending" | "attended"
 
   // Stats: refresh moderado cada 2 min (era 30s)
   const statsQ = useQuery<StatsResp>({
@@ -586,15 +591,27 @@ export default function RevenuePage() {
     refetchInterval: 2 * 60_000,
   });
 
-  // Conversaciones: solo si la tab activa la usa
-  const convsQ = useQuery<{ conversations: Conversation[]; total: number }>({
-    queryKey: ["revenue", "conversations", daysBack, advisorFilter, statusFilter, channelFilter],
+  // Conversaciones: con paginación + búsqueda + filtro pendientes/atendidas
+  const convsQ = useQuery<{
+    conversations: Conversation[];
+    total: number;
+    page: number;
+    page_size: number;
+    pages: number;
+  }>({
+    queryKey: ["revenue", "conversations", daysBack, advisorFilter, statusFilter, channelFilter, convSearch, replyFilter, convPage],
     enabled: activeTab === "conversaciones",
     queryFn: () => {
-      const params = new URLSearchParams({ days_back: String(daysBack), limit: "200" });
+      const params = new URLSearchParams({
+        days_back: String(daysBack),
+        page: String(convPage),
+        page_size: "50",
+      });
       if (advisorFilter) params.set("advisor_id", advisorFilter);
       if (statusFilter) params.set("status", statusFilter);
       if (channelFilter) params.set("channel", channelFilter);
+      if (convSearch.trim()) params.set("search", convSearch.trim());
+      if (replyFilter) params.set("reply_filter", replyFilter);
       return api.get(`/api/revenue/conversations?${params.toString()}`);
     },
   });
@@ -665,19 +682,68 @@ export default function RevenuePage() {
         <TabsContent value="conversaciones">
           <Card>
             <CardContent className="p-4">
+              {/* Sub-tabs pendientes / atendidas / todas */}
+              <div className="flex gap-2 mb-3 border-b">
+                {[
+                  { val: "pending",  label: "🔴 Sin respuesta",   color: "text-red-600" },
+                  { val: "attended", label: "✅ Atendidas",       color: "text-emerald-600" },
+                  { val: "",         label: "Todas",              color: "" },
+                ].map(t => (
+                  <button
+                    key={t.val}
+                    onClick={() => { setReplyFilter(t.val); setConvPage(1); }}
+                    className={`px-3 py-2 text-sm border-b-2 transition ${
+                      replyFilter === t.val
+                        ? "border-graphite font-semibold"
+                        : "border-transparent text-graphite hover:text-black"
+                    } ${replyFilter === t.val ? t.color : ""}`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Filtros + buscador */}
               <div className="flex flex-wrap gap-3 mb-3 items-center">
-                <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="border rounded px-2 py-1 text-sm">
+                <input
+                  type="text"
+                  value={convSearchInput}
+                  onChange={(e) => setConvSearchInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      setConvSearch(convSearchInput);
+                      setConvPage(1);
+                    }
+                  }}
+                  placeholder="🔍 Buscar nombre, teléfono o lead ID..."
+                  className="border rounded px-3 py-1.5 text-sm w-72"
+                />
+                <button
+                  onClick={() => { setConvSearch(convSearchInput); setConvPage(1); }}
+                  className="border rounded px-3 py-1.5 text-sm bg-graphite text-white hover:opacity-90"
+                >
+                  Buscar
+                </button>
+                {convSearch && (
+                  <button
+                    onClick={() => { setConvSearchInput(""); setConvSearch(""); setConvPage(1); }}
+                    className="text-sm text-graphite underline"
+                  >
+                    Limpiar
+                  </button>
+                )}
+                <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setConvPage(1); }} className="border rounded px-2 py-1 text-sm">
                   <option value="">Todos los estados</option>
                   <option value="in_work">Activas</option>
                   <option value="closed">Cerradas</option>
                 </select>
-                <select value={channelFilter} onChange={(e) => setChannelFilter(e.target.value)} className="border rounded px-2 py-1 text-sm">
+                <select value={channelFilter} onChange={(e) => { setChannelFilter(e.target.value); setConvPage(1); }} className="border rounded px-2 py-1 text-sm">
                   <option value="">Todos los canales</option>
                   <option value="waba">WhatsApp</option>
                   <option value="instagram_business">Instagram</option>
                 </select>
                 {advisorsQ.data && (
-                  <select value={advisorFilter} onChange={(e) => setAdvisorFilter(e.target.value)} className="border rounded px-2 py-1 text-sm">
+                  <select value={advisorFilter} onChange={(e) => { setAdvisorFilter(e.target.value); setConvPage(1); }} className="border rounded px-2 py-1 text-sm">
                     <option value="">Todas las asesoras</option>
                     {advisorsQ.data.rows.map((a) => (
                       <option key={a.advisor_id} value={a.advisor_id}>{a.name}</option>
@@ -685,7 +751,9 @@ export default function RevenuePage() {
                   </select>
                 )}
                 <div className="ml-auto text-sm text-graphite">
-                  {convsQ.data ? `${convsQ.data.total} conversaciones` : ""}
+                  {convsQ.data
+                    ? `${convsQ.data.total} resultados${convsQ.data.pages > 1 ? ` · pág. ${convsQ.data.page}/${convsQ.data.pages}` : ""}`
+                    : ""}
                 </div>
               </div>
               {convsQ.isLoading ? <LoadingState /> : convsQ.isError ? <ErrorState error={convsQ.error} /> : (
@@ -724,6 +792,43 @@ export default function RevenuePage() {
                   {!convsQ.data?.conversations?.length && (
                     <div className="text-center text-graphite py-8">Sin conversaciones en el rango.</div>
                   )}
+                </div>
+              )}
+
+              {/* Controles de paginación */}
+              {convsQ.data && convsQ.data.pages > 1 && (
+                <div className="flex items-center justify-center gap-2 mt-4">
+                  <button
+                    onClick={() => setConvPage(1)}
+                    disabled={convPage === 1}
+                    className="border rounded px-2 py-1 text-sm disabled:opacity-30"
+                  >
+                    « Primera
+                  </button>
+                  <button
+                    onClick={() => setConvPage(Math.max(1, convPage - 1))}
+                    disabled={convPage === 1}
+                    className="border rounded px-3 py-1 text-sm disabled:opacity-30"
+                  >
+                    ← Anterior
+                  </button>
+                  <span className="text-sm text-graphite px-2">
+                    Página <strong>{convsQ.data.page}</strong> de <strong>{convsQ.data.pages}</strong>
+                  </span>
+                  <button
+                    onClick={() => setConvPage(Math.min(convsQ.data!.pages, convPage + 1))}
+                    disabled={convPage >= convsQ.data.pages}
+                    className="border rounded px-3 py-1 text-sm disabled:opacity-30"
+                  >
+                    Siguiente →
+                  </button>
+                  <button
+                    onClick={() => setConvPage(convsQ.data!.pages)}
+                    disabled={convPage >= convsQ.data.pages}
+                    className="border rounded px-2 py-1 text-sm disabled:opacity-30"
+                  >
+                    Última »
+                  </button>
                 </div>
               )}
             </CardContent>

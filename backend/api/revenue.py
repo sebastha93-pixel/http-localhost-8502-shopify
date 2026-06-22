@@ -764,25 +764,110 @@ def list_conversations(
     status: str | None = Query(None, description="in_work|closed"),
     channel: str | None = Query(None),
     days_back: int = Query(30, ge=1, le=365),
-    limit: int = Query(100, ge=1, le=500),
+    search: str | None = Query(None, description="Búsqueda por nombre/teléfono/lead_id"),
+    reply_filter: str | None = Query(
+        None,
+        description="'pending' = sin respuesta de asesora · 'attended' = con respuesta · None = todas"
+    ),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     _: CurrentUser = Depends(require_role("admin", "operador")),
 ) -> dict:
-    """Lista de conversations con filtros, enriquecida con datos de lead y advisor."""
+    """Lista de conversations con filtros + paginación + búsqueda + filtro respondidas."""
     sb = db._sb()
     if sb is None:
         raise HTTPException(503, "Supabase no configurado")
     desde = (datetime.now(tz=timezone.utc) - timedelta(days=days_back)).isoformat()
+
+    # 1. Si hay search, primero matchear leads por nombre/teléfono.
+    lead_ids_filter: list[int] | None = None
+    if search and search.strip():
+        s = search.strip()
+        # ¿Es lead_id numérico?
+        if s.isdigit():
+            lead_ids_filter = [int(s)]
+        else:
+            # Buscar leads cuyo nombre o teléfono contenga el query (case-insensitive).
+            try:
+                lq = (
+                    sb.table("kommo_leads")
+                      .select("lead_id")
+                      .or_(f"customer_name.ilike.%{s}%,customer_phone.ilike.%{s}%")
+                      .limit(500)
+                      .execute()
+                )
+                lead_ids_filter = [r["lead_id"] for r in (lq.data or []) if r.get("lead_id")]
+                if not lead_ids_filter:
+                    # No hay matches → respuesta vacía rápida.
+                    return {
+                        "ok": True, "total": 0, "page": page, "page_size": page_size,
+                        "pages": 0, "conversations": []
+                    }
+            except Exception:
+                lead_ids_filter = []
+
+    # 2. Construir query base sobre conversations.
     q = sb.table("conversations").select(
-        "conversation_id,lead_id,advisor_id,channel,started_at,last_message_at,status,message_count,audit_status"
-    ).gte("last_message_at", desde).order("last_message_at", desc=True).limit(limit)
+        "conversation_id,lead_id,advisor_id,channel,started_at,last_message_at,status,message_count,audit_status",
+        count="exact",
+    ).gte("last_message_at", desde).order("last_message_at", desc=True)
     if advisor_id:
         q = q.eq("advisor_id", advisor_id)
     if status:
         q = q.eq("status", status)
     if channel:
         q = q.eq("channel", channel)
-    convs = q.execute().data or []
+    if lead_ids_filter is not None:
+        if not lead_ids_filter:
+            return {"ok": True, "total": 0, "page": page, "page_size": page_size, "pages": 0, "conversations": []}
+        q = q.in_("lead_id", lead_ids_filter)
 
+    # 3. Para filtro pending/attended traemos un set más amplio y filtramos en Python.
+    # (Supabase/PostgREST no soporta fácil sub-queries en EXISTS.)
+    apply_reply_filter = reply_filter in ("pending", "attended")
+    fetch_limit = max(page * page_size * 4, 200) if apply_reply_filter else page * page_size
+    fetch_limit = min(fetch_limit, 2000)
+    q = q.limit(fetch_limit)
+
+    res = q.execute()
+    convs_all = res.data or []
+    total_in_filter = res.count if res.count is not None else len(convs_all)
+
+    # 4. Si reply_filter, marcar cada conv con flag has_advisor_reply.
+    if apply_reply_filter and convs_all:
+        conv_ids = [c["conversation_id"] for c in convs_all]
+        with_reply: set = set()
+        for i in range(0, len(conv_ids), 100):
+            batch = conv_ids[i:i+100]
+            try:
+                ms = (sb.table("messages")
+                        .select("conversation_id,sender_type")
+                        .in_("conversation_id", batch)
+                        .eq("sender_type", "advisor")
+                        .limit(5000)
+                        .execute().data) or []
+                for m in ms:
+                    with_reply.add(m["conversation_id"])
+            except Exception:
+                pass
+        if reply_filter == "pending":
+            convs_filtered = [c for c in convs_all if c["conversation_id"] not in with_reply]
+        else:  # attended
+            convs_filtered = [c for c in convs_all if c["conversation_id"] in with_reply]
+        total_filtered = len(convs_filtered)
+    else:
+        convs_filtered = convs_all
+        total_filtered = total_in_filter
+
+    # 5. Paginar el resultado final.
+    start = (page - 1) * page_size
+    end = start + page_size
+    convs = convs_filtered[start:end] if apply_reply_filter else convs_filtered
+    if not apply_reply_filter:
+        # En este caso convs_filtered ya tiene page * page_size items; sólo cortamos los de la página.
+        convs = convs_filtered[(page - 1) * page_size : page * page_size]
+
+    # 6. Enriquecer.
     advisor_ids = list({c["advisor_id"] for c in convs if c.get("advisor_id")})
     lead_ids = list({c["lead_id"] for c in convs if c.get("lead_id")})
     advisors_map: dict = {}
@@ -806,7 +891,16 @@ def list_conversations(
             "customer_name": lead.get("customer_name"),
             "customer_phone": lead.get("customer_phone"),
         })
-    return {"ok": True, "total": len(enriched), "conversations": enriched}
+
+    pages = max(1, (total_filtered + page_size - 1) // page_size) if total_filtered else 0
+    return {
+        "ok": True,
+        "total": total_filtered,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages,
+        "conversations": enriched,
+    }
 
 
 @router.get("/advisors/ranking")
