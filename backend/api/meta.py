@@ -433,7 +433,9 @@ def _buscar_lead_kommo_por_phone(wa_id: str) -> Optional[dict]:
                         "advisor_id":              lead.get("advisor_id"),
                         "customer_name":           lead.get("customer_name"),
                         "conversation_id_existente": cr.data[0]["conversation_id"] if cr.data else None,
-     except Exception:
+                    }
+                    break
+    except Exception:
         result = None
     
     # FASE C1: Si NO encontramos en DB local, preguntar a Kommo API en vivo.
