@@ -567,14 +567,25 @@ def _build_message_row(*, message_id, conversation_id, sender_type, sender_name,
 
 def _asegurar_conversation(sb, conversation_id: str, payload: dict) -> None:
     """Asegura que conversation_id exista en conversations (FK requirement).
-    Si no existe, la crea con metadata. Si es WhatsApp con wa_id, busca lead
-    en Kommo y enriquece con lead_id/advisor_id."""
+    Si no existe, la crea con metadata + cross-reference Kommo.
+    Si ya existe, ACTUALIZA last_message_at para que la lista refleje la actividad reciente
+    (sin pisar otros campos como lead_id/advisor_id que pueden venir del sync Kommo)."""
     if not conversation_id:
         return
+    now_iso = datetime.now(tz=timezone.utc).isoformat()
     try:
         r = sb.table("conversations").select("conversation_id").eq("conversation_id", conversation_id).limit(1).execute()
         if r.data:
-            return  # Ya existe (no la sobrescribimos para no perder metadata Kommo)
+            # Conv existente → solo actualizar last_message_at + status (sin tocar lead_id/advisor_id).
+            try:
+                sb.table("conversations").update({
+                    "last_message_at": now_iso,
+                    "status":          "in_work",
+                }).eq("conversation_id", conversation_id).execute()
+            except Exception as e:
+                _stats["errores"] += 1
+                _stats["ultimo_error"] = f"conv_update: {str(e)[:200]}"
+            return
     except Exception:
         return
 
@@ -582,11 +593,11 @@ def _asegurar_conversation(sb, conversation_id: str, payload: dict) -> None:
     row: dict = {
         "conversation_id":  conversation_id,
         "channel":          channel,
-        "started_at":       datetime.now(tz=timezone.utc).isoformat(),
-        "last_message_at":  datetime.now(tz=timezone.utc).isoformat(),
+        "started_at":       now_iso,
+        "last_message_at":  now_iso,
         "status":           "in_work",
         "audit_status":     "pending",
-        "synced_at":        datetime.now(tz=timezone.utc).isoformat(),
+        "synced_at":        now_iso,
     }
     # Cross-reference con Kommo: si el conv_id es meta-wa-* extraer wa_id y buscar lead
     if channel == "whatsapp" and conversation_id.startswith("meta-wa-"):
