@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { usePedidos } from "@/lib/hooks";
 import { PedidosTable } from "@/components/pedidos-table";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
-import { KpiCard } from "@/components/kpi-card";
+import { KpiStrip } from "@/components/kpi-card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Pedido } from "@/lib/types";
 import { formatMoneyShort } from "@/lib/utils";
@@ -28,7 +28,7 @@ export default function ContraentregaPage() {
     };
   }, [data]);
 
-  if (isLoading) return <LoadingState label="Cargando pedidos contraentrega..." />;
+  if (isLoading) return <LoadingState label="Cargando pedidos contraentrega…" />;
   if (error || !data) return <ErrorState error={error} onRetry={() => refetch()} />;
 
   const sumVal = (arr: Pedido[]) => arr.reduce((s, p) => s + (p.valor_num ?? 0), 0);
@@ -46,13 +46,15 @@ export default function ContraentregaPage() {
       onRefresh={() => refetch()}
     >
       {/* KPIs COD */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
-        <KpiCard label="Total COD"        value={groups.todos.length}        meta={formatMoneyShort(valTotal)}     accent="navy" />
-        <KpiCard label="Pendientes"       value={groups.pendientes.length}   meta="Esperan despacho"               accent="khaki" />
-        <KpiCard label="En proceso"       value={groups.proceso.length}      meta={formatMoneyShort(valProceso)}   accent="steel" />
-        <KpiCard label="En tránsito"      value={groups.transito.length}     meta={formatMoneyShort(valTransito)}  accent="navy" />
-        <KpiCard label="Novedades"        value={groups.novedades.length}    meta={formatMoneyShort(valNovedades)} accent={groups.novedades.length ? "rust" : "steel"} danger={groups.novedades.length > 0} />
-      </div>
+      <KpiStrip
+        items={[
+          { label: "Total COD",   value: `${groups.todos.length} · ${formatMoneyShort(valTotal)}` },
+          { label: "Pendientes",  value: groups.pendientes.length },
+          { label: "En proceso",  value: `${groups.proceso.length} · ${formatMoneyShort(valProceso)}` },
+          { label: "En tránsito", value: `${groups.transito.length} · ${formatMoneyShort(valTransito)}` },
+          { label: "Novedades",   value: `${groups.novedades.length} · ${formatMoneyShort(valNovedades)}`, tone: groups.novedades.length > 0 ? "danger" : "default" },
+        ]}
+      />
 
       <Tabs defaultValue="pendientes">
         <TabsList>
@@ -67,7 +69,7 @@ export default function ContraentregaPage() {
           <PedidosTable
             pedidos={groups.pendientes}
             showTipoFilter={false}
-            emptyMessage="No hay pedidos pendientes de despacho"
+            emptyMessage="Sin pedidos pendientes de despacho."
             columns={["nivel", "orden", "cliente", "telefono", "producto", "ciudad", "dias", "valor", "estado"]}
             selectable
             renderAction={(p) => <AutorizarDespachoButton pedido={p} />}
@@ -77,7 +79,7 @@ export default function ContraentregaPage() {
           <PedidosTable
             pedidos={groups.proceso}
             showTipoFilter={false}
-            emptyMessage="No hay pedidos en proceso"
+            emptyMessage="Sin pedidos en proceso."
             columns={["nivel", "orden", "cliente", "telefono", "producto", "ciudad", "envio", "dias", "valor", "estado"]}
             selectable
           />
@@ -86,7 +88,7 @@ export default function ContraentregaPage() {
           <PedidosTable
             pedidos={groups.transito}
             showTipoFilter={false}
-            emptyMessage="No hay pedidos en tránsito"
+            emptyMessage="Sin pedidos en tránsito."
             columns={["nivel", "orden", "cliente", "telefono", "ciudad", "zona", "envio", "dias", "valor", "estado", "link"]}
             selectable
           />
@@ -95,7 +97,7 @@ export default function ContraentregaPage() {
           <PedidosTable
             pedidos={groups.novedades}
             showTipoFilter={false}
-            emptyMessage="✓ Sin novedades en COD"
+            emptyMessage="Sin novedades en COD. Todo va al día."
             columns={["nivel", "orden", "cliente", "telefono", "ciudad", "dias", "valor", "novedad", "link"]}
             selectable
           />
@@ -105,12 +107,12 @@ export default function ContraentregaPage() {
             pedidos={groups.entregados}
             showTipoFilter={false}
             showNivelFilter={false}
-            emptyMessage="Sin entregas registradas"
+            emptyMessage="Sin entregas registradas en este período."
             columns={["orden", "cliente", "telefono", "ciudad", "dias", "valor", "estado", "link"]}
             selectable
           />
-          <p className="text-xs text-graphite mt-3">
-            Total entregado: <span className="font-semibold text-ink">{formatMoneyShort(valEntregado)}</span>
+          <p className="mt-3 text-xs text-graphite">
+            Total entregado <span className="font-medium text-ink-900 tabular-nums">{formatMoneyShort(valEntregado)}</span>
           </p>
         </TabsContent>
       </Tabs>

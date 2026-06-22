@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
-import { KpiCard } from "@/components/kpi-card";
+import { KpiCard, KpiStrip } from "@/components/kpi-card";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -126,12 +126,12 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Buscar por producto, SKU, vendor o tipo..."
-            className="w-full rounded-md border border-border bg-white pl-9 pr-3 py-2 text-sm text-ink placeholder:text-graphite/60 focus:outline-none focus:ring-2 focus:ring-steel"
+            placeholder="Buscar producto, SKU, vendor o tipo"
+            className="w-full rounded-sm border border-border bg-card pl-9 pr-3 py-2 text-sm text-ink-900 placeholder:text-graphite/60 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
           />
         </div>
         {mostrarStock && (
-          <div className="flex gap-1">
+          <div className="inline-flex overflow-hidden rounded-sm border border-border bg-card">
             {([
               { id: "todos", label: "Todos" },
               { id: "con_stock", label: "Con stock" },
@@ -141,8 +141,8 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
               <button
                 key={f.id}
                 onClick={() => setFiltro(f.id)}
-                className={`px-3 py-1.5 rounded-md text-xs font-semibold uppercase tracking-wider transition-colors ${
-                  filtro === f.id ? "bg-navy text-white" : "bg-concrete text-graphite hover:bg-concrete/70"
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  filtro === f.id ? "bg-ink-900 text-white" : "text-graphite hover:bg-cloud"
                 }`}
               >
                 {f.label}
@@ -152,14 +152,14 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
         )}
       </div>
 
-      <p className="text-xs text-graphite">{filtrados.length} de {productos.length} productos</p>
+      <p className="text-xs text-graphite tabular-nums">{filtrados.length} de {productos.length} productos</p>
 
       <Card>
         <CardContent className="p-0 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-concrete/50 border-b border-border">
-                <tr className="text-left text-[0.65rem] font-bold uppercase tracking-wider text-graphite">
+              <thead className="bg-cloud/60 border-b border-border">
+                <tr className="text-left text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
                   <th className="px-3 py-2.5"></th>
                   <th className="px-3 py-2.5">Producto</th>
                   <th className="px-3 py-2.5">SKU</th>
@@ -176,12 +176,12 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
               </thead>
               <tbody className="divide-y divide-border">
                 {filtrados.length === 0 ? (
-                  <tr><td colSpan={12} className="px-3 py-8 text-center text-sm text-graphite">Sin resultados.</td></tr>
+                  <tr><td colSpan={12} className="px-3 py-8 text-center text-sm text-graphite">Sin productos con estos filtros.</td></tr>
                 ) : filtrados.map((p) => (
                   <>
                     <tr
                       key={p.id}
-                      className="hover:bg-concrete/30 cursor-pointer"
+                      className="hover:bg-cloud/50 cursor-pointer transition-colors"
                       onClick={() => setExpandido(expandido === p.id ? null : p.id)}
                     >
                       <td className="px-3 py-2.5">
@@ -193,7 +193,7 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                         )}
                       </td>
                       <td className="px-3 py-2.5">
-                        <p className="font-medium text-ink">{p.titulo}</p>
+                        <p className="font-medium text-ink-900">{p.titulo}</p>
                         <p className="text-xs text-graphite">{p.vendor || "—"}</p>
                       </td>
                       <td className="px-3 py-2.5 text-xs text-graphite tabular-nums">{skuAgrupado(p)}</td>
@@ -206,7 +206,7 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                           const tienePrecioFull = (p.descuento_max_pct || 0) > 0;
                           return (
                             <div className="flex flex-col items-end">
-                              <span className="font-semibold text-ink tabular-nums">
+                              <span className="font-medium text-ink-900 tabular-nums">
                                 {min === max ? formatMoney(min) : `${formatMoney(min)} – ${formatMoney(max)}`}
                               </span>
                               {tienePrecioFull && (
@@ -232,14 +232,14 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                       <td className="px-3 py-2.5 text-right tabular-nums">{p.num_variantes}</td>
                       {mostrarStock && (
                         <td className="px-3 py-2.5 text-right tabular-nums">
-                          <span className={p.sin_stock ? "text-rust font-semibold" : p.stock_bajo ? "text-khaki font-semibold" : "text-ink"}>
+                          <span className={p.sin_stock ? "text-terracotta font-semibold" : p.stock_bajo ? "text-ochre font-semibold" : "text-ink-900"}>
                             {p.total_stock}
                           </span>
                         </td>
                       )}
                       <td className="px-3 py-2.5 text-right text-xs">
                         {p.dias_publicado != null ? (
-                          <span className="text-ink tabular-nums" title={p.published_at}>{p.dias_publicado}d</span>
+                          <span className="text-ink-900 tabular-nums" title={p.published_at}>{p.dias_publicado}d</span>
                         ) : (
                           <span className="text-graphite">—</span>
                         )}
@@ -251,7 +251,7 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                             const hayDif = Math.abs(diff) > 0;
                             return (
                               <span
-                                className={hayDif ? "text-rust font-semibold tabular-nums" : "text-ink tabular-nums"}
+                                className={hayDif ? "text-terracotta font-semibold tabular-nums" : "text-ink-900 tabular-nums"}
                                 title={hayDif ? `Shopify dice ${p.total_stock}, Melonn tiene ${p.stock_melonn}. Diferencia ${diff > 0 ? "+" : ""}${diff}.` : "Cuadra con Shopify"}
                               >
                                 {p.stock_melonn}
@@ -275,7 +275,7 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                           target="_blank"
                           rel="noopener noreferrer"
                           onClick={(e) => e.stopPropagation()}
-                          className="inline-flex items-center text-steel hover:text-navy"
+                          className="inline-flex items-center text-graphite hover:text-navy-600"
                           title="Abrir en Shopify admin"
                         >
                           <ExternalLink className="h-3.5 w-3.5" />
@@ -283,10 +283,10 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                       </td>
                     </tr>
                     {expandido === p.id && (
-                      <tr key={`${p.id}-vars`} className="bg-concrete/20">
+                      <tr key={`${p.id}-vars`} className="bg-cloud/40">
                         <td colSpan={12} className="px-6 py-3">
-                          <div className="flex items-center justify-between mb-2">
-                            <p className="text-[0.65rem] uppercase tracking-wider text-graphite">Tallas del SKU <span className="font-bold text-ink">{skuAgrupado(p)}</span></p>
+                          <div className="mb-2 flex items-center justify-between">
+                            <p className="text-[0.65rem] uppercase tracking-[0.12em] text-graphite">Tallas del SKU <span className="font-medium text-ink-900 tabular-nums">{skuAgrupado(p)}</span></p>
                             <p className="text-[0.65rem] text-graphite">{p.variantes.length} {p.variantes.length === 1 ? "variante" : "variantes"}</p>
                           </div>
                           <table className="w-full text-xs">
@@ -311,23 +311,23 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                                 const diff = sm != null ? v.stock - sm : 0;
                                 return (
                                   <tr key={v.id}>
-                                    <td className="py-1 text-ink font-semibold">{tallaDeVariante(v.sku, raiz)}</td>
+                                    <td className="py-1 font-medium text-ink-900">{tallaDeVariante(v.sku, raiz)}</td>
                                     <td className="py-1 text-graphite">{v.titulo || "—"}</td>
                                     <td className="py-1 text-graphite tabular-nums">{v.sku || "—"}</td>
-                                    <td className="py-1 text-right text-ink font-semibold tabular-nums">{formatMoney(v.precio)}</td>
+                                    <td className="py-1 text-right font-medium text-ink-900 tabular-nums">{formatMoney(v.precio)}</td>
                                     <td className="py-1 text-right text-graphite tabular-nums">
                                       {full > 0 ? <span className="line-through">{formatMoney(full)}</span> : "—"}
                                     </td>
                                     <td className="py-1 text-right tabular-nums">
-                                      {desc > 0 ? <span className="text-rust font-semibold">-{desc.toFixed(0)}%</span> : <span className="text-graphite">—</span>}
+                                      {desc > 0 ? <span className="text-terracotta font-semibold">-{desc.toFixed(0)}%</span> : <span className="text-graphite">—</span>}
                                     </td>
-                                    <td className={`py-1 text-right tabular-nums ${v.stock <= 0 ? "text-rust font-semibold" : v.stock <= 5 ? "text-khaki" : "text-ink"}`}>{v.stock}</td>
+                                    <td className={`py-1 text-right tabular-nums ${v.stock <= 0 ? "text-terracotta font-semibold" : v.stock <= 5 ? "text-ochre" : "text-ink-900"}`}>{v.stock}</td>
                                     <td className="py-1 text-right tabular-nums">
                                       {sm == null ? (
                                         <span className="text-graphite italic" title="Sin match en Melonn">—</span>
                                       ) : (
                                         <span
-                                          className={diff !== 0 ? "text-rust font-semibold" : "text-ink"}
+                                          className={diff !== 0 ? "text-terracotta font-semibold" : "text-ink-900"}
                                           title={diff !== 0 ? `Shopify: ${v.stock} · Melonn: ${sm} · Diferencia ${diff > 0 ? "+" : ""}${diff}` : "Cuadra"}
                                         >
                                           {sm}{diff !== 0 && <span className="ml-1 text-[0.65rem]">({diff > 0 ? "+" : ""}{diff})</span>}
@@ -375,7 +375,7 @@ export default function InventarioPage() {
     refetchOnWindowFocus: false,
   });
 
-  if (resumen.isLoading) return <LoadingState label="Cargando inventario..." />;
+  if (resumen.isLoading) return <LoadingState label="Cargando inventario…" />;
   if (resumen.error) return <ErrorState error={resumen.error} onRetry={() => resumen.refetch()} />;
 
   const r = resumen.data;
@@ -391,16 +391,18 @@ export default function InventarioPage() {
       {r && (
         <>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
-            <KpiCard label="Productos activos"     value={String(r.activos)}    meta="Visibles en tienda"  accent="teal" />
-            <KpiCard label="Productos en borrador" value={String(r.borrador)}   meta="Pendientes publicar" accent="khaki" />
-            <KpiCard label="Archivados"            value={String(r.archivados)} meta="Descontinuados"      accent="steel" />
+            <KpiCard label="Productos activos"     value={r.activos}    meta="Visibles en tienda"  variant="success" />
+            <KpiCard label="Productos en borrador" value={r.borrador}   meta="Pendientes de publicar" />
+            <KpiCard label="Archivados"            value={r.archivados} meta="Descontinuados" />
           </div>
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            <KpiCard label="SKUs activos"      value={String(r.total_skus)}     meta="Variantes" accent="navy" />
-            <KpiCard label="Unidades en stock" value={String(r.total_unidades)} meta="Total" accent="navy" />
-            <KpiCard label="Sin stock"  value={String(r.sin_stock)}  meta="SKUs en cero"   accent={r.sin_stock > 0 ? "rust" : "steel"} danger={r.sin_stock > 10} />
-            <KpiCard label="Stock bajo" value={String(r.stock_bajo)} meta="1-5 unidades"   accent={r.stock_bajo > 0 ? "khaki" : "steel"} />
-          </div>
+          <KpiStrip
+            items={[
+              { label: "SKUs activos",      value: r.total_skus },
+              { label: "Unidades en stock", value: r.total_unidades },
+              { label: "Sin stock",         value: r.sin_stock,  tone: r.sin_stock > 10 ? "danger" : "default" },
+              { label: "Stock bajo",        value: r.stock_bajo, tone: r.stock_bajo > 0 ? "danger" : "default" },
+            ]}
+          />
         </>
       )}
 
