@@ -824,8 +824,30 @@ export default function RevenuePage() {
                     <tbody>
                       {(convsQ.data?.conversations || [])
                         .filter(c => !onlyUnassigned || !c.advisor_id)
-                        .map((c) => (
-                        <tr key={c.conversation_id} className="border-b hover:bg-cloud/40 cursor-pointer" onClick={() => setSelectedConv(c.conversation_id)}>
+                        .sort((a, b) => {
+                          // En tab Pendientes, ordenar por urgencia (más viejos arriba)
+                          if (replyFilter === "pending") {
+                            const ta = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+                            const tb = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+                            return ta - tb;  // ascendente = más antiguos primero
+                          }
+                          return 0;
+                        })
+                        .map((c) => {
+                          // Calcular urgencia para tab Pendientes
+                          const isPending = replyFilter === "pending";
+                          const ageMin = c.last_message_at
+                            ? Math.floor((Date.now() - new Date(c.last_message_at).getTime()) / 60000)
+                            : 0;
+                          const urgent = isPending && ageMin > 30;
+                          const veryUrgent = isPending && ageMin > 120;
+                          const rowClass = veryUrgent
+                            ? "bg-red-50 hover:bg-red-100"
+                            : urgent
+                              ? "bg-amber-50 hover:bg-amber-100"
+                              : "hover:bg-cloud/40";
+                          return (
+                        <tr key={c.conversation_id} className={`border-b cursor-pointer ${rowClass}`} onClick={() => setSelectedConv(c.conversation_id)}>
                           <td className="py-2 pr-3">
                             <div className="font-medium flex items-center gap-1.5">
                               {c.is_vip && <span title="Cliente VIP: 3+ ventas ganadas">⭐</span>}
@@ -865,11 +887,18 @@ export default function RevenuePage() {
                                     : <span className="text-red-700 font-medium">{c.avg_response_min}m</span>)
                               : <span className="text-graphite">—</span>}
                           </td>
-                          <td className="py-2 pr-3 whitespace-nowrap">{fmtRelative(c.last_message_at)}</td>
+                          <td className="py-2 pr-3 whitespace-nowrap">
+                            {isPending
+                              ? <span className={veryUrgent ? "text-red-700 font-semibold" : urgent ? "text-amber-700 font-medium" : ""}>
+                                  ⏱ {fmtRelative(c.last_message_at)}
+                                </span>
+                              : fmtRelative(c.last_message_at)}
+                          </td>
                           <td className="py-2 pr-3"><StatusBadge status={c.status} /></td>
                           <td className="py-2 pr-3"><StatusBadge status={c.lead_status || undefined} /></td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                   {!convsQ.data?.conversations?.length && (
