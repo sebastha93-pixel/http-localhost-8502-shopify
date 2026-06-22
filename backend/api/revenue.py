@@ -25,6 +25,30 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/revenue", tags=["revenue"])
 
 
+def _safe_exec(q, retries: int = 2, default=None):
+    """
+    Ejecuta una query Supabase con retry + backoff cuando httpx desconecta
+    el pool mid-stream (RemoteProtocolError: Server disconnected).
+    Retorna la data o `default` (típicamente []) tras agotar retries.
+    """
+    import time
+    last_exc = None
+    for i in range(retries + 1):
+        try:
+            return q.execute().data or (default if default is not None else [])
+        except Exception as e:
+            last_exc = e
+            msg = str(e).lower()
+            if "remoteprotocol" in msg or "disconnected" in msg or "server disconnected" in msg:
+                if i < retries:
+                    time.sleep(0.4 * (2 ** i))  # 0.4s, 0.8s
+                    continue
+            raise
+    if last_exc is not None:
+        log.warning(f"_safe_exec agotó retries: {last_exc}")
+    return default if default is not None else []
+
+
 # ── OAuth2 con Kommo (necesario para scope de chats) ─────────────────────────
 @router.get("/oauth/start")
 def oauth_start() -> RedirectResponse:
@@ -827,14 +851,14 @@ def list_conversations(
             return {"ok": True, "total": 0, "page": page, "page_size": page_size, "pages": 0, "conversations": []}
         q = q.in_("lead_id", lead_ids_filter)
 
-    # 3. Traemos un set amplio para hacer dedup por lead_id + filtros en Python.
-    # Cada lead puede tener varias conversations en nuestra DB (meta-wa-*, talk-*,
-    # lead-*) — pero el negocio piensa por LEAD, no por canal. Unificamos.
-    fetch_limit = 2000
+    # 3. Traemos un set acotado para dedup por lead_id + filtros en Python.
+    # Cada lead puede tener varias conversations (meta-wa-*, talk-*, lead-*),
+    # pero el negocio piensa por LEAD, no por canal.
+    # 800 es suficiente para 30 días reales y evita timeouts de Supabase.
+    fetch_limit = 800
     q = q.limit(fetch_limit)
 
-    res = q.execute()
-    convs_all = res.data or []
+    convs_all = _safe_exec(q, retries=2, default=[])
 
     # 4. Dedup por lead_id: nos quedamos con la conversation más reciente por lead.
     # Si no hay lead_id (raro), conservamos por conversation_id como fallback.
@@ -862,15 +886,17 @@ def list_conversations(
         # mensajes pueden estar en cualquiera de las conv del mismo lead.
         lead_ids_check = [c["lead_id"] for c in convs_dedup if c.get("lead_id")]
         leads_with_reply: set = set()
-        for i in range(0, len(lead_ids_check), 200):
-            batch = lead_ids_check[i:i+200]
+        # Batches más chicos (100) y limit más estricto (2000) para evitar
+        # que Supabase corte la conexión con result sets grandes.
+        for i in range(0, len(lead_ids_check), 100):
+            batch = lead_ids_check[i:i+100]
             try:
-                ms = (sb.table("messages")
-                        .select("lead_id,sender_type")
-                        .in_("lead_id", batch)
-                        .eq("sender_type", "advisor")
-                        .limit(5000)
-                        .execute().data) or []
+                q_msg = (sb.table("messages")
+                           .select("lead_id,sender_type")
+                           .in_("lead_id", batch)
+                           .eq("sender_type", "advisor")
+                           .limit(2000))
+                ms = _safe_exec(q_msg, retries=1, default=[])
                 for m in ms:
                     if m.get("lead_id"):
                         leads_with_reply.add(m["lead_id"])
@@ -1024,28 +1050,43 @@ def advisors_ranking(
     adv_q = sb.table("advisors").select("advisor_id,name,email,active")
     if not incluir_inactivos:
         adv_q = adv_q.eq("active", True)
-    advisors = adv_q.execute().data or []
-    convs = sb.table("conversations").select("conversation_id,advisor_id,lead_id,last_message_at,channel").gte("last_message_at", desde).execute().data or []
+    advisors = _safe_exec(adv_q, retries=2, default=[])
+    # Limit explícito: el ranking opera sobre conv recientes, 3000 cubre periodos
+    # razonables sin reventar el pool de Supabase.
+    convs_q = (sb.table("conversations")
+                 .select("conversation_id,advisor_id,lead_id,last_message_at,channel")
+                 .gte("last_message_at", desde)
+                 .order("last_message_at", desc=True)
+                 .limit(3000))
+    convs = _safe_exec(convs_q, retries=2, default=[])
     conv_ids = [c["conversation_id"] for c in convs]
     lead_ids = list({c["lead_id"] for c in convs if c.get("lead_id")})
     leads_map: dict = {}
     if lead_ids:
-        for batch_start in range(0, len(lead_ids), 200):
-            batch = lead_ids[batch_start:batch_start + 200]
-            for l in (sb.table("kommo_leads").select("lead_id,status,lead_value").in_("lead_id", batch).execute().data or []):
+        # Batches de 100 (era 200) — postgrest IN(...) clauses grandes hacen
+        # URLs que el load balancer corta.
+        for batch_start in range(0, len(lead_ids), 100):
+            batch = lead_ids[batch_start:batch_start + 100]
+            leads_q = (sb.table("kommo_leads")
+                         .select("lead_id,status,lead_value")
+                         .in_("lead_id", batch)
+                         .limit(200))
+            for l in _safe_exec(leads_q, retries=1, default=[]):
                 leads_map[l["lead_id"]] = l
 
-    # Mensajes para calcular: atendidas (≥1 msg de advisor) y tiempo de respuesta promedio
+    # Mensajes para calcular: atendidas + tiempo de respuesta promedio.
+    # Batches 50 (era 100) + limit 2000 (era 5000) para evitar
+    # RemoteProtocolError mid-stream.
     msgs_por_conv: dict = {}  # conv_id → lista de mensajes ordenados
     if conv_ids:
-        for batch_start in range(0, len(conv_ids), 100):
-            batch = conv_ids[batch_start:batch_start + 100]
-            ms = (sb.table("messages")
-                    .select("conversation_id,sender_type,sent_at")
-                    .in_("conversation_id", batch)
-                    .order("sent_at")
-                    .limit(5000).execute().data) or []
-            for m in ms:
+        for batch_start in range(0, len(conv_ids), 50):
+            batch = conv_ids[batch_start:batch_start + 50]
+            msgs_q = (sb.table("messages")
+                        .select("conversation_id,sender_type,sent_at")
+                        .in_("conversation_id", batch)
+                        .order("sent_at")
+                        .limit(2000))
+            for m in _safe_exec(msgs_q, retries=1, default=[]):
                 msgs_por_conv.setdefault(m["conversation_id"], []).append(m)
 
     by_advisor: dict = {}
