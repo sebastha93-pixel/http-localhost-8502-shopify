@@ -341,37 +341,63 @@ def coaching_para_asesora(advisor_id: str, days_back: int = 8) -> dict:
         for r in (raw.get("recomendaciones") or [])[:1]:
             recomendaciones.append(r)
 
-    # ── Casos problema: top 8 con peor score / mayor impacto, con snippet del
-    # momento crítico, recomendación y datos del lead para feedback accionable.
-    # SOLO mostramos casos donde Kommo confirma que la venta se perdió
-    # o donde el lead sigue en proceso con score bajo. Nunca casos ganados.
+    # ── Casos problema: top 8 con peor score / mayor impacto.
+    # REGLAS ESTRICTAS para que el feedback sea accionable y no muestre falsos
+    # positivos (audits donde Haiku se equivocó):
+    #   1. Excluir audits cuyo lead está GANADO en Kommo (won) — nunca son
+    #      caso problema aunque Haiku haya dicho "perdida".
+    #   2. Excluir audits sin lost_moment textual — sin frase concreta no hay
+    #      feedback accionable. main_loss_reason solo no basta (es genérico).
+    #   3. Etiquetar real_state explícito: "confirmado_perdida" (Kommo=lost),
+    #      "en_proceso" (Kommo abierto, Haiku dice mal), "sin_kommo" (lead
+    #      huérfano). El frontend usa esto para mostrar badge correcto en vez
+    #      de marcar todo como PERDIDA cuando aún no se sabe.
+    def _real_state(a: dict) -> str:
+        lead = lead_status_map.get(a.get("lead_id")) or {}
+        kst = (lead.get("status") or "").lower()
+        if kst == "won":   return "ganada_kommo"
+        if kst == "lost":  return "confirmado_perdida"
+        if kst:            return "en_proceso"
+        return "sin_kommo"
+
     def _score_caso(a: dict) -> float:
-        """Menor = peor. Usa Kommo como ground truth para clasificar."""
-        rc = _real_classification(a)
+        """Menor = peor."""
+        state = _real_state(a)
         overall = float(a.get("overall_score") or 5)
         impacto = float(a.get("economic_impact_estimate") or 0)
-        cls_weight = -100 if rc == "venta_perdida" else 0
+        cls_weight = -100 if state == "confirmado_perdida" else (-30 if state in ("en_proceso", "sin_kommo") else 0)
         impacto_weight = -min(impacto / 100_000, 50)
         return cls_weight + overall * 10 + impacto_weight
 
-    # Filtrar: NO incluimos ganadas (no son casos problema)
-    candidatas = [a for a in audits if _real_classification(a) != "venta_lograda"]
+    # Filtros estrictos.
+    n_filtrados_ganados = 0
+    n_filtrados_sin_snippet = 0
+    candidatas: list[dict] = []
+    for a in audits:
+        st = _real_state(a)
+        if st == "ganada_kommo":
+            n_filtrados_ganados += 1
+            continue
+        if not a.get("lost_moment"):
+            n_filtrados_sin_snippet += 1
+            continue
+        candidatas.append(a)
+
     peores = sorted(candidatas, key=_score_caso)[:8]
 
     casos_problema: list[dict] = []
     for a in peores:
-        if not (a.get("lost_moment") or a.get("main_loss_reason")):
-            continue  # sin contenido, no aporta para coaching
         lead = lead_status_map.get(a.get("lead_id")) or {}
-        real_rc = _real_classification(a)
+        state = _real_state(a)
         casos_problema.append({
             "conversation_id":      a.get("conversation_id"),
             "lead_id":               a.get("lead_id"),
             "customer_name":         lead.get("customer_name"),
             "customer_phone":        lead.get("customer_phone"),
             "lead_value":            lead.get("lead_value"),
-            "result_classification": real_rc,  # ground truth de Kommo
+            "result_classification": _real_classification(a),
             "kommo_status":          lead.get("status"),
+            "real_state":            state,
             "overall_score":         a.get("overall_score"),
             "main_loss_reason":      a.get("main_loss_reason"),
             "lost_moment":           a.get("lost_moment"),
@@ -449,6 +475,8 @@ Recomendaciones previas de las auditorías: {recomendaciones[:15]}
                 "impact_perdido_cop": int(impact_perdido),
                 "avg_overall": avg('overall_score'),
                 "n_mismatches_haiku_kommo": n_mismatches,
+                "n_filtrados_ganados":     n_filtrados_ganados,
+                "n_filtrados_sin_snippet": n_filtrados_sin_snippet,
             },
             "coaching": parsed,
             "casos_problema": casos_problema,

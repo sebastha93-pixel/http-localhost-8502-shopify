@@ -756,6 +756,7 @@ interface CasoProblema {
   lead_value?: number | null;
   result_classification?: string;
   kommo_status?: string | null;
+  real_state?: "confirmado_perdida" | "en_proceso" | "sin_kommo" | "ganada_kommo";
   overall_score?: number | null;
   main_loss_reason?: string | null;
   lost_moment?: string | null;
@@ -918,6 +919,17 @@ function CoachingTab({
                     {q.data.casos_problema.length} {q.data.casos_problema.length === 1 ? "caso" : "casos"} · click para ver conversación
                   </p>
                 </div>
+                {(q.data.stats?.n_filtrados_ganados > 0 || q.data.stats?.n_filtrados_sin_snippet > 0) && (
+                  <div className="mb-3 rounded-sm border border-border bg-cloud px-3 py-2 text-xs text-graphite">
+                    <strong className="text-ink-900">Filtros aplicados:</strong>{" "}
+                    {q.data.stats.n_filtrados_ganados > 0 && (
+                      <span>{q.data.stats.n_filtrados_ganados} caso{q.data.stats.n_filtrados_ganados === 1 ? "" : "s"} excluido{q.data.stats.n_filtrados_ganados === 1 ? "" : "s"} (en Kommo aparecen como GANADAS, no son problema). </span>
+                    )}
+                    {q.data.stats.n_filtrados_sin_snippet > 0 && (
+                      <span>{q.data.stats.n_filtrados_sin_snippet} sin snippet textual (necesitan re-auditoría para coaching útil).</span>
+                    )}
+                  </div>
+                )}
                 <div className="space-y-3">
                   {q.data.casos_problema.map((c: CasoProblema, i: number) => (
                     <CasoProblemaCard key={c.conversation_id || i} c={c} onOpen={onSelect} />
@@ -942,8 +954,10 @@ function CasoProblemaCard({
   c: CasoProblema;
   onOpen: (id: string) => void;
 }) {
-  const isLost = c.result_classification === "venta_perdida";
-  const isWon  = c.result_classification === "venta_lograda";
+  // real_state usa Kommo como verdad: 'confirmado_perdida' = lost en Kommo,
+  // 'en_proceso' = lead abierto pero Haiku marcó problema, 'sin_kommo' = huérfano.
+  // 'ganada_kommo' nunca debería llegar acá (filtrado en backend).
+  const state = c.real_state || (c.result_classification === "venta_perdida" ? "confirmado_perdida" : "en_proceso");
   const score = c.overall_score ?? null;
   const scoreColor =
     score === null ? "text-graphite" :
@@ -976,11 +990,9 @@ function CasoProblemaCard({
               {score}<span className="text-xs text-graphite">/10</span>
             </span>
           )}
-          {isLost && <Badge tone="critico">Perdida</Badge>}
-          {isWon  && <Badge tone="normal">Ganada</Badge>}
-          {!isLost && !isWon && c.result_classification && (
-            <Badge tone="riesgo">{c.result_classification.replace("_", " ")}</Badge>
-          )}
+          {state === "confirmado_perdida" && <Badge tone="critico">Perdida (Kommo)</Badge>}
+          {state === "en_proceso"         && <Badge tone="riesgo">En proceso</Badge>}
+          {state === "sin_kommo"          && <Badge tone="riesgo">Sin Kommo</Badge>}
           {c.haiku_vs_kommo_mismatch && (
             <span title="La IA y Kommo discreparon. Usamos Kommo como verdad." className="text-[0.65rem] text-ochre">⚠ IA discrepó</span>
           )}
