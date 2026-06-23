@@ -2494,16 +2494,47 @@ def diagnostico_data_quality(
     hoy_bog_start = now_bog.replace(hour=0, minute=0, second=0, microsecond=0)
     hoy_iso = hoy_bog_start.astimezone(timezone.utc).isoformat()
 
+    # Estrategia: consultar messages.sent_at >= midnight_bog (más confiable que
+    # conversations.last_message_at que solo se actualiza vía webhook Meta).
+    # Después hidratamos las conversaciones únicas con metadata.
     convs_hoy: list[dict] = []
+    msgs_hoy_por_conv: dict = {}  # conv_id -> {customer:n, advisor:n}
     try:
-        convs_hoy_q = (sb.table("conversations")
-                         .select("conversation_id,lead_id,advisor_id,channel,last_message_at,status,msgs_customer,msgs_advisor,avg_response_min")
-                         .gte("last_message_at", hoy_iso)
-                         .order("last_message_at", desc=True)
-                         .limit(500))
-        convs_hoy = _safe_exec(convs_hoy_q, retries=2, default=[])
-    except Exception:
-        pass
+        msgs_hoy_q = (sb.table("messages")
+                        .select("conversation_id,sender_type,sent_at")
+                        .gte("sent_at", hoy_iso)
+                        .order("sent_at", desc=True)
+                        .limit(3000))
+        msgs_hoy = _safe_exec(msgs_hoy_q, retries=2, default=[])
+        for m in msgs_hoy:
+            cid = m.get("conversation_id")
+            if not cid:
+                continue
+            row = msgs_hoy_por_conv.setdefault(cid, {"customer": 0, "advisor": 0, "first_at": None})
+            stype = (m.get("sender_type") or "").lower()
+            if stype == "customer":
+                row["customer"] += 1
+            elif stype in ("advisor", "agent"):
+                row["advisor"] += 1
+            row["first_at"] = m.get("sent_at")  # last in order=desc → más viejo
+
+        # Hidratar conversaciones únicas
+        conv_ids_hoy = list(msgs_hoy_por_conv.keys())
+        if conv_ids_hoy:
+            for i in range(0, len(conv_ids_hoy), 80):
+                batch = conv_ids_hoy[i:i+80]
+                cs_q = (sb.table("conversations")
+                          .select("conversation_id,lead_id,advisor_id,channel,last_message_at,status,avg_response_min")
+                          .in_("conversation_id", batch))
+                cs = _safe_exec(cs_q, retries=2, default=[])
+                for c in cs:
+                    cid = c["conversation_id"]
+                    mc = msgs_hoy_por_conv.get(cid, {})
+                    c["msgs_customer"] = mc.get("customer", 0)
+                    c["msgs_advisor"]  = mc.get("advisor", 0)
+                    convs_hoy.append(c)
+    except Exception as e:
+        log.warning(f"conversaciones_del_dia query fail: {e}")
 
     # Dedup por lead_id (un lead puede tener varios canales = 1 conversación
     # operativa). Si no hay lead_id, dedup por conversation_id.
