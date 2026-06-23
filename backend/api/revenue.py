@@ -1735,6 +1735,78 @@ def alertas_activas(
     return {"ok": True, "total": len(alertas), "alertas": alertas, "umbral_min": sin_respuesta_min}
 
 
+@router.get("/lead-fields-stats")
+def lead_fields_stats(
+    days_back: int = Query(30, ge=1, le=365),
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """Agrega valores de custom_fields_values de los leads en el período.
+
+    Lee la columna `raw` JSONB de kommo_leads (donde guardamos el lead crudo)
+    y extrae cada campo personalizado: fuente, campaña, talla, color, etc.
+    Útil para que el director comercial vea atribución y mix de producto.
+    """
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    desde = (datetime.now(tz=timezone.utc) - timedelta(days=days_back)).isoformat()
+
+    leads_q = (sb.table("kommo_leads")
+                 .select("lead_id,status,lead_value,raw,created_at")
+                 .gte("created_at", desde)
+                 .order("created_at", desc=True)
+                 .limit(3000))
+    leads = _safe_exec(leads_q, retries=2, default=[])
+
+    # Estructura: { field_name: { value: { count, won, revenue } } }
+    by_field: dict = {}
+    n_con_custom_fields = 0
+    for l in leads:
+        raw = l.get("raw") or {}
+        cfv = raw.get("custom_fields_values") or []
+        if cfv:
+            n_con_custom_fields += 1
+        is_won = l.get("status") == "won"
+        revenue = float(l.get("lead_value") or 0) if is_won else 0
+        for f in cfv:
+            fname = f.get("field_name") or f.get("field_code") or "—"
+            vals = f.get("values") or []
+            for v in vals:
+                vraw = v.get("value")
+                if vraw is None:
+                    continue
+                vstr = str(vraw)[:100]
+                bucket = by_field.setdefault(fname, {})
+                row = bucket.setdefault(vstr, {"count": 0, "won": 0, "revenue": 0.0})
+                row["count"] += 1
+                if is_won:
+                    row["won"] += 1
+                    row["revenue"] += revenue
+
+    # Top 10 valores por field, calcular conv_rate
+    resumen: dict = {}
+    for fname, valores in by_field.items():
+        rows = []
+        for vstr, stats in valores.items():
+            rows.append({
+                "value": vstr,
+                "count": stats["count"],
+                "won":   stats["won"],
+                "revenue": int(stats["revenue"]),
+                "conv_rate": round(100 * stats["won"] / stats["count"], 1) if stats["count"] else 0,
+            })
+        rows.sort(key=lambda r: r["count"], reverse=True)
+        resumen[fname] = rows[:10]
+
+    return {
+        "ok": True,
+        "periodo_dias":             days_back,
+        "leads_analizados":         len(leads),
+        "leads_con_custom_fields":  n_con_custom_fields,
+        "campos":                   resumen,
+    }
+
+
 @router.get("/tendencias")
 def tendencias(
     days_back: int = Query(30, ge=1, le=365),
@@ -2185,6 +2257,115 @@ def sync_advisors_endpoint(
 ) -> dict:
     """Trae asesoras de Kommo y las puebla en advisors. Idempotente."""
     return kommo_svc.sync_advisors()
+
+
+@router.post("/dedupe-conversations")
+def dedupe_conversations(
+    dry_run: bool = Query(True, description="True = solo reporta. False = ejecuta merge."),
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Consolida conversations duplicadas para un mismo lead_id.
+
+    Regla de merge: para cada lead_id con >1 conversation, se queda con UNA
+    (preferencia: talk-* más reciente > meta-* más reciente). Los mensajes
+    de las otras se reasignan a la canónica y luego se borran las duplicadas.
+
+    Por default es dry_run=True (solo reporta). Pasa dry_run=false para ejecutar.
+    """
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+
+    # 1. Conversations agrupadas por lead_id (sólo las que tienen lead_id).
+    page = 0
+    per_page = 1000
+    todas: list[dict] = []
+    while True:
+        q = (sb.table("conversations")
+               .select("conversation_id,lead_id,last_message_at")
+               .not_.is_("lead_id", "null")
+               .order("last_message_at", desc=True)
+               .range(page * per_page, page * per_page + per_page - 1))
+        rows = _safe_exec(q, retries=2, default=[])
+        if not rows:
+            break
+        todas.extend(rows)
+        if len(rows) < per_page:
+            break
+        page += 1
+        if page > 50:  # safety cap 50k convs
+            break
+
+    por_lead: dict = {}
+    for c in todas:
+        por_lead.setdefault(c["lead_id"], []).append(c)
+
+    grupos_duplicados = {lid: convs for lid, convs in por_lead.items() if len(convs) > 1}
+
+    def _prio(conv: dict) -> tuple:
+        """Mayor = mejor. Prefiere talk-* > meta-* > otros y más reciente."""
+        cid = conv["conversation_id"] or ""
+        kind = 2 if cid.startswith("talk-") else (1 if cid.startswith("meta-") else 0)
+        return (kind, conv.get("last_message_at") or "")
+
+    n_leads_afectados = len(grupos_duplicados)
+    n_convs_a_borrar = sum(len(g) - 1 for g in grupos_duplicados.values())
+    samples = []
+    for lid, convs in list(grupos_duplicados.items())[:5]:
+        ordenadas = sorted(convs, key=_prio, reverse=True)
+        samples.append({
+            "lead_id": lid,
+            "canónica": ordenadas[0]["conversation_id"],
+            "duplicadas": [c["conversation_id"] for c in ordenadas[1:]],
+        })
+
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "leads_con_duplicados": n_leads_afectados,
+            "conversations_a_borrar": n_convs_a_borrar,
+            "ejemplos": samples,
+            "siguiente": "Re-ejecuta con dry_run=false para aplicar.",
+        }
+
+    # 2. Ejecutar merge.
+    n_msgs_reasignados = 0
+    n_convs_borradas = 0
+    errores: list[str] = []
+    for lid, convs in grupos_duplicados.items():
+        ordenadas = sorted(convs, key=_prio, reverse=True)
+        canon = ordenadas[0]["conversation_id"]
+        dupes = [c["conversation_id"] for c in ordenadas[1:]]
+        try:
+            # Reasignar mensajes de las dupes a la canónica.
+            for dupe in dupes:
+                try:
+                    upd = (sb.table("messages")
+                             .update({"conversation_id": canon})
+                             .eq("conversation_id", dupe)
+                             .execute())
+                    n_msgs_reasignados += len(upd.data or [])
+                except Exception as e:
+                    errores.append(f"msgs {dupe}: {str(e)[:120]}")
+            # Borrar las conversations duplicadas.
+            for dupe in dupes:
+                try:
+                    sb.table("conversations").delete().eq("conversation_id", dupe).execute()
+                    n_convs_borradas += 1
+                except Exception as e:
+                    errores.append(f"del {dupe}: {str(e)[:120]}")
+        except Exception as e:
+            errores.append(f"lead {lid}: {str(e)[:120]}")
+
+    return {
+        "ok": True,
+        "dry_run": False,
+        "leads_consolidados":       n_leads_afectados,
+        "conversations_borradas":   n_convs_borradas,
+        "mensajes_reasignados":     n_msgs_reasignados,
+        "errores":                  errores[:10],
+    }
 
 
 @router.post("/sync/leads")

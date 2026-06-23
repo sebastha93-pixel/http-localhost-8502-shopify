@@ -682,7 +682,67 @@ function TendenciasTab({ daysBack }: { daysBack: number }) {
           </p>
         </CardContent>
       </Card>
+
+      {/* CAMPOS PERSONALIZADOS DEL LEAD (fuente, campaña, talla, color, etc.) */}
+      <LeadFieldsCard daysBack={daysBack} />
     </div>
+  );
+}
+
+function LeadFieldsCard({ daysBack }: { daysBack: number }) {
+  const q = useQuery<any>({
+    queryKey: ["revenue", "lead-fields-stats", daysBack],
+    queryFn: () => api.get(`/api/revenue/lead-fields-stats?days_back=${daysBack}`),
+  });
+  if (q.isLoading) return null;
+  if (q.isError || !q.data?.ok) return null;
+  const campos = q.data.campos || {};
+  const fieldNames = Object.keys(campos);
+  if (fieldNames.length === 0) return null;
+  return (
+    <Card>
+      <CardContent className="p-5">
+        <div className="mb-3 flex items-baseline justify-between">
+          <p className="section-label">Atribución y mix de leads — campos personalizados de Kommo</p>
+          <p className="text-[0.65rem] text-graphite">
+            {q.data.leads_analizados} leads · {q.data.leads_con_custom_fields} con campos
+          </p>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          {fieldNames.map((fname) => (
+            <div key={fname} className="rounded-sm border border-border bg-card p-3">
+              <p className="mb-2 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">{fname}</p>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="text-left py-1 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Valor</th>
+                    <th className="text-right py-1 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Leads</th>
+                    <th className="text-right py-1 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Ganados</th>
+                    <th className="text-right py-1 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">% Conv.</th>
+                    <th className="text-right py-1 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Revenue</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {campos[fname].map((row: any, i: number) => (
+                    <tr key={i} className="border-b border-border">
+                      <td className="py-1 text-ink-900 truncate max-w-[14rem]">{row.value}</td>
+                      <td className="py-1 text-right tabular">{row.count}</td>
+                      <td className="py-1 text-right tabular text-sage">{row.won}</td>
+                      <td className={`py-1 text-right tabular font-medium ${row.conv_rate >= 30 ? "text-sage" : row.conv_rate >= 10 ? "text-ochre" : "text-terracotta"}`}>
+                        {row.conv_rate}%
+                      </td>
+                      <td className="py-1 text-right tabular text-graphite whitespace-nowrap">
+                        {row.revenue > 0 ? `$${Math.round(row.revenue / 1000)}K` : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
