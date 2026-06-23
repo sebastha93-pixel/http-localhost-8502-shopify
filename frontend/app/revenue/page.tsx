@@ -1289,9 +1289,11 @@ export default function RevenuePage() {
                     </thead>
                     <tbody>
                       {(advisorsQ.data?.rows || []).map((r, i) => (
-                        <tr key={r.advisor_id} className={`border-b border-border ${i === 0 ? "stitch-rail bg-ochre/[0.04]" : ""}`}>
-                          <td className="py-2.5 pr-3 pl-3 font-display tabular text-base text-ink-900">{i + 1}</td>
-                          <td className="py-2.5 pr-3">
+                        <tr key={r.advisor_id} className={`border-b border-border ${i === 0 ? "bg-ochre/[0.04]" : ""}`}>
+                          <td className={`py-2.5 pr-3 pl-3 font-display tabular text-base text-ink-900 ${i === 0 ? "border-l-2 border-l-selvedge text-ochre font-medium" : ""}`}>
+                            {i + 1}
+                          </td>
+                          <td className="py-2.5 pr-3 text-left align-middle">
                             <p className="font-medium text-ink-900">{r.name}</p>
                             <p className="text-[0.7rem] text-graphite">{r.email}</p>
                           </td>
