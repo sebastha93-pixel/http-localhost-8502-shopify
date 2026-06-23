@@ -65,10 +65,11 @@ const NAV: { home: NavItem; groups: NavGroup[] } = {
     {
       title: "Configuración",
       items: [
-        { label: "Configuración", href: "/configuracion" },
-        { label: "Usuarios",      href: "/usuarios" },
-        { label: "Auditoría",     href: "/auditoria" },
-        { label: "Integraciones", href: "/integraciones" },
+        { label: "Configuración",       href: "/configuracion" },
+        { label: "Usuarios",            href: "/usuarios" },
+        { label: "Auditoría",           href: "/auditoria" },
+        { label: "Diagnóstico Revenue", href: "/diagnostico-revenue" },
+        { label: "Integraciones",       href: "/integraciones" },
       ],
     },
   ],
@@ -79,7 +80,7 @@ export function Sidebar() {
   const { user } = useAuth();
 
   // Filtra grupo Configuración: "Usuarios" y "Auditoría" solo para admin
-  const ADMIN_ONLY = ["/usuarios", "/auditoria"];
+  const ADMIN_ONLY = ["/usuarios", "/auditoria", "/diagnostico-revenue"];
   const groups = NAV.groups.map((g) => ({
     ...g,
     items: g.items.filter((it) => !ADMIN_ONLY.includes(it.href) || esAdmin(user)),
