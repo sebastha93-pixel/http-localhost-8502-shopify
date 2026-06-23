@@ -1272,16 +1272,13 @@ ${asesoras || "  · sin asignaciones"}`;
         onSelect={setSelectedConv}
       />
 
-      {/* KPI STRIP */}
+      {/* KPI STRIP — solo totales históricos. Las métricas del día viven en el briefing. */}
       <KpiStrip
         items={[
           { label: "Asesoras en línea", value: statsQ.isLoading ? "…" : (stats?.advisors ?? 0) },
-          { label: "Leads",             value: statsQ.isLoading ? "…" : (stats?.leads ?? 0).toLocaleString("es-CO") },
-          { label: "Conversaciones",    value: statsQ.isLoading ? "…" : (stats?.conversations ?? 0).toLocaleString("es-CO") },
-          { label: `Mensajes ${daysBack === 1 ? "hoy" : daysBack === 2 ? "48h" : `${daysBack}d`}`,
-            value: msgsStatsQ.isLoading ? "…" : (msgsStatsQ.data?.total_mensajes ?? 0).toLocaleString("es-CO") },
-          { label: "Mensajes (total)",  value: statsQ.isLoading ? "…" : (stats?.messages ?? 0).toLocaleString("es-CO") },
-          { label: "Por auditar",       value: statsQ.isLoading ? "…" : (stats?.pending_audits ?? 0).toLocaleString("es-CO"),
+          { label: "Leads (total)",    value: statsQ.isLoading ? "…" : (stats?.leads ?? 0).toLocaleString("es-CO") },
+          { label: "Mensajes (total)", value: statsQ.isLoading ? "…" : (stats?.messages ?? 0).toLocaleString("es-CO") },
+          { label: "Por auditar",      value: statsQ.isLoading ? "…" : (stats?.pending_audits ?? 0).toLocaleString("es-CO"),
             tone: (stats?.pending_audits ?? 0) > 10 ? "danger" : "default" },
         ]}
       />
