@@ -215,8 +215,46 @@ def sync_talks(full: bool = False, limit_total: int = 5000) -> dict:
 
             started_ts = talk.get("created_at")
             updated_ts = talk.get("updated_at")
+            talk_conv_id = f"talk-{talk['talk_id']}"
+
+            # ── Unificación Meta↔Kommo: si ya existe un conversation meta-wa-*
+            # asociado a este lead, NO crear duplicado talk-*. En su lugar,
+            # actualizar el meta-* con el lead_id/advisor_id correctos. Esto
+            # evita la duplicación clásica donde Meta crea meta-wa-* primero y
+            # Kommo crea talk-* después para el mismo lead.
+            existing_meta_conv: Optional[str] = None
+            try:
+                eq = (sb.table("conversations")
+                        .select("conversation_id")
+                        .eq("lead_id", lead_id)
+                        .like("conversation_id", "meta-%")
+                        .order("last_message_at", desc=True)
+                        .limit(1)
+                        .execute())
+                if eq.data:
+                    existing_meta_conv = eq.data[0]["conversation_id"]
+            except Exception:
+                pass
+
+            if existing_meta_conv:
+                # Hidratar el meta-* con datos de Kommo (status, channel mejor)
+                try:
+                    sb.table("conversations").update({
+                        "advisor_id":      adv,
+                        "channel":         talk.get("origin") or "unknown",
+                        "status":          talk.get("status"),
+                        "last_message_at": datetime.fromtimestamp(int(updated_ts), tz=timezone.utc).isoformat() if updated_ts else None,
+                        "synced_at":       datetime.now(tz=timezone.utc).isoformat(),
+                    }).eq("conversation_id", existing_meta_conv).execute()
+                    upserted += 1
+                except Exception as e:
+                    upsert_failed += 1
+                    if len(sample_errors) < 3:
+                        sample_errors.append(f"merge-talk={talk.get('talk_id')} into {existing_meta_conv}: {str(e)[:200]}")
+                continue
+
             conv = {
-                "conversation_id":  f"talk-{talk['talk_id']}",
+                "conversation_id":  talk_conv_id,
                 "lead_id":          lead_id,
                 "advisor_id":       adv,
                 "channel":          talk.get("origin") or "unknown",
