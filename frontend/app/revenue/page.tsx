@@ -68,6 +68,11 @@ interface AdvisorRow {
   conversion_rate: number | null;
   last_activity: string | null;
   channels: Record<string, number>;
+  // Métricas extendidas
+  atendidas_24h?: number;
+  dormidos_48h?: number;
+  avg_edad_cierre_dias?: number | null;
+  cierre_por_canal?: Record<string, number | null>;
 }
 
 interface MessageRow {
@@ -1681,7 +1686,7 @@ ${asesoras || "  · sin asignaciones"}`;
                   <table className="min-w-full text-sm">
                     <thead>
                       <tr className="border-b border-border text-left">
-                        {["#", "Asesora", "Asignadas", "Atendidas", "% Resp.", "Ganadas", "Perdidas", "% Conv.", "Ticket prom.", "Tiempo resp.", "Último activo"].map(h => (
+                        {["#", "Asesora", "Asignadas", "Atendidas", "Atend. 24h", "Dormidos 48h", "% Resp.", "Ganadas", "Perdidas", "% Conv.", "Ticket prom.", "Tiempo resp.", "Edad cierre", "Último activo"].map(h => (
                           <th key={h} className="py-2 pr-3 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
                             {h}
                           </th>
@@ -1700,6 +1705,10 @@ ${asesoras || "  · sin asignaciones"}`;
                           </td>
                           <td className="py-2.5 pr-3 tabular">{r.asignadas ?? r.conversations}</td>
                           <td className="py-2.5 pr-3 tabular">{r.atendidas ?? 0}</td>
+                          <td className="py-2.5 pr-3 tabular">{r.atendidas_24h ?? 0}</td>
+                          <td className={`py-2.5 pr-3 tabular ${(r.dormidos_48h ?? 0) > 0 ? "text-terracotta font-medium" : "text-graphite"}`}>
+                            {r.dormidos_48h ?? 0}
+                          </td>
                           <td className="py-2.5 pr-3 tabular font-medium">{r.response_rate != null ? `${r.response_rate}%` : "—"}</td>
                           <td className="py-2.5 pr-3 tabular text-sage">{r.won}</td>
                           <td className="py-2.5 pr-3 tabular text-terracotta">{r.lost}</td>
@@ -1713,6 +1722,9 @@ ${asesoras || "  · sin asignaciones"}`;
                                 ? `${r.avg_response_min}m`
                                 : `${(r.avg_response_min / 60).toFixed(1)}h`
                               : "—"}
+                          </td>
+                          <td className="py-2.5 pr-3 tabular whitespace-nowrap text-graphite">
+                            {r.avg_edad_cierre_dias != null ? `${r.avg_edad_cierre_dias}d` : "—"}
                           </td>
                           <td className="py-2.5 pr-3 tabular whitespace-nowrap text-graphite">
                             {fmtRelative(r.last_activity)}

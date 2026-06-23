@@ -1127,6 +1127,22 @@ def advisors_ranking(
             for m in _safe_exec(msgs_q, retries=1, default=[]):
                 msgs_por_conv.setdefault(m["conversation_id"], []).append(m)
 
+    # Ampliar campos traídos del lead para métricas adicionales.
+    if lead_ids:
+        leads_map = {}
+        for batch_start in range(0, len(lead_ids), 100):
+            batch = lead_ids[batch_start:batch_start + 100]
+            leads_q = (sb.table("kommo_leads")
+                         .select("lead_id,status,lead_value,created_at,closed_at")
+                         .in_("lead_id", batch)
+                         .limit(200))
+            for l in _safe_exec(leads_q, retries=1, default=[]):
+                leads_map[l["lead_id"]] = l
+
+    now_utc = datetime.now(tz=timezone.utc)
+    cutoff_24h = (now_utc - timedelta(hours=24)).isoformat()
+    cutoff_48h = (now_utc - timedelta(hours=48)).isoformat()
+
     by_advisor: dict = {}
     for c in convs:
         adv_id = c.get("advisor_id")
@@ -1136,19 +1152,44 @@ def advisors_ranking(
             "asignadas": 0, "atendidas": 0, "won": 0, "lost": 0, "in_progress": 0,
             "revenue_ganado": 0.0, "last_activity": None, "channels": {},
             "response_times_seg": [],
+            # Nuevas métricas
+            "atendidas_24h": 0,
+            "dormidos_48h":  0,
+            "edades_cierre_dias": [],
+            "cierre_por_canal": {},  # canal → {won, lost}
         })
         r["asignadas"] += 1
-        ch = c.get("channel") or "unknown"
-        r["channels"][ch] = r["channels"].get(ch, 0) + 1
+        ch_raw = (c.get("channel") or "unknown").lower()
+        if "waba" in ch_raw or "whatsapp" in ch_raw or ch_raw == "wa": ch_norm = "WhatsApp"
+        elif "instagram" in ch_raw or ch_raw == "ig" or ch_raw == "dm": ch_norm = "Instagram"
+        elif "messenger" in ch_raw or "facebook" in ch_raw: ch_norm = "Messenger"
+        elif "tiktok" in ch_raw: ch_norm = "TikTok"
+        else: ch_norm = ch_raw.capitalize() or "Otro"
+        r["channels"][ch_norm] = r["channels"].get(ch_norm, 0) + 1
+
         lead = leads_map.get(c.get("lead_id")) or {}
         st = lead.get("status")
+        cierre_canal = r["cierre_por_canal"].setdefault(ch_norm, {"won": 0, "lost": 0})
         if st == "won":
             r["won"] += 1
             r["revenue_ganado"] += float(lead.get("lead_value") or 0)
+            cierre_canal["won"] += 1
+            # Antigüedad lead al cerrar (días)
+            try:
+                if lead.get("created_at") and lead.get("closed_at"):
+                    c_dt = datetime.fromisoformat(lead["created_at"].replace("Z", "+00:00"))
+                    f_dt = datetime.fromisoformat(lead["closed_at"].replace("Z", "+00:00"))
+                    edad_dias = (f_dt - c_dt).total_seconds() / 86400
+                    if 0 < edad_dias < 365:
+                        r["edades_cierre_dias"].append(edad_dias)
+            except Exception:
+                pass
         elif st == "lost":
             r["lost"] += 1
+            cierre_canal["lost"] += 1
         else:
             r["in_progress"] += 1
+
         lm = c.get("last_message_at")
         if lm and (r["last_activity"] is None or lm > r["last_activity"]):
             r["last_activity"] = lm
@@ -1158,6 +1199,15 @@ def advisors_ranking(
         tiene_advisor_msg = any(m.get("sender_type") == "advisor" for m in ms)
         if tiene_advisor_msg:
             r["atendidas"] += 1
+            # Atendidas en últimas 24h
+            ultimo_advisor = max((m.get("sent_at", "") for m in ms if m.get("sender_type") == "advisor"), default="")
+            if ultimo_advisor and ultimo_advisor >= cutoff_24h:
+                r["atendidas_24h"] += 1
+
+        # Lead "dormido": último mensaje > 48h y sin cerrar (in_progress)
+        if st not in ("won", "lost") and lm and lm < cutoff_48h:
+            r["dormidos_48h"] += 1
+
         # Tiempo de respuesta: ms del primer mensaje advisor después de un customer
         last_customer_ts = None
         for m in ms:
@@ -1181,36 +1231,47 @@ def advisors_ranking(
         s = by_advisor.get(adv["advisor_id"], {
             "asignadas": 0, "atendidas": 0, "won": 0, "lost": 0, "in_progress": 0,
             "revenue_ganado": 0.0, "last_activity": None, "channels": {},
-            "response_times_seg": [],
+            "response_times_seg": [], "atendidas_24h": 0, "dormidos_48h": 0,
+            "edades_cierre_dias": [], "cierre_por_canal": {},
         })
         cerradas = s["won"] + s["lost"]
         conv_rate = round(100 * s["won"] / cerradas, 1) if cerradas else None
-        # Tasa de respuesta: cuántas conversaciones recibió y efectivamente atendió
         response_rate = round(100 * s["atendidas"] / s["asignadas"], 1) if s["asignadas"] else None
-        # Ticket promedio de las ganadas
         ticket_promedio = round(s["revenue_ganado"] / s["won"], 0) if s["won"] else None
-        # Tiempo de respuesta promedio (minutos)
         rts = s["response_times_seg"]
         avg_response_min = round(sum(rts) / len(rts) / 60, 1) if rts else None
+        # Antigüedad promedio del lead al cerrar (días)
+        edades = s["edades_cierre_dias"]
+        avg_edad_cierre_dias = round(sum(edades) / len(edades), 1) if edades else None
+        # Tasa de cierre por canal: %win en cada uno
+        cierre_canal_rate = {
+            ch: round(100 * v["won"] / (v["won"] + v["lost"]), 1) if (v["won"] + v["lost"]) else None
+            for ch, v in s["cierre_por_canal"].items()
+        }
         rows.append({
-            "advisor_id":         adv["advisor_id"],
-            "name":               adv["name"],
-            "email":              adv.get("email"),
-            "active":             adv.get("active"),
-            "asignadas":          s["asignadas"],
-            "atendidas":          s["atendidas"],
-            "won":                s["won"],
-            "lost":               s["lost"],
-            "in_progress":        s["in_progress"],
-            "response_rate":      response_rate,
-            "conversion_rate":    conv_rate,
-            "revenue_ganado":     s["revenue_ganado"],
-            "ticket_promedio":    ticket_promedio,
-            "avg_response_min":   avg_response_min,
-            "last_activity":      s["last_activity"],
-            "channels":           s["channels"],
-            # Compat: alias para no romper frontend que ya consume "conversations"
-            "conversations":      s["asignadas"],
+            "advisor_id":          adv["advisor_id"],
+            "name":                adv["name"],
+            "email":               adv.get("email"),
+            "active":              adv.get("active"),
+            "asignadas":           s["asignadas"],
+            "atendidas":           s["atendidas"],
+            "won":                 s["won"],
+            "lost":                s["lost"],
+            "in_progress":         s["in_progress"],
+            "response_rate":       response_rate,
+            "conversion_rate":     conv_rate,
+            "revenue_ganado":      s["revenue_ganado"],
+            "ticket_promedio":     ticket_promedio,
+            "avg_response_min":    avg_response_min,
+            "last_activity":       s["last_activity"],
+            "channels":            s["channels"],
+            # Nuevas métricas
+            "atendidas_24h":       s["atendidas_24h"],
+            "dormidos_48h":        s["dormidos_48h"],
+            "avg_edad_cierre_dias": avg_edad_cierre_dias,
+            "cierre_por_canal":    cierre_canal_rate,
+            # Compat
+            "conversations":       s["asignadas"],
         })
     rows.sort(key=lambda r: (r["won"], r["asignadas"]), reverse=True)
     return {"ok": True, "total": len(rows), "rows": rows, "days_back": days_back}
