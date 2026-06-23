@@ -1048,6 +1048,13 @@ function CalcularRankingsBtn({ daysBack }: { daysBack: number }) {
 
 export default function RevenuePage() {
   const [daysBack, setDaysBack] = useState(1);
+  // Override de ventana en horas (1h, 4h, 12h). null = usar daysBack normal.
+  const [hoursBack, setHoursBack] = useState<number | null>(null);
+  // Helper para queries: arma string de query params según la ventana activa.
+  const windowParams = hoursBack !== null
+    ? `hours_back=${hoursBack}`
+    : `days_back=${daysBack}`;
+  const windowKey = hoursBack !== null ? `h${hoursBack}` : `d${daysBack}`;
   const [advisorFilter, setAdvisorFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [channelFilter, setChannelFilter] = useState<string>("");
@@ -1085,14 +1092,15 @@ export default function RevenuePage() {
     page_size: number;
     pages: number;
   }>({
-    queryKey: ["revenue", "conversations", daysBack, advisorFilter, statusFilter, channelFilter, convSearch, replyFilter, convPage],
+    queryKey: ["revenue", "conversations", windowKey, advisorFilter, statusFilter, channelFilter, convSearch, replyFilter, convPage],
     enabled: activeTab === "conversaciones",
     queryFn: () => {
       const params = new URLSearchParams({
-        days_back: String(daysBack),
         page: String(convPage),
         page_size: "50",
       });
+      if (hoursBack !== null) params.set("hours_back", String(hoursBack));
+      else params.set("days_back", String(daysBack));
       if (advisorFilter) params.set("advisor_id", advisorFilter);
       if (statusFilter) params.set("status", statusFilter);
       if (channelFilter) params.set("channel", channelFilter);
@@ -1104,14 +1112,14 @@ export default function RevenuePage() {
 
   // Query separada para el hero — siempre pendientes top 4, no depende de filtros visibles
   const fugasQ = useQuery<{ conversations: Conversation[] }>({
-    queryKey: ["revenue", "fugas", daysBack],
-    queryFn: () => api.get(`/api/revenue/conversations?days_back=${daysBack}&reply_filter=pending&page=1&page_size=25`),
+    queryKey: ["revenue", "fugas", windowKey],
+    queryFn: () => api.get(`/api/revenue/conversations?${windowParams}&reply_filter=pending&page=1&page_size=25`),
     refetchInterval: 60_000,
   });
 
   const advisorsQ = useQuery<{ rows: AdvisorRow[]; total: number }>({
-    queryKey: ["revenue", "advisors", "ranking", daysBack],
-    queryFn: () => api.get(`/api/revenue/advisors/ranking?days_back=${daysBack}`),
+    queryKey: ["revenue", "advisors", "ranking", windowKey],
+    queryFn: () => api.get(`/api/revenue/advisors/ranking?${windowParams}`),
     refetchInterval: 60_000,
     // Siempre habilitado: los chips de asesoras en el header funcionan en todas las pestañas.
   });
@@ -1124,8 +1132,11 @@ export default function RevenuePage() {
   });
 
   const msgsStatsQ = useQuery<any>({
-    queryKey: ["revenue", "messages", "stats", daysBack],
-    queryFn: () => api.get(`/api/revenue/messages/stats?days_back=${Math.min(daysBack, 30)}`),
+    queryKey: ["revenue", "messages", "stats", windowKey],
+    queryFn: () => {
+      if (hoursBack !== null) return api.get(`/api/revenue/messages/stats?hours_back=${hoursBack}`);
+      return api.get(`/api/revenue/messages/stats?days_back=${Math.min(daysBack, 30)}`);
+    },
     refetchInterval: 60_000,
   });
 
@@ -1339,25 +1350,38 @@ ${asesoras || "  · sin asignaciones"}`;
       {/* SELECTOR DE PERÍODO */}
       <div className="flex flex-wrap items-center gap-3">
         <label className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Periodo</label>
-        <div className="inline-flex rounded-sm border border-border bg-card overflow-hidden">
-          {[
-            [1,   "Hoy"],
-            [2,   "48h"],
-            [7,   "7d"],
-            [30,  "30d"],
-            [90,  "90d"],
-            [365, "1 año"],
-          ].map(([v, l]) => {
-            const active = daysBack === (v as number);
+        <div className="inline-flex rounded-sm border border-border bg-card overflow-hidden flex-wrap">
+          {([
+            { type: "h", v: 1,    l: "1h"   },
+            { type: "h", v: 4,    l: "4h"   },
+            { type: "h", v: 12,   l: "12h"  },
+            { type: "d", v: 1,    l: "Hoy"  },
+            { type: "d", v: 2,    l: "48h"  },
+            { type: "d", v: 7,    l: "7d"   },
+            { type: "d", v: 30,   l: "30d"  },
+            { type: "d", v: 90,   l: "90d"  },
+            { type: "d", v: 365,  l: "1 año"},
+          ] as const).map((opt) => {
+            const active = opt.type === "h"
+              ? hoursBack === opt.v
+              : (hoursBack === null && daysBack === opt.v);
             return (
               <button
-                key={v as number}
-                onClick={() => setDaysBack(v as number)}
+                key={`${opt.type}${opt.v}`}
+                onClick={() => {
+                  if (opt.type === "h") {
+                    setHoursBack(opt.v);
+                  } else {
+                    setHoursBack(null);
+                    setDaysBack(opt.v);
+                  }
+                  setConvPage(1);
+                }}
                 className={`px-3 py-1.5 text-xs font-medium transition-colors ${
                   active ? "bg-ink-900 text-white" : "text-graphite hover:bg-cloud"
                 }`}
               >
-                {l}
+                {opt.l}
               </button>
             );
           })}

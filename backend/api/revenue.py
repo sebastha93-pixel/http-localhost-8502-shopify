@@ -816,6 +816,7 @@ def list_conversations(
     status: str | None = Query(None, description="in_work|closed"),
     channel: str | None = Query(None),
     days_back: int = Query(30, ge=1, le=365),
+    hours_back: float | None = Query(None, gt=0, le=8760, description="Si se pasa, override days_back: ventana rolling de N horas desde ahora (ej. 1, 4, 12)."),
     search: str | None = Query(None, description="Búsqueda por nombre/teléfono/lead_id"),
     reply_filter: str | None = Query(
         None,
@@ -826,15 +827,19 @@ def list_conversations(
     _: CurrentUser = Depends(require_role("admin", "operador")),
 ) -> dict:
     """Lista de conversations con filtros + paginación + búsqueda + filtro respondidas.
-    'Hoy' (days_back=1) = desde 00:00 Bogotá hasta ahora."""
+    'Hoy' (days_back=1) = desde 00:00 Bogotá hasta ahora.
+    Si se pasa hours_back, usa ventana rolling de N horas en vez de anchor a medianoche."""
     sb = db._sb()
     if sb is None:
         raise HTTPException(503, "Supabase no configurado")
     from zoneinfo import ZoneInfo
     TZ_BOG = ZoneInfo("America/Bogota")
     now_bog = datetime.now(tz=TZ_BOG)
-    start_bog = now_bog.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_back - 1)
-    desde = start_bog.astimezone(timezone.utc).isoformat()
+    if hours_back is not None:
+        desde = (datetime.now(tz=timezone.utc) - timedelta(hours=hours_back)).isoformat()
+    else:
+        start_bog = now_bog.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_back - 1)
+        desde = start_bog.astimezone(timezone.utc).isoformat()
 
     # 1. Si hay search, primero matchear leads por nombre/teléfono.
     lead_ids_filter: list[int] | None = None
@@ -1065,15 +1070,18 @@ def list_conversations(
 @router.get("/advisors/ranking")
 def advisors_ranking(
     days_back: int = Query(30, ge=1, le=365),
+    hours_back: float | None = Query(None, gt=0, le=8760, description="Override days_back: ventana rolling de N horas."),
     incluir_inactivos: bool = Query(False),
     _: CurrentUser = Depends(require_role("admin", "operador")),
 ) -> dict:
-    """Ranking de asesores: conversaciones, won/lost, tasa, último activo.
-    Por defecto solo asesoras activas. Use incluir_inactivos=true para ver todas."""
+    """Ranking de asesores: conversaciones, won/lost, tasa, último activo."""
     sb = db._sb()
     if sb is None:
         raise HTTPException(503, "Supabase no configurado")
-    desde = (datetime.now(tz=timezone.utc) - timedelta(days=days_back)).isoformat()
+    if hours_back is not None:
+        desde = (datetime.now(tz=timezone.utc) - timedelta(hours=hours_back)).isoformat()
+    else:
+        desde = (datetime.now(tz=timezone.utc) - timedelta(days=days_back)).isoformat()
 
     adv_q = sb.table("advisors").select("advisor_id,name,email,active")
     if not incluir_inactivos:
@@ -1814,6 +1822,7 @@ def messages_stats(
     desde: str | None = Query(None, description="ISO YYYY-MM-DD (UTC)"),
     hasta: str | None = Query(None, description="ISO YYYY-MM-DD (UTC, inclusive)"),
     days_back: int = Query(7, ge=1, le=180, description="Si no se pasa desde/hasta, ventana de N días desde hoy"),
+    hours_back: float | None = Query(None, gt=0, le=8760, description="Override days_back: ventana rolling de N horas."),
     _: CurrentUser = Depends(require_role("admin", "operador")),
 ) -> dict:
     """Contadores de mensajes por día en un rango. Si no se pasa desde/hasta usa
@@ -1827,15 +1836,17 @@ def messages_stats(
     TZ_BOG = ZoneInfo("America/Bogota")
     if desde and hasta:
         try:
-            # Interpretar desde/hasta como fecha Bogotá (no UTC).
             d_des = datetime.fromisoformat(desde).replace(tzinfo=TZ_BOG)
             d_has = datetime.fromisoformat(hasta).replace(hour=23, minute=59, second=59, tzinfo=TZ_BOG)
             dt_desde = d_des.astimezone(timezone.utc)
             dt_hasta = d_has.astimezone(timezone.utc)
         except Exception:
             raise HTTPException(400, "desde/hasta deben ser YYYY-MM-DD")
+    elif hours_back is not None:
+        # Ventana rolling de N horas desde ahora.
+        dt_hasta = datetime.now(tz=timezone.utc)
+        dt_desde = dt_hasta - timedelta(hours=hours_back)
     else:
-        # 'Hoy' = desde 00:00 Bogotá hasta ahora.
         now_bog = datetime.now(tz=TZ_BOG)
         start_bog = now_bog.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_back - 1)
         dt_desde = start_bog.astimezone(timezone.utc)
