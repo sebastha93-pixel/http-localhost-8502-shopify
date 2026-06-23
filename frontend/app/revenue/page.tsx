@@ -602,29 +602,41 @@ function TendenciasTab({ daysBack }: { daysBack: number }) {
       <Card>
         <CardContent className="p-5">
           <p className="section-label mb-4">Fuga por franja horaria (Bogotá UTC-5)</p>
-          <div className="flex h-32 items-end gap-1">
+          <div className="flex h-40 items-end gap-1">
             {(d?.por_hora || []).map((h: any) => {
               const total = h.total;
-              const pct = total > 0 ? (total / maxHora) * 100 : 0;
               const fugaPct = total ? ((total - h.won) / total) * 100 : 0;
+              // Altura = % de fuga. Volumen se codifica con opacidad.
+              const hAlto = total > 0 ? Math.max(8, fugaPct) : 0;
               const isPico = fugaPct > 70 && total > 3;
+              const baja_volumen = total > 0 && total < 3;
               return (
                 <div
                   key={h.hora}
                   className="flex flex-1 flex-col items-center"
-                  title={`${h.hora}h · ${total} conversaciones · ${h.won} ganadas`}
+                  title={`${h.hora}h · ${total} conversaciones · ${h.won} ganadas · fuga ${fugaPct.toFixed(0)}%`}
                 >
-                  <div
-                    className={`w-full rounded-sm ${isPico ? "bg-terracotta" : "bg-steel-400"}`}
-                    style={{ height: `${pct}%`, minHeight: total ? "2px" : 0 }}
-                  />
+                  <div className="w-full flex flex-col justify-end" style={{ height: "100%" }}>
+                    {total > 0 ? (
+                      <div
+                        className={`w-full rounded-sm ${isPico ? "bg-terracotta" : "bg-steel-400"} ${baja_volumen ? "opacity-40" : ""}`}
+                        style={{ height: `${hAlto}%` }}
+                        title={`${h.hora}h · ${total} convs · ${fugaPct.toFixed(0)}% fuga`}
+                      />
+                    ) : (
+                      <div className="h-px w-full bg-border" />
+                    )}
+                  </div>
                   <p className="mt-1 text-[0.6rem] tabular text-graphite">{h.hora}</p>
+                  {total > 0 && (
+                    <p className="text-[0.55rem] tabular text-graphite/70">{total}</p>
+                  )}
                 </div>
               );
             })}
           </div>
           <p className="mt-2 text-xs text-graphite">
-            Barras en terracotta = picos de fuga (más del 70 % no convierte). Atiende ese rango primero.
+            Altura = % de fuga (no convirtió). Terracotta = pico (&gt; 70 %). Opacidad baja = pocos datos (&lt; 3 convs).
           </p>
         </CardContent>
       </Card>
@@ -632,24 +644,37 @@ function TendenciasTab({ daysBack }: { daysBack: number }) {
       {/* POR DÍA */}
       <Card>
         <CardContent className="p-5">
-          <p className="section-label mb-4">Por día de la semana</p>
-          <div className="flex h-32 items-end gap-2">
+          <p className="section-label mb-4">Por día de la semana · tasa de fuga</p>
+          <div className="flex h-40 items-end gap-3">
             {(d?.por_dia_semana || []).map((dia: any) => {
-              const pct = dia.total > 0 ? (dia.total / maxDia) * 100 : 0;
+              const conv = dia.conv_rate ?? 0;
+              const fugaPct = dia.total > 0 ? 100 - conv : 0;
+              const hAlto = dia.total > 0 ? Math.max(8, fugaPct) : 0;
+              const isPico = fugaPct > 70 && dia.total > 3;
+              const baja_volumen = dia.total > 0 && dia.total < 3;
               return (
                 <div key={dia.dia} className="flex flex-1 flex-col items-center">
-                  <div
-                    className="w-full rounded-sm bg-navy-600"
-                    style={{ height: `${pct}%`, minHeight: dia.total ? "2px" : 0 }}
-                  />
-                  <p className="mt-1 text-xs">{dia.dia_label}</p>
-                  <p className="text-[0.6rem] tabular text-graphite">
-                    {dia.total} · {dia.conv_rate != null ? `${dia.conv_rate}%` : "—"}
+                  <div className="w-full flex flex-col justify-end" style={{ height: "100%" }}>
+                    {dia.total > 0 ? (
+                      <div
+                        className={`w-full rounded-sm ${isPico ? "bg-terracotta" : "bg-navy-600"} ${baja_volumen ? "opacity-40" : ""}`}
+                        style={{ height: `${hAlto}%` }}
+                      />
+                    ) : (
+                      <div className="h-px w-full bg-border" />
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs font-medium">{dia.dia_label}</p>
+                  <p className="text-[0.62rem] tabular text-graphite">
+                    {dia.total} {dia.total === 1 ? "conv" : "convs"} · {dia.total ? `${fugaPct.toFixed(0)}% fuga` : "—"}
                   </p>
                 </div>
               );
             })}
           </div>
+          <p className="mt-2 text-xs text-graphite">
+            Altura = % de fuga (no convirtió ese día). Días con &lt; 3 convs aparecen atenuados (muestra insuficiente).
+          </p>
         </CardContent>
       </Card>
     </div>
