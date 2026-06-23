@@ -47,6 +47,12 @@ async def lifespan(app: FastAPI):
                 rol="admin",
             )
             print(f"   👤 Bootstrap admin creado: {settings.auth_bootstrap_email}")
+        elif settings.auth_bootstrap_email:
+            # Self-healing: si el bootstrap user existe pero no es admin, promoverlo
+            existing = usuarios_svc.obtener_por_email(settings.auth_bootstrap_email)
+            if existing and existing.get("rol") != "admin":
+                usuarios_svc.actualizar(existing["id"], rol="admin", activo=True)
+                print(f"   ⬆️  Bootstrap admin promovido: {settings.auth_bootstrap_email}")
     except Exception as e:
         print(f"   ⚠️  Bootstrap admin omitido: {e}")
 
