@@ -38,8 +38,11 @@ class Settings(BaseSettings):
 
     # ── CORS ───────────────────────────────────────────────────────────────────
     cors_origins: str = Field(
-        default="http://localhost:3000,http://localhost:3001",
+        # Default incluye localhost para dev + dominio de producción para no
+        # romper acceso si la env var CORS_ORIGINS se borra accidentalmente.
+        default="http://localhost:3000,http://localhost:3001,https://http-localhost-8502-shopify.vercel.app",
         description="Coma-separated lista de origins permitidos (frontend Next.js)",
+        alias="CORS_ORIGINS",
     )
 
     # ── Melonn ─────────────────────────────────────────────────────────────────

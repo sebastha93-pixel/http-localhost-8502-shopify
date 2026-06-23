@@ -65,11 +65,9 @@ const NAV: { home: NavItem; groups: NavGroup[] } = {
     {
       title: "Configuración",
       items: [
-        { label: "Configuración",       href: "/configuracion" },
         { label: "Usuarios",            href: "/usuarios" },
         { label: "Auditoría",           href: "/auditoria" },
         { label: "Diagnóstico Revenue", href: "/diagnostico-revenue" },
-        { label: "Integraciones",       href: "/integraciones" },
       ],
     },
   ],

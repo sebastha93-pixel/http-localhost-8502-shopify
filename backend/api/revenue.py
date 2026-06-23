@@ -953,10 +953,12 @@ def list_conversations(
     advisors_map: dict = {}
     leads_map: dict = {}
     if advisor_ids:
-        for a in (sb.table("advisors").select("advisor_id,name,email").in_("advisor_id", advisor_ids).execute().data or []):
+        adv_q = sb.table("advisors").select("advisor_id,name,email").in_("advisor_id", advisor_ids)
+        for a in _safe_exec(adv_q, retries=2, default=[]):
             advisors_map[a["advisor_id"]] = a
     if lead_ids:
-        for l in (sb.table("kommo_leads").select("lead_id,status,lead_value,customer_name,customer_phone").in_("lead_id", lead_ids).execute().data or []):
+        leads_q = sb.table("kommo_leads").select("lead_id,status,lead_value,customer_name,customer_phone").in_("lead_id", lead_ids)
+        for l in _safe_exec(leads_q, retries=2, default=[]):
             leads_map[l["lead_id"]] = l
 
     # Contador de mensajes (cliente / asesora) + tiempo respuesta promedio por lead.

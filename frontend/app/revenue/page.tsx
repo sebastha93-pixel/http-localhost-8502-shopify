@@ -1135,7 +1135,8 @@ export default function RevenuePage() {
     },
   });
 
-  // Query separada para el hero — siempre pendientes top 4, no depende de filtros visibles
+  // Query separada para el hero — siempre pendientes top 4, no depende de filtros visibles.
+  // refetchInterval desfasado entre queries para evitar spike simultáneo a Supabase.
   const fugasQ = useQuery<{ conversations: Conversation[] }>({
     queryKey: ["revenue", "fugas", windowKey],
     queryFn: () => api.get(`/api/revenue/conversations?${windowParams}&reply_filter=pending&page=1&page_size=25`),
@@ -1145,7 +1146,7 @@ export default function RevenuePage() {
   const advisorsQ = useQuery<{ rows: AdvisorRow[]; total: number }>({
     queryKey: ["revenue", "advisors", "ranking", windowKey],
     queryFn: () => api.get(`/api/revenue/advisors/ranking?${windowParams}`),
-    refetchInterval: 60_000,
+    refetchInterval: 75_000,
     // Siempre habilitado: los chips de asesoras en el header funcionan en todas las pestañas.
   });
 
@@ -1153,7 +1154,7 @@ export default function RevenuePage() {
     queryKey: ["revenue", "messages", "recent"],
     queryFn: () => api.get("/api/revenue/messages/recent?limit=100"),
     enabled: activeTab === "mensajes",
-    refetchInterval: 60_000,
+    refetchInterval: 90_000,
   });
 
   const msgsStatsQ = useQuery<any>({
@@ -1162,7 +1163,7 @@ export default function RevenuePage() {
       if (hoursBack !== null) return api.get(`/api/revenue/messages/stats?hours_back=${hoursBack}`);
       return api.get(`/api/revenue/messages/stats?days_back=${Math.min(daysBack, 30)}`);
     },
-    refetchInterval: 60_000,
+    refetchInterval: 105_000,
   });
 
   // Briefing matutino — el reporte que el equipo revisa cada mañana.
@@ -1177,7 +1178,7 @@ export default function RevenuePage() {
   const briefingQ = useQuery<Briefing>({
     queryKey: ["revenue", "briefing-hoy"],
     queryFn: () => api.get("/api/revenue/briefing-hoy"),
-    refetchInterval: 60_000,
+    refetchInterval: 120_000,
   });
   const [briefingCopied, setBriefingCopied] = useState(false);
   function copiarBriefing() {
