@@ -295,6 +295,51 @@ def coaching_para_asesora(advisor_id: str, days_back: int = 60) -> dict:
         for r in (raw.get("recomendaciones") or [])[:1]:
             recomendaciones.append(r)
 
+    # ── Casos problema: top 8 con peor score / mayor impacto, con snippet del
+    # momento crítico, recomendación y datos del lead para feedback accionable.
+    def _score_caso(a: dict) -> float:
+        """Menor = peor. Combina classification + overall_score + impacto."""
+        cls = a.get("result_classification") or ""
+        overall = float(a.get("overall_score") or 5)
+        impacto = float(a.get("economic_impact_estimate") or 0)
+        # Las perdidas con alto impacto van primero
+        cls_weight = -100 if cls == "venta_perdida" else 0
+        impacto_weight = -min(impacto / 100_000, 50)  # cap a 50 puntos
+        return cls_weight + overall * 10 + impacto_weight
+
+    peores = sorted(audits, key=_score_caso)[:8]
+    lead_ids_caso = list({a.get("lead_id") for a in peores if a.get("lead_id")})
+    leads_caso_map: dict = {}
+    if lead_ids_caso:
+        try:
+            ld = (sb.table("kommo_leads")
+                    .select("lead_id,customer_name,customer_phone,lead_value,status")
+                    .in_("lead_id", lead_ids_caso)
+                    .limit(50).execute().data) or []
+            leads_caso_map = {l["lead_id"]: l for l in ld}
+        except Exception:
+            pass
+
+    casos_problema: list[dict] = []
+    for a in peores:
+        if not (a.get("lost_moment") or a.get("main_loss_reason")):
+            continue  # sin contenido, no aporta para coaching
+        lead = leads_caso_map.get(a.get("lead_id")) or {}
+        casos_problema.append({
+            "conversation_id":      a.get("conversation_id"),
+            "lead_id":               a.get("lead_id"),
+            "customer_name":         lead.get("customer_name"),
+            "customer_phone":        lead.get("customer_phone"),
+            "lead_value":            lead.get("lead_value"),
+            "result_classification": a.get("result_classification"),
+            "overall_score":         a.get("overall_score"),
+            "main_loss_reason":      a.get("main_loss_reason"),
+            "lost_moment":           a.get("lost_moment"),
+            "recommended_response":  a.get("recommended_response"),
+            "economic_impact":       a.get("economic_impact_estimate"),
+            "audit_date":            a.get("audit_date"),
+        })
+
     resumen_para_ia = f"""Asesora: {advisor_name}
 Periodo: últimos {days_back} días, {n} conversaciones auditadas.
 
@@ -363,6 +408,7 @@ Recomendaciones previas de las auditorías: {recomendaciones[:15]}
                 "avg_overall": avg('overall_score'),
             },
             "coaching": parsed,
+            "casos_problema": casos_problema,
             "modelo": ANTHROPIC_MODEL,
             "costo_usd": round(cost, 6),
         }

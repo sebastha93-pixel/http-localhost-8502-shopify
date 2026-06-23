@@ -723,7 +723,27 @@ function AlertasTab({ onSelect }: { onSelect: (id: string) => void }) {
 // COACHING IA
 // ============================================================================
 
-function CoachingTab({ advisors }: { advisors: AdvisorRow[] }) {
+interface CasoProblema {
+  conversation_id?: string;
+  lead_id?: number;
+  customer_name?: string | null;
+  customer_phone?: string | null;
+  lead_value?: number | null;
+  result_classification?: string;
+  overall_score?: number | null;
+  main_loss_reason?: string | null;
+  lost_moment?: string | null;
+  recommended_response?: string | null;
+  economic_impact?: number | null;
+  audit_date?: string | null;
+}
+
+function CoachingTab({
+  advisors, onSelect,
+}: {
+  advisors: AdvisorRow[];
+  onSelect: (id: string) => void;
+}) {
   const [selectedAdvisor, setSelectedAdvisor] = useState<string>("");
   const q = useQuery<any>({
     queryKey: ["revenue", "coaching", selectedAdvisor],
@@ -837,6 +857,23 @@ function CoachingTab({ advisors }: { advisors: AdvisorRow[] }) {
               </div>
             )}
 
+            {/* CASOS DONDE FALLASTE — feedback accionable con snippets reales */}
+            {q.data.casos_problema?.length > 0 && (
+              <div>
+                <div className="mb-3 flex items-baseline justify-between">
+                  <p className="section-label">Casos donde fallaste — feedback accionable</p>
+                  <p className="text-[0.65rem] text-graphite">
+                    {q.data.casos_problema.length} {q.data.casos_problema.length === 1 ? "caso" : "casos"} · click para ver conversación
+                  </p>
+                </div>
+                <div className="space-y-3">
+                  {q.data.casos_problema.map((c: CasoProblema, i: number) => (
+                    <CasoProblemaCard key={c.conversation_id || i} c={c} onOpen={onSelect} />
+                  ))}
+                </div>
+              </div>
+            )}
+
             <p className="border-t border-border pt-2 text-[0.62rem] uppercase tracking-[0.1em] text-graphite">
               {q.data.modelo} · costo {q.data.costo_usd ? `$${q.data.costo_usd.toFixed(4)}` : "—"} USD
             </p>
@@ -844,6 +881,99 @@ function CoachingTab({ advisors }: { advisors: AdvisorRow[] }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function CasoProblemaCard({
+  c, onOpen,
+}: {
+  c: CasoProblema;
+  onOpen: (id: string) => void;
+}) {
+  const isLost = c.result_classification === "venta_perdida";
+  const isWon  = c.result_classification === "venta_lograda";
+  const score = c.overall_score ?? null;
+  const scoreColor =
+    score === null ? "text-graphite" :
+    score >= 7 ? "text-sage" :
+    score >= 5 ? "text-ochre" :
+                 "text-terracotta";
+  const clienteLabel =
+    c.customer_name?.trim() || c.customer_phone || (c.lead_id ? `Lead #${c.lead_id}` : "Cliente sin nombre");
+
+  return (
+    <article className="rounded-md border border-border bg-card overflow-hidden">
+      {/* Header del caso */}
+      <header className="flex flex-wrap items-baseline gap-3 border-b border-border bg-cloud/40 px-4 py-2.5">
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-medium text-ink-900">
+            {clienteLabel}
+            {c.lead_value != null && c.lead_value > 0 && (
+              <span className="ml-2 font-display tabular text-sm text-ochre">
+                · {fmtCop(c.lead_value)}
+              </span>
+            )}
+          </p>
+          <p className="text-[0.7rem] text-graphite">
+            {c.main_loss_reason || "Sin motivo registrado"}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {score !== null && (
+            <span className={`font-display tabular text-base font-medium ${scoreColor}`}>
+              {score}<span className="text-xs text-graphite">/10</span>
+            </span>
+          )}
+          {isLost && <Badge tone="critico">Perdida</Badge>}
+          {isWon  && <Badge tone="normal">Ganada</Badge>}
+          {!isLost && !isWon && c.result_classification && (
+            <Badge tone="riesgo">{c.result_classification.replace("_", " ")}</Badge>
+          )}
+        </div>
+      </header>
+
+      {/* Body: snippet del momento + recomendación */}
+      <div className="space-y-3 px-4 py-3">
+        {c.lost_moment && (
+          <div className="stitch-rail pl-3 rounded-sm bg-terracotta/[0.05] py-2 pr-3">
+            <p className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite">
+              Momento crítico — qué se dijo
+            </p>
+            <p className="mt-0.5 text-sm italic text-ink-900">&ldquo;{c.lost_moment}&rdquo;</p>
+          </div>
+        )}
+        {c.recommended_response && (
+          <div className="rounded-sm bg-sage/[0.06] border-l-2 border-l-sage px-3 py-2">
+            <p className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite">
+              Qué debió responder
+            </p>
+            <p className="mt-0.5 text-sm italic text-sage">&ldquo;{c.recommended_response}&rdquo;</p>
+          </div>
+        )}
+        {!c.lost_moment && !c.recommended_response && (
+          <p className="text-xs italic text-graphite">
+            La auditoría no capturó snippet de este caso. Abre la conversación completa para revisar.
+          </p>
+        )}
+      </div>
+
+      {/* Footer: link a conversación */}
+      {c.conversation_id && (
+        <footer className="border-t border-border bg-card px-4 py-2">
+          <button
+            onClick={() => onOpen(c.conversation_id!)}
+            className="inline-flex items-center gap-1 text-xs font-medium text-navy-600 transition-colors hover:text-navy-700"
+          >
+            Ver conversación completa →
+          </button>
+          {c.economic_impact != null && c.economic_impact > 0 && (
+            <span className="ml-3 text-[0.7rem] text-graphite tabular">
+              Impacto estimado <span className="font-medium text-terracotta">{fmtCop(c.economic_impact)}</span>
+            </span>
+          )}
+        </footer>
+      )}
+    </article>
   );
 }
 
@@ -1375,7 +1505,7 @@ export default function RevenuePage() {
         </TabsContent>
 
         <TabsContent value="coaching">
-          <CoachingTab advisors={advisorsQ.data?.rows || []} />
+          <CoachingTab advisors={advisorsQ.data?.rows || []} onSelect={setSelectedConv} />
         </TabsContent>
       </Tabs>
 
