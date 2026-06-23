@@ -2263,3 +2263,180 @@ def obtener_informe(
     if not res.data:
         raise HTTPException(status_code=404, detail="Informe no encontrado")
     return res.data[0]
+
+
+# ── Diagnóstico de calidad de datos ───────────────────────────────────────────
+@router.get("/diagnostico/data-quality")
+def diagnostico_data_quality(
+    days_back: int = Query(8, ge=1, le=90),
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """
+    Auditoría rápida de la calidad de los datos que estamos sirviendo en /revenue.
+
+    Reporta:
+      - Audits últimos N días: total, distribución según Haiku vs según Kommo
+      - Mismatches Haiku/Kommo (qué tanto se equivoca el modelo)
+      - Conversaciones vigentes vs huérfanas (sin lead_id)
+      - Distribución de leads por status en el período
+      - Ejemplos concretos para inspección manual
+    """
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+
+    from zoneinfo import ZoneInfo
+    TZ_BOG = ZoneInfo("America/Bogota")
+    now_bog = datetime.now(tz=TZ_BOG)
+    start_bog = now_bog.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_back - 1)
+    desde_iso = start_bog.astimezone(timezone.utc).isoformat()
+
+    # ── 1. Audits del período ─────────────────────────────────────────────
+    audits = (sb.table("chat_audits")
+                .select("conversation_id,lead_id,advisor_id,result_classification,economic_impact_estimate,audit_date")
+                .gte("audit_date", desde_iso)
+                .order("audit_date", desc=True)
+                .limit(500).execute().data) or []
+    lead_ids_audits = list({a.get("lead_id") for a in audits if a.get("lead_id")})
+    leads_map: dict = {}
+    if lead_ids_audits:
+        for i in range(0, len(lead_ids_audits), 100):
+            batch = lead_ids_audits[i:i+100]
+            ld = (sb.table("kommo_leads")
+                    .select("lead_id,status,customer_name,customer_phone,lead_value")
+                    .in_("lead_id", batch)
+                    .limit(150).execute().data) or []
+            for l in ld:
+                leads_map[l["lead_id"]] = l
+
+    def _kommo_class(a: dict) -> str:
+        lead = leads_map.get(a.get("lead_id")) or {}
+        kst = (lead.get("status") or "").lower()
+        if kst == "won":
+            return "venta_lograda"
+        if kst == "lost":
+            return "venta_perdida"
+        return "en_proceso"
+
+    haiku_counts = {"venta_lograda": 0, "venta_perdida": 0, "inconclusa": 0, "otro": 0}
+    kommo_counts = {"venta_lograda": 0, "venta_perdida": 0, "en_proceso": 0}
+    mismatches: dict = {
+        "haiku_perdida_kommo_ganada": [],
+        "haiku_ganada_kommo_perdida": [],
+        "haiku_terminal_kommo_abierto": [],
+        "sin_lead_id_en_audit": [],
+    }
+    for a in audits:
+        haiku = a.get("result_classification") or "otro"
+        haiku_counts[haiku] = haiku_counts.get(haiku, 0) + 1
+        if not a.get("lead_id"):
+            mismatches["sin_lead_id_en_audit"].append({
+                "conversation_id": a.get("conversation_id"),
+                "haiku": haiku,
+                "audit_date": a.get("audit_date"),
+            })
+            continue
+        kommo = _kommo_class(a)
+        kommo_counts[kommo] = kommo_counts.get(kommo, 0) + 1
+        lead = leads_map.get(a["lead_id"]) or {}
+        ejemplo = {
+            "conversation_id": a.get("conversation_id"),
+            "lead_id":         a.get("lead_id"),
+            "cliente":         lead.get("customer_name") or lead.get("customer_phone"),
+            "lead_value":      lead.get("lead_value"),
+            "haiku":           haiku,
+            "kommo_status":    lead.get("status"),
+            "audit_date":      a.get("audit_date"),
+        }
+        if haiku == "venta_perdida" and kommo == "venta_lograda":
+            mismatches["haiku_perdida_kommo_ganada"].append(ejemplo)
+        elif haiku == "venta_lograda" and kommo == "venta_perdida":
+            mismatches["haiku_ganada_kommo_perdida"].append(ejemplo)
+        elif haiku in ("venta_lograda", "venta_perdida") and kommo == "en_proceso":
+            mismatches["haiku_terminal_kommo_abierto"].append(ejemplo)
+
+    # ── 2. Conversaciones del período ─────────────────────────────────────
+    convs = (sb.table("conversations")
+               .select("conversation_id,lead_id,advisor_id,last_message_at,status")
+               .gte("last_message_at", desde_iso)
+               .limit(1500).execute().data) or []
+    n_convs = len(convs)
+    n_con_lead = sum(1 for c in convs if c.get("lead_id"))
+    n_sin_lead = n_convs - n_con_lead
+    n_sin_advisor = sum(1 for c in convs if not c.get("advisor_id"))
+    ejemplos_huerfanas = [
+        {
+            "conversation_id": c["conversation_id"],
+            "last_message_at": c.get("last_message_at"),
+            "channel_inferido": (c["conversation_id"].split("-")[0] if c.get("conversation_id") else None),
+        }
+        for c in convs if not c.get("lead_id")
+    ][:10]
+
+    # ── 3. Leads del período por status ───────────────────────────────────
+    leads_periodo = (sb.table("kommo_leads")
+                       .select("lead_id,status,lead_value,closed_at,updated_at")
+                       .gte("updated_at", desde_iso)
+                       .limit(1500).execute().data) or []
+    status_dist: dict = {}
+    valor_won = 0.0
+    valor_lost = 0.0
+    for l in leads_periodo:
+        st = (l.get("status") or "unknown").lower()
+        status_dist[st] = status_dist.get(st, 0) + 1
+        val = float(l.get("lead_value") or 0)
+        if st == "won":
+            valor_won += val
+        elif st == "lost":
+            valor_lost += val
+
+    # ── 4. Conversaciones por edad (vigencia) ─────────────────────────────
+    now_utc = datetime.now(tz=timezone.utc)
+    rangos = {"0-24h": 0, "24-48h": 0, "48-72h": 0, "3-7d": 0, "mas_de_7d": 0}
+    for c in convs:
+        lm = c.get("last_message_at")
+        if not lm:
+            continue
+        try:
+            t = datetime.fromisoformat(lm.replace("Z", "+00:00"))
+            hours = (now_utc - t).total_seconds() / 3600
+            if hours < 24:
+                rangos["0-24h"] += 1
+            elif hours < 48:
+                rangos["24-48h"] += 1
+            elif hours < 72:
+                rangos["48-72h"] += 1
+            elif hours < 168:
+                rangos["3-7d"] += 1
+            else:
+                rangos["mas_de_7d"] += 1
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "ventana_dias": days_back,
+        "desde": desde_iso,
+        "hasta": now_utc.isoformat(),
+        "audits": {
+            "total": len(audits),
+            "haiku_dice": haiku_counts,
+            "kommo_dice": kommo_counts,
+            "mismatches_count": {k: len(v) for k, v in mismatches.items()},
+            "mismatches_ejemplos": {k: v[:5] for k, v in mismatches.items()},
+        },
+        "conversations": {
+            "total": n_convs,
+            "con_lead_id": n_con_lead,
+            "sin_lead_id_huerfanas": n_sin_lead,
+            "sin_advisor_asignada": n_sin_advisor,
+            "ejemplos_huerfanas": ejemplos_huerfanas,
+            "edad_distribucion": rangos,
+        },
+        "leads_periodo": {
+            "total": len(leads_periodo),
+            "distribucion_status": status_dist,
+            "valor_total_ganadas_cop": int(valor_won),
+            "valor_total_perdidas_cop": int(valor_lost),
+        },
+    }
