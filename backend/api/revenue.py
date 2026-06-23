@@ -2291,23 +2291,32 @@ def diagnostico_data_quality(
     start_bog = now_bog.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_back - 1)
     desde_iso = start_bog.astimezone(timezone.utc).isoformat()
 
-    # ── 1. Audits del período ─────────────────────────────────────────────
-    audits = (sb.table("chat_audits")
-                .select("conversation_id,lead_id,advisor_id,result_classification,economic_impact_estimate,audit_date")
-                .gte("audit_date", desde_iso)
-                .order("audit_date", desc=True)
-                .limit(500).execute().data) or []
+    # ── 1. Audits del período (limit acotado + retry seguro) ─────────────
+    try:
+        audits_q = (sb.table("chat_audits")
+                      .select("conversation_id,lead_id,advisor_id,result_classification,economic_impact_estimate,audit_date")
+                      .gte("audit_date", desde_iso)
+                      .order("audit_date", desc=True)
+                      .limit(300))
+        audits = _safe_exec(audits_q, retries=2, default=[])
+    except Exception as e:
+        log.warning(f"diagnostico audits fail: {e}")
+        audits = []
+
     lead_ids_audits = list({a.get("lead_id") for a in audits if a.get("lead_id")})
     leads_map: dict = {}
     if lead_ids_audits:
-        for i in range(0, len(lead_ids_audits), 100):
-            batch = lead_ids_audits[i:i+100]
-            ld = (sb.table("kommo_leads")
-                    .select("lead_id,status,customer_name,customer_phone,lead_value")
-                    .in_("lead_id", batch)
-                    .limit(150).execute().data) or []
-            for l in ld:
-                leads_map[l["lead_id"]] = l
+        for i in range(0, len(lead_ids_audits), 80):
+            batch = lead_ids_audits[i:i+80]
+            try:
+                ld_q = (sb.table("kommo_leads")
+                          .select("lead_id,status,customer_name,customer_phone,lead_value")
+                          .in_("lead_id", batch)
+                          .limit(120))
+                for l in _safe_exec(ld_q, retries=1, default=[]):
+                    leads_map[l["lead_id"]] = l
+            except Exception:
+                pass
 
     def _kommo_class(a: dict) -> str:
         lead = leads_map.get(a.get("lead_id")) or {}
@@ -2356,10 +2365,16 @@ def diagnostico_data_quality(
             mismatches["haiku_terminal_kommo_abierto"].append(ejemplo)
 
     # ── 2. Conversaciones del período ─────────────────────────────────────
-    convs = (sb.table("conversations")
-               .select("conversation_id,lead_id,advisor_id,last_message_at,status")
-               .gte("last_message_at", desde_iso)
-               .limit(1500).execute().data) or []
+    try:
+        convs_q = (sb.table("conversations")
+                     .select("conversation_id,lead_id,advisor_id,last_message_at,status")
+                     .gte("last_message_at", desde_iso)
+                     .order("last_message_at", desc=True)
+                     .limit(800))
+        convs = _safe_exec(convs_q, retries=2, default=[])
+    except Exception as e:
+        log.warning(f"diagnostico convs fail: {e}")
+        convs = []
     n_convs = len(convs)
     n_con_lead = sum(1 for c in convs if c.get("lead_id"))
     n_sin_lead = n_convs - n_con_lead
@@ -2374,10 +2389,16 @@ def diagnostico_data_quality(
     ][:10]
 
     # ── 3. Leads del período por status ───────────────────────────────────
-    leads_periodo = (sb.table("kommo_leads")
-                       .select("lead_id,status,lead_value,closed_at,updated_at")
-                       .gte("updated_at", desde_iso)
-                       .limit(1500).execute().data) or []
+    try:
+        leads_q = (sb.table("kommo_leads")
+                     .select("lead_id,status,lead_value,closed_at,updated_at")
+                     .gte("updated_at", desde_iso)
+                     .order("updated_at", desc=True)
+                     .limit(800))
+        leads_periodo = _safe_exec(leads_q, retries=2, default=[])
+    except Exception as e:
+        log.warning(f"diagnostico leads fail: {e}")
+        leads_periodo = []
     status_dist: dict = {}
     valor_won = 0.0
     valor_lost = 0.0
