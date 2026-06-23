@@ -1112,7 +1112,8 @@ export default function RevenuePage() {
   const advisorsQ = useQuery<{ rows: AdvisorRow[]; total: number }>({
     queryKey: ["revenue", "advisors", "ranking", daysBack],
     queryFn: () => api.get(`/api/revenue/advisors/ranking?days_back=${daysBack}`),
-    enabled: activeTab === "asesoras" || activeTab === "conversaciones" || activeTab === "coaching",
+    refetchInterval: 60_000,
+    // Siempre habilitado: los chips de asesoras en el header funcionan en todas las pestañas.
   });
 
   const msgsQ = useQuery<{ messages: MessageRow[]; total: number }>({
@@ -1272,16 +1273,68 @@ ${asesoras || "  · sin asignaciones"}`;
         onSelect={setSelectedConv}
       />
 
-      {/* KPI STRIP — solo totales históricos. Las métricas del día viven en el briefing. */}
-      <KpiStrip
-        items={[
-          { label: "Asesoras en línea", value: statsQ.isLoading ? "…" : (stats?.advisors ?? 0) },
-          { label: "Leads (total)",    value: statsQ.isLoading ? "…" : (stats?.leads ?? 0).toLocaleString("es-CO") },
-          { label: "Mensajes (total)", value: statsQ.isLoading ? "…" : (stats?.messages ?? 0).toLocaleString("es-CO") },
-          { label: "Por auditar",      value: statsQ.isLoading ? "…" : (stats?.pending_audits ?? 0).toLocaleString("es-CO"),
-            tone: (stats?.pending_audits ?? 0) > 10 ? "danger" : "default" },
-        ]}
-      />
+      {/* ASESORAS EN LÍNEA — chips clicables para filtrar la lista de abajo */}
+      <section>
+        <div className="flex items-baseline justify-between mb-2">
+          <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">
+            Asesoras en línea · toca para filtrar leads asignados
+          </p>
+          {advisorFilter && (
+            <button
+              onClick={() => { setAdvisorFilter(""); setConvPage(1); }}
+              className="text-xs text-navy-600 hover:underline"
+            >
+              Limpiar filtro
+            </button>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => { setAdvisorFilter(""); setConvPage(1); }}
+            className={`px-3 py-1.5 rounded-sm text-xs font-medium transition-colors border ${
+              advisorFilter === ""
+                ? "bg-navy-600 text-white border-navy-600"
+                : "bg-card text-ink-900 border-border hover:bg-cloud"
+            }`}
+          >
+            Todas
+            <span className="ml-1.5 opacity-70 tabular">
+              {advisorsQ.data?.rows.filter((a) => a.active).reduce((s, a) => s + (a.asignadas ?? a.conversations ?? 0), 0) ?? "…"}
+            </span>
+          </button>
+          {(advisorsQ.data?.rows || [])
+            .filter((a) => a.active)
+            .sort((a, b) => (b.asignadas ?? b.conversations ?? 0) - (a.asignadas ?? a.conversations ?? 0))
+            .map((a) => {
+              const count = a.asignadas ?? a.conversations ?? 0;
+              const active = advisorFilter === a.advisor_id;
+              return (
+                <button
+                  key={a.advisor_id}
+                  onClick={() => {
+                    setAdvisorFilter(active ? "" : a.advisor_id);
+                    setConvPage(1);
+                    if (activeTab !== "conversaciones") setActiveTab("conversaciones");
+                  }}
+                  className={`px-3 py-1.5 rounded-sm text-xs font-medium transition-colors border ${
+                    active
+                      ? "bg-navy-600 text-white border-navy-600"
+                      : "bg-card text-ink-900 border-border hover:bg-cloud"
+                  }`}
+                >
+                  {a.name}
+                  <span className="ml-1.5 opacity-70 tabular">{count}</span>
+                </button>
+              );
+            })}
+          {advisorsQ.isLoading && (
+            <span className="text-xs text-graphite italic">Cargando asesoras…</span>
+          )}
+          {advisorsQ.data && advisorsQ.data.rows.filter((a) => a.active).length === 0 && (
+            <span className="text-xs text-graphite italic">Sin asesoras activas.</span>
+          )}
+        </div>
+      </section>
 
       {/* SELECTOR DE PERÍODO */}
       <div className="flex flex-wrap items-center gap-3">
