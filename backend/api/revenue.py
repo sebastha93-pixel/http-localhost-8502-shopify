@@ -783,10 +783,11 @@ def oauth_status(_: CurrentUser = Depends(require_role("admin"))) -> dict:
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
-@router.get("/ping")
+@router.api_route("/ping", methods=["GET", "HEAD"])
 def ping() -> dict:
     """Health-check PÚBLICO sin auth — pega esto a UptimeRobot cada 5 min
     para que Railway no duerma y el webhook Kommo responda en <2s siempre.
+    Acepta GET y HEAD (UptimeRobot usa HEAD por default).
     """
     from datetime import datetime as _dt, timezone as _tz
     return {"ok": True, "ts": _dt.now(tz=_tz.utc).isoformat()}
