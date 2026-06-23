@@ -1901,6 +1901,177 @@ def messages_stats(
     }
 
 
+@router.get("/briefing-hoy")
+def briefing_hoy(_: CurrentUser = Depends(require_role("admin", "operador"))) -> dict:
+    """Briefing matutino — el reporte que el equipo revisa cada mañana.
+
+    Usa el MISMO patrón de /messages/stats (limit 50000, funciona) en vez del
+    patrón de /diagnostico (limit 3000, fallaba). Garantiza datos reales.
+
+    Ventana: 00:00 Bogotá hasta ahora.
+    Retorna: total convs del día · atendidas/pendientes/sin asesora ·
+             por canal · por asesora ordenada por pendientes desc ·
+             tiempo promedio primera respuesta.
+    """
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    from zoneinfo import ZoneInfo
+    TZ_BOG = ZoneInfo("America/Bogota")
+    now_bog = datetime.now(tz=TZ_BOG)
+    start_bog = now_bog.replace(hour=0, minute=0, second=0, microsecond=0)
+    dt_desde = start_bog.astimezone(timezone.utc)
+
+    # 1. Todos los mensajes desde midnight Bogotá hasta ahora.
+    msgs = (sb.table("messages")
+              .select("conversation_id,sender_type,sent_at")
+              .gte("sent_at", dt_desde.isoformat())
+              .limit(50000).execute().data) or []
+
+    if not msgs:
+        return {
+            "ok": True,
+            "fecha_bogota": now_bog.strftime("%Y-%m-%d"),
+            "total": 0, "atendidas": 0, "pendientes": 0, "sin_asesora": 0,
+            "avg_response_min": None,
+            "por_canal": {}, "por_asesora": [],
+            "total_mensajes_hoy": 0,
+        }
+
+    # 2. Agrupar mensajes por conversation_id.
+    por_conv: dict = {}
+    for m in msgs:
+        cid = m.get("conversation_id")
+        if not cid:
+            continue
+        row = por_conv.setdefault(cid, {"customer": 0, "advisor": 0, "first_customer_at": None, "first_advisor_at": None})
+        st = (m.get("sender_type") or "").lower()
+        sa = m.get("sent_at")
+        if st == "customer":
+            row["customer"] += 1
+            if not row["first_customer_at"] or (sa and sa < row["first_customer_at"]):
+                row["first_customer_at"] = sa
+        elif st in ("advisor", "agent"):
+            row["advisor"] += 1
+            if not row["first_advisor_at"] or (sa and sa < row["first_advisor_at"]):
+                row["first_advisor_at"] = sa
+
+    # 3. Hidratar conversaciones únicas con metadata.
+    conv_ids = list(por_conv.keys())
+    convs_meta: dict = {}
+    for i in range(0, len(conv_ids), 100):
+        batch = conv_ids[i:i+100]
+        try:
+            cs = (sb.table("conversations")
+                    .select("conversation_id,lead_id,advisor_id,channel")
+                    .in_("conversation_id", batch)
+                    .execute().data) or []
+            for c in cs:
+                convs_meta[c["conversation_id"]] = c
+        except Exception:
+            continue
+
+    # 4. Lookup de nombres de asesoras.
+    advisor_ids = list({c.get("advisor_id") for c in convs_meta.values() if c.get("advisor_id")})
+    advisor_names: dict = {}
+    if advisor_ids:
+        try:
+            ad = (sb.table("advisors").select("advisor_id,name")
+                    .in_("advisor_id", advisor_ids).limit(50).execute().data) or []
+            advisor_names = {a["advisor_id"]: a.get("name") for a in ad}
+        except Exception:
+            pass
+
+    # 5. Dedup por lead_id (un lead puede tener varios convs hoy = 1 cliente real).
+    por_lead: dict = {}
+    for cid, counts in por_conv.items():
+        meta = convs_meta.get(cid, {})
+        lead_id = meta.get("lead_id") or cid
+        existing = por_lead.get(lead_id)
+        if existing:
+            existing["customer"] += counts["customer"]
+            existing["advisor"]  += counts["advisor"]
+            if counts["first_customer_at"] and (not existing["first_customer_at"] or counts["first_customer_at"] < existing["first_customer_at"]):
+                existing["first_customer_at"] = counts["first_customer_at"]
+            if counts["first_advisor_at"] and (not existing["first_advisor_at"] or counts["first_advisor_at"] < existing["first_advisor_at"]):
+                existing["first_advisor_at"] = counts["first_advisor_at"]
+        else:
+            por_lead[lead_id] = {
+                "customer": counts["customer"],
+                "advisor":  counts["advisor"],
+                "first_customer_at": counts["first_customer_at"],
+                "first_advisor_at":  counts["first_advisor_at"],
+                "channel":  (meta.get("channel") or "unknown").lower(),
+                "advisor_id": meta.get("advisor_id"),
+            }
+
+    # 6. Métricas finales.
+    total = len(por_lead)
+    atendidas = sum(1 for r in por_lead.values() if r["advisor"] > 0)
+    pendientes = total - atendidas
+    sin_asesora = sum(1 for r in por_lead.values() if not r.get("advisor_id"))
+
+    por_canal: dict = {}
+    for r in por_lead.values():
+        ch = r["channel"]
+        if "waba" in ch or "whatsapp" in ch or ch == "wa":
+            cn = "WhatsApp"
+        elif "instagram" in ch or ch == "ig" or ch == "dm":
+            cn = "Instagram"
+        elif "messenger" in ch or "facebook" in ch or ch == "fb":
+            cn = "Messenger"
+        elif "tiktok" in ch or ch == "tt":
+            cn = "TikTok"
+        else:
+            cn = ch.capitalize() or "Otro"
+        por_canal[cn] = por_canal.get(cn, 0) + 1
+
+    # Tiempo primera respuesta = first_advisor_at - first_customer_at (si ambos existen).
+    response_times: list = []
+    for r in por_lead.values():
+        fc = r.get("first_customer_at")
+        fa = r.get("first_advisor_at")
+        if fc and fa and fa > fc:
+            try:
+                tc = datetime.fromisoformat(fc.replace("Z", "+00:00"))
+                ta = datetime.fromisoformat(fa.replace("Z", "+00:00"))
+                response_times.append((ta - tc).total_seconds() / 60.0)
+            except Exception:
+                pass
+    avg_response_min = round(sum(response_times) / len(response_times), 1) if response_times else None
+
+    # Por asesora.
+    por_asesora_dict: dict = {}
+    for r in por_lead.values():
+        aid = r.get("advisor_id")
+        if not aid:
+            continue
+        row = por_asesora_dict.setdefault(aid, {
+            "advisor_id": aid,
+            "name": advisor_names.get(aid) or "—",
+            "asignadas": 0, "atendidas": 0, "pendientes": 0,
+        })
+        row["asignadas"] += 1
+        if r["advisor"] > 0:
+            row["atendidas"] += 1
+        else:
+            row["pendientes"] += 1
+    por_asesora = sorted(por_asesora_dict.values(), key=lambda r: r["pendientes"], reverse=True)
+
+    return {
+        "ok": True,
+        "fecha_bogota": now_bog.strftime("%Y-%m-%d"),
+        "total": total,
+        "atendidas": atendidas,
+        "pendientes": pendientes,
+        "sin_asesora": sin_asesora,
+        "avg_response_min": avg_response_min,
+        "por_canal": por_canal,
+        "por_asesora": por_asesora,
+        "total_mensajes_hoy": len(msgs),
+    }
+
+
 @router.get("/messages/recent")
 def messages_recent(
     limit: int = Query(50, ge=1, le=300),

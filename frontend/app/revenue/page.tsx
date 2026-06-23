@@ -9,7 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { StatusBadge as ConvStatusBadge } from "@/components/status-badge";
-import { ExternalLink, Search, X, Sparkles, Filter, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, AlertCircle } from "lucide-react";
+import { ExternalLink, Search, X, Sparkles, Filter, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, AlertCircle, Copy, Check } from "lucide-react";
 
 interface DetailResp {
   conversation: any;
@@ -1128,6 +1128,48 @@ export default function RevenuePage() {
     refetchInterval: 60_000,
   });
 
+  // Briefing matutino — el reporte que el equipo revisa cada mañana.
+  type Briefing = {
+    ok: boolean; fecha_bogota: string; total: number;
+    atendidas: number; pendientes: number; sin_asesora: number;
+    avg_response_min: number | null;
+    por_canal: Record<string, number>;
+    por_asesora: Array<{ advisor_id: string; name: string; asignadas: number; atendidas: number; pendientes: number }>;
+    total_mensajes_hoy: number;
+  };
+  const briefingQ = useQuery<Briefing>({
+    queryKey: ["revenue", "briefing-hoy"],
+    queryFn: () => api.get("/api/revenue/briefing-hoy"),
+    refetchInterval: 60_000,
+  });
+  const [briefingCopied, setBriefingCopied] = useState(false);
+  function copiarBriefing() {
+    const b = briefingQ.data;
+    if (!b) return;
+    const canales = Object.entries(b.por_canal).sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `  ${k}: ${v}`).join("\n");
+    const asesoras = b.por_asesora.slice(0, 10)
+      .map(r => `  ${r.name} · ${r.asignadas} asig · ${r.atendidas} atend · ${r.pendientes} pend`).join("\n");
+    const txt = `📊 MALE'DENIM · Briefing del día ${b.fecha_bogota}
+
+Conversaciones del día: ${b.total}
+  Atendidas: ${b.atendidas}
+  Pendientes: ${b.pendientes}
+  Sin asesora: ${b.sin_asesora}
+Mensajes recibidos hoy: ${b.total_mensajes_hoy}
+1ª respuesta promedio: ${b.avg_response_min ? `${b.avg_response_min} min` : "—"}
+
+Por canal:
+${canales || "  · sin canales"}
+
+Por asesora:
+${asesoras || "  · sin asignaciones"}`;
+    navigator.clipboard?.writeText(txt).then(() => {
+      setBriefingCopied(true);
+      setTimeout(() => setBriefingCopied(false), 2500);
+    });
+  }
+
   const stats = statsQ.data;
 
   return (
@@ -1136,6 +1178,93 @@ export default function RevenuePage() {
       subtitle="Auditoría comercial: conversaciones, equipo, conversión"
       isFetching={statsQ.isFetching}
     >
+      {/* BRIEFING DEL DÍA — el reporte que el equipo revisa cada mañana */}
+      {briefingQ.data && (
+        <section className="rounded-md border border-navy-600/30 bg-navy-600/[0.03] overflow-hidden">
+          <div className="flex flex-wrap items-baseline justify-between gap-3 border-b border-border bg-card px-5 py-3">
+            <div>
+              <p className="font-display text-base font-medium text-ink-900">
+                Briefing del día
+              </p>
+              <p className="text-xs text-graphite">
+                {briefingQ.data.fecha_bogota} · zona horaria Bogotá · actualiza cada 1 min
+              </p>
+            </div>
+            <button
+              onClick={copiarBriefing}
+              className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-medium text-ink-900 transition-colors hover:bg-cloud"
+            >
+              {briefingCopied ? <><Check className="h-3.5 w-3.5 text-sage" /> Copiado</> : <><Copy className="h-3.5 w-3.5" /> Copiar reporte</>}
+            </button>
+          </div>
+
+          <div className="p-5 space-y-4">
+            <KpiStrip
+              items={[
+                { label: "Conversaciones hoy", value: briefingQ.data.total },
+                { label: "Atendidas",          value: briefingQ.data.atendidas, tone: "success" },
+                { label: "Pendientes",         value: briefingQ.data.pendientes, tone: briefingQ.data.pendientes > 0 ? "danger" : "default" },
+                { label: "Sin asesora",        value: briefingQ.data.sin_asesora, tone: briefingQ.data.sin_asesora > 0 ? "danger" : "default" },
+                { label: "Mensajes hoy",       value: briefingQ.data.total_mensajes_hoy.toLocaleString("es-CO") },
+                { label: "1ª resp. prom.",     value: briefingQ.data.avg_response_min ? `${briefingQ.data.avg_response_min}m` : "—" },
+              ]}
+            />
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <Card>
+                <CardContent className="p-4">
+                  <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite mb-2">Por canal</p>
+                  {Object.keys(briefingQ.data.por_canal).length === 0 ? (
+                    <p className="text-xs text-graphite italic">Sin canales registrados hoy.</p>
+                  ) : (
+                    <ul className="space-y-1 text-sm">
+                      {Object.entries(briefingQ.data.por_canal)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([k, v]) => (
+                          <li key={k} className="flex justify-between">
+                            <span className="text-ink-900">{k}</span>
+                            <span className="tabular font-medium">{v}</span>
+                          </li>
+                        ))}
+                    </ul>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="p-4">
+                  <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite mb-2">Por asesora · ordenadas por pendientes</p>
+                  {briefingQ.data.por_asesora.length === 0 ? (
+                    <p className="text-xs text-graphite italic">Sin asesoras con conversaciones hoy.</p>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border">
+                          <th className="text-left py-1 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Asesora</th>
+                          <th className="text-right py-1 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Asig.</th>
+                          <th className="text-right py-1 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Atend.</th>
+                          <th className="text-right py-1 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Pend.</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {briefingQ.data.por_asesora.map((r, i) => (
+                          <tr key={i} className="border-b border-border">
+                            <td className="py-1.5 text-ink-900">{r.name}</td>
+                            <td className="py-1.5 text-right tabular">{r.asignadas}</td>
+                            <td className="py-1.5 text-right tabular text-sage">{r.atendidas}</td>
+                            <td className={`py-1.5 text-right tabular font-medium ${r.pendientes > 0 ? "text-terracotta" : "text-graphite"}`}>{r.pendientes}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </section>
+      )}
+
       {/* HERO — Fugas activas */}
       <FugasHero
         convs={fugasQ.data?.conversations || []}
