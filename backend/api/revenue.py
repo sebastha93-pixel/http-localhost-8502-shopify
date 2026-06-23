@@ -2458,6 +2458,125 @@ def diagnostico_data_quality(
     except Exception:
         n_audit_pending = -1  # no se pudo calcular
 
+    # ── 3.7. Valor según leads asociados a audits del período ────────────
+    # Esto resuelve la incoherencia: los counters de "según leads_periodo"
+    # filtran por updated_at (puede dar 0 si los cierres no actualizaron
+    # updated_at), pero los audits SÍ tienen 24 leads asociados. Mostramos
+    # ambos universos para que se vea la diferencia.
+    val_audits_won = 0.0
+    val_audits_lost = 0.0
+    n_audits_won_con_val = 0
+    n_audits_won_sin_val = 0
+    n_audits_lost_con_val = 0
+    n_audits_lost_sin_val = 0
+    seen_leads = set()
+    for a in audits:
+        lid = a.get("lead_id")
+        if not lid or lid in seen_leads:
+            continue
+        seen_leads.add(lid)
+        lead = leads_map.get(lid) or {}
+        kst = (lead.get("status") or "").lower()
+        val = float(lead.get("lead_value") or 0)
+        has_val = val > 0
+        if kst == "won":
+            val_audits_won += val
+            if has_val: n_audits_won_con_val += 1
+            else:       n_audits_won_sin_val += 1
+        elif kst == "lost":
+            val_audits_lost += val
+            if has_val: n_audits_lost_con_val += 1
+            else:       n_audits_lost_sin_val += 1
+
+    # ── 4.5. CONVERSACIONES DEL DÍA — briefing matutino en TZ Bogotá ─────
+    # Definimos "conversación del día" como: lead único que tuvo al menos
+    # un mensaje (de cliente o asesora) entre 00:00 y ahora en Bogotá.
+    hoy_bog_start = now_bog.replace(hour=0, minute=0, second=0, microsecond=0)
+    hoy_iso = hoy_bog_start.astimezone(timezone.utc).isoformat()
+
+    convs_hoy: list[dict] = []
+    try:
+        convs_hoy_q = (sb.table("conversations")
+                         .select("conversation_id,lead_id,advisor_id,channel,last_message_at,status,msgs_customer,msgs_advisor,avg_response_min")
+                         .gte("last_message_at", hoy_iso)
+                         .order("last_message_at", desc=True)
+                         .limit(500))
+        convs_hoy = _safe_exec(convs_hoy_q, retries=2, default=[])
+    except Exception:
+        pass
+
+    # Dedup por lead_id (un lead puede tener varios canales = 1 conversación
+    # operativa). Si no hay lead_id, dedup por conversation_id.
+    convs_hoy_dedup: dict = {}
+    for c in convs_hoy:
+        key = c.get("lead_id") or c.get("conversation_id")
+        if key and key not in convs_hoy_dedup:
+            convs_hoy_dedup[key] = c
+    convs_hoy_list = list(convs_hoy_dedup.values())
+
+    # Métricas del día
+    total_hoy = len(convs_hoy_list)
+    canal_hoy: dict = {}
+    atendidas_hoy = 0
+    pendientes_hoy = 0
+    sin_asesora_hoy = 0
+    response_times: list = []
+    por_asesora_hoy: dict = {}
+    advisor_ids_hoy = list({c.get("advisor_id") for c in convs_hoy_list if c.get("advisor_id")})
+    advisor_names: dict = {}
+    if advisor_ids_hoy:
+        try:
+            adv_data = (sb.table("advisors").select("advisor_id,name")
+                          .in_("advisor_id", advisor_ids_hoy).limit(50).execute().data) or []
+            advisor_names = {a["advisor_id"]: a.get("name") for a in adv_data}
+        except Exception:
+            pass
+
+    for c in convs_hoy_list:
+        ch = (c.get("channel") or "unknown").lower()
+        # Normalizar canal
+        if "waba" in ch or "whatsapp" in ch or ch == "wa":
+            ch_norm = "WhatsApp"
+        elif "instagram" in ch or ch == "ig" or ch == "dm":
+            ch_norm = "Instagram"
+        elif "messenger" in ch or "facebook" in ch or ch == "fb":
+            ch_norm = "Messenger"
+        elif "tiktok" in ch or ch == "tt":
+            ch_norm = "TikTok"
+        else:
+            ch_norm = ch.capitalize() or "Otro"
+        canal_hoy[ch_norm] = canal_hoy.get(ch_norm, 0) + 1
+
+        adv_id = c.get("advisor_id")
+        msgs_a = int(c.get("msgs_advisor") or 0)
+        if not adv_id:
+            sin_asesora_hoy += 1
+        if msgs_a > 0:
+            atendidas_hoy += 1
+        else:
+            pendientes_hoy += 1
+        rt = c.get("avg_response_min")
+        if rt is not None and float(rt) > 0:
+            response_times.append(float(rt))
+
+        if adv_id:
+            row = por_asesora_hoy.setdefault(adv_id, {
+                "name": advisor_names.get(adv_id) or "—",
+                "asignadas": 0,
+                "atendidas": 0,
+                "pendientes": 0,
+            })
+            row["asignadas"] += 1
+            if msgs_a > 0:
+                row["atendidas"] += 1
+            else:
+                row["pendientes"] += 1
+
+    avg_response_min = round(sum(response_times) / len(response_times), 1) if response_times else None
+    por_asesora_lista = sorted(
+        por_asesora_hoy.values(), key=lambda r: r["pendientes"], reverse=True,
+    )
+
     # ── 4. Conversaciones por edad (vigencia) ─────────────────────────────
     now_utc = datetime.now(tz=timezone.utc)
     rangos = {"0-24h": 0, "24-48h": 0, "48-72h": 0, "3-7d": 0, "mas_de_7d": 0}
@@ -2518,10 +2637,30 @@ def diagnostico_data_quality(
             "inconclusas_cop": int(val_audit_inconclusas),
             "nota": "Suma de economic_impact_estimate de Haiku, agrupado por status real de Kommo. Más confiable que lead_value cuando los operadores no llenan el valor en Kommo.",
         },
+        "leads_de_audits": {
+            "total_leads_unicos": len(seen_leads),
+            "valor_won_cop": int(val_audits_won),
+            "valor_lost_cop": int(val_audits_lost),
+            "won_con_valor": n_audits_won_con_val,
+            "won_sin_valor": n_audits_won_sin_val,
+            "lost_con_valor": n_audits_lost_con_val,
+            "lost_sin_valor": n_audits_lost_sin_val,
+            "nota": "Leads ASOCIADOS A AUDITS del período (sin filtrar updated_at). Resuelve el caso donde Kommo no actualizó updated_at en el cierre.",
+        },
         "cobertura_audit": {
             "conversaciones_periodo": n_convs,
             "audits_periodo": len(audits),
             "audits_pendientes": n_audit_pending,
             "pct_cobertura": round(100 * len(audits) / n_convs, 1) if n_convs > 0 else 0,
+        },
+        "conversaciones_del_dia": {
+            "fecha_bogota": now_bog.strftime("%Y-%m-%d"),
+            "total": total_hoy,
+            "por_canal": canal_hoy,
+            "atendidas": atendidas_hoy,
+            "pendientes": pendientes_hoy,
+            "sin_asesora": sin_asesora_hoy,
+            "avg_response_min": avg_response_min,
+            "por_asesora": por_asesora_lista,
         },
     }

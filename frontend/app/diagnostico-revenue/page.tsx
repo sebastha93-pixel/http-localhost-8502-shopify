@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
 import { esAdmin } from "@/lib/auth";
@@ -9,7 +9,7 @@ import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { KpiStrip } from "@/components/kpi-card";
-import { Shield } from "lucide-react";
+import { Shield, Copy, Check, Loader2, Sparkles, RefreshCw } from "lucide-react";
 
 interface Diagnostico {
   ok: boolean;
@@ -48,11 +48,36 @@ interface Diagnostico {
     inconclusas_cop: number;
     nota?: string;
   };
+  leads_de_audits?: {
+    total_leads_unicos: number;
+    valor_won_cop: number;
+    valor_lost_cop: number;
+    won_con_valor: number;
+    won_sin_valor: number;
+    lost_con_valor: number;
+    lost_sin_valor: number;
+    nota?: string;
+  };
   cobertura_audit?: {
     conversaciones_periodo: number;
     audits_periodo: number;
     audits_pendientes: number;
     pct_cobertura: number;
+  };
+  conversaciones_del_dia?: {
+    fecha_bogota: string;
+    total: number;
+    por_canal: Record<string, number>;
+    atendidas: number;
+    pendientes: number;
+    sin_asesora: number;
+    avg_response_min: number | null;
+    por_asesora: Array<{
+      name: string;
+      asignadas: number;
+      atendidas: number;
+      pendientes: number;
+    }>;
   };
 }
 
@@ -63,7 +88,10 @@ function fmtCop(n: number | null | undefined) {
 
 export default function DiagnosticoRevenuePage() {
   const { user } = useAuth();
+  const qc = useQueryClient();
   const [days, setDays] = useState<number>(8);
+  const [copied, setCopied] = useState<boolean>(false);
+  const [actionMsg, setActionMsg] = useState<string>("");
 
   const q = useQuery<Diagnostico>({
     queryKey: ["diagnostico-revenue", days],
@@ -71,6 +99,59 @@ export default function DiagnosticoRevenuePage() {
     enabled: esAdmin(user),
     staleTime: 60_000,
   });
+
+  const auditBatchMut = useMutation({
+    mutationFn: (limit: number) => api.post<any>(`/api/revenue/audit/run-pending?limit=${limit}&solo_cerradas=false`),
+    onSuccess: (data) => {
+      setActionMsg(`✓ Procesadas: ${data?.procesadas ?? 0} · exitosas: ${data?.exitosas ?? 0} · fallidas: ${data?.fallidas ?? 0}`);
+      qc.invalidateQueries({ queryKey: ["diagnostico-revenue"] });
+      setTimeout(() => setActionMsg(""), 8000);
+    },
+    onError: (e: Error) => {
+      setActionMsg(`Error: ${e.message}`);
+      setTimeout(() => setActionMsg(""), 8000);
+    },
+  });
+
+  const syncLeadsMut = useMutation({
+    mutationFn: () => api.post<any>(`/api/revenue/sync/leads?full=false&limit=1000`),
+    onSuccess: (data) => {
+      setActionMsg(`✓ Leads sincronizados: ${data?.actualizados ?? data?.total ?? "OK"}`);
+      qc.invalidateQueries({ queryKey: ["diagnostico-revenue"] });
+      setTimeout(() => setActionMsg(""), 8000);
+    },
+    onError: (e: Error) => {
+      setActionMsg(`Error: ${e.message}`);
+      setTimeout(() => setActionMsg(""), 8000);
+    },
+  });
+
+  function copiarReporteDia() {
+    const dia = q.data?.conversaciones_del_dia;
+    if (!dia) return;
+    const canales = Object.entries(dia.por_canal || {})
+      .map(([k, v]) => `${k}: ${v}`)
+      .join(" · ");
+    const asesoras = (dia.por_asesora || [])
+      .map(r => `  · ${r.name}: ${r.asignadas} (atendidas ${r.atendidas}, pendientes ${r.pendientes})`)
+      .join("\n");
+    const txt = `📊 MALE DENIM · Reporte del día ${dia.fecha_bogota}
+
+Conversaciones del día: ${dia.total}
+  Atendidas: ${dia.atendidas}
+  Pendientes: ${dia.pendientes}
+  Sin asesora: ${dia.sin_asesora}
+
+Por canal: ${canales || "—"}
+Tiempo promedio primera respuesta: ${dia.avg_response_min ? `${dia.avg_response_min} min` : "—"}
+
+Por asesora:
+${asesoras || "  · sin asignaciones"}`;
+    navigator.clipboard?.writeText(txt).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    });
+  }
 
   if (!esAdmin(user)) {
     return (
@@ -120,6 +201,118 @@ export default function DiagnosticoRevenuePage() {
           ))}
         </div>
       </div>
+
+      {/* ────────── CONVERSACIONES DEL DÍA — briefing matutino ─────── */}
+      {d.conversaciones_del_dia && (
+        <section className="rounded-md border border-navy-600/30 bg-navy-600/[0.03] overflow-hidden">
+          <div className="flex flex-wrap items-baseline justify-between gap-3 border-b border-border bg-card px-5 py-3">
+            <div>
+              <p className="font-display text-base font-medium text-ink-900">
+                Conversaciones del día
+              </p>
+              <p className="text-xs text-graphite">
+                {d.conversaciones_del_dia.fecha_bogota} · zona horaria Bogotá
+              </p>
+            </div>
+            <button
+              onClick={copiarReporteDia}
+              className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-medium text-ink-900 transition-colors hover:bg-cloud"
+            >
+              {copied ? <><Check className="h-3.5 w-3.5 text-sage" /> Copiado</> : <><Copy className="h-3.5 w-3.5" /> Copiar reporte</>}
+            </button>
+          </div>
+
+          <div className="p-5 space-y-4">
+            <KpiStrip
+              items={[
+                { label: "Total del día", value: d.conversaciones_del_dia.total },
+                { label: "Atendidas",     value: d.conversaciones_del_dia.atendidas, tone: "success" },
+                { label: "Pendientes",    value: d.conversaciones_del_dia.pendientes, tone: d.conversaciones_del_dia.pendientes > 0 ? "danger" : "default" },
+                { label: "Sin asesora",   value: d.conversaciones_del_dia.sin_asesora, tone: d.conversaciones_del_dia.sin_asesora > 0 ? "danger" : "default" },
+                { label: "1ª resp. prom.", value: d.conversaciones_del_dia.avg_response_min ? `${d.conversaciones_del_dia.avg_response_min}m` : "—" },
+              ]}
+            />
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <Card>
+                <CardContent className="p-4">
+                  <p className="section-label mb-2">Por canal</p>
+                  {Object.keys(d.conversaciones_del_dia.por_canal).length === 0 ? (
+                    <p className="text-xs text-graphite italic">Sin canales registrados hoy.</p>
+                  ) : (
+                    <ul className="space-y-1 text-sm">
+                      {Object.entries(d.conversaciones_del_dia.por_canal)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([k, v]) => (
+                          <li key={k} className="flex justify-between">
+                            <span className="text-ink-900">{k}</span>
+                            <span className="tabular font-medium">{v}</span>
+                          </li>
+                        ))}
+                    </ul>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="p-4">
+                  <p className="section-label mb-2">Por asesora · ordenadas por pendientes</p>
+                  {d.conversaciones_del_dia.por_asesora.length === 0 ? (
+                    <p className="text-xs text-graphite italic">Sin asesoras con conversaciones hoy.</p>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border">
+                          <th className="text-left py-1 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Asesora</th>
+                          <th className="text-right py-1 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Asig.</th>
+                          <th className="text-right py-1 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Atend.</th>
+                          <th className="text-right py-1 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Pend.</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {d.conversaciones_del_dia.por_asesora.map((r, i) => (
+                          <tr key={i} className="border-b border-border">
+                            <td className="py-1.5 text-ink-900">{r.name}</td>
+                            <td className="py-1.5 text-right tabular">{r.asignadas}</td>
+                            <td className="py-1.5 text-right tabular text-sage">{r.atendidas}</td>
+                            <td className={`py-1.5 text-right tabular font-medium ${r.pendientes > 0 ? "text-terracotta" : "text-graphite"}`}>{r.pendientes}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* ────────── ACCIONES ADMIN ────────── */}
+      <section>
+        <p className="section-label mb-3">Acciones de mantenimiento</p>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => auditBatchMut.mutate(20)}
+            disabled={auditBatchMut.isPending}
+            className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-navy-700 disabled:opacity-50"
+          >
+            {auditBatchMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            Auditar 20 pendientes
+          </button>
+          <button
+            onClick={() => syncLeadsMut.mutate()}
+            disabled={syncLeadsMut.isPending}
+            className="inline-flex items-center gap-2 rounded-sm border border-border bg-card px-4 py-2 text-xs font-medium text-ink-900 transition-colors hover:bg-cloud disabled:opacity-50"
+          >
+            {syncLeadsMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            Re-sincronizar leads de Kommo
+          </button>
+          {actionMsg && (
+            <span className="text-xs text-graphite italic">{actionMsg}</span>
+          )}
+        </div>
+      </section>
 
       {/* Resumen ejecutivo */}
       <KpiStrip
