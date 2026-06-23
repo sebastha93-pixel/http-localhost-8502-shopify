@@ -34,8 +34,25 @@ interface Diagnostico {
   leads_periodo: {
     total: number;
     distribucion_status: Record<string, number>;
+    distribucion_pipeline?: Record<string, number>;
     valor_total_ganadas_cop: number;
     valor_total_perdidas_cop: number;
+    won_con_valor?: number;
+    won_sin_valor?: number;
+    lost_con_valor?: number;
+    lost_sin_valor?: number;
+  };
+  valor_segun_audit?: {
+    ganadas_cop: number;
+    perdidas_cop: number;
+    inconclusas_cop: number;
+    nota?: string;
+  };
+  cobertura_audit?: {
+    conversaciones_periodo: number;
+    audits_periodo: number;
+    audits_pendientes: number;
+    pct_cobertura: number;
   };
 }
 
@@ -109,12 +126,77 @@ export default function DiagnosticoRevenuePage() {
         items={[
           { label: "Audits",        value: d.audits.total },
           { label: "Conversaciones", value: d.conversations.total },
+          { label: "Cobertura",     value: d.cobertura_audit ? `${d.cobertura_audit.pct_cobertura}%` : "—", tone: (d.cobertura_audit?.pct_cobertura ?? 0) < 30 ? "danger" : "default" },
+          { label: "Pendientes audit", value: d.cobertura_audit?.audits_pendientes ?? "—", tone: (d.cobertura_audit?.audits_pendientes ?? 0) > 10 ? "danger" : "default" },
           { label: "Huérfanas",     value: d.conversations.sin_lead_id_huerfanas, tone: d.conversations.sin_lead_id_huerfanas > 0 ? "danger" : "default" },
           { label: "Mismatches IA", value: totalMismatch,                          tone: totalMismatch > 0 ? "danger" : "success" },
-          { label: "Ganadas COP",   value: fmtCop(d.leads_periodo.valor_total_ganadas_cop),  tone: "success" },
-          { label: "Perdidas COP",  value: fmtCop(d.leads_periodo.valor_total_perdidas_cop), tone: "danger" },
         ]}
       />
+
+      {/* VALOR MONETARIO — comparativa lead_value vs economic_impact */}
+      <section>
+        <p className="section-label mb-3">Valor monetario · 2 fuentes</p>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Card>
+            <CardContent className="p-5">
+              <p className="text-xs font-medium text-graphite mb-2">Según lead_value en Kommo</p>
+              <table className="w-full text-sm">
+                <tbody>
+                  <tr>
+                    <td className="py-1">Ganadas</td>
+                    <td className="py-1 text-right tabular text-sage font-medium">{fmtCop(d.leads_periodo.valor_total_ganadas_cop)}</td>
+                  </tr>
+                  <tr>
+                    <td className="py-1 pl-3 text-xs text-graphite">Con valor poblado</td>
+                    <td className="py-1 text-right tabular text-xs text-graphite">{d.leads_periodo.won_con_valor ?? 0}</td>
+                  </tr>
+                  <tr>
+                    <td className="py-1 pl-3 text-xs text-graphite">Sin valor (Kommo vacío)</td>
+                    <td className="py-1 text-right tabular text-xs text-terracotta">{d.leads_periodo.won_sin_valor ?? 0}</td>
+                  </tr>
+                  <tr><td colSpan={2} className="py-1 border-t border-border"></td></tr>
+                  <tr>
+                    <td className="py-1">Perdidas</td>
+                    <td className="py-1 text-right tabular text-terracotta font-medium">{fmtCop(d.leads_periodo.valor_total_perdidas_cop)}</td>
+                  </tr>
+                  <tr>
+                    <td className="py-1 pl-3 text-xs text-graphite">Con valor poblado</td>
+                    <td className="py-1 text-right tabular text-xs text-graphite">{d.leads_periodo.lost_con_valor ?? 0}</td>
+                  </tr>
+                  <tr>
+                    <td className="py-1 pl-3 text-xs text-graphite">Sin valor</td>
+                    <td className="py-1 text-right tabular text-xs text-terracotta">{d.leads_periodo.lost_sin_valor ?? 0}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </CardContent>
+          </Card>
+          {d.valor_segun_audit && (
+            <Card>
+              <CardContent className="p-5">
+                <p className="text-xs font-medium text-graphite mb-2">Según economic_impact_estimate de Haiku</p>
+                <p className="text-[0.65rem] text-graphite/80 italic mb-3">{d.valor_segun_audit.nota}</p>
+                <table className="w-full text-sm">
+                  <tbody>
+                    <tr>
+                      <td className="py-1">Ganadas (clasificadas por Kommo)</td>
+                      <td className="py-1 text-right tabular text-sage font-medium">{fmtCop(d.valor_segun_audit.ganadas_cop)}</td>
+                    </tr>
+                    <tr>
+                      <td className="py-1">Perdidas (clasificadas por Kommo)</td>
+                      <td className="py-1 text-right tabular text-terracotta font-medium">{fmtCop(d.valor_segun_audit.perdidas_cop)}</td>
+                    </tr>
+                    <tr>
+                      <td className="py-1">Inconclusas (lead aún abierto)</td>
+                      <td className="py-1 text-right tabular text-ochre font-medium">{fmtCop(d.valor_segun_audit.inconclusas_cop)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      </section>
 
       {/* AUDITS: Haiku vs Kommo */}
       <section>

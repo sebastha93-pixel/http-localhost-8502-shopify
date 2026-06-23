@@ -2388,10 +2388,12 @@ def diagnostico_data_quality(
         for c in convs if not c.get("lead_id")
     ][:10]
 
-    # ── 3. Leads del período por status ───────────────────────────────────
+    # ── 3. Leads del período por status (con desglose de valor) ──────────
+    # Pedimos también pipeline_id + status_id para detectar si el sync está
+    # mapeando bien los estados.
     try:
         leads_q = (sb.table("kommo_leads")
-                     .select("lead_id,status,lead_value,closed_at,updated_at")
+                     .select("lead_id,status,status_id,pipeline_id,lead_value,closed_at,updated_at")
                      .gte("updated_at", desde_iso)
                      .order("updated_at", desc=True)
                      .limit(800))
@@ -2399,17 +2401,62 @@ def diagnostico_data_quality(
     except Exception as e:
         log.warning(f"diagnostico leads fail: {e}")
         leads_periodo = []
+
     status_dist: dict = {}
+    pipeline_dist: dict = {}
     valor_won = 0.0
     valor_lost = 0.0
+    n_won_con_valor = 0
+    n_won_sin_valor = 0
+    n_lost_con_valor = 0
+    n_lost_sin_valor = 0
     for l in leads_periodo:
         st = (l.get("status") or "unknown").lower()
         status_dist[st] = status_dist.get(st, 0) + 1
+        pid = l.get("pipeline_id")
+        if pid:
+            pipeline_dist[pid] = pipeline_dist.get(pid, 0) + 1
         val = float(l.get("lead_value") or 0)
+        has_val = val > 0
         if st == "won":
             valor_won += val
+            if has_val: n_won_con_valor += 1
+            else:       n_won_sin_valor += 1
         elif st == "lost":
             valor_lost += val
+            if has_val: n_lost_con_valor += 1
+            else:       n_lost_sin_valor += 1
+
+    # ── 3.5. Valor según economic_impact_estimate del audit (más confiable
+    # que lead_value, que muchas veces no se llena en Kommo) ──────────────
+    val_audit_won = 0.0
+    val_audit_lost = 0.0
+    val_audit_inconclusas = 0.0
+    for a in audits:
+        impact = float(a.get("economic_impact_estimate") or 0)
+        if impact <= 0:
+            continue
+        lead = leads_map.get(a.get("lead_id")) or {}
+        kst = (lead.get("status") or "").lower()
+        if kst == "won":
+            val_audit_won += impact
+        elif kst == "lost":
+            val_audit_lost += impact
+        else:
+            val_audit_inconclusas += impact
+
+    # ── 3.6. Cobertura de auditoría ───────────────────────────────────────
+    # Cuántas conversaciones del período tienen audit_status pendiente
+    try:
+        n_pending_q = (sb.table("conversations")
+                         .select("conversation_id", count="exact")
+                         .gte("last_message_at", desde_iso)
+                         .eq("audit_status", "pending")
+                         .limit(1))
+        n_pending_res = n_pending_q.execute()
+        n_audit_pending = n_pending_res.count or 0
+    except Exception:
+        n_audit_pending = -1  # no se pudo calcular
 
     # ── 4. Conversaciones por edad (vigencia) ─────────────────────────────
     now_utc = datetime.now(tz=timezone.utc)
@@ -2457,7 +2504,24 @@ def diagnostico_data_quality(
         "leads_periodo": {
             "total": len(leads_periodo),
             "distribucion_status": status_dist,
+            "distribucion_pipeline": pipeline_dist,
             "valor_total_ganadas_cop": int(valor_won),
             "valor_total_perdidas_cop": int(valor_lost),
+            "won_con_valor": n_won_con_valor,
+            "won_sin_valor": n_won_sin_valor,
+            "lost_con_valor": n_lost_con_valor,
+            "lost_sin_valor": n_lost_sin_valor,
+        },
+        "valor_segun_audit": {
+            "ganadas_cop": int(val_audit_won),
+            "perdidas_cop": int(val_audit_lost),
+            "inconclusas_cop": int(val_audit_inconclusas),
+            "nota": "Suma de economic_impact_estimate de Haiku, agrupado por status real de Kommo. Más confiable que lead_value cuando los operadores no llenan el valor en Kommo.",
+        },
+        "cobertura_audit": {
+            "conversaciones_periodo": n_convs,
+            "audits_periodo": len(audits),
+            "audits_pendientes": n_audit_pending,
+            "pct_cobertura": round(100 * len(audits) / n_convs, 1) if n_convs > 0 else 0,
         },
     }
