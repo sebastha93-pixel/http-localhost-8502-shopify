@@ -243,9 +243,18 @@ Devuelve SOLO JSON válido con esta estructura:
 Sé directo, específico y accionable. Cita frases textuales cuando sea posible. NO uses markdown."""
 
 
-def coaching_para_asesora(advisor_id: str, days_back: int = 60) -> dict:
-    """Genera reporte de coaching IA basado en todas las auditorías de una asesora.
-    Toma el dataset, lo resume estadísticamente y pasa a Haiku para sintetizar."""
+def coaching_para_asesora(advisor_id: str, days_back: int = 8) -> dict:
+    """Genera reporte de coaching IA basado en auditorías recientes de una asesora.
+
+    Default: ventana de 8 días (era 60). Coaching debe ser sobre lo reciente
+    para que el feedback sea accionable.
+
+    GROUND TRUTH de venta_ganada/perdida = kommo_leads.status (lo que el
+    operador clasifica en Kommo al cerrar el lead). Haiku se usa para
+    juzgar calidad de la conversación, NO para decidir si la venta cerró.
+    Esto evita el bug donde Haiku marca como perdida un lead que tiene
+    pago confirmado fuera del chat.
+    """
     sb = db._sb()
     if sb is None:
         return {"ok": False, "error": "supabase_no_configurado"}
@@ -264,12 +273,49 @@ def coaching_para_asesora(advisor_id: str, days_back: int = 60) -> dict:
     if not audits:
         return {"ok": False, "error": "sin_auditorias"}
 
-    # Agregados estadísticos
+    # Ground truth: traer el status REAL de Kommo para cada lead auditado.
+    # Si Kommo dice won/lost, eso manda. Si está en proceso, usamos Haiku.
+    lead_ids_audit = list({a.get("lead_id") for a in audits if a.get("lead_id")})
+    lead_status_map: dict = {}
+    if lead_ids_audit:
+        try:
+            ld = (sb.table("kommo_leads")
+                    .select("lead_id,status,customer_name,customer_phone,lead_value")
+                    .in_("lead_id", lead_ids_audit)
+                    .limit(200).execute().data) or []
+            lead_status_map = {l["lead_id"]: l for l in ld}
+        except Exception:
+            pass
+
+    def _real_classification(a: dict) -> str:
+        """venta_lograda / venta_perdida / inconclusa, usando Kommo como verdad."""
+        lead = lead_status_map.get(a.get("lead_id")) or {}
+        kst = (lead.get("status") or "").lower()
+        if kst == "won":
+            return "venta_lograda"
+        if kst == "lost":
+            return "venta_perdida"
+        # Lead aún abierto en Kommo → confiamos en Haiku
+        return a.get("result_classification") or "inconclusa"
+
+    def _haiku_vs_kommo_mismatch(a: dict) -> bool:
+        """Marca si Haiku dijo perdida pero Kommo dice ganada (o viceversa)."""
+        haiku = a.get("result_classification") or ""
+        real = _real_classification(a)
+        return haiku in ("venta_lograda", "venta_perdida") and real != haiku
+
+    # Agregados estadísticos usando ground truth de Kommo
+    real_class = [_real_classification(a) for a in audits]
     n = len(audits)
-    won = sum(1 for a in audits if a.get("result_classification") == "venta_lograda")
-    lost = sum(1 for a in audits if a.get("result_classification") == "venta_perdida")
+    won = real_class.count("venta_lograda")
+    lost = real_class.count("venta_perdida")
     inconclusas = n - won - lost
-    impact_perdido = sum(float(a.get("economic_impact_estimate") or 0) for a in audits if a.get("result_classification") == "venta_perdida")
+    impact_perdido = sum(
+        float(a.get("economic_impact_estimate") or 0)
+        for a, rc in zip(audits, real_class)
+        if rc == "venta_perdida"
+    )
+    n_mismatches = sum(1 for a in audits if _haiku_vs_kommo_mismatch(a))
 
     def avg(field):
         vals = [float(a[field]) for a in audits if a.get(field) is not None]
@@ -297,47 +343,42 @@ def coaching_para_asesora(advisor_id: str, days_back: int = 60) -> dict:
 
     # ── Casos problema: top 8 con peor score / mayor impacto, con snippet del
     # momento crítico, recomendación y datos del lead para feedback accionable.
+    # SOLO mostramos casos donde Kommo confirma que la venta se perdió
+    # o donde el lead sigue en proceso con score bajo. Nunca casos ganados.
     def _score_caso(a: dict) -> float:
-        """Menor = peor. Combina classification + overall_score + impacto."""
-        cls = a.get("result_classification") or ""
+        """Menor = peor. Usa Kommo como ground truth para clasificar."""
+        rc = _real_classification(a)
         overall = float(a.get("overall_score") or 5)
         impacto = float(a.get("economic_impact_estimate") or 0)
-        # Las perdidas con alto impacto van primero
-        cls_weight = -100 if cls == "venta_perdida" else 0
-        impacto_weight = -min(impacto / 100_000, 50)  # cap a 50 puntos
+        cls_weight = -100 if rc == "venta_perdida" else 0
+        impacto_weight = -min(impacto / 100_000, 50)
         return cls_weight + overall * 10 + impacto_weight
 
-    peores = sorted(audits, key=_score_caso)[:8]
-    lead_ids_caso = list({a.get("lead_id") for a in peores if a.get("lead_id")})
-    leads_caso_map: dict = {}
-    if lead_ids_caso:
-        try:
-            ld = (sb.table("kommo_leads")
-                    .select("lead_id,customer_name,customer_phone,lead_value,status")
-                    .in_("lead_id", lead_ids_caso)
-                    .limit(50).execute().data) or []
-            leads_caso_map = {l["lead_id"]: l for l in ld}
-        except Exception:
-            pass
+    # Filtrar: NO incluimos ganadas (no son casos problema)
+    candidatas = [a for a in audits if _real_classification(a) != "venta_lograda"]
+    peores = sorted(candidatas, key=_score_caso)[:8]
 
     casos_problema: list[dict] = []
     for a in peores:
         if not (a.get("lost_moment") or a.get("main_loss_reason")):
             continue  # sin contenido, no aporta para coaching
-        lead = leads_caso_map.get(a.get("lead_id")) or {}
+        lead = lead_status_map.get(a.get("lead_id")) or {}
+        real_rc = _real_classification(a)
         casos_problema.append({
             "conversation_id":      a.get("conversation_id"),
             "lead_id":               a.get("lead_id"),
             "customer_name":         lead.get("customer_name"),
             "customer_phone":        lead.get("customer_phone"),
             "lead_value":            lead.get("lead_value"),
-            "result_classification": a.get("result_classification"),
+            "result_classification": real_rc,  # ground truth de Kommo
+            "kommo_status":          lead.get("status"),
             "overall_score":         a.get("overall_score"),
             "main_loss_reason":      a.get("main_loss_reason"),
             "lost_moment":           a.get("lost_moment"),
             "recommended_response":  a.get("recommended_response"),
             "economic_impact":       a.get("economic_impact_estimate"),
             "audit_date":            a.get("audit_date"),
+            "haiku_vs_kommo_mismatch": _haiku_vs_kommo_mismatch(a),
         })
 
     resumen_para_ia = f"""Asesora: {advisor_name}
@@ -401,11 +442,13 @@ Recomendaciones previas de las auditorías: {recomendaciones[:15]}
             "advisor_id": advisor_id,
             "advisor_name": advisor_name,
             "n_auditorias": n,
+            "ventana_dias": days_back,
             "stats": {
                 "won": won, "lost": lost, "inconclusas": inconclusas,
                 "conversion_rate": round(100 * won / (won + lost), 1) if (won + lost) else 0,
                 "impact_perdido_cop": int(impact_perdido),
                 "avg_overall": avg('overall_score'),
+                "n_mismatches_haiku_kommo": n_mismatches,
             },
             "coaching": parsed,
             "casos_problema": casos_problema,

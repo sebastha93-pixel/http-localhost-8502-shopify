@@ -730,12 +730,14 @@ interface CasoProblema {
   customer_phone?: string | null;
   lead_value?: number | null;
   result_classification?: string;
+  kommo_status?: string | null;
   overall_score?: number | null;
   main_loss_reason?: string | null;
   lost_moment?: string | null;
   recommended_response?: string | null;
   economic_impact?: number | null;
   audit_date?: string | null;
+  haiku_vs_kommo_mismatch?: boolean;
 }
 
 function CoachingTab({
@@ -745,15 +747,16 @@ function CoachingTab({
   onSelect: (id: string) => void;
 }) {
   const [selectedAdvisor, setSelectedAdvisor] = useState<string>("");
+  const [days, setDays] = useState<number>(8);
   const q = useQuery<any>({
-    queryKey: ["revenue", "coaching", selectedAdvisor],
-    queryFn: () => api.get(`/api/revenue/coaching/${selectedAdvisor}?days_back=60`),
+    queryKey: ["revenue", "coaching", selectedAdvisor, days],
+    queryFn: () => api.get(`/api/revenue/coaching/${selectedAdvisor}?days_back=${days}`),
     enabled: !!selectedAdvisor,
   });
   return (
     <Card>
       <CardContent className="p-5">
-        <div className="mb-4 flex items-center gap-3">
+        <div className="mb-4 flex flex-wrap items-center gap-3">
           <label className="text-xs text-graphite">Asesora</label>
           <select
             value={selectedAdvisor}
@@ -767,6 +770,20 @@ function CoachingTab({
               </option>
             ))}
           </select>
+          <span className="ml-2 text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Ventana</span>
+          <div className="inline-flex overflow-hidden rounded-sm border border-border bg-card">
+            {[3, 8, 15, 30].map(d => (
+              <button
+                key={d}
+                onClick={() => setDays(d)}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  days === d ? "bg-ink-900 text-white" : "text-graphite hover:bg-cloud"
+                }`}
+              >
+                {d}d
+              </button>
+            ))}
+          </div>
         </div>
 
         {!selectedAdvisor && (
@@ -783,6 +800,16 @@ function CoachingTab({
         )}
         {q.data?.ok && (
           <div className="space-y-4">
+            {/* Aviso: discrepancias Haiku vs Kommo (ground truth) */}
+            {(q.data.stats?.n_mismatches_haiku_kommo ?? 0) > 0 && (
+              <div className="rounded-sm border border-ochre/30 bg-ochre/[0.06] px-3 py-2 text-xs text-ink-900">
+                <span className="font-medium text-ochre">
+                  {q.data.stats.n_mismatches_haiku_kommo} discrepancia{q.data.stats.n_mismatches_haiku_kommo === 1 ? "" : "s"}
+                </span>{" "}
+                entre lo que dijo la IA y el estado real en Kommo. Los conteos de Ganadas / Perdidas usan Kommo como verdad.
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
               {[
                 ["Auditorías",       q.data.n_auditorias],
@@ -928,6 +955,9 @@ function CasoProblemaCard({
           {isWon  && <Badge tone="normal">Ganada</Badge>}
           {!isLost && !isWon && c.result_classification && (
             <Badge tone="riesgo">{c.result_classification.replace("_", " ")}</Badge>
+          )}
+          {c.haiku_vs_kommo_mismatch && (
+            <span title="La IA y Kommo discreparon. Usamos Kommo como verdad." className="text-[0.65rem] text-ochre">⚠ IA discrepó</span>
           )}
         </div>
       </header>

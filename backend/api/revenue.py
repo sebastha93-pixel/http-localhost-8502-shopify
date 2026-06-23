@@ -1711,10 +1711,11 @@ def tendencias(
 @router.get("/coaching/{advisor_id}")
 def coaching_asesora(
     advisor_id: str,
-    days_back: int = Query(60, ge=7, le=365),
+    days_back: int = Query(8, ge=1, le=90),
     _: CurrentUser = Depends(require_role("admin")),
 ) -> dict:
-    """Genera reporte de coaching IA para una asesora basado en sus auditorías."""
+    """Coaching IA basado en auditorías recientes (default 8 días).
+    Usa kommo_leads.status como ground truth para won/lost, no Haiku."""
     return audit_ia.coaching_para_asesora(advisor_id, days_back=days_back)
 
 
