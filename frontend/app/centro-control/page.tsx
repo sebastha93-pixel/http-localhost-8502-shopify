@@ -12,6 +12,7 @@ import { formatMoney, formatMoneyShort, fmtDateTime, hoyBogota } from "@/lib/uti
 import {
   ArrowRight, Loader2, TrendingUp, AlertTriangle, CheckCircle,
   Phone, Truck, MapPin, DollarSign, Activity, History, ShieldAlert,
+  ShoppingBag, Package, MessageSquare, RotateCcw, CreditCard,
 } from "lucide-react";
 
 interface QuickAction {
@@ -99,16 +100,93 @@ interface Overview {
   finanzas: Finanzas;
 }
 
+// === Tipos de los endpoints adicionales ===========================
+interface ComercialOverview {
+  ventas_hoy: { total?: number; num_pedidos?: number; ticket_promedio?: number };
+  delta: { ayer?: number; pct?: number; up?: boolean };
+  serie_12d: number[];
+  top_productos: Array<{ sku?: string; nombre?: string; revenue?: number; unidades?: number }>;
+}
+
+interface ComercialComp {
+  semana: { actual: { total: number; num_pedidos: number }; pct: number; up: boolean };
+  mes:    { actual: { total: number; num_pedidos: number }; pct: number; up: boolean };
+}
+
+interface InventarioResumen {
+  activos: number;
+  total_skus: number;
+  total_unidades: number;
+  sin_stock: number;
+  stock_bajo: number;
+}
+
+interface RevenueStats {
+  ok: boolean;
+  advisors?: number;
+  leads?: number;
+  conversations?: number;
+  messages?: number;
+  pending_audits?: number;
+}
+
+interface MpResumen {
+  total: number;
+  valor_neto_total: number;
+  comision_total: number;
+}
+
+// === Página =======================================================
 export default function CentroControlPage() {
   const { user } = useAuth();
-  const { data, isLoading, error, refetch, isFetching } = useQuery({
+
+  // Query principal: overview de operaciones (la que ya existía)
+  const opsQ = useQuery({
     queryKey: ["dashboard", "overview"],
     queryFn: () => api.get<Overview>("/api/dashboard/overview"),
   });
 
-  if (isLoading) return <LoadingState label="Cargando Centro de Control…" />;
-  if (error || !data) return <ErrorState error={error} onRetry={() => refetch()} />;
+  // Queries paralelas — cada sección carga independiente.
+  // Si falla una, las demás siguen renderizando.
+  const comercialQ = useQuery({
+    queryKey: ["dashboard", "comercial-overview"],
+    queryFn: () => api.get<ComercialOverview>("/api/comercial/overview"),
+    staleTime: 5 * 60_000,
+    retry: 1,
+  });
+  const comercialCompQ = useQuery({
+    queryKey: ["dashboard", "comercial-comp"],
+    queryFn: () => api.get<ComercialComp>("/api/comercial/comparativas"),
+    staleTime: 10 * 60_000,
+    retry: 1,
+  });
+  const inventarioQ = useQuery({
+    queryKey: ["dashboard", "inventario-resumen"],
+    queryFn: () => api.get<InventarioResumen>("/api/inventario/resumen"),
+    staleTime: 30 * 60_000,
+    retry: 1,
+  });
+  const revenueQ = useQuery({
+    queryKey: ["dashboard", "revenue-stats"],
+    queryFn: () => api.get<RevenueStats>("/api/revenue/stats"),
+    staleTime: 2 * 60_000,
+    retry: 1,
+  });
+  const mpQ = useQuery({
+    queryKey: ["dashboard", "mp-30d"],
+    queryFn: () => {
+      const desde = new Date();
+      desde.setDate(desde.getDate() - 30);
+      return api.get<MpResumen>(`/api/finanzas/mercadopago?desde=${desde.toISOString().slice(0, 10)}`);
+    },
+    staleTime: 15 * 60_000,
+    retry: 1,
+  });
 
+  if (opsQ.isLoading) return <LoadingState label="Cargando Centro de Control…" />;
+  if (opsQ.error || !opsQ.data) return <ErrorState error={opsQ.error} onRetry={() => opsQ.refetch()} />;
+
+  const data = opsQ.data;
   const totalCod = data.n_pend + data.n_transito + data.n_novedades + data.n_entregados;
 
   return (
@@ -127,7 +205,7 @@ export default function CentroControlPage() {
           <p className="section-label">Última sincronización</p>
           <p className="mt-1 text-sm font-medium text-ink-900 tabular-nums">
             {fmtDateTime(data.fetched_at)}
-            {isFetching && <Loader2 className="inline ml-2 h-3 w-3 animate-spin text-steel-500" />}
+            {opsQ.isFetching && <Loader2 className="inline ml-2 h-3 w-3 animate-spin text-steel-500" />}
           </p>
         </div>
       </div>
@@ -146,11 +224,9 @@ export default function CentroControlPage() {
         </section>
       )}
 
-      {/* KPIs operativos */}
+      {/* ────────── BLOQUE 1: OPERACIONES (existente) ─────────── */}
       <section>
-        <p className="section-label mb-3 flex items-center gap-2">
-          <Activity className="h-3 w-3" /> Operación logística
-        </p>
+        <SectionHeading icon={Activity} title="Operación logística" />
         <KpiStrip
           items={[
             { label: "Pedidos activos", value: data.n_total },
@@ -162,13 +238,71 @@ export default function CentroControlPage() {
         />
       </section>
 
-      {/* Actividad de hoy + Distribución */}
+      {/* ────────── BLOQUE 2: COMERCIAL (Shopify) — nuevo ─────────── */}
+      <section>
+        <SectionHeading icon={ShoppingBag} title="Comercial — Shopify" href="/comercial" />
+        {comercialQ.isLoading || !comercialQ.data ? (
+          <SkeletonStrip />
+        ) : (
+          <ComercialBlock
+            overview={comercialQ.data}
+            comp={comercialCompQ.data}
+          />
+        )}
+      </section>
+
+      {/* ────────── BLOQUE 3: REVENUE IA + INVENTARIO ─────────── */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <section>
+          <SectionHeading icon={MessageSquare} title="Revenue IA" href="/revenue" />
+          {revenueQ.isLoading || !revenueQ.data ? (
+            <SkeletonStrip cols={4} />
+          ) : (
+            <KpiStrip
+              items={[
+                { label: "Asesoras en línea", value: revenueQ.data.advisors ?? 0 },
+                { label: "Conversaciones",    value: (revenueQ.data.conversations ?? 0).toLocaleString("es-CO") },
+                { label: "Mensajes (total)",  value: (revenueQ.data.messages ?? 0).toLocaleString("es-CO") },
+                { label: "Por auditar",       value: revenueQ.data.pending_audits ?? 0, tone: (revenueQ.data.pending_audits ?? 0) > 10 ? "danger" : "default" },
+              ]}
+            />
+          )}
+        </section>
+
+        <section>
+          <SectionHeading icon={Package} title="Inventario" href="/inventario" />
+          {inventarioQ.isLoading || !inventarioQ.data ? (
+            <SkeletonStrip cols={4} />
+          ) : (
+            <KpiStrip
+              items={[
+                { label: "Productos activos", value: inventarioQ.data.activos },
+                { label: "SKUs",              value: inventarioQ.data.total_skus.toLocaleString("es-CO") },
+                { label: "Sin stock",         value: inventarioQ.data.sin_stock, tone: inventarioQ.data.sin_stock > 10 ? "danger" : "default" },
+                { label: "Stock bajo",        value: inventarioQ.data.stock_bajo, tone: inventarioQ.data.stock_bajo > 0 ? "danger" : "default" },
+              ]}
+            />
+          )}
+        </section>
+      </div>
+
+      {/* ────────── BLOQUE 4: DEVOLUCIONES / INCIDENCIAS ─────────── */}
+      <section>
+        <SectionHeading icon={RotateCcw} title="Devoluciones e incidencias" href="/incidencias" />
+        <KpiStrip
+          items={[
+            { label: "Novedades activas",    value: data.n_novedades,                           tone: data.n_novedades > 0 ? "danger" : "default" },
+            { label: "Despacho urgente",     value: data.urgentes.length,                       tone: data.urgentes.length > 0 ? "danger" : "default" },
+            { label: "Acciones hoy",         value: data.actividad_hoy.acciones_hoy },
+            { label: "Despachos autorizados", value: data.actividad_hoy.autorizados_hoy,        tone: "success" },
+          ]}
+        />
+      </section>
+
+      {/* ────────── BLOQUE 5: Actividad de hoy + Distribución (existente) ─────────── */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* Actividad hoy */}
         <section className="lg:col-span-1">
-          <p className="section-label mb-3 flex items-center gap-2">
-            <TrendingUp className="h-3 w-3" /> Actividad de hoy
-          </p>
+          <SectionHeading icon={TrendingUp} title="Actividad de hoy" />
           <Card>
             <CardContent className="space-y-3 p-5">
               <StatRow icon={Truck}        label="Pedidos nuevos"        value={data.actividad_hoy.pedidos_creados_hoy} />
@@ -179,9 +313,8 @@ export default function CentroControlPage() {
           </Card>
         </section>
 
-        {/* Distribución por estado COD */}
         <section className="lg:col-span-2">
-          <p className="section-label mb-3">Distribución COD por estado</p>
+          <SectionHeading icon={DollarSign} title="Distribución COD por estado" />
           <Card>
             <CardContent className="space-y-3 p-5">
               <DistRow label="Pendientes despacho" value={data.n_pend}       color="bg-ochre"      total={totalCod} />
@@ -193,12 +326,10 @@ export default function CentroControlPage() {
         </section>
       </div>
 
-      {/* Top urgentes + Acciones recientes */}
+      {/* ────────── BLOQUE 6: Urgentes + Acciones recientes ─────────── */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <section>
-          <p className="section-label mb-3 flex items-center gap-2">
-            <AlertTriangle className="h-3 w-3" /> Pedidos urgentes ({data.urgentes.length})
-          </p>
+          <SectionHeading icon={AlertTriangle} title={`Pedidos urgentes (${data.urgentes.length})`} />
           <Card>
             <CardContent className="p-0">
               {data.urgentes.length === 0 ? (
@@ -215,9 +346,7 @@ export default function CentroControlPage() {
         </section>
 
         <section>
-          <p className="section-label mb-3 flex items-center gap-2">
-            <History className="h-3 w-3" /> Acciones recientes del equipo
-          </p>
+          <SectionHeading icon={History} title="Acciones recientes del equipo" />
           <Card>
             <CardContent className="p-0">
               {data.acciones_recientes.length === 0 ? (
@@ -241,12 +370,10 @@ export default function CentroControlPage() {
         </section>
       </div>
 
-      {/* Performance por zona + por carrier */}
+      {/* ────────── BLOQUE 7: Performance por zona + carrier ─────────── */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <section>
-          <p className="section-label mb-3 flex items-center gap-2">
-            <MapPin className="h-3 w-3" /> Performance por zona
-          </p>
+          <SectionHeading icon={MapPin} title="Performance por zona" />
           <Card>
             <CardContent className="space-y-2 p-5">
               {data.por_zona.slice(0, 6).map((z) => (
@@ -257,9 +384,7 @@ export default function CentroControlPage() {
         </section>
 
         <section>
-          <p className="section-label mb-3 flex items-center gap-2">
-            <Truck className="h-3 w-3" /> Performance por transportadora
-          </p>
+          <SectionHeading icon={Truck} title="Performance por transportadora" />
           <Card>
             <CardContent className="space-y-2 p-5">
               {data.por_carrier.length === 0 ? (
@@ -274,38 +399,69 @@ export default function CentroControlPage() {
         </section>
       </div>
 
-      {/* Finanzas */}
-      <section>
-        <p className="section-label mb-3 flex items-center gap-2">
-          <DollarSign className="h-3 w-3" /> Finanzas
-        </p>
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <KpiCard
-            label="COD entregado total"
-            value={formatMoneyShort(data.finanzas.cod_entregados)}
-            meta={`${data.n_entregados} cobrados`}
-            variant="success"
-          />
-          <KpiCard
-            label="Por liquidar Melonn"
-            value={formatMoneyShort(data.finanzas.cod_por_liquidar)}
-            meta={`${data.finanzas.n_por_liquidar} pedidos`}
-            variant={data.finanzas.cod_por_liquidar > 0 ? "danger" : "default"}
-          />
-          <KpiCard
-            label="COD en novedades"
-            value={formatMoneyShort(data.finanzas.cod_novedades)}
-            meta="Recaudo comprometido"
-            variant={data.finanzas.cod_novedades > 0 ? "danger" : "default"}
-          />
-          <KpiCard
-            label="Diferencias detectadas"
-            value={data.finanzas.n_con_diferencia}
-            meta="Monto ≠ esperado"
-            variant={data.finanzas.n_con_diferencia > 0 ? "danger" : "default"}
-          />
-        </div>
-      </section>
+      {/* ────────── BLOQUE 8: FINANZAS COD + Pagos online ─────────── */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <section>
+          <SectionHeading icon={DollarSign} title="Finanzas — COD" href="/finanzas" />
+          <div className="grid grid-cols-2 gap-4">
+            <KpiCard
+              label="COD entregado total"
+              value={formatMoneyShort(data.finanzas.cod_entregados)}
+              meta={`${data.n_entregados} cobrados`}
+              variant="success"
+            />
+            <KpiCard
+              label="Por liquidar Melonn"
+              value={formatMoneyShort(data.finanzas.cod_por_liquidar)}
+              meta={`${data.finanzas.n_por_liquidar} pedidos`}
+              variant={data.finanzas.cod_por_liquidar > 0 ? "danger" : "default"}
+            />
+            <KpiCard
+              label="COD en novedades"
+              value={formatMoneyShort(data.finanzas.cod_novedades)}
+              meta="Recaudo comprometido"
+              variant={data.finanzas.cod_novedades > 0 ? "danger" : "default"}
+            />
+            <KpiCard
+              label="Diferencias detectadas"
+              value={data.finanzas.n_con_diferencia}
+              meta="Monto ≠ esperado"
+              variant={data.finanzas.n_con_diferencia > 0 ? "danger" : "default"}
+            />
+          </div>
+        </section>
+
+        <section>
+          <SectionHeading icon={CreditCard} title="Pagos online — MercadoPago" href="/mercadopago" />
+          {mpQ.isLoading || !mpQ.data ? (
+            <SkeletonStrip cols={2} />
+          ) : (
+            <div className="grid grid-cols-2 gap-4">
+              <KpiCard
+                label="Transacciones 30d"
+                value={mpQ.data.total}
+                meta="Pagos aprobados"
+              />
+              <KpiCard
+                label="Valor neto 30d"
+                value={formatMoneyShort(mpQ.data.valor_neto_total)}
+                meta="Después de comisión"
+                variant="success"
+              />
+              <KpiCard
+                label="Valor bruto 30d"
+                value={formatMoneyShort(mpQ.data.valor_neto_total + mpQ.data.comision_total)}
+                meta="Recaudo total"
+              />
+              <KpiCard
+                label="Comisión MP"
+                value={formatMoneyShort(mpQ.data.comision_total)}
+                meta="Cobrado por MP"
+              />
+            </div>
+          )}
+        </section>
+      </div>
 
       <p className="pt-2 text-center text-[0.65rem] text-graphite tabular-nums">
         {data.n_total} pedidos · fuente: {data.fuente}
@@ -314,7 +470,114 @@ export default function CentroControlPage() {
   );
 }
 
-// ── Sub-componentes ──────────────────────────────────────────────────
+// ────────── Sub-componentes ──────────────────────────────────────────
+
+function SectionHeading({
+  icon: Icon, title, href,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  href?: string;
+}) {
+  const inner = (
+    <p className="section-label mb-3 flex items-center gap-2">
+      <Icon className="h-3 w-3" /> {title}
+      {href && <span className="text-graphite/50">↗</span>}
+    </p>
+  );
+  return href ? (
+    <Link href={href} className="block hover:opacity-80 transition-opacity">{inner}</Link>
+  ) : inner;
+}
+
+function SkeletonStrip({ cols = 5 }: { cols?: number }) {
+  return (
+    <div className={`grid divide-x divide-border rounded-md border border-border bg-card grid-cols-${cols}`}>
+      {Array.from({ length: cols }).map((_, i) => (
+        <div key={i} className="px-5 py-4">
+          <div className="h-2 w-16 rounded-sm bg-cloud shimmer" />
+          <div className="mt-3 h-5 w-12 rounded-sm bg-cloud shimmer" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ComercialBlock({
+  overview, comp,
+}: {
+  overview: ComercialOverview;
+  comp?: ComercialComp;
+}) {
+  const ventasHoy = overview.ventas_hoy?.total ?? 0;
+  const numPedidosHoy = overview.ventas_hoy?.num_pedidos ?? 0;
+  const pct = overview.delta?.pct ?? 0;
+  const up = !!overview.delta?.up;
+
+  return (
+    <>
+      <KpiStrip
+        items={[
+          { label: "Ventas hoy",     value: formatMoneyShort(ventasHoy) },
+          { label: "Pedidos hoy",    value: numPedidosHoy },
+          { label: "Vs ayer",        value: ventasHoy > 0 ? `${up ? "↑" : "↓"} ${Math.abs(pct).toFixed(1)}%` : "—",
+            tone: ventasHoy > 0 ? (up ? "success" : "danger") : "default" },
+          { label: "Semana actual",  value: comp ? formatMoneyShort(comp.semana.actual.total) : "…" },
+          { label: "Mes a la fecha", value: comp ? formatMoneyShort(comp.mes.actual.total)    : "…" },
+        ]}
+      />
+
+      {/* Spark 12 días + Top productos */}
+      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+        <Card>
+          <CardContent className="p-4">
+            <p className="section-label mb-2">Ventas últimos 12 días</p>
+            <div className="h-16"><Sparkline data={overview.serie_12d || []} /></div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <p className="section-label mb-2">Top productos (30 días)</p>
+            {overview.top_productos && overview.top_productos.length > 0 ? (
+              <ul className="space-y-1.5">
+                {overview.top_productos.slice(0, 3).map((p, i) => (
+                  <li key={`${p.sku}-${i}`} className="flex items-baseline justify-between text-xs">
+                    <span className="text-graphite tabular-nums">{i + 1}.</span>
+                    <span className="mx-2 flex-1 truncate text-ink-900">{p.nombre || p.sku || "—"}</span>
+                    <span className="font-medium text-ink-900 tabular-nums">{formatMoney(p.revenue ?? 0)}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="py-2 text-xs text-graphite">Sin ventas en el período.</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </>
+  );
+}
+
+function Sparkline({ data, height = 50 }: { data: number[]; height?: number }) {
+  if (!data?.length) return <div className="text-xs text-graphite">Sin datos</div>;
+  const max = Math.max(...data, 1);
+  const min = Math.min(...data, 0);
+  const range = max - min || 1;
+  const w = 100;
+  const points = data.map((v, i) => {
+    const x = (i / (data.length - 1 || 1)) * w;
+    const y = height - ((v - min) / range) * height;
+    return `${x},${y}`;
+  }).join(" ");
+  const lastX = ((data.length - 1) / (data.length - 1 || 1)) * w;
+  const lastY = height - ((data[data.length - 1] - min) / range) * height;
+  return (
+    <svg viewBox={`0 0 ${w} ${height}`} className="h-full w-full" preserveAspectRatio="none">
+      <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.5" className="text-navy-600" />
+      <circle cx={lastX} cy={lastY} r="2" className="fill-navy-600" />
+    </svg>
+  );
+}
 
 function QuickActionCard({ q }: { q: QuickAction }) {
   const colors: Record<string, string> = {
