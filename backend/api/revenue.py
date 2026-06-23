@@ -665,43 +665,73 @@ def debug_schema(table: str, _: CurrentUser = Depends(require_role("admin"))) ->
 
 @router.post("/kommo-webhook")
 async def kommo_webhook(request: Request, background_tasks: BackgroundTasks) -> dict:
-    """Receptor de eventos de Kommo. PÚBLICO. Parsea y persiste en Supabase.
-    Si detecta cierre de lead (won/lost), dispara audit IA en background."""
+    """Receptor de eventos de Kommo. PÚBLICO.
+
+    CRITICAL: Kommo desactiva el webhook si tarda >2s en responder. Por eso:
+    1. Leemos bytes crudos (rápido, no parsea form/json).
+    2. Encolamos TODO el parseo y persistencia en background.
+    3. Respondemos 200 inmediatamente.
+    """
     from datetime import datetime as _dt, timezone as _tz
     now_iso = _dt.now(tz=_tz.utc).isoformat()
 
-    body_dict: dict = {}
+    # Lectura mínima: bytes crudos + content-type. Sin await form()/json() acá.
     try:
+        raw = await request.body()
         ct = (request.headers.get("content-type") or "").lower()
-        if "json" in ct:
-            body_dict = await request.json()
-        else:
-            form = await request.form()
-            body_dict = dict(form)
-    except Exception as e:
-        body_dict = {"_parse_error": str(e)[:200]}
+    except Exception:
+        raw = b""
+        ct = ""
 
     _webhook_stats["total"] += 1
     if _webhook_stats["primero_en"] is None:
         _webhook_stats["primero_en"] = now_iso
     _webhook_stats["ultimo_en"] = now_iso
 
-    keys = " ".join(body_dict.keys()) if isinstance(body_dict, dict) else ""
-    es_msg = "message" in keys or "talk" in keys
-    es_lead = "leads" in keys
-    if es_msg:
-        _webhook_stats["mensajes_evento"] += 1
-    elif es_lead:
-        _webhook_stats["leads_evento"] += 1
-    else:
-        _webhook_stats["otros"] += 1
-
-    # Procesamiento en background para responder rápido a Kommo (evita timeouts
-    # que desactivan el webhook). Las llamadas a Kommo API en fases C1/C2 pueden
-    # tomar varios segundos, no podemos bloquear la respuesta del webhook.
-    def _procesar_en_background(body: dict) -> None:
+    def _procesar_en_background(raw_bytes: bytes, ctype: str) -> None:
+        """Parsea body + persiste. Corre DESPUÉS de responder a Kommo."""
         try:
-            parsed = _kommo_form_to_nested(body) if isinstance(body, dict) else {}
+            body_dict: dict = {}
+            if "json" in ctype:
+                import json as _json
+                try:
+                    body_dict = _json.loads(raw_bytes.decode("utf-8", errors="replace") or "{}")
+                except Exception:
+                    body_dict = {}
+            else:
+                # form-urlencoded: parsear manualmente sin instanciar Starlette.FormData
+                from urllib.parse import parse_qsl
+                try:
+                    body_dict = dict(parse_qsl(
+                        raw_bytes.decode("utf-8", errors="replace"),
+                        keep_blank_values=True,
+                    ))
+                except Exception:
+                    body_dict = {}
+            if not isinstance(body_dict, dict):
+                body_dict = {}
+
+            keys = " ".join(body_dict.keys())
+            es_msg = "message" in keys or "talk" in keys
+            es_lead = "leads" in keys
+            if es_msg:
+                _webhook_stats["mensajes_evento"] += 1
+            elif es_lead:
+                _webhook_stats["leads_evento"] += 1
+            else:
+                _webhook_stats["otros"] += 1
+
+            preview = {k: (str(v)[:200] if not isinstance(v, (dict, list)) else "<obj>")
+                       for k, v in list(body_dict.items())[:20]}
+            _webhook_stats["ultimos_payloads"].insert(0, {
+                "ts": now_iso,
+                "tipo": "message" if es_msg else "lead" if es_lead else "otro",
+                "keys": list(body_dict.keys())[:20],
+                "preview": preview,
+            })
+            _webhook_stats["ultimos_payloads"] = _webhook_stats["ultimos_payloads"][:10]
+
+            parsed = _kommo_form_to_nested(body_dict)
             result = _procesar_webhook(parsed)
             _webhook_stats["mensajes_guardados"] += result.get("messages", 0)
             _webhook_stats["convs_upserteadas"] += result.get("conversations", 0)
@@ -714,19 +744,7 @@ async def kommo_webhook(request: Request, background_tasks: BackgroundTasks) -> 
             _webhook_stats["errores_parser"] += 1
             _webhook_stats["ultimos_errores"] = ([f"bg: {str(e)[:200]}"] + _webhook_stats["ultimos_errores"])[:5]
 
-    if isinstance(body_dict, dict) and not body_dict.get("_parse_error"):
-        background_tasks.add_task(_procesar_en_background, body_dict)
-
-    preview = {k: (str(v)[:200] if not isinstance(v, (dict, list)) else "<obj>")
-               for k, v in body_dict.items()}
-    _webhook_stats["ultimos_payloads"].insert(0, {
-        "ts": now_iso,
-        "tipo": "message" if es_msg else "lead" if es_lead else "otro",
-        "keys": list(body_dict.keys())[:20],
-        "preview": preview,
-    })
-    _webhook_stats["ultimos_payloads"] = _webhook_stats["ultimos_payloads"][:10]
-
+    background_tasks.add_task(_procesar_en_background, raw, ct)
     return {"ok": True}
 
 
@@ -765,6 +783,15 @@ def oauth_status(_: CurrentUser = Depends(require_role("admin"))) -> dict:
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
+@router.get("/ping")
+def ping() -> dict:
+    """Health-check PÚBLICO sin auth — pega esto a UptimeRobot cada 5 min
+    para que Railway no duerma y el webhook Kommo responda en <2s siempre.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    return {"ok": True, "ts": _dt.now(tz=_tz.utc).isoformat()}
+
+
 @router.get("/health")
 def health(_: CurrentUser = Depends(require_role("admin", "operador"))) -> dict:
     """
