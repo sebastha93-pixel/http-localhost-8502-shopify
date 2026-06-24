@@ -186,6 +186,55 @@ def _correr_jobs():
             _last_result = resultado
             return
 
+        # ── Dedupe nocturno de conversations duplicadas ──────────────────
+        # Para cada lead_id con >1 conversation: consolida en una sola
+        # (preferencia talk-* > meta-* > otros · desempate por last_message_at
+        # desc). Reasigna mensajes de las dupes a la canónica y borra dupes.
+        # Idempotente: si no hay dupes, no hace nada.
+        try:
+            page = 0
+            todas: list = []
+            while True:
+                r = (sb.table("conversations")
+                       .select("conversation_id,lead_id,last_message_at")
+                       .not_.is_("lead_id", "null")
+                       .order("last_message_at", desc=True)
+                       .range(page * 1000, page * 1000 + 999)
+                       .execute().data) or []
+                if not r:
+                    break
+                todas.extend(r)
+                if len(r) < 1000:
+                    break
+                page += 1
+                if page > 50:
+                    break
+            por_lead: dict = {}
+            for c in todas:
+                por_lead.setdefault(c["lead_id"], []).append(c)
+            n_dupes_borradas = 0
+            n_msgs_reasignados = 0
+            for lid, convs in por_lead.items():
+                if len(convs) < 2:
+                    continue
+                def _prio(c):
+                    cid = c["conversation_id"] or ""
+                    kind = 2 if cid.startswith("talk-") else (1 if cid.startswith("meta-") else 0)
+                    return (kind, c.get("last_message_at") or "")
+                ordenadas = sorted(convs, key=_prio, reverse=True)
+                canon = ordenadas[0]["conversation_id"]
+                for dupe in [c["conversation_id"] for c in ordenadas[1:]]:
+                    try:
+                        upd = sb.table("messages").update({"conversation_id": canon}).eq("conversation_id", dupe).execute()
+                        n_msgs_reasignados += len(upd.data or [])
+                        sb.table("conversations").delete().eq("conversation_id", dupe).execute()
+                        n_dupes_borradas += 1
+                    except Exception:
+                        pass
+            resultado["dedupe"] = {"borradas": n_dupes_borradas, "msgs_reasignados": n_msgs_reasignados}
+        except Exception as e:
+            resultado["dedupe_error"] = str(e)[:300]
+
         # Calcular rankings 30 días
         from backend.api.revenue import rankings_calcular as _rc  # noqa
         # rankings_calcular es un endpoint que requiere CurrentUser. Hacemos la lógica inline.
