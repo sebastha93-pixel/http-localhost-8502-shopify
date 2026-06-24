@@ -127,6 +127,48 @@ def _whisper_transcribe(audio_bytes: bytes, mime: str) -> Optional[str]:
         return None
 
 
+def transcribir_uno(message_id: str, media_id: str) -> dict:
+    """Transcribe UN audio específico ya (no batch). Pensado para llamar
+    desde el webhook Meta en background_tasks, así el audio aparece
+    transcrito en /revenue en <30s en vez de esperar al cron nocturno.
+
+    Idempotente: si el mensaje ya fue transcrito (no empieza con placeholder),
+    no hace nada y retorna ok=true.
+    """
+    sb = db._sb()
+    if sb is None or not message_id or not media_id:
+        return {"ok": False, "error": "args_invalidos"}
+    if not _openai_key():
+        return {"ok": False, "error": "no_openai_key"}
+    if not _meta_token():
+        return {"ok": False, "error": "no_meta_token"}
+    # Verificar que el mensaje aún esté pendiente
+    try:
+        r = sb.table("messages").select("message_text").eq("message_id", message_id).limit(1).execute()
+        if not r.data:
+            return {"ok": False, "error": "mensaje_no_encontrado"}
+        current = r.data[0].get("message_text") or ""
+        if not current.startswith("🎤 [audio]") or len(current) > 30:
+            # Ya tiene transcripción (texto > placeholder simple) — idempotente
+            return {"ok": True, "skipped": True, "reason": "ya_transcrito"}
+    except Exception as e:
+        return {"ok": False, "error": f"check: {str(e)[:120]}"}
+
+    downloaded = _descargar_audio_meta(media_id)
+    if not downloaded:
+        return {"ok": False, "error": "descarga_fallo"}
+    audio_bytes, mime = downloaded
+    texto = _whisper_transcribe(audio_bytes, mime)
+    if not texto:
+        return {"ok": False, "error": "whisper_fallo"}
+    nuevo = f"🎤 [audio] {texto[:4500]}"
+    try:
+        sb.table("messages").update({"message_text": nuevo}).eq("message_id", message_id).execute()
+        return {"ok": True, "transcrito": True, "preview": texto[:120]}
+    except Exception as e:
+        return {"ok": False, "error": f"update: {str(e)[:120]}"}
+
+
 def process_pending(limit: int = 20) -> dict:
     """Procesa hasta `limit` mensajes de audio sin transcripción.
 

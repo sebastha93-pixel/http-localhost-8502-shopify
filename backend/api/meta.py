@@ -20,7 +20,7 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 
 from backend.core.security import CurrentUser, require_role
 from backend.services import revenue_db as db
@@ -91,7 +91,7 @@ def webhook_verify(
 
 
 @router.post("/webhook")
-async def webhook_receive(request: Request) -> dict:
+async def webhook_receive(request: Request, background_tasks: BackgroundTasks) -> dict:
     """Receptor de eventos de Meta. PÚBLICO (Meta no autentica con Bearer).
     Valida firma X-Hub-Signature-256 con META_APP_SECRET."""
     body = await request.body()
@@ -202,6 +202,18 @@ def _procesar_whatsapp(payload: dict) -> dict:
                 )
                 if _upsert_message(sb, row):
                     msgs_saved += 1
+                    # Transcripción inmediata si es audio (en background, no
+                    # bloquea respuesta del webhook). En <30s queda transcrito.
+                    if msg_type in ("audio", "voice"):
+                        audio_meta_id = (m.get("audio") or m.get("voice") or {}).get("id")
+                        if audio_meta_id:
+                            def _tx_now(msg_id_arg=msg_id, media_id_arg=audio_meta_id):
+                                try:
+                                    from backend.services import transcription as _tx
+                                    _tx.transcribir_uno(f"meta-wa-{msg_id_arg}", media_id_arg)
+                                except Exception:
+                                    pass
+                            background_tasks.add_task(_tx_now)
 
             # Statuses (sent/delivered/read) — son los eventos para OUTGOING
             # Meta los envía con el id del mensaje saliente. Si NO lo teníamos
