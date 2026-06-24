@@ -800,6 +800,70 @@ def oauth_status(_: CurrentUser = Depends(require_role("admin"))) -> dict:
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
+@router.get("/diag")
+def diag() -> dict:
+    """Diagnostic público sin auth — útil para debug remoto sin ver logs Railway.
+
+    Reporta:
+    - uptime del proceso (cuánto lleva vivo)
+    - memoria + CPU
+    - timestamp del último cron run
+    - últimos errores capturados
+    """
+    import os
+    import time
+    info: dict = {
+        "ok": True,
+        "ts": datetime.now(tz=timezone.utc).isoformat(),
+        "pid": os.getpid(),
+    }
+    # Uptime proceso
+    try:
+        with open("/proc/self/stat") as f:
+            stat = f.read().split()
+        start_jiffies = int(stat[21])
+        clock_ticks = os.sysconf("SC_CLK_TCK")
+        with open("/proc/uptime") as f:
+            boot_uptime = float(f.read().split()[0])
+        proc_uptime = boot_uptime - (start_jiffies / clock_ticks)
+        info["uptime_sec"] = round(proc_uptime, 1)
+    except Exception as e:
+        info["uptime_err"] = str(e)[:100]
+    # Memory
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    info["mem_kb"] = int(line.split()[1])
+                elif line.startswith("VmPeak:"):
+                    info["mem_peak_kb"] = int(line.split()[1])
+    except Exception:
+        pass
+    # Scheduler state
+    try:
+        from backend.core import revenue_scheduler as rsch
+        st = rsch.get_state()
+        info["scheduler"] = {
+            "last_run_at":  st.get("last_run_at"),
+            "last_result":  (str(st.get("last_result") or "")[:300]) or None,
+        }
+    except Exception as e:
+        info["scheduler_err"] = str(e)[:200]
+    # Stats webhook Kommo
+    try:
+        info["kommo_webhook_stats"] = {
+            "total":             _webhook_stats.get("total", 0),
+            "ultimo_en":         _webhook_stats.get("ultimo_en"),
+            "mensajes_evento":   _webhook_stats.get("mensajes_evento", 0),
+            "leads_evento":      _webhook_stats.get("leads_evento", 0),
+            "errores_parser":    _webhook_stats.get("errores_parser", 0),
+            "ultimos_errores":   _webhook_stats.get("ultimos_errores", [])[:3],
+        }
+    except Exception:
+        pass
+    return info
+
+
 @router.api_route("/ping", methods=["GET", "HEAD"])
 def ping() -> dict:
     """Health-check PÚBLICO sin auth — pega esto a UptimeRobot cada 5 min
