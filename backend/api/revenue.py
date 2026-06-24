@@ -864,6 +864,69 @@ def diag() -> dict:
     return info
 
 
+@router.get("/kommo/describe")
+def kommo_describe(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Extrae TODO lo estructural de Kommo en un solo response.
+
+    Útil para entender el ecosistema completo de un vistazo:
+    - Account info (subdomain, currency, country, plan)
+    - Pipelines con sus stages
+    - Custom fields del lead (con field_id, code, type)
+    - Sample lead con TODOS los campos populados
+    - Lista de usuarios (asesoras) con roles
+    """
+    import sys
+    from pathlib import Path
+    _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+    import kommo_client as kc
+
+    out: dict = {"ok": True}
+    # Account
+    try:
+        out["account"] = kc.verificar_conexion()
+    except Exception as e:
+        out["account_err"] = str(e)[:200]
+    # Pipelines
+    try:
+        out["pipelines"] = kc.listar_pipelines()
+    except Exception as e:
+        out["pipelines_err"] = str(e)[:200]
+    # Users / advisors
+    try:
+        users = kc.listar_usuarios()
+        out["users"] = [
+            {"id": u.get("id"), "name": u.get("name"), "email": u.get("email"),
+             "rights": u.get("rights") or {}, "lang": u.get("lang")}
+            for u in users
+        ]
+    except Exception as e:
+        out["users_err"] = str(e)[:200]
+    # Custom fields lead (via raw API)
+    try:
+        from urllib.parse import urlencode as _ue
+        url = f"{kc._base_url()}/leads/custom_fields"
+        resp = kc._get(url.replace(kc._base_url(), ""), {"limit": 250})
+        out["lead_custom_fields"] = ((resp or {}).get("_embedded") or {}).get("custom_fields", [])
+    except Exception as e:
+        out["lead_custom_fields_err"] = str(e)[:200]
+    # Custom fields contact
+    try:
+        url = f"{kc._base_url()}/contacts/custom_fields"
+        resp = kc._get(url.replace(kc._base_url(), ""), {"limit": 250})
+        out["contact_custom_fields"] = ((resp or {}).get("_embedded") or {}).get("custom_fields", [])
+    except Exception as e:
+        out["contact_custom_fields_err"] = str(e)[:200]
+    # Sample lead con TODOS los campos
+    try:
+        leads_sample = list(kc.listar_leads(limit_total=1))
+        out["sample_lead"] = leads_sample[0] if leads_sample else None
+    except Exception as e:
+        out["sample_lead_err"] = str(e)[:200]
+    return out
+
+
 @router.post("/backfill/conversations-vacias")
 def backfill_conversations_vacias(
     background_tasks: BackgroundTasks,
