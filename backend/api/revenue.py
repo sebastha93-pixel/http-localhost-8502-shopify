@@ -2314,6 +2314,92 @@ def messages_stats(
     }
 
 
+@router.get("/loss-reasons-stats")
+def loss_reasons_stats(
+    days_back: int = Query(30, ge=1, le=365),
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """Top motivos de pérdida estructurados (custom field 'Motivo de Perdida').
+    Mucho más accionable que loss_reason texto libre.
+    """
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    desde = (datetime.now(tz=timezone.utc) - timedelta(days=days_back)).isoformat()
+    leads_q = (sb.table("kommo_leads")
+                 .select("lead_id,status,lead_value,raw,closed_at,advisor_id")
+                 .eq("status", "lost")
+                 .gte("closed_at", desde)
+                 .order("closed_at", desc=True)
+                 .limit(3000))
+    leads = _safe_exec(leads_q, retries=2, default=[])
+
+    # Agregar por motivo + por asesora
+    por_motivo: dict = {}
+    por_asesora_motivo: dict = {}
+    for l in leads:
+        raw = l.get("raw") or {}
+        cfv = raw.get("custom_fields_values") or []
+        motivo = None
+        for f in cfv:
+            if f.get("field_name") == "Motivo de Perdida":
+                vals = f.get("values") or []
+                if vals:
+                    motivo = vals[0].get("value") or "Sin motivo"
+                break
+        motivo = motivo or "Sin motivo"
+        val = float(l.get("lead_value") or 0)
+        m = por_motivo.setdefault(motivo, {"count": 0, "valor_perdido": 0})
+        m["count"] += 1
+        m["valor_perdido"] += val
+        aid = l.get("advisor_id")
+        if aid:
+            ka = por_asesora_motivo.setdefault(aid, {})
+            ka[motivo] = ka.get(motivo, 0) + 1
+
+    top_motivos = sorted(
+        [{"motivo": k, **v, "valor_perdido": int(v["valor_perdido"])}
+         for k, v in por_motivo.items()],
+        key=lambda r: r["count"], reverse=True,
+    )
+    return {
+        "ok": True,
+        "periodo_dias": days_back,
+        "total_leads_perdidos": len(leads),
+        "top_motivos": top_motivos,
+        "por_asesora_motivo": por_asesora_motivo,
+    }
+
+
+@router.get("/pipelines")
+def pipelines_list(_: CurrentUser = Depends(require_role("admin", "operador"))) -> dict:
+    """Lista los pipelines de Kommo (no cacheado — siempre fresh).
+    Útil para el selector en /revenue.
+    """
+    import sys
+    from pathlib import Path
+    _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+    import kommo_client as kc
+    try:
+        pips = kc.listar_pipelines()
+        return {
+            "ok": True,
+            "pipelines": [
+                {
+                    "id": p.get("id"),
+                    "name": p.get("name"),
+                    "is_main": p.get("is_main", False),
+                    "sort": p.get("sort"),
+                }
+                for p in pips
+            ],
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200], "pipelines": []}
+
+
 @router.get("/briefing-hoy")
 def briefing_hoy(_: CurrentUser = Depends(require_role("admin", "operador"))) -> dict:
     """Briefing matutino — el reporte que el equipo revisa cada mañana.
