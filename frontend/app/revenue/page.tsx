@@ -456,6 +456,23 @@ function ConversationDetailPanel({
                             {m.sender_name || "Asesora"}
                           </p>
                         )}
+                        {/* Imagen: si el placeholder es "🖼️ [imagen]", renderizar inline via proxy */}
+                        {m.message_text?.startsWith("🖼️ [imagen]") && (
+                          <a
+                            href={`/api/revenue/media/${encodeURIComponent(m.message_id)}`}
+                            target="_blank"
+                            rel="noopener"
+                            className="block mb-1"
+                          >
+                            <img
+                              src={`/api/revenue/media/${encodeURIComponent(m.message_id)}`}
+                              alt="Imagen del cliente"
+                              loading="lazy"
+                              className="max-w-[240px] max-h-[240px] rounded-sm object-cover"
+                              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                            />
+                          </a>
+                        )}
                         <p className="whitespace-pre-wrap break-words">
                           {m.message_text
                             ? m.message_text

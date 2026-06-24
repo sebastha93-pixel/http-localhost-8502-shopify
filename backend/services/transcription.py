@@ -36,6 +36,14 @@ def _meta_token() -> Optional[str]:
     return os.environ.get("META_SYSTEM_USER_TOKEN", "").strip() or None
 
 
+def descargar_media_meta(media_id: str) -> Optional[tuple[bytes, str]]:
+    """Versión pública: descarga cualquier media de Meta (image, audio, video,
+    document) usando META_SYSTEM_USER_TOKEN. Retorna (bytes, mime) o None.
+    Cap 25MB para no reventar memoria.
+    """
+    return _descargar_audio_meta(media_id)
+
+
 def _descargar_audio_meta(media_id: str) -> Optional[tuple[bytes, str]]:
     """Descarga binario de audio desde Meta Graph API.
     Devuelve (bytes, mime_type) o None.

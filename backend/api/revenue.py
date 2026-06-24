@@ -864,6 +864,54 @@ def diag() -> dict:
     return info
 
 
+@router.get("/media/{message_id}")
+def media_proxy(message_id: str):
+    """Sirve media (imagen/video/audio) de un mensaje WhatsApp, proxy a Meta.
+
+    El media_id de Meta expira en ~5 min, por eso no podemos cachearlo en
+    DB. Cada vez que el frontend pide la imagen, hacemos lookup del media_id
+    desde messages.payload y llamamos a Meta Graph API en vivo.
+
+    Útil para mostrar inline en /revenue las fotos que clientes envían
+    (capturas de pantalla, fotos de productos, comprobantes de pago).
+
+    PÚBLICO sin auth para que el browser pueda mostrar <img src=...>.
+    El message_id sigue siendo opaco (no enumerable), no es un riesgo real.
+    """
+    from fastapi.responses import Response
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+    try:
+        r = sb.table("messages").select("payload").eq("message_id", message_id).limit(1).execute()
+        if not r.data:
+            raise HTTPException(404, "mensaje no encontrado")
+        payload = r.data[0].get("payload") or {}
+        raw = payload.get("raw") or {}
+        media_id = None
+        # WhatsApp: payload.raw tiene image/audio/video/document/sticker
+        for kind in ("image", "audio", "video", "document", "sticker", "voice"):
+            obj = raw.get(kind) or {}
+            if obj.get("id"):
+                media_id = obj["id"]
+                break
+        if not media_id:
+            raise HTTPException(404, "media_id no encontrado en payload")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"lookup: {str(e)[:120]}")
+
+    from backend.services import transcription as _tx
+    downloaded = _tx.descargar_media_meta(media_id)
+    if not downloaded:
+        raise HTTPException(502, "Meta media descarga falló")
+    audio_bytes, mime = downloaded
+    return Response(content=audio_bytes, media_type=mime, headers={
+        "Cache-Control": "private, max-age=300",  # 5 min cache cliente
+    })
+
+
 @router.api_route("/ping", methods=["GET", "HEAD"])
 def ping() -> dict:
     """Health-check PÚBLICO sin auth — pega esto a UptimeRobot cada 5 min
