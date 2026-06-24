@@ -864,6 +864,78 @@ def diag() -> dict:
     return info
 
 
+@router.post("/backfill/conversations-vacias")
+def backfill_conversations_vacias(
+    background_tasks: BackgroundTasks,
+    limit: int = Query(100, ge=1, le=1000, description="Cuántas conversaciones vacías procesar"),
+    days_back: int = Query(30, ge=1, le=365, description="Solo conversaciones activas en últimos N días"),
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Encuentra conversaciones SIN mensajes y trata de jalar las notas
+    históricas desde Kommo. Útil para rellenar conversaciones 0/0 que
+    quedaron así porque se crearon antes del webhook Meta o durante
+    apagones del webhook Kommo.
+
+    Corre en background para no bloquear la respuesta. Cada lead toma
+    ~2-5s (rate-limit Kommo). Con limit=100 son ~5-10 minutos.
+    """
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "Supabase no configurado")
+
+    desde = (datetime.now(tz=timezone.utc) - timedelta(days=days_back)).isoformat()
+
+    # Encontrar conversaciones recientes con lead_id pero SIN mensajes en messages
+    convs_q = (sb.table("conversations")
+                 .select("conversation_id,lead_id")
+                 .not_.is_("lead_id", "null")
+                 .gte("last_message_at", desde)
+                 .order("last_message_at", desc=True)
+                 .limit(2000))
+    convs = _safe_exec(convs_q, retries=2, default=[])
+
+    # Cuáles tienen mensajes en messages
+    conv_ids = [c["conversation_id"] for c in convs]
+    con_mensajes: set = set()
+    for i in range(0, len(conv_ids), 200):
+        batch = conv_ids[i:i+200]
+        try:
+            mq = (sb.table("messages").select("conversation_id")
+                    .in_("conversation_id", batch).limit(2000).execute().data) or []
+            for m in mq:
+                con_mensajes.add(m["conversation_id"])
+        except Exception:
+            pass
+
+    # Las que faltan
+    vacias = [c for c in convs if c["conversation_id"] not in con_mensajes][:limit]
+    leads_pendientes = list({c["lead_id"] for c in vacias if c.get("lead_id")})
+
+    # Disparar en background
+    def _backfill_worker(lead_ids: list[int]):
+        rescatados = 0
+        fallidos = 0
+        for lid in lead_ids:
+            try:
+                res = kommo_svc.sync_messages_de_lead(int(lid))
+                if res.get("messages_guardados", 0) > 0:
+                    rescatados += 1
+                else:
+                    fallidos += 1
+            except Exception:
+                fallidos += 1
+        log.info(f"backfill_conversations_vacias terminó: rescatados={rescatados} fallidos={fallidos}")
+
+    background_tasks.add_task(_backfill_worker, leads_pendientes)
+    return {
+        "ok": True,
+        "encolados": len(leads_pendientes),
+        "convs_vacias_detectadas": len(vacias),
+        "convs_revisadas": len(convs),
+        "hint": "Corriendo en background. Re-consulta /diagnostico en 5-10 min para ver progreso.",
+    }
+
+
 @router.get("/media/{message_id}")
 def media_proxy(message_id: str):
     """Sirve media (imagen/video/audio) de un mensaje WhatsApp, proxy a Meta.
