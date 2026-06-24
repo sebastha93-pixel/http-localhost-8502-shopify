@@ -701,8 +701,68 @@ function TendenciasTab({ daysBack }: { daysBack: number }) {
       </Card>
 
       {/* CAMPOS PERSONALIZADOS DEL LEAD (fuente, campaña, talla, color, etc.) */}
+      <LossReasonsCard daysBack={daysBack} />
       <LeadFieldsCard daysBack={daysBack} />
     </div>
+  );
+}
+
+function LossReasonsCard({ daysBack }: { daysBack: number }) {
+  const q = useQuery<any>({
+    queryKey: ["revenue", "loss-reasons-stats", daysBack],
+    queryFn: () => api.get(`/api/revenue/loss-reasons-stats?days_back=${daysBack}`),
+  });
+  if (q.isLoading || q.isError || !q.data?.ok) return null;
+  const motivos = q.data.top_motivos || [];
+  if (motivos.length === 0) return null;
+  const total = q.data.total_leads_perdidos || 1;
+  const max = motivos[0]?.count || 1;
+  return (
+    <Card>
+      <CardContent className="p-5">
+        <div className="mb-3 flex items-baseline justify-between">
+          <p className="section-label">Motivos de pérdida · espejo Kommo</p>
+          <p className="text-[0.65rem] text-graphite">
+            {q.data.total_leads_perdidos} leads perdidos en {daysBack}d
+          </p>
+        </div>
+        <div className="space-y-2">
+          {motivos.map((m: any) => {
+            const pct = Math.round((m.count / total) * 100);
+            const barPct = Math.max(2, Math.round((m.count / max) * 100));
+            const isDominant = pct >= 30;
+            return (
+              <div key={m.motivo} className="grid grid-cols-[1fr_auto] items-center gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-baseline justify-between mb-1">
+                    <span className={`text-sm ${isDominant ? "font-medium text-ink-900" : "text-graphite"}`}>
+                      {m.motivo}
+                    </span>
+                    <span className="text-[0.7rem] tabular text-graphite">
+                      {m.count} · {pct}%
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-sm bg-cloud overflow-hidden">
+                    <div
+                      className={`h-full ${isDominant ? "bg-terracotta" : "bg-steel-400"} transition-all`}
+                      style={{ width: `${barPct}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="text-right tabular text-[0.7rem] text-graphite whitespace-nowrap">
+                  {m.valor_perdido > 0 ? `$${Math.round(m.valor_perdido / 1000).toLocaleString("es-CO")}K` : "—"}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <p className="mt-3 text-xs text-graphite">
+          {motivos[0]?.count >= total * 0.5
+            ? `⚠ Más de la mitad de las pérdidas son por "${motivos[0]?.motivo}". Eso es accionable: si bajas ese motivo a la mitad, recuperas mucho ingreso.`
+            : "Distribución mixta de motivos — revisa la columna por asesora para coaching dirigido."}
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
