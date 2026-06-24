@@ -1257,6 +1257,7 @@ export default function RevenuePage() {
     mensajes_salientes_hoy: number;
     total_mensajes_hoy: number;
     leads_hoy: { ganados: number; perdidos: number; activos_nuevos: number; valor_ganado: number; valor_perdido: number };
+    leads_sin_tareas?: number | null;
   };
   const briefingQ = useQuery<Briefing>({
     queryKey: ["revenue", "briefing-hoy"],
@@ -1353,7 +1354,7 @@ ${asesoras || "  · sin asignaciones"}`;
                   { label: "Leads perdidos hoy",     value: briefingQ.data.leads_hoy.perdidos, tone: briefingQ.data.leads_hoy.perdidos > 0 ? "danger" : "default" },
                   { label: "Valor perdido",          value: briefingQ.data.leads_hoy.valor_perdido > 0 ? `$${Math.round(briefingQ.data.leads_hoy.valor_perdido / 1000).toLocaleString("es-CO")}K` : "—", tone: briefingQ.data.leads_hoy.valor_perdido > 0 ? "danger" : "default" },
                   { label: "Leads nuevos hoy",       value: briefingQ.data.leads_hoy.activos_nuevos },
-                  { label: "Sin asesora asignada",   value: briefingQ.data.sin_asesora, tone: briefingQ.data.sin_asesora > 0 ? "danger" : "default" },
+                  { label: "Sin tareas pendientes",  value: briefingQ.data.leads_sin_tareas != null ? briefingQ.data.leads_sin_tareas.toLocaleString("es-CO") : "—", tone: (briefingQ.data.leads_sin_tareas ?? 0) > 0 ? "danger" : "default" },
                 ]}
               />
             )}

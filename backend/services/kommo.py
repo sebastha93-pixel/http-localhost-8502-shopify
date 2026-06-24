@@ -67,6 +67,74 @@ def sync_advisors() -> dict:
     return {"ok": True, "total": procesados, "activos": activos}
 
 
+# ── Sync de tasks ─────────────────────────────────────────────────────────────
+def sync_tasks(full: bool = False, limit_total: int = 10000) -> dict:
+    """Trae tasks de Kommo y las upsertea en kommo_tasks.
+
+    Solo guarda tasks entity_type='leads'. Habilita el KPI 'Leads sin tareas'
+    del briefing matutino (espejo de Kommo).
+    """
+    import kommo_client as kc
+    sb = db._sb()
+    if sb is None:
+        return {"ok": False, "error": "supabase_no_configurado"}
+
+    desde_ts: Optional[int] = None
+    if not full:
+        last = db.leer_sync_state("kommo_tasks_last_sync")
+        if last:
+            try: desde_ts = int(last)
+            except Exception: pass
+
+    nuevo_corte_ts = int(datetime.now(tz=timezone.utc).timestamp())
+    procesados = 0
+    upserted = 0
+    skipped_not_lead = 0
+    errors: list[str] = []
+    try:
+        for t in kc.listar_tasks(updated_after_ts=desde_ts, limit_total=limit_total):
+            procesados += 1
+            if (t.get("entity_type") or "").lower() != "leads":
+                skipped_not_lead += 1
+                continue
+            try:
+                created = t.get("created_at")
+                updated = t.get("updated_at")
+                complete_till = t.get("complete_till")
+                row = {
+                    "task_id":             int(t["id"]),
+                    "entity_id":           int(t.get("entity_id") or 0) or None,
+                    "responsible_user_id": int(t.get("responsible_user_id") or 0) or None,
+                    "is_completed":        bool(t.get("is_completed")),
+                    "text":                (t.get("text") or "")[:500],
+                    "task_type_id":        t.get("task_type_id"),
+                    "complete_till":       datetime.fromtimestamp(int(complete_till), tz=timezone.utc).isoformat() if complete_till else None,
+                    "created_at":          datetime.fromtimestamp(int(created), tz=timezone.utc).isoformat() if created else None,
+                    "updated_at":          datetime.fromtimestamp(int(updated), tz=timezone.utc).isoformat() if updated else None,
+                    "raw":                 t,
+                    "synced_at":           datetime.now(tz=timezone.utc).isoformat(),
+                }
+                row = {k: v for k, v in row.items() if v is not None}
+                sb.table("kommo_tasks").upsert(row, on_conflict="task_id").execute()
+                upserted += 1
+            except Exception as e:
+                if len(errors) < 3:
+                    errors.append(f"task {t.get('id')}: {str(e)[:150]}")
+    except RuntimeError as e:
+        return {"ok": False, "error": str(e), "procesados": procesados}
+    except Exception as e:
+        log.exception("sync_tasks error")
+        return {"ok": False, "error": str(e)[:300], "procesados": procesados}
+
+    if procesados > 0 or desde_ts is None:
+        db.guardar_sync_state("kommo_tasks_last_sync", str(nuevo_corte_ts))
+    return {
+        "ok": True, "procesados": procesados, "upserted": upserted,
+        "skipped_not_lead": skipped_not_lead, "errors": errors,
+        "modo": "full" if full else "incremental",
+    }
+
+
 # ── Sync de leads ─────────────────────────────────────────────────────────────
 def sync_leads(full: bool = False, limit_total: int = 5000) -> dict:
     """

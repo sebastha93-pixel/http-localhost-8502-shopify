@@ -186,6 +186,17 @@ def _correr_jobs():
             _last_result = resultado
             return
 
+        # ── Sync de tasks Kommo (habilita KPI 'Leads sin tareas') ────────
+        try:
+            from backend.services import kommo as _ksvc
+            tasks_res = _ksvc.sync_tasks(full=False, limit_total=10000)
+            resultado["tasks_sync"] = {
+                "procesados": tasks_res.get("procesados", 0),
+                "upserted":   tasks_res.get("upserted", 0),
+            }
+        except Exception as e:
+            resultado["tasks_sync_error"] = str(e)[:300]
+
         # ── Transcribir audios WhatsApp pendientes ───────────────────────
         # Solo si OPENAI_API_KEY está configurado. Lote hasta 50 por noche
         # para mantener costo controlado (~$0.30 a precio Whisper).

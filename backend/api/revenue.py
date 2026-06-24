@@ -2239,6 +2239,38 @@ def briefing_hoy(_: CurrentUser = Depends(require_role("admin", "operador"))) ->
         elif st in ("advisor", "agent"):
             por_canal_salientes[cn] = por_canal_salientes.get(cn, 0) + 1
 
+    # Leads sin tareas pendientes (estado abierto y no hay task pendiente).
+    # Espejo del KPI Kommo "Leads sin tareas". Requiere tabla kommo_tasks
+    # sincronizada. Si la tabla no existe / no hay datos, retorna null para
+    # que el frontend lo oculte.
+    leads_sin_tareas: int | None = None
+    try:
+        # Total leads abiertos
+        open_q = sb.table("kommo_leads").select("lead_id", count="exact", head=True).eq("status", "open").execute()
+        total_open = open_q.count or 0
+        # Leads que SÍ tienen task pendiente
+        tasks_q = sb.table("kommo_tasks").select("entity_id").eq("is_completed", False).limit(50000).execute()
+        with_task = set()
+        for t in (tasks_q.data or []):
+            if t.get("entity_id"):
+                with_task.add(t["entity_id"])
+        # Diferencia: abiertos sin task
+        # Como no podemos hacer NOT IN eficiente vía PostgREST con 50k IDs,
+        # asumimos: leads_sin_tareas ≈ total_open - len(with_task que tengan status=open)
+        # Para precisión, traemos los lead_ids open y restamos.
+        all_open_ids = set()
+        page = 0
+        while page < 50:
+            r = (sb.table("kommo_leads").select("lead_id").eq("status", "open").range(page * 1000, page * 1000 + 999).execute().data) or []
+            if not r: break
+            for x in r:
+                if x.get("lead_id"): all_open_ids.add(x["lead_id"])
+            if len(r) < 1000: break
+            page += 1
+        leads_sin_tareas = len(all_open_ids - with_task)
+    except Exception:
+        leads_sin_tareas = None
+
     # Leads del día (cerrados hoy o creados hoy en Kommo).
     leads_hoy = {"ganados": 0, "perdidos": 0, "activos_nuevos": 0, "valor_ganado": 0, "valor_perdido": 0}
     try:
@@ -2308,6 +2340,7 @@ def briefing_hoy(_: CurrentUser = Depends(require_role("admin", "operador"))) ->
         "total_mensajes_hoy": len(msgs),
         # Leads del día (cerrados hoy en Kommo)
         "leads_hoy": leads_hoy,
+        "leads_sin_tareas": leads_sin_tareas,
         # Equipo
         "por_asesora": por_asesora,
     }
@@ -2473,6 +2506,18 @@ def dedupe_conversations(
         "mensajes_reasignados":     n_msgs_reasignados,
         "errores":                  errores[:10],
     }
+
+
+@router.post("/sync/tasks")
+def sync_tasks_endpoint(
+    full: bool = Query(False),
+    limit: int = Query(10000, ge=1, le=50000),
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Sync de tasks Kommo → tabla kommo_tasks.
+    Habilita el KPI 'Leads sin tareas' del briefing.
+    """
+    return kommo_svc.sync_tasks(full=full, limit_total=limit)
 
 
 @router.post("/sync/leads")

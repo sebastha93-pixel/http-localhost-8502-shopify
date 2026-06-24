@@ -572,6 +572,33 @@ def listar_talks(updated_after_ts: Optional[int] = None,
                 return
 
 
+def listar_tasks(updated_after_ts: Optional[int] = None,
+                  limit_total: int = 10000) -> Iterator[dict]:
+    """
+    Itera todas las tasks (recordatorios/pendientes) de la cuenta Kommo.
+
+    Cada task tiene:
+      - id, entity_id, entity_type (lead/contact/etc), text
+      - is_completed (bool), complete_till (epoch deadline)
+      - responsible_user_id (asesora dueña)
+      - created_at, updated_at
+      - result (si fue completada, el resultado escrito)
+
+    Para el KPI 'Leads sin tareas' filtramos: entity_type='leads' y
+    is_completed=false.
+    """
+    params: dict = {"limit": 250}
+    if updated_after_ts:
+        params["filter[updated_at][from]"] = int(updated_after_ts)
+    enviados = 0
+    for page in _paginar("tasks", "tasks", params):
+        for t in page:
+            yield t
+            enviados += 1
+            if enviados >= limit_total:
+                return
+
+
 def listar_eventos_de_lead(lead_id: int) -> Iterator[dict]:
     """
     Eventos del lead (cambios de stage, asignaciones, etc.).
