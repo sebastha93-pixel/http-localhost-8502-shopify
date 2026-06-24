@@ -1248,9 +1248,15 @@ export default function RevenuePage() {
     ok: boolean; fecha_bogota: string; total: number;
     atendidas: number; pendientes: number; sin_asesora: number;
     avg_response_min: number | null;
+    max_response_min: number | null;
     por_canal: Record<string, number>;
+    por_canal_entrantes: Record<string, number>;
+    por_canal_salientes: Record<string, number>;
     por_asesora: Array<{ advisor_id: string; name: string; asignadas: number; atendidas: number; pendientes: number }>;
+    mensajes_entrantes_hoy: number;
+    mensajes_salientes_hoy: number;
     total_mensajes_hoy: number;
+    leads_hoy: { ganados: number; perdidos: number; activos_nuevos: number; valor_ganado: number; valor_perdido: number };
   };
   const briefingQ = useQuery<Briefing>({
     queryKey: ["revenue", "briefing-hoy"],
@@ -1261,23 +1267,35 @@ export default function RevenuePage() {
   function copiarBriefing() {
     const b = briefingQ.data;
     if (!b) return;
-    const canales = Object.entries(b.por_canal).sort((a, b) => b[1] - a[1])
-      .map(([k, v]) => `  ${k}: ${v}`).join("\n");
+    const canalesRows = Array.from(new Set([
+      ...Object.keys(b.por_canal_entrantes || {}),
+      ...Object.keys(b.por_canal_salientes || {}),
+    ]))
+      .sort((a, b2) => (b.por_canal_entrantes?.[b2] ?? 0) - (b.por_canal_entrantes?.[a] ?? 0))
+      .map(c => `  ${c}: ${b.por_canal_entrantes?.[c] ?? 0} entr / ${b.por_canal_salientes?.[c] ?? 0} sal`).join("\n");
     const asesoras = b.por_asesora.slice(0, 10)
       .map(r => `  ${r.name} · ${r.asignadas} asig · ${r.atendidas} atend · ${r.pendientes} pend`).join("\n");
+    const lh = b.leads_hoy || { ganados: 0, perdidos: 0, activos_nuevos: 0, valor_ganado: 0, valor_perdido: 0 };
+    const fmtCop = (n: number) => n > 0 ? `$${n.toLocaleString("es-CO")}` : "—";
     const txt = `📊 MALE'DENIM · Briefing del día ${b.fecha_bogota}
 
-Conversaciones del día: ${b.total}
-  Atendidas: ${b.atendidas}
-  Pendientes: ${b.pendientes}
-  Sin asesora: ${b.sin_asesora}
-Mensajes recibidos hoy: ${b.total_mensajes_hoy}
-1ª respuesta promedio: ${b.avg_response_min ? `${b.avg_response_min} min` : "—"}
+📥 Mensajes entrantes: ${b.mensajes_entrantes_hoy ?? 0}
+📤 Mensajes salientes: ${b.mensajes_salientes_hoy ?? 0}
+💬 Conversaciones únicas: ${b.total}
+⚠ Sin réplica: ${b.pendientes}
+🙅 Sin asesora: ${b.sin_asesora}
+⏱ Lapso medio: ${b.avg_response_min ? `${b.avg_response_min} min` : "—"}
+⏱ Lapso mayor: ${b.max_response_min ? `${b.max_response_min} min` : "—"}
 
-Por canal:
-${canales || "  · sin canales"}
+💰 Leads cerrados hoy:
+  Ganados: ${lh.ganados} (${fmtCop(lh.valor_ganado)})
+  Perdidos: ${lh.perdidos} (${fmtCop(lh.valor_perdido)})
+  Nuevos abiertos: ${lh.activos_nuevos}
 
-Por asesora:
+📡 Mensajes por canal (entrantes / salientes):
+${canalesRows || "  · sin canales"}
+
+👥 Por asesora:
 ${asesoras || "  · sin asignaciones"}`;
     navigator.clipboard?.writeText(txt).then(() => {
       setBriefingCopied(true);
@@ -1314,34 +1332,62 @@ ${asesoras || "  · sin asignaciones"}`;
           </div>
 
           <div className="p-5 space-y-4">
+            {/* Fila 1 — Mensajes entrantes vs salientes (espejo Kommo) */}
             <KpiStrip
               items={[
-                { label: "Conversaciones hoy", value: briefingQ.data.total },
-                { label: "Atendidas",          value: briefingQ.data.atendidas, tone: "success" },
-                { label: "Pendientes",         value: briefingQ.data.pendientes, tone: briefingQ.data.pendientes > 0 ? "danger" : "default" },
-                { label: "Sin asesora",        value: briefingQ.data.sin_asesora, tone: briefingQ.data.sin_asesora > 0 ? "danger" : "default" },
-                { label: "Mensajes hoy",       value: briefingQ.data.total_mensajes_hoy.toLocaleString("es-CO") },
-                { label: "1ª resp. prom.",     value: briefingQ.data.avg_response_min ? `${briefingQ.data.avg_response_min}m` : "—" },
+                { label: "Mensajes entrantes", value: (briefingQ.data.mensajes_entrantes_hoy ?? 0).toLocaleString("es-CO"), tone: "default" },
+                { label: "Mensajes salientes", value: (briefingQ.data.mensajes_salientes_hoy ?? 0).toLocaleString("es-CO"), tone: "default" },
+                { label: "Conversaciones",     value: briefingQ.data.total },
+                { label: "Sin réplica",        value: briefingQ.data.pendientes, tone: briefingQ.data.pendientes > 0 ? "danger" : "default" },
+                { label: "Lapso medio",        value: briefingQ.data.avg_response_min ? `${briefingQ.data.avg_response_min}m` : "—" },
+                { label: "Lapso mayor",        value: briefingQ.data.max_response_min ? (briefingQ.data.max_response_min < 60 ? `${briefingQ.data.max_response_min}m` : briefingQ.data.max_response_min < 1440 ? `${Math.round(briefingQ.data.max_response_min/60)}h` : `${Math.round(briefingQ.data.max_response_min/1440)}d`) : "—" },
               ]}
             />
+
+            {/* Fila 2 — Leads del día (espejo Kommo) */}
+            {briefingQ.data.leads_hoy && (
+              <KpiStrip
+                items={[
+                  { label: "Leads ganados hoy",      value: briefingQ.data.leads_hoy.ganados, tone: "success" },
+                  { label: "Valor ganado",           value: briefingQ.data.leads_hoy.valor_ganado > 0 ? `$${Math.round(briefingQ.data.leads_hoy.valor_ganado / 1000).toLocaleString("es-CO")}K` : "—", tone: "success" },
+                  { label: "Leads perdidos hoy",     value: briefingQ.data.leads_hoy.perdidos, tone: briefingQ.data.leads_hoy.perdidos > 0 ? "danger" : "default" },
+                  { label: "Valor perdido",          value: briefingQ.data.leads_hoy.valor_perdido > 0 ? `$${Math.round(briefingQ.data.leads_hoy.valor_perdido / 1000).toLocaleString("es-CO")}K` : "—", tone: briefingQ.data.leads_hoy.valor_perdido > 0 ? "danger" : "default" },
+                  { label: "Leads nuevos hoy",       value: briefingQ.data.leads_hoy.activos_nuevos },
+                  { label: "Sin asesora asignada",   value: briefingQ.data.sin_asesora, tone: briefingQ.data.sin_asesora > 0 ? "danger" : "default" },
+                ]}
+              />
+            )}
 
             <div className="grid gap-4 md:grid-cols-2">
               <Card>
                 <CardContent className="p-4">
-                  <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite mb-2">Por canal</p>
-                  {Object.keys(briefingQ.data.por_canal).length === 0 ? (
+                  <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite mb-2">Por canal · entrantes vs salientes</p>
+                  {Object.keys(briefingQ.data.por_canal_entrantes || {}).length === 0 && Object.keys(briefingQ.data.por_canal_salientes || {}).length === 0 ? (
                     <p className="text-xs text-graphite italic">Sin canales registrados hoy.</p>
                   ) : (
-                    <ul className="space-y-1 text-sm">
-                      {Object.entries(briefingQ.data.por_canal)
-                        .sort((a, b) => b[1] - a[1])
-                        .map(([k, v]) => (
-                          <li key={k} className="flex justify-between">
-                            <span className="text-ink-900">{k}</span>
-                            <span className="tabular font-medium">{v}</span>
-                          </li>
-                        ))}
-                    </ul>
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border">
+                          <th className="text-left py-1 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Canal</th>
+                          <th className="text-right py-1 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Entrantes</th>
+                          <th className="text-right py-1 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Salientes</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Array.from(new Set([
+                          ...Object.keys(briefingQ.data.por_canal_entrantes || {}),
+                          ...Object.keys(briefingQ.data.por_canal_salientes || {}),
+                        ]))
+                          .sort((a, b) => (briefingQ.data.por_canal_entrantes?.[b] ?? 0) - (briefingQ.data.por_canal_entrantes?.[a] ?? 0))
+                          .map((canal) => (
+                            <tr key={canal} className="border-b border-border">
+                              <td className="py-1.5 text-ink-900">{canal}</td>
+                              <td className="py-1.5 text-right tabular">{briefingQ.data!.por_canal_entrantes?.[canal] ?? 0}</td>
+                              <td className="py-1.5 text-right tabular text-graphite">{briefingQ.data!.por_canal_salientes?.[canal] ?? 0}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
                   )}
                 </CardContent>
               </Card>

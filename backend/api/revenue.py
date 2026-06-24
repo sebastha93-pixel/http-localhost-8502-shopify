@@ -2094,14 +2094,23 @@ def briefing_hoy(_: CurrentUser = Depends(require_role("admin", "operador"))) ->
               .gte("sent_at", dt_desde.isoformat())
               .limit(50000).execute().data) or []
 
+    # Conteo bruto de mensajes ENTRANTES vs SALIENTES hoy
+    # (no dedup por conv — son TODOS los msgs, para espejar Kommo).
+    mensajes_entrantes = sum(1 for m in msgs if (m.get("sender_type") or "").lower() == "customer")
+    mensajes_salientes = sum(1 for m in msgs if (m.get("sender_type") or "").lower() in ("advisor", "agent"))
+
     if not msgs:
         return {
             "ok": True,
             "fecha_bogota": now_bog.strftime("%Y-%m-%d"),
             "total": 0, "atendidas": 0, "pendientes": 0, "sin_asesora": 0,
-            "avg_response_min": None,
-            "por_canal": {}, "por_asesora": [],
+            "avg_response_min": None, "max_response_min": None,
+            "por_canal": {}, "por_canal_entrantes": {}, "por_canal_salientes": {},
+            "por_asesora": [],
+            "mensajes_entrantes_hoy": 0,
+            "mensajes_salientes_hoy": 0,
             "total_mensajes_hoy": 0,
+            "leads_hoy": {"ganados": 0, "perdidos": 0, "activos_nuevos": 0, "valor_ganado": 0, "valor_perdido": 0},
         }
 
     # 2. Agrupar mensajes por conversation_id.
@@ -2205,6 +2214,61 @@ def briefing_hoy(_: CurrentUser = Depends(require_role("admin", "operador"))) ->
             except Exception:
                 pass
     avg_response_min = round(sum(response_times) / len(response_times), 1) if response_times else None
+    max_response_min = round(max(response_times), 1) if response_times else None
+
+    # Mensajes por canal — separado en entrantes vs salientes (espejo Kommo).
+    por_canal_entrantes: dict = {}
+    por_canal_salientes: dict = {}
+    for m in msgs:
+        cid = m.get("conversation_id")
+        meta = convs_meta.get(cid, {})
+        ch = (meta.get("channel") or "unknown").lower()
+        if "waba" in ch or "whatsapp" in ch or ch == "wa":
+            cn = "WhatsApp"
+        elif "instagram" in ch or ch == "ig" or ch == "dm":
+            cn = "Instagram"
+        elif "messenger" in ch or "facebook" in ch or ch == "fb":
+            cn = "Messenger"
+        elif "tiktok" in ch or ch == "tt":
+            cn = "TikTok"
+        else:
+            cn = ch.capitalize() or "Otro"
+        st = (m.get("sender_type") or "").lower()
+        if st == "customer":
+            por_canal_entrantes[cn] = por_canal_entrantes.get(cn, 0) + 1
+        elif st in ("advisor", "agent"):
+            por_canal_salientes[cn] = por_canal_salientes.get(cn, 0) + 1
+
+    # Leads del día (cerrados hoy o creados hoy en Kommo).
+    leads_hoy = {"ganados": 0, "perdidos": 0, "activos_nuevos": 0, "valor_ganado": 0, "valor_perdido": 0}
+    try:
+        lq = (sb.table("kommo_leads")
+                .select("lead_id,status,lead_value,closed_at,created_at")
+                .or_(f"closed_at.gte.{dt_desde.isoformat()},created_at.gte.{dt_desde.isoformat()}")
+                .limit(2000)
+                .execute().data) or []
+        vg = 0.0
+        vp = 0.0
+        for l in lq:
+            st_lead = (l.get("status") or "").lower()
+            val = float(l.get("lead_value") or 0)
+            closed = l.get("closed_at") or ""
+            created = l.get("created_at") or ""
+            cerrado_hoy = closed and closed >= dt_desde.isoformat()
+            creado_hoy = created and created >= dt_desde.isoformat()
+            if cerrado_hoy:
+                if st_lead == "won":
+                    leads_hoy["ganados"] += 1
+                    vg += val
+                elif st_lead == "lost":
+                    leads_hoy["perdidos"] += 1
+                    vp += val
+            if creado_hoy and st_lead not in ("won", "lost"):
+                leads_hoy["activos_nuevos"] += 1
+        leads_hoy["valor_ganado"]  = int(vg)
+        leads_hoy["valor_perdido"] = int(vp)
+    except Exception:
+        pass
 
     # Por asesora.
     por_asesora_dict: dict = {}
@@ -2227,14 +2291,25 @@ def briefing_hoy(_: CurrentUser = Depends(require_role("admin", "operador"))) ->
     return {
         "ok": True,
         "fecha_bogota": now_bog.strftime("%Y-%m-%d"),
+        # Conversaciones únicas (leads únicos con actividad hoy)
         "total": total,
         "atendidas": atendidas,
         "pendientes": pendientes,
         "sin_asesora": sin_asesora,
         "avg_response_min": avg_response_min,
-        "por_canal": por_canal,
-        "por_asesora": por_asesora,
+        "max_response_min": max_response_min,
+        # Canales — Kommo distingue in/out, replicamos eso
+        "por_canal": por_canal,                         # dedup por lead (legacy)
+        "por_canal_entrantes": por_canal_entrantes,     # NEW: mensajes recibidos
+        "por_canal_salientes": por_canal_salientes,     # NEW: mensajes enviados
+        # Mensajes totales del día (no dedup, espejo de Kommo)
+        "mensajes_entrantes_hoy": mensajes_entrantes,
+        "mensajes_salientes_hoy": mensajes_salientes,
         "total_mensajes_hoy": len(msgs),
+        # Leads del día (cerrados hoy en Kommo)
+        "leads_hoy": leads_hoy,
+        # Equipo
+        "por_asesora": por_asesora,
     }
 
 
