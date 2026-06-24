@@ -186,6 +186,19 @@ def _correr_jobs():
             _last_result = resultado
             return
 
+        # ── Transcribir audios WhatsApp pendientes ───────────────────────
+        # Solo si OPENAI_API_KEY está configurado. Lote hasta 50 por noche
+        # para mantener costo controlado (~$0.30 a precio Whisper).
+        try:
+            from backend.services import transcription as _tx
+            tx_res = _tx.process_pending(limit=50)
+            resultado["transcripcion"] = {
+                "transcritos": tx_res.get("transcritos", 0),
+                "procesados":  tx_res.get("procesados", 0),
+            }
+        except Exception as e:
+            resultado["transcripcion_error"] = str(e)[:300]
+
         # ── Dedupe nocturno de conversations duplicadas ──────────────────
         # Para cada lead_id con >1 conversation: consolida en una sola
         # (preferencia talk-* > meta-* > otros · desempate por last_message_at

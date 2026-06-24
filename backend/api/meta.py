@@ -190,6 +190,7 @@ def _procesar_whatsapp(payload: dict) -> dict:
                     sender_name=sender_name,
                     message_text=text,
                     sent_at=sent_at,
+                    topic=msg_type,
                     payload={
                         "channel": "whatsapp",
                         "wa_id": wa_id_from,
@@ -564,7 +565,7 @@ _columnas_problematicas: set = set()
 
 
 def _build_message_row(*, message_id, conversation_id, sender_type, sender_name,
-                       message_text, sent_at, payload) -> dict:
+                       message_text, sent_at, payload, topic="text") -> dict:
     row = {
         "message_id":      message_id,
         "conversation_id": conversation_id,
@@ -572,7 +573,7 @@ def _build_message_row(*, message_id, conversation_id, sender_type, sender_name,
         "sender_name":     (sender_name or "")[:80],
         "message_text":    (message_text or "")[:5000],
         "sent_at":         sent_at,
-        "topic":           "text",
+        "topic":           topic or "text",
         "payload":         payload,
     }
     return {k: v for k, v in row.items() if v is not None}

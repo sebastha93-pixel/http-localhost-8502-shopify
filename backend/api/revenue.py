@@ -2259,6 +2259,18 @@ def sync_advisors_endpoint(
     return kommo_svc.sync_advisors()
 
 
+@router.post("/transcribe-audios")
+def transcribe_audios(
+    limit: int = Query(20, ge=1, le=200),
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Transcribe audios WhatsApp pendientes con OpenAI Whisper.
+    Necesita OPENAI_API_KEY + META_SYSTEM_USER_TOKEN en Railway env.
+    """
+    from backend.services import transcription as _tx
+    return _tx.process_pending(limit=limit)
+
+
 @router.post("/dedupe-conversations")
 def dedupe_conversations(
     dry_run: bool = Query(True, description="True = solo reporta. False = ejecuta merge."),
