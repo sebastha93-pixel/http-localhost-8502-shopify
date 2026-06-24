@@ -436,13 +436,30 @@ def _procesar_webhook(parsed: dict) -> dict:
                     pass
                 created = int(t.get("created_at") or 0) or None
                 updated = int(t.get("updated_at") or 0) or None
+                conv_id_talk = f"talk-{talk_id}"
+                new_lma = _dt.fromtimestamp(updated, tz=_tz.utc).isoformat() if updated else None
+
+                # Monotonic write: si la conv ya existe, no retrocedas el reloj
+                # de last_message_at. Esto evita que un webhook con timestamp
+                # viejo de Kommo pise un timestamp más reciente del Meta webhook.
+                existing_lma = None
+                try:
+                    exq = sb.table("conversations").select("last_message_at").eq("conversation_id", conv_id_talk).limit(1).execute()
+                    if exq.data:
+                        existing_lma = exq.data[0].get("last_message_at")
+                except Exception:
+                    pass
+                if existing_lma and new_lma and existing_lma >= new_lma:
+                    # Skip last_message_at en este upsert
+                    new_lma = existing_lma
+
                 row = {
-                    "conversation_id":  f"talk-{talk_id}",
+                    "conversation_id":  conv_id_talk,
                     "lead_id":          int(entity_id),
                     "advisor_id":       advisor_id_lead,
                     "channel":          t.get("origin") or "unknown",
                     "started_at":       _dt.fromtimestamp(created, tz=_tz.utc).isoformat() if created else None,
-                    "last_message_at":  _dt.fromtimestamp(updated, tz=_tz.utc).isoformat() if updated else None,
+                    "last_message_at":  new_lma,
                     "status":           "in_work" if (t.get("is_in_work") in ("1", 1, True)) else "closed",
                     "audit_status":     "pending",
                     "synced_at":        _dt.now(tz=_tz.utc).isoformat(),

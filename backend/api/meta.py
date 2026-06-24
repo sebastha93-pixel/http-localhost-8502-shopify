@@ -588,14 +588,19 @@ def _asegurar_conversation(sb, conversation_id: str, payload: dict) -> None:
         return
     now_iso = datetime.now(tz=timezone.utc).isoformat()
     try:
-        r = sb.table("conversations").select("conversation_id").eq("conversation_id", conversation_id).limit(1).execute()
+        r = sb.table("conversations").select("conversation_id,last_message_at").eq("conversation_id", conversation_id).limit(1).execute()
         if r.data:
-            # Conv existente → solo actualizar last_message_at + status (sin tocar lead_id/advisor_id).
+            # Monotonic write: solo subir last_message_at si el nuevo timestamp
+            # es mayor al actual. Evita que un sync atrasado de Kommo (con
+            # timestamp viejo) retroceda el reloj y muestre la conv como "fría"
+            # cuando en realidad acaba de recibir mensaje.
+            existing = r.data[0]
+            current_lma = existing.get("last_message_at")
+            payload_update: dict = {"status": "in_work"}
+            if not current_lma or current_lma < now_iso:
+                payload_update["last_message_at"] = now_iso
             try:
-                sb.table("conversations").update({
-                    "last_message_at": now_iso,
-                    "status":          "in_work",
-                }).eq("conversation_id", conversation_id).execute()
+                sb.table("conversations").update(payload_update).eq("conversation_id", conversation_id).execute()
             except Exception as e:
                 _stats["errores"] += 1
                 _stats["ultimo_error"] = f"conv_update: {str(e)[:200]}"
