@@ -89,11 +89,24 @@ def _construir_mensajes(conv_id: str) -> Optional[dict]:
 
     lead = {}
     if conv.get("lead_id"):
-        ld = sb.table("kommo_leads").select(
-            "lead_id,status,stage_id,pipeline_id,lead_value,customer_name,customer_phone,closed_at,loss_reason,tags,created_at"
-        ).eq("lead_id", conv["lead_id"]).limit(1).execute().data
-        if ld:
-            lead = ld[0]
+        # Intento 1: traer todas las columnas enriquecidas. Si alguna no
+        # existe en el schema, Supabase devuelve 400 y caemos al intento 2
+        # con solo las columnas básicas (status, lead_value, customer_*).
+        try:
+            ld = sb.table("kommo_leads").select(
+                "lead_id,status,stage_id,pipeline_id,lead_value,customer_name,customer_phone,closed_at,loss_reason,tags,created_at"
+            ).eq("lead_id", conv["lead_id"]).limit(1).execute().data
+            if ld:
+                lead = ld[0]
+        except Exception:
+            try:
+                ld = sb.table("kommo_leads").select(
+                    "lead_id,status,lead_value,customer_name,customer_phone,closed_at"
+                ).eq("lead_id", conv["lead_id"]).limit(1).execute().data
+                if ld:
+                    lead = ld[0]
+            except Exception:
+                pass
 
     advisor_name = None
     if conv.get("advisor_id"):

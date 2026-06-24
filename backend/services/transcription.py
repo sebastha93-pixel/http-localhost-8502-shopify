@@ -61,17 +61,31 @@ def _descargar_audio_meta(media_id: str) -> Optional[tuple[bytes, str]]:
     except Exception as e:
         log.warning(f"meta media fetch {media_id}: {e}")
         return None
-    # 2. Descargar binario (esta URL también requiere el token)
+    # 2. Descargar binario (esta URL también requiere el token).
+    # Cap a 25MB: Whisper API tope, además protege memoria del worker
+    # contra un audio anómalo que reviente Railway.
     try:
         r2 = requests.get(
             url,
             headers={"Authorization": f"Bearer {token}"},
             timeout=30,
+            stream=True,
         )
         if r2.status_code != 200:
             log.warning(f"meta media binary {media_id}: {r2.status_code}")
             return None
-        return (r2.content, mime)
+        chunks: list = []
+        total = 0
+        MAX_BYTES = 25 * 1024 * 1024
+        for chunk in r2.iter_content(chunk_size=64 * 1024):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > MAX_BYTES:
+                log.warning(f"meta media {media_id} excede 25MB, skip")
+                return None
+            chunks.append(chunk)
+        return (b"".join(chunks), mime)
     except Exception as e:
         log.warning(f"meta media download {media_id}: {e}")
         return None

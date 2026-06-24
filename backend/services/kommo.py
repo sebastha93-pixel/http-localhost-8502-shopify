@@ -237,15 +237,28 @@ def sync_talks(full: bool = False, limit_total: int = 5000) -> dict:
                 pass
 
             if existing_meta_conv:
-                # Hidratar el meta-* con datos de Kommo (status, channel mejor)
+                # Hidratar el meta-* con datos de Kommo (status, channel mejor).
+                # Monotonic write: last_message_at solo se sube si el nuevo es
+                # más reciente — evita que un talk con timestamp viejo retroceda
+                # el reloj que Meta webhook tenga al día.
+                new_lma_str = datetime.fromtimestamp(int(updated_ts), tz=timezone.utc).isoformat() if updated_ts else None
                 try:
-                    sb.table("conversations").update({
+                    existing_lma = None
+                    try:
+                        exq = sb.table("conversations").select("last_message_at").eq("conversation_id", existing_meta_conv).limit(1).execute()
+                        if exq.data:
+                            existing_lma = exq.data[0].get("last_message_at")
+                    except Exception:
+                        pass
+                    update_payload = {
                         "advisor_id":      adv,
                         "channel":         talk.get("origin") or "unknown",
                         "status":          talk.get("status"),
-                        "last_message_at": datetime.fromtimestamp(int(updated_ts), tz=timezone.utc).isoformat() if updated_ts else None,
                         "synced_at":       datetime.now(tz=timezone.utc).isoformat(),
-                    }).eq("conversation_id", existing_meta_conv).execute()
+                    }
+                    if new_lma_str and (not existing_lma or existing_lma < new_lma_str):
+                        update_payload["last_message_at"] = new_lma_str
+                    sb.table("conversations").update(update_payload).eq("conversation_id", existing_meta_conv).execute()
                     upserted += 1
                 except Exception as e:
                     upsert_failed += 1
