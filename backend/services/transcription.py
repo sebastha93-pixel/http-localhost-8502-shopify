@@ -142,7 +142,11 @@ def process_pending(limit: int = 20) -> dict:
     if not _meta_token():
         return {"ok": False, "error": "no_meta_token"}
 
-    # Buscar mensajes pendientes: topic=audio, message_text empieza con placeholder
+    # Buscar mensajes pendientes: topic=audio, message_text empieza con
+    # placeholder. Intenta full select (con payload); si la columna no existe
+    # en el schema, hace fallback informativo (no podemos transcribir sin
+    # payload porque ahí viene el media_id de Meta).
+    rows: list = []
     try:
         r = (sb.table("messages")
                .select("message_id,payload,sent_at")
@@ -153,7 +157,20 @@ def process_pending(limit: int = 20) -> dict:
                .execute())
         rows = r.data or []
     except Exception as e:
-        return {"ok": False, "error": f"query: {str(e)[:200]}"}
+        err = str(e)
+        if "payload" in err and ("does not exist" in err or "42703" in err):
+            return {
+                "ok": False,
+                "error": "schema_missing_payload_column",
+                "hint": (
+                    "La columna 'payload' (jsonb) no existe en la tabla messages "
+                    "de Supabase. Agrégala desde Supabase Table Editor: "
+                    "messages → + New column → name=payload, type=jsonb, allow NULL. "
+                    "Una vez creada, los audios NUEVOS guardarán el media_id y este "
+                    "endpoint los podrá transcribir."
+                ),
+            }
+        return {"ok": False, "error": f"query: {err[:200]}"}
 
     n_transcritos = 0
     n_sin_audio_id = 0
