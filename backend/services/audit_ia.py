@@ -30,7 +30,9 @@ MAX_OUTPUT_TOKENS  = 1500
 
 SYSTEM_PROMPT = """Eres un auditor comercial experto en ventas conversacionales por WhatsApp e Instagram para una marca de jeans premium (MALE DENIM).
 
-Recibirás una conversación entre una asesora de ventas y un cliente potencial. Devuelve SOLO un JSON válido con esta estructura exacta:
+Recibirás una conversación entre una asesora de ventas y un cliente potencial, junto con METADATA REAL del lead en el CRM Kommo (status, pipeline stage, valor, fecha de cierre). Esta metadata es VERDAD OPERATIVA — si Kommo dice "won" significa que la venta SE GANÓ aunque el chat no haya logrado mostrarlo explícitamente.
+
+Devuelve SOLO un JSON válido con esta estructura exacta:
 
 {
   "result_classification": "venta_lograda" | "venta_perdida" | "inconclusa",
@@ -53,11 +55,15 @@ Recibirás una conversación entre una asesora de ventas y un cliente potencial.
   "recomendaciones": ["<consejos para la asesora>"]
 }
 
-Reglas:
-- Si conversación tiene <4 mensajes y lead no está cerrado → "inconclusa" + "en_proceso".
-- NO inventes frases. Cita textual.
-- Si campo no aplica → [] o null.
-- NO uses markdown. Solo JSON puro."""
+REGLAS CRÍTICAS:
+1. Si la metadata indica Kommo status = "won" → result_classification SIEMPRE = "venta_lograda", sale_status = "ganada", main_loss_reason = null. Aunque el chat no muestre el cierre explícito (puede haberse cerrado por teléfono o el comprobante vino como imagen no transcrita).
+2. Si la metadata indica Kommo status = "lost" → result_classification = "venta_perdida", sale_status = "perdida".
+3. Si la metadata indica un mensaje del cliente con adjunto (📎 [adjunto], imagen, comprobante) en los últimos turnos junto a palabras tipo "Nequi", "Bancolombia", "transferencia", "comprobante", "pagué", "consigné", "envío el soporte" → asume que SÍ pagó, marca "venta_lograda" si Kommo aún no lo refleja.
+4. Si pipeline_stage indica una etapa avanzada ("Datos", "Confirmación", "Pago", "Envío", "Cerrado") y la conversación se ve productiva pero no hay confirmación explícita → marca "inconclusa" + "en_proceso", NUNCA "venta_perdida".
+5. Si conversación tiene <4 mensajes y lead no está cerrado en Kommo → "inconclusa" + "en_proceso".
+6. NO inventes frases. Cita textual.
+7. Si campo no aplica → [] o null.
+8. NO uses markdown. Solo JSON puro."""
 
 
 def _api_key() -> Optional[str]:
@@ -75,7 +81,7 @@ def _construir_mensajes(conv_id: str) -> Optional[dict]:
     conv = convs[0]
 
     msgs = (sb.table("messages")
-              .select("message_id,sender_type,sender_name,message_text,sent_at")
+              .select("message_id,sender_type,sender_name,message_text,sent_at,topic,payload")
               .eq("conversation_id", conv_id)
               .order("sent_at")
               .limit(MAX_INPUT_MESSAGES)
@@ -83,7 +89,9 @@ def _construir_mensajes(conv_id: str) -> Optional[dict]:
 
     lead = {}
     if conv.get("lead_id"):
-        ld = sb.table("kommo_leads").select("lead_id,status,lead_value,customer_name,customer_phone,closed_at").eq("lead_id", conv["lead_id"]).limit(1).execute().data
+        ld = sb.table("kommo_leads").select(
+            "lead_id,status,stage_id,pipeline_id,lead_value,customer_name,customer_phone,closed_at,loss_reason,tags,created_at"
+        ).eq("lead_id", conv["lead_id"]).limit(1).execute().data
         if ld:
             lead = ld[0]
 
@@ -97,27 +105,97 @@ def _construir_mensajes(conv_id: str) -> Optional[dict]:
 
 
 def _formato_thread(data: dict) -> str:
-    """Convierte el thread en texto plano para enviar al modelo."""
+    """Convierte el thread en texto plano para enviar al modelo.
+
+    Enriquece el contexto con metadata del CRM (Kommo es ground truth) y
+    anota adjuntos / señales de pago en los mensajes para que Haiku no
+    confunda 'mandó comprobante como imagen' con 'no respondió'.
+    """
     lines = []
     lead = data.get("lead") or {}
     conv = data.get("conv") or {}
+
+    # ── Encabezado con METADATA OPERATIVA (Kommo = verdad)
     lines.append(f"# Conversación {conv.get('conversation_id')}")
     lines.append(f"Canal: {conv.get('channel') or '—'}")
     lines.append(f"Asesora: {data.get('advisor_name') or '—'}")
     lines.append(f"Cliente: {lead.get('customer_name') or '—'} ({lead.get('customer_phone') or '—'})")
-    lines.append(f"Estado del lead: {lead.get('status') or '—'}")
+    lines.append("")
+    lines.append("## METADATA OPERATIVA (Kommo CRM — verdad operativa)")
+    kommo_status = lead.get("status") or "—"
+    lines.append(f"Kommo status: {kommo_status} ← USA ESTO COMO VERDAD")
+    if lead.get("stage_id"):
+        lines.append(f"Pipeline stage_id: {lead['stage_id']}")
+    if lead.get("pipeline_id"):
+        lines.append(f"Pipeline_id: {lead['pipeline_id']}")
     if lead.get("lead_value"):
         lines.append(f"Valor del lead (COP): {lead['lead_value']}")
+    if lead.get("closed_at"):
+        lines.append(f"Cerrado en Kommo: {lead['closed_at']}")
+    if lead.get("loss_reason"):
+        lines.append(f"Motivo de pérdida (Kommo): {lead['loss_reason']}")
+    if lead.get("tags"):
+        try:
+            lines.append(f"Tags: {', '.join(lead['tags'])}")
+        except Exception:
+            pass
+    if lead.get("created_at"):
+        lines.append(f"Lead creado: {lead['created_at']}")
     lines.append("")
-    lines.append("# Thread de mensajes:")
-    for m in data.get("messages", []) or []:
+
+    # ── Thread con detección de adjuntos / comprobantes
+    lines.append("## Thread de mensajes:")
+    msgs = data.get("messages", []) or []
+    n_attachments_customer = 0
+    payment_keywords = (
+        "nequi", "bancolombia", "daviplata", "transferencia", "consigné",
+        "consigne", "comprobante", "soporte de pago", "ya pagué", "pagué",
+        "ya consigne", "ya transferi", "envío soporte", "envío comprobante",
+        "le mando el soporte", "le mando el comprobante", "ahí va el pago",
+    )
+    payment_signal = False
+    for m in msgs:
         who = m.get("sender_type") or "?"
         nom = m.get("sender_name") or ""
         ts  = m.get("sent_at") or ""
         txt = (m.get("message_text") or "").replace("\n", " ").strip()
-        if not txt:
+        topic = m.get("topic") or ""
+        payload = m.get("payload") or {}
+
+        # Detectar adjunto: topic ≠ "text" o payload con media
+        is_attachment = topic not in ("text", "") or (
+            isinstance(payload, dict) and any(k in payload for k in ("image", "audio", "video", "document", "media", "attachment"))
+        )
+        marker = ""
+        if is_attachment:
+            kind = topic if topic and topic != "text" else "adjunto"
+            marker = f" 📎[{kind}]"
+            if who == "customer":
+                n_attachments_customer += 1
+
+        # Detectar señales de pago en el texto
+        if txt and any(kw in txt.lower() for kw in payment_keywords):
+            payment_signal = True
+            marker += " 💰[señal_pago]"
+
+        if not txt and not marker:
             continue
-        lines.append(f"[{who} | {nom} | {ts}] {txt}")
+        line_txt = txt if txt else "(sin texto)"
+        lines.append(f"[{who} | {nom} | {ts}]{marker} {line_txt}")
+
+    # Resumen de señales para que Haiku no tenga que recontar
+    lines.append("")
+    lines.append("## Señales detectadas")
+    lines.append(f"- Adjuntos del cliente: {n_attachments_customer}")
+    lines.append(f"- Palabras clave de pago detectadas: {'sí' if payment_signal else 'no'}")
+    lines.append(f"- Total mensajes: {len(msgs)}")
+    if kommo_status == "won":
+        lines.append("- ⚠ Kommo dice GANADA — clasifica venta_lograda independiente del chat.")
+    elif kommo_status == "lost":
+        lines.append("- ⚠ Kommo dice PERDIDA — clasifica venta_perdida.")
+    elif (n_attachments_customer > 0 or payment_signal) and kommo_status not in ("won", "lost"):
+        lines.append("- ⚠ Cliente probablemente pagó (comprobante adjunto o palabras de pago) pero Kommo aún no refleja. Marca venta_lograda si confianza ≥ 0.7.")
+
     return "\n".join(lines)
 
 
