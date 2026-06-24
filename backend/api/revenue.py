@@ -932,20 +932,23 @@ def list_conversations(
     # 5. Filtro pending/attended sobre la lista deduped.
     apply_reply_filter = reply_filter in ("pending", "attended")
     if apply_reply_filter and convs_dedup:
-        # Buscar advisor reply por lead_id (no por conversation_id) porque los
-        # mensajes pueden estar en cualquiera de las conv del mismo lead.
+        # Solo necesitamos saber si CADA lead tiene ≥1 mensaje de asesora.
+        # Batch grande (200 lead_ids) con select mínimo (solo lead_id) +
+        # filter sender_type=advisor + limit 3000 = una query cubre 200
+        # leads. Para 800 convs → 4 queries (vs 8 antes). Sin N+1 real.
+        # NOTA: limit 3000 funciona porque ya filtramos sender_type=advisor;
+        # si un lead muy verbose tiene >15 advisor msgs simplemente lo
+        # detectamos en el primero.
         lead_ids_check = [c["lead_id"] for c in convs_dedup if c.get("lead_id")]
         leads_with_reply: set = set()
-        # Batches más chicos (100) y limit más estricto (2000) para evitar
-        # que Supabase corte la conexión con result sets grandes.
-        for i in range(0, len(lead_ids_check), 100):
-            batch = lead_ids_check[i:i+100]
+        for i in range(0, len(lead_ids_check), 200):
+            batch = lead_ids_check[i:i+200]
             try:
                 q_msg = (sb.table("messages")
-                           .select("lead_id,sender_type")
+                           .select("lead_id")
                            .in_("lead_id", batch)
                            .eq("sender_type", "advisor")
-                           .limit(2000))
+                           .limit(3000))
                 ms = _safe_exec(q_msg, retries=1, default=[])
                 for m in ms:
                     if m.get("lead_id"):

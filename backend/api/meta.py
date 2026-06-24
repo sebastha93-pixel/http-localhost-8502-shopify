@@ -433,22 +433,42 @@ def _buscar_lead_kommo_por_phone(wa_id: str) -> Optional[dict]:
                 }
                 break
 
-        # 2. Match por dígitos finales si el exacto no funcionó (los últimos 10
-        # dígitos cubren el número sin código país). Necesario porque Kommo
-        # guarda phones con espacios/guiones/formatos inconsistentes.
+        # 2. Match por variantes COMUNES de formato (sin código país, con +57,
+        # con guiones, etc.). Usa .in_() exacto en vez de like('%...%') que
+        # hace full table scan sobre customer_phone (lento a partir de 10k+
+        # leads y la columna no tiene índice trigram).
         if not result and len(wa_norm) >= 7:
-            ultimos = wa_norm[-10:] if len(wa_norm) >= 10 else wa_norm
-            r = sb.table("kommo_leads").select("lead_id,advisor_id,customer_name,customer_phone").like("customer_phone", f"%{ultimos}%").limit(5).execute()
-            for lead in (r.data or []):
-                lead_phone_norm = _normalizar_phone(lead.get("customer_phone") or "")
-                if lead_phone_norm and lead_phone_norm[-10:] == ultimos:
-                    result = {
-                        "lead_id":                 lead["lead_id"],
-                        "advisor_id":              lead.get("advisor_id"),
-                        "customer_name":           lead.get("customer_name"),
-                        "conversation_id_existente": _conv_existente_para_lead(lead["lead_id"]),
-                    }
-                    break
+            ultimos10 = wa_norm[-10:] if len(wa_norm) >= 10 else wa_norm
+            phone_variants = {
+                ultimos10,
+                f"+57{ultimos10}",
+                f"57{ultimos10}",
+                f"+{wa_norm}",
+                wa_norm,
+            }
+            # Variantes con guiones tipo 300-123-4567
+            if len(ultimos10) == 10:
+                con_guion = f"{ultimos10[:3]}-{ultimos10[3:6]}-{ultimos10[6:]}"
+                phone_variants.add(con_guion)
+                phone_variants.add(f"+57 {con_guion}")
+            try:
+                r = (sb.table("kommo_leads")
+                       .select("lead_id,advisor_id,customer_name,customer_phone")
+                       .in_("customer_phone", list(phone_variants))
+                       .limit(5)
+                       .execute())
+                for lead in (r.data or []):
+                    lead_phone_norm = _normalizar_phone(lead.get("customer_phone") or "")
+                    if lead_phone_norm and lead_phone_norm[-10:] == ultimos10:
+                        result = {
+                            "lead_id":                 lead["lead_id"],
+                            "advisor_id":              lead.get("advisor_id"),
+                            "customer_name":           lead.get("customer_name"),
+                            "conversation_id_existente": _conv_existente_para_lead(lead["lead_id"]),
+                        }
+                        break
+            except Exception:
+                pass
     except Exception:
         result = None
     

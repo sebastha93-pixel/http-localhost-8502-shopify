@@ -207,6 +207,8 @@ def _correr_jobs():
         try:
             page = 0
             todas: list = []
+            MAX_CONVS = 50_000  # cap RAM. Si la base crece, este cron procesa lo más reciente.
+            truncated = False
             while True:
                 r = (sb.table("conversations")
                        .select("conversation_id,lead_id,last_message_at")
@@ -217,11 +219,17 @@ def _correr_jobs():
                 if not r:
                     break
                 todas.extend(r)
+                if len(todas) >= MAX_CONVS:
+                    truncated = True
+                    log.warning(f"dedupe nocturno: truncado en {MAX_CONVS} convs. Procesa lo más reciente.")
+                    break
                 if len(r) < 1000:
                     break
                 page += 1
                 if page > 50:
                     break
+            if truncated:
+                resultado.setdefault("dedupe_warnings", []).append(f"truncado en {MAX_CONVS}")
             por_lead: dict = {}
             for c in todas:
                 por_lead.setdefault(c["lead_id"], []).append(c)
