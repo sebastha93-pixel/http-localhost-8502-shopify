@@ -864,6 +864,19 @@ def diag() -> dict:
     return info
 
 
+@router.post("/backfill/custom-fields")
+def backfill_custom_fields_endpoint(
+    limit: int = Query(500, ge=1, le=10000),
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Extrae custom_fields_values del raw JSONB a las columnas nuevas
+    (utm_*, talla, ciudad, motivo_perdida, num_total_compras, etc).
+
+    Idempotente. Correr en lotes de 500-1000 hasta cubrir todos los leads.
+    """
+    return db.backfill_custom_fields(limit=limit)
+
+
 @router.get("/kommo/describe")
 def kommo_describe(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     """Extrae TODO lo estructural de Kommo en un solo response.

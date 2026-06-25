@@ -67,10 +67,100 @@ def advisor_uuid_por_kommo(kommo_user_id: int) -> Optional[str]:
 
 
 # ── kommo_leads ───────────────────────────────────────────────────────────────
+def _extract_custom_fields(lead: dict) -> dict:
+    """Extrae custom_fields_values del lead a un dict plano.
+
+    Mapea los campos relevantes que Kommo trae pero no estábamos
+    procesando: UTMs, gclid/fbclid/ttad_id (atribución de ads), Ciudad,
+    Talla, Referencia, Cantidad de Unidades, Motivo de Perdida/Ganado
+    estructurados, Num Total Compras (LTV), Shopify status, etc.
+
+    Retorna dict con keys del schema kommo_leads (utm_source, utm_campaign,
+    motivo_perdida, talla, etc). Solo incluye keys cuyo valor NO es null.
+    """
+    out: dict = {}
+    cfv = lead.get("custom_fields_values") or []
+    if not isinstance(cfv, list):
+        return out
+
+    # Mapeo: field_code O field_name → columna nuestra
+    # Usamos field_code primero (más estable), fallback a field_name
+    code_map = {
+        # Atribución marketing
+        "UTM_SOURCE":   "utm_source",
+        "UTM_MEDIUM":   "utm_medium",
+        "UTM_CAMPAIGN": "utm_campaign",
+        "UTM_CONTENT":  "utm_content",
+        "UTM_TERM":     "utm_term",
+        "UTM_REFERRER": "utm_referrer",
+        "REFERRER":     "referrer",
+        "GCLID":        "gclid",
+        "GCLIENTID":    "gclientid",
+        "FBCLID":       "fbclid",
+        "TIKTOK_AD_ID_TD":   "ttad_id",
+        "TIKTOK_AD_NAME_TD": "ttad_name",
+        # Shopify cross-reference
+        "SHOPIFY_LEAD_EXTERNAL_ID":      "shopify_lead_id",
+        "SHOPIFY_LEAD_FULFILLMENT_STATUS": "shopify_fulfillment",
+        "SHOPIFY_LEAD_CURRENCY":         "shopify_currency",
+        "SHOPIFY_ORDER_STATUS":          "shopify_order_status",
+        "SHOPIFY_ORDER_PAYMENT_STATUS":  "shopify_payment_status",
+        "SHOPIFY_ORDER_LINK":            "shopify_order_link",
+        # Próxima cita
+        "CF_SCHEDULER_UPCOMING_APPOINTMENT": "proxima_cita",
+    }
+    # Campos sin field_code estable, los mapeamos por field_name (español)
+    name_map = {
+        "Ciudad":               "ciudad",
+        "Referencia":           "referencia",
+        "Talla":                "talla",
+        "Cantidad de Unidades": "cantidad_unidades",
+        "Motivo de Perdida":    "motivo_perdida",
+        "Motivo de Ganado":     "motivo_ganado",
+        "Numero de Compras":    "numero_compras",
+        "Num Total Compras":    "num_total_compras",
+        "Incremento":           "incremento",
+        "Telefono contacto":    "telefono_secundario",
+        "correo contacto":      "email_lead",
+    }
+
+    for f in cfv:
+        if not isinstance(f, dict):
+            continue
+        field_code = f.get("field_code") or ""
+        field_name = f.get("field_name") or ""
+        vals = f.get("values") or []
+        if not vals:
+            continue
+        first = vals[0] if isinstance(vals[0], dict) else {"value": vals[0]}
+        raw_val = first.get("value")
+        if raw_val is None or raw_val == "":
+            continue
+
+        # Decidir columna destino
+        col = code_map.get(field_code) or name_map.get(field_name)
+        if not col:
+            continue
+
+        # Casting según el tipo de campo
+        if col in ("numero_compras", "num_total_compras", "incremento", "cantidad_unidades", "shopify_lead_id"):
+            try:
+                out[col] = int(float(str(raw_val).replace(",", "")))
+            except Exception:
+                pass
+        else:
+            out[col] = str(raw_val)[:500]
+    return out
+
+
 def upsert_lead(lead: dict) -> bool:
     """
     `lead` es el dict que entrega kommo_client.listar_leads (estructura Kommo
     cruda). Lo mapeamos al schema de la tabla.
+
+    Extrae custom_fields_values a columnas dedicadas (UTMs, talla, ciudad,
+    motivo perdida/ganado, LTV, Shopify status). El fallback en raw JSONB
+    se mantiene para campos no mapeados.
     """
     sb = _sb()
     if sb is None:
@@ -83,7 +173,7 @@ def upsert_lead(lead: dict) -> bool:
         contact = ((lead.get("_embedded") or {}).get("contacts") or [{}])[0] if lead.get("_embedded") else {}
         cust_name = contact.get("name") or ""
 
-        # loss_reason
+        # loss_reason (de _embedded — texto libre)
         lr_list = ((lead.get("_embedded") or {}).get("loss_reason") or [])
         loss_reason = lr_list[0].get("name") if lr_list else None
 
@@ -94,6 +184,15 @@ def upsert_lead(lead: dict) -> bool:
         # closed_at: cuando el lead fue cerrado (status 142 = ganado, 143 = perdido)
         closed_at_ts = lead.get("closed_at")
 
+        # updated_at de Kommo (no nuestro synced_at)
+        kommo_updated_ts = lead.get("updated_at")
+
+        # closest_task_at: próxima tarea del lead
+        closest_task_ts = lead.get("closest_task_at")
+
+        # Custom fields → columnas dedicadas
+        cf_data = _extract_custom_fields(lead)
+
         data = {
             "lead_id":              int(lead["id"]),
             "pipeline_id":          lead.get("pipeline_id"),
@@ -103,6 +202,8 @@ def upsert_lead(lead: dict) -> bool:
             "advisor_id":           advisor_id,
             "created_at":           _epoch_to_iso(lead.get("created_at")),
             "closed_at":            _epoch_to_iso(closed_at_ts) if closed_at_ts else None,
+            "kommo_updated_at":     _epoch_to_iso(kommo_updated_ts) if kommo_updated_ts else None,
+            "closest_task_at":      _epoch_to_iso(closest_task_ts) if closest_task_ts else None,
             "lead_value":           float(lead.get("price") or 0),
             "loss_reason":          loss_reason,
             "tags":                 tag_names,
@@ -110,12 +211,71 @@ def upsert_lead(lead: dict) -> bool:
             "customer_name":        cust_name,
             "raw":                  lead,
             "synced_at":            datetime.now(timezone.utc).isoformat(),
+            **cf_data,  # spread de custom fields extraídos
         }
         sb.table("kommo_leads").upsert(data, on_conflict="lead_id").execute()
         return True
     except Exception as e:
         log.warning(f"upsert_lead {lead.get('id')}: {e}")
         return False
+
+
+def backfill_custom_fields(limit: int = 500) -> dict:
+    """Backfill: extrae custom_fields_values del raw JSONB de leads ya
+    sincronizados a las columnas nuevas. Idempotente: se puede correr
+    múltiples veces sin duplicar nada.
+
+    Útil después de añadir las columnas nuevas para enriquecer leads
+    históricos sin necesidad de re-pegarle a la API de Kommo.
+    """
+    sb = _sb()
+    if sb is None:
+        return {"ok": False, "error": "supabase_no_configurado"}
+    procesados = 0
+    enriquecidos = 0
+    errores = 0
+    last_id = 0
+    while procesados < limit:
+        batch_size = min(100, limit - procesados)
+        try:
+            r = (sb.table("kommo_leads")
+                   .select("lead_id,raw")
+                   .gt("lead_id", last_id)
+                   .order("lead_id")
+                   .limit(batch_size)
+                   .execute())
+            rows = r.data or []
+        except Exception as e:
+            log.warning(f"backfill_custom_fields fetch: {e}")
+            errores += 1
+            break
+        if not rows:
+            break
+        for row in rows:
+            lead_id = row["lead_id"]
+            last_id = lead_id
+            procesados += 1
+            raw = row.get("raw") or {}
+            cf_data = _extract_custom_fields(raw)
+            if not cf_data:
+                continue
+            try:
+                sb.table("kommo_leads").update(cf_data).eq("lead_id", lead_id).execute()
+                enriquecidos += 1
+            except Exception as e:
+                errores += 1
+                log.warning(f"backfill {lead_id}: {str(e)[:100]}")
+                if errores > 10:
+                    break
+        if errores > 10:
+            break
+    return {
+        "ok": True,
+        "procesados": procesados,
+        "enriquecidos": enriquecidos,
+        "errores": errores,
+        "last_lead_id": last_id,
+    }
 
 
 def _map_status(status_id: Any) -> str:
