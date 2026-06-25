@@ -410,6 +410,35 @@ class AutorizarResponse(BaseModel):
     orden_melonn: str
 
 
+@router.get("/pedidos/{orden_melonn}/documentos-entrega")
+def documentos_entrega(
+    orden_melonn: str,
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """Trae guía de envío + evidencia de entrega (POD) de una orden.
+
+    Útil para:
+      - Mostrar/descargar la guía sin entrar a Melonn
+      - Adjuntar foto/firma de entregado cuando un cliente reclama
+      - Auditoría de entregas en /devoluciones e /incidencias
+    """
+    import sys
+    from pathlib import Path
+    _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+    import melonn_client as mc
+
+    try:
+        data = mc.obtener_documentos_entrega(orden_melonn)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Melonn API error: {exc}")
+
+    if data is None:
+        return {"ok": False, "error": "documentos_no_disponibles", "orden": orden_melonn}
+    return {"ok": True, "orden": orden_melonn, "data": data}
+
+
 @router.post("/pedidos/{orden_melonn}/autorizar-despacho", response_model=AutorizarResponse)
 def autorizar_despacho(
     orden_melonn: str,

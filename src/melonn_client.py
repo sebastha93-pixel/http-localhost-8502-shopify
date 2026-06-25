@@ -857,6 +857,40 @@ def release_hold_fulfillment(orden: str, shipping_method_code: str = None) -> tu
     return False, err or "Error desconocido al autorizar despacho"
 
 
+def obtener_documentos_entrega(orden: str) -> Optional[dict]:
+    """Trae la guía de envío + evidencia de entrega (POD) de una orden.
+
+    GET /sell-orders/{external_order_number}/delivery-documents
+
+    Devuelve un dict con URLs/base64 de:
+      - shipping label (PDF/imagen de guía)
+      - proof of delivery (firma, foto al cliente)
+      - cualquier otro archivo de evidencia que Melonn tenga
+
+    Si nos pasan un M-id, se traduce a external_order_number igual que
+    en release_hold_fulfillment.
+    """
+    if not orden:
+        return None
+
+    if orden.startswith("M") and orden[1:].isdigit():
+        detail = _get(f"sell-orders/{orden}")
+        if detail:
+            ext = detail.get("external_order_number")
+            if ext:
+                orden = str(ext)
+        else:
+            cache_hit = _cache_leer(ignorar_ttl=True)
+            if cache_hit:
+                pedidos, _, _, _ = cache_hit
+                for p in pedidos:
+                    if p.get("orden_melonn") == orden:
+                        orden = p.get("orden_tienda") or orden
+                        break
+
+    return _get(f"sell-orders/{orden}/delivery-documents")
+
+
 def _parsear_fecha(valor) -> Optional[date]:
     if not valor:
         return None
