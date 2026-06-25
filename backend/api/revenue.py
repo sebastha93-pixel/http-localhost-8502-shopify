@@ -2734,7 +2734,7 @@ def messages_recent(
 @router.get("/leads-mal-clasificados")
 def leads_mal_clasificados(
     limit: int = Query(100, ge=1, le=500),
-    _: CurrentUser = Depends(require_role("admin")),
+    _: CurrentUser = Depends(require_role("admin", "operador")),
 ) -> dict:
     """Detecta inconsistencias en Kommo: leads con status_id=143 (Perdido)
     PERO motivo_ganado NO NULL. Esos son ventas reales mal clasificadas

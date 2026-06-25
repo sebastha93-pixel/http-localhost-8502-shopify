@@ -823,6 +823,107 @@ function LeadFieldsCard({ daysBack }: { daysBack: number }) {
   );
 }
 
+function VentasEscondidasCard() {
+  const q = useQuery<any>({
+    queryKey: ["revenue", "leads-mal-clasificados"],
+    queryFn: () => api.get("/api/revenue/leads-mal-clasificados?limit=50"),
+    refetchInterval: 300_000,
+  });
+  const [expanded, setExpanded] = useState(false);
+  if (q.isLoading) return null;
+  if (q.isError || !q.data?.ok) return null;
+  const total = q.data.total_perdidos_pipeline || 0;
+  const mal = q.data.mal_clasificados || 0;
+  if (mal === 0) return null;
+  const pct = q.data.porcentaje_inflacion ?? 0;
+  const muestras: any[] = q.data.muestras || [];
+  const valorEscondido = q.data.valor_escondido_en_muestra || 0;
+  return (
+    <Card>
+      <CardContent className="p-5">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <div>
+            <p className="section-label text-terracotta">⚠ Ventas escondidas en perdidos</p>
+            <p className="mt-1 text-xs text-graphite">
+              Leads marcados como "Perdido" en Kommo pero con "Motivo de Ganado" lleno · son ventas reales mal clasificadas
+            </p>
+          </div>
+          <button
+            onClick={() => setExpanded(v => !v)}
+            className="inline-flex items-center rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-medium text-ink-900 hover:bg-cloud"
+          >
+            {expanded ? "Ocultar lista" : "Ver lista"}
+          </button>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <div>
+            <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Total perdidos</p>
+            <p className="font-display text-2xl text-ink-900 tabular">{total.toLocaleString("es-CO")}</p>
+          </div>
+          <div>
+            <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Mal clasificados</p>
+            <p className="font-display text-2xl text-terracotta tabular">{mal.toLocaleString("es-CO")}</p>
+          </div>
+          <div>
+            <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">% Inflación</p>
+            <p className="font-display text-2xl text-terracotta tabular">{pct}%</p>
+          </div>
+          <div>
+            <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Valor en muestra</p>
+            <p className="font-display text-2xl text-ink-900 tabular">
+              {valorEscondido > 0 ? `$${Math.round(valorEscondido / 1000).toLocaleString("es-CO")}K` : "—"}
+            </p>
+          </div>
+        </div>
+        <p className="text-xs text-graphite mb-3">{q.data.interpretacion}</p>
+        {expanded && muestras.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="text-left py-2 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Lead</th>
+                  <th className="text-left py-2 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Cerrado</th>
+                  <th className="text-left py-2 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Motivo Ganado</th>
+                  <th className="text-left py-2 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Motivo Pérdida</th>
+                  <th className="text-right py-2 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Talla / Uds</th>
+                  <th className="text-right py-2 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">N° Compras</th>
+                  <th className="text-right py-2 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {muestras.map((m) => (
+                  <tr key={m.lead_id} className="border-b border-border/40">
+                    <td className="py-1.5">
+                      <a
+                        href={`https://drtjeans.kommo.com/leads/detail/${m.lead_id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-navy-600 hover:underline tabular text-xs"
+                      >
+                        #{m.lead_id}
+                      </a>
+                    </td>
+                    <td className="py-1.5 text-xs text-graphite tabular">{fmtDate(m.closed_at)}</td>
+                    <td className="py-1.5 text-xs text-ink-900">{m.motivo_ganado || "—"}</td>
+                    <td className="py-1.5 text-xs text-graphite">{m.motivo_perdida || "—"}</td>
+                    <td className="py-1.5 text-xs text-right tabular text-graphite">
+                      {m.talla ? `T${m.talla}` : "—"} / {m.cantidad_unidades || "—"}
+                    </td>
+                    <td className="py-1.5 text-xs text-right tabular text-graphite">{m.numero_compras || "—"}</td>
+                    <td className="py-1.5 text-xs text-right tabular text-ink-900">
+                      {m.lead_value > 0 ? `$${Math.round(m.lead_value).toLocaleString("es-CO")}` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ============================================================================
 // ALERTAS
 // ============================================================================
@@ -1503,6 +1604,9 @@ ${asesoras || "  · sin asignaciones"}`;
           </div>
         </section>
       )}
+
+      {/* VENTAS ESCONDIDAS — leads en estado "Perdido" pero con motivo_ganado */}
+      <VentasEscondidasCard />
 
       {/* HERO — Fugas activas */}
       <FugasHero
