@@ -849,6 +849,26 @@ def diag() -> dict:
         }
     except Exception as e:
         info["scheduler_err"] = str(e)[:200]
+    # Backfill custom_fields progress
+    try:
+        sb = db._sb()
+        if sb is not None:
+            # Count leads con utm_source poblado (señal de backfill)
+            with_utm = sb.table("kommo_leads").select("lead_id", count="exact", head=True).not_.is_("utm_source", "null").execute()
+            with_motivo = sb.table("kommo_leads").select("lead_id", count="exact", head=True).not_.is_("motivo_perdida", "null").execute()
+            with_talla = sb.table("kommo_leads").select("lead_id", count="exact", head=True).not_.is_("talla", "null").execute()
+            total = sb.table("kommo_leads").select("lead_id", count="exact", head=True).execute()
+            done_flag = db.leer_sync_state("custom_fields_backfill_done") == "1"
+            info["custom_fields_backfill"] = {
+                "total_leads":           total.count or 0,
+                "leads_con_utm_source":  with_utm.count or 0,
+                "leads_con_motivo":      with_motivo.count or 0,
+                "leads_con_talla":       with_talla.count or 0,
+                "marked_done":           done_flag,
+            }
+    except Exception as e:
+        info["custom_fields_backfill_err"] = str(e)[:200]
+
     # Stats webhook Kommo
     try:
         info["kommo_webhook_stats"] = {
