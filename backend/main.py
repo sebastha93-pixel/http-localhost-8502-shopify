@@ -113,18 +113,22 @@ async def lifespan(app: FastAPI):
                 def _do_backfill():
                     print(f"   🔄 Backfill custom_fields arrancando en background...")
                     total = 0
-                    for i in range(50):  # max 50 lotes de 1000 = 50k leads
+                    last_id = 0
+                    for i in range(200):  # max 200 lotes de 1000 = 200k leads
                         try:
-                            res = _rdb.backfill_custom_fields(limit=1000)
+                            res = _rdb.backfill_custom_fields(limit=1000, start_lead_id=last_id)
                         except Exception as e:
                             print(f"   ⚠️  Backfill error: {e}")
                             break
                         if not res.get("ok"): break
                         proc = res.get("procesados", 0)
                         enr = res.get("enriquecidos", 0)
+                        new_last = res.get("last_lead_id", 0)
                         total += enr
-                        print(f"   🔄 Backfill lote {i+1}: proc={proc} enriq={enr}")
-                        if proc == 0: break
+                        print(f"   🔄 Backfill lote {i+1}: proc={proc} enriq={enr} last_id={new_last}")
+                        if proc == 0 or new_last <= last_id:
+                            break  # no más leads o no avanzamos = terminamos
+                        last_id = new_last
                     _rdb.guardar_sync_state("custom_fields_backfill_done", "1")
                     print(f"   ✅ Backfill custom_fields TERMINADO. Total enriquecidos: {total}")
                 t = threading.Thread(target=_do_backfill, daemon=True, name="cf_backfill")

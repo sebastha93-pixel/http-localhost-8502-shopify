@@ -220,13 +220,14 @@ def upsert_lead(lead: dict) -> bool:
         return False
 
 
-def backfill_custom_fields(limit: int = 500) -> dict:
+def backfill_custom_fields(limit: int = 500, start_lead_id: int = 0) -> dict:
     """Backfill: extrae custom_fields_values del raw JSONB de leads ya
     sincronizados a las columnas nuevas. Idempotente: se puede correr
     múltiples veces sin duplicar nada.
 
-    Útil después de añadir las columnas nuevas para enriquecer leads
-    históricos sin necesidad de re-pegarle a la API de Kommo.
+    start_lead_id: permite paginar entre llamadas externas (cada call
+    procesa hasta `limit` leads desde lead_id > start_lead_id, retorna
+    last_lead_id para la próxima call).
     """
     sb = _sb()
     if sb is None:
@@ -234,7 +235,7 @@ def backfill_custom_fields(limit: int = 500) -> dict:
     procesados = 0
     enriquecidos = 0
     errores = 0
-    last_id = 0
+    last_id = int(start_lead_id or 0)
     while procesados < limit:
         batch_size = min(100, limit - procesados)
         try:
