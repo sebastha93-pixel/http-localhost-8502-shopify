@@ -2731,6 +2731,100 @@ def messages_recent(
 
 
 # ── Sync ──────────────────────────────────────────────────────────────────────
+@router.get("/chats-activos-kommo")
+def chats_activos_kommo(
+    _: CurrentUser = Depends(require_role("admin", "operador")),
+) -> dict:
+    """Espejo EXACTO del contador rojo de Chats en la barra lateral de Kommo:
+    cantidad de talks no leídos (is_read=False). Es el KPI operativo real que
+    el equipo monitorea en la mañana y durante el día.
+
+    Itera la API de talks de Kommo y agrupa por origen + por asesora.
+    """
+    import sys
+    src_path = "/Users/sebastianhurtado/male_denim_logistics/src"
+    if src_path not in sys.path:
+        # No-op en Railway (otra ruta) — solo para dev local
+        pass
+    try:
+        import kommo_client as kc
+    except Exception as e:
+        return {"ok": False, "error": f"kommo_client_import: {str(e)[:120]}"}
+
+    n_total = 0
+    n_no_leidos = 0
+    n_en_trabajo = 0
+    por_origen: dict = {}
+    por_responsable: dict = {}
+    muestras_no_leidos: list = []
+
+    try:
+        # Iterar talks recientes (últimos 7 días) para no traer histórico viejo.
+        # Kommo no expone counter directo de unread → iteramos y contamos.
+        from datetime import datetime, timezone, timedelta
+        hace_7d = int((datetime.now(tz=timezone.utc) - timedelta(days=7)).timestamp())
+        for talk in kc.listar_talks(updated_after_ts=hace_7d, limit_total=3000):
+            n_total += 1
+            is_read = talk.get("is_read")
+            is_in_work = talk.get("is_in_work")
+            if is_in_work:
+                n_en_trabajo += 1
+            # is_read puede venir como False, 0, None → contar como no leído solo si es False/0 explícito
+            if is_read is False or is_read == 0:
+                n_no_leidos += 1
+                origin = talk.get("origin") or "desconocido"
+                por_origen[origin] = por_origen.get(origin, 0) + 1
+                resp = talk.get("responsible_user_id")
+                if resp:
+                    por_responsable[resp] = por_responsable.get(resp, 0) + 1
+                if len(muestras_no_leidos) < 20:
+                    muestras_no_leidos.append({
+                        "talk_id": talk.get("id"),
+                        "lead_id": talk.get("entity_id") if talk.get("entity_type") == "leads" else None,
+                        "origin": origin,
+                        "responsible_user_id": resp,
+                        "updated_at": talk.get("updated_at"),
+                    })
+    except Exception as e:
+        return {"ok": False, "error": f"kommo_query: {str(e)[:200]}", "parcial": {
+            "n_total": n_total, "n_no_leidos": n_no_leidos,
+        }}
+
+    # Mapear responsable_user_id → nombre de asesora (best-effort).
+    sb = db._sb()
+    nombres_responsable: dict = {}
+    if sb is not None and por_responsable:
+        try:
+            ids = list(por_responsable.keys())
+            ads = (sb.table("advisors")
+                     .select("advisor_id,name")
+                     .in_("advisor_id", [str(x) for x in ids])
+                     .execute().data) or []
+            for a in ads:
+                nombres_responsable[a["advisor_id"]] = a.get("name") or a["advisor_id"]
+        except Exception:
+            pass
+
+    por_asesora = sorted(
+        [
+            {"advisor_id": str(uid), "name": nombres_responsable.get(str(uid), str(uid)), "no_leidos": cnt}
+            for uid, cnt in por_responsable.items()
+        ],
+        key=lambda r: r["no_leidos"], reverse=True,
+    )
+
+    return {
+        "ok": True,
+        "chats_no_leidos": n_no_leidos,
+        "chats_en_trabajo": n_en_trabajo,
+        "total_talks_revisados": n_total,
+        "ventana": "últimos 7 días",
+        "por_origen": dict(sorted(por_origen.items(), key=lambda kv: kv[1], reverse=True)),
+        "por_asesora": por_asesora,
+        "muestras": muestras_no_leidos,
+    }
+
+
 @router.get("/leads-mal-clasificados")
 def leads_mal_clasificados(
     limit: int = Query(100, ge=1, le=500),

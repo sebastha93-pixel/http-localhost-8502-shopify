@@ -823,6 +823,98 @@ function LeadFieldsCard({ daysBack }: { daysBack: number }) {
   );
 }
 
+function ChatsActivosKommoCard() {
+  const q = useQuery<any>({
+    queryKey: ["revenue", "chats-activos-kommo"],
+    queryFn: () => api.get("/api/revenue/chats-activos-kommo"),
+    refetchInterval: 60_000,
+  });
+  if (q.isLoading) {
+    return (
+      <section className="rounded-md border border-terracotta/30 bg-terracotta/[0.04] p-5">
+        <p className="section-label text-terracotta">Chats activos · espejo Kommo</p>
+        <p className="mt-2 text-xs text-graphite">Consultando Kommo…</p>
+      </section>
+    );
+  }
+  if (q.isError || !q.data?.ok) {
+    return (
+      <section className="rounded-md border border-terracotta/30 bg-terracotta/[0.04] p-5">
+        <p className="section-label text-terracotta">Chats activos · espejo Kommo</p>
+        <p className="mt-2 text-xs text-graphite">{q.data?.error || "Error al consultar Kommo"}</p>
+      </section>
+    );
+  }
+  const d = q.data;
+  const porOrigen: Record<string, number> = d.por_origen || {};
+  const porAsesora: Array<{ name: string; no_leidos: number }> = d.por_asesora || [];
+  return (
+    <section className="rounded-md border-2 border-terracotta/40 bg-terracotta/[0.04] overflow-hidden">
+      <div className="px-5 py-4 border-b border-terracotta/20 flex flex-wrap items-baseline justify-between gap-3">
+        <div>
+          <p className="font-display text-base font-medium text-ink-900">
+            Chats sin responder · espejo Kommo
+          </p>
+          <p className="text-xs text-graphite mt-0.5">
+            Mismo número que ves en rojo en la barra lateral de Kommo · actualiza cada 1 min
+          </p>
+        </div>
+        <a
+          href="https://drtjeans.kommo.com/chats/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-medium text-ink-900 hover:bg-cloud"
+        >
+          Abrir Kommo →
+        </a>
+      </div>
+      <div className="p-5 grid gap-5 md:grid-cols-[auto_1fr]">
+        <div className="flex flex-col items-start">
+          <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">No leídos AHORA</p>
+          <p className="font-display text-6xl text-terracotta tabular leading-none mt-1">
+            {d.chats_no_leidos.toLocaleString("es-CO")}
+          </p>
+          <p className="text-[0.65rem] text-graphite mt-2">
+            {d.chats_en_trabajo} en trabajo · {d.total_talks_revisados} revisados ({d.ventana})
+          </p>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite mb-2">Por canal</p>
+            {Object.keys(porOrigen).length === 0 ? (
+              <p className="text-xs text-graphite italic">Sin datos</p>
+            ) : (
+              <div className="space-y-1">
+                {Object.entries(porOrigen).slice(0, 6).map(([o, n]) => (
+                  <div key={o} className="flex justify-between text-sm">
+                    <span className="text-ink-900">{o}</span>
+                    <span className="tabular text-graphite">{n}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div>
+            <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite mb-2">Por asesora</p>
+            {porAsesora.length === 0 ? (
+              <p className="text-xs text-graphite italic">Sin asignación</p>
+            ) : (
+              <div className="space-y-1">
+                {porAsesora.slice(0, 6).map((a) => (
+                  <div key={a.advisor_id} className="flex justify-between text-sm">
+                    <span className="text-ink-900 truncate pr-2">{a.name}</span>
+                    <span className="tabular text-graphite">{a.no_leidos}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function VentasEscondidasCard() {
   const q = useQuery<any>({
     queryKey: ["revenue", "leads-mal-clasificados"],
@@ -1490,6 +1582,9 @@ ${asesoras || "  · sin asignaciones"}`;
       subtitle="Auditoría comercial: conversaciones, equipo, conversión"
       isFetching={statsQ.isFetching}
     >
+      {/* CHATS SIN RESPONDER — espejo del 105 rojo de Kommo, el KPI operativo */}
+      <ChatsActivosKommoCard />
+
       {/* BRIEFING DEL DÍA — el reporte que el equipo revisa cada mañana */}
       {briefingQ.data && (
         <section className="rounded-md border border-navy-600/30 bg-navy-600/[0.03] overflow-hidden">
