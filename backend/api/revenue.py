@@ -2731,6 +2731,68 @@ def messages_recent(
 
 
 # ── Sync ──────────────────────────────────────────────────────────────────────
+@router.get("/leads-mal-clasificados")
+def leads_mal_clasificados(
+    limit: int = Query(100, ge=1, le=500),
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Detecta inconsistencias en Kommo: leads con status_id=143 (Perdido)
+    PERO motivo_ganado NO NULL. Esos son ventas reales mal clasificadas
+    como perdidas, lo que infla el KPI de pérdidas y oculta ingresos.
+    """
+    sb = db._sb()
+    if sb is None:
+        return {"ok": False, "error": "supabase_no_configurado"}
+    try:
+        # Conteo total
+        total_perdidos_q = (sb.table("kommo_leads")
+                              .select("lead_id", count="exact")
+                              .eq("status_id", 143)
+                              .limit(0)
+                              .execute())
+        total_perdidos = getattr(total_perdidos_q, "count", 0) or 0
+
+        mal_clasif_q = (sb.table("kommo_leads")
+                          .select("lead_id", count="exact")
+                          .eq("status_id", 143)
+                          .not_.is_("motivo_ganado", "null")
+                          .limit(0)
+                          .execute())
+        mal_clasif = getattr(mal_clasif_q, "count", 0) or 0
+
+        # Muestras concretas
+        muestras_q = (sb.table("kommo_leads")
+                        .select("lead_id,status,closed_at,lead_value,motivo_ganado,motivo_perdida,numero_compras,talla,cantidad_unidades,advisor_id")
+                        .eq("status_id", 143)
+                        .not_.is_("motivo_ganado", "null")
+                        .order("closed_at", desc=True)
+                        .limit(limit)
+                        .execute())
+        muestras = muestras_q.data or []
+
+        # Valor total escondido
+        valor_escondido = sum(float(m.get("lead_value") or 0) for m in muestras)
+
+        return {
+            "ok": True,
+            "total_perdidos_pipeline": total_perdidos,
+            "mal_clasificados": mal_clasif,
+            "porcentaje_inflacion": round(100.0 * mal_clasif / max(total_perdidos, 1), 1),
+            "valor_escondido_en_muestra": valor_escondido,
+            "n_muestras": len(muestras),
+            "muestras": muestras,
+            "interpretacion": (
+                f"De los {total_perdidos} leads marcados como 'Perdido' en Kommo, "
+                f"{mal_clasif} ({round(100.0*mal_clasif/max(total_perdidos,1),1)}%) "
+                f"tienen 'Motivo de Ganado' lleno — son ventas reales escondidas. "
+                f"Limpiar esto en Kommo descuenta {mal_clasif} pérdidas falsas y "
+                f"suma esas ventas al ganado real."
+            ),
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"query: {str(e)[:200]}"}
+
+
 @router.post("/sync/advisors")
 def sync_advisors_endpoint(
     _: CurrentUser = Depends(require_role("admin")),
