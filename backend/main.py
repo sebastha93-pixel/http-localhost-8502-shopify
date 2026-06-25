@@ -102,6 +102,39 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"   ⚠️  Revenue scheduler no arrancó: {e}")
 
+        # One-time backfill: extraer custom_fields_values del raw JSONB
+        # a las columnas dedicadas. Idempotente — marca done en sync_state
+        # cuando termina para no repetir en cada arranque.
+        try:
+            from backend.services import revenue_db as _rdb
+            done = _rdb.leer_sync_state("custom_fields_backfill_done")
+            if done != "1":
+                import threading
+                def _do_backfill():
+                    print(f"   🔄 Backfill custom_fields arrancando en background...")
+                    total = 0
+                    for i in range(50):  # max 50 lotes de 1000 = 50k leads
+                        try:
+                            res = _rdb.backfill_custom_fields(limit=1000)
+                        except Exception as e:
+                            print(f"   ⚠️  Backfill error: {e}")
+                            break
+                        if not res.get("ok"): break
+                        proc = res.get("procesados", 0)
+                        enr = res.get("enriquecidos", 0)
+                        total += enr
+                        print(f"   🔄 Backfill lote {i+1}: proc={proc} enriq={enr}")
+                        if proc == 0: break
+                    _rdb.guardar_sync_state("custom_fields_backfill_done", "1")
+                    print(f"   ✅ Backfill custom_fields TERMINADO. Total enriquecidos: {total}")
+                t = threading.Thread(target=_do_backfill, daemon=True, name="cf_backfill")
+                t.start()
+                print(f"   🔄 Backfill custom_fields encolado (background)")
+            else:
+                print(f"   ✓ Backfill custom_fields ya estaba hecho")
+        except Exception as e:
+            print(f"   ⚠️  Backfill bootstrap: {e}")
+
     yield
     # Shutdown
     if es_lider:
