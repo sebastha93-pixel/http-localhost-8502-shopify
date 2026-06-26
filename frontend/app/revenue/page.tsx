@@ -847,7 +847,7 @@ function ChatsActivosKommoCard() {
   }
   const d = q.data;
   const porOrigen: Record<string, number> = d.por_origen || {};
-  const porAsesora: Array<{ name: string; no_leidos: number }> = d.por_asesora || [];
+  const porAsesora: Array<{ advisor_id: string; name: string; no_leidos: number }> = d.por_asesora || [];
   return (
     <section className="rounded-md border-2 border-terracotta/40 bg-terracotta/[0.04] overflow-hidden">
       <div className="px-5 py-4 border-b border-terracotta/20 flex flex-wrap items-baseline justify-between gap-3">
