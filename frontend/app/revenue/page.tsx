@@ -856,10 +856,10 @@ function ChatsActivosKommoCard() {
       <div className="px-5 py-4 border-b border-terracotta/20 flex flex-wrap items-baseline justify-between gap-3">
         <div>
           <p className="font-display text-base font-medium text-ink-900">
-            Chats abiertos · espejo Kommo
+            Chats sin responder · espejo Kommo
           </p>
           <p className="text-xs text-graphite mt-0.5">
-            Mismo filtro "Chats abiertos" (status=opened) que ves en la barra lateral de Kommo · actualiza cada 1 min
+            Talks abiertos con cliente sin respuesta · aprox. del badge rojo de Kommo · actualiza cada 20s
           </p>
         </div>
         <a

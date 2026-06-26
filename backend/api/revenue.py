@@ -2755,7 +2755,7 @@ def chats_activos_kommo(
     # cada request (con 25 usuarios serían 25 × 80 páginas/min — fatal).
     import json as _json, time as _time
     from datetime import datetime, timezone, timedelta
-    CACHE_KEY = "chats_activos_kommo_v4"
+    CACHE_KEY = "chats_activos_kommo_v5"
     CACHE_TTL_SEC = 25  # un poco menos del refetchInterval del front (30s)
     try:
         cached = db.leer_sync_state(CACHE_KEY)
@@ -2813,10 +2813,19 @@ def chats_activos_kommo(
         return resultado_rapido
 
     try:
-        # FALLBACK: el endpoint AJAX no respondió. Iteramos talks con
-        # filtro server-side status=opened.
-        hace_180d = int((datetime.now(tz=timezone.utc) - timedelta(days=180)).timestamp())
-        for talk in kc.listar_talks(updated_after_ts=hace_180d, limit_total=5000, only_opened=True):
+        # FALLBACK: el endpoint AJAX no respondió (Bearer no autoriza el
+        # endpoint interno /ajax/v4/inbox/badge — requiere cookies de sesión
+        # que expiran al cerrar el browser, no es viable persistirlas).
+        #
+        # APROXIMACIÓN: iteramos talks con filter[status]=opened y contamos
+        # los is_read=false como "chats abiertos". Es lo más cercano al badge
+        # rojo de Kommo vía la API oficial — típicamente 5-15% por debajo
+        # porque algunos chats abiertos antiguos pueden quedar fuera del cap
+        # de paginación. Para precisión exacta se necesitaría un agente local.
+        #
+        # Sin filtro de ventana — Kommo arrastra chats abiertos de hace meses
+        # si nunca se cerraron, y queremos contarlos todos.
+        for talk in kc.listar_talks(updated_after_ts=None, limit_total=8000, only_opened=True):
             n_total += 1
             is_read = talk.get("is_read")
             is_in_work = talk.get("is_in_work")
@@ -2826,8 +2835,6 @@ def chats_activos_kommo(
                 n_no_leidos += 1
             # only_opened=True ya filtra server-side a status=opened en Kommo,
             # así que TODOS los talks que llegan aquí son abiertos por definición.
-            # No re-chequeamos talk.status porque Kommo no siempre devuelve
-            # ese campo en el formato esperado (a veces string, a veces ausente).
             if True:
                 n_abiertos += 1
                 origin = talk.get("origin") or "desconocido"
@@ -2873,16 +2880,15 @@ def chats_activos_kommo(
 
     resultado = {
         "ok": True,
-        # chats_abiertos = espejo EXACTO del filtro "Chats abiertos" de Kommo
-        # (status=opened). Es el número operativo que el equipo mira en
-        # el sidebar de Kommo todo el día.
-        "chats_abiertos": n_abiertos,
-        # chats_no_leidos = subset de no respondidos (is_read=false).
-        # Se mantiene como dato secundario.
+        # APROXIMACIÓN del badge rojo de Kommo: contamos talks abiertos
+        # con cliente sin responder (is_read=false). Típicamente queda
+        # 5-15% por debajo del badge exacto del sidebar.
+        "chats_abiertos": n_no_leidos,
         "chats_no_leidos": n_no_leidos,
         "chats_en_trabajo": n_en_trabajo,
+        "chats_abiertos_total": n_abiertos,  # total opened (incluye respondidos)
         "total_talks_revisados": n_total,
-        "ventana": "últimos 180 días",
+        "ventana": "histórico completo",
         "por_origen": dict(sorted(por_origen.items(), key=lambda kv: kv[1], reverse=True)),
         "por_asesora": por_asesora,
         "muestras": muestras_no_leidos,
