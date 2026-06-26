@@ -541,7 +541,8 @@ def listar_notes_de_lead(lead_id: int,
 
 
 def listar_talks(updated_after_ts: Optional[int] = None,
-                  limit_total: int = 5000) -> Iterator[dict]:
+                  limit_total: int = 5000,
+                  only_opened: bool = False) -> Iterator[dict]:
     """
     Itera talks (conversaciones de chat). Cada talk es un "thread" entre
     un asesor y un cliente, ligado a un lead/contacto.
@@ -558,10 +559,17 @@ def listar_talks(updated_after_ts: Optional[int] = None,
     Suficiente para análisis de tiempo, abandono, ranking por asesor.
 
     `updated_after_ts`: epoch seconds para incremental.
+    `only_opened`: si True, filtra server-side a status=1 (abierto).
+                   Esto reduce drásticamente el volumen y es lo que
+                   espeja el contador "Chats abiertos" de Kommo.
     """
     params: dict = {"limit": 250}
     if updated_after_ts:
         params["filter[updated_at][from]"] = int(updated_after_ts)
+    if only_opened:
+        # filter[status]=1 → solo chats con status=opened.
+        # Verificado en Kommo: el URL /chats/?status[]=opened usa este filtro.
+        params["filter[status]"] = 1
 
     enviados = 0
     for page in _paginar("talks", "talks", params):

@@ -827,7 +827,10 @@ function ChatsActivosKommoCard() {
   const q = useQuery<any>({
     queryKey: ["revenue", "chats-activos-kommo"],
     queryFn: () => api.get("/api/revenue/chats-activos-kommo"),
-    refetchInterval: 60_000,
+    refetchInterval: 20_000,              // refresca cada 20s
+    refetchIntervalInBackground: true,    // sigue refrescando aunque la pestaña no esté activa
+    placeholderData: (prev: any) => prev,      // mantiene el último valor mientras carga uno nuevo (evita parpadeo a 0)
+    staleTime: 15_000,
   });
   if (q.isLoading) {
     return (
@@ -1540,7 +1543,10 @@ export default function RevenuePage() {
   const chatsKommoQ = useQuery<any>({
     queryKey: ["revenue", "chats-kommo-briefing"],
     queryFn: () => api.get("/api/revenue/chats-activos-kommo"),
-    refetchInterval: 60_000,
+    refetchInterval: 20_000,
+    refetchIntervalInBackground: true,
+    placeholderData: (prev: any) => prev,
+    staleTime: 15_000,
   });
   const [briefingCopied, setBriefingCopied] = useState(false);
   function copiarBriefing() {

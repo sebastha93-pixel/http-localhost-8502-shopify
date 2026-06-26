@@ -2751,6 +2751,23 @@ def chats_activos_kommo(
     except Exception as e:
         return {"ok": False, "error": f"kommo_client_import: {str(e)[:120]}"}
 
+    # ── Cache de 30s en sync_state para evitar pegarle a Kommo en
+    # cada request (con 25 usuarios serían 25 × 80 páginas/min — fatal).
+    import json as _json, time as _time
+    from datetime import datetime, timezone, timedelta
+    CACHE_KEY = "chats_activos_kommo_v2"
+    CACHE_TTL_SEC = 25  # un poco menos del refetchInterval del front (30s)
+    try:
+        cached = db.leer_sync_state(CACHE_KEY)
+        if cached:
+            obj = _json.loads(cached)
+            edad = _time.time() - obj.get("_ts", 0)
+            if edad < CACHE_TTL_SEC:
+                obj["_cache_age_sec"] = round(edad, 1)
+                return obj
+    except Exception:
+        pass
+
     n_total = 0
     n_no_leidos = 0
     n_en_trabajo = 0
@@ -2760,16 +2777,12 @@ def chats_activos_kommo(
     muestras_no_leidos: list = []
 
     try:
-        # Iterar talks recientes para contar los "abiertos" (espejo del
-        # filtro "Chats abiertos" en Kommo que es status=opened, NO is_read).
-        # Verificado navegando en Kommo: el URL del filtro es
-        #   /chats/?status[]=opened
-        # Lo que se traduce en la API a talk.status == 1 (open).
-        from datetime import datetime, timezone, timedelta
-        # Ventana 180d — Kommo cuenta chats abiertos aunque sean viejos.
-        # Si el cliente nunca cerró el ticket, sigue contando.
+        # Filtramos server-side a status=1 (abierto) para reducir
+        # drásticamente el volumen — antes iterábamos 20k talks históricos.
+        # Ahora pedimos solo los abiertos que es lo único que necesitamos.
+        # Ventana 180d (Kommo arrastra chats abiertos antiguos).
         hace_180d = int((datetime.now(tz=timezone.utc) - timedelta(days=180)).timestamp())
-        for talk in kc.listar_talks(updated_after_ts=hace_180d, limit_total=20000):
+        for talk in kc.listar_talks(updated_after_ts=hace_180d, limit_total=5000, only_opened=True):
             n_total += 1
             is_read = talk.get("is_read")
             is_in_work = talk.get("is_in_work")
@@ -2823,7 +2836,7 @@ def chats_activos_kommo(
         key=lambda r: r["no_leidos"], reverse=True,
     )
 
-    return {
+    resultado = {
         "ok": True,
         # chats_abiertos = espejo EXACTO del filtro "Chats abiertos" de Kommo
         # (status=opened). Es el número operativo que el equipo mira en
@@ -2838,7 +2851,14 @@ def chats_activos_kommo(
         "por_origen": dict(sorted(por_origen.items(), key=lambda kv: kv[1], reverse=True)),
         "por_asesora": por_asesora,
         "muestras": muestras_no_leidos,
+        "_ts": _time.time(),
+        "_cached": False,
     }
+    try:
+        db.guardar_sync_state(CACHE_KEY, _json.dumps(resultado))
+    except Exception:
+        pass
+    return resultado
 
 
 @router.get("/leads-mal-clasificados")
