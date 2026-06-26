@@ -2751,10 +2751,36 @@ def chats_activos_kommo(
     except Exception as e:
         return {"ok": False, "error": f"kommo_client_import: {str(e)[:120]}"}
 
-    # ── Cache de 30s en sync_state para evitar pegarle a Kommo en
-    # cada request (con 25 usuarios serían 25 × 80 páginas/min — fatal).
+    # ── PRIORIDAD 1: badge live del agente local (browser-poller).
+    # Si el agente postea cada 20-30s, este valor es el badge EXACTO de Kommo.
+    # Se considera válido si tiene <90s de antigüedad (margen para latencia).
     import json as _json, time as _time
     from datetime import datetime, timezone, timedelta
+    try:
+        live_raw = db.leer_sync_state("chats_badge_live")
+        if live_raw:
+            live = _json.loads(live_raw)
+            edad_live = _time.time() - live.get("ts", 0)
+            if edad_live < 90 and isinstance(live.get("count"), int):
+                return {
+                    "ok": True,
+                    "chats_abiertos": live["count"],
+                    "chats_no_leidos": live["count"],
+                    "chats_en_trabajo": 0,
+                    "total_talks_revisados": 0,
+                    "ventana": "tiempo real · badge live",
+                    "por_origen": {},
+                    "por_asesora": [],
+                    "muestras": [],
+                    "_ts": _time.time(),
+                    "_live_age_sec": round(edad_live, 1),
+                    "_source": "browser_poller",
+                }
+    except Exception:
+        pass
+
+    # ── PRIORIDAD 2: cache de 30s en sync_state para evitar pegarle a
+    # Kommo en cada request (con 25 usuarios serían 25 × 80 páginas/min).
     CACHE_KEY = "chats_activos_kommo_v5"
     CACHE_TTL_SEC = 25  # un poco menos del refetchInterval del front (30s)
     try:
@@ -2900,6 +2926,41 @@ def chats_activos_kommo(
     except Exception:
         pass
     return resultado
+
+
+@router.post("/chats-badge-ingest")
+def chats_badge_ingest(body: dict) -> dict:
+    """Recibe el conteo EXACTO del badge rojo de Kommo desde el agente
+    local (browser/launchd) que sí tiene cookies vivas. Almacena en
+    sync_state con timestamp para que /chats-activos-kommo lo prefiera.
+
+    Auth: header x-badge-secret con valor de env CHATS_BADGE_SECRET.
+    Si la env var no está seteada, el endpoint queda abierto (modo dev).
+    """
+    import os, json as _json, time as _time
+    from fastapi import Request
+    # Validación de secret
+    expected = (os.environ.get("CHATS_BADGE_SECRET") or "").strip()
+    if expected:
+        # Leer secret del body (más simple que header en este caso)
+        if (body or {}).get("secret") != expected:
+            raise HTTPException(401, "secret_invalido")
+    count = (body or {}).get("count")
+    if not isinstance(count, int) or count < 0 or count > 100000:
+        raise HTTPException(400, "count_invalido")
+    sb = db._sb()
+    if sb is None:
+        raise HTTPException(503, "supabase_no_configurado")
+    payload = {
+        "count": count,
+        "source": (body or {}).get("source") or "unknown",
+        "ts": _time.time(),
+    }
+    try:
+        db.guardar_sync_state("chats_badge_live", _json.dumps(payload))
+        return {"ok": True, "stored": payload}
+    except Exception as e:
+        raise HTTPException(500, f"store: {str(e)[:120]}")
 
 
 @router.get("/leads-mal-clasificados")

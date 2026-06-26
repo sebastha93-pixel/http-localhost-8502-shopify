@@ -32,8 +32,9 @@ Módulo nuevo para gestionar el inventario de insumos (tela) y los procesos prod
 | Costo de tela | viene en el Sheet de despacho (COP) |
 | Conciliación | registra lo real, marca diferencia, permite parciales **con autorización (admin)** |
 | Roles | admin + operador; autorización de precosteo solo con permiso especial |
-| Precosteo | todos los componentes + foto; inmutable tras firma; una vez por referencia |
-| Corte sin autorización | advierte + correo al responsable |
+| Precosteo | todos los componentes + foto (subida en el módulo); inmutable tras firma; una vez por referencia |
+| Autorización ↔ Sheet | se autoriza en la app y se escribe de vuelta en el Sheet (sync bidireccional) |
+| Corte sin autorización | advierte; correo al responsable en fase posterior |
 
 \* *El campo tono se guarda pero sin lógica ni validaciones en Fase 1.*
 
@@ -106,14 +107,15 @@ Lee la hoja "Órdenes de Despacho" → llena/actualiza `ordenes_despacho`.
 
 ### C. Precosteo y autorización de referencia
 1. La hoja "Precosteo" alimenta `referencias_precosteo` como `borrador`.
-2. Un usuario con `puede_autorizar_precosteo` revisa (incluida la **foto**) y **autoriza**.
-3. Al autorizar → queda **bloqueada** (inmutable) y registra quién y cuándo.
-4. Una vez autorizada, el módulo **congela** ese precosteo (los cambios posteriores del Sheet no la tocan).
+2. La **foto** de la referencia se sube dentro del módulo (Supabase Storage).
+3. Un usuario con `puede_autorizar_precosteo` (permiso gestionado en la app) revisa la foto y el costeo y **autoriza** desde el módulo.
+4. Al autorizar → queda **bloqueada** (inmutable), registra quién y cuándo, y **escribe la autorización de vuelta en el Sheet** (estado, responsable, fecha).
+5. Una vez autorizada, el módulo **congela** ese precosteo (los cambios posteriores del Sheet no la tocan).
 
 ### D. Corte
 1. Escaneas el código del lote (lector → input con autofocus + Enter).
 2. Eliges la **referencia**.
-   - Si la referencia **no está autorizada** → **advierte** y **envía correo al responsable** (permite continuar marcado como sin autorización).
+   - Si la referencia **no está autorizada** → **advierte** en pantalla (permite continuar marcado como sin autorización). *El correo al responsable se habilita en una fase posterior, cuando se configure el canal de correo.*
 3. Ingresas largo de trazo, curva de tallas y nº de capas.
 4. El sistema calcula: prendas estimadas, metros consumidos, rendimiento teórico.
 5. El cortador ingresa su **consumo real** → **diferencia % (eficiencia)**.
@@ -152,9 +154,9 @@ Los metros disponibles siempre cuadran vía `movimientos_inventario` (ingreso �
 ## 7. Arquitectura técnica
 
 - **Backend:** `backend/services/produccion.py` + `backend/api/produccion.py` (prefijo `/api/produccion`), registrado en `backend/main.py`.
-- **Sincronización Sheets:** cuenta de servicio de Google (compartir ambas hojas con el correo de servicio).
-- **Fotos:** Supabase Storage o link de Drive (a definir).
-- **Correo:** canal de notificaciones (SMTP / Resend / etc., a definir).
+- **Sincronización Sheets:** cuenta de servicio de Google (compartir ambas hojas con el correo de servicio). **Bidireccional** en la autorización de precosteo: el módulo lee el borrador y escribe de vuelta el estado autorizado.
+- **Fotos:** se suben en el módulo → Supabase Storage.
+- **Correo:** se configura en una fase posterior; por ahora el corte sin autorización solo advierte en pantalla.
 - **Frontend:** `frontend/app/produccion` con pestañas:
   **Inventario · Ingreso · Precosteo · Corte · Remisiones · Confeccionistas · Tablero**.
 - **Código de barras:** Code128 generado en el navegador (JsBarcode) para etiqueta Zebra; layout ZPL o PDF 10×10.
@@ -171,9 +173,11 @@ Los metros disponibles siempre cuadran vía `movimientos_inventario` (ingreso �
 
 ---
 
-## 9. Pendientes por confirmar
+## 9. Pendientes resueltos
 
-1. **Foto de la referencia:** ¿se sube dentro del módulo o llega como link de Drive en el Sheet?
-2. **Canal de correo** para las notificaciones: ¿ya tienes uno (SMTP / Resend) o lo configuramos?
-3. **Permiso de autorización:** ¿flag por usuario (`puede_autorizar_precosteo`) o lo restringimos a admin?
-4. **Inmutabilidad vs Sheet:** tras autorizar, el módulo congela la referencia e ignora cambios posteriores del Sheet. ¿Correcto?
+1. **Foto de la referencia** → se sube dentro del módulo (Supabase Storage). ✅
+2. **Canal de correo** → se configura en una fase posterior; por ahora solo advertencia en pantalla. ✅
+3. **Permiso de autorización** → el permiso (`puede_autorizar_precosteo`) se gestiona en la app; se autoriza desde el módulo y el resultado se marca de vuelta en el Sheet. ✅
+4. **Inmutabilidad vs Sheet** → confirmado: tras autorizar, el módulo congela la referencia e ignora cambios posteriores del Sheet. ✅
+
+**Diseño cerrado — listo para construir cuando lo indiques.**
