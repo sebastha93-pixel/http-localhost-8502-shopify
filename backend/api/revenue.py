@@ -2755,7 +2755,7 @@ def chats_activos_kommo(
     # cada request (con 25 usuarios serían 25 × 80 páginas/min — fatal).
     import json as _json, time as _time
     from datetime import datetime, timezone, timedelta
-    CACHE_KEY = "chats_activos_kommo_v2"
+    CACHE_KEY = "chats_activos_kommo_v3"
     CACHE_TTL_SEC = 25  # un poco menos del refetchInterval del front (30s)
     try:
         cached = db.leer_sync_state(CACHE_KEY)
@@ -2786,14 +2786,15 @@ def chats_activos_kommo(
             n_total += 1
             is_read = talk.get("is_read")
             is_in_work = talk.get("is_in_work")
-            status = talk.get("status")  # 1=open, 2=closed
             if is_in_work:
                 n_en_trabajo += 1
-            # is_read puede venir como False, 0, None → contar como no leído solo si es False/0 explícito
             if is_read is False or is_read == 0:
                 n_no_leidos += 1
-            # Espejo EXACTO del filtro "Chats abiertos" de Kommo.
-            if status == 1 or status == "1":
+            # only_opened=True ya filtra server-side a status=opened en Kommo,
+            # así que TODOS los talks que llegan aquí son abiertos por definición.
+            # No re-chequeamos talk.status porque Kommo no siempre devuelve
+            # ese campo en el formato esperado (a veces string, a veces ausente).
+            if True:
                 n_abiertos += 1
                 origin = talk.get("origin") or "desconocido"
                 por_origen[origin] = por_origen.get(origin, 0) + 1
