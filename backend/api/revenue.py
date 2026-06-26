@@ -2762,8 +2762,11 @@ def chats_activos_kommo(
         # Iterar talks recientes (últimos 7 días) para no traer histórico viejo.
         # Kommo no expone counter directo de unread → iteramos y contamos.
         from datetime import datetime, timezone, timedelta
-        hace_7d = int((datetime.now(tz=timezone.utc) - timedelta(days=7)).timestamp())
-        for talk in kc.listar_talks(updated_after_ts=hace_7d, limit_total=3000):
+        # Ventana 60d para alcanzar los chats viejos sin responder que
+        # Kommo cuenta en su badge rojo (puede arrastrar conversaciones
+        # de hace meses si el cliente nunca recibió respuesta).
+        hace_60d = int((datetime.now(tz=timezone.utc) - timedelta(days=60)).timestamp())
+        for talk in kc.listar_talks(updated_after_ts=hace_60d, limit_total=10000):
             n_total += 1
             is_read = talk.get("is_read")
             is_in_work = talk.get("is_in_work")
@@ -2818,7 +2821,7 @@ def chats_activos_kommo(
         "chats_no_leidos": n_no_leidos,
         "chats_en_trabajo": n_en_trabajo,
         "total_talks_revisados": n_total,
-        "ventana": "últimos 7 días",
+        "ventana": "últimos 60 días",
         "por_origen": dict(sorted(por_origen.items(), key=lambda kv: kv[1], reverse=True)),
         "por_asesora": por_asesora,
         "muestras": muestras_no_leidos,

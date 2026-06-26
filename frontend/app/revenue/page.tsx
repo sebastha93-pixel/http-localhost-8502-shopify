@@ -1534,6 +1534,14 @@ export default function RevenuePage() {
     queryFn: () => api.get("/api/revenue/briefing-hoy"),
     refetchInterval: 120_000,
   });
+  // Espejo del contador "Chats" de Kommo — número operativo que el equipo
+  // revisa todo el día para tomar decisiones. Sustituye al conteo local
+  // de conversaciones (que cuenta solo las del día).
+  const chatsKommoQ = useQuery<any>({
+    queryKey: ["revenue", "chats-kommo-briefing"],
+    queryFn: () => api.get("/api/revenue/chats-activos-kommo"),
+    refetchInterval: 60_000,
+  });
   const [briefingCopied, setBriefingCopied] = useState(false);
   function copiarBriefing() {
     const b = briefingQ.data;
@@ -1611,7 +1619,7 @@ ${asesoras || "  · sin asignaciones"}`;
               items={[
                 { label: "Mensajes entrantes", value: (briefingQ.data.mensajes_entrantes_hoy ?? 0).toLocaleString("es-CO"), tone: "default" },
                 { label: "Mensajes salientes", value: (briefingQ.data.mensajes_salientes_hoy ?? 0).toLocaleString("es-CO"), tone: "default" },
-                { label: "Conversaciones",     value: briefingQ.data.total },
+                { label: "Chats",              value: chatsKommoQ.data?.chats_no_leidos != null ? chatsKommoQ.data.chats_no_leidos.toLocaleString("es-CO") : briefingQ.data.total, tone: (chatsKommoQ.data?.chats_no_leidos ?? 0) > 50 ? "danger" : "default" },
                 { label: "Sin réplica",        value: briefingQ.data.pendientes, tone: briefingQ.data.pendientes > 0 ? "danger" : "default" },
                 { label: "Lapso medio",        value: briefingQ.data.avg_response_min ? `${briefingQ.data.avg_response_min}m` : "—" },
                 { label: "Lapso mayor",        value: briefingQ.data.max_response_min ? (briefingQ.data.max_response_min < 60 ? `${briefingQ.data.max_response_min}m` : briefingQ.data.max_response_min < 1440 ? `${Math.round(briefingQ.data.max_response_min/60)}h` : `${Math.round(briefingQ.data.max_response_min/1440)}d`) : "—" },
