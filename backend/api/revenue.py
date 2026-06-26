@@ -2755,7 +2755,7 @@ def chats_activos_kommo(
     # cada request (con 25 usuarios serían 25 × 80 páginas/min — fatal).
     import json as _json, time as _time
     from datetime import datetime, timezone, timedelta
-    CACHE_KEY = "chats_activos_kommo_v3"
+    CACHE_KEY = "chats_activos_kommo_v4"
     CACHE_TTL_SEC = 25  # un poco menos del refetchInterval del front (30s)
     try:
         cached = db.leer_sync_state(CACHE_KEY)
@@ -2776,11 +2776,45 @@ def chats_activos_kommo(
     por_responsable: dict = {}
     muestras_no_leidos: list = []
 
+    # ── FAST PATH: endpoint AJAX interno que devuelve el badge EXACTO ──
+    # Descubierto inspeccionando red de Kommo UI:
+    #   GET /ajax/v4/inbox/badge -> {"count": 78}
+    # Es el mismo número rojo del sidebar. Si responde 200, retornamos
+    # inmediatamente sin iterar talks (1 request, <1s).
+    badge = None
     try:
-        # Filtramos server-side a status=1 (abierto) para reducir
-        # drásticamente el volumen — antes iterábamos 20k talks históricos.
-        # Ahora pedimos solo los abiertos que es lo único que necesitamos.
-        # Ventana 180d (Kommo arrastra chats abiertos antiguos).
+        badge = kc.obtener_inbox_badge()
+    except Exception:
+        pass
+    if badge and isinstance(badge.get("count"), int):
+        total_info = None
+        try:
+            total_info = kc.obtener_inbox_count()
+        except Exception:
+            pass
+        resultado_rapido = {
+            "ok": True,
+            "chats_abiertos": badge["count"],
+            "chats_no_leidos": badge["count"],  # mismo valor — el badge YA cuenta sin responder
+            "chats_en_trabajo": 0,
+            "total_talks_revisados": (total_info or {}).get("count", 0),
+            "ventana": "tiempo real · /ajax/v4/inbox/badge",
+            "por_origen": {},
+            "por_asesora": [],
+            "muestras": [],
+            "_ts": _time.time(),
+            "_cached": False,
+            "_fast_path": True,
+        }
+        try:
+            db.guardar_sync_state(CACHE_KEY, _json.dumps(resultado_rapido))
+        except Exception:
+            pass
+        return resultado_rapido
+
+    try:
+        # FALLBACK: el endpoint AJAX no respondió. Iteramos talks con
+        # filtro server-side status=opened.
         hace_180d = int((datetime.now(tz=timezone.utc) - timedelta(days=180)).timestamp())
         for talk in kc.listar_talks(updated_after_ts=hace_180d, limit_total=5000, only_opened=True):
             n_total += 1

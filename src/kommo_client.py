@@ -540,6 +540,41 @@ def listar_notes_de_lead(lead_id: int,
             yield note
 
 
+def obtener_inbox_badge() -> Optional[dict]:
+    """Devuelve el conteo EXACTO del badge rojo de Chats en el sidebar
+    de Kommo. Endpoint AJAX interno (no oficial), descubierto inspeccionando
+    las llamadas de red de la UI:
+      GET /ajax/v4/inbox/badge -> {"count": 78}
+
+    Si el token no autoriza este endpoint, retorna None y el caller debe
+    caer al método de iterar talks.
+    """
+    url = f"https://{_subdomain()}.kommo.com/ajax/v4/inbox/badge"
+    try:
+        _rate_limiter.wait()
+        r = requests.get(url, headers=_headers(), timeout=_TIMEOUT)
+        if r.status_code != 200:
+            log.warning(f"inbox/badge status={r.status_code}")
+            return None
+        return r.json()
+    except Exception as e:
+        log.warning(f"inbox/badge error: {e}")
+        return None
+
+
+def obtener_inbox_count() -> Optional[dict]:
+    """Conteo total de chats (todos los talks históricos)."""
+    url = f"https://{_subdomain()}.kommo.com/ajax/v4/inbox/count"
+    try:
+        _rate_limiter.wait()
+        r = requests.get(url, headers=_headers(), timeout=_TIMEOUT)
+        if r.status_code != 200:
+            return None
+        return r.json()
+    except Exception:
+        return None
+
+
 def listar_talks(updated_after_ts: Optional[int] = None,
                   limit_total: int = 5000,
                   only_opened: bool = False) -> Iterator[dict]:
