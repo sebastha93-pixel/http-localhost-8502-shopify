@@ -853,14 +853,14 @@ function ChatsActivosKommoCard() {
       <div className="px-5 py-4 border-b border-terracotta/20 flex flex-wrap items-baseline justify-between gap-3">
         <div>
           <p className="font-display text-base font-medium text-ink-900">
-            Chats sin responder · espejo Kommo
+            Chats abiertos · espejo Kommo
           </p>
           <p className="text-xs text-graphite mt-0.5">
-            Mismo número que ves en rojo en la barra lateral de Kommo · actualiza cada 1 min
+            Mismo filtro "Chats abiertos" (status=opened) que ves en la barra lateral de Kommo · actualiza cada 1 min
           </p>
         </div>
         <a
-          href="https://drtjeans.kommo.com/chats/"
+          href="https://drtjeans.kommo.com/chats/?status[]=opened"
           target="_blank"
           rel="noopener noreferrer"
           className="inline-flex items-center rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-medium text-ink-900 hover:bg-cloud"
@@ -870,12 +870,12 @@ function ChatsActivosKommoCard() {
       </div>
       <div className="p-5 grid gap-5 md:grid-cols-[auto_1fr]">
         <div className="flex flex-col items-start">
-          <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">No leídos AHORA</p>
+          <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">CHATS ABIERTOS</p>
           <p className="font-display text-6xl text-terracotta tabular leading-none mt-1">
-            {d.chats_no_leidos.toLocaleString("es-CO")}
+            {(d.chats_abiertos ?? d.chats_no_leidos).toLocaleString("es-CO")}
           </p>
           <p className="text-[0.65rem] text-graphite mt-2">
-            {d.chats_en_trabajo} en trabajo · {d.total_talks_revisados} revisados ({d.ventana})
+            {d.chats_no_leidos} sin leer · {d.chats_en_trabajo} en trabajo · {d.total_talks_revisados} revisados ({d.ventana})
           </p>
         </div>
         <div className="grid gap-4 md:grid-cols-2">
@@ -1619,7 +1619,7 @@ ${asesoras || "  · sin asignaciones"}`;
               items={[
                 { label: "Mensajes entrantes", value: (briefingQ.data.mensajes_entrantes_hoy ?? 0).toLocaleString("es-CO"), tone: "default" },
                 { label: "Mensajes salientes", value: (briefingQ.data.mensajes_salientes_hoy ?? 0).toLocaleString("es-CO"), tone: "default" },
-                { label: "Chats",              value: chatsKommoQ.data?.chats_no_leidos != null ? chatsKommoQ.data.chats_no_leidos.toLocaleString("es-CO") : briefingQ.data.total, tone: (chatsKommoQ.data?.chats_no_leidos ?? 0) > 50 ? "danger" : "default" },
+                { label: "Chats",              value: chatsKommoQ.data?.chats_abiertos != null ? chatsKommoQ.data.chats_abiertos.toLocaleString("es-CO") : briefingQ.data.total, tone: (chatsKommoQ.data?.chats_abiertos ?? 0) > 100 ? "danger" : "default" },
                 { label: "Sin réplica",        value: briefingQ.data.pendientes, tone: briefingQ.data.pendientes > 0 ? "danger" : "default" },
                 { label: "Lapso medio",        value: briefingQ.data.avg_response_min ? `${briefingQ.data.avg_response_min}m` : "—" },
                 { label: "Lapso mayor",        value: briefingQ.data.max_response_min ? (briefingQ.data.max_response_min < 60 ? `${briefingQ.data.max_response_min}m` : briefingQ.data.max_response_min < 1440 ? `${Math.round(briefingQ.data.max_response_min/60)}h` : `${Math.round(briefingQ.data.max_response_min/1440)}d`) : "—" },

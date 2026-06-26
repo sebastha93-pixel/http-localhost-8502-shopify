@@ -2754,27 +2754,34 @@ def chats_activos_kommo(
     n_total = 0
     n_no_leidos = 0
     n_en_trabajo = 0
+    n_abiertos = 0
     por_origen: dict = {}
     por_responsable: dict = {}
     muestras_no_leidos: list = []
 
     try:
-        # Iterar talks recientes (últimos 7 días) para no traer histórico viejo.
-        # Kommo no expone counter directo de unread → iteramos y contamos.
+        # Iterar talks recientes para contar los "abiertos" (espejo del
+        # filtro "Chats abiertos" en Kommo que es status=opened, NO is_read).
+        # Verificado navegando en Kommo: el URL del filtro es
+        #   /chats/?status[]=opened
+        # Lo que se traduce en la API a talk.status == 1 (open).
         from datetime import datetime, timezone, timedelta
-        # Ventana 60d para alcanzar los chats viejos sin responder que
-        # Kommo cuenta en su badge rojo (puede arrastrar conversaciones
-        # de hace meses si el cliente nunca recibió respuesta).
-        hace_60d = int((datetime.now(tz=timezone.utc) - timedelta(days=60)).timestamp())
-        for talk in kc.listar_talks(updated_after_ts=hace_60d, limit_total=10000):
+        # Ventana 180d — Kommo cuenta chats abiertos aunque sean viejos.
+        # Si el cliente nunca cerró el ticket, sigue contando.
+        hace_180d = int((datetime.now(tz=timezone.utc) - timedelta(days=180)).timestamp())
+        for talk in kc.listar_talks(updated_after_ts=hace_180d, limit_total=20000):
             n_total += 1
             is_read = talk.get("is_read")
             is_in_work = talk.get("is_in_work")
+            status = talk.get("status")  # 1=open, 2=closed
             if is_in_work:
                 n_en_trabajo += 1
             # is_read puede venir como False, 0, None → contar como no leído solo si es False/0 explícito
             if is_read is False or is_read == 0:
                 n_no_leidos += 1
+            # Espejo EXACTO del filtro "Chats abiertos" de Kommo.
+            if status == 1 or status == "1":
+                n_abiertos += 1
                 origin = talk.get("origin") or "desconocido"
                 por_origen[origin] = por_origen.get(origin, 0) + 1
                 resp = talk.get("responsible_user_id")
@@ -2818,10 +2825,16 @@ def chats_activos_kommo(
 
     return {
         "ok": True,
+        # chats_abiertos = espejo EXACTO del filtro "Chats abiertos" de Kommo
+        # (status=opened). Es el número operativo que el equipo mira en
+        # el sidebar de Kommo todo el día.
+        "chats_abiertos": n_abiertos,
+        # chats_no_leidos = subset de no respondidos (is_read=false).
+        # Se mantiene como dato secundario.
         "chats_no_leidos": n_no_leidos,
         "chats_en_trabajo": n_en_trabajo,
         "total_talks_revisados": n_total,
-        "ventana": "últimos 60 días",
+        "ventana": "últimos 180 días",
         "por_origen": dict(sorted(por_origen.items(), key=lambda kv: kv[1], reverse=True)),
         "por_asesora": por_asesora,
         "muestras": muestras_no_leidos,
