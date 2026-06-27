@@ -33,6 +33,9 @@ async def lifespan(app: FastAPI):
     # Startup
     print(f"🚀 MALE'DENIM OS API · env={settings.env}")
     print(f"   CORS allowed: {settings.cors_origins_list}")
+    # Validar configuración de seguridad — aborta boot en producción si hay
+    # secrets débiles (JWT default, META_APP_SECRET vacío, etc.)
+    settings.validate_security()
 
     # Bootstrap del primer admin si la tabla usuarios está vacía
     try:
@@ -47,7 +50,9 @@ async def lifespan(app: FastAPI):
                 password_hash=hash_password(settings.auth_bootstrap_password),
                 rol="admin",
             )
-            print(f"   👤 Bootstrap admin creado: {settings.auth_bootstrap_email}")
+            # No loguear el email completo (PII). Solo confirmar que se creó.
+            _email_masked = settings.auth_bootstrap_email.split("@")[0][:3] + "***@***"
+            print(f"   👤 Bootstrap admin creado: {_email_masked}")
         elif settings.auth_bootstrap_email:
             # Self-healing: si el bootstrap user existe pero no es admin, promoverlo
             existing = usuarios_svc.obtener_por_email(settings.auth_bootstrap_email)
@@ -172,6 +177,24 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+# ── Security headers — HSTS, X-Frame-Options, X-Content-Type-Options, etc. ──
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    # Bloquea embedding de la API en iframes (clickjacking)
+    response.headers["X-Frame-Options"] = "DENY"
+    # No content sniffing
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # Referrer mínimo
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # Permisos restrictivos
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    # HSTS solo en producción (en dev puede romper localhost)
+    if settings.is_production:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 
 # ── Routers ───────────────────────────────────────────────────────────────────

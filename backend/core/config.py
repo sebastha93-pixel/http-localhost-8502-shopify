@@ -28,8 +28,11 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, description="Puerto del servidor")
 
     # ── Auth ───────────────────────────────────────────────────────────────────
-    auth_jwt_secret: str  = Field(default="dev-only-change-in-prod-XXXX")
-    auth_jwt_expiry_min: int = 60 * 24 * 7      # 7 días
+    # Secret JWT: si en producción queda en default → boot abortado (ver validate_security).
+    auth_jwt_secret: str = Field(default="dev-only-change-in-prod-XXXX", alias="AUTH_JWT_SECRET")
+    # TTL del access token: 2 horas. Suficiente para una jornada operativa sin
+    # exponer la sesión por 7 días en caso de XSS robando el token de localStorage.
+    auth_jwt_expiry_min: int = Field(default=120, alias="AUTH_JWT_EXPIRY_MIN")
 
     # Bootstrap del primer admin (solo se usa si la tabla usuarios está vacía)
     auth_bootstrap_email:    str = Field(default="", alias="AUTH_BOOTSTRAP_EMAIL")
@@ -77,6 +80,35 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.env.lower() == "production"
+
+    def validate_security(self) -> None:
+        """Aborta el boot si hay configuración insegura en producción.
+
+        Llamar UNA VEZ en startup desde main.py. En dev/staging solo
+        loguea warnings; en producción levanta RuntimeError.
+        """
+        problemas: list[str] = []
+
+        # JWT secret obligatorio en producción
+        weak_secrets = {"", "dev-only-change-in-prod-XXXX", "dev-only-change-in-prod", "secret", "changeme"}
+        if self.auth_jwt_secret in weak_secrets or len(self.auth_jwt_secret) < 32:
+            problemas.append("AUTH_JWT_SECRET débil o ausente (mínimo 32 chars, no default)")
+
+        # Meta webhook secret obligatorio si vamos a recibir webhooks
+        import os as _os
+        if not (_os.environ.get("META_APP_SECRET") or "").strip():
+            problemas.append("META_APP_SECRET no configurado (webhook Meta sería fail-open)")
+
+        # Kommo webhook secret
+        if not (_os.environ.get("KOMMO_WEBHOOK_SECRET") or "").strip():
+            problemas.append("KOMMO_WEBHOOK_SECRET no configurado (webhook Kommo sin firma)")
+
+        if problemas:
+            mensaje = "Errores de seguridad detectados:\n" + "\n".join(f"  - {p}" for p in problemas)
+            if self.is_production:
+                raise RuntimeError(mensaje + "\nABORTANDO BOOT en producción.")
+            else:
+                print(f"⚠️  WARN seguridad (dev): \n{mensaje}")
 
 
 @lru_cache(maxsize=1)

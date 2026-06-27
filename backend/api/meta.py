@@ -103,14 +103,21 @@ async def webhook_receive(request: Request, background_tasks: BackgroundTasks) -
         _stats["primero_en"] = now_iso
     _stats["ultimo_en"] = now_iso
 
-    # Validar firma (solo si tenemos APP_SECRET configurado)
-    if _app_secret() and not _verify_signature(body, sig):
+    # Validar firma con META_APP_SECRET. FAIL-CLOSED: si el secret no
+    # está configurado en producción rechazamos para evitar webhook abierto.
+    secret_ok = bool(_app_secret())
+    if not secret_ok:
+        from backend.core.config import settings as _s
+        if _s.is_production:
+            _stats["errores"] += 1
+            _stats["ultimo_error"] = "META_APP_SECRET no configurado"
+            log.error("Meta webhook PRODUCCION sin META_APP_SECRET → rechazando")
+            raise HTTPException(503, "META_APP_SECRET no configurado en producción")
+    if secret_ok and not _verify_signature(body, sig):
         _stats["errores"] += 1
         _stats["ultimo_error"] = "firma_invalida"
-        # Responder 200 igual para que Meta no desactive el webhook,
-        # pero log el evento como sospechoso
-        log.warning("Meta webhook: firma inválida")
-        return {"ok": True, "warning": "signature_invalid"}
+        log.warning("Meta webhook: firma inválida → rechazando")
+        raise HTTPException(401, "firma_invalida")
 
     try:
         payload = await request.json()
@@ -744,10 +751,15 @@ def discover_assets(_: CurrentUser = Depends(require_role("admin"))) -> dict:
                          timeout=20)
         if r.status_code == 200:
             for p in (r.json().get("data") or []):
+                # NO devolver page_access_token al cliente (security: token leak).
+                # Si el admin necesita el token, debe verlo desde Railway logs
+                # o llamar /discover-tokens (admin-only que sí lo expone).
+                tok = p.get("access_token") or ""
                 out["pages"].append({
                     "page_id":          p["id"],
                     "page_name":        p.get("name"),
-                    "page_access_token": p.get("access_token"),
+                    "page_access_token_set": bool(tok),
+                    "page_access_token_preview": (tok[:8] + "..." + tok[-4:]) if len(tok) > 14 else "***",
                 })
                 # 2. Instagram Business vinculado a la Page
                 ig = p.get("instagram_business_account") or {}

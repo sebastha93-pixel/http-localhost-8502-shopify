@@ -79,14 +79,48 @@ def get_current_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(_be
             headers={"WWW-Authenticate": "Bearer"},
         )
     payload = decode_token(creds.credentials)
+
+    # Verificar contra DB que el usuario sigue ACTIVO y con el mismo rol.
+    # Esto cierra el gap de JWT cacheado por 2h después de desactivar/cambiar
+    # rol al usuario en Supabase. Caché TTL 30s para no martillar la DB.
+    uid = payload["sub"]
+    cached = _USER_CACHE.get(uid)
+    import time as _t
+    now = _t.time()
+    if cached and (now - cached["ts"]) < 30:
+        fresh = cached["data"]
+    else:
+        from backend.services import usuarios as _svc
+        try:
+            db_user = _svc.obtener_por_id(uid)
+        except Exception:
+            db_user = None
+        if not db_user or not db_user.get("activo", True):
+            # Limpiar cache para forzar re-check si el usuario se reactiva
+            _USER_CACHE.pop(uid, None)
+            raise HTTPException(status_code=401, detail="Usuario inactivo o no existe")
+        fresh = {
+            "rol": db_user.get("rol") or payload["rol"],
+            "permisos": db_user.get("permisos") or {},
+            "activo": True,
+        }
+        _USER_CACHE[uid] = {"ts": now, "data": fresh}
+
     return CurrentUser(
-        id=payload["sub"],
+        id=uid,
         email=payload["email"],
         nombre=payload["nombre"],
-        rol=payload["rol"],
+        rol=fresh["rol"],
         cargo=payload.get("cargo", ""),
-        permisos=payload.get("permisos", {}) or {},
+        permisos=fresh["permisos"],
+        activo=fresh["activo"],
     )
+
+
+# Cache simple en memoria por worker. Refresh cada 30s. Aplica chequeo de DB
+# para evitar martillar Supabase en cada request mientras se mantiene
+# revocación rápida (un usuario desactivado pierde acceso en ≤30s).
+_USER_CACHE: dict = {}
 
 
 def get_current_user_optional(creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer)) -> Optional[CurrentUser]:

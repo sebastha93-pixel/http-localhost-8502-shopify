@@ -2,10 +2,11 @@
 backend.api.health — Endpoints de health-check para monitoring y debugging.
 """
 from datetime import datetime
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from backend.core.config import settings
+from backend.core.security import CurrentUser, require_role
 
 
 router = APIRouter(prefix="/api", tags=["health"])
@@ -38,8 +39,8 @@ class ConfigCheck(BaseModel):
 
 
 @router.get("/health/config", response_model=ConfigCheck)
-def health_config() -> ConfigCheck:
-    """Verifica que las env vars críticas estén presentes (no expone valores)."""
+def health_config(_: CurrentUser = Depends(require_role("admin"))) -> ConfigCheck:
+    """Verifica que las env vars críticas estén presentes (no expone valores). Solo admin."""
     return ConfigCheck(
         melonn      = bool(settings.melonn_api_key),
         shopify     = bool(settings.shopify_store and settings.shopify_access_token),
@@ -56,16 +57,19 @@ def health_scheduler() -> dict:
 
 
 @router.post("/health/scheduler/pause")
-def health_scheduler_pause(hours: float = 4) -> dict:
-    """Pausa el scheduler por N horas (default 4). Útil cuando Melonn bloquea."""
+def health_scheduler_pause(
+    hours: float = 4,
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Pausa el scheduler por N horas (default 4). Solo admin para evitar DoS."""
     from backend.core import scheduler
     scheduler.trigger_cooldown(int(hours * 3600))
     return {"ok": True, "paused_seconds": int(hours * 3600), **scheduler.status()}
 
 
 @router.post("/health/scheduler/resume")
-def health_scheduler_resume() -> dict:
-    """Reanuda el scheduler (cancela cualquier cooldown activo)."""
+def health_scheduler_resume(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Reanuda el scheduler (cancela cualquier cooldown activo). Solo admin."""
     from backend.core import scheduler
     scheduler.resume_now()
     return {"ok": True, **scheduler.status()}

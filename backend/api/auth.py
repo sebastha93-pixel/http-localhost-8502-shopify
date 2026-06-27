@@ -3,9 +3,10 @@ backend.api.auth — Login, perfil actual, gestión de usuarios.
 """
 from __future__ import annotations
 
+import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 
 from backend.core.security import (
@@ -16,6 +17,53 @@ from backend.services import usuarios as svc
 
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+# ── Rate limit anti brute-force en /login ──────────────────────────────
+# Track intentos FALLIDOS por (IP, email). Si >5 fallos en 5 minutos,
+# bloquea ese par por 15 minutos. In-memory por worker — suficiente para
+# 25 usuarios concurrentes, no necesitamos Redis.
+_LOGIN_ATTEMPTS: dict[tuple[str, str], list[float]] = {}
+_LOGIN_BLOCKS: dict[tuple[str, str], float] = {}
+_LOGIN_MAX_INTENTOS = 5
+_LOGIN_VENTANA_SEC = 300       # 5 minutos
+_LOGIN_BLOQUEO_SEC = 900       # 15 minutos
+
+
+def _check_rate_limit(ip: str, email: str) -> None:
+    """Levanta 429 si hay demasiados intentos fallidos recientes."""
+    key = (ip or "?", (email or "").lower().strip())
+    now = time.time()
+    # Si está actualmente bloqueado, rechazar
+    if key in _LOGIN_BLOCKS:
+        if now < _LOGIN_BLOCKS[key]:
+            restante = int(_LOGIN_BLOCKS[key] - now)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Demasiados intentos fallidos. Espera {restante}s.",
+            )
+        else:
+            del _LOGIN_BLOCKS[key]
+            _LOGIN_ATTEMPTS.pop(key, None)
+
+
+def _registrar_intento_fallido(ip: str, email: str) -> None:
+    """Registra un intento fallido. Si pasa el umbral, marca bloqueo."""
+    key = (ip or "?", (email or "").lower().strip())
+    now = time.time()
+    intentos = _LOGIN_ATTEMPTS.setdefault(key, [])
+    # Limpiar intentos viejos fuera de ventana
+    intentos[:] = [t for t in intentos if (now - t) < _LOGIN_VENTANA_SEC]
+    intentos.append(now)
+    if len(intentos) >= _LOGIN_MAX_INTENTOS:
+        _LOGIN_BLOCKS[key] = now + _LOGIN_BLOQUEO_SEC
+
+
+def _resetear_intentos(ip: str, email: str) -> None:
+    """Limpia los intentos al login exitoso."""
+    key = (ip or "?", (email or "").lower().strip())
+    _LOGIN_ATTEMPTS.pop(key, None)
+    _LOGIN_BLOCKS.pop(key, None)
 
 
 # ── Modelos ──────────────────────────────────────────────────────────
@@ -63,12 +111,22 @@ class ActualizarUsuarioBody(BaseModel):
 # ── Login ────────────────────────────────────────────────────────────
 
 @router.post("/login", response_model=LoginResponse)
-def login(body: LoginBody) -> LoginResponse:
+def login(body: LoginBody, request: Request) -> LoginResponse:
+    # IP del cliente (considera proxy de Railway/Vercel)
+    ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "?")
+    # Anti brute-force: 5 intentos / 5 min, bloqueo 15 min
+    _check_rate_limit(ip, body.email)
+
     u = svc.obtener_por_email(body.email)
     if not u or not u.get("activo"):
+        _registrar_intento_fallido(ip, body.email)
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
     if not verify_password(body.password, u["password_hash"]):
+        _registrar_intento_fallido(ip, body.email)
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
+
+    # Login exitoso → reset contadores
+    _resetear_intentos(ip, body.email)
 
     cu = CurrentUser(
         id=str(u["id"]),
@@ -150,6 +208,13 @@ def actualizar_usuario(
 ) -> UsuarioOut:
     if actor.id == uid and body.activo is False:
         raise HTTPException(status_code=400, detail="No puedes desactivarte a ti mismo")
+    # No permitir que el admin se quite el rol de admin a sí mismo —
+    # evita lockout accidental del owner.
+    if actor.id == uid and body.rol and body.rol != "admin":
+        raise HTTPException(
+            status_code=400,
+            detail="No puedes quitarte el rol de admin a ti mismo. Pídele a otro admin que lo haga.",
+        )
     campos = body.model_dump(exclude_unset=True)
     if "password" in campos:
         campos["password_hash"] = hash_password(campos.pop("password"))
@@ -160,12 +225,13 @@ def actualizar_usuario(
     except HTTPException:
         raise
     except Exception as e:
-        # Capturar y devolver el error real (no dejar que FastAPI haga 500
-        # genérico sin CORS headers — el front no puede ver el mensaje).
+        # Loguear stack completo a stdout (Railway logs) pero NO exponer
+        # tipo de excepción ni traceback al cliente (security: info disclosure).
         import traceback
         traceback.print_exc()
+        # Mensaje genérico al cliente. Para diagnóstico real, ver Railway logs.
         raise HTTPException(
             status_code=500,
-            detail=f"Error guardando usuario: {type(e).__name__}: {str(e)[:300]}",
+            detail="No se pudo guardar el usuario. Contacta al administrador.",
         )
     return _to_out(u)

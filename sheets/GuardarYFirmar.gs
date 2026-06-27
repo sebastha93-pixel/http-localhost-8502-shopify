@@ -9,14 +9,31 @@
  * (Para imprimir etiquetas NO necesitas instalar ninguna fuente: el barcode se genera solo.)
  */
 
+/* ═══════════════ PERMISOS (correos autorizados) ═══════════════ */
+// Solo estos correos pueden FIRMAR el precosteo:
+var FIRMANTES_PRECOSTEO = ['sebastian.hurtado@maledenim.com', 'maria.alejandra@maledenim.com'];
+// Solo estos correos pueden AUTORIZAR la orden de corte (el diseñador):
+var AUTORIZA_CORTE = ['CORREO_DEL_DISENADOR@maledenim.com'];   // ← reemplaza por el correo real del diseñador
+// Imprimir etiquetas: cualquiera (sin restricción).
+
+function _puede(lista) {
+  var u = (Session.getActiveUser().getEmail() || '').toLowerCase();
+  for (var i = 0; i < lista.length; i++) {
+    if (String(lista[i]).toLowerCase() === u) return true;
+  }
+  SpreadsheetApp.getUi().alert('No tienes permiso para esta acción.\n\nUsuario actual: ' + (u || '(no identificado)') +
+    '\nAutorizados: ' + lista.join(', '));
+  return false;
+}
+
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu("MALE'DENIM")
-    .addItem('Guardar y firmar precosteo', 'guardarYFirmarPrecosteo')
+    .addItem('Firmar precosteo (Sebastián / Alejandra)', 'guardarYFirmarPrecosteo')
     .addSeparator()
     .addItem('Imprimir etiquetas de rollos', 'imprimirEtiquetas')
     .addSeparator()
-    .addItem('Firmar orden de corte', 'firmarOrdenCorte')
+    .addItem('Autorizar orden de corte (diseñador)', 'firmarOrdenCorte')
     .addToUi();
 }
 
@@ -27,6 +44,7 @@ function guardarYFirmarPrecosteo() {
   var f  = ss.getSheetByName('Precosteo (formato)');
   var h  = ss.getSheetByName('Histórico Precosteo');
   if (!f || !h) { ui.alert('Faltan las hojas "Precosteo (formato)" o "Histórico Precosteo".'); return; }
+  if (!_puede(FIRMANTES_PRECOSTEO)) return;            // solo Sebastián / Alejandra
   var ref = f.getRange('B2').getValue();
   if (!ref) { ui.alert('Falta la REF del precosteo.'); return; }
   var estado = String(f.getRange('B38').getValue()).toLowerCase();
@@ -111,6 +129,7 @@ function firmarOrdenCorte() {
   var co = ss.getSheetByName('Cortes');
   var hc = ss.getSheetByName('Histórico Cortes');
   if (!oc || !co || !hc) { ui.alert('Faltan hojas: Orden de Corte / Cortes / Histórico Cortes.'); return; }
+  if (!_puede(AUTORIZA_CORTE)) return;                 // solo el diseñador
   var ref = oc.getRange('B5').getValue();
   if (!ref) { ui.alert('Falta la Referencia de la prenda.'); return; }
   var firma = oc.getRange('B31').getValue();

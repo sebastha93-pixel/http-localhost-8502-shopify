@@ -682,13 +682,19 @@ def debug_schema(table: str, _: CurrentUser = Depends(require_role("admin"))) ->
 
 @router.post("/kommo-webhook")
 async def kommo_webhook(request: Request, background_tasks: BackgroundTasks) -> dict:
-    """Receptor de eventos de Kommo. PÚBLICO.
+    """Receptor de eventos de Kommo. PÚBLICO con firma HMAC.
+
+    Auth: header X-Signature con HMAC-SHA1 del body crudo, key=KOMMO_WEBHOOK_SECRET.
+    (Kommo no soporta HMAC nativo en webhooks — usamos un secret compartido
+    enviado en header. Configurarlo manualmente al setear webhook en Kommo
+    UI o vía script.)
 
     CRITICAL: Kommo desactiva el webhook si tarda >2s en responder. Por eso:
     1. Leemos bytes crudos (rápido, no parsea form/json).
     2. Encolamos TODO el parseo y persistencia en background.
     3. Respondemos 200 inmediatamente.
     """
+    import os as _os, hmac as _hmac, hashlib as _hashlib
     from datetime import datetime as _dt, timezone as _tz
     now_iso = _dt.now(tz=_tz.utc).isoformat()
 
@@ -699,6 +705,26 @@ async def kommo_webhook(request: Request, background_tasks: BackgroundTasks) -> 
     except Exception:
         raw = b""
         ct = ""
+
+    # ── Auth: validar firma HMAC del header X-Signature ──────────────
+    # El secret es generado por nosotros y se configura en KOMMO_WEBHOOK_SECRET
+    # (Railway env) + en Kommo Settings → Webhooks → header personalizado.
+    secret = (_os.environ.get("KOMMO_WEBHOOK_SECRET") or "").strip()
+    if secret:
+        provided = (
+            request.headers.get("x-signature")
+            or request.headers.get("X-Signature")
+            or request.headers.get("x-kommo-signature")
+            or ""
+        ).strip()
+        expected = _hmac.new(secret.encode("utf-8"), raw, _hashlib.sha1).hexdigest()
+        # Aceptar también un secret plano en header (fallback simple si Kommo
+        # solo permite headers estáticos sin HMAC computado).
+        if not (_hmac.compare_digest(provided, expected) or _hmac.compare_digest(provided, secret)):
+            _webhook_stats["errores_parser"] = _webhook_stats.get("errores_parser", 0) + 1
+            raise HTTPException(status_code=401, detail="firma_invalida")
+    # Si secret no está configurado: log warning, no bloqueamos para no
+    # romper webhook activo durante migración. validate_security() ya alertó.
 
     _webhook_stats["total"] += 1
     if _webhook_stats["primero_en"] is None:
@@ -801,8 +827,8 @@ def oauth_status(_: CurrentUser = Depends(require_role("admin"))) -> dict:
 
 # ── Health ────────────────────────────────────────────────────────────────────
 @router.get("/diag")
-def diag() -> dict:
-    """Diagnostic público sin auth — útil para debug remoto sin ver logs Railway.
+def diag(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Diagnostic SOLO admin — expone info sensible (PID, memoria, schedulers, webhook stats).
 
     Reporta:
     - uptime del proceso (cuánto lleva vivo)
@@ -1033,7 +1059,7 @@ def backfill_conversations_vacias(
 
 
 @router.get("/media/{message_id}")
-def media_proxy(message_id: str):
+def media_proxy(message_id: str, _: CurrentUser = Depends(require_role("admin", "operador", "lectura"))):
     """Sirve media (imagen/video/audio) de un mensaje WhatsApp, proxy a Meta.
 
     El media_id de Meta expira en ~5 min, por eso no podemos cachearlo en
