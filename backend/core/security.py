@@ -105,28 +105,49 @@ def get_current_user_optional(creds: Optional[HTTPAuthorizationCredentials] = De
 
 
 def require_role(*roles: str):
-    """Dependency factory: requiere que el usuario tenga uno de los roles dados.
+    """Dependency factory: gate por rol.
 
-    Acepta los roles nuevos (admin/lector/user) y los viejos (operador/lectura)
-    para retro-compat con código existente.
+    Semántica de los roles aceptados:
+      - "admin"     → solo admin pasa
+      - "operador"  → acción de ESCRITURA (modificar). Pasan:
+                      admin, operador (legacy), user con permiso 'modificar' en algún grupo
+      - "lectura"   → acción de LECTURA. Pasan:
+                      admin, operador, lector, lectura (legacy), user con cualquier permiso
     """
-    # Mapping de roles viejos para que callers viejos sigan funcionando.
-    ALIASES = {
-        "operador": ("operador", "user", "admin"),
-        "lectura":  ("lectura", "lector", "user", "admin"),
-    }
-    permitidos = set()
-    for r in roles:
-        permitidos.add(r)
-        if r in ALIASES:
-            permitidos.update(ALIASES[r])
-    # Admin SIEMPRE pasa (acceso total al owner).
-    permitidos.add("admin")
+    requiere_escritura = "operador" in roles
+    requiere_lectura   = "lectura" in roles or requiere_escritura
+    # Roles literales que siempre pasan si están en la lista
+    literales = set(roles) | {"admin"}
+    if "operador" in roles:
+        literales.add("operador")  # legacy escritura
+    if "lectura" in roles:
+        literales |= {"lectura", "lector"}  # legacy + nuevo lectura
 
     def _check(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
-        if user.rol not in permitidos:
-            raise HTTPException(status_code=403, detail=f"Requiere rol: {', '.join(roles)}")
-        return user
+        if not user.activo:
+            raise HTTPException(403, "Usuario inactivo")
+        # admin SIEMPRE pasa
+        if user.rol == "admin":
+            return user
+        # Roles literales legacy (operador, lectura) y lector nuevo
+        if user.rol in literales:
+            return user
+        # Rol "user" granular: pasa solo si tiene la acción correcta en ALGÚN grupo.
+        # Esto es un check liviano "global"; los endpoints críticos deben usar
+        # require_permission(grupo, accion) para chequeo fino.
+        if user.rol == "user":
+            permisos = user.permisos or {}
+            necesaria = "modificar" if requiere_escritura else ("ver" if requiere_lectura else None)
+            if necesaria is None:
+                # Endpoint admin-only — user no pasa
+                raise HTTPException(403, "Acceso restringido a administrador")
+            for acciones in permisos.values():
+                if isinstance(acciones, list) and necesaria in acciones:
+                    return user
+                if isinstance(acciones, dict) and acciones.get(necesaria):
+                    return user
+            raise HTTPException(403, f"Sin permiso de '{necesaria}' en ningún módulo")
+        raise HTTPException(403, f"Requiere rol: {', '.join(roles)}")
     return _check
 
 

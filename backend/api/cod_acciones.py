@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from backend.core.security import CurrentUser, require_role
+from backend.core.security import CurrentUser, require_role, require_permission
 from backend.services import revenue_db as db
 
 router = APIRouter(prefix="/api/cod-acciones", tags=["cod-acciones"])
@@ -50,7 +50,7 @@ VALID_RESPUESTA = {"aprobacion", "no_contesta"}
 @router.get("/{orden_melonn}")
 def get_accion(
     orden_melonn: str,
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
 ) -> dict:
     """Devuelve el estado actual de acciones para un pedido."""
     sb = db._sb()
@@ -81,7 +81,7 @@ def get_accion(
 def registrar_contacto(
     orden_melonn: str,
     body: ContactoIn,
-    user: CurrentUser = Depends(require_role("admin", "operador")),
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
 ) -> dict:
     """Registra que un asesor contactó al cliente vía llamada o mensaje."""
     if body.via not in VALID_CONTACTO:
@@ -107,7 +107,7 @@ def registrar_contacto(
 def registrar_respuesta(
     orden_melonn: str,
     body: RespuestaIn,
-    user: CurrentUser = Depends(require_role("admin", "operador")),
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
 ) -> dict:
     """Registra la respuesta del cliente al contacto previo.
 

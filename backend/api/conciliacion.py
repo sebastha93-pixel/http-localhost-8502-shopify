@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.core.security import CurrentUser, get_current_user, require_role
+from backend.core.security import CurrentUser, get_current_user, require_role, require_permission
 from backend.services import melonn as melonn_svc
 from backend.services import metricas as metricas_svc
 from backend.services import conciliacion as cnc_svc
@@ -154,7 +154,7 @@ def listar_cod(_: CurrentUser = Depends(get_current_user)) -> CodResponse:
 def liquidar(
     orden: str,
     body: LiquidarBody,
-    user: CurrentUser = Depends(require_role("admin", "operador")),
+    user: CurrentUser = Depends(require_permission("finanzas", "modificar")),
 ) -> dict:
     """Marcar un pedido como liquidado por Melonn."""
     try:
@@ -180,7 +180,7 @@ def liquidar(
 @router.delete("/{orden}/liquidar")
 def desliquidar(
     orden: str,
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("finanzas", "borrar")),
 ) -> dict:
     """Eliminar la liquidación de un pedido (marcar como no liquidado)."""
     ok = cnc_svc.eliminar(orden)

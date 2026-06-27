@@ -9,7 +9,7 @@ from typing import Optional, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from backend.core.security import CurrentUser, require_role
+from backend.core.security import CurrentUser, require_role, require_permission
 from backend.services import melonn as svc
 from backend.services import metricas as metricas_svc
 from backend.services import overrides as overrides_svc
@@ -442,7 +442,7 @@ def documentos_entrega(
 @router.post("/pedidos/{orden_melonn}/autorizar-despacho", response_model=AutorizarResponse)
 def autorizar_despacho(
     orden_melonn: str,
-    user: CurrentUser = Depends(require_role("admin", "operador")),
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
 ) -> AutorizarResponse:
     """
     Libera el hold de fulfillment en Melonn y autoriza el despacho del pedido.
