@@ -15,7 +15,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from backend.core.security import CurrentUser, require_role
+from backend.core.security import CurrentUser, require_role, require_permission
 from backend.services import melonn as melonn_svc
 from backend.services import metricas as metricas_svc
 from backend.services import overrides as overrides_svc
@@ -234,7 +234,7 @@ def iniciar_run(max_pedidos: int, autor: str, solo_sin_guia: bool = True) -> dic
 
 
 @router.get("/pendientes")
-def pendientes(_: CurrentUser = Depends(require_role("admin", "operador"))) -> dict:
+def pendientes(_: CurrentUser = Depends(require_permission("operaciones", "modificar"))) -> dict:
     """Cuántos pedidos activos faltan por extraer guía."""
     body = ScrapeRequest(max_pedidos=10_000, solo_sin_guia=True)
     faltantes = _seleccionar_pedidos(body)
@@ -260,7 +260,7 @@ def scrape(
 
 
 @router.get("/status")
-def status(_: CurrentUser = Depends(require_role("admin", "operador"))) -> dict:
+def status(_: CurrentUser = Depends(require_permission("operaciones", "modificar"))) -> dict:
     """Estado actual del bot scraper."""
     with _lock:
         return dict(_bot_state)

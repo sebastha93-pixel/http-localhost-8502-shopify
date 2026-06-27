@@ -13,7 +13,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from backend.core.security import CurrentUser, require_role
+from backend.core.security import CurrentUser, require_role, require_permission
 from backend.services import archivo as archivo_svc
 
 
@@ -28,7 +28,7 @@ def listar(
     desde: Optional[str] = Query(None, description="ISO YYYY-MM-DD"),
     hasta: Optional[str] = Query(None, description="ISO YYYY-MM-DD"),
     limit: int = Query(200, ge=1, le=1000),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
 ) -> dict:
     """Lista pedidos archivados. Filtros opcionales."""
     items = archivo_svc.listar(q=q, desde=desde, hasta=hasta, limit=limit)
@@ -36,7 +36,7 @@ def listar(
 
 
 @router.get("/stats")
-def stats(_: CurrentUser = Depends(require_role("admin", "operador"))) -> dict:
+def stats(_: CurrentUser = Depends(require_permission("operaciones", "modificar"))) -> dict:
     """Resumen del archivo: total registros, % con novedad, rango."""
     return archivo_svc.stats()
 

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from backend.core.security import CurrentUser, require_role
+from backend.core.security import CurrentUser, require_role, require_permission
 
 
 router = APIRouter(prefix="/api/inventario", tags=["inventario"])
@@ -28,7 +28,7 @@ def _sm():
 
 @router.get("/resumen")
 def resumen(
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
 ) -> dict:
     """KPIs del catálogo: activos, borrador, archivados, stock total, sin stock."""
     try:
@@ -41,7 +41,7 @@ def resumen(
 def productos(
     status: str = Query("active", pattern="^(active|draft|archived)$"),
     limit: int = Query(250, ge=1, le=500),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
 ) -> dict:
     """Lista productos con stock por variante."""
     try:

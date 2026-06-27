@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from supabase import create_client, Client
 
-from backend.core.security import CurrentUser, require_role
+from backend.core.security import CurrentUser, require_role, require_permission
 
 
 router = APIRouter(prefix="/api/auditoria", tags=["auditoria"])

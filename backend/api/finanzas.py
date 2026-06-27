@@ -11,7 +11,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from backend.core.security import CurrentUser, get_current_user, require_role
+from backend.core.security import CurrentUser, get_current_user, require_role, require_permission
 from backend.services import melonn as melonn_svc
 from backend.services import metricas as metricas_svc
 from backend.services import addi as addi_svc

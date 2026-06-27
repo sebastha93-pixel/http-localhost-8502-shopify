@@ -12,7 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.core.security import CurrentUser, get_current_user, require_role
+from backend.core.security import CurrentUser, get_current_user, require_role, require_permission
 
 _SRC = Path(__file__).resolve().parent.parent.parent / "src"
 if str(_SRC) not in sys.path:
@@ -104,7 +104,7 @@ def get_acciones(orden: str, _: CurrentUser = Depends(get_current_user)) -> list
 def post_accion(
     orden: str,
     body: NuevaAccion,
-    user: CurrentUser = Depends(require_role("admin", "operador")),
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
 ) -> Accion:
     if body.tipo not in TIPOS_ACCION:
         raise HTTPException(status_code=400, detail=f"Tipo inválido. Permitidos: {TIPOS_ACCION}")
@@ -131,7 +131,7 @@ def get_notas(orden: str, _: CurrentUser = Depends(get_current_user)) -> list[No
 def post_nota(
     orden: str,
     body: NuevaNota,
-    user: CurrentUser = Depends(require_role("admin", "operador")),
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
 ) -> Nota:
     ok, err = memoria.agregar_nota(orden, user.nombre, body.nota)
     if not ok:
@@ -182,7 +182,7 @@ def get_override(orden: str, _: CurrentUser = Depends(get_current_user)) -> Opti
 def post_override(
     orden: str,
     body: NuevoOverride,
-    user: CurrentUser = Depends(require_role("admin", "operador")),
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
 ) -> Override:
     try:
         o = overrides_svc.upsert(
@@ -201,7 +201,7 @@ def post_override(
 def marcar_novedad(
     orden: str,
     body: MarcarNovedadBody,
-    user: CurrentUser = Depends(require_role("admin", "operador")),
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
 ) -> Override:
     """Marca o desmarca manualmente un pedido como novedad."""
     try:
@@ -230,7 +230,7 @@ def marcar_novedad(
 def guardar_guia(
     orden: str,
     body: GuiaBody,
-    user: CurrentUser = Depends(require_role("admin", "operador")),
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
 ) -> Override:
     """Guarda la transportadora real y número de guía (datos que Melonn no expone)."""
     try:

@@ -14,7 +14,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from backend.core.security import CurrentUser, require_role
+from backend.core.security import CurrentUser, require_role, require_permission
 
 
 router = APIRouter(prefix="/api/comercial", tags=["comercial"])
@@ -36,7 +36,7 @@ async def _run(fn, *args, **kwargs):
 
 @router.get("/overview")
 async def overview(
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """
     Overview comercial completo en una sola llamada.
@@ -80,7 +80,7 @@ async def overview(
 @router.get("/ventas")
 def ventas(
     dias: int = Query(12, ge=1, le=60),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Serie diaria de ventas (default 12 días)."""
     try:
@@ -99,7 +99,7 @@ def ventas(
 def top_productos(
     n: int = Query(5, ge=1, le=20),
     dias: int = Query(30, ge=1, le=90),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Top N productos por revenue de los últimos `dias`."""
     try:
@@ -111,7 +111,7 @@ def top_productos(
 
 @router.get("/comparativas")
 def comparativas(
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """
     Comparativas temporales:
@@ -129,7 +129,7 @@ def comparativas(
 @router.get("/clientes")
 def clientes(
     dias: int = Query(90, ge=30, le=365),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """
     Análisis de clientes en los últimos `dias`:
@@ -237,7 +237,7 @@ def desglose(
     periodo: str = Query("30d", pattern="^(hoy|ayer|7d|30d|mes|ytd|custom)$"),
     desde:   str = Query("", description="ISO YYYY-MM-DD (solo si periodo=custom)"),
     hasta:   str = Query("", description="ISO YYYY-MM-DD (solo si periodo=custom)"),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Desglose de ventas: bruto, neto, descuentos, por canal y por asesor."""
     try:
@@ -249,7 +249,7 @@ def desglose(
 
 @router.get("/inventario")
 def inventario(
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """
     Inventario Shopify: productos activos / borrador / archivados +
@@ -265,7 +265,7 @@ def inventario(
 @router.get("/ventas-periodo")
 def ventas_periodo(
     periodo: str = Query("30d", pattern="^(7d|30d|90d|ytd)$"),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Ventas para un período preset: 7d, 30d, 90d, ytd."""
     try:

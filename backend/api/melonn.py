@@ -258,7 +258,7 @@ def debug_detalle(
 
 @router.post("/sync-completo", response_model=SyncResponse)
 def sync_completo_endpoint(
-    user: CurrentUser = Depends(require_role("admin", "operador")),
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
 ) -> SyncResponse:
     """
     Pasada exhaustiva de enriquecimiento Shopify sobre TODO el caché.
@@ -280,7 +280,7 @@ def sync_completo_endpoint(
 
 @router.post("/enriquecer-faltantes")
 def enriquecer_faltantes_endpoint(
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
 ) -> dict:
     """
     Corre sync_completo en loop hasta que no queden faltantes o el conteo
@@ -413,7 +413,7 @@ class AutorizarResponse(BaseModel):
 @router.get("/pedidos/{orden_melonn}/documentos-entrega")
 def documentos_entrega(
     orden_melonn: str,
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
 ) -> dict:
     """Trae guía de envío + evidencia de entrega (POD) de una orden.
 

@@ -14,7 +14,7 @@ import requests
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 
-from backend.core.security import CurrentUser, require_role
+from backend.core.security import CurrentUser, require_role, require_permission
 from backend.services import kommo as kommo_svc
 from backend.services import revenue_db as db
 from backend.services import audit_ia
@@ -1091,7 +1091,7 @@ def ping() -> dict:
 
 
 @router.get("/health")
-def health(_: CurrentUser = Depends(require_role("admin", "operador"))) -> dict:
+def health(_: CurrentUser = Depends(require_permission("comercial", "modificar"))) -> dict:
     """
     Valida la conexión con Kommo y devuelve info de la cuenta.
     Útil para confirmar que las env vars KOMMO_SUBDOMAIN/KOMMO_API_TOKEN
@@ -1101,7 +1101,7 @@ def health(_: CurrentUser = Depends(require_role("admin", "operador"))) -> dict:
 
 
 @router.get("/stats")
-def stats(_: CurrentUser = Depends(require_role("admin", "operador"))) -> dict:
+def stats(_: CurrentUser = Depends(require_permission("comercial", "modificar"))) -> dict:
     """KPIs del módulo: cuántos leads/conv/mensajes/audits."""
     return db.stats_revenue()
 
@@ -1121,7 +1121,7 @@ def list_conversations(
     ),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Lista de conversations con filtros + paginación + búsqueda + filtro respondidas.
     'Hoy' (days_back=1) = desde 00:00 Bogotá hasta ahora.
@@ -1374,7 +1374,7 @@ def advisors_ranking(
     days_back: int = Query(30, ge=1, le=365),
     hours_back: float | None = Query(None, gt=0, le=8760, description="Override days_back: ventana rolling de N horas."),
     incluir_inactivos: bool = Query(False),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Ranking de asesores: conversaciones, won/lost, tasa, último activo."""
     sb = db._sb()
@@ -1593,7 +1593,7 @@ def talks_backfill_start(
 
 @router.get("/sync/talks/backfill/status")
 def talks_backfill_status(
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     return kommo_svc.get_backfill_state()
 
@@ -1621,7 +1621,7 @@ def audit_run_pending(
 @router.get("/conversations/{conversation_id}/detail")
 def conversation_detail(
     conversation_id: str,
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Detalle completo: conversation + lead + mensajes (ordenados) + última auditoría."""
     sb = db._sb()
@@ -1960,7 +1960,7 @@ def rankings_calcular(
 @router.get("/alertas")
 def alertas_activas(
     sin_respuesta_min: int = Query(30, ge=5, le=720, description="Minutos sin respuesta asesora"),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Conversations activas donde:
     1. El último mensaje fue del cliente
@@ -2038,7 +2038,7 @@ def alertas_activas(
 @router.get("/lead-fields-stats")
 def lead_fields_stats(
     days_back: int = Query(30, ge=1, le=365),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Agrega valores de custom_fields_values de los leads en el período.
 
@@ -2110,7 +2110,7 @@ def lead_fields_stats(
 @router.get("/tendencias")
 def tendencias(
     days_back: int = Query(30, ge=1, le=365),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Agrega conversations por canal, hora del día y día de semana.
     Incluye breakdown won/lost para cada grupo."""
@@ -2223,7 +2223,7 @@ def slack_check_alertas(_: CurrentUser = Depends(require_role("admin"))) -> dict
 def rankings_historico(
     advisor_id: str | None = Query(None),
     limit: int = Query(50, ge=1, le=500),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Histórico de rankings persistidos."""
     sb = db._sb()
@@ -2239,7 +2239,7 @@ def rankings_historico(
 def audit_list(
     limit: int = Query(50, ge=1, le=200),
     classification: str | None = Query(None),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Lista de auditorías recientes."""
     sb = db._sb()
@@ -2258,7 +2258,7 @@ def messages_stats(
     hasta: str | None = Query(None, description="ISO YYYY-MM-DD (UTC, inclusive)"),
     days_back: int = Query(7, ge=1, le=180, description="Si no se pasa desde/hasta, ventana de N días desde hoy"),
     hours_back: float | None = Query(None, gt=0, le=8760, description="Override days_back: ventana rolling de N horas."),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Contadores de mensajes por día en un rango. Si no se pasa desde/hasta usa
     ventana de los últimos days_back días. Devuelve totales y serie diaria con
@@ -2350,7 +2350,7 @@ def messages_stats(
 @router.get("/loss-reasons-stats")
 def loss_reasons_stats(
     days_back: int = Query(30, ge=1, le=365),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Top motivos de pérdida estructurados (custom field 'Motivo de Perdida').
     Mucho más accionable que loss_reason texto libre.
@@ -2405,7 +2405,7 @@ def loss_reasons_stats(
 
 
 @router.get("/pipelines")
-def pipelines_list(_: CurrentUser = Depends(require_role("admin", "operador"))) -> dict:
+def pipelines_list(_: CurrentUser = Depends(require_permission("comercial", "modificar"))) -> dict:
     """Lista los pipelines de Kommo (no cacheado — siempre fresh).
     Útil para el selector en /revenue.
     """
@@ -2434,7 +2434,7 @@ def pipelines_list(_: CurrentUser = Depends(require_role("admin", "operador"))) 
 
 
 @router.get("/briefing-hoy")
-def briefing_hoy(_: CurrentUser = Depends(require_role("admin", "operador"))) -> dict:
+def briefing_hoy(_: CurrentUser = Depends(require_permission("comercial", "modificar"))) -> dict:
     """Briefing matutino — el reporte que el equipo revisa cada mañana.
 
     Usa el MISMO patrón de /messages/stats (limit 50000, funciona) en vez del
@@ -2701,7 +2701,7 @@ def briefing_hoy(_: CurrentUser = Depends(require_role("admin", "operador"))) ->
 @router.get("/messages/recent")
 def messages_recent(
     limit: int = Query(50, ge=1, le=300),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Feed cronológico de los últimos mensajes."""
     sb = db._sb()
@@ -2733,7 +2733,7 @@ def messages_recent(
 # ── Sync ──────────────────────────────────────────────────────────────────────
 @router.get("/chats-activos-kommo")
 def chats_activos_kommo(
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Espejo EXACTO del contador rojo de Chats en la barra lateral de Kommo:
     cantidad de talks no leídos (is_read=False). Es el KPI operativo real que
@@ -2966,7 +2966,7 @@ def chats_badge_ingest(body: dict) -> dict:
 @router.get("/leads-mal-clasificados")
 def leads_mal_clasificados(
     limit: int = Query(100, ge=1, le=500),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Detecta inconsistencias en Kommo: leads con status_id=143 (Perdido)
     PERO motivo_ganado NO NULL. Esos son ventas reales mal clasificadas
@@ -3425,7 +3425,7 @@ def get_informe_consultor(
     days_back: int = Query(7, ge=1, le=90),
     advisor_id: str | None = Query(None),
     guardar: bool = Query(False),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Genera informe director comercial sobre conversaciones del periodo."""
     informe = informe_svc.generar_informe(
@@ -3479,7 +3479,7 @@ def run_informe_semanal(
 @router.get("/informe-consultor/historico")
 def listar_informes(
     limit: int = Query(20, ge=1, le=100),
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Lista los últimos N informes generados."""
     sb = db._sb()
@@ -3499,7 +3499,7 @@ def listar_informes(
 @router.get("/informe-consultor/{informe_id}")
 def obtener_informe(
     informe_id: str,
-    _: CurrentUser = Depends(require_role("admin", "operador")),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
     """Recupera un informe específico por ID."""
     sb = db._sb()
