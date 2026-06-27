@@ -31,7 +31,7 @@ Por eso la **unidad de inventario es el rollo**, cada uno con su propio código 
 | Unidad de inventario | **El rollo individual** (cada uno con código de barras propio) |
 | Atributos por rollo | nº rollo/serial, metros, lote de fábrica, tono, referencia/descripción de tela, ancho, fecha ingreso |
 | Tono | **Se controla por rollo** (las hojas lo traen) |
-| Captura del despacho | Transcripción manual fila por fila; cada rollo genera su código + etiqueta |
+| Captura del ingreso | Transcripción manual fila por fila; cada rollo genera su código + etiqueta |
 | Etiqueta | Térmica Zebra, 10×10 cm, código de barras Code128, **una por rollo** |
 | Caso Megatex (sin rollos) | Se registra como un rollo único con el total de metros |
 | Orden de Corte | **Documento en modo formato** con indicaciones; luz verde al cortador |
@@ -41,7 +41,7 @@ Por eso la **unidad de inventario es el rollo**, cada uno con su propio código 
 | Consumo real | lo ingresa el cortador; el sistema calcula la **diferencia %** |
 | Merma | % o metros (ambos disponibles) |
 | Remisión | consecutivo + fecha de recogida; agrupa varias órdenes de corte |
-| Consecutivos | `DESP-2026-0001`, `ROLLO-2026-000001`, `OC-2026-0001`, `REM-2026-0001` |
+| Consecutivos | `ING-2026-0001`, `ROLLO-2026-000001`, `OC-2026-0001`, `REM-2026-0001` |
 | Costo de tela | viene en el documento de la textilera (COP) |
 | Conciliación | registra lo real, marca diferencia, permite parciales **con autorización (admin)** |
 | Roles | admin + operador; autorización de precosteo y de orden de corte solo con permiso |
@@ -53,15 +53,15 @@ Por eso la **unidad de inventario es el rollo**, cada uno con su propio código 
 
 ## 3. Modelo de datos (Supabase)
 
-### `ordenes_despacho` — cabecera de la entrega de la textilera
-`numero_despacho` (DESP-2026-0001), `textilera`, `nit_textilera`,
+### `ordenes_ingreso` — cabecera de la entrega de la textilera
+`numero_ingreso` (ING-2026-0001), `textilera`, `nit_textilera`,
 `numero_documento` (remisión/factura/lista empaque de la textilera),
 `tipo_documento` (remision / factura / lista_empaque / consulta),
 `fecha`, `orden_compra`, `total_rollos`, `total_metros`,
 `estado` (pendiente / recibida_parcial / recibida_completa / conciliada), `observaciones`.
 
 ### `rollos_tela` — **unidad de inventario**
-`codigo_interno` (ROLLO-2026-000001), `barcode`, `orden_despacho_id`,
+`codigo_interno` (ROLLO-2026-000001), `barcode`, `orden_ingreso_id`,
 `numero_rollo` (el de la textilera), `serial`, `lote_fabrica`, `tono`,
 `referencia_tela` (código de la textilera), `descripcion_tela` (ej. SANDDENIM, FUNKY),
 `ancho`, `costo_metro`,
@@ -116,10 +116,10 @@ Por eso la **unidad de inventario es el rollo**, cada uno con su propio código 
 ## 4. Flujo operativo
 
 ### A. Ingreso de tela (copiar la orden de la textilera)
-1. Creas la **orden de despacho** (cabecera): textilera, número de documento, fecha, orden de compra.
+1. Creas la **orden de ingreso** (cabecera): textilera, número de documento, fecha, orden de compra.
 2. Transcribes **rollo por rollo** la hoja de entrega: nº de rollo, serial, lote de fábrica, tono, referencia/descripción, ancho, metros, costo/metro.
-3. Al guardar cada rollo, el sistema genera su `codigo_interno` + `barcode` y habilita **imprimir la etiqueta Zebra 10×10** (botón "imprimir" por rollo o impresión masiva de todos los rollos del despacho).
-4. **Conciliación:** compara el total de metros transcritos vs el documento; si hay diferencia, marca el despacho/rollo `con_novedad`. Entregas **parciales** se permiten contra la misma orden **con autorización (admin)**.
+3. Al guardar cada rollo, el sistema genera su `codigo_interno` + `barcode` y habilita **imprimir la etiqueta Zebra 10×10** (botón "imprimir" por rollo o impresión masiva de todos los rollos del ingreso).
+4. **Conciliación:** compara el total de metros transcritos vs el documento; si hay diferencia, marca el ingreso/rollo `con_novedad`. Entregas **parciales** se permiten contra la misma orden **con autorización (admin)**.
 5. Megatex (sin rollos) → se registra como un rollo único con el total.
 6. Movimiento `ingreso` (+metros) por cada rollo.
 
@@ -169,11 +169,32 @@ Por eso la **unidad de inventario es el rollo**, cada uno con su propio código 
 
 ---
 
+## 6b. Formatos y almacenamiento (reset a 0)
+
+Tres documentos funcionan como **formato** (pantalla de captura): **Orden de Ingreso**, **Precosteo** y **Orden de Corte**. El patrón es el mismo en los tres:
+
+1. Llenas el formato.
+2. Al **firmar / dar luz verde / guardar**, el sistema:
+   - **Guarda un registro permanente** en su tabla de Supabase (con consecutivo, quién firmó y la fecha; inmutable).
+   - **Limpia el formato y lo deja en 0**, listo para el siguiente.
+3. Lo firmado queda en el **histórico** y nunca se pierde; el formato vacío es solo la "hoja en blanco" del próximo.
+
+| Formato | Se guarda en (histórico) | Qué lo dispara |
+|---|---|---|
+| Orden de Ingreso | `ordenes_ingreso` + `rollos_tela` | Guardar el ingreso |
+| Precosteo | `referencias_precosteo` | Firma de autorización |
+| Orden de Corte | `ordenes_corte` + `orden_corte_rollos` | Luz verde (autorización) |
+
+**En el módulo (app):** automático — el botón guarda en la base de datos y resetea el formato.
+**En el Google Sheet:** se replica con un botón + Apps Script que copia el formato a una hoja **"Histórico"** y limpia los campos (las fórmulas solas no pueden archivar ni limpiar).
+
+---
+
 ## 7. Estructura del Google Sheet
 
-> El despacho/rollos se capturan **en el módulo** (transcripción). El Sheet se usa para el **Precosteo**; la hoja de despacho queda como plantilla de apoyo/pegado.
+> El ingreso/rollos se capturan **en el módulo** (transcripción). El Sheet se usa para el **Precosteo**; la hoja de ingreso queda como plantilla de apoyo/pegado.
 
-### Hoja "Órdenes de Despacho" (nivel rollo)
+### Hoja "Órdenes de Ingreso" (nivel rollo)
 `textilera · numero_documento · tipo_documento · fecha · orden_compra · numero_rollo · serial · lote_fabrica · tono · referencia_tela · descripcion_tela · ancho_cm · metros · costo_metro_cop · codigo_interno (sistema) · barcode (sistema)`
 
 ### Hoja "Precosteo Referencias"
@@ -188,7 +209,7 @@ Por eso la **unidad de inventario es el rollo**, cada uno con su propio código 
 - **Fotos:** se suben en el módulo → Supabase Storage.
 - **Correo:** se configura en una fase posterior; por ahora el corte sin autorización solo advierte en pantalla.
 - **Frontend:** `frontend/app/produccion` con pestañas:
-  **Inventario (rollos) · Ingreso/Despachos · Precosteo · Órdenes de Corte · Remisiones · Confeccionistas · Tablero**.
+  **Inventario (rollos) · Órdenes de Ingreso · Precosteo · Órdenes de Corte · Remisiones · Confeccionistas · Tablero**.
 - **Código de barras:** Code128 generado en el navegador (JsBarcode); etiqueta Zebra 10×10 (ZPL o PDF) por rollo.
 - **Esquema SQL** en `SUPABASE_PRODUCCION.sql` (estilo `SUPABASE_USUARIOS.sql`).
 
