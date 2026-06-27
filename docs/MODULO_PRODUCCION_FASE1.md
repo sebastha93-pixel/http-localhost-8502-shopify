@@ -2,16 +2,25 @@
 
 **Estado:** Diseño en revisión (sin implementar)
 **Última actualización:** 2026-06-26
-**Alcance Fase 1:** Inventario de tela por lote + trazabilidad corte → confección, con control de precosteo/autorización por referencia.
+**Alcance Fase 1:** Inventario de tela **por rollo** + Orden de Corte (formato) + trazabilidad corte → confección, con control de precosteo/autorización por referencia.
 
 ---
 
 ## 1. Resumen
 
-Módulo nuevo para gestionar el inventario de insumos (tela) y los procesos productivos de corte y confección. Se alimenta de Google Sheets (órdenes de despacho de la textilera y precosteo de referencias), permite captura por lector de código de barras, y mantiene el inventario al día descontando metros cortados.
+Módulo nuevo para gestionar el inventario de insumos (tela) y los procesos productivos de corte y confección. Se alimenta de las hojas de entrega de las textileras (transcripción en el módulo) y del precosteo de referencias (Google Sheet), permite captura por lector de código de barras, y mantiene el inventario al día descontando metros cortados **por rollo**.
 
 **Fuente de verdad:** Supabase (Postgres), igual que el resto del OS.
-**Google Sheets** alimenta dos cosas: las órdenes de despacho y el precosteo de referencias.
+**Razón social cliente:** Dirty Jeans S.A.S.
+
+### Realidad de las hojas de las textileras (revisadas)
+Cada entrega trae **muchos rollos**, listados rollo por rollo: número de rollo/serial, metros, lote de fábrica, tono y referencia/descripción de la tela. Formatos vistos:
+- **Primatela** — hoja de entrega: 15 rollos, ITEM/REFERENCIA/Nro Rollo/LOTE/metros.
+- **Contacto** — lista de empaque: 34 seriales, con columna **TONO** (A/B) y referencia/descripción.
+- **Stilotex** — consulta por serial: lote por serial, tonos 653/999 (verde/negro).
+- **Megatex** — factura electrónica: **solo total en metros**, sin desglose por rollo (caso especial).
+
+Por eso la **unidad de inventario es el rollo**, cada uno con su propio código de barras.
 
 ---
 
@@ -19,165 +28,188 @@ Módulo nuevo para gestionar el inventario de insumos (tela) y los procesos prod
 
 | Tema | Decisión |
 |---|---|
-| Atributos de tela | metros, tono*, ancho, fecha ingreso, fecha de corte |
-| Unidad de inventario | Un lote por orden de despacho |
-| Etiqueta | Térmica Zebra, 10×10 cm, código de barras Code128 |
+| Unidad de inventario | **El rollo individual** (cada uno con código de barras propio) |
+| Atributos por rollo | nº rollo/serial, metros, lote de fábrica, tono, referencia/descripción de tela, ancho, fecha ingreso |
+| Tono | **Se controla por rollo** (las hojas lo traen) |
+| Captura del despacho | Transcripción manual fila por fila; cada rollo genera su código + etiqueta |
+| Etiqueta | Térmica Zebra, 10×10 cm, código de barras Code128, **una por rollo** |
+| Caso Megatex (sin rollos) | Se registra como un rollo único con el total de metros |
+| Orden de Corte | **Documento en modo formato** con indicaciones; luz verde al cortador |
 | Modelo de corte | Trazo + capas (completo) |
 | Curva de tallas | 4-6-8-10-12-14-16 |
 | Rendimiento teórico | largo del trazo ÷ prendas del trazo |
 | Consumo real | lo ingresa el cortador; el sistema calcula la **diferencia %** |
 | Merma | % o metros (ambos disponibles) |
-| Remisión | consecutivo + fecha de recogida; agrupa varios cortes |
-| Consecutivos | `TELA-2026-0001`, `CORTE-2026-0001`, `REM-2026-0001` |
-| Costo de tela | viene en el Sheet de despacho (COP) |
+| Remisión | consecutivo + fecha de recogida; agrupa varias órdenes de corte |
+| Consecutivos | `DESP-2026-0001`, `ROLLO-2026-000001`, `OC-2026-0001`, `REM-2026-0001` |
+| Costo de tela | viene en el documento de la textilera (COP) |
 | Conciliación | registra lo real, marca diferencia, permite parciales **con autorización (admin)** |
-| Roles | admin + operador; autorización de precosteo solo con permiso especial |
+| Roles | admin + operador; autorización de precosteo y de orden de corte solo con permiso |
 | Precosteo | todos los componentes + foto (subida en el módulo); inmutable tras firma; una vez por referencia |
 | Autorización ↔ Sheet | se autoriza en la app y se escribe de vuelta en el Sheet (sync bidireccional) |
 | Corte sin autorización | advierte; correo al responsable en fase posterior |
-
-\* *El campo tono se guarda pero sin lógica ni validaciones en Fase 1.*
 
 ---
 
 ## 3. Modelo de datos (Supabase)
 
-### `ordenes_despacho` — sincronizada desde el Sheet
-`numero_orden`, `fecha_despacho`, `textilera`, `tipo_tela`, `tono`, `ancho`,
-`metros_despachados`, `costo_metro` (COP), `doc_textilera`, `observaciones`,
-`estado` (pendiente / recibida_parcial / recibida_completa / conciliada), `sheet_row`.
+### `ordenes_despacho` — cabecera de la entrega de la textilera
+`numero_despacho` (DESP-2026-0001), `textilera`, `nit_textilera`,
+`numero_documento` (remisión/factura/lista empaque de la textilera),
+`tipo_documento` (remision / factura / lista_empaque / consulta),
+`fecha`, `orden_compra`, `total_rollos`, `total_metros`,
+`estado` (pendiente / recibida_parcial / recibida_completa / conciliada), `observaciones`.
 
-### `lotes_tela` — unidad de inventario
-`codigo` (TELA-2026-0001), `nombre` (manual), `orden_despacho_id`,
-`tipo_tela`, `tono`, `ancho`, `costo_metro`,
-`metros_recibidos`, `metros_disponible`,
+### `rollos_tela` — **unidad de inventario**
+`codigo_interno` (ROLLO-2026-000001), `barcode`, `orden_despacho_id`,
+`numero_rollo` (el de la textilera), `serial`, `lote_fabrica`, `tono`,
+`referencia_tela` (código de la textilera), `descripcion_tela` (ej. SANDDENIM, FUNKY),
+`ancho`, `costo_metro`,
+`metros_inicial`, `metros_disponible`,
 `fecha_ingreso`, `fecha_ultimo_corte`,
 `estado` (disponible / en_corte / agotado / con_novedad).
 
-### `referencias_precosteo` — sincronizada del Sheet + autorizada en el módulo
+### `referencias_precosteo` — referencia de prenda + costeo + autorización
 `codigo_referencia`, `nombre`, `foto_url`,
 `consumo_tela_prenda` (m), `costo_tela`,
-`insumos` (JSON: lista de insumo + costo),
+`insumos` (JSON: lista de insumo + costo), `costo_insumos`,
 `costo_confeccion`, `costo_lavanderia`,
 `costo_total_prenda`, `precio_venta`, `margen`,
-`estado` (borrador / autorizada),
-`autorizada_por`, `fecha_autorizacion`, `bloqueada` (bool).
-**Regla:** al autorizar → `bloqueada = true` y ningún campo se puede modificar.
+`estado` (borrador / autorizada), `autorizada_por`, `fecha_autorizacion`, `bloqueada` (bool).
+**Regla:** al autorizar → `bloqueada = true` e inmutable.
+
+### `ordenes_corte` — **el formato que da luz verde al cortador**
+`consecutivo` (OC-2026-0001), `referencia_id`, `tono`,
+`largo_trazo`, `prendas_por_trazo`, `curva_trazo` (JSON por talla 4-16), `num_capas`,
+`prendas_estimadas` (= prendas_por_trazo × capas),
+`metros_consumidos` (= largo_trazo × capas),
+`rendimiento_teorico` (= largo_trazo ÷ prendas_por_trazo),
+`consumo_real_cortador`, `diferencia_pct` (calculada),
+`merma_tipo` (% / metros), `merma_valor`,
+`indicaciones` (texto libre para el cortador),
+`responsable`, `fecha_limite`,
+`estado` (borrador / autorizada / en_proceso / cortada),
+`autorizada_por`, `fecha_autorizacion`,
+`confeccionista_id`, `usuario`, `fecha`.
+
+### `orden_corte_rollos` — rollos asignados a la orden de corte
+`orden_corte_id`, `rollo_id`, `metros_usados`.
+(De aquí sale el descuento de inventario por rollo.)
 
 ### `confeccionistas`
 `nombre`, `telefono`, `direccion`, `activo`.
 
-### `cortes`
-`codigo` (CORTE-2026-0001), `lote_tela_id`, `referencia_id`,
-`largo_trazo`, `prendas_por_trazo`, `curva_trazo` (JSON por talla),
-`num_capas`, `metros_consumidos` (= largo_trazo × capas),
-`merma_tipo` (% / metros), `merma_valor`,
-`prendas_estimadas` (= prendas_por_trazo × capas),
-`rendimiento_teorico` (= largo_trazo ÷ prendas_por_trazo),
-`consumo_real_cortador`, `diferencia_pct` (calculada),
-`autorizada_al_cortar` (bool, snapshot del estado de la referencia),
-`confeccionista_id`, `fecha`, `usuario`.
-
 ### `remisiones` + `remision_items`
-**remisiones:** `consecutivo` (REM-2026-0001), `confeccionista_id`,
-`fecha_recogida`, `estado` (generada / recogida), `pdf_url`.
-**remision_items:** `remision_id`, `corte_id`.
+**remisiones:** `consecutivo` (REM-2026-0001), `confeccionista_id`, `fecha_recogida`,
+`estado` (generada / recogida), `pdf_url`.
+**remision_items:** `remision_id`, `orden_corte_id`.
 
-### `movimientos_inventario` — libro mayor auditable
-`lote_tela_id`, `tipo` (ingreso / corte / ajuste), `metros` (±),
+### `movimientos_inventario` — libro mayor auditable (por rollo)
+`rollo_id`, `tipo` (ingreso / corte / ajuste), `metros` (±),
 `doc_ref`, `usuario`, `fecha`, `nota`.
 
-### `usuarios` (existente) — nuevo permiso
-`puede_autorizar_precosteo` (flag) — habilita la firma de autorización.
+### `usuarios` (existente) — nuevos permisos
+`puede_autorizar_precosteo`, `puede_autorizar_corte` (flags).
 
 ---
 
 ## 4. Flujo operativo
 
-### A. Sincronizar despachos
-Lee la hoja "Órdenes de Despacho" → llena/actualiza `ordenes_despacho`.
+### A. Ingreso de tela (copiar la orden de la textilera)
+1. Creas la **orden de despacho** (cabecera): textilera, número de documento, fecha, orden de compra.
+2. Transcribes **rollo por rollo** la hoja de entrega: nº de rollo, serial, lote de fábrica, tono, referencia/descripción, ancho, metros, costo/metro.
+3. Al guardar cada rollo, el sistema genera su `codigo_interno` + `barcode` y habilita **imprimir la etiqueta Zebra 10×10** (botón "imprimir" por rollo o impresión masiva de todos los rollos del despacho).
+4. **Conciliación:** compara el total de metros transcritos vs el documento; si hay diferencia, marca el despacho/rollo `con_novedad`. Entregas **parciales** se permiten contra la misma orden **con autorización (admin)**.
+5. Megatex (sin rollos) → se registra como un rollo único con el total.
+6. Movimiento `ingreso` (+metros) por cada rollo.
 
-### B. Ingreso de tela
-1. Seleccionas la orden de despacho.
-2. Pones el nombre del lote, registras los **metros reales recibidos**.
-3. Si difieren del despacho → se marca la **diferencia** y el lote queda `con_novedad`.
-4. Si es **entrega parcial** → la orden queda `recibida_parcial`; cerrarla requiere **autorización de admin**.
-5. Se genera el `codigo` + **etiqueta Zebra 10×10** imprimible.
-6. Movimiento `ingreso` (+metros).
-
-### C. Precosteo y autorización de referencia
+### B. Precosteo y autorización de referencia
 1. La hoja "Precosteo" alimenta `referencias_precosteo` como `borrador`.
 2. La **foto** de la referencia se sube dentro del módulo (Supabase Storage).
-3. Un usuario con `puede_autorizar_precosteo` (permiso gestionado en la app) revisa la foto y el costeo y **autoriza** desde el módulo.
-4. Al autorizar → queda **bloqueada** (inmutable), registra quién y cuándo, y **escribe la autorización de vuelta en el Sheet** (estado, responsable, fecha).
-5. Una vez autorizada, el módulo **congela** ese precosteo (los cambios posteriores del Sheet no la tocan).
+3. Un usuario con `puede_autorizar_precosteo` revisa la foto y el costeo y **autoriza** desde la app.
+4. Al autorizar → queda **bloqueada** (inmutable), registra quién y cuándo, y **escribe la autorización de vuelta en el Sheet**.
+5. Una vez autorizada, el módulo **congela** ese precosteo (cambios posteriores del Sheet no la tocan).
 
-### D. Corte
-1. Escaneas el código del lote (lector → input con autofocus + Enter).
-2. Eliges la **referencia**.
-   - Si la referencia **no está autorizada** → **advierte** en pantalla (permite continuar marcado como sin autorización). *El correo al responsable se habilita en una fase posterior, cuando se configure el canal de correo.*
-3. Ingresas largo de trazo, curva de tallas y nº de capas.
-4. El sistema calcula: prendas estimadas, metros consumidos, rendimiento teórico.
-5. El cortador ingresa su **consumo real** → **diferencia % (eficiencia)**.
-6. Registras merma (% o metros).
-7. Descuenta metros del lote (movimiento `corte`).
+### C. Orden de Corte (formato — luz verde al cortador)
+1. Creas la orden de corte: eliges la **referencia** (debe estar autorizada; si no, advierte) y el **tono**.
+2. **Asignas los rollos** (escaneando su código de barras) de los que saldrá la tela.
+3. Defines el **trazo** (largo), la **curva de tallas** y el **nº de capas** → el sistema calcula prendas estimadas, metros a consumir y rendimiento teórico.
+4. Escribes las **indicaciones** para el cortador (sentido de tela, defectos a evitar, notas de calidad), el **responsable** y la **fecha límite**.
+5. Un usuario con `puede_autorizar_corte` **firma/autoriza** → estado `autorizada` = **luz verde**. Se imprime el **formato de Orden de Corte**.
+6. El cortador ejecuta y reporta el **consumo real** → el sistema calcula la **diferencia % (eficiencia)** y la **merma**; estado `cortada`.
+7. Descuenta los metros de los **rollos asignados** (movimiento `corte` por rollo).
 
-### E. Remisión al confeccionista
-1. Agrupas uno o varios cortes del mismo confeccionista.
+### D. Remisión al confeccionista
+1. Agrupas una o varias órdenes de corte del mismo confeccionista.
 2. Asignas consecutivo y **fecha de recogida**.
 3. Genera documento imprimible / PDF.
 
-### F. Inventario
-Los metros disponibles siempre cuadran vía `movimientos_inventario` (ingreso − corte ± ajuste).
+### E. Inventario (vista unificada por nombre)
+- El inventario se **unifica por nombre de tela** (descripción): por cada tela muestra el **nº de rollos**, los metros recibidos, cortados y **disponibles**.
+- Un **desplegable** permite seleccionar una tela por nombre y ver su cantidad de rollos y metros disponibles; al expandir, se ven los rollos individuales con su código de barras.
+- En la **Orden de Corte** se **elige la tela por nombre** (desplegable), se ven los metros disponibles y luego se asignan los rollos específicos.
+- Al cortar, el **descuento es automático** sobre los rollos asignados; los metros disponibles por rollo y el resumen por nombre siempre cuadran vía `movimientos_inventario` (ingreso − corte ± ajuste).
 
 ---
 
 ## 5. Tablero (KPIs y alertas)
 
-- **Stock mínimo por tipo/tono** — alerta cuando los metros bajan de un mínimo configurable.
-- **Eficiencia de corte** — diferencia % teórico vs real por corte / referencia / cortador.
-- **Telas paradas / antigüedad** — lotes con muchos días sin movimiento.
-- **Valor del inventario** — metros disponibles × costo/metro, total y por tipo.
+- **Stock mínimo por tipo/tono** — alerta cuando los metros disponibles de un tipo o tono bajan de un mínimo configurable.
+- **Eficiencia de corte** — diferencia % teórico vs real por orden de corte / referencia / cortador.
+- **Telas paradas / antigüedad** — rollos con muchos días sin movimiento.
+- **Valor del inventario** — metros disponibles × costo/metro, total y por tipo/tono.
 
 ---
 
-## 6. Estructura propuesta del Google Sheet
+## 6. Documentos imprimibles
 
-### Hoja "Órdenes de Despacho"
-`numero_orden · fecha_despacho · textilera · tipo_tela · tono · ancho · metros_despachados · costo_metro · doc_textilera · observaciones`
+- **Etiqueta de rollo** (Zebra 10×10): código de barras Code128 + código interno, descripción/tono, ancho, metros, lote de fábrica, fecha.
+- **Orden de Corte** (formato): referencia + foto, tono, rollos asignados, trazo/curva/capas, prendas estimadas, indicaciones, responsable, fecha límite, firma de autorización.
+- **Remisión** (al confeccionista): confeccionista, órdenes de corte incluidas, prendas, fecha de recogida, consecutivo.
+
+---
+
+## 7. Estructura del Google Sheet
+
+> El despacho/rollos se capturan **en el módulo** (transcripción). El Sheet se usa para el **Precosteo**; la hoja de despacho queda como plantilla de apoyo/pegado.
+
+### Hoja "Órdenes de Despacho" (nivel rollo)
+`textilera · numero_documento · tipo_documento · fecha · orden_compra · numero_rollo · serial · lote_fabrica · tono · referencia_tela · descripcion_tela · ancho_cm · metros · costo_metro_cop · codigo_interno (sistema) · barcode (sistema)`
 
 ### Hoja "Precosteo Referencias"
-`codigo_referencia · nombre · foto (link Drive) · consumo_tela_prenda · costo_tela · insumos · costo_confeccion · costo_lavanderia · costo_total_prenda · precio_venta · margen`
+`codigo_referencia · nombre · consumo_tela_prenda_m · costo_tela_cop · detalle_insumos · costo_insumos_cop · costo_confeccion_cop · costo_lavanderia_cop · costo_total_prenda_cop (fórmula) · precio_venta_cop · margen_cop (fórmula) · margen_pct (fórmula) · foto_link_opcional · estado_autorizacion (sistema) · autorizado_por (sistema) · fecha_autorizacion (sistema)`
 
 ---
 
-## 7. Arquitectura técnica
+## 8. Arquitectura técnica
 
 - **Backend:** `backend/services/produccion.py` + `backend/api/produccion.py` (prefijo `/api/produccion`), registrado en `backend/main.py`.
-- **Sincronización Sheets:** cuenta de servicio de Google (compartir ambas hojas con el correo de servicio). **Bidireccional** en la autorización de precosteo: el módulo lee el borrador y escribe de vuelta el estado autorizado.
+- **Sincronización Sheets:** cuenta de servicio de Google. Bidireccional en la autorización de precosteo.
 - **Fotos:** se suben en el módulo → Supabase Storage.
 - **Correo:** se configura en una fase posterior; por ahora el corte sin autorización solo advierte en pantalla.
 - **Frontend:** `frontend/app/produccion` con pestañas:
-  **Inventario · Ingreso · Precosteo · Corte · Remisiones · Confeccionistas · Tablero**.
-- **Código de barras:** Code128 generado en el navegador (JsBarcode) para etiqueta Zebra; layout ZPL o PDF 10×10.
+  **Inventario (rollos) · Ingreso/Despachos · Precosteo · Órdenes de Corte · Remisiones · Confeccionistas · Tablero**.
+- **Código de barras:** Code128 generado en el navegador (JsBarcode); etiqueta Zebra 10×10 (ZPL o PDF) por rollo.
 - **Esquema SQL** en `SUPABASE_PRODUCCION.sql` (estilo `SUPABASE_USUARIOS.sql`).
 
 ---
 
-## 8. Fase 2 (más adelante)
+## 9. Fase 2 (más adelante)
 
-- **Devolución del confeccionista** — recibir prendas terminadas, cerrar la remisión, cuadrar prendas cortadas vs entregadas.
-- Enlazar `referencia` con el catálogo de Shopify (desplegable real).
+- **Devolución del confeccionista** — recibir prendas terminadas, cerrar la remisión, cuadrar cortadas vs entregadas.
+- Enlazar `referencia_tela` y `referencia` de prenda con el catálogo de Shopify.
+- **OCR** de las hojas de las textileras para auto-cargar rollos.
+- **Correo** de notificación al cortar sin autorización.
 - Otros insumos (botones, cremalleras, hilos) como inventario propio.
 - Integración del costo de confección con el módulo de finanzas.
 
 ---
 
-## 9. Pendientes resueltos
+## 10. Decisiones resueltas (pendientes anteriores)
 
-1. **Foto de la referencia** → se sube dentro del módulo (Supabase Storage). ✅
-2. **Canal de correo** → se configura en una fase posterior; por ahora solo advertencia en pantalla. ✅
-3. **Permiso de autorización** → el permiso (`puede_autorizar_precosteo`) se gestiona en la app; se autoriza desde el módulo y el resultado se marca de vuelta en el Sheet. ✅
-4. **Inmutabilidad vs Sheet** → confirmado: tras autorizar, el módulo congela la referencia e ignora cambios posteriores del Sheet. ✅
-
-**Diseño cerrado — listo para construir cuando lo indiques.**
+1. **Foto de la referencia** → se sube en el módulo (Supabase Storage). ✅
+2. **Canal de correo** → fase posterior; por ahora solo advertencia en pantalla. ✅
+3. **Permiso de autorización** → flags `puede_autorizar_precosteo` / `puede_autorizar_corte` gestionados en la app; el resultado del precosteo se marca de vuelta en el Sheet. ✅
+4. **Inmutabilidad vs Sheet** → tras autorizar, se congela la referencia. ✅
+5. **Unidad de inventario** → el rollo individual, con código de barras propio. ✅
+6. **Tono** → se controla por rollo. ✅

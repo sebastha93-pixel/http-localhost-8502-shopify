@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     cors_origins: str = Field(
         # Default incluye localhost para dev + dominio de producción para no
         # romper acceso si la env var CORS_ORIGINS se borra accidentalmente.
-        default="http://localhost:3000,http://localhost:3001,https://http-localhost-8502-shopify.vercel.app",
+        default="http://localhost:3000,http://localhost:3001,https://http-localhost-8502-shopify.vercel.app,https://app.maledenim.com",
         description="Coma-separated lista de origins permitidos (frontend Next.js)",
         alias="CORS_ORIGINS",
     )
