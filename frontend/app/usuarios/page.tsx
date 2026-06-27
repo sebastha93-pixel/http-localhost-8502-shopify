@@ -317,6 +317,7 @@ function UsuarioRow({
   );
   const [activo, setActivo] = useState(u.activo);
   const [password, setPassword] = useState("");
+  const [errEdit, setErrEdit] = useState("");
 
   const mut = useMutation({
     mutationFn: () => {
@@ -325,7 +326,8 @@ function UsuarioRow({
       if (password) body.password = password;
       return api.patch<Usuario>(`/api/auth/usuarios/${u.id}`, body);
     },
-    onSuccess: () => onSaved(),
+    onSuccess: () => { setErrEdit(""); onSaved(); },
+    onError: (e: Error) => setErrEdit(e.message || "Error desconocido"),
   });
 
   if (isEditing) {
@@ -377,6 +379,11 @@ function UsuarioRow({
               </button>
             </div>
           </div>
+          {errEdit && (
+            <div className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta">
+              {errEdit}
+            </div>
+          )}
         </td>
       </tr>
     );
