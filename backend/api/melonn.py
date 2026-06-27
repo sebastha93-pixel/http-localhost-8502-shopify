@@ -447,7 +447,13 @@ def autorizar_despacho(
     """
     Libera el hold de fulfillment en Melonn y autoriza el despacho del pedido.
     Equivalente al botón "Authorize dispatch" en la UI de Melonn.
-    Registra automáticamente una acción de auditoría en Supabase.
+
+    GATE de workflow: requiere que ANTES exista en cod_acciones:
+      - contacto_at NO NULL (asesor contactó al cliente)
+      - respuesta = 'aprobacion' (cliente aprobó el envío)
+
+    Esto evita despachar pedidos sin confirmación previa del cliente,
+    causa #1 de devoluciones y contraentregas rechazadas.
     """
     import sys
     from pathlib import Path
@@ -456,6 +462,52 @@ def autorizar_despacho(
         sys.path.insert(0, str(_SRC))
     import melonn_client as mc
     import memoria
+
+    # ── Verificar workflow obligatorio ──────────────────────────────────
+    # Buscamos la fila en cod_acciones para esta orden. Si no existe o
+    # respuesta no es 'aprobacion', rechazamos con 409.
+    from backend.services import revenue_db as _rdb
+    sb = _rdb._sb()
+    if sb is not None:
+        try:
+            r = (sb.table("cod_acciones")
+                   .select("contacto_at,respuesta,contacto_via")
+                   .eq("orden_melonn", orden_melonn)
+                   .limit(1)
+                   .execute())
+            row = (r.data or [None])[0]
+            contacto_at = (row or {}).get("contacto_at")
+            respuesta   = (row or {}).get("respuesta")
+            if not contacto_at:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Contacta al cliente (Llamar o WhatsApp) antes de autorizar el despacho.",
+                )
+            if respuesta == "no_contesta":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Cliente no contestó. Vuelve a contactarlo antes de autorizar.",
+                )
+            if respuesta == "rechazo":
+                raise HTTPException(
+                    status_code=409,
+                    detail="El cliente rechazó el pedido. No se puede autorizar el despacho.",
+                )
+            if respuesta != "aprobacion":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Marca la respuesta del cliente (Acuerdo / No contesta / Rechazo) antes de autorizar.",
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            # Si la tabla no existe aún (DDL pendiente), no bloqueamos —
+            # log warning y continuamos. Pero esto NO debería pasar en prod.
+            err = str(e)
+            if "does not exist" in err or "42P01" in err:
+                log.warning(f"cod_acciones tabla ausente — skip gate ({orden_melonn})")
+            else:
+                log.warning(f"Error chequeando workflow cod_acciones: {err[:200]}")
 
     try:
         ok, mensaje = mc.release_hold_fulfillment(orden_melonn)

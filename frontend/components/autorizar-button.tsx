@@ -1,17 +1,25 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Pedido } from "@/lib/types";
 import { useAuth } from "@/components/auth-provider";
 import { puedeEscribir } from "@/lib/auth";
-import { CheckCircle, Loader2, AlertCircle, Send } from "lucide-react";
+import { CheckCircle, Loader2, AlertCircle, Send, Lock } from "lucide-react";
 
 interface AutorizarResponse {
   ok: boolean;
   mensaje: string;
   orden_melonn: string;
+}
+
+interface AccionFlow {
+  ok?: boolean;
+  existe?: boolean;
+  contacto_at?: string | null;
+  contacto_via?: "llamada" | "mensaje" | null;
+  respuesta?: "aprobacion" | "no_contesta" | "rechazo" | null;
 }
 
 export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
@@ -23,10 +31,24 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
   // Botón oculto si el usuario es solo lectura
   if (!puedeEscribir(user)) return null;
 
+  const orden = pedido.orden_melonn;
+
+  // Estado del workflow (contacto + respuesta).
+  // Solo autorizar se permite si respuesta === "aprobacion".
+  const flowQ = useQuery<AccionFlow>({
+    queryKey: ["cod-accion", orden],
+    queryFn: () => api.get(`/api/cod-acciones/${orden}`),
+    enabled: !!orden,
+    staleTime: 5_000,
+  });
+
+  const flow = flowQ.data;
+  const contactado = !!flow?.contacto_at;
+  const respuesta = flow?.respuesta;
+  const aprobado = respuesta === "aprobacion";
+
   const mutation = useMutation({
     mutationFn: () => {
-      // Melonn requiere external_order_number (orden_tienda) para release-hold.
-      // Si no hay, fallback al M-id (el backend resuelve).
       const id = pedido.orden_tienda || pedido.orden_melonn;
       return api.post<AutorizarResponse>(
         `/api/melonn/pedidos/${id}/autorizar-despacho`,
@@ -35,8 +57,6 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
     onSuccess: (data) => {
       setFeedback("ok");
       setMsg(data.mensaje);
-      // Invalidación AGRESIVA inmediata — el backend ya refrescó el pedido
-      // en caché antes de responder, así que esto es seguro.
       qc.invalidateQueries({ queryKey: ["melonn"] });
       qc.invalidateQueries({ queryKey: ["metricas"] });
     },
@@ -68,9 +88,61 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
     );
   }
 
-  // Confirmación inline (NO confirm() nativo) — iOS Safari invalida los
-  // diálogos nativos cuando el user activation se gastó en un tel:/wa.me
-  // previo, lo que hacía que el botón Autorizar pareciera no responder.
+  // ── GATE: bloquear si no hay contacto previo o respuesta no aprobada ──
+  // El cliente debe haber sido contactado Y haber dado acuerdo antes de
+  // autorizar el despacho. Esto evita despachar pedidos sin confirmar
+  // (causa #1 de devoluciones y contraentregas rechazadas).
+  if (!contactado) {
+    return (
+      <div className="inline-flex flex-col items-end gap-0.5">
+        <button
+          disabled
+          title="Toca el pedido para abrir el detalle y contactar al cliente primero"
+          className="inline-flex items-center gap-1.5 rounded-md bg-concrete border border-border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-graphite cursor-not-allowed"
+        >
+          <Lock className="h-3 w-3" /> Contactar primero
+        </button>
+        <span className="text-[0.6rem] text-graphite">Llama o escribe por WhatsApp</span>
+      </div>
+    );
+  }
+  if (respuesta === "no_contesta") {
+    return (
+      <div className="inline-flex flex-col items-end gap-0.5">
+        <button
+          disabled
+          title="El cliente no contestó. Vuelve a intentar contactarlo."
+          className="inline-flex items-center gap-1.5 rounded-md bg-concrete border border-border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-graphite cursor-not-allowed"
+        >
+          <Lock className="h-3 w-3" /> Sin respuesta
+        </button>
+        <span className="text-[0.6rem] text-graphite">Vuelve a contactar</span>
+      </div>
+    );
+  }
+  if (respuesta === "rechazo") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-semibold text-rust">
+        <AlertCircle className="h-3.5 w-3.5" /> Cliente rechazó
+      </span>
+    );
+  }
+  if (!aprobado) {
+    return (
+      <div className="inline-flex flex-col items-end gap-0.5">
+        <button
+          disabled
+          title="Marca la respuesta del cliente en el panel"
+          className="inline-flex items-center gap-1.5 rounded-md bg-concrete border border-border px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-graphite cursor-not-allowed"
+        >
+          <Lock className="h-3 w-3" /> Falta respuesta
+        </button>
+        <span className="text-[0.6rem] text-graphite">Acuerdo / No contesta / Rechazó</span>
+      </div>
+    );
+  }
+
+  // Confirmación inline
   if (feedback === "confirm") {
     return (
       <div className="inline-flex items-center gap-1.5">
@@ -91,6 +163,7 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
     );
   }
 
+  // Cliente aprobó → botón habilitado
   return (
     <button
       onClick={() => {
