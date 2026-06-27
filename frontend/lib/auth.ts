@@ -44,12 +44,38 @@ export const ROL_LABEL: Record<Rol, string> = {
   lectura:  "Solo lectura",  // legacy
 };
 
-export const MODULOS = [
-  "centro_control", "logistica", "contraentrega", "envios", "b2b",
-  "devoluciones", "incidencias", "historico", "finanzas", "comercial",
-  "inventario", "revenue", "inteligencia", "configuracion", "usuarios",
-  "auditoria",
-] as const;
+// Grupos de permisos — agrupados por afinidad operativa para que el admin
+// no tenga que dar permiso uno por uno a cada categoría.
+export const GRUPOS_PERMISOS = {
+  centro_control: ["centro_control"],
+  operaciones:    ["logistica", "envios", "devoluciones", "incidencias", "historico", "b2b"],
+  contraentrega:  ["contraentrega"],
+  comercial:      ["comercial", "revenue", "inteligencia"],
+  inventario:     ["inventario"],
+  finanzas:       ["finanzas"],
+  administracion: ["configuracion", "usuarios", "auditoria"],
+} as const;
+
+export const GRUPOS = Object.keys(GRUPOS_PERMISOS) as Array<keyof typeof GRUPOS_PERMISOS>;
+
+export const GRUPO_LABEL: Record<string, string> = {
+  centro_control: "Centro de control",
+  operaciones:    "Operaciones (logística, envíos, devoluciones, incidencias, histórico, B2B)",
+  contraentrega:  "Contraentrega",
+  comercial:      "Comercial & Revenue (ventas, leads, inteligencia)",
+  inventario:     "Inventario",
+  finanzas:       "Finanzas",
+  administracion: "Administración (configuración, usuarios, auditoría)",
+};
+
+// Mapping inverso módulo → grupo (para resolver permisos al chequear).
+const _MODULO_A_GRUPO: Record<string, string> = {};
+for (const [grupo, modulos] of Object.entries(GRUPOS_PERMISOS)) {
+  for (const m of modulos) _MODULO_A_GRUPO[m] = grupo;
+}
+
+// Lista plana retro-compat (de cuando había permisos por módulo).
+export const MODULOS = Object.values(GRUPOS_PERMISOS).flat() as readonly string[];
 
 export const MODULO_LABEL: Record<string, string> = {
   centro_control: "Centro de control",
@@ -94,9 +120,15 @@ export function tienePermiso(user: User | null | undefined, modulo: string, acci
   if (user.rol === "admin") return true;
   if (user.rol === "lector" || user.rol === "lectura") return accion === "ver";
   if (user.rol === "user") {
-    const acciones = user.permisos?.[modulo];
-    if (Array.isArray(acciones)) return acciones.includes(accion);
-    if (acciones && typeof acciones === "object") return !!(acciones as Record<string, boolean>)[accion];
+    // Buscar por GRUPO primero (resolución módulo → grupo) y luego por
+    // el módulo directo como fallback (permisos viejos por módulo).
+    const grupo = _MODULO_A_GRUPO[modulo];
+    const candidatos = [grupo, modulo].filter(Boolean) as string[];
+    for (const k of candidatos) {
+      const acciones = user.permisos?.[k];
+      if (Array.isArray(acciones) && acciones.includes(accion)) return true;
+      if (acciones && typeof acciones === "object" && (acciones as Record<string, boolean>)[accion]) return true;
+    }
     return false;
   }
   // Legacy: operador puede ver+modificar pero no borrar

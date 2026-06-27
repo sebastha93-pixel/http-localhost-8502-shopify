@@ -51,13 +51,27 @@ ROLES = ("admin", "lector", "user")
 # lectura  → lector
 ROLES_LEGACY = {"operador": "user", "lectura": "lector"}
 
-# Módulos disponibles para permisos granulares.
-MODULOS = (
-    "centro_control", "logistica", "contraentrega", "envios", "b2b",
-    "devoluciones", "incidencias", "historico", "finanzas", "comercial",
-    "inventario", "revenue", "inteligencia", "configuracion", "usuarios",
-    "auditoria",
-)
+# Grupos de permisos — agrupados por afinidad operativa para que el
+# administrador no tenga que dar permiso uno por uno a cada módulo.
+# El permiso se asigna al GRUPO, y el helper resuelve módulo→grupo.
+MODULOS_GRUPOS = {
+    "centro_control":   ["centro_control"],
+    "operaciones":      ["logistica", "envios", "devoluciones", "incidencias", "historico", "b2b"],
+    "contraentrega":    ["contraentrega"],
+    "comercial":        ["comercial", "revenue", "inteligencia"],
+    "inventario":       ["inventario"],
+    "finanzas":         ["finanzas"],
+    "administracion":   ["configuracion", "usuarios", "auditoria"],
+}
+
+# Lista de grupos (lo que se expone en el formulario de permisos).
+GRUPOS = tuple(MODULOS_GRUPOS.keys())
+
+# Lista plana de todos los módulos individuales (retro-compat).
+MODULOS = tuple(m for grupo in MODULOS_GRUPOS.values() for m in grupo)
+
+# Mapping inverso: módulo → grupo, para resolver permisos al chequear.
+_MODULO_A_GRUPO = {m: g for g, mods in MODULOS_GRUPOS.items() for m in mods}
 
 ACCIONES = ("ver", "modificar", "borrar")
 
@@ -214,11 +228,18 @@ def tiene_permiso(usuario: dict, modulo: str, accion: str) -> bool:
         permisos = usuario.get("permisos") or {}
         if not isinstance(permisos, dict):
             return False
-        acciones_modulo = permisos.get(modulo) or []
-        if isinstance(acciones_modulo, list):
-            return accion in acciones_modulo
-        if isinstance(acciones_modulo, dict):
-            return bool(acciones_modulo.get(accion))
+        # Buscar primero por grupo (modulo → grupo), luego por módulo
+        # individual (para compat con permisos viejos por módulo).
+        grupo = _MODULO_A_GRUPO.get(modulo)
+        candidatos = [k for k in (grupo, modulo) if k]
+        for k in candidatos:
+            acciones = permisos.get(k)
+            if acciones is None:
+                continue
+            if isinstance(acciones, list) and accion in acciones:
+                return True
+            if isinstance(acciones, dict) and acciones.get(accion):
+                return True
         return False
     # Roles viejos retro-compat
     if usuario.get("rol") == "operador":

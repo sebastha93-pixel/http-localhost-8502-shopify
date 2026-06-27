@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
 import {
-  ROL_LABEL, esAdmin, MODULOS, MODULO_LABEL, ACCIONES, ACCION_LABEL,
+  ROL_LABEL, esAdmin, GRUPOS, GRUPO_LABEL, ACCIONES, ACCION_LABEL,
   type Rol, type Accion,
 } from "@/lib/auth";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
@@ -26,11 +26,11 @@ interface Usuario {
 
 const ROLES_NUEVOS: Rol[] = ["admin", "lector", "user"];
 
-// Preset por defecto cuando se crea un user: solo ver en todos los módulos.
+// Preset por defecto cuando se crea un user: solo ver en todos los grupos.
 // El admin lo ajusta luego con la matriz.
 function permisosPorDefecto(): Record<string, string[]> {
   const p: Record<string, string[]> = {};
-  for (const m of MODULOS) p[m] = ["ver"];
+  for (const g of GRUPOS) p[g] = ["ver"];
   return p;
 }
 
@@ -207,8 +207,8 @@ function PermisosMatrix({
   permisos: Record<string, string[]>;
   onChange: (p: Record<string, string[]>) => void;
 }) {
-  function toggle(modulo: string, accion: Accion) {
-    const actual = new Set(permisos[modulo] || []);
+  function toggle(grupo: string, accion: Accion) {
+    const actual = new Set(permisos[grupo] || []);
     if (actual.has(accion)) {
       actual.delete(accion);
       // Si quitan "ver", también quitar las acciones de escritura
@@ -222,17 +222,17 @@ function PermisosMatrix({
       // Si marcan modificar/borrar, asegurar que "ver" esté.
       if (accion !== "ver") actual.add("ver");
     }
-    onChange({ ...permisos, [modulo]: Array.from(actual) });
+    onChange({ ...permisos, [grupo]: Array.from(actual) });
   }
 
   function presetTodo() {
     const p: Record<string, string[]> = {};
-    for (const m of MODULOS) p[m] = ["ver", "modificar"];
+    for (const g of GRUPOS) p[g] = ["ver", "modificar"];
     onChange(p);
   }
   function presetSoloVer() {
     const p: Record<string, string[]> = {};
-    for (const m of MODULOS) p[m] = ["ver"];
+    for (const g of GRUPOS) p[g] = ["ver"];
     onChange(p);
   }
   function presetNada() {
@@ -243,7 +243,7 @@ function PermisosMatrix({
     <div className="border border-border rounded-sm bg-cloud/30">
       <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
         <p className="text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-ink-900">
-          Permisos por módulo
+          Permisos por área
         </p>
         <div className="flex items-center gap-2">
           <button type="button" onClick={presetSoloVer} className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite hover:text-ink-900">
@@ -262,7 +262,7 @@ function PermisosMatrix({
       <table className="w-full text-sm">
         <thead className="bg-card border-b border-border">
           <tr>
-            <th className="px-4 py-2 text-left text-[0.6rem] font-semibold uppercase tracking-[0.1em] text-graphite">Módulo</th>
+            <th className="px-4 py-2 text-left text-[0.6rem] font-semibold uppercase tracking-[0.1em] text-graphite">Área</th>
             {ACCIONES.map((a) => (
               <th key={a} className="px-3 py-2 text-center text-[0.6rem] font-semibold uppercase tracking-[0.1em] text-graphite">
                 {ACCION_LABEL[a]}
@@ -271,18 +271,20 @@ function PermisosMatrix({
           </tr>
         </thead>
         <tbody>
-          {MODULOS.map((m) => {
-            const acciones = permisos[m] || [];
+          {GRUPOS.map((g) => {
+            const acciones = permisos[g] || [];
             return (
-              <tr key={m} className="border-b border-border/40 hover:bg-card/60">
-                <td className="px-4 py-1.5 text-sm text-ink-900">{MODULO_LABEL[m] || m}</td>
+              <tr key={g} className="border-b border-border/40 hover:bg-card/60">
+                <td className="px-4 py-2 text-sm text-ink-900 max-w-[420px]">
+                  <div className="font-medium">{GRUPO_LABEL[g] || g}</div>
+                </td>
                 {ACCIONES.map((a) => (
-                  <td key={a} className="px-3 py-1.5 text-center">
+                  <td key={a} className="px-3 py-2 text-center">
                     <input
                       type="checkbox"
                       checked={acciones.includes(a)}
-                      onChange={() => toggle(m, a)}
-                      className="rounded border-graphite/40 cursor-pointer"
+                      onChange={() => toggle(g, a)}
+                      className="rounded border-graphite/40 cursor-pointer h-4 w-4"
                     />
                   </td>
                 ))}
@@ -292,7 +294,7 @@ function PermisosMatrix({
         </tbody>
       </table>
       <p className="px-4 py-2 text-[0.62rem] text-graphite italic border-t border-border">
-        "Modificar" y "Borrar" implican "Ver" automáticamente. Borrar es destructivo: úsalo solo cuando sea necesario.
+        Cada área agrupa varios módulos. "Modificar" y "Borrar" implican "Ver" automáticamente. Borrar es destructivo: úsalo solo cuando sea necesario.
       </p>
     </div>
   );

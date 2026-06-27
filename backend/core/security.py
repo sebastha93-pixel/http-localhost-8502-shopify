@@ -141,12 +141,20 @@ def _check_permiso(user: CurrentUser, modulo: str, accion: str) -> bool:
     if rol == "lector":
         return accion == "ver"
     if rol == "user":
+        # Importación local para evitar ciclo con services.
+        from backend.services.usuarios import MODULOS_GRUPOS
         permisos = user.permisos or {}
-        acciones = permisos.get(modulo) or []
-        if isinstance(acciones, list):
-            return accion in acciones
-        if isinstance(acciones, dict):
-            return bool(acciones.get(accion))
+        # Resolver modulo → grupo, chequear ambos.
+        modulo_a_grupo = {m: g for g, mods in MODULOS_GRUPOS.items() for m in mods}
+        candidatos = [modulo_a_grupo.get(modulo), modulo]
+        for k in candidatos:
+            if not k:
+                continue
+            acciones = permisos.get(k)
+            if isinstance(acciones, list) and accion in acciones:
+                return True
+            if isinstance(acciones, dict) and acciones.get(accion):
+                return True
         return False
     # Roles legacy
     if rol == "operador":

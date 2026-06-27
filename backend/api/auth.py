@@ -107,7 +107,9 @@ def catalogo_permisos(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     """Catálogo de roles, módulos y acciones disponibles para el formulario."""
     return {
         "roles": list(svc.ROLES),
-        "modulos": list(svc.MODULOS),
+        "modulos": list(svc.MODULOS),       # plana, retro-compat
+        "grupos": list(svc.GRUPOS),         # nuevos (lo que se muestra en UI)
+        "grupos_detalle": svc.MODULOS_GRUPOS,  # mapping grupo → módulos
         "acciones": list(svc.ACCIONES),
     }
 

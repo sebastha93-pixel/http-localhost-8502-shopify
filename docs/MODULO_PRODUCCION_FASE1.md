@@ -202,8 +202,11 @@ Tres documentos funcionan como **formato** (pantalla de captura): **Orden de Ing
 ### Hoja "Órdenes de Ingreso" (nivel rollo)
 `textilera · numero_documento · tipo_documento · fecha · orden_compra · numero_rollo · serial · lote_fabrica · tono · referencia_tela · descripcion_tela · ancho_cm · metros · costo_metro_cop · codigo_interno (sistema) · barcode (sistema)`
 
-### Hoja "Precosteo Referencias"
-`codigo_referencia · nombre · consumo_tela_prenda_m · costo_tela_cop · detalle_insumos · costo_insumos_cop · costo_confeccion_cop · costo_lavanderia_cop · costo_total_prenda_cop (fórmula) · precio_venta_cop · margen_cop (fórmula) · margen_pct (fórmula) · foto_link_opcional · estado_autorizacion (sistema) · autorizado_por (sistema) · fecha_autorizacion (sistema)`
+### Hoja "Precosteo (formato)"
+Espejo del formato real 14500-1: cabecera (REF, nombre, tela, color, foto) + tabla de líneas
+`categoria · item · valor_unitario · cantidad · iva · total_sin_iva (fórmula) · total_con_iva (fórmula)`,
+y al pie `COSTO TOTAL (sin/con IVA)` y `PRECIO SUGERIDO DE VENTA` (por margen).
+Al firmar, la fila resumen se archiva en **Histórico Precosteo** y el formato se limpia.
 
 ---
 
