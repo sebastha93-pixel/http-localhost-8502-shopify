@@ -122,6 +122,41 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
   const tel = (pedido.telefono_comprador || "").replace(/\D/g, "");
   const currentUser = user?.nombre || "Sin identificar";
 
+  // ── Detectar estado del pedido para decidir qué flow mostrar ──
+  // Pendiente = aún no se ha despachado (estado_melonn_code 26/29) y sin novedad
+  // Novedad = orden con problemas (es_novedad_visible)
+  // Otros = en proceso, tránsito, entregado → mostrar todo normal
+  const codeNum = pedido.estado_melonn_code ?? 0;
+  const tieneNovedad = !!pedido.es_novedad_visible;
+  const esPendiente = [26, 29].includes(codeNum) && !tieneNovedad;
+  // Sin novedad y aún no entregado → restringir acciones (solo COD response flow).
+  // Las acciones completas (escalado, devolución, gestión trans) solo en novedad.
+  const mostrarAccionesCompletas = tieneNovedad;
+
+  // ── Workflow COD: estado actual de contacto + respuesta ──
+  const accionFlowQ = useQuery<any>({
+    queryKey: ["cod-accion", orden],
+    queryFn: () => api.get(`/api/cod-acciones/${orden}`),
+    enabled: !!orden && esPendiente,
+    staleTime: 5_000,
+  });
+
+  const contactoMut = useMutation({
+    mutationFn: (via: "llamada" | "mensaje") =>
+      api.post(`/api/cod-acciones/${orden}/contacto`, { via }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["cod-accion", orden] }),
+  });
+
+  const respuestaMut = useMutation({
+    mutationFn: (valor: "aprobacion" | "no_contesta" | "rechazo") =>
+      api.post(`/api/cod-acciones/${orden}/respuesta`, { valor }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["cod-accion", orden] }),
+  });
+
+  const flowData = accionFlowQ.data;
+  const contactado = !!flowData?.contacto_at;
+  const respuesta = flowData?.respuesta;
+
   return (
     <div className="bg-white border-2 border-steel/30 rounded-lg shadow-lg overflow-hidden">
       {/* Header */}
@@ -193,14 +228,27 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
           {tel && (
             <div className="flex items-center gap-2 rounded-md bg-concrete/50 px-3 py-2">
               <span className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Contactar</span>
-              <a href={`tel:+57${tel}`} className="inline-flex items-center gap-1 text-sm font-semibold text-ink hover:text-navy">
+              <a
+                href={`tel:+57${tel}`}
+                onClick={() => { if (esPendiente && canWrite) contactoMut.mutate("llamada"); }}
+                className={`inline-flex items-center gap-1 text-sm font-semibold transition-colors ${
+                  esPendiente && flowData?.contacto_via === "llamada"
+                    ? "text-teal"
+                    : "text-ink hover:text-navy"
+                }`}
+              >
                 <Phone className="h-3.5 w-3.5" /> Llamar
               </a>
               <a
                 href={`https://wa.me/57${tel}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-sm font-semibold text-teal hover:text-ink"
+                onClick={() => { if (esPendiente && canWrite) contactoMut.mutate("mensaje"); }}
+                className={`inline-flex items-center gap-1 text-sm font-semibold transition-colors ${
+                  esPendiente && flowData?.contacto_via === "mensaje"
+                    ? "text-sage"
+                    : "text-teal hover:text-ink"
+                }`}
               >
                 <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
               </a>
@@ -208,11 +256,68 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
             </div>
           )}
 
+          {/* Respuesta del cliente (solo en Pendientes, después de contactar) */}
+          {esPendiente && canWrite && contactado && !respuesta && (
+            <div className="rounded-md border border-navy/20 bg-navy/5 px-3 py-3 space-y-2">
+              <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">
+                ¿Cuál fue la respuesta del cliente?
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => respuestaMut.mutate("aprobacion")}
+                  disabled={respuestaMut.isPending}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-teal/40 bg-white px-3 py-1.5 text-xs font-semibold text-teal hover:bg-teal/10 disabled:opacity-50"
+                >
+                  <CheckCircle className="h-3 w-3" /> Acuerdo cliente
+                </button>
+                <button
+                  onClick={() => respuestaMut.mutate("no_contesta")}
+                  disabled={respuestaMut.isPending}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-white px-3 py-1.5 text-xs font-semibold text-graphite hover:bg-concrete disabled:opacity-50"
+                >
+                  <X className="h-3 w-3" /> No contesta
+                </button>
+                <button
+                  onClick={() => respuestaMut.mutate("rechazo")}
+                  disabled={respuestaMut.isPending}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-rust/40 bg-white px-3 py-1.5 text-xs font-semibold text-rust hover:bg-rust/10 disabled:opacity-50"
+                >
+                  <AlertCircle className="h-3 w-3" /> Rechazó pedido
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Estado de respuesta ya marcada */}
+          {esPendiente && respuesta && (
+            <div className={`rounded-md border px-3 py-2 ${
+              respuesta === "aprobacion" ? "border-teal/40 bg-teal/5" :
+              respuesta === "rechazo" ? "border-rust/40 bg-rust/5" :
+              "border-border bg-concrete/40"
+            }`}>
+              <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Respuesta cliente</p>
+              <p className="text-sm font-semibold text-ink">
+                {respuesta === "aprobacion" ? "✓ Acuerdo cliente — listo para autorizar despacho" :
+                 respuesta === "rechazo"    ? "✗ Cliente rechazó el pedido" :
+                                              "⏳ Cliente no contestó — vuelve a intentar"}
+              </p>
+            </div>
+          )}
+
+          {/* Hint si todavía no se ha contactado en Pendiente */}
+          {esPendiente && !contactado && canWrite && (
+            <p className="text-xs text-graphite italic px-1">
+              💡 Contacta al cliente (Llamar o WhatsApp) antes de autorizar el despacho.
+            </p>
+          )}
+
           {/* Historial del cliente (Shopify) — base para decidir autorizar/exigir prepago */}
           <ClienteHistorial email={pedido.email_comprador as string} telefono={pedido.telefono_comprador} />
 
-          {/* Envío: transportadora + guía (editable) + acceso directo */}
-          <EnvioInfo pedido={pedido} />
+          {/* Envío y rastreo: SOLO desde tránsito en adelante o cuando tiene novedad.
+              En Pendientes/En proceso ocultamos las transportadoras porque el pedido
+              aún no se ha despachado y mostrar enlaces de rastreo es engañoso. */}
+          {(!esPendiente || tieneNovedad) && <EnvioInfo pedido={pedido} />}
 
           {/* Productos — lista completa si hay varios */}
           <ProductosPedido pedido={pedido} />
@@ -231,10 +336,12 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
             </div>
           )}
 
-          {/* Acciones rápidas — solo si tiene permisos */}
-          {canWrite && (
+          {/* Acciones de gestión — SOLO en pedidos con novedad (escalado, devolución,
+              gestión transportadora, etc.). En pedidos pendientes/normales sin novedad
+              estos botones no aplican porque aún no hay un problema que gestionar. */}
+          {canWrite && mostrarAccionesCompletas && (
             <div>
-              <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-2">Marcar acción</p>
+              <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-2">Marcar acción (gestión de novedad)</p>
               <p className="text-[0.65rem] text-graphite mb-2">
                 Registrado como: <span className="font-semibold text-ink">{currentUser}</span>
               </p>

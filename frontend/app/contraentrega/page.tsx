@@ -73,7 +73,7 @@ export default function ContraentregaPage() {
             emptyMessage="Sin pedidos pendientes de despacho."
             columns={["nivel", "orden", "cliente", "telefono", "producto", "ciudad", "dias", "valor", "estado"]}
             selectable
-            renderAction={(p) => <PendientesCodFlow pedido={p} />}
+            renderAction={(p) => <AutorizarDespachoButton pedido={p} />}
           />
         </TabsContent>
         <TabsContent value="proceso">

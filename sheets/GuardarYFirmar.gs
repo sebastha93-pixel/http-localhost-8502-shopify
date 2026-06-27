@@ -1,57 +1,135 @@
 /**
- * MALE'DENIM OS — Guardar y firmar (reset a 0 + archivar)
+ * MALE'DENIM OS — Acciones de la plantilla de producción
  *
- * Replica en Google Sheets lo que el módulo hace automáticamente:
- * al firmar un precosteo, archiva el formato en "Histórico Precosteo"
- * y limpia el formato para el siguiente.
+ *  • Guardar y firmar precosteo   → archiva en "Histórico Precosteo" y limpia el formato.
+ *  • Imprimir etiquetas de rollos → abre una ventana con los códigos de barra (Code 128) y un botón Imprimir.
+ *  • Firmar orden de corte         → archiva en "Histórico Cortes", registra el corte (descuenta inventario) y limpia.
  *
- * INSTALAR:
- *   1) Sube Produccion_Sheet_Plantilla.xlsx a Google Drive y ábrelo como Google Sheet.
- *   2) Extensiones → Apps Script.
- *   3) Borra lo que haya y pega TODO este archivo. Guarda.
- *   4) Recarga la hoja. Aparece el menú "MALE'DENIM" arriba.
- *   5) Llena el Precosteo y usa: MALE'DENIM → Guardar y firmar precosteo.
+ * INSTALAR: Extensiones → Apps Script → pega este archivo → Guarda → recarga la hoja.
+ * (Para imprimir etiquetas NO necesitas instalar ninguna fuente: el barcode se genera solo.)
  */
 
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu("MALE'DENIM")
     .addItem('Guardar y firmar precosteo', 'guardarYFirmarPrecosteo')
+    .addSeparator()
+    .addItem('Imprimir etiquetas de rollos', 'imprimirEtiquetas')
+    .addSeparator()
+    .addItem('Firmar orden de corte', 'firmarOrdenCorte')
     .addToUi();
 }
 
+/* ───────────────────────── PRECOSTEO ───────────────────────── */
 function guardarYFirmarPrecosteo() {
   var ui = SpreadsheetApp.getUi();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var f  = ss.getSheetByName('Precosteo (formato)');
   var h  = ss.getSheetByName('Histórico Precosteo');
   if (!f || !h) { ui.alert('Faltan las hojas "Precosteo (formato)" o "Histórico Precosteo".'); return; }
-
   var ref = f.getRange('B2').getValue();
   if (!ref) { ui.alert('Falta la REF del precosteo.'); return; }
-
   var estado = String(f.getRange('B38').getValue()).toLowerCase();
   if (estado !== 'autorizada') {
-    var r = ui.alert('El estado no es "autorizada". ¿Archivar de todas formas?', ui.ButtonSet.YES_NO);
+    var r = ui.alert('El estado no es "Autorizada". ¿Archivar de todas formas?', ui.ButtonSet.YES_NO);
     if (r !== ui.Button.YES) return;
   }
-
-  // 1) Archivar la fila resumen en el histórico
-  h.appendRow([
-    new Date(),                    // fecha_firma
-    ref,                           // ref
-    f.getRange('D2').getValue(),   // nombre
-    f.getRange('B3').getValue(),   // tela
-    f.getRange('D3').getValue(),   // color
-    f.getRange('F29').getValue(),  // costo_total_sin_iva
-    f.getRange('G29').getValue(),  // costo_total_con_iva
-    f.getRange('B34').getValue(),  // precio_venta_con_iva (primer margen)
-    f.getRange('D38').getValue()   // autorizado_por
-  ]);
-
-  // 2) Limpiar el formato a 0 (cabecera, valores/cantidades de las líneas, y autorización)
+  h.appendRow([ new Date(), ref,
+    f.getRange('D2').getValue(), f.getRange('B3').getValue(), f.getRange('D3').getValue(),
+    f.getRange('F29').getValue(), f.getRange('G29').getValue(), f.getRange('B34').getValue(),
+    f.getRange('D38').getValue() ]);
   f.getRangeList(['B2','D2','G2','B3','D3','B38','D38','G38']).clearContent();
   f.getRange('C6:D28').clearContent();
+  ui.alert('Precosteo "' + ref + '" archivado. Formato listo en 0.');
+}
 
-  ui.alert('Precosteo "' + ref + '" archivado en el histórico. Formato listo en 0.');
+/* ───────────────────────── ETIQUETAS (imprime directo) ───────────────────────── */
+function imprimirEtiquetas() {
+  var ui = SpreadsheetApp.getUi();
+  var ing = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Órdenes de Ingreso');
+  if (!ing) { ui.alert('Falta la hoja "Órdenes de Ingreso".'); return; }
+  var last = ing.getLastRow();
+  if (last < 2) { ui.alert('No hay rollos para etiquetar.'); return; }
+  var rows = ing.getRange(2, 1, last - 1, 16).getValues();
+  var labels = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i], code = r[14];               // O = código interno
+    if (!r[0] || !code) continue;
+    labels.push({
+      code: String(code),
+      desc: String(r[10] || ''),                 // K descripción
+      tono: String(r[8] || ''),                  // I tono
+      metros: String(r[12] || ''),               // M metros
+      lote: String(r[7] || ''),                  // H lote
+      fecha: r[3] ? Utilities.formatDate(new Date(r[3]), Session.getScriptTimeZone(), 'yyyy-MM-dd') : ''
+    });
+  }
+  if (!labels.length) { ui.alert('No hay rollos con datos para etiquetar.'); return; }
+  var t = HtmlService.createTemplate(ETIQUETAS_HTML);
+  t.labels = labels;
+  ui.showModalDialog(t.evaluate().setWidth(840).setHeight(640), 'Etiquetas de rollos');
+}
+
+var ETIQUETAS_HTML =
+'<!DOCTYPE html><html><head><meta charset="utf-8">' +
+'<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>' +
+'<style>' +
+'body{font-family:Montserrat,Arial,sans-serif;margin:0;color:#213033}' +
+'.bar{position:sticky;top:0;background:#213033;color:#fff;padding:10px 16px;display:flex;justify-content:space-between;align-items:center}' +
+'.bar button{background:#fff;color:#213033;border:0;padding:8px 16px;font-weight:700;border-radius:4px;cursor:pointer}' +
+'#grid{display:flex;flex-wrap:wrap;gap:10px;padding:14px}' +
+'.lbl{width:250px;border:1px solid #213033;border-radius:6px;padding:10px;box-sizing:border-box;text-align:center}' +
+'.lbl .brand{font-weight:800;font-size:11px;letter-spacing:1px}' +
+'.lbl .code{font-weight:700;font-size:12px;margin:4px 0}' +
+'.lbl .meta{font-size:11px;color:#444;margin-top:4px}' +
+'.lbl .metros{font-weight:700}' +
+'@media print{.bar{display:none}.lbl{page-break-inside:avoid;width:250px}}' +
+'</style></head><body>' +
+'<div class="bar"><strong>Etiquetas de rollos</strong><button onclick="window.print()">Imprimir</button></div>' +
+'<div id="grid"></div>' +
+'<script>' +
+'var DATA = <?!= JSON.stringify(labels) ?>;' +
+'var g=document.getElementById("grid");' +
+'DATA.forEach(function(d,i){' +
+'  var el=document.createElement("div"); el.className="lbl";' +
+'  el.innerHTML=\'<div class="brand">MALE\\u0027DENIM</div>\'+' +
+'    \'<svg id="bc\'+i+\'"></svg>\'+' +
+'    \'<div class="code">\'+d.code+\'</div>\'+' +
+'    \'<div class="meta">\'+d.desc+(d.tono?\' · Tono \'+d.tono:\'\')+\'</div>\'+' +
+'    \'<div class="meta metros">\'+d.metros+\' m\'+(d.lote?\' · Lote \'+d.lote:\'\')+\'</div>\'+' +
+'    \'<div class="meta">\'+d.fecha+\'</div>\';' +
+'  g.appendChild(el);' +
+'});' +
+'DATA.forEach(function(d,i){ JsBarcode("#bc"+i, d.code, {format:"CODE128", height:48, width:1.6, fontSize:12, margin:4}); });' +
+'<\/script></body></html>';
+
+/* ─────────────────────── FIRMAR ORDEN DE CORTE ─────────────────────── */
+function firmarOrdenCorte() {
+  var ui = SpreadsheetApp.getUi();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var oc = ss.getSheetByName('Orden de Corte (formato)');
+  var co = ss.getSheetByName('Cortes');
+  var hc = ss.getSheetByName('Histórico Cortes');
+  if (!oc || !co || !hc) { ui.alert('Faltan hojas: Orden de Corte / Cortes / Histórico Cortes.'); return; }
+  var ref = oc.getRange('B5').getValue();
+  if (!ref) { ui.alert('Falta la Referencia de la prenda.'); return; }
+  var firma = oc.getRange('B31').getValue();
+  var estado = String(oc.getRange('E31').getValue()).toLowerCase();
+  if (!firma || estado !== 'autorizada') {
+    var r = ui.alert('La orden no está firmada/Autorizada. ¿Firmar y registrar de todas formas?', ui.ButtonSet.YES_NO);
+    if (r !== ui.Button.YES) return;
+  }
+  var tela = oc.getRange('B6').getValue();
+  var tono = oc.getRange('D5').getValue();
+  var resp = oc.getRange('B7').getValue();
+  var cons = oc.getRange('B4').getValue();
+  var mv = oc.getRange('E11:E14').getValues(), metros = 0;
+  for (var i = 0; i < mv.length; i++) { var v = Number(mv[i][0]); if (!isNaN(v)) metros += v; }
+  co.appendRow([new Date(), tela, ref, metros, tono, resp]);
+  hc.appendRow([new Date(), cons, ref, tono, tela, metros, resp, firma]);
+  oc.getRangeList(['B4','B5','D5','B6','B7','D7','A27','B31','E31']).clearContent();
+  oc.getRange('A11:E14').clearContent();
+  oc.getRangeList(['B17','D17','B18','D18','B19','D19','B20','D20']).clearContent();
+  oc.getRange('B24:H24').clearContent();
+  ui.alert('Orden de corte "' + (cons || ref) + '" firmada y registrada (' + metros + ' m descontados de ' + tela + '). Formato listo en 0.');
 }

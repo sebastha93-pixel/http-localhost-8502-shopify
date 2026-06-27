@@ -44,7 +44,7 @@ class RespuestaIn(BaseModel):
 
 
 VALID_CONTACTO = {"llamada", "mensaje"}
-VALID_RESPUESTA = {"aprobacion", "no_contesta"}
+VALID_RESPUESTA = {"aprobacion", "no_contesta", "rechazo"}
 
 
 @router.get("/{orden_melonn}")
