@@ -48,24 +48,21 @@ export const ROL_LABEL: Record<Rol, string> = {
 // no tenga que dar permiso uno por uno a cada categoría.
 export const GRUPOS_PERMISOS = {
   centro_control: ["centro_control"],
-  operaciones:    ["logistica", "envios", "devoluciones", "incidencias", "historico", "b2b"],
-  contraentrega:  ["contraentrega"],
-  comercial:      ["comercial", "revenue", "inteligencia"],
-  inventario:     ["inventario"],
+  operaciones:    ["logistica", "envios", "devoluciones", "incidencias",
+                   "historico", "b2b", "contraentrega", "inventario"],
   finanzas:       ["finanzas"],
-  administracion: ["configuracion", "usuarios", "auditoria"],
+  comercial:      ["comercial", "revenue", "inteligencia"],
+  configuracion:  ["configuracion", "usuarios", "auditoria"],
 } as const;
 
 export const GRUPOS = Object.keys(GRUPOS_PERMISOS) as Array<keyof typeof GRUPOS_PERMISOS>;
 
 export const GRUPO_LABEL: Record<string, string> = {
   centro_control: "Centro de control",
-  operaciones:    "Operaciones (logística, envíos, devoluciones, incidencias, histórico, B2B)",
-  contraentrega:  "Contraentrega",
-  comercial:      "Comercial & Revenue (ventas, leads, inteligencia)",
-  inventario:     "Inventario",
+  operaciones:    "Operaciones (logística, envíos, devoluciones, incidencias, histórico, B2B, contraentrega, inventario)",
   finanzas:       "Finanzas",
-  administracion: "Administración (configuración, usuarios, auditoría)",
+  comercial:      "Comercial (ventas, revenue, inteligencia)",
+  configuracion:  "Configuración (configuración general, usuarios, auditoría)",
 };
 
 // Mapping inverso módulo → grupo (para resolver permisos al chequear).

@@ -45,7 +45,7 @@ function guardarYFirmarPrecosteo() {
     f.getRange('D3').getValue(),   // color
     f.getRange('F29').getValue(),  // costo_total_sin_iva
     f.getRange('G29').getValue(),  // costo_total_con_iva
-    f.getRange('D34').getValue(),  // precio_final_con_iva (primer margen)
+    f.getRange('B34').getValue(),  // precio_venta_con_iva (primer margen)
     f.getRange('D38').getValue()   // autorizado_por
   ]);
 

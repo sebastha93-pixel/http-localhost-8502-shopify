@@ -55,13 +55,12 @@ ROLES_LEGACY = {"operador": "user", "lectura": "lector"}
 # administrador no tenga que dar permiso uno por uno a cada módulo.
 # El permiso se asigna al GRUPO, y el helper resuelve módulo→grupo.
 MODULOS_GRUPOS = {
-    "centro_control":   ["centro_control"],
-    "operaciones":      ["logistica", "envios", "devoluciones", "incidencias", "historico", "b2b"],
-    "contraentrega":    ["contraentrega"],
-    "comercial":        ["comercial", "revenue", "inteligencia"],
-    "inventario":       ["inventario"],
-    "finanzas":         ["finanzas"],
-    "administracion":   ["configuracion", "usuarios", "auditoria"],
+    "centro_control": ["centro_control"],
+    "operaciones":    ["logistica", "envios", "devoluciones", "incidencias",
+                       "historico", "b2b", "contraentrega", "inventario"],
+    "finanzas":       ["finanzas"],
+    "comercial":      ["comercial", "revenue", "inteligencia"],
+    "configuracion":  ["configuracion", "usuarios", "auditoria"],
 }
 
 # Lista de grupos (lo que se expone en el formulario de permisos).
