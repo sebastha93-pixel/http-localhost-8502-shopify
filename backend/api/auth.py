@@ -157,4 +157,15 @@ def actualizar_usuario(
         u = svc.actualizar(uid, **campos)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Capturar y devolver el error real (no dejar que FastAPI haga 500
+        # genérico sin CORS headers — el front no puede ver el mensaje).
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error guardando usuario: {type(e).__name__}: {str(e)[:300]}",
+        )
     return _to_out(u)
