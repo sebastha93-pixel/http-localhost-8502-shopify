@@ -9,6 +9,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Pedido } from "@/lib/types";
 import { formatMoneyShort } from "@/lib/utils";
 import { AutorizarDespachoButton } from "@/components/autorizar-button";
+import { PendientesCodFlow } from "@/components/pendientes-cod-flow";
 
 export default function ContraentregaPage() {
   const { data, isLoading, error, refetch, isFetching } = usePedidos();
@@ -72,7 +73,7 @@ export default function ContraentregaPage() {
             emptyMessage="Sin pedidos pendientes de despacho."
             columns={["nivel", "orden", "cliente", "telefono", "producto", "ciudad", "dias", "valor", "estado"]}
             selectable
-            renderAction={(p) => <AutorizarDespachoButton pedido={p} />}
+            renderAction={(p) => <PendientesCodFlow pedido={p} />}
           />
         </TabsContent>
         <TabsContent value="proceso">
@@ -80,7 +81,7 @@ export default function ContraentregaPage() {
             pedidos={groups.proceso}
             showTipoFilter={false}
             emptyMessage="Sin pedidos en proceso."
-            columns={["nivel", "orden", "cliente", "telefono", "producto", "ciudad", "envio", "dias", "valor", "estado"]}
+            columns={["nivel", "orden", "cliente", "telefono", "producto", "ciudad", "dias", "valor", "estado"]}
             selectable
           />
         </TabsContent>
