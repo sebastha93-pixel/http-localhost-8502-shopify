@@ -35,7 +35,9 @@ class UsuarioOut(BaseModel):
     id: str
     email: str
     nombre: str
+    cargo: str = ""
     rol: str
+    permisos: dict = {}
     activo: bool
     creado_en: Optional[str] = None
 
@@ -43,13 +45,17 @@ class UsuarioOut(BaseModel):
 class CrearUsuarioBody(BaseModel):
     email: EmailStr
     nombre: str = Field(min_length=2)
+    cargo: str = ""
     password: str = Field(min_length=8)
-    rol: str = "operador"
+    rol: str = "user"
+    permisos: dict = {}
 
 
 class ActualizarUsuarioBody(BaseModel):
     nombre: Optional[str] = None
+    cargo: Optional[str] = None
     rol: Optional[str] = None
+    permisos: Optional[dict] = None
     activo: Optional[bool] = None
     password: Optional[str] = Field(default=None, min_length=8)
 
@@ -68,7 +74,9 @@ def login(body: LoginBody) -> LoginResponse:
         id=str(u["id"]),
         email=u["email"],
         nombre=u["nombre"],
+        cargo=u.get("cargo") or "",
         rol=u["rol"],
+        permisos=u.get("permisos") or {},
         activo=u["activo"],
     )
     return LoginResponse(access_token=create_access_token(cu), user=cu)
@@ -86,10 +94,22 @@ def _to_out(u: dict) -> UsuarioOut:
         id=str(u["id"]),
         email=u["email"],
         nombre=u["nombre"],
+        cargo=u.get("cargo") or "",
         rol=u["rol"],
+        permisos=u.get("permisos") or {},
         activo=u.get("activo", True),
         creado_en=u.get("creado_en"),
     )
+
+
+@router.get("/usuarios/catalogo")
+def catalogo_permisos(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """Catálogo de roles, módulos y acciones disponibles para el formulario."""
+    return {
+        "roles": list(svc.ROLES),
+        "modulos": list(svc.MODULOS),
+        "acciones": list(svc.ACCIONES),
+    }
 
 
 @router.get("/usuarios", response_model=list[UsuarioOut])
@@ -102,7 +122,7 @@ def crear_usuario(
     body: CrearUsuarioBody,
     _: CurrentUser = Depends(require_role("admin")),
 ) -> UsuarioOut:
-    if body.rol not in svc.ROLES:
+    if body.rol not in svc.ROLES and body.rol not in svc.ROLES_LEGACY:
         raise HTTPException(status_code=400, detail=f"Rol inválido. Permitidos: {list(svc.ROLES)}")
     if svc.obtener_por_email(body.email):
         raise HTTPException(status_code=409, detail="El email ya está registrado")
@@ -110,8 +130,10 @@ def crear_usuario(
         u = svc.crear(
             email=body.email,
             nombre=body.nombre,
+            cargo=body.cargo or "",
             password_hash=hash_password(body.password),
             rol=body.rol,
+            permisos=body.permisos or None,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

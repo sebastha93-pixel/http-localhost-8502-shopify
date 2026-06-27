@@ -69,14 +69,19 @@ Por eso la **unidad de inventario es el rollo**, cada uno con su propio código 
 `fecha_ingreso`, `fecha_ultimo_corte`,
 `estado` (disponible / en_corte / agotado / con_novedad).
 
-### `referencias_precosteo` — referencia de prenda + costeo + autorización
-`codigo_referencia`, `nombre`, `foto_url`,
-`consumo_tela_prenda` (m), `costo_tela`,
-`insumos` (JSON: lista de insumo + costo), `costo_insumos`,
-`costo_confeccion`, `costo_lavanderia`,
-`costo_total_prenda`, `precio_venta`, `margen`,
+### `referencias_precosteo` — cabecera del precosteo (formato)
+`codigo_referencia` (ej. 14500-1), `nombre` (ej. SKINNY OSCURO), `tela`, `color`, `foto_url`,
+`iva_pct` (19), `costo_total_sin_iva`, `costo_total_con_iva`,
+`precio_sugerido_venta`, `margen`,
 `estado` (borrador / autorizada), `autorizada_por`, `fecha_autorizacion`, `bloqueada` (bool).
-**Regla:** al autorizar → `bloqueada = true` e inmutable.
+**Regla:** al autorizar → `bloqueada = true`; cabecera e ítems quedan inmutables.
+
+### `precosteo_items` — líneas del precosteo (una por concepto)
+`referencia_id`, `categoria` (DIRTY JEANS / MP / PROCESO EN MP / PROCESO / INSUMO CONFECCION / INSUMO EMPAQUE / INSUMO TERMINACION / GASTOS FIJOS),
+`item` (ej. PRECIO TELA, FORRO, CONFECCION, CIERRE, BOTON, REMACHE…),
+`valor_unitario`, `cantidad`, `iva`,
+`total_sin_iva` (= valor_unitario × cantidad), `total_con_iva` (= total_sin_iva + iva).
+*Modelado a partir del formato real 14500-1.*
 
 ### `ordenes_corte` — **el formato que da luz verde al cortador**
 `consecutivo` (OC-2026-0001), `referencia_id`, `tono`,

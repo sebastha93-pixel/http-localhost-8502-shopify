@@ -4,7 +4,10 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
-import { ROL_LABEL, esAdmin } from "@/lib/auth";
+import {
+  ROL_LABEL, esAdmin, MODULOS, MODULO_LABEL, ACCIONES, ACCION_LABEL,
+  type Rol, type Accion,
+} from "@/lib/auth";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -14,9 +17,21 @@ interface Usuario {
   id: string;
   email: string;
   nombre: string;
-  rol: "admin" | "operador" | "lectura";
+  cargo?: string;
+  rol: Rol;
+  permisos?: Record<string, string[]>;
   activo: boolean;
   creado_en?: string;
+}
+
+const ROLES_NUEVOS: Rol[] = ["admin", "lector", "user"];
+
+// Preset por defecto cuando se crea un user: solo ver en todos los módulos.
+// El admin lo ajusta luego con la matriz.
+function permisosPorDefecto(): Record<string, string[]> {
+  const p: Record<string, string[]> = {};
+  for (const m of MODULOS) p[m] = ["ver"];
+  return p;
 }
 
 export default function UsuariosPage() {
@@ -83,7 +98,8 @@ export default function UsuariosPage() {
             <thead className="bg-cloud/60 border-b border-border">
               <tr>
                 {[
-                  ["Nombre", "left"], ["Email", "left"], ["Rol", "left"], ["Estado", "left"], ["Acciones", "right"],
+                  ["Nombre", "left"], ["Cargo", "left"], ["Email", "left"],
+                  ["Rol", "left"], ["Estado", "left"], ["Acciones", "right"],
                 ].map(([h, align]) => (
                   <th key={h} className={`px-4 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite text-${align}`}>{h}</th>
                 ))}
@@ -111,51 +127,67 @@ export default function UsuariosPage() {
   );
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// Formulario crear usuario
+// ──────────────────────────────────────────────────────────────────────
+
 function UsuarioForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
   const [email, setEmail] = useState("");
   const [nombre, setNombre] = useState("");
+  const [cargo, setCargo] = useState("");
   const [password, setPassword] = useState("");
-  const [rol, setRol] = useState<Usuario["rol"]>("operador");
+  const [rol, setRol] = useState<Rol>("user");
+  const [permisos, setPermisos] = useState<Record<string, string[]>>(permisosPorDefecto());
   const [err, setErr] = useState("");
 
   const mut = useMutation({
-    mutationFn: () => api.post<Usuario>("/api/auth/usuarios", { email, nombre, password, rol }),
+    mutationFn: () => api.post<Usuario>("/api/auth/usuarios", {
+      email, nombre, cargo, password, rol,
+      permisos: rol === "user" ? permisos : {},
+    }),
     onSuccess,
     onError: (e: Error) => setErr(e.message),
   });
 
   return (
     <Card>
-      <CardContent className="p-5">
-        <p className="section-label mb-3">Crear usuario</p>
+      <CardContent className="p-5 space-y-4">
+        <p className="section-label">Crear usuario</p>
         <form
           onSubmit={(e) => { e.preventDefault(); setErr(""); mut.mutate(); }}
-          className="grid grid-cols-1 md:grid-cols-2 gap-3"
+          className="space-y-4"
         >
-          <Field label="Nombre" value={nombre} onChange={setNombre} required />
-          <Field label="Email" type="email" value={email} onChange={setEmail} required />
-          <Field label="Contraseña (mín. 8)" type="password" value={password} onChange={setPassword} required />
-          <div>
-            <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Rol</label>
-            <select
-              value={rol}
-              onChange={(e) => setRol(e.target.value as Usuario["rol"])}
-              className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
-            >
-              <option value="admin">Administrador</option>
-              <option value="operador">Operador</option>
-              <option value="lectura">Solo lectura</option>
-            </select>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Field label="Nombre completo" value={nombre} onChange={setNombre} required placeholder="ej. Kelly Pérez" />
+            <Field label="Cargo en la empresa" value={cargo} onChange={setCargo} placeholder="ej. Asesora de ventas" />
+            <Field label="Email" type="email" value={email} onChange={setEmail} required />
+            <Field label="Contraseña (mín. 8)" type="password" value={password} onChange={setPassword} required />
+            <div className="md:col-span-2">
+              <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Tipo de acceso</label>
+              <select
+                value={rol}
+                onChange={(e) => setRol(e.target.value as Rol)}
+                className="w-full md:w-1/2 rounded-sm border border-border bg-card px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
+              >
+                <option value="admin">Administrador — acceso total</option>
+                <option value="lector">Lector — solo ver en todos los módulos</option>
+                <option value="user">Usuario — permisos granulares (configurar abajo)</option>
+              </select>
+            </div>
           </div>
 
-          {err && <p className="md:col-span-2 text-sm text-terracotta">{err}</p>}
+          {rol === "user" && (
+            <PermisosMatrix permisos={permisos} onChange={setPermisos} />
+          )}
 
-          <div className="flex justify-end gap-2 md:col-span-2">
+          {err && <p className="text-sm text-terracotta">{err}</p>}
+
+          <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={onClose} className="rounded-sm border border-border bg-card px-4 py-2 text-[0.7rem] font-medium uppercase tracking-[0.12em] text-graphite transition-colors hover:bg-cloud">
               Cancelar
             </button>
             <button type="submit" disabled={mut.isPending} className="rounded-sm bg-navy-600 px-4 py-2 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-white transition-colors hover:bg-navy-700 disabled:opacity-50">
-              {mut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Crear"}
+              {mut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Crear usuario"}
             </button>
           </div>
         </form>
@@ -164,19 +196,130 @@ function UsuarioForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: (
   );
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// Matriz de permisos (módulos × acciones)
+// ──────────────────────────────────────────────────────────────────────
+
+function PermisosMatrix({
+  permisos,
+  onChange,
+}: {
+  permisos: Record<string, string[]>;
+  onChange: (p: Record<string, string[]>) => void;
+}) {
+  function toggle(modulo: string, accion: Accion) {
+    const actual = new Set(permisos[modulo] || []);
+    if (actual.has(accion)) {
+      actual.delete(accion);
+      // Si quitan "ver", también quitar las acciones de escritura
+      // (no tiene sentido modificar sin ver).
+      if (accion === "ver") {
+        actual.delete("modificar");
+        actual.delete("borrar");
+      }
+    } else {
+      actual.add(accion);
+      // Si marcan modificar/borrar, asegurar que "ver" esté.
+      if (accion !== "ver") actual.add("ver");
+    }
+    onChange({ ...permisos, [modulo]: Array.from(actual) });
+  }
+
+  function presetTodo() {
+    const p: Record<string, string[]> = {};
+    for (const m of MODULOS) p[m] = ["ver", "modificar"];
+    onChange(p);
+  }
+  function presetSoloVer() {
+    const p: Record<string, string[]> = {};
+    for (const m of MODULOS) p[m] = ["ver"];
+    onChange(p);
+  }
+  function presetNada() {
+    onChange({});
+  }
+
+  return (
+    <div className="border border-border rounded-sm bg-cloud/30">
+      <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
+        <p className="text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-ink-900">
+          Permisos por módulo
+        </p>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={presetSoloVer} className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite hover:text-ink-900">
+            Solo ver todo
+          </button>
+          <span className="text-graphite">·</span>
+          <button type="button" onClick={presetTodo} className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite hover:text-ink-900">
+            Ver + modificar todo
+          </button>
+          <span className="text-graphite">·</span>
+          <button type="button" onClick={presetNada} className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite hover:text-ink-900">
+            Limpiar
+          </button>
+        </div>
+      </div>
+      <table className="w-full text-sm">
+        <thead className="bg-card border-b border-border">
+          <tr>
+            <th className="px-4 py-2 text-left text-[0.6rem] font-semibold uppercase tracking-[0.1em] text-graphite">Módulo</th>
+            {ACCIONES.map((a) => (
+              <th key={a} className="px-3 py-2 text-center text-[0.6rem] font-semibold uppercase tracking-[0.1em] text-graphite">
+                {ACCION_LABEL[a]}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {MODULOS.map((m) => {
+            const acciones = permisos[m] || [];
+            return (
+              <tr key={m} className="border-b border-border/40 hover:bg-card/60">
+                <td className="px-4 py-1.5 text-sm text-ink-900">{MODULO_LABEL[m] || m}</td>
+                {ACCIONES.map((a) => (
+                  <td key={a} className="px-3 py-1.5 text-center">
+                    <input
+                      type="checkbox"
+                      checked={acciones.includes(a)}
+                      onChange={() => toggle(m, a)}
+                      className="rounded border-graphite/40 cursor-pointer"
+                    />
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="px-4 py-2 text-[0.62rem] text-graphite italic border-t border-border">
+        "Modificar" y "Borrar" implican "Ver" automáticamente. Borrar es destructivo: úsalo solo cuando sea necesario.
+      </p>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Fila de tabla (edición inline)
+// ──────────────────────────────────────────────────────────────────────
+
 function UsuarioRow({
   u, isEditing, isCurrentUser, onEdit, onSaved,
 }: {
   u: Usuario; isEditing: boolean; isCurrentUser: boolean; onEdit: () => void; onSaved: () => void;
 }) {
   const [nombre, setNombre] = useState(u.nombre);
-  const [rol, setRol] = useState(u.rol);
+  const [cargo, setCargo] = useState(u.cargo || "");
+  const [rol, setRol] = useState<Rol>(u.rol);
+  const [permisos, setPermisos] = useState<Record<string, string[]>>(
+    (u.permisos as Record<string, string[]>) || permisosPorDefecto()
+  );
   const [activo, setActivo] = useState(u.activo);
   const [password, setPassword] = useState("");
 
   const mut = useMutation({
     mutationFn: () => {
-      const body: Record<string, unknown> = { nombre, rol, activo };
+      const body: Record<string, unknown> = { nombre, cargo, rol, activo };
+      if (rol === "user") body.permisos = permisos;
       if (password) body.password = password;
       return api.patch<Usuario>(`/api/auth/usuarios/${u.id}`, body);
     },
@@ -186,38 +329,51 @@ function UsuarioRow({
   if (isEditing) {
     return (
       <tr className="border-b border-border bg-steel-300/15">
-        <td className="px-4 py-2">
-          <input value={nombre} onChange={(e) => setNombre(e.target.value)} className="w-full rounded-sm border border-border bg-card px-2 py-1 text-sm" />
-        </td>
-        <td className="px-4 py-2 text-xs text-graphite">{u.email}</td>
-        <td className="px-4 py-2">
-          <select value={rol} onChange={(e) => setRol(e.target.value as Usuario["rol"])} className="rounded-sm border border-border bg-card px-2 py-1 text-sm">
-            <option value="admin">Admin</option>
-            <option value="operador">Operador</option>
-            <option value="lectura">Lectura</option>
-          </select>
-        </td>
-        <td className="px-4 py-2">
-          <label className="flex items-center gap-2 text-xs">
-            <input type="checkbox" checked={activo} onChange={(e) => setActivo(e.target.checked)} disabled={isCurrentUser} />
-            {activo ? "Activo" : "Inactivo"}
-          </label>
-        </td>
-        <td className="px-4 py-2">
-          <div className="flex items-center justify-end gap-2">
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Nueva contraseña (opcional)"
-              className="w-44 rounded-sm border border-border bg-card px-2 py-1 text-xs"
-            />
-            <button onClick={() => mut.mutate()} disabled={mut.isPending} className="rounded-sm bg-navy-600 p-1.5 text-white transition-colors hover:bg-navy-700 disabled:opacity-50" title="Guardar">
-              {mut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-            </button>
-            <button onClick={onEdit} className="rounded-sm border border-border p-1.5 text-graphite transition-colors hover:bg-cloud" title="Cancelar">
-              <X className="h-3 w-3" />
-            </button>
+        <td colSpan={6} className="p-4 space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="mb-1 block text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Nombre</label>
+              <input value={nombre} onChange={(e) => setNombre(e.target.value)} className="w-full rounded-sm border border-border bg-card px-2 py-1 text-sm" />
+            </div>
+            <div>
+              <label className="mb-1 block text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Cargo</label>
+              <input value={cargo} onChange={(e) => setCargo(e.target.value)} placeholder="ej. Asesora" className="w-full rounded-sm border border-border bg-card px-2 py-1 text-sm" />
+            </div>
+            <div>
+              <label className="mb-1 block text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Rol</label>
+              <select value={rol} onChange={(e) => setRol(e.target.value as Rol)} className="w-full rounded-sm border border-border bg-card px-2 py-1 text-sm">
+                <option value="admin">Administrador</option>
+                <option value="lector">Lector</option>
+                <option value="user">Usuario (granular)</option>
+              </select>
+            </div>
+          </div>
+
+          {rol === "user" && (
+            <PermisosMatrix permisos={permisos} onChange={setPermisos} />
+          )}
+
+          <div className="flex items-center justify-between gap-3">
+            <label className="flex items-center gap-2 text-xs">
+              <input type="checkbox" checked={activo} onChange={(e) => setActivo(e.target.checked)} disabled={isCurrentUser} />
+              {activo ? "Activo" : "Inactivo"} {isCurrentUser && <span className="text-[0.6rem] text-graphite">(no puedes desactivarte)</span>}
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Nueva contraseña (opcional)"
+                className="w-52 rounded-sm border border-border bg-card px-2 py-1 text-xs"
+              />
+              <button onClick={() => mut.mutate()} disabled={mut.isPending} className="inline-flex items-center gap-1 rounded-sm bg-navy-600 px-3 py-1.5 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-white transition-colors hover:bg-navy-700 disabled:opacity-50">
+                {mut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                Guardar
+              </button>
+              <button onClick={onEdit} className="rounded-sm border border-border p-1.5 text-graphite transition-colors hover:bg-cloud" title="Cancelar">
+                <X className="h-3 w-3" />
+              </button>
+            </div>
           </div>
         </td>
       </tr>
@@ -229,10 +385,11 @@ function UsuarioRow({
       <td className="px-4 py-3 font-medium text-ink-900">
         {u.nombre} {isCurrentUser && <span className="ml-1 text-[0.6rem] text-steel-500">(tú)</span>}
       </td>
+      <td className="px-4 py-3 text-graphite text-xs">{u.cargo || "—"}</td>
       <td className="px-4 py-3 text-graphite">{u.email}</td>
       <td className="px-4 py-3">
-        <Badge tone={u.rol === "admin" ? "critico" : u.rol === "operador" ? "info" : "neutral"}>
-          {ROL_LABEL[u.rol]}
+        <Badge tone={u.rol === "admin" ? "critico" : (u.rol === "lector" || u.rol === "lectura") ? "neutral" : "info"}>
+          {ROL_LABEL[u.rol] || u.rol}
         </Badge>
       </td>
       <td className="px-4 py-3">
@@ -248,8 +405,8 @@ function UsuarioRow({
 }
 
 function Field({
-  label, value, onChange, type = "text", required = false,
-}: { label: string; value: string; onChange: (v: string) => void; type?: string; required?: boolean }) {
+  label, value, onChange, type = "text", required = false, placeholder = "",
+}: { label: string; value: string; onChange: (v: string) => void; type?: string; required?: boolean; placeholder?: string }) {
   return (
     <div>
       <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
@@ -258,6 +415,7 @@ function Field({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         required={required}
+        placeholder={placeholder}
         minLength={type === "password" ? 8 : undefined}
         className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
       />

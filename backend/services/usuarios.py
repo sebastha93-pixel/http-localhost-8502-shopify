@@ -40,73 +40,192 @@ def _sb() -> Optional[Client]:
         return None
 
 
-ROLES = ("admin", "operador", "lectura")
+# ── Roles principales ───────────────────────────────────────────────────────
+# admin   = acceso total (owner)
+# lector  = solo lectura en todos los módulos
+# user    = permisos granulares por módulo+acción definidos en el campo `permisos`
+ROLES = ("admin", "lector", "user")
+
+# Aliases de retro-compat (usuarios viejos).
+# operador → user (permisos amplios por default)
+# lectura  → lector
+ROLES_LEGACY = {"operador": "user", "lectura": "lector"}
+
+# Módulos disponibles para permisos granulares.
+MODULOS = (
+    "centro_control", "logistica", "contraentrega", "envios", "b2b",
+    "devoluciones", "incidencias", "historico", "finanzas", "comercial",
+    "inventario", "revenue", "inteligencia", "configuracion", "usuarios",
+    "auditoria",
+)
+
+ACCIONES = ("ver", "modificar", "borrar")
+
+# Columnas que SELECT siempre debe pedir (incluye cargo + permisos nuevos).
+_COLS = "id,email,nombre,cargo,rol,permisos,activo,creado_en"
+_COLS_AUTH = "id,email,nombre,cargo,rol,permisos,activo,password_hash"
+
+
+def _normalizar_rol(rol: str) -> str:
+    """Convierte roles viejos a los nuevos."""
+    return ROLES_LEGACY.get(rol, rol)
 
 
 def listar() -> list[dict]:
     sb = _sb()
     if sb is None:
         return []
-    res = (sb.table("usuarios")
-           .select("id,email,nombre,rol,activo,creado_en")
-           .order("creado_en", desc=False)
-           .execute())
-    return res.data or []
+    try:
+        res = (sb.table("usuarios")
+               .select(_COLS)
+               .order("creado_en", desc=False)
+               .execute())
+        return res.data or []
+    except Exception as e:
+        # Si cargo/permisos no existen aún en la DB (migración pendiente),
+        # caer al SELECT antiguo para no romper la app.
+        if "cargo" in str(e) or "permisos" in str(e):
+            res = (sb.table("usuarios")
+                   .select("id,email,nombre,rol,activo,creado_en")
+                   .order("creado_en", desc=False)
+                   .execute())
+            return res.data or []
+        raise
 
 
 def obtener_por_email(email: str) -> Optional[dict]:
     sb = _sb()
     if sb is None:
         return None
-    res = (sb.table("usuarios")
-           .select("id,email,nombre,rol,activo,password_hash")
-           .eq("email", email.lower().strip())
-           .limit(1)
-           .execute())
-    return (res.data or [None])[0]
+    try:
+        res = (sb.table("usuarios")
+               .select(_COLS_AUTH)
+               .eq("email", email.lower().strip())
+               .limit(1)
+               .execute())
+        return (res.data or [None])[0]
+    except Exception as e:
+        if "cargo" in str(e) or "permisos" in str(e):
+            res = (sb.table("usuarios")
+                   .select("id,email,nombre,rol,activo,password_hash")
+                   .eq("email", email.lower().strip())
+                   .limit(1)
+                   .execute())
+            return (res.data or [None])[0]
+        raise
 
 
 def obtener_por_id(uid: str) -> Optional[dict]:
     sb = _sb()
     if sb is None:
         return None
-    res = (sb.table("usuarios")
-           .select("id,email,nombre,rol,activo,creado_en")
-           .eq("id", uid)
-           .limit(1)
-           .execute())
-    return (res.data or [None])[0]
+    try:
+        res = (sb.table("usuarios").select(_COLS).eq("id", uid).limit(1).execute())
+        return (res.data or [None])[0]
+    except Exception as e:
+        if "cargo" in str(e) or "permisos" in str(e):
+            res = (sb.table("usuarios")
+                   .select("id,email,nombre,rol,activo,creado_en")
+                   .eq("id", uid).limit(1).execute())
+            return (res.data or [None])[0]
+        raise
 
 
-def crear(*, email: str, nombre: str, password_hash: str, rol: str = "operador") -> dict:
+def crear(*, email: str, nombre: str, password_hash: str, rol: str = "user",
+          cargo: str = "", permisos: Optional[dict] = None) -> dict:
+    rol = _normalizar_rol(rol)
     if rol not in ROLES:
-        raise ValueError(f"Rol inválido: {rol}")
+        raise ValueError(f"Rol inválido: {rol}. Permitidos: {ROLES}")
+    if rol != "user" and permisos:
+        # admin y lector ignoran permisos granulares
+        permisos = None
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
-    res = sb.table("usuarios").insert({
+    payload = {
         "email":         email.lower().strip(),
         "nombre":        nombre.strip(),
         "password_hash": password_hash,
         "rol":           rol,
         "activo":        True,
-    }).execute()
-    return res.data[0]
+    }
+    if cargo:
+        payload["cargo"] = cargo.strip()
+    if permisos is not None:
+        payload["permisos"] = permisos
+    try:
+        res = sb.table("usuarios").insert(payload).execute()
+        return res.data[0]
+    except Exception as e:
+        # Si la migración aún no corrió, intentar sin los campos nuevos.
+        if "cargo" in str(e) or "permisos" in str(e):
+            payload.pop("cargo", None)
+            payload.pop("permisos", None)
+            res = sb.table("usuarios").insert(payload).execute()
+            return res.data[0]
+        raise
 
 
 def actualizar(uid: str, **campos) -> dict:
-    """Solo permite cambiar: nombre, rol, activo, password_hash."""
-    permitidos = {"nombre", "rol", "activo", "password_hash"}
+    permitidos = {"nombre", "cargo", "rol", "permisos", "activo", "password_hash"}
     update = {k: v for k, v in campos.items() if k in permitidos and v is not None}
-    if "rol" in update and update["rol"] not in ROLES:
-        raise ValueError(f"Rol inválido: {update['rol']}")
+    if "rol" in update:
+        update["rol"] = _normalizar_rol(update["rol"])
+        if update["rol"] not in ROLES:
+            raise ValueError(f"Rol inválido: {update['rol']}. Permitidos: {ROLES}")
+        if update["rol"] != "user":
+            update["permisos"] = None  # limpiar granulares
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
-    res = sb.table("usuarios").update(update).eq("id", uid).execute()
-    if not res.data:
-        raise ValueError(f"Usuario {uid} no encontrado")
-    return res.data[0]
+    try:
+        res = sb.table("usuarios").update(update).eq("id", uid).execute()
+        if not res.data:
+            raise ValueError(f"Usuario {uid} no encontrado")
+        return res.data[0]
+    except Exception as e:
+        if "cargo" in str(e) or "permisos" in str(e):
+            update.pop("cargo", None)
+            update.pop("permisos", None)
+            res = sb.table("usuarios").update(update).eq("id", uid).execute()
+            if not res.data:
+                raise ValueError(f"Usuario {uid} no encontrado")
+            return res.data[0]
+        raise
+
+
+# ── Helper de chequeo de permisos ─────────────────────────────────────
+def tiene_permiso(usuario: dict, modulo: str, accion: str) -> bool:
+    """Verifica si un usuario tiene permiso para una acción en un módulo.
+
+    - admin: siempre True
+    - lector: solo accion='ver' es True
+    - user: revisa el dict permisos[modulo] que es una lista de acciones
+    - retro-compat: operador → todo excepto borrar; lectura → solo ver
+    """
+    if not usuario or not usuario.get("activo", True):
+        return False
+    rol = _normalizar_rol(usuario.get("rol") or "")
+    if rol == "admin":
+        return True
+    if rol == "lector":
+        return accion == "ver"
+    if rol == "user":
+        permisos = usuario.get("permisos") or {}
+        if not isinstance(permisos, dict):
+            return False
+        acciones_modulo = permisos.get(modulo) or []
+        if isinstance(acciones_modulo, list):
+            return accion in acciones_modulo
+        if isinstance(acciones_modulo, dict):
+            return bool(acciones_modulo.get(accion))
+        return False
+    # Roles viejos retro-compat
+    if usuario.get("rol") == "operador":
+        return accion in ("ver", "modificar")
+    if usuario.get("rol") == "lectura":
+        return accion == "ver"
+    return False
 
 
 def contar() -> int:
