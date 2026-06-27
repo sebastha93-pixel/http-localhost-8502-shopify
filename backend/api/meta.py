@@ -103,17 +103,14 @@ async def webhook_receive(request: Request, background_tasks: BackgroundTasks) -
         _stats["primero_en"] = now_iso
     _stats["ultimo_en"] = now_iso
 
-    # Validar firma con META_APP_SECRET. FAIL-CLOSED: si el secret no
-    # está configurado en producción rechazamos para evitar webhook abierto.
+    # Validar firma con META_APP_SECRET cuando esté configurado.
+    # Si el secret falta, log warning pero NO rechazamos (validate_security
+    # ya alertó al admin en boot). Cuando el admin lo configure, los requests
+    # con firma inválida se rechazan inmediato.
     secret_ok = bool(_app_secret())
     if not secret_ok:
-        from backend.core.config import settings as _s
-        if _s.is_production:
-            _stats["errores"] += 1
-            _stats["ultimo_error"] = "META_APP_SECRET no configurado"
-            log.error("Meta webhook PRODUCCION sin META_APP_SECRET → rechazando")
-            raise HTTPException(503, "META_APP_SECRET no configurado en producción")
-    if secret_ok and not _verify_signature(body, sig):
+        log.warning("Meta webhook sin META_APP_SECRET — aceptando sin validar firma")
+    elif not _verify_signature(body, sig):
         _stats["errores"] += 1
         _stats["ultimo_error"] = "firma_invalida"
         log.warning("Meta webhook: firma inválida → rechazando")

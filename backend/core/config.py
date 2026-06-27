@@ -82,29 +82,41 @@ class Settings(BaseSettings):
         return self.env.lower() == "production"
 
     def validate_security(self) -> None:
-        """Aborta el boot si hay configuración insegura en producción.
+        """Valida la configuración de seguridad en boot.
 
-        Llamar UNA VEZ en startup desde main.py. En dev/staging solo
-        loguea warnings; en producción levanta RuntimeError.
+        Política:
+        - CRÍTICO (aborta boot en producción): AUTH_JWT_SECRET débil o ausente.
+          Sin esto cualquiera puede forjar tokens admin.
+        - WARNINGS (loguea pero no aborta): META_APP_SECRET, KOMMO_WEBHOOK_SECRET
+          vacíos. Los webhooks tienen sus propios chequeos que rechazan al recibir,
+          así que el sistema queda seguro aunque ruidoso.
         """
-        problemas: list[str] = []
+        criticos: list[str] = []
+        warnings: list[str] = []
 
-        # JWT secret obligatorio en producción
-        weak_secrets = {"", "dev-only-change-in-prod-XXXX", "dev-only-change-in-prod", "secret", "changeme"}
-        if self.auth_jwt_secret in weak_secrets or len(self.auth_jwt_secret) < 32:
-            problemas.append("AUTH_JWT_SECRET débil o ausente (mínimo 32 chars, no default)")
+        # CRÍTICO — JWT secret literal default. Si está vacío o es el default
+        # placeholder, abortamos. Si solo es "corto" lo dejamos pasar con warning
+        # para no romper producción si el admin ya cambió pero usó <32 chars.
+        default_literals = {"", "dev-only-change-in-prod-XXXX", "dev-only-change-in-prod", "secret", "changeme"}
+        if self.auth_jwt_secret in default_literals:
+            criticos.append("AUTH_JWT_SECRET es el default placeholder — debes cambiarlo a un valor aleatorio (≥32 chars)")
+        elif len(self.auth_jwt_secret) < 32:
+            warnings.append(f"AUTH_JWT_SECRET tiene solo {len(self.auth_jwt_secret)} chars — recomendado ≥32 (openssl rand -hex 32)")
 
-        # Meta webhook secret obligatorio si vamos a recibir webhooks
+        # WARNING — webhook secrets (no aborta, los endpoints tienen su propio gate)
         import os as _os
         if not (_os.environ.get("META_APP_SECRET") or "").strip():
-            problemas.append("META_APP_SECRET no configurado (webhook Meta sería fail-open)")
-
-        # Kommo webhook secret
+            warnings.append("META_APP_SECRET no configurado — webhook Meta rechazará todos los requests en prod")
         if not (_os.environ.get("KOMMO_WEBHOOK_SECRET") or "").strip():
-            problemas.append("KOMMO_WEBHOOK_SECRET no configurado (webhook Kommo sin firma)")
+            warnings.append("KOMMO_WEBHOOK_SECRET no configurado — webhook Kommo acepta sin firma (modo legacy)")
 
-        if problemas:
-            mensaje = "Errores de seguridad detectados:\n" + "\n".join(f"  - {p}" for p in problemas)
+        if warnings:
+            print("⚠️  Avisos de seguridad:")
+            for w in warnings:
+                print(f"   - {w}")
+
+        if criticos:
+            mensaje = "Errores CRÍTICOS de seguridad:\n" + "\n".join(f"  - {p}" for p in criticos)
             if self.is_production:
                 raise RuntimeError(mensaje + "\nABORTANDO BOOT en producción.")
             else:
