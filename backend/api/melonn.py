@@ -470,12 +470,66 @@ def autorizar_despacho(
     sb = _rdb._sb()
     if sb is not None:
         try:
-            r = (sb.table("cod_acciones")
-                   .select("contacto_at,respuesta,contacto_via")
-                   .eq("orden_melonn", orden_melonn)
-                   .limit(1)
-                   .execute())
-            row = (r.data or [None])[0]
+            # El path param puede ser orden_melonn (M-id) o orden_tienda
+            # (external). Como cod_acciones se guarda con la clave que
+            # use el frontend al llamar /cod-acciones/{X}/contacto,
+            # buscamos por AMBOS campos para encontrar la fila correcta.
+            row = None
+            # Primer intento: buscar por orden_melonn = path
+            r1 = (sb.table("cod_acciones")
+                    .select("contacto_at,respuesta,contacto_via")
+                    .eq("orden_melonn", orden_melonn)
+                    .limit(1)
+                    .execute())
+            if r1.data:
+                row = r1.data[0]
+            else:
+                # Segundo intento: buscar por orden_tienda = path
+                r2 = (sb.table("cod_acciones")
+                        .select("contacto_at,respuesta,contacto_via")
+                        .eq("orden_tienda", orden_melonn)
+                        .limit(1)
+                        .execute())
+                if r2.data:
+                    row = r2.data[0]
+                else:
+                    # Tercer intento: resolver el pedido y buscar por el OTRO id.
+                    # El path es uno de los dos — el otro está en cache.
+                    try:
+                        import sys as _sys
+                        from pathlib import Path as _Path
+                        _SRC = _Path(__file__).resolve().parent.parent.parent / "src"
+                        if str(_SRC) not in _sys.path:
+                            _sys.path.insert(0, str(_SRC))
+                        import melonn_client as _mc
+                        # Intentar resolver al otro identificador via cache local
+                        cache = _mc._cache_leer(ignorar_ttl=True)
+                        if cache:
+                            pedidos = cache[0]
+                            for p in pedidos:
+                                ot = p.get("orden_tienda")
+                                om = p.get("orden_melonn")
+                                if str(ot) == orden_melonn and om:
+                                    # Buscar por el M-id encontrado
+                                    r3 = (sb.table("cod_acciones")
+                                            .select("contacto_at,respuesta,contacto_via")
+                                            .eq("orden_melonn", om)
+                                            .limit(1)
+                                            .execute())
+                                    if r3.data:
+                                        row = r3.data[0]
+                                    break
+                                if str(om) == orden_melonn and ot:
+                                    r3 = (sb.table("cod_acciones")
+                                            .select("contacto_at,respuesta,contacto_via")
+                                            .eq("orden_tienda", ot)
+                                            .limit(1)
+                                            .execute())
+                                    if r3.data:
+                                        row = r3.data[0]
+                                    break
+                    except Exception as _e:
+                        log.warning(f"Lookup cache para cod_acciones falló: {_e}")
             contacto_at = (row or {}).get("contacto_at")
             respuesta   = (row or {}).get("respuesta")
             if not contacto_at:
