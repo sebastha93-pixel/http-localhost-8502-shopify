@@ -160,6 +160,54 @@ def _to_out(u: dict) -> UsuarioOut:
     )
 
 
+@router.get("/usuarios/diagnosticar")
+def diagnosticar_usuario(
+    email: str,
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Diagnóstico de un usuario: existe, activo, rol, último login.
+    Útil cuando alguien reporta que no puede entrar.
+    """
+    u = svc.obtener_por_email(email)
+    if not u:
+        return {"existe": False, "mensaje": f"No hay usuario con email {email}"}
+    return {
+        "existe": True,
+        "email": u.get("email"),
+        "nombre": u.get("nombre"),
+        "rol": u.get("rol"),
+        "activo": u.get("activo"),
+        "cargo": u.get("cargo"),
+        "tiene_permisos": bool(u.get("permisos")),
+        "puede_loguearse": bool(u.get("activo")),
+    }
+
+
+@router.post("/usuarios/{uid}/resetear-bloqueo")
+def resetear_bloqueo(
+    uid: str,
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Limpia el rate-limit de login para un usuario.
+    Llamar cuando un usuario quedó bloqueado por intentos fallidos.
+    """
+    u = svc.obtener_por_id(uid)
+    if not u:
+        raise HTTPException(404, "Usuario no encontrado")
+    email = (u.get("email") or "").lower().strip()
+    # Limpiar todas las entradas del rate-limit para ese email (cualquier IP)
+    claves_borradas = 0
+    for key in list(_LOGIN_ATTEMPTS.keys()):
+        if key[1] == email:
+            _LOGIN_ATTEMPTS.pop(key, None)
+            claves_borradas += 1
+    for key in list(_LOGIN_BLOCKS.keys()):
+        if key[1] == email:
+            _LOGIN_BLOCKS.pop(key, None)
+            claves_borradas += 1
+    return {"ok": True, "email": email, "bloqueos_eliminados": claves_borradas}
+
+
 @router.get("/usuarios/catalogo")
 def catalogo_permisos(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     """Catálogo de roles, módulos y acciones disponibles para el formulario."""
