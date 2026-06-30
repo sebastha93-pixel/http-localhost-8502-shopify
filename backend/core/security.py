@@ -95,15 +95,24 @@ def get_current_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(_be
             db_user = _svc.obtener_por_id(uid)
         except Exception:
             db_user = None
-        if not db_user or not db_user.get("activo", True):
-            # Limpiar cache para forzar re-check si el usuario se reactiva
+        if db_user is None:
+            # No pudimos leer la DB (RLS, timeout, etc.) — fallback al JWT
+            # para no romper el login. Solo INVALIDAMOS si la DB explícitamente
+            # nos dijo que el usuario está inactivo.
+            fresh = {
+                "rol": payload.get("rol", "lector"),
+                "permisos": payload.get("permisos", {}) or {},
+                "activo": True,
+            }
+        elif not db_user.get("activo", True):
             _USER_CACHE.pop(uid, None)
-            raise HTTPException(status_code=401, detail="Usuario inactivo o no existe")
-        fresh = {
-            "rol": db_user.get("rol") or payload["rol"],
-            "permisos": db_user.get("permisos") or {},
-            "activo": True,
-        }
+            raise HTTPException(status_code=401, detail="Usuario inactivo")
+        else:
+            fresh = {
+                "rol": db_user.get("rol") or payload["rol"],
+                "permisos": db_user.get("permisos") or {},
+                "activo": True,
+            }
         _USER_CACHE[uid] = {"ts": now, "data": fresh}
 
     return CurrentUser(
