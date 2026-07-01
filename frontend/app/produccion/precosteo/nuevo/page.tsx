@@ -18,8 +18,8 @@ interface LineaForm {
   item: string;
   valor_unitario: string;
   cantidad: string;
-  iva: string;
-  fija?: boolean;   // true = renglón de plantilla (no se borra, item read-only)
+  aplica_iva: boolean;   // si true, IVA se calcula automático con iva_pct global
+  fija?: boolean;        // true = renglón de plantilla (no se borra, item read-only)
 }
 
 /**
@@ -54,12 +54,19 @@ function lineasIniciales(): LineaForm[] {
     for (const it of g.items) {
       out.push({
         categoria: g.categoria, item: it,
-        valor_unitario: "", cantidad: "1", iva: "0",
+        valor_unitario: "", cantidad: "1", aplica_iva: false,
         fija: true,
       });
     }
   }
   return out;
+}
+
+function ivaDeLinea(l: LineaForm, ivaPct: number): number {
+  if (!l.aplica_iva) return 0;
+  const v = parseFloat(l.valor_unitario || "0") || 0;
+  const q = parseFloat(l.cantidad || "0") || 0;
+  return Math.round(v * q * (ivaPct / 100));
 }
 
 export default function NuevoPrecosteoPage() {
@@ -71,9 +78,12 @@ export default function NuevoPrecosteoPage() {
   const [tela, setTela] = useState("");
   const [color, setColor] = useState("");
   const [iva, setIva] = useState("19");
-  const [margen, setMargen] = useState("60");
+  const [precioVenta, setPrecioVenta] = useState("");
   const [lineas, setLineas] = useState<LineaForm[]>(lineasIniciales());
   const [err, setErr] = useState("");
+
+  const ivaPct = parseFloat(iva) || 0;
+  const precioVentaNum = parseFloat(precioVenta || "0") || 0;
 
   const mut = useMutation({
     mutationFn: () => {
@@ -85,16 +95,21 @@ export default function NuevoPrecosteoPage() {
           item: l.item.trim(),
           valor_unitario: parseFloat(l.valor_unitario || "0") || 0,
           cantidad: parseFloat(l.cantidad || "0") || 0,
-          iva: parseFloat(l.iva || "0") || 0,
+          iva: ivaDeLinea(l, ivaPct),
         }));
       if (items.length === 0) throw new Error("Llena al menos un renglón con valor unitario.");
+      // Utilidad se deriva del precio de venta final que el usuario tecleó
+      const costoCon = items.reduce((s, it) => s + it.valor_unitario * it.cantidad + it.iva, 0);
+      const margen = precioVentaNum > 0 && costoCon > 0
+        ? ((precioVentaNum - costoCon) / costoCon) * 100
+        : 0;
       return api.post<{ id: string }>("/api/produccion/precosteo", {
         codigo_referencia: codigo.trim(),
         nombre: nombre.trim(),
         tela: tela.trim() || null,
         color: color.trim() || null,
-        iva_pct: parseFloat(iva) || 19,
-        margen: parseFloat(margen) || 0,
+        iva_pct: ivaPct || 19,
+        margen,
         items,
       });
     },
@@ -102,13 +117,13 @@ export default function NuevoPrecosteoPage() {
     onError: (e: Error) => setErr(e.message),
   });
 
-  function actualizar(idx: number, campo: keyof LineaForm, valor: string) {
+  function actualizar(idx: number, campo: keyof LineaForm, valor: string | boolean) {
     setLineas((prev) => prev.map((l, i) => (i === idx ? { ...l, [campo]: valor } : l)));
   }
   function agregarOtro() {
     setLineas((prev) => [...prev, {
       categoria: CATEGORIAS[0], item: "",
-      valor_unitario: "", cantidad: "1", iva: "0",
+      valor_unitario: "", cantidad: "1", aplica_iva: false,
       fija: false,
     }]);
   }
@@ -117,9 +132,10 @@ export default function NuevoPrecosteoPage() {
   }
 
   const totalSin = lineas.reduce((s, l) => s + (parseFloat(l.valor_unitario || "0") || 0) * (parseFloat(l.cantidad || "0") || 0), 0);
-  const totalIva = lineas.reduce((s, l) => s + (parseFloat(l.iva || "0") || 0), 0);
+  const totalIva = lineas.reduce((s, l) => s + ivaDeLinea(l, ivaPct), 0);
   const totalCon = totalSin + totalIva;
-  const precioSugerido = totalCon * (1 + (parseFloat(margen || "0") || 0) / 100);
+  const utilidad = precioVentaNum > 0 && totalCon > 0 ? precioVentaNum - totalCon : 0;
+  const utilidadPct = precioVentaNum > 0 && totalCon > 0 ? (utilidad / totalCon) * 100 : 0;
 
   // Agrupamos por categoría para dibujar sub-encabezados en la tabla
   const gruposUI: { categoria: string; indices: number[] }[] = [];
@@ -144,7 +160,7 @@ export default function NuevoPrecosteoPage() {
               <Input label="Tela"                 value={tela} onChange={setTela} placeholder="SANDDENIM" />
               <Input label="Color"                value={color} onChange={setColor} placeholder="Índigo" />
               <Input label="IVA %"                value={iva} onChange={setIva} inputMode="decimal" />
-              <Input label="Margen %"             value={margen} onChange={setMargen} inputMode="decimal" placeholder="60" />
+              <Input label="Precio de venta final" value={precioVenta} onChange={setPrecioVenta} inputMode="decimal" placeholder="120000" />
             </div>
           </CardContent>
         </Card>
@@ -166,7 +182,8 @@ export default function NuevoPrecosteoPage() {
                     <th className="px-2 py-2">Item</th>
                     <th className="px-2 py-2 w-[130px]">Valor unit.</th>
                     <th className="px-2 py-2 w-[90px]">Cantidad</th>
-                    <th className="px-2 py-2 w-[110px]">IVA $</th>
+                    <th className="px-2 py-2 w-[60px] text-center">IVA</th>
+                    <th className="px-2 py-2 w-[100px] text-right">IVA $</th>
                     <th className="px-2 py-2 w-[120px] text-right">Total c/IVA</th>
                     <th className="px-2 py-2 w-[30px]" />
                   </tr>
@@ -175,14 +192,15 @@ export default function NuevoPrecosteoPage() {
                   {gruposUI.map((g) => (
                     <Fragment key={g.categoria}>
                       <tr className="bg-cloud/60 border-b border-border">
-                        <td colSpan={6} className="px-2 py-1.5 text-[0.6rem] font-bold uppercase tracking-[0.16em] text-ink-900">
+                        <td colSpan={7} className="px-2 py-1.5 text-[0.6rem] font-bold uppercase tracking-[0.16em] text-ink-900">
                           {g.categoria}
                         </td>
                       </tr>
                       {g.indices.map((idx) => {
                         const l = lineas[idx];
                         const ts = (parseFloat(l.valor_unitario || "0") || 0) * (parseFloat(l.cantidad || "0") || 0);
-                        const tc = ts + (parseFloat(l.iva || "0") || 0);
+                        const ivaMonto = ivaDeLinea(l, ivaPct);
+                        const tc = ts + ivaMonto;
                         return (
                           <tr key={idx} className="border-b border-border/40">
                             <td className="px-2 py-1.5">
@@ -210,10 +228,12 @@ export default function NuevoPrecosteoPage() {
                                 inputMode="decimal"
                                 className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs text-right tabular" />
                             </td>
-                            <td className="px-2 py-1.5">
-                              <input value={l.iva} onChange={(e) => actualizar(idx, "iva", e.target.value)}
-                                inputMode="decimal"
-                                className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs text-right tabular" />
+                            <td className="px-2 py-1.5 text-center">
+                              <input type="checkbox" checked={l.aplica_iva}
+                                onChange={(e) => actualizar(idx, "aplica_iva", e.target.checked)} />
+                            </td>
+                            <td className="px-2 py-1.5 text-right tabular text-graphite">
+                              {ivaMonto > 0 ? `$${ivaMonto.toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"}
                             </td>
                             <td className="px-2 py-1.5 text-right tabular text-ink-900 font-medium">
                               ${tc.toLocaleString("es-CO", { maximumFractionDigits: 0 })}
@@ -233,21 +253,28 @@ export default function NuevoPrecosteoPage() {
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-border">
-                    <td colSpan={3} className="px-2 py-2 text-right text-[0.65rem] uppercase tracking-widest text-graphite">Total sin IVA</td>
+                    <td colSpan={4} className="px-2 py-2 text-right text-[0.65rem] uppercase tracking-widest text-graphite">Total sin IVA</td>
                     <td colSpan={2} className="px-2 py-2 text-right tabular font-semibold">${totalSin.toLocaleString("es-CO", { maximumFractionDigits: 0 })}</td>
                     <td />
                   </tr>
                   <tr>
-                    <td colSpan={3} className="px-2 py-1 text-right text-[0.65rem] uppercase tracking-widest text-graphite">Total con IVA</td>
+                    <td colSpan={4} className="px-2 py-1 text-right text-[0.65rem] uppercase tracking-widest text-graphite">Total con IVA</td>
                     <td colSpan={2} className="px-2 py-1 text-right tabular font-semibold text-ink-900">${totalCon.toLocaleString("es-CO", { maximumFractionDigits: 0 })}</td>
                     <td />
                   </tr>
                   <tr>
-                    <td colSpan={3} className="px-2 py-1 text-right text-[0.65rem] uppercase tracking-widest text-graphite">
-                      Precio sugerido ({margen || 0}%)
+                    <td colSpan={4} className="px-2 py-1 text-right text-[0.65rem] uppercase tracking-widest text-graphite">Precio de venta</td>
+                    <td colSpan={2} className="px-2 py-1 text-right tabular font-semibold text-ink-900">
+                      {precioVentaNum > 0 ? `$${precioVentaNum.toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"}
                     </td>
-                    <td colSpan={2} className="px-2 py-1 text-right tabular font-bold text-navy-600 text-sm">
-                      ${precioSugerido.toLocaleString("es-CO", { maximumFractionDigits: 0 })}
+                    <td />
+                  </tr>
+                  <tr>
+                    <td colSpan={4} className="px-2 py-1 text-right text-[0.65rem] uppercase tracking-widest text-graphite">
+                      Utilidad {precioVentaNum > 0 ? `(${utilidadPct.toFixed(1)}%)` : ""}
+                    </td>
+                    <td colSpan={2} className={`px-2 py-1 text-right tabular font-bold text-sm ${utilidad >= 0 ? "text-teal" : "text-terracotta"}`}>
+                      {precioVentaNum > 0 ? `$${utilidad.toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"}
                     </td>
                     <td />
                   </tr>
