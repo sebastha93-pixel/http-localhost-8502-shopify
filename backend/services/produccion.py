@@ -568,24 +568,34 @@ def listar_precosteos(*, estado: Optional[str] = None, tela: Optional[str] = Non
     """Lista precosteos.
     Si `disponibles_para_corte`, devuelve TODOS los autorizados + los borradores
     marcados como muestra de diseño (que pueden generar corte sin firma).
+    Cache 30s.
     """
+    cache_key = f"precosteos:{estado}:{tela}:{limit}:{disponibles_para_corte}"
+    cached = _cache_get(cache_key, ttl_seg=30)
+    if cached is not None:
+        return cached
     sb = _sb()
     if sb is None:
         return []
-    q = sb.table("referencias_precosteo").select("*").order("created_at", desc=True).limit(limit)
+    # Solo columnas necesarias para la lista + selector — foto_url no viaja aquí.
+    cols = ("id,codigo_referencia,nombre,tela,color,iva_pct,margen,"
+            "costo_total_sin_iva,costo_total_con_iva,precio_sugerido_venta,"
+            "estado,bloqueada,es_muestra_diseno,autorizada_por,fecha_autorizacion,"
+            "created_at,created_by")
+    q = sb.table("referencias_precosteo").select(cols).order("created_at", desc=True).limit(limit)
     if disponibles_para_corte:
-        # bloqueada = true (autorizados) OR es_muestra_diseno = true
         try:
             q = q.or_("bloqueada.eq.true,es_muestra_diseno.eq.true")
         except Exception:
-            # Compat si la migración aún no corrió — solo bloqueados
             q = q.eq("bloqueada", True)
     else:
         if estado:
             q = q.eq("estado", estado)
         if tela:
             q = q.ilike("tela", f"%{tela}%")
-    return (q.execute().data or [])
+    out = q.execute().data or []
+    _cache_set(cache_key, out, ttl_seg=30)
+    return out
 
 
 def obtener_precosteo(precosteo_id: str) -> Optional[dict]:
@@ -788,23 +798,32 @@ def crear_orden_corte(*, referencia_id: str,
 
 def listar_ordenes_corte(*, estado: Optional[str] = None,
                           limit: int = 200) -> list[dict]:
+    """Lista órdenes de corte. Cache 20s."""
+    cache_key = f"ordenes_corte_lista:{estado}:{limit}"
+    cached = _cache_get(cache_key, ttl_seg=20)
+    if cached is not None:
+        return cached
     sb = _sb()
     if sb is None:
         return []
+    # No traer foto_url en el JOIN — pesa mucho y no se usa en la lista.
     q = (sb.table("ordenes_corte")
-           .select("*,referencia:referencia_id(codigo_referencia,nombre,tela,color,foto_url)")
+           .select("*,referencia:referencia_id(codigo_referencia,nombre,tela,color)")
            .order("created_at", desc=True).limit(limit))
     if estado:
         q = q.eq("estado", estado)
-    return q.execute().data or []
+    out = q.execute().data or []
+    _cache_set(cache_key, out, ttl_seg=20)
+    return out
 
 
 def obtener_orden_corte(oc_id: str) -> Optional[dict]:
     sb = _sb()
     if sb is None:
         return None
+    # Sin foto_url — el detalle nunca la mostraba.
     r = (sb.table("ordenes_corte")
-           .select("*,referencia:referencia_id(codigo_referencia,nombre,tela,color,foto_url)")
+           .select("*,referencia:referencia_id(codigo_referencia,nombre,tela,color)")
            .eq("id", oc_id).limit(1).execute()).data
     if not r:
         return None
