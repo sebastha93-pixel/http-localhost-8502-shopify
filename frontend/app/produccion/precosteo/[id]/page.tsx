@@ -145,6 +145,8 @@ export default function PrecosteoDetallePage() {
         </Card>
       </div>
 
+      <StockTelaCard tela={p.tela} />
+
       <Card>
         <CardContent className="p-0">
           <div className="px-4 py-3 border-b border-border">
@@ -198,5 +200,64 @@ function Kpi({ label, value }: { label: string; value: string }) {
       <p className="text-[0.6rem] uppercase tracking-widest text-graphite">{label}</p>
       <p className="mt-1 font-display text-xl text-ink-900 tabular">{value}</p>
     </div>
+  );
+}
+
+interface StockRow {
+  descripcion_tela: string;
+  tono: string;
+  num_rollos: number;
+  metros_disponible: number;
+}
+
+/**
+ * Muestra el stock disponible de la tela del precosteo, agrupado por tono.
+ * Sirve para que el cortador sepa con qué material puede trabajar antes
+ * de generar la orden de corte.
+ */
+function StockTelaCard({ tela }: { tela?: string }) {
+  const q = useQuery<{ resumen: StockRow[] }>({
+    queryKey: ["produccion", "inventario", "resumen"],
+    queryFn: () => api.get("/api/produccion/inventario/resumen"),
+    enabled: !!tela,
+  });
+  if (!tela) return null;
+  const filas = (q.data?.resumen || []).filter(
+    (r) => (r.descripcion_tela || "").toUpperCase().trim() === tela.toUpperCase().trim(),
+  );
+  const totalMetros = filas.reduce((s, r) => s + Number(r.metros_disponible || 0), 0);
+  const totalRollos = filas.reduce((s, r) => s + Number(r.num_rollos || 0), 0);
+
+  return (
+    <Card>
+      <CardContent className="p-5">
+        <div className="flex items-center justify-between mb-3">
+          <p className="section-label">Stock disponible · {tela}</p>
+          <p className="text-xs text-graphite tabular">
+            {totalMetros.toFixed(2)} m · {totalRollos} rollo(s)
+          </p>
+        </div>
+        {q.isLoading ? (
+          <p className="text-xs text-graphite">Cargando stock…</p>
+        ) : filas.length === 0 ? (
+          <p className="text-xs text-terracotta">
+            No hay rollos disponibles de esta tela. Registra un ingreso antes de generar la orden de corte.
+          </p>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {filas.map((f) => (
+              <div key={f.tono} className="rounded-sm border border-border bg-cloud/40 p-3">
+                <p className="text-[0.6rem] uppercase tracking-widest text-graphite">Tono</p>
+                <p className="font-display text-sm text-ink-900">{f.tono || "—"}</p>
+                <p className="mt-2 text-xs tabular text-ink-900 font-semibold">
+                  {Number(f.metros_disponible).toFixed(2)} m
+                </p>
+                <p className="text-[0.6rem] text-graphite">{f.num_rollos} rollo(s)</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

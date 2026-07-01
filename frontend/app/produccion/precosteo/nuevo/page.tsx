@@ -5,13 +5,20 @@
  * 24 líneas fijas por categoría + botón "+ Otro" para renglones especiales.
  * Se llenan solo valor unitario, cantidad y (opcional) IVA.
  */
-import { Fragment, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageShell } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { Plus, Trash2, Save, Loader2, AlertCircle } from "lucide-react";
+import { Plus, Trash2, Save, Loader2, AlertCircle, CheckCircle, Boxes } from "lucide-react";
+
+interface TelaStock {
+  descripcion_tela: string;
+  tono: string;
+  num_rollos: number;
+  metros_disponible: number;
+}
 
 interface LineaForm {
   categoria: string;
@@ -79,11 +86,36 @@ export default function NuevoPrecosteoPage() {
   const [codigo, setCodigo] = useState("");
   const [nombre, setNombre] = useState("");
   const [tela, setTela] = useState("");
+  const [telaOtra, setTelaOtra] = useState("");
   const [color, setColor] = useState("");
   const [iva, setIva] = useState("19");
   const [precioVenta, setPrecioVenta] = useState("");
   const [lineas, setLineas] = useState<LineaForm[]>(lineasIniciales());
   const [err, setErr] = useState("");
+  const [confirmar, setConfirmar] = useState(false);
+
+  // Telas con stock disponible → dropdown en cabecera
+  const stockQ = useQuery<{ resumen: TelaStock[] }>({
+    queryKey: ["produccion", "inventario", "resumen"],
+    queryFn: () => api.get("/api/produccion/inventario/resumen"),
+  });
+  const telasStock = useMemo<{ label: string; value: string; metros: number }[]>(() => {
+    const items = stockQ.data?.resumen || [];
+    // Agrupa por descripcion_tela sumando metros de todos los tonos
+    const acc: Record<string, number> = {};
+    for (const it of items) {
+      const d = (it.descripcion_tela || "").trim().toUpperCase();
+      if (!d) continue;
+      acc[d] = (acc[d] || 0) + Number(it.metros_disponible || 0);
+    }
+    return Object.entries(acc)
+      .filter(([, m]) => m > 0)
+      .sort((a, b) => b[1] - a[1])
+      .map(([d, m]) => ({ value: d, metros: m, label: `${d} — ${m.toFixed(2)} m disponibles` }));
+  }, [stockQ.data]);
+
+  // Tela final que se envía al backend
+  const telaFinal = tela === "__OTRA__" ? telaOtra.trim().toUpperCase() : tela;
 
   const ivaPct = parseFloat(iva) || 0;
   const precioVentaNum = parseFloat(precioVenta || "0") || 0;
@@ -109,7 +141,7 @@ export default function NuevoPrecosteoPage() {
       return api.post<{ id: string }>("/api/produccion/precosteo", {
         codigo_referencia: codigo.trim(),
         nombre: nombre.trim(),
-        tela: tela.trim() || null,
+        tela: telaFinal || null,
         color: color.trim() || null,
         iva_pct: ivaPct || 19,
         margen,
@@ -151,7 +183,7 @@ export default function NuevoPrecosteoPage() {
   return (
     <PageShell title="Nuevo precosteo" subtitle="Plantilla estándar · llena valor y cantidad">
       <form
-        onSubmit={(e) => { e.preventDefault(); setErr(""); mut.mutate(); }}
+        onSubmit={(e) => { e.preventDefault(); setErr(""); setConfirmar(true); }}
         className="space-y-4"
       >
         <Card>
@@ -160,7 +192,29 @@ export default function NuevoPrecosteoPage() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <Input label="Código referencia *" value={codigo} onChange={setCodigo} required placeholder="14500-1" />
               <Input label="Nombre *"             value={nombre} onChange={setNombre} required placeholder="SKINNY OSCURO" />
-              <Input label="Tela"                 value={tela} onChange={setTela} placeholder="SANDDENIM" />
+              <div>
+                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                  Tela * <span className="text-graphite/60 normal-case tracking-normal">(de inventario)</span>
+                </label>
+                <select value={tela} onChange={(e) => setTela(e.target.value)} required
+                  className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm">
+                  <option value="">Selecciona tela…</option>
+                  {telasStock.map((t) => (
+                    <option key={t.value} value={t.value}>{t.label}</option>
+                  ))}
+                  <option value="__OTRA__">— Otra (no está en inventario) —</option>
+                </select>
+                {tela === "__OTRA__" && (
+                  <input value={telaOtra} onChange={(e) => setTelaOtra(e.target.value.toUpperCase())}
+                    placeholder="Nombre de la tela nueva"
+                    className="mt-2 w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />
+                )}
+                {telasStock.length === 0 && !stockQ.isLoading && (
+                  <p className="mt-1 text-[0.62rem] text-terracotta flex items-center gap-1">
+                    <Boxes className="h-3 w-3" /> Aún no hay telas con stock. Registra un ingreso primero.
+                  </p>
+                )}
+              </div>
               <Input label="Color"                value={color} onChange={setColor} placeholder="Índigo" />
               <Input label="IVA %"                value={iva} onChange={setIva} inputMode="decimal" />
               <Input label="Precio de venta final" value={precioVenta} onChange={setPrecioVenta} inputMode="decimal" placeholder="120000" />
@@ -306,6 +360,70 @@ export default function NuevoPrecosteoPage() {
           </button>
         </div>
       </form>
+
+      {/* Modal de confirmación — mitiga errores mostrando qué tela se seleccionó */}
+      {confirmar && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-900/60 p-4">
+          <div className="w-full max-w-md rounded-sm bg-white border border-border shadow-2xl">
+            <div className="px-5 py-4 border-b border-border">
+              <p className="section-label">Confirmar guardado</p>
+            </div>
+            <div className="p-5 space-y-3">
+              <p className="text-sm text-ink-900">
+                Vas a crear el precosteo <span className="font-semibold">{codigo || "(sin código)"}</span>.
+              </p>
+              <div className="rounded-sm border border-navy-600/30 bg-navy-600/5 p-3 space-y-1">
+                <div className="flex justify-between text-xs">
+                  <span className="text-graphite">Nombre</span>
+                  <span className="font-semibold text-ink-900">{nombre || "—"}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-graphite">Tela</span>
+                  <span className="font-bold text-navy-600 uppercase">{telaFinal || "SIN TELA"}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-graphite">Color</span>
+                  <span className="text-ink-900">{color || "—"}</span>
+                </div>
+                <div className="flex justify-between text-xs pt-2 border-t border-border/40">
+                  <span className="text-graphite">Costo total con IVA</span>
+                  <span className="tabular font-semibold text-ink-900">
+                    ${totalCon.toLocaleString("es-CO", { maximumFractionDigits: 0 })}
+                  </span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-graphite">Precio de venta</span>
+                  <span className="tabular font-semibold text-ink-900">
+                    {precioVentaNum > 0 ? `$${precioVentaNum.toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"}
+                  </span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-graphite">Utilidad</span>
+                  <span className={`tabular font-semibold ${utilidad >= 0 ? "text-teal" : "text-terracotta"}`}>
+                    {precioVentaNum > 0 ? `$${utilidad.toLocaleString("es-CO", { maximumFractionDigits: 0 })} (${utilidadPct.toFixed(1)}%)` : "—"}
+                  </span>
+                </div>
+              </div>
+              <p className="text-[0.7rem] text-graphite">
+                Se guardará como <span className="font-semibold text-ink-900">borrador</span>.
+                Podrás editarlo hasta que lo firmes.
+              </p>
+            </div>
+            <div className="px-5 py-4 border-t border-border flex justify-end gap-2">
+              <button type="button" onClick={() => setConfirmar(false)}
+                className="rounded-sm border border-border bg-card px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-ink-900 hover:bg-cloud">
+                Volver a editar
+              </button>
+              <button type="button" onClick={() => { setConfirmar(false); mut.mutate(); }}
+                disabled={mut.isPending}
+                className="inline-flex items-center gap-2 rounded-sm bg-teal px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white hover:bg-ink-900 disabled:opacity-40">
+                {mut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                Confirmar y guardar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </PageShell>
   );
 }
