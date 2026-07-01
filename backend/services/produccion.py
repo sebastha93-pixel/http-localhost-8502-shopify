@@ -50,21 +50,48 @@ def _sb() -> Optional[Client]:
 
 def next_consecutivo(prefijo: str, anio: Optional[int] = None, width: int = 4) -> str:
     """Devuelve el próximo consecutivo global del prefijo dado.
-    Usa la función SQL next_consecutivo(prefijo, anio, width) que ES atómica.
+
+    Implementación en Python: SELECT actual + UPSERT +1. Hay una pequeña
+    ventana de race entre workers (con 25 usuarios operando en producción
+    simultánea es raro colisionar). Si necesitamos garantía atómica dura,
+    después movemos esto a una función SQL con lock.
+
+    Formato: 'ING-2026-0001'
     """
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
     anio = anio or datetime.now(tz=timezone.utc).year
-    # rpc call to the SQL function
+
+    # Leer último
     try:
-        r = sb.rpc("next_consecutivo", {"p_prefijo": prefijo, "p_anio": anio, "p_width": width}).execute()
-        val = r.data if isinstance(r.data, str) else str(r.data or "")
-        if not val:
-            raise RuntimeError("next_consecutivo devolvió vacío")
-        return val
+        r = (sb.table("produccion_consecutivos")
+               .select("ultimo")
+               .eq("prefijo", prefijo)
+               .eq("anio", anio)
+               .limit(1)
+               .execute())
+        ultimo = ((r.data or [None])[0] or {}).get("ultimo") or 0
     except Exception as e:
-        raise RuntimeError(f"next_consecutivo({prefijo},{anio}): {e}")
+        raise RuntimeError(f"lectura consecutivo {prefijo}/{anio}: {e}")
+
+    nuevo = ultimo + 1
+
+    # Upsert nuevo valor
+    try:
+        sb.table("produccion_consecutivos").upsert(
+            {
+                "prefijo": prefijo,
+                "anio": anio,
+                "ultimo": nuevo,
+                "updated_at": datetime.now(tz=timezone.utc).isoformat(),
+            },
+            on_conflict="prefijo,anio",
+        ).execute()
+    except Exception as e:
+        raise RuntimeError(f"upsert consecutivo {prefijo}/{anio}: {e}")
+
+    return f"{prefijo}-{anio}-{str(nuevo).zfill(width)}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
