@@ -470,15 +470,16 @@ async def subir_foto(
 # ═══════════════════════════════════════════════════════════════════════
 
 class CrearCorteBody(BaseModel):
-    referencia_id:      str
-    tono:               Optional[str] = None
-    largo_trazo:        float = Field(gt=0)
-    prendas_por_trazo:  int = Field(gt=0)
-    curva_trazo:        dict = Field(default_factory=dict)
-    num_capas:          int = Field(gt=0)
-    responsable:        Optional[str] = None
-    fecha_limite:       Optional[str] = None
-    indicaciones:       Optional[str] = None
+    referencia_id:         str
+    largo_trazo:           float = Field(gt=0)
+    curva_trazo:           dict = Field(default_factory=dict)
+    cantidad_programada:   Optional[int] = None
+    promedio_tecnico:      Optional[float] = None
+    responsable:           Optional[str] = None
+    fecha_envio:           Optional[str] = None
+    indicaciones:          Optional[str] = None
+    destinatarios_correo:  list[str] = Field(default_factory=list)
+    trazos_url:            Optional[str] = None
 
 
 class PistolearRolloBody(BaseModel):
@@ -492,6 +493,11 @@ class CerrarCorteBody(BaseModel):
     merma_valor: Optional[float] = None
 
 
+class AutorizarCorteBody(BaseModel):
+    destinatarios:  Optional[list[str]] = None
+    mensaje_extra:  Optional[str] = None
+
+
 @router.post("/corte")
 def crear_corte(
     body: CrearCorteBody,
@@ -500,14 +506,15 @@ def crear_corte(
     try:
         oc = svc.crear_orden_corte(
             referencia_id=body.referencia_id,
-            tono=body.tono,
             largo_trazo=body.largo_trazo,
-            prendas_por_trazo=body.prendas_por_trazo,
             curva_trazo=body.curva_trazo,
-            num_capas=body.num_capas,
+            cantidad_programada=body.cantidad_programada,
+            promedio_tecnico=body.promedio_tecnico,
             responsable=body.responsable,
-            fecha_limite=body.fecha_limite,
+            fecha_envio=body.fecha_envio,
             indicaciones=body.indicaciones,
+            destinatarios_correo=body.destinatarios_correo,
+            trazos_url=body.trazos_url,
             created_by=user.email,
         )
         return {"ok": True, "orden_corte": oc}
@@ -516,6 +523,52 @@ def crear_corte(
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(500, f"crear_corte: {str(e)[:200]}")
+
+
+@router.post("/corte/{oc_id}/autorizar")
+def autorizar_corte(
+    oc_id: str,
+    body: AutorizarCorteBody,
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    try:
+        oc = svc.autorizar_orden_corte(
+            oc_id,
+            destinatarios=body.destinatarios,
+            mensaje_extra=body.mensaje_extra,
+            usuario=user.email,
+        )
+        return {"ok": True, **oc}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"autorizar_corte: {str(e)[:200]}")
+
+
+@router.post("/corte/{oc_id}/trazos")
+async def subir_trazos_corte(
+    oc_id: str,
+    file: UploadFile = File(...),
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    contenido = await file.read()
+    if len(contenido) > 15 * 1024 * 1024:
+        raise HTTPException(413, "archivo_mayor_a_15MB")
+    if not contenido:
+        raise HTTPException(400, "archivo_vacio")
+    try:
+        url = svc.subir_trazos_corte(
+            oc_id,
+            file_bytes=contenido,
+            filename=file.filename or "trazos.pdf",
+            content_type=file.content_type or "application/pdf",
+        )
+        return {"ok": True, "trazos_url": url}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"trazos: {str(e)[:200]}")
 
 
 @router.get("/corte")

@@ -630,50 +630,95 @@ def ajustar_stock(*, rollo_id: str, metros_delta: float, nota: str,
 # ORDEN DE CORTE (Bloque 4)
 # ═══════════════════════════════════════════════════════════════════════
 
-def crear_orden_corte(*, referencia_id: str, tono: Optional[str],
-                       largo_trazo: float, prendas_por_trazo: int,
-                       curva_trazo: dict, num_capas: int,
-                       responsable: Optional[str], fecha_limite: Optional[str],
-                       indicaciones: Optional[str], created_by: str) -> dict:
-    """Crea una orden de corte a partir de un precosteo FIRMADO.
-    Calcula prendas estimadas y metros teóricos.
+def calcular_capas_desde_curva(curva: dict) -> int:
+    """Regla del cortador: dos tallas con la misma cantidad se cortan juntas
+    (comparten capas). Total capas = suma de valores únicos.
+    Ej. talla 6=10 y talla 12=10 → grupo {10} → aporta 10 capas.
+    """
+    if not curva:
+        return 0
+    valores_unicos = set()
+    for _, n in curva.items():
+        try:
+            v = int(n)
+        except Exception:
+            v = 0
+        if v > 0:
+            valores_unicos.add(v)
+    return sum(valores_unicos)
+
+
+def crear_orden_corte(*, referencia_id: str,
+                       largo_trazo: float,
+                       curva_trazo: dict,
+                       cantidad_programada: Optional[int] = None,
+                       promedio_tecnico: Optional[float] = None,
+                       responsable: Optional[str] = None,
+                       fecha_envio: Optional[str] = None,
+                       indicaciones: Optional[str] = None,
+                       destinatarios_correo: Optional[list[str]] = None,
+                       trazos_url: Optional[str] = None,
+                       created_by: str = "") -> dict:
+    """Crea una orden de corte a partir de un precosteo (firmado o muestra).
+    - num_capas se auto-calcula desde la curva de tallas.
+    - prendas_por_trazo = # tallas distintas con cantidad > 0 (aprox).
+    - prendas_estimadas = suma de unidades de la curva.
     """
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
-    # Precosteo debe existir. Se permite:
-    #   - Precosteo firmado (bloqueada=True), o
-    #   - Precosteo en borrador marcado como muestra de diseño.
     p = obtener_precosteo(referencia_id)
     if not p:
         raise ValueError("precosteo_no_encontrado")
     if not p.get("bloqueada") and not p.get("es_muestra_diseno"):
         raise ValueError("precosteo_no_firmado")
 
-    prendas_est = int(prendas_por_trazo) * int(num_capas)
-    metros_teo = round(float(largo_trazo) * int(num_capas), 2)
+    curva = curva_trazo or {}
+    # Prendas totales programadas = suma de la curva
+    prendas_curva = sum(int(n or 0) for n in curva.values())
+    prendas_est = int(cantidad_programada) if cantidad_programada else prendas_curva
+    # Capas auto-calculadas por la regla del cortador (misma cantidad ⇒ mismo trazo)
+    num_capas = calcular_capas_desde_curva(curva)
+    # Tallas distintas cortadas por trazo (aprox — tallas con cantidad > 0)
+    prendas_por_trazo_est = max(1, sum(1 for v in curva.values() if int(v or 0) > 0))
+    metros_teo = round(float(largo_trazo) * num_capas, 2)
     rendimiento = round(metros_teo / prendas_est, 4) if prendas_est else 0
 
-    # Consecutivo mensual: YYYYMM-NNNN (resetea cada mes)
     codigo = next_consecutivo_mensual("OC", width=4)
     row = {
         "consecutivo": codigo,
         "referencia_id": referencia_id,
-        "tono": (tono or None),
         "largo_trazo": float(largo_trazo),
-        "prendas_por_trazo": int(prendas_por_trazo),
-        "curva_trazo": curva_trazo or {},
-        "num_capas": int(num_capas),
+        "prendas_por_trazo": prendas_por_trazo_est,
+        "curva_trazo": curva,
+        "num_capas": num_capas,
+        "cantidad_programada": prendas_est,
+        "promedio_tecnico": float(promedio_tecnico) if promedio_tecnico is not None else None,
         "prendas_estimadas": prendas_est,
         "metros_consumidos": metros_teo,
         "rendimiento_teorico": rendimiento,
         "responsable": responsable or None,
-        "fecha_limite": fecha_limite or None,
+        "fecha_envio": fecha_envio or None,
+        "fecha_limite": fecha_envio or None,   # retro-compat con la columna vieja
         "indicaciones": indicaciones or None,
+        "trazos_url": trazos_url or None,
+        "destinatarios_correo": destinatarios_correo or [],
         "estado": "borrador",
         "created_by": created_by,
     }
-    r = sb.table("ordenes_corte").insert(row).execute()
+    try:
+        r = sb.table("ordenes_corte").insert(row).execute()
+    except Exception as e:
+        # Compat si la migración aún no corrió: quita las columnas nuevas
+        msg = str(e)
+        cols_nuevas = ("cantidad_programada", "promedio_tecnico", "fecha_envio",
+                       "trazos_url", "destinatarios_correo")
+        if any(c in msg for c in cols_nuevas):
+            for c in cols_nuevas:
+                row.pop(c, None)
+            r = sb.table("ordenes_corte").insert(row).execute()
+        else:
+            raise
     return r.data[0]
 
 
@@ -835,3 +880,141 @@ def eliminar_orden_corte(oc_id: str) -> None:
         raise ValueError("no_se_puede_eliminar_cortada")
     # orden_corte_rollos cae por CASCADE
     sb.table("ordenes_corte").delete().eq("id", oc_id).execute()
+
+
+# ── Trazos: adjuntar archivo (PDF/imagen) ─────────────────────────────
+def subir_trazos_corte(oc_id: str, *, file_bytes: bytes, filename: str,
+                       content_type: str) -> str:
+    """Sube el archivo de trazos a Storage bucket 'produccion-trazos'
+    y guarda la URL en la orden. Devuelve la URL pública.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    oc = obtener_orden_corte(oc_id)
+    if not oc:
+        raise ValueError("orden_no_encontrada")
+    ext = (filename.rsplit(".", 1)[-1] if "." in filename else "pdf").lower()
+    if ext not in ("pdf", "png", "jpg", "jpeg", "webp"):
+        raise ValueError("formato_no_soportado")
+    bucket = "produccion-trazos"
+    path = f"{oc_id}/trazos.{ext}"
+    try:
+        try:
+            sb.storage.from_(bucket).remove([path])
+        except Exception:
+            pass
+        sb.storage.from_(bucket).upload(
+            path, file_bytes,
+            {"content-type": content_type or "application/octet-stream", "upsert": "true"},
+        )
+    except Exception as e:
+        raise RuntimeError(f"subir_trazos: {str(e)[:200]}")
+    url = sb.storage.from_(bucket).get_public_url(path)
+    sb.table("ordenes_corte").update({
+        "trazos_url": url, "updated_at": _now_iso(),
+    }).eq("id", oc_id).execute()
+    return url
+
+
+# ── Autorizar orden de corte y enviar correo ──────────────────────────
+def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = None,
+                           mensaje_extra: Optional[str] = None,
+                           usuario: str) -> dict:
+    """Marca la orden como 'autorizada' y prepara el correo para los destinatarios.
+
+    Estrategia de envío:
+    - Si RESEND_API_KEY está seteada → envía vía Resend API.
+    - Si no → devuelve `mailto_url` para que el frontend lo abra en el cliente
+      de correo del usuario. Los datos quedan igualmente guardados en la orden.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    oc = obtener_orden_corte(oc_id)
+    if not oc:
+        raise ValueError("orden_no_encontrada")
+    if oc.get("estado") == "cortada":
+        raise ValueError("orden_ya_cortada")
+
+    # Guardar destinatarios si vinieron
+    update: dict = {"estado": "autorizada", "autorizada_por": usuario, "updated_at": _now_iso()}
+    if destinatarios is not None:
+        update["destinatarios_correo"] = destinatarios
+    try:
+        sb.table("ordenes_corte").update(update).eq("id", oc_id).execute()
+    except Exception as e:
+        if "destinatarios_correo" in str(e):
+            update.pop("destinatarios_correo", None)
+            sb.table("ordenes_corte").update(update).eq("id", oc_id).execute()
+        else:
+            raise
+
+    ref = oc.get("referencia") or {}
+    codigo_ref = ref.get("codigo_referencia") or ""
+    asunto = f"Orden de corte referencia {codigo_ref}"
+
+    # Cuerpo del correo
+    filas_curva = "\n".join(f"  · Talla {t}: {n} und" for t, n in (oc.get("curva_trazo") or {}).items())
+    body = (
+        f"Orden de corte {oc.get('consecutivo')}\n"
+        f"Referencia: {codigo_ref} · {ref.get('nombre','')}\n"
+        f"Tela: {ref.get('tela','—')}\n"
+        f"Largo trazo: {oc.get('largo_trazo')} m\n"
+        f"Número de capas: {oc.get('num_capas')}\n"
+        f"Cantidad programada: {oc.get('cantidad_programada') or oc.get('prendas_estimadas') or ''}\n"
+        f"Promedio técnico: {oc.get('promedio_tecnico') or '—'}\n"
+        f"Cortador responsable: {oc.get('responsable') or '—'}\n"
+        f"Fecha envío: {oc.get('fecha_envio') or oc.get('fecha_limite') or '—'}\n"
+        f"\nCurva de tallas:\n{filas_curva or '  (sin curva)'}\n"
+        f"\nTrazos: {oc.get('trazos_url') or '—'}\n"
+    )
+    if mensaje_extra:
+        body += f"\n{mensaje_extra}\n"
+    body += f"\nAutorizada por: {usuario}\n"
+
+    dest = destinatarios if destinatarios is not None else (oc.get("destinatarios_correo") or [])
+    resultado = {
+        "asunto": asunto,
+        "body": body,
+        "destinatarios": dest,
+        "enviado_por": None,   # 'resend' | 'mailto'
+        "mailto_url": None,
+    }
+
+    # Envío via Resend si hay API key
+    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
+    if resend_key and dest:
+        try:
+            import httpx
+            from_email = os.environ.get("RESEND_FROM", "orden-corte@maledenim.com").strip()
+            r = httpx.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {resend_key}",
+                         "Content-Type": "application/json"},
+                json={
+                    "from": from_email,
+                    "to": dest,
+                    "subject": asunto,
+                    "text": body,
+                },
+                timeout=15.0,
+            )
+            if r.status_code >= 400:
+                raise RuntimeError(f"resend_error: {r.status_code} {r.text[:200]}")
+            resultado["enviado_por"] = "resend"
+        except Exception as e:
+            print(f"[corte.autorizar] Resend falló, fallback a mailto: {e}")
+
+    # Fallback mailto
+    if resultado["enviado_por"] is None:
+        from urllib.parse import quote
+        to_str = ",".join(dest) if dest else ""
+        resultado["mailto_url"] = (
+            f"mailto:{to_str}"
+            f"?subject={quote(asunto)}"
+            f"&body={quote(body)}"
+        )
+        resultado["enviado_por"] = "mailto"
+
+    return {**obtener_orden_corte(oc_id), "correo": resultado}

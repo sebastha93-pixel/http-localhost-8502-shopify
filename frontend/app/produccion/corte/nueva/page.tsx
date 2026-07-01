@@ -7,13 +7,13 @@
  * 3. Curva de tallas 4-6-8-10-12-14-16 (editable).
  * Al guardar → borrador. La pistola de rollos se hace en el detalle.
  */
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageShell, LoadingState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { Save, Loader2, AlertCircle } from "lucide-react";
+import { Save, Loader2, AlertCircle, Paperclip, CheckCircle } from "lucide-react";
 
 interface Precosteo {
   id: string;
@@ -47,49 +47,85 @@ export default function NuevaOrdenCortePage() {
   }, [q.data]);
 
   const [referenciaId, setReferenciaId] = useState("");
-  const [tono, setTono] = useState("");
+  const [promedioTecnico, setPromedioTecnico] = useState("");
   const [largoTrazo, setLargoTrazo] = useState("");
-  const [prendasTrazo, setPrendasTrazo] = useState("");
-  const [numCapas, setNumCapas] = useState("");
+  const [cantidadProgramada, setCantidadProgramada] = useState("");
   const [responsable, setResponsable] = useState("");
-  const [fechaLimite, setFechaLimite] = useState("");
+  const [fechaEnvio, setFechaEnvio] = useState("");
   const [indicaciones, setIndicaciones] = useState("");
+  const [destinatarios, setDestinatarios] = useState("");
+  const [trazosUrl] = useState("");
+  const [subiendoTrazos] = useState(false);
+  const trazosRef = useRef<HTMLInputElement>(null);
   const [curva, setCurva] = useState<Record<string, string>>(
     Object.fromEntries(TALLAS_DEFAULT.map((t) => [t, ""]))
   );
   const [tallaExtra, setTallaExtra] = useState("");
   const [err, setErr] = useState("");
 
+  // Precosteo seleccionado (para mostrar la tela automáticamente en la cabecera)
+  const precosteoSel = useMemo<Precosteo | undefined>(
+    () => precosteos.find((p) => p.id === referenciaId),
+    [precosteos, referenciaId],
+  );
+
+  // Auto-calcula # capas desde la curva:
+  // regla del cortador — tallas con la misma cantidad se cortan juntas → group by count.
+  // Total capas = suma de valores ÚNICOS.
+  const capasAutoCalc = useMemo(() => {
+    const unicos = new Set<number>();
+    for (const v of Object.values(curva)) {
+      const n = parseInt(v || "0", 10) || 0;
+      if (n > 0) unicos.add(n);
+    }
+    return Array.from(unicos).reduce((a, b) => a + b, 0);
+  }, [curva]);
+
+  const totalCurva = Object.values(curva).reduce((s, v) => s + (parseInt(v || "0", 10) || 0), 0);
+
   const mut = useMutation({
     mutationFn: () => {
       const largo = parseFloat(largoTrazo || "0");
-      const prendas = parseInt(prendasTrazo || "0", 10);
-      const capas = parseInt(numCapas || "0", 10);
-      if (!referenciaId)         throw new Error("Selecciona una referencia (precosteo firmado)");
-      if (!(largo > 0))          throw new Error("Largo de trazo inválido");
-      if (!(prendas > 0))        throw new Error("Prendas por trazo inválido");
-      if (!(capas > 0))          throw new Error("Número de capas inválido");
+      const cant = parseInt(cantidadProgramada || "0", 10);
+      if (!referenciaId)   throw new Error("Selecciona una referencia");
+      if (!(largo > 0))    throw new Error("Largo de trazo inválido");
       // Curva: solo tallas con valor > 0
       const curvaFinal: Record<string, number> = {};
       for (const [talla, val] of Object.entries(curva)) {
         const n = parseInt(val || "0", 10);
         if (n > 0) curvaFinal[talla] = n;
       }
+      if (Object.keys(curvaFinal).length === 0)
+        throw new Error("Llena al menos una talla en la curva.");
+      const destArr = destinatarios
+        .split(/[,;\s]+/g).map((s) => s.trim()).filter(Boolean);
       return api.post<{ ok: boolean; orden_corte: { id: string } }>("/api/produccion/corte", {
         referencia_id: referenciaId,
-        tono: tono || null,
         largo_trazo: largo,
-        prendas_por_trazo: prendas,
         curva_trazo: curvaFinal,
-        num_capas: capas,
+        cantidad_programada: cant || totalCurva || null,
+        promedio_tecnico: promedioTecnico ? parseFloat(promedioTecnico) : null,
         responsable: responsable || null,
-        fecha_limite: fechaLimite || null,
+        fecha_envio: fechaEnvio || null,
         indicaciones: indicaciones || null,
+        destinatarios_correo: destArr,
+        trazos_url: trazosUrl || null,
       });
     },
     onSuccess: (data) => router.push(`/produccion/corte/${data.orden_corte.id}`),
     onError: (e: Error) => setErr(e.message),
   });
+
+  async function subirTrazosPreCreacion(f: File) {
+    // Estrategia: crear la orden como borrador, luego subir el archivo.
+    // Como aquí aún no hay id, guardamos el archivo temporalmente y lo
+    // subimos justo antes del submit final. Para simplicidad y consistencia,
+    // pedimos primero llenar cabecera y luego adjuntar en el detalle.
+    // Aquí solo capturamos la URL si ya se subió alguna vez.
+    setErr("Sube los trazos desde el detalle de la orden (después de guardarla).");
+    if (trazosRef.current) trazosRef.current.value = "";
+    void f;
+  }
 
   function actualizarCurva(t: string, v: string) {
     setCurva((prev) => ({ ...prev, [t]: v }));
@@ -109,13 +145,11 @@ export default function NuevaOrdenCortePage() {
     });
   }
 
-  // Totales derivados
+  // Totales derivados (para la card de KPIs)
   const largoN = parseFloat(largoTrazo || "0") || 0;
-  const capasN = parseInt(numCapas || "0", 10) || 0;
-  const prendasN = parseInt(prendasTrazo || "0", 10) || 0;
-  const prendasEst = prendasN * capasN;
-  const metrosTeo = largoN * capasN;
-  const totalCurva = Object.values(curva).reduce((s, v) => s + (parseInt(v || "0", 10) || 0), 0);
+  const metrosTeo = largoN * capasAutoCalc;
+  const prendasEst = parseInt(cantidadProgramada || "0", 10) || totalCurva || 0;
+  const rendimiento = prendasEst > 0 ? metrosTeo / prendasEst : 0;
 
   if (q.isLoading) return <LoadingState label="Cargando referencias…" />;
 
@@ -150,12 +184,29 @@ export default function NuevaOrdenCortePage() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <Input label="Tono"                value={tono}          onChange={setTono}          placeholder="Ej. índigo oscuro" />
+              {/* Nombre de tela — trae automático del precosteo */}
+              <div>
+                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                  Nombre de tela (auto)
+                </label>
+                <input readOnly value={precosteoSel?.tela || ""}
+                  placeholder={referenciaId ? "—" : "Selecciona referencia primero"}
+                  className="w-full rounded-sm border border-border bg-cloud/40 px-3 py-2 text-sm text-graphite" />
+              </div>
+              <Input label="Promedio técnico (m/prenda)" value={promedioTecnico} onChange={setPromedioTecnico} inputMode="decimal" placeholder="0.850" />
               <Input label="Largo de trazo (m) *" value={largoTrazo}    onChange={setLargoTrazo}    inputMode="decimal" required />
-              <Input label="Prendas por trazo *"  value={prendasTrazo}  onChange={setPrendasTrazo}  inputMode="numeric" required />
-              <Input label="Nº de capas *"        value={numCapas}      onChange={setNumCapas}      inputMode="numeric" required />
-              <Input label="Responsable"          value={responsable}   onChange={setResponsable}   placeholder="Ej. cortador" />
-              <Input label="Fecha límite"         type="date" value={fechaLimite} onChange={setFechaLimite} />
+              <Input label="Cantidad programada"   value={cantidadProgramada} onChange={setCantidadProgramada} inputMode="numeric" placeholder={totalCurva > 0 ? String(totalCurva) : "0"} />
+              {/* Nº capas — auto desde curva (readonly) */}
+              <div>
+                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                  Nº de capas (auto)
+                </label>
+                <div className="w-full rounded-sm border border-border bg-cloud/40 px-3 py-2 text-sm text-ink-900 tabular font-semibold">
+                  {capasAutoCalc}
+                </div>
+              </div>
+              <Input label="Cortador responsable"  value={responsable}   onChange={setResponsable}   placeholder="Ej. Ivan Rodríguez" />
+              <Input label="Fecha de envío"        type="date" value={fechaEnvio} onChange={setFechaEnvio} />
             </div>
 
             <div>
@@ -164,6 +215,48 @@ export default function NuevaOrdenCortePage() {
               </label>
               <textarea value={indicaciones} onChange={(e) => setIndicaciones(e.target.value)}
                 rows={2} className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />
+            </div>
+
+            {/* Adjuntar trazos */}
+            <div>
+              <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                Adjuntar trazos (PDF/imagen)
+              </label>
+              <div className="flex items-center gap-2">
+                <input ref={trazosRef} type="file" accept="application/pdf,image/*" className="hidden"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) subirTrazosPreCreacion(f); }} />
+                <button type="button" onClick={() => trazosRef.current?.click()}
+                  disabled={subiendoTrazos}
+                  className="inline-flex items-center gap-2 rounded-sm border border-border bg-card px-3 py-2 text-xs font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud disabled:opacity-40">
+                  {subiendoTrazos ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+                  {trazosUrl ? "Cambiar archivo" : "Subir archivo"}
+                </button>
+                {trazosUrl && (
+                  <a href={trazosUrl} target="_blank" rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-teal">
+                    <CheckCircle className="h-3.5 w-3.5" /> Trazos adjuntos
+                  </a>
+                )}
+                <span className="text-[0.65rem] text-graphite">
+                  (Puedes subir/cambiar los trazos en el detalle de la orden después de guardarla)
+                </span>
+              </div>
+            </div>
+
+            {/* Destinatarios correo — se envían al autorizar */}
+            <div>
+              <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                Destinatarios correo de autorización
+              </label>
+              <input value={destinatarios} onChange={(e) => setDestinatarios(e.target.value)}
+                placeholder="cortador@maledenim.com, produccion@maledenim.com"
+                className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />
+              <p className="mt-1 text-[0.62rem] text-graphite">
+                Emails separados por coma. Al autorizar la orden se enviará el correo con asunto{" "}
+                <span className="font-semibold text-ink-900">
+                  &ldquo;Orden de corte referencia {precosteoSel?.codigo_referencia || "XXXX"}&rdquo;
+                </span>.
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -206,10 +299,10 @@ export default function NuevaOrdenCortePage() {
         {/* Cálculos teóricos */}
         <Card>
           <CardContent className="p-5 grid grid-cols-2 md:grid-cols-4 gap-4">
-            <Kpi label="Prendas estimadas" value={prendasEst.toString()} />
-            <Kpi label="Metros teóricos"   value={`${metrosTeo.toFixed(2)} m`} />
-            <Kpi label="Prendas curva/trazo" value={totalCurva.toString()} />
-            <Kpi label="Rendimiento (m/prenda)" value={prendasEst ? (metrosTeo / prendasEst).toFixed(3) : "—"} />
+            <Kpi label="Cantidad programada" value={prendasEst.toString()} />
+            <Kpi label="Nº capas (auto)"     value={capasAutoCalc.toString()} />
+            <Kpi label="Metros teóricos"     value={`${metrosTeo.toFixed(2)} m`} />
+            <Kpi label="Rendimiento (m/prenda)" value={prendasEst ? rendimiento.toFixed(3) : "—"} />
           </CardContent>
         </Card>
 
