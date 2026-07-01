@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from backend.core.security import CurrentUser, require_role, require_permission
@@ -271,9 +271,160 @@ def ajuste_stock(
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# TODOs siguientes bloques (marcados para no perder scope)
+# PRECOSTEO
 # ═══════════════════════════════════════════════════════════════════════
-# Bloque 3 — Precosteo (GET/POST + firmar)
+
+class PrecosteoItemIn(BaseModel):
+    categoria:      str = Field(min_length=1)
+    item:           str = Field(min_length=1)
+    valor_unitario: float = Field(ge=0)
+    cantidad:       float = Field(gt=0)
+    iva:            float = Field(ge=0, default=0)
+
+
+class PrecosteoIn(BaseModel):
+    codigo_referencia: str = Field(min_length=1)
+    nombre:            str = Field(min_length=1)
+    tela:              Optional[str] = None
+    color:             Optional[str] = None
+    iva_pct:           float = 19
+    margen:            float = 0
+    items:             list[PrecosteoItemIn] = []
+
+
+class PrecosteoUpdate(BaseModel):
+    nombre:  Optional[str] = None
+    tela:    Optional[str] = None
+    color:   Optional[str] = None
+    iva_pct: Optional[float] = None
+    margen:  Optional[float] = None
+    items:   Optional[list[PrecosteoItemIn]] = None
+
+
+@router.get("/precosteo/categorias")
+def categorias_precosteo(_: CurrentUser = Depends(require_permission("operaciones", "ver"))) -> dict:
+    return {"categorias": list(svc.CATEGORIAS_PRECOSTEO)}
+
+
+@router.post("/precosteo")
+def crear_precosteo(
+    body: PrecosteoIn,
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    try:
+        return svc.crear_precosteo(
+            codigo_referencia=body.codigo_referencia,
+            nombre=body.nombre,
+            tela=body.tela or "",
+            color=body.color or "",
+            iva_pct=body.iva_pct,
+            margen=body.margen,
+            items=[i.model_dump() for i in body.items],
+            created_by=user.email,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"crear_precosteo: {str(e)[:200]}")
+
+
+@router.get("/precosteo")
+def listar_precosteos(
+    estado: Optional[str] = None,
+    tela: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=1000),
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
+) -> dict:
+    return {"precosteos": svc.listar_precosteos(estado=estado, tela=tela, limit=limit)}
+
+
+@router.get("/precosteo/{precosteo_id}")
+def detalle_precosteo(
+    precosteo_id: str,
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
+) -> dict:
+    p = svc.obtener_precosteo(precosteo_id)
+    if not p:
+        raise HTTPException(404, "no_encontrado")
+    return p
+
+
+@router.patch("/precosteo/{precosteo_id}")
+def actualizar_precosteo(
+    precosteo_id: str,
+    body: PrecosteoUpdate,
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    try:
+        return svc.actualizar_precosteo(
+            precosteo_id,
+            nombre=body.nombre,
+            tela=body.tela,
+            color=body.color,
+            iva_pct=body.iva_pct,
+            margen=body.margen,
+            items=[i.model_dump() for i in body.items] if body.items is not None else None,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"actualizar: {str(e)[:200]}")
+
+
+@router.post("/precosteo/{precosteo_id}/firmar")
+def firmar_precosteo(
+    precosteo_id: str,
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    """Firma y bloquea. Requiere flag `puede_autorizar_precosteo` en usuarios."""
+    try:
+        return svc.firmar_precosteo(precosteo_id, usuario_id=user.id)
+    except ValueError as e:
+        # sin_permiso, ya_bloqueado, no_encontrado → 403 vs 400 vs 404
+        msg = str(e)
+        if msg == "sin_permiso_autorizar_precosteo":
+            raise HTTPException(403, "No tienes permiso para autorizar precosteo. Pide a un admin activar el flag.")
+        if msg == "no_encontrado":
+            raise HTTPException(404, "Precosteo no encontrado")
+        raise HTTPException(400, msg)
+
+
+@router.delete("/precosteo/{precosteo_id}")
+def eliminar_precosteo(
+    precosteo_id: str,
+    _: CurrentUser = Depends(require_permission("operaciones", "borrar")),
+) -> dict:
+    try:
+        svc.eliminar_precosteo(precosteo_id)
+        return {"ok": True}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/precosteo/{precosteo_id}/foto")
+async def subir_foto(
+    precosteo_id: str,
+    file: UploadFile = File(...),
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(400, "imagen_mayor_a_5MB")
+    try:
+        url = svc.subir_foto_precosteo(
+            precosteo_id,
+            file_bytes=content,
+            filename=file.filename or "foto.jpg",
+            content_type=file.content_type or "image/jpeg",
+        )
+        return {"ok": True, "foto_url": url}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"foto: {str(e)[:200]}")
+
+
 # Bloque 4 — Orden de Corte + cierre
 # Bloque 5 — Informe teórico vs real
 # Bloque 6 — Remisiones + Insumos

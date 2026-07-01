@@ -299,6 +299,252 @@ def inventario_resumen() -> list[dict]:
     return out
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# PRECOSTEO
+# ═══════════════════════════════════════════════════════════════════════
+
+CATEGORIAS_PRECOSTEO = (
+    "DIRTY JEANS", "MP", "PROCESO EN MP", "PROCESO",
+    "INSUMO CONFECCION", "INSUMO EMPAQUE", "INSUMO TERMINACION",
+    "GASTOS FIJOS",
+)
+
+
+def _calcular_totales_precosteo(items: list[dict], iva_pct: float, margen: float) -> dict:
+    """Suma totales de líneas y calcula precio sugerido por margen."""
+    total_sin = 0.0
+    total_con = 0.0
+    for it in items:
+        vu = float(it.get("valor_unitario") or 0)
+        cant = float(it.get("cantidad") or 0)
+        iva = float(it.get("iva") or 0)
+        ts = round(vu * cant, 2)
+        tc = round(ts + iva, 2)
+        it["total_sin_iva"] = ts
+        it["total_con_iva"] = tc
+        total_sin += ts
+        total_con += tc
+    total_sin = round(total_sin, 2)
+    total_con = round(total_con, 2)
+    precio = round(total_con * (1 + (float(margen) or 0) / 100), 0) if margen else None
+    return {
+        "costo_total_sin_iva": total_sin,
+        "costo_total_con_iva": total_con,
+        "precio_sugerido_venta": precio,
+    }
+
+
+def crear_precosteo(*, codigo_referencia: str, nombre: str, tela: str, color: str,
+                    iva_pct: float, margen: float, items: list[dict],
+                    created_by: str) -> dict:
+    """Crea un precosteo en estado 'borrador' con sus líneas."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    if not codigo_referencia.strip():
+        raise ValueError("codigo_referencia_requerido")
+    # Validar categorías
+    for it in items:
+        cat = (it.get("categoria") or "").upper().strip()
+        if cat and cat not in CATEGORIAS_PRECOSTEO:
+            raise ValueError(f"categoria_invalida: {cat}")
+    totales = _calcular_totales_precosteo(items, iva_pct, margen)
+    row = {
+        "codigo_referencia": codigo_referencia.strip(),
+        "nombre": nombre.strip(),
+        "tela": (tela or "").strip() or None,
+        "color": (color or "").strip() or None,
+        "iva_pct": iva_pct,
+        "margen": margen,
+        "costo_total_sin_iva": totales["costo_total_sin_iva"],
+        "costo_total_con_iva": totales["costo_total_con_iva"],
+        "precio_sugerido_venta": totales["precio_sugerido_venta"],
+        "estado": "borrador",
+        "bloqueada": False,
+        "created_by": created_by,
+    }
+    r = sb.table("referencias_precosteo").insert(row).execute()
+    if not r.data:
+        raise RuntimeError("no_se_pudo_crear")
+    ref = r.data[0]
+    ref_id = ref["id"]
+
+    # Insertar ítems
+    if items:
+        rows_items = []
+        for i, it in enumerate(items):
+            rows_items.append({
+                "referencia_id": ref_id,
+                "categoria": (it.get("categoria") or "").upper().strip(),
+                "item": (it.get("item") or "").strip(),
+                "valor_unitario": it.get("valor_unitario") or 0,
+                "cantidad": it.get("cantidad") or 1,
+                "iva": it.get("iva") or 0,
+                "total_sin_iva": it.get("total_sin_iva") or 0,
+                "total_con_iva": it.get("total_con_iva") or 0,
+                "orden": i,
+            })
+        sb.table("precosteo_items").insert(rows_items).execute()
+
+    return obtener_precosteo(ref_id)
+
+
+def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
+                         tela: Optional[str] = None, color: Optional[str] = None,
+                         iva_pct: Optional[float] = None, margen: Optional[float] = None,
+                         items: Optional[list[dict]] = None,
+                         foto_url: Optional[str] = None) -> dict:
+    """Actualiza un borrador. Rechaza si el precosteo ya está bloqueado."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    actual = obtener_precosteo(precosteo_id)
+    if not actual:
+        raise ValueError("no_encontrado")
+    if actual.get("bloqueada"):
+        raise ValueError("precosteo_bloqueado")
+
+    update: dict = {}
+    if nombre is not None:  update["nombre"] = nombre.strip()
+    if tela is not None:    update["tela"] = tela.strip() or None
+    if color is not None:   update["color"] = color.strip() or None
+    if iva_pct is not None: update["iva_pct"] = iva_pct
+    if margen is not None:  update["margen"] = margen
+    if foto_url is not None: update["foto_url"] = foto_url
+
+    if items is not None:
+        # Reemplazar líneas: borrar y volver a insertar
+        sb.table("precosteo_items").delete().eq("referencia_id", precosteo_id).execute()
+        totales = _calcular_totales_precosteo(items, iva_pct if iva_pct is not None else float(actual.get("iva_pct") or 19), margen if margen is not None else float(actual.get("margen") or 0))
+        update.update(totales)
+        rows_items = []
+        for i, it in enumerate(items):
+            rows_items.append({
+                "referencia_id": precosteo_id,
+                "categoria": (it.get("categoria") or "").upper().strip(),
+                "item": (it.get("item") or "").strip(),
+                "valor_unitario": it.get("valor_unitario") or 0,
+                "cantidad": it.get("cantidad") or 1,
+                "iva": it.get("iva") or 0,
+                "total_sin_iva": it.get("total_sin_iva") or 0,
+                "total_con_iva": it.get("total_con_iva") or 0,
+                "orden": i,
+            })
+        if rows_items:
+            sb.table("precosteo_items").insert(rows_items).execute()
+
+    if update:
+        update["updated_at"] = _now_iso()
+        sb.table("referencias_precosteo").update(update).eq("id", precosteo_id).execute()
+
+    return obtener_precosteo(precosteo_id)
+
+
+def firmar_precosteo(precosteo_id: str, *, usuario_id: str) -> dict:
+    """Firma un precosteo (autoriza + bloquea). Requiere flag puede_autorizar_precosteo."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+
+    # Validar flag del usuario
+    from backend.services import usuarios as _usuarios
+    u = _usuarios.obtener_por_id(usuario_id)
+    if not u:
+        raise ValueError("usuario_no_encontrado")
+    if not u.get("puede_autorizar_precosteo"):
+        raise ValueError("sin_permiso_autorizar_precosteo")
+
+    actual = obtener_precosteo(precosteo_id)
+    if not actual:
+        raise ValueError("no_encontrado")
+    if actual.get("bloqueada"):
+        raise ValueError("ya_bloqueado")
+
+    now = _now_iso()
+    sb.table("referencias_precosteo").update({
+        "estado": "autorizada",
+        "bloqueada": True,
+        "autorizada_por": u.get("email") or usuario_id,
+        "fecha_autorizacion": now,
+        "updated_at": now,
+    }).eq("id", precosteo_id).execute()
+    return obtener_precosteo(precosteo_id)
+
+
+def eliminar_precosteo(precosteo_id: str) -> None:
+    """Elimina un precosteo (solo borrador). Los ítems caen por CASCADE."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    actual = obtener_precosteo(precosteo_id)
+    if not actual:
+        raise ValueError("no_encontrado")
+    if actual.get("bloqueada"):
+        raise ValueError("no_se_puede_eliminar_bloqueado")
+    sb.table("referencias_precosteo").delete().eq("id", precosteo_id).execute()
+
+
+def listar_precosteos(*, estado: Optional[str] = None, tela: Optional[str] = None,
+                      limit: int = 200) -> list[dict]:
+    sb = _sb()
+    if sb is None:
+        return []
+    q = sb.table("referencias_precosteo").select("*").order("created_at", desc=True).limit(limit)
+    if estado:
+        q = q.eq("estado", estado)
+    if tela:
+        q = q.ilike("tela", f"%{tela}%")
+    return (q.execute().data or [])
+
+
+def obtener_precosteo(precosteo_id: str) -> Optional[dict]:
+    sb = _sb()
+    if sb is None:
+        return None
+    ref = (sb.table("referencias_precosteo").select("*").eq("id", precosteo_id).limit(1).execute()).data
+    if not ref:
+        return None
+    items = (sb.table("precosteo_items").select("*")
+               .eq("referencia_id", precosteo_id)
+               .order("orden").execute()).data or []
+    return {**ref[0], "items": items}
+
+
+def subir_foto_precosteo(precosteo_id: str, *, file_bytes: bytes, filename: str,
+                         content_type: str) -> str:
+    """Sube la foto de la referencia a Supabase Storage bucket 'produccion-fotos'
+    y devuelve la URL pública. Actualiza foto_url en la tabla.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
+    if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
+        raise ValueError("formato_imagen_no_soportado")
+    path = f"{precosteo_id}/foto.{ext}"
+    bucket = "produccion-fotos"
+    try:
+        # Upsert por si ya existía
+        try:
+            sb.storage.from_(bucket).remove([path])
+        except Exception:
+            pass
+        sb.storage.from_(bucket).upload(
+            path, file_bytes,
+            {"content-type": content_type or f"image/{ext}", "upsert": "true"},
+        )
+    except Exception as e:
+        raise RuntimeError(f"subir_foto: {str(e)[:200]}")
+    # URL pública (asume bucket con read policy pública)
+    url = sb.storage.from_(bucket).get_public_url(path)
+    # Guardar en la referencia
+    sb.table("referencias_precosteo").update({
+        "foto_url": url,
+        "updated_at": _now_iso(),
+    }).eq("id", precosteo_id).execute()
+    return url
+
+
 def ajustar_stock(*, rollo_id: str, metros_delta: float, nota: str,
                   usuario: str) -> dict:
     """Ajuste manual de stock de un rollo (admin). Registra movimiento."""

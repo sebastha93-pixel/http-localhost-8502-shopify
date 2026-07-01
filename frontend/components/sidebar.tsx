@@ -68,6 +68,7 @@ const NAV: { home: NavItem; groups: NavGroup[] } = {
         { label: "Producción",  href: "/produccion" },
         { label: "Ingreso",     href: "/produccion/ingreso" },
         { label: "Inventario",  href: "/produccion/inventario" },
+        { label: "Precosteo",   href: "/produccion/precosteo" },
       ],
     },
     {

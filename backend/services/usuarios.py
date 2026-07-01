@@ -75,8 +75,8 @@ _MODULO_A_GRUPO = {m: g for g, mods in MODULOS_GRUPOS.items() for m in mods}
 ACCIONES = ("ver", "modificar", "borrar")
 
 # Columnas que SELECT siempre debe pedir (incluye cargo + permisos nuevos).
-_COLS = "id,email,nombre,cargo,rol,permisos,activo,creado_en"
-_COLS_AUTH = "id,email,nombre,cargo,rol,permisos,activo,password_hash"
+_COLS = "id,email,nombre,cargo,rol,permisos,activo,creado_en,puede_autorizar_precosteo,puede_autorizar_corte"
+_COLS_AUTH = "id,email,nombre,cargo,rol,permisos,activo,password_hash,puede_autorizar_precosteo,puede_autorizar_corte"
 
 
 def _normalizar_rol(rol: str) -> str:

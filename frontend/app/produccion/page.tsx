@@ -8,7 +8,7 @@ import { Package, Boxes, Ruler, Scissors, FileText, Users, BarChart3 } from "luc
 const MODULOS = [
   { href: "/produccion/ingreso",       label: "Ingreso de tela", desc: "Recepción de textilera → rollos + etiquetas", icon: Package, activo: true },
   { href: "/produccion/inventario",    label: "Inventario",      desc: "Rollos por tela · metros disponibles",         icon: Boxes,   activo: true },
-  { href: "/produccion/precosteo",     label: "Precosteo",       desc: "Costeo por referencia + firma",                icon: Ruler,   activo: false },
+  { href: "/produccion/precosteo",     label: "Precosteo",       desc: "Costeo por referencia + firma",                icon: Ruler,   activo: true },
   { href: "/produccion/corte",         label: "Orden de corte",  desc: "Trazo, curva y consumo real",                  icon: Scissors, activo: false },
   { href: "/produccion/remisiones",    label: "Remisiones",      desc: "Entregas a confeccionista",                    icon: FileText, activo: false },
   { href: "/produccion/confeccionistas", label: "Confeccionistas", desc: "Directorio de talleres",                       icon: Users,   activo: false },
