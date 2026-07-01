@@ -63,6 +63,14 @@ const NAV: { home: NavItem; groups: NavGroup[] } = {
       ],
     },
     {
+      title: "Producción",
+      items: [
+        { label: "Producción",  href: "/produccion" },
+        { label: "Ingreso",     href: "/produccion/ingreso" },
+        { label: "Inventario",  href: "/produccion/inventario" },
+      ],
+    },
+    {
       title: "Configuración",
       items: [
         { label: "Usuarios",            href: "/usuarios" },
