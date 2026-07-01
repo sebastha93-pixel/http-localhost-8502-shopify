@@ -671,3 +671,118 @@ def eliminar_corte(
         return {"ok": True}
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# BLOQUE 6A — CONFECCIONISTAS + REMISIONES
+# ═══════════════════════════════════════════════════════════════════════
+
+class ConfeccionistaIn(BaseModel):
+    nombre:    str = Field(min_length=2)
+    telefono:  Optional[str] = None
+    direccion: Optional[str] = None
+
+
+class ConfeccionistaUpdate(BaseModel):
+    nombre:    Optional[str] = None
+    telefono:  Optional[str] = None
+    direccion: Optional[str] = None
+    activo:    Optional[bool] = None
+
+
+class RemisionIn(BaseModel):
+    confeccionista_id: str
+    fecha_recogida:    str
+    orden_corte_ids:   list[str] = Field(min_length=1)
+
+
+@router.get("/confeccionistas")
+def listar_confeccionistas(
+    incluir_inactivos: bool = False,
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
+) -> dict:
+    return {"confeccionistas": svc.listar_confeccionistas(incluir_inactivos=incluir_inactivos)}
+
+
+@router.post("/confeccionistas")
+def crear_confeccionista(
+    body: ConfeccionistaIn,
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    try:
+        return {"ok": True, "confeccionista": svc.crear_confeccionista(
+            nombre=body.nombre, telefono=body.telefono, direccion=body.direccion,
+        )}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"crear_conf: {str(e)[:200]}")
+
+
+@router.patch("/confeccionistas/{cid}")
+def actualizar_confeccionista(
+    cid: str,
+    body: ConfeccionistaUpdate,
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    try:
+        campos = body.model_dump(exclude_unset=True)
+        return {"ok": True, "confeccionista": svc.actualizar_confeccionista(cid, **campos)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"actualizar_conf: {str(e)[:200]}")
+
+
+@router.get("/remisiones")
+def listar_remisiones(
+    estado: Optional[str] = None,
+    confeccionista_id: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=500),
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
+) -> dict:
+    return {"remisiones": svc.listar_remisiones(
+        estado=estado, confeccionista_id=confeccionista_id, limit=limit,
+    )}
+
+
+@router.post("/remisiones")
+def crear_remision(
+    body: RemisionIn,
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    try:
+        rem = svc.crear_remision(
+            confeccionista_id=body.confeccionista_id,
+            fecha_recogida=body.fecha_recogida,
+            orden_corte_ids=body.orden_corte_ids,
+            created_by=user.email,
+        )
+        return {"ok": True, "remision": rem}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"crear_remision: {str(e)[:200]}")
+
+
+@router.get("/remisiones/{rem_id}")
+def detalle_remision(
+    rem_id: str,
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
+) -> dict:
+    rem = svc.obtener_remision(rem_id)
+    if not rem:
+        raise HTTPException(404, "no_encontrada")
+    return rem
+
+
+@router.post("/remisiones/{rem_id}/recogida")
+def marcar_recogida(
+    rem_id: str,
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    try:
+        return {"ok": True, "remision": svc.marcar_remision_recogida(rem_id)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))

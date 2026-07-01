@@ -10,8 +10,8 @@ const MODULOS = [
   { href: "/produccion/inventario",    label: "Inventario",      desc: "Rollos por tela · metros disponibles",         icon: Boxes,   activo: true },
   { href: "/produccion/precosteo",     label: "Precosteo",       desc: "Costeo por referencia + firma",                icon: Ruler,   activo: true },
   { href: "/produccion/corte",         label: "Orden de corte",  desc: "Trazo, curva y consumo real (pistolea rollos)",  icon: Scissors, activo: true },
-  { href: "/produccion/remisiones",    label: "Remisiones",      desc: "Entregas a confeccionista",                    icon: FileText, activo: false },
-  { href: "/produccion/confeccionistas", label: "Confeccionistas", desc: "Directorio de talleres",                       icon: Users,   activo: false },
+  { href: "/produccion/remisiones",    label: "Remisiones",      desc: "Entregas a confeccionista",                    icon: FileText, activo: true },
+  { href: "/produccion/confeccionistas", label: "Confeccionistas", desc: "Directorio de talleres",                       icon: Users,   activo: true },
   { href: "/produccion/tablero",       label: "Tablero",         desc: "Eficiencia · stock mínimo · valor",             icon: BarChart3, activo: false },
 ];
 

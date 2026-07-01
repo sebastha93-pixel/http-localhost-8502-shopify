@@ -1079,3 +1079,155 @@ def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = No
         resultado["enviado_por"] = "mailto"
 
     return {**obtener_orden_corte(oc_id), "correo": resultado}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# BLOQUE 6A — CONFECCIONISTAS
+# ═══════════════════════════════════════════════════════════════════════
+
+def crear_confeccionista(*, nombre: str, telefono: Optional[str] = None,
+                          direccion: Optional[str] = None) -> dict:
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    if not nombre.strip():
+        raise ValueError("nombre_requerido")
+    row = {
+        "nombre":    nombre.strip(),
+        "telefono":  (telefono or "").strip() or None,
+        "direccion": (direccion or "").strip() or None,
+        "activo":    True,
+    }
+    r = sb.table("confeccionistas").insert(row).execute()
+    return r.data[0]
+
+
+def listar_confeccionistas(*, incluir_inactivos: bool = False,
+                            limit: int = 200) -> list[dict]:
+    sb = _sb()
+    if sb is None:
+        return []
+    q = sb.table("confeccionistas").select("*").order("nombre").limit(limit)
+    if not incluir_inactivos:
+        q = q.eq("activo", True)
+    return q.execute().data or []
+
+
+def actualizar_confeccionista(cid: str, **campos) -> dict:
+    permitidos = {"nombre", "telefono", "direccion", "activo"}
+    update = {k: v for k, v in campos.items() if k in permitidos and v is not None}
+    if not update:
+        raise ValueError("nada_que_actualizar")
+    if "nombre" in update:
+        update["nombre"] = str(update["nombre"]).strip()
+    update["updated_at"] = _now_iso()
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    r = sb.table("confeccionistas").update(update).eq("id", cid).execute()
+    if not r.data:
+        raise ValueError("no_encontrado")
+    return r.data[0]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# BLOQUE 6A — REMISIONES A CONFECCIONISTA
+# ═══════════════════════════════════════════════════════════════════════
+
+def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
+                    orden_corte_ids: list[str], created_by: str) -> dict:
+    """Crea una remisión: entrega de N órdenes de corte cortadas a un confeccionista.
+    - Valida que las órdenes existan y estén 'cortada' (no borrador ni autorizada).
+    - Genera consecutivo `REM-YYYY-NNNN`.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    if not orden_corte_ids:
+        raise ValueError("sin_ordenes")
+
+    # Validar confeccionista
+    c = (sb.table("confeccionistas").select("id,nombre,activo")
+           .eq("id", confeccionista_id).limit(1).execute()).data
+    if not c:
+        raise ValueError("confeccionista_no_encontrado")
+    if not c[0].get("activo"):
+        raise ValueError("confeccionista_inactivo")
+
+    # Validar órdenes de corte
+    for oc_id in orden_corte_ids:
+        oc = (sb.table("ordenes_corte").select("id,estado,consecutivo")
+                .eq("id", oc_id).limit(1).execute()).data
+        if not oc:
+            raise ValueError(f"orden_corte_no_encontrada:{oc_id}")
+        if oc[0].get("estado") != "cortada":
+            raise ValueError(f"orden_no_cortada:{oc[0].get('consecutivo')}")
+
+    codigo = next_consecutivo("REM", width=4)
+    row = {
+        "consecutivo":       codigo,
+        "confeccionista_id": confeccionista_id,
+        "fecha_recogida":    fecha_recogida,
+        "estado":            "generada",
+        "created_by":        created_by,
+    }
+    r = sb.table("remisiones").insert(row).execute()
+    if not r.data:
+        raise RuntimeError("no_se_pudo_crear_remision")
+    rem = r.data[0]
+
+    # Items
+    items_rows = [
+        {"remision_id": rem["id"], "orden_corte_id": oc_id}
+        for oc_id in orden_corte_ids
+    ]
+    sb.table("remision_items").insert(items_rows).execute()
+
+    return obtener_remision(rem["id"])
+
+
+def listar_remisiones(*, estado: Optional[str] = None,
+                       confeccionista_id: Optional[str] = None,
+                       limit: int = 200) -> list[dict]:
+    sb = _sb()
+    if sb is None:
+        return []
+    q = (sb.table("remisiones")
+           .select("*,confeccionista:confeccionista_id(nombre)")
+           .order("created_at", desc=True).limit(limit))
+    if estado:
+        q = q.eq("estado", estado)
+    if confeccionista_id:
+        q = q.eq("confeccionista_id", confeccionista_id)
+    return q.execute().data or []
+
+
+def obtener_remision(rem_id: str) -> Optional[dict]:
+    sb = _sb()
+    if sb is None:
+        return None
+    r = (sb.table("remisiones")
+           .select("*,confeccionista:confeccionista_id(nombre,telefono,direccion)")
+           .eq("id", rem_id).limit(1).execute()).data
+    if not r:
+        return None
+    items = (sb.table("remision_items")
+               .select("*,orden_corte:orden_corte_id("
+                       "consecutivo,referencia_lote,cantidad_programada,"
+                       "unidades_cortadas,fecha_entrega,"
+                       "referencia:referencia_id(codigo_referencia,nombre,tela))")
+               .eq("remision_id", rem_id).execute()).data or []
+    return {**r[0], "items": items}
+
+
+def marcar_remision_recogida(rem_id: str) -> dict:
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    r = (sb.table("remisiones").update({
+        "estado": "recogida",
+        "updated_at": _now_iso(),
+    }).eq("id", rem_id).execute()).data
+    if not r:
+        raise ValueError("no_encontrado")
+    return obtener_remision(rem_id)
