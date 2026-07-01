@@ -5,13 +5,20 @@
  * 24 líneas fijas por categoría + botón "+ Otro" para renglones especiales.
  * Se llenan solo valor unitario, cantidad y (opcional) IVA.
  */
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageShell } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { Plus, Trash2, Save, Loader2, AlertCircle, CheckCircle } from "lucide-react";
+import { Plus, Trash2, Save, Loader2, AlertCircle, CheckCircle, Search, ChevronDown } from "lucide-react";
+
+interface TelaStock {
+  descripcion_tela: string;
+  tono: string;
+  num_rollos: number;
+  metros_disponible: number;
+}
 
 interface LineaForm {
   categoria: string;
@@ -90,6 +97,51 @@ export default function NuevoPrecosteoPage() {
   // Tela final normalizada a mayúsculas — se cruza con inventario al momento del corte
   const telaFinal = tela.trim().toUpperCase();
 
+  // Combobox de tela: trae inventario, agrupa por descripcion_tela, permite buscar
+  const stockQ = useQuery<{ resumen: TelaStock[] }>({
+    queryKey: ["produccion", "inventario", "resumen"],
+    queryFn: () => api.get("/api/produccion/inventario/resumen"),
+  });
+  const telasInventario = useMemo<{ nombre: string; metros: number; rollos: number }[]>(() => {
+    const items = stockQ.data?.resumen || [];
+    const acc: Record<string, { metros: number; rollos: number }> = {};
+    for (const it of items) {
+      const d = (it.descripcion_tela || "").trim().toUpperCase();
+      if (!d) continue;
+      const cur = acc[d] || { metros: 0, rollos: 0 };
+      cur.metros += Number(it.metros_disponible || 0);
+      cur.rollos += Number(it.num_rollos || 0);
+      acc[d] = cur;
+    }
+    return Object.entries(acc)
+      .map(([nombre, v]) => ({ nombre, metros: v.metros, rollos: v.rollos }))
+      .filter((t) => t.metros > 0)
+      .sort((a, b) => b.metros - a.metros);
+  }, [stockQ.data]);
+
+  const [telaBuscar, setTelaBuscar] = useState("");
+  const [telaOpen, setTelaOpen] = useState(false);
+  const telaBoxRef = useRef<HTMLDivElement>(null);
+
+  const telasFiltradas = useMemo(() => {
+    const q = telaBuscar.trim().toUpperCase();
+    if (!q) return telasInventario;
+    return telasInventario.filter((t) => t.nombre.includes(q));
+  }, [telasInventario, telaBuscar]);
+
+  // Cierra el dropdown si haces clic afuera
+  useEffect(() => {
+    function handleClickAfuera(e: MouseEvent) {
+      if (telaBoxRef.current && !telaBoxRef.current.contains(e.target as Node)) {
+        setTelaOpen(false);
+      }
+    }
+    if (telaOpen) {
+      document.addEventListener("mousedown", handleClickAfuera);
+      return () => document.removeEventListener("mousedown", handleClickAfuera);
+    }
+  }, [telaOpen]);
+
   const ivaPct = parseFloat(iva) || 0;
   const precioVentaNum = parseFloat(precioVenta || "0") || 0;
 
@@ -106,6 +158,7 @@ export default function NuevoPrecosteoPage() {
           iva: ivaDeLinea(l, ivaPct),
         }));
       if (items.length === 0) throw new Error("Llena al menos un renglón con valor unitario.");
+      if (!telaFinal) throw new Error("Selecciona una tela del inventario.");
       // El precio de venta que el usuario teclea YA INCLUYE IVA.
       // Para calcular la utilidad real: sacar el IVA de la venta y compararlo
       // contra el costo SIN IVA (el IVA de compras es crédito recuperable).
@@ -172,7 +225,52 @@ export default function NuevoPrecosteoPage() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <Input label="Código referencia *" value={codigo} onChange={setCodigo} required placeholder="14500-1" />
               <Input label="Nombre *"             value={nombre} onChange={setNombre} required placeholder="SKINNY OSCURO" />
-              <Input label="Tela *" value={tela} onChange={(v) => setTela(v.toUpperCase())} required placeholder="SANDDENIM 12OZ" />
+              {/* Combobox de tela — solo permite escoger telas que hay en inventario */}
+              <div ref={telaBoxRef} className="relative">
+                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                  Tela * <span className="text-graphite/60 normal-case tracking-normal">(inventario)</span>
+                </label>
+                <button type="button" onClick={() => setTelaOpen((v) => !v)}
+                  className="w-full flex items-center justify-between rounded-sm border border-border bg-card px-3 py-2 text-sm text-left hover:bg-cloud/30">
+                  <span className={tela ? "text-ink-900" : "text-graphite/60"}>
+                    {tela || "Selecciona tela…"}
+                  </span>
+                  <ChevronDown className={`h-3.5 w-3.5 text-graphite transition-transform ${telaOpen ? "rotate-180" : ""}`} />
+                </button>
+                {telaOpen && (
+                  <div className="absolute z-20 mt-1 w-full rounded-sm border border-border bg-white shadow-lg">
+                    <div className="p-2 border-b border-border">
+                      <div className="flex items-center gap-2 rounded-sm border border-border bg-cloud/30 px-2 py-1.5">
+                        <Search className="h-3.5 w-3.5 text-graphite flex-none" />
+                        <input autoFocus value={telaBuscar} onChange={(e) => setTelaBuscar(e.target.value)}
+                          placeholder="Buscar tela…"
+                          className="w-full bg-transparent text-sm outline-none" />
+                      </div>
+                    </div>
+                    <div className="max-h-64 overflow-y-auto">
+                      {stockQ.isLoading ? (
+                        <div className="px-3 py-3 text-xs text-graphite">Cargando inventario…</div>
+                      ) : telasFiltradas.length === 0 ? (
+                        <div className="px-3 py-3 text-xs text-graphite">
+                          {telasInventario.length === 0
+                            ? "No hay telas en inventario. Registra un ingreso primero."
+                            : "Ninguna tela coincide con la búsqueda."}
+                        </div>
+                      ) : telasFiltradas.map((t) => (
+                        <button key={t.nombre} type="button"
+                          onClick={() => { setTela(t.nombre); setTelaOpen(false); setTelaBuscar(""); }}
+                          className={`w-full flex items-center justify-between px-3 py-2 text-left text-xs hover:bg-cloud/50 ${tela === t.nombre ? "bg-navy-600/[0.06]" : ""}`}>
+                          <div>
+                            <div className="font-semibold text-ink-900">{t.nombre}</div>
+                            <div className="text-[0.65rem] text-graphite">{t.rollos} rollo(s)</div>
+                          </div>
+                          <span className="tabular text-xs text-graphite">{t.metros.toFixed(2)} m</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
               <Input label="Color"                value={color} onChange={setColor} placeholder="Índigo" />
               <Input label="IVA %"                value={iva} onChange={setIva} inputMode="decimal" />
               <Input label="Precio de venta (con IVA)" value={precioVenta} onChange={setPrecioVenta} inputMode="decimal" placeholder="120000" />
