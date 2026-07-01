@@ -10,12 +10,14 @@ import { useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, API_BASE } from "@/lib/api";
+import { getToken } from "@/lib/auth";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   ArrowLeft, ScanLine, Trash2, Lock, Loader2, AlertCircle, CheckCircle,
+  Paperclip, Send,
 } from "lucide-react";
 
 interface RolloLink {
@@ -56,6 +58,8 @@ interface OrdenCorte {
   curva_trazo: Record<string, number>;
   num_capas: number;
   prendas_estimadas: number;
+  cantidad_programada?: number;
+  promedio_tecnico?: number;
   metros_consumidos: number;   // teórico
   rendimiento_teorico?: number;
   consumo_real_cortador?: number;
@@ -64,7 +68,11 @@ interface OrdenCorte {
   merma_valor?: number;
   responsable?: string;
   fecha_limite?: string;
+  fecha_envio?: string;
   indicaciones?: string;
+  trazos_url?: string;
+  destinatarios_correo?: string[];
+  autorizada_por?: string;
   estado: string;
   referencia?: {
     codigo_referencia: string;
@@ -172,6 +180,65 @@ export default function DetalleOrdenCortePage() {
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
   });
 
+  // ── Trazos ─────────────────────────────────────
+  const trazosRef = useRef<HTMLInputElement>(null);
+  const [subiendoTrazos, setSubiendoTrazos] = useState(false);
+
+  async function subirTrazos(f: File) {
+    setErr(""); setMsg("");
+    setSubiendoTrazos(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", f);
+      const res = await fetch(`${API_BASE}/api/produccion/corte/${id}/trazos`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${getToken()}` },
+        body: fd,
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(text.slice(0, 200) || `HTTP ${res.status}`);
+      setMsg("Trazos subidos.");
+      qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Error subiendo trazos");
+    } finally {
+      setSubiendoTrazos(false);
+      if (trazosRef.current) trazosRef.current.value = "";
+    }
+  }
+
+  // ── Autorizar + correo ─────────────────────────
+  const [destinatariosEdit, setDestinatariosEdit] = useState("");
+  const [mensajeExtra, setMensajeExtra] = useState("");
+
+  const autorizar = useMutation({
+    mutationFn: () => {
+      const dest = destinatariosEdit
+        .split(/[,;\s]+/g).map((s) => s.trim()).filter(Boolean);
+      return api.post<{
+        ok: boolean;
+        correo?: { asunto: string; body: string; destinatarios: string[]; enviado_por: string; mailto_url?: string };
+      }>(`/api/produccion/corte/${id}/autorizar`, {
+        destinatarios: dest.length > 0 ? dest : null,
+        mensaje_extra: mensajeExtra || null,
+      });
+    },
+    onSuccess: (data) => {
+      setErr("");
+      const c = data.correo;
+      if (c?.enviado_por === "resend") {
+        setMsg(`Orden autorizada. Correo enviado a ${c.destinatarios.join(", ")}.`);
+      } else if (c?.mailto_url) {
+        setMsg("Orden autorizada. Abriendo tu cliente de correo…");
+        window.location.href = c.mailto_url;
+      } else {
+        setMsg("Orden autorizada.");
+      }
+      qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
+    },
+    onError: (e: Error) => { setErr(e.message); setMsg(""); },
+  });
+
   if (q.isLoading) return <LoadingState label="Cargando orden de corte…" />;
   if (q.isError || !q.data) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
@@ -239,6 +306,69 @@ export default function DetalleOrdenCortePage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Trazos + destinatarios + autorizar */}
+      {!cerrada && (
+        <Card>
+          <CardContent className="p-5 space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Trazos */}
+              <div>
+                <p className="section-label mb-2">Trazos</p>
+                <input ref={trazosRef} type="file" accept="application/pdf,image/*" className="hidden"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) subirTrazos(f); }} />
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => trazosRef.current?.click()}
+                    disabled={subiendoTrazos}
+                    className="inline-flex items-center gap-2 rounded-sm border border-border bg-card px-3 py-2 text-xs font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud disabled:opacity-40">
+                    {subiendoTrazos ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+                    {oc.trazos_url ? "Cambiar" : "Subir archivo"}
+                  </button>
+                  {oc.trazos_url && (
+                    <a href={oc.trazos_url} target="_blank" rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-teal hover:underline">
+                      <CheckCircle className="h-3.5 w-3.5" /> Ver trazos
+                    </a>
+                  )}
+                </div>
+                <p className="mt-1 text-[0.62rem] text-graphite">PDF/JPG/PNG · máx 15MB</p>
+              </div>
+
+              {/* Autorizar */}
+              <div>
+                <p className="section-label mb-2">Autorizar orden</p>
+                {oc.estado === "autorizada" ? (
+                  <div className="rounded-sm border border-teal/40 bg-teal/5 px-3 py-2 text-xs text-teal flex items-center gap-2">
+                    <CheckCircle className="h-3.5 w-3.5" /> Autorizada por {oc.autorizada_por || "—"}
+                  </div>
+                ) : (
+                  <>
+                    <input value={destinatariosEdit}
+                      onChange={(e) => setDestinatariosEdit(e.target.value)}
+                      placeholder={(oc.destinatarios_correo || []).join(", ") || "correos@destinatarios.com"}
+                      className="w-full rounded-sm border border-border bg-white px-3 py-2 text-xs" />
+                    <textarea value={mensajeExtra}
+                      onChange={(e) => setMensajeExtra(e.target.value)}
+                      rows={2} placeholder="Mensaje adicional (opcional)"
+                      className="mt-2 w-full rounded-sm border border-border bg-white px-3 py-2 text-xs" />
+                    <button type="button" onClick={() => autorizar.mutate()}
+                      disabled={autorizar.isPending}
+                      className="mt-2 w-full inline-flex items-center justify-center gap-2 rounded-sm bg-teal px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white hover:bg-ink-900 disabled:opacity-40">
+                      {autorizar.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                      Autorizar y enviar correo
+                    </button>
+                    <p className="mt-1 text-[0.62rem] text-graphite">
+                      Asunto: <span className="font-semibold text-ink-900">
+                        Orden de corte referencia {oc.referencia?.codigo_referencia || "—"}
+                      </span>
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Rollos disponibles en inventario, agrupados: coinciden con la tela del precosteo primero */}
       {!cerrada && (
