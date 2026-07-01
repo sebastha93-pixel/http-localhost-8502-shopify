@@ -455,3 +455,143 @@ async def subir_foto(
 # Bloque 4 — Orden de Corte + cierre
 # Bloque 5 — Informe teórico vs real
 # Bloque 6 — Remisiones + Insumos
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# BLOQUE 4 — ORDEN DE CORTE
+# ═══════════════════════════════════════════════════════════════════════
+
+class CrearCorteBody(BaseModel):
+    referencia_id:      str
+    tono:               Optional[str] = None
+    largo_trazo:        float = Field(gt=0)
+    prendas_por_trazo:  int = Field(gt=0)
+    curva_trazo:        dict = Field(default_factory=dict)
+    num_capas:          int = Field(gt=0)
+    responsable:        Optional[str] = None
+    fecha_limite:       Optional[str] = None
+    indicaciones:       Optional[str] = None
+
+
+class PistolearRolloBody(BaseModel):
+    barcode:         str = Field(min_length=1)
+    metros_reservar: float = Field(gt=0)
+
+
+class CerrarCorteBody(BaseModel):
+    consumo_real_cortador: float = Field(gt=0)
+    merma_tipo:  Optional[str] = None
+    merma_valor: Optional[float] = None
+
+
+@router.post("/corte")
+def crear_corte(
+    body: CrearCorteBody,
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    try:
+        oc = svc.crear_orden_corte(
+            referencia_id=body.referencia_id,
+            tono=body.tono,
+            largo_trazo=body.largo_trazo,
+            prendas_por_trazo=body.prendas_por_trazo,
+            curva_trazo=body.curva_trazo,
+            num_capas=body.num_capas,
+            responsable=body.responsable,
+            fecha_limite=body.fecha_limite,
+            indicaciones=body.indicaciones,
+            created_by=user.email,
+        )
+        return {"ok": True, "orden_corte": oc}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"crear_corte: {str(e)[:200]}")
+
+
+@router.get("/corte")
+def listar_cortes(
+    estado: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=500),
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
+) -> dict:
+    return {"ordenes": svc.listar_ordenes_corte(estado=estado, limit=limit)}
+
+
+@router.get("/corte/{oc_id}")
+def detalle_corte(
+    oc_id: str,
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
+) -> dict:
+    oc = svc.obtener_orden_corte(oc_id)
+    if not oc:
+        raise HTTPException(404, "Orden de corte no encontrada")
+    return oc
+
+
+@router.post("/corte/{oc_id}/pistolear")
+def pistolear_rollo(
+    oc_id: str,
+    body: PistolearRolloBody,
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    try:
+        oc = svc.asignar_rollo_a_corte(
+            oc_id=oc_id,
+            barcode=body.barcode,
+            metros_reservar=body.metros_reservar,
+        )
+        return {"ok": True, "orden_corte": oc}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"pistolear: {str(e)[:200]}")
+
+
+@router.delete("/corte/{oc_id}/rollo/{rollo_id}")
+def quitar_rollo(
+    oc_id: str,
+    rollo_id: str,
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    try:
+        oc = svc.quitar_rollo_de_corte(oc_id=oc_id, rollo_id=rollo_id)
+        return {"ok": True, "orden_corte": oc}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/corte/{oc_id}/cerrar")
+def cerrar_corte(
+    oc_id: str,
+    body: CerrarCorteBody,
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    try:
+        oc = svc.cerrar_orden_corte(
+            oc_id=oc_id,
+            consumo_real_cortador=body.consumo_real_cortador,
+            merma_tipo=body.merma_tipo,
+            merma_valor=body.merma_valor,
+            usuario=user.email,
+        )
+        return {"ok": True, "orden_corte": oc}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"cerrar_corte: {str(e)[:200]}")
+
+
+@router.delete("/corte/{oc_id}")
+def eliminar_corte(
+    oc_id: str,
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    try:
+        svc.eliminar_orden_corte(oc_id)
+        return {"ok": True}
+    except ValueError as e:
+        raise HTTPException(400, str(e))

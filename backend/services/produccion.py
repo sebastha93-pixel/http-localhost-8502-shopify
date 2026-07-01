@@ -573,3 +573,211 @@ def ajustar_stock(*, rollo_id: str, metros_delta: float, nota: str,
         "nota": nota or None,
     }).execute()
     return {"ok": True, "metros_disponible": nuevo, "estado": estado_nuevo}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ORDEN DE CORTE (Bloque 4)
+# ═══════════════════════════════════════════════════════════════════════
+
+def crear_orden_corte(*, referencia_id: str, tono: Optional[str],
+                       largo_trazo: float, prendas_por_trazo: int,
+                       curva_trazo: dict, num_capas: int,
+                       responsable: Optional[str], fecha_limite: Optional[str],
+                       indicaciones: Optional[str], created_by: str) -> dict:
+    """Crea una orden de corte a partir de un precosteo FIRMADO.
+    Calcula prendas estimadas y metros teóricos.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    # Precosteo debe existir y estar bloqueado (firmado)
+    p = obtener_precosteo(referencia_id)
+    if not p:
+        raise ValueError("precosteo_no_encontrado")
+    if not p.get("bloqueada"):
+        raise ValueError("precosteo_no_firmado")
+
+    prendas_est = int(prendas_por_trazo) * int(num_capas)
+    metros_teo = round(float(largo_trazo) * int(num_capas), 2)
+    rendimiento = round(metros_teo / prendas_est, 4) if prendas_est else 0
+
+    codigo = next_consecutivo("OC", width=4)
+    row = {
+        "consecutivo": codigo,
+        "referencia_id": referencia_id,
+        "tono": (tono or None),
+        "largo_trazo": float(largo_trazo),
+        "prendas_por_trazo": int(prendas_por_trazo),
+        "curva_trazo": curva_trazo or {},
+        "num_capas": int(num_capas),
+        "prendas_estimadas": prendas_est,
+        "metros_consumidos": metros_teo,
+        "rendimiento_teorico": rendimiento,
+        "responsable": responsable or None,
+        "fecha_limite": fecha_limite or None,
+        "indicaciones": indicaciones or None,
+        "estado": "borrador",
+        "created_by": created_by,
+    }
+    r = sb.table("ordenes_corte").insert(row).execute()
+    return r.data[0]
+
+
+def listar_ordenes_corte(*, estado: Optional[str] = None,
+                          limit: int = 200) -> list[dict]:
+    sb = _sb()
+    if sb is None:
+        return []
+    q = (sb.table("ordenes_corte")
+           .select("*,referencia:referencia_id(codigo_referencia,nombre,tela,color,foto_url)")
+           .order("created_at", desc=True).limit(limit))
+    if estado:
+        q = q.eq("estado", estado)
+    return q.execute().data or []
+
+
+def obtener_orden_corte(oc_id: str) -> Optional[dict]:
+    sb = _sb()
+    if sb is None:
+        return None
+    r = (sb.table("ordenes_corte")
+           .select("*,referencia:referencia_id(codigo_referencia,nombre,tela,color,foto_url)")
+           .eq("id", oc_id).limit(1).execute()).data
+    if not r:
+        return None
+    rollos = (sb.table("orden_corte_rollos")
+                .select("*,rollo:rollo_id(codigo_interno,barcode,descripcion_tela,tono,metros_disponible,metros_inicial,costo_metro)")
+                .eq("orden_corte_id", oc_id).execute()).data or []
+    return {**r[0], "rollos": rollos}
+
+
+def asignar_rollo_a_corte(*, oc_id: str, barcode: str,
+                           metros_reservar: float) -> dict:
+    """Pistolear un rollo: valida barcode → agrega a la orden con los metros reservados.
+    NO descuenta del inventario todavía (eso pasa al cerrar la orden).
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    oc = obtener_orden_corte(oc_id)
+    if not oc:
+        raise ValueError("orden_no_encontrada")
+    if oc.get("estado") == "cortada":
+        raise ValueError("orden_ya_cortada")
+
+    rollo = obtener_rollo_por_barcode(barcode.strip())
+    if not rollo:
+        raise ValueError("rollo_no_encontrado")
+    if rollo.get("estado") == "agotado":
+        raise ValueError("rollo_agotado")
+    disp = float(rollo.get("metros_disponible") or 0)
+    m = float(metros_reservar or 0)
+    if m <= 0:
+        raise ValueError("metros_reservar_debe_ser_positivo")
+    if m > disp:
+        raise ValueError(f"metros_insuficientes: rollo tiene {disp}m disponibles")
+
+    # Upsert por (orden_corte_id, rollo_id)
+    existing = (sb.table("orden_corte_rollos").select("id")
+                 .eq("orden_corte_id", oc_id).eq("rollo_id", rollo["id"])
+                 .limit(1).execute()).data
+    if existing:
+        sb.table("orden_corte_rollos").update({"metros_usados": m}).eq("id", existing[0]["id"]).execute()
+    else:
+        sb.table("orden_corte_rollos").insert({
+            "orden_corte_id": oc_id,
+            "rollo_id": rollo["id"],
+            "metros_usados": m,
+        }).execute()
+    return obtener_orden_corte(oc_id)
+
+
+def quitar_rollo_de_corte(*, oc_id: str, rollo_id: str) -> dict:
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    oc = obtener_orden_corte(oc_id)
+    if not oc:
+        raise ValueError("orden_no_encontrada")
+    if oc.get("estado") == "cortada":
+        raise ValueError("orden_ya_cortada")
+    sb.table("orden_corte_rollos").delete().eq("orden_corte_id", oc_id).eq("rollo_id", rollo_id).execute()
+    return obtener_orden_corte(oc_id)
+
+
+def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
+                        merma_tipo: Optional[str] = None,
+                        merma_valor: Optional[float] = None,
+                        usuario: str) -> dict:
+    """Cierra la orden: descuenta metros de cada rollo asignado (según metros_usados),
+    calcula diferencia teórica vs real y pasa a estado 'cortada'.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    oc = obtener_orden_corte(oc_id)
+    if not oc:
+        raise ValueError("orden_no_encontrada")
+    if oc.get("estado") == "cortada":
+        raise ValueError("orden_ya_cortada")
+    rollos = oc.get("rollos") or []
+    if not rollos:
+        raise ValueError("orden_sin_rollos")
+
+    doc_ref = oc["consecutivo"]
+    # Descuenta cada rollo por sus metros_usados
+    for link in rollos:
+        rollo_id = link.get("rollo_id")
+        m = float(link.get("metros_usados") or 0)
+        if not rollo_id or m <= 0:
+            continue
+        rollo = obtener_rollo(rollo_id)
+        if not rollo:
+            continue
+        nuevo = round(float(rollo["metros_disponible"]) - m, 2)
+        if nuevo < 0:
+            raise ValueError(f"metros_negativos_en_rollo_{rollo['codigo_interno']}")
+        estado_nuevo = "agotado" if nuevo <= 0 else rollo.get("estado")
+        sb.table("rollos_tela").update({
+            "metros_disponible": nuevo,
+            "estado": estado_nuevo,
+            "fecha_ultimo_corte": _now_iso(),
+            "updated_at": _now_iso(),
+        }).eq("id", rollo_id).execute()
+        sb.table("movimientos_inventario").insert({
+            "rollo_id": rollo_id,
+            "tipo": "corte",
+            "metros": -m,
+            "doc_ref": doc_ref,
+            "usuario": usuario,
+            "nota": f"Corte {doc_ref}",
+        }).execute()
+
+    # Calcula diferencia teórico vs real
+    teorico = float(oc.get("metros_consumidos") or 0)
+    real = float(consumo_real_cortador or 0)
+    diff = round((real - teorico) / teorico * 100, 2) if teorico > 0 else 0
+
+    sb.table("ordenes_corte").update({
+        "consumo_real_cortador": real,
+        "diferencia_pct": diff,
+        "merma_tipo": merma_tipo,
+        "merma_valor": merma_valor,
+        "estado": "cortada",
+        "updated_at": _now_iso(),
+    }).eq("id", oc_id).execute()
+    return obtener_orden_corte(oc_id)
+
+
+def eliminar_orden_corte(oc_id: str) -> None:
+    """Elimina orden de corte solo si está en borrador (no ha descontado inventario)."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    oc = obtener_orden_corte(oc_id)
+    if not oc:
+        raise ValueError("orden_no_encontrada")
+    if oc.get("estado") == "cortada":
+        raise ValueError("no_se_puede_eliminar_cortada")
+    # orden_corte_rollos cae por CASCADE
+    sb.table("ordenes_corte").delete().eq("id", oc_id).execute()
