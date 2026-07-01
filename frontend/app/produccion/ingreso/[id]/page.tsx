@@ -98,7 +98,7 @@ export default function DetalleIngresoPage() {
           <table className="w-full text-sm">
             <thead className="bg-cloud/60 border-b border-border">
               <tr className="text-left text-[0.62rem] uppercase tracking-[0.12em] text-graphite">
-                <th className="px-4 py-2">Código</th>
+                <th className="px-4 py-2">Código interno</th>
                 <th className="px-4 py-2">Descripción</th>
                 <th className="px-4 py-2">Tono</th>
                 <th className="px-4 py-2 text-right">Ancho</th>
@@ -111,7 +111,10 @@ export default function DetalleIngresoPage() {
             <tbody>
               {ing.rollos.map((r) => (
                 <tr key={r.id} className="border-b border-border hover:bg-cloud/50">
-                  <td className="px-4 py-2 font-medium tabular">{r.codigo_interno}</td>
+                  <td className="px-4 py-2 tabular">
+                    <div className="font-semibold text-navy-600">{r.codigo_interno}</div>
+                    <div className="text-[0.6rem] text-graphite mt-0.5">Barcode: {r.barcode}</div>
+                  </td>
                   <td className="px-4 py-2">{r.descripcion_tela}</td>
                   <td className="px-4 py-2 text-graphite">{r.tono || "—"}</td>
                   <td className="px-4 py-2 text-right tabular">{r.ancho || "—"}</td>

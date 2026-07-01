@@ -27,3 +27,6 @@ anthropic>=0.40
 # PDF → imagen (para OCR de remisiones de textilera con Claude vision).
 # pypdfium2 no requiere binarios del sistema (funciona en Railway).
 pypdfium2>=4.30
+
+# PDF de etiquetas Zebra 10×10 con Code128 (produccion.ingreso).
+reportlab>=4.0
