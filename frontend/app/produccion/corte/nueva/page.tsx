@@ -7,13 +7,13 @@
  * 3. Curva de tallas 4-6-8-10-12-14-16 (editable).
  * Al guardar → borrador. La pistola de rollos se hace en el detalle.
  */
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageShell, LoadingState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { Save, Loader2, AlertCircle, Paperclip, CheckCircle } from "lucide-react";
+import { Save, Loader2, AlertCircle, Paperclip, CheckCircle, Search, ChevronDown } from "lucide-react";
 
 interface Precosteo {
   id: string;
@@ -68,6 +68,37 @@ export default function NuevaOrdenCortePage() {
     () => precosteos.find((p) => p.id === referenciaId),
     [precosteos, referenciaId],
   );
+
+  // Combobox precosteo — buscador con lupa
+  const [refBuscar, setRefBuscar] = useState("");
+  const [refOpen, setRefOpen] = useState(false);
+  const refBoxRef = useRef<HTMLDivElement>(null);
+
+  const precosteosFiltrados = useMemo(() => {
+    const q = refBuscar.trim().toUpperCase();
+    if (!q) return precosteos;
+    return precosteos.filter((p) => {
+      const hay = `${p.codigo_referencia} ${p.nombre} ${p.tela || ""}`.toUpperCase();
+      return hay.includes(q);
+    });
+  }, [precosteos, refBuscar]);
+
+  useEffect(() => {
+    function handleClickAfuera(e: MouseEvent) {
+      if (refBoxRef.current && !refBoxRef.current.contains(e.target as Node)) {
+        setRefOpen(false);
+      }
+    }
+    if (refOpen) {
+      document.addEventListener("mousedown", handleClickAfuera);
+      return () => document.removeEventListener("mousedown", handleClickAfuera);
+    }
+  }, [refOpen]);
+
+  function precosteoLabel(p: Precosteo): string {
+    const tag = !p.bloqueada && p.es_muestra_diseno ? " · MUESTRA" : "";
+    return `${p.codigo_referencia} · ${p.nombre}${p.tela ? ` (${p.tela})` : ""}${tag}`;
+  }
 
   // Auto-calcula # capas desde la curva con la regla MALE'DENIM:
   //   Pares fijos: (6,12), (8,10), (14,16) — cada par aporta max(par).
@@ -172,22 +203,61 @@ export default function NuevaOrdenCortePage() {
         <Card>
           <CardContent className="p-5 space-y-4">
             <p className="section-label">Referencia</p>
-            <div>
+            <div ref={refBoxRef} className="relative">
               <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
                 Precosteo firmado *
               </label>
-              <select value={referenciaId} onChange={(e) => setReferenciaId(e.target.value)} required
-                className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm">
-                <option value="">Selecciona una referencia…</option>
-                {precosteos.map((p) => {
-                  const tag = !p.bloqueada && p.es_muestra_diseno ? " · MUESTRA" : "";
-                  return (
-                    <option key={p.id} value={p.id}>
-                      {p.codigo_referencia} · {p.nombre}{p.tela ? ` (${p.tela})` : ""}{tag}
-                    </option>
-                  );
-                })}
-              </select>
+              <button type="button" onClick={() => setRefOpen((v) => !v)}
+                className="w-full flex items-center justify-between rounded-sm border border-border bg-card px-3 py-2 text-sm text-left hover:bg-cloud/30">
+                <span className={precosteoSel ? "text-ink-900" : "text-graphite/60"}>
+                  {precosteoSel ? precosteoLabel(precosteoSel) : "Selecciona una referencia…"}
+                </span>
+                <ChevronDown className={`h-3.5 w-3.5 text-graphite transition-transform ${refOpen ? "rotate-180" : ""}`} />
+              </button>
+              {refOpen && (
+                <div className="absolute z-20 mt-1 w-full rounded-sm border border-border bg-white shadow-lg">
+                  <div className="p-2 border-b border-border">
+                    <div className="flex items-center gap-2 rounded-sm border border-border bg-cloud/30 px-2 py-1.5">
+                      <Search className="h-3.5 w-3.5 text-graphite flex-none" />
+                      <input autoFocus value={refBuscar} onChange={(e) => setRefBuscar(e.target.value)}
+                        placeholder="Buscar por código, nombre o tela…"
+                        className="w-full bg-transparent text-sm outline-none" />
+                    </div>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto">
+                    {q.isLoading ? (
+                      <div className="px-3 py-3 text-xs text-graphite">Cargando referencias…</div>
+                    ) : precosteosFiltrados.length === 0 ? (
+                      <div className="px-3 py-3 text-xs text-graphite">
+                        {precosteos.length === 0
+                          ? "No hay precosteos disponibles."
+                          : "Ninguna referencia coincide."}
+                      </div>
+                    ) : precosteosFiltrados.map((p) => {
+                      const esMuestra = !p.bloqueada && p.es_muestra_diseno;
+                      return (
+                        <button key={p.id} type="button"
+                          onClick={() => { setReferenciaId(p.id); setRefOpen(false); setRefBuscar(""); }}
+                          className={`w-full flex items-center justify-between px-3 py-2 text-left text-xs hover:bg-cloud/50 ${referenciaId === p.id ? "bg-navy-600/[0.06]" : ""}`}>
+                          <div className="min-w-0 flex-1">
+                            <div className="font-semibold text-ink-900 truncate">
+                              {p.codigo_referencia} · {p.nombre}
+                            </div>
+                            <div className="text-[0.65rem] text-graphite truncate">
+                              {p.tela || "sin tela"}{p.color ? ` · ${p.color}` : ""}
+                            </div>
+                          </div>
+                          {esMuestra && (
+                            <span className="ml-2 shrink-0 rounded-sm bg-navy-600/10 px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-widest text-navy-600">
+                              Muestra
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               {precosteos.length === 0 && (
                 <p className="mt-1 text-[0.62rem] text-terracotta">
                   No hay precosteos disponibles. Firma uno o marca uno como muestra de diseño en /produccion/precosteo.
