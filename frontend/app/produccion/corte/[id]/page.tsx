@@ -541,19 +541,7 @@ export default function DetalleOrdenCortePage() {
       )}
 
       {/* Comparación al cerrar */}
-      {cerrada && (
-        <Card>
-          <CardContent className="p-5 space-y-3">
-            <p className="section-label">Comparación teórico vs real</p>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <Kpi label="Teórico"        value={`${oc.metros_consumidos} m`} />
-              <Kpi label="Real cortador"  value={`${oc.consumo_real_cortador} m`} />
-              <Kpi label="Diferencia"     value={oc.diferencia_pct != null ? `${oc.diferencia_pct}%` : "—"} />
-              <Kpi label="Rendimiento (m/prenda)" value={oc.rendimiento_teorico ? oc.rendimiento_teorico.toFixed(3) : "—"} />
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {cerrada && <InformeCerradoCard oc={oc} />}
     </PageShell>
   );
 }
@@ -848,6 +836,160 @@ function ComparativoBloque({ label, teorico, valueReal, onChangeReal, inputMode,
         </div>
       </div>
       {hint && <p className="mt-1 text-[0.55rem] text-graphite italic">{hint}</p>}
+    </div>
+  );
+}
+
+function InformeCerradoCard({ oc }: { oc: OrdenCorte }) {
+  const promTeo = Number(oc.promedio_tecnico || 0);
+  const promReal = Number(oc.promedio_real || 0);
+  const promDelta = promReal > 0 && promTeo > 0 ? promReal - promTeo : null;
+
+  const metrosTeo = Number(oc.metros_consumidos || 0);
+  const metrosReal = Number(oc.consumo_real_cortador || 0);
+  const metrosDelta = metrosReal > 0 && metrosTeo > 0 ? metrosReal - metrosTeo : null;
+
+  const capasTeo = Number(oc.num_capas || 0);
+  const capasReal = Number(oc.capas_real || 0);
+  const capasDelta = capasReal > 0 && capasTeo > 0 ? capasReal - capasTeo : null;
+
+  const curva = oc.curva_trazo || {};
+  const unidades = oc.unidades_cortadas || {};
+  const tallas = Object.keys(curva);
+  const totalProgramado = Object.values(curva).reduce<number>((s, n) => s + (Number(n) || 0), 0);
+  const totalCortado = Object.values(unidades).reduce<number>((s, n) => s + (Number(n) || 0), 0);
+
+  return (
+    <Card>
+      <CardContent className="p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <p className="section-label">Informe del cortador · cerrado</p>
+          <Badge tone="normal"><Lock className="inline h-2.5 w-2.5 mr-1" />Cortada</Badge>
+        </div>
+
+        {/* Identificación */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <ReadKV label="Ref. interna"     value={oc.consecutivo} bold />
+          <ReadKV label="Referencia lote"  value={oc.referencia_lote || "—"} />
+          <ReadKV label="Fecha entrega"    value={oc.fecha_entrega || "—"} />
+          <ReadKV label="Precio del corte" value={oc.precio_corte != null ? `$${Number(oc.precio_corte).toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"} />
+        </div>
+
+        {/* Comparativos teórico vs real con Δ */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <CompRead label="Capas"              teorico={capasTeo}   real={capasReal}   delta={capasDelta}   fmt={(n) => String(n)} />
+          <CompRead label="Promedio (m/prenda)" teorico={promTeo}    real={promReal}    delta={promDelta}    fmt={(n) => n.toFixed(3)} />
+          <CompRead label="Metros"             teorico={metrosTeo}  real={metrosReal}  delta={metrosDelta}  fmt={(n) => `${n.toFixed(2)} m`} />
+        </div>
+
+        {/* Retazos + merma */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <ReadKV label="Cantidad de retazos" value={oc.retazos_cantidad != null ? String(oc.retazos_cantidad) : "—"} />
+          <ReadKV label="Merma tipo"          value={oc.merma_tipo || "—"} />
+          <ReadKV label="Merma valor"         value={oc.merma_valor != null ? String(oc.merma_valor) : "—"} />
+        </div>
+
+        {/* Unidades cortadas por talla */}
+        <div>
+          <p className="section-label mb-2">Unidades cortadas por talla</p>
+          {tallas.length === 0 ? (
+            <p className="text-xs text-graphite">Sin curva registrada.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-cloud/60 border-b border-border">
+                  <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                    <th className="px-3 py-2">Talla</th>
+                    {tallas.map((t) => (
+                      <th key={t} className="px-3 py-2 text-center">{t}</th>
+                    ))}
+                    <th className="px-3 py-2 text-right">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b border-border/40">
+                    <td className="px-3 py-1.5 text-graphite">Programado</td>
+                    {tallas.map((t) => (
+                      <td key={t} className="px-3 py-1.5 text-center tabular text-graphite">
+                        {curva[t] ?? 0}
+                      </td>
+                    ))}
+                    <td className="px-3 py-1.5 text-right tabular font-semibold">{totalProgramado}</td>
+                  </tr>
+                  <tr className="border-b border-border/40">
+                    <td className="px-3 py-1.5 text-ink-900 font-semibold">Cortado real</td>
+                    {tallas.map((t) => (
+                      <td key={t} className="px-3 py-1.5 text-center tabular font-semibold text-ink-900">
+                        {unidades[t] ?? 0}
+                      </td>
+                    ))}
+                    <td className="px-3 py-1.5 text-right tabular font-bold text-navy-600">{totalCortado}</td>
+                  </tr>
+                  <tr>
+                    <td className="px-3 py-1.5 text-graphite">Δ</td>
+                    {tallas.map((t) => {
+                      const d = (Number(unidades[t] || 0) - Number(curva[t] || 0));
+                      const cls = d > 0 ? "text-terracotta" : d < 0 ? "text-terracotta" : "text-graphite";
+                      return (
+                        <td key={t} className={`px-3 py-1.5 text-center tabular ${cls}`}>
+                          {d === 0 ? "0" : (d > 0 ? `+${d}` : `${d}`)}
+                        </td>
+                      );
+                    })}
+                    <td className={`px-3 py-1.5 text-right tabular font-semibold ${(totalCortado - totalProgramado) === 0 ? "text-graphite" : "text-terracotta"}`}>
+                      {(totalCortado - totalProgramado) > 0
+                        ? `+${totalCortado - totalProgramado}`
+                        : `${totalCortado - totalProgramado}`}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <div className="border-t border-border pt-3 text-[0.65rem] text-graphite grid grid-cols-1 md:grid-cols-3 gap-2">
+          <p>Autorizada por: <span className="text-ink-900 font-semibold">{oc.autorizada_por || "—"}</span></p>
+          <p>Cortador: <span className="text-ink-900 font-semibold">{oc.responsable || "—"}</span></p>
+          <p>Fecha envío: <span className="text-ink-900 font-semibold">{oc.fecha_envio || oc.fecha_limite || "—"}</span></p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ReadKV({ label, value, bold = false }: { label: string; value: string; bold?: boolean }) {
+  return (
+    <div>
+      <p className="text-[0.6rem] uppercase tracking-widest text-graphite">{label}</p>
+      <p className={`mt-1 text-sm tabular ${bold ? "font-semibold text-navy-600" : "text-ink-900"}`}>{value}</p>
+    </div>
+  );
+}
+
+function CompRead({ label, teorico, real, delta, fmt }: {
+  label: string; teorico: number; real: number; delta: number | null; fmt: (n: number) => string;
+}) {
+  const tono = delta == null ? "text-graphite" : (delta > 0 ? "text-terracotta" : delta < 0 ? "text-teal" : "text-graphite");
+  return (
+    <div className="rounded-sm border border-border bg-cloud/30 p-3">
+      <p className="text-[0.6rem] uppercase tracking-widest text-graphite mb-2">{label}</p>
+      <div className="grid grid-cols-3 gap-2">
+        <div>
+          <p className="text-[0.55rem] text-graphite">Teórico</p>
+          <div className="tabular text-sm text-graphite">{teorico > 0 ? fmt(teorico) : "—"}</div>
+        </div>
+        <div>
+          <p className="text-[0.55rem] text-graphite">Real</p>
+          <div className="tabular text-sm text-ink-900 font-semibold">{real > 0 ? fmt(real) : "—"}</div>
+        </div>
+        <div>
+          <p className="text-[0.55rem] text-graphite">Δ</p>
+          <div className={`tabular text-sm font-semibold ${tono}`}>
+            {delta == null ? "—" : (delta > 0 ? `+${fmt(delta)}` : fmt(delta))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
