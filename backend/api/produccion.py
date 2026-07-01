@@ -489,8 +489,16 @@ class PistolearRolloBody(BaseModel):
 
 class CerrarCorteBody(BaseModel):
     consumo_real_cortador: float = Field(gt=0)
-    merma_tipo:  Optional[str] = None
-    merma_valor: Optional[float] = None
+    merma_tipo:        Optional[str] = None
+    merma_valor:       Optional[float] = None
+    # Informe del cortador
+    referencia_lote:   Optional[str] = None
+    capas_real:        Optional[int] = None
+    promedio_real:     Optional[float] = None
+    unidades_cortadas: Optional[dict] = None
+    retazos_cantidad:  Optional[int] = None
+    fecha_entrega:     Optional[str] = None
+    precio_corte:      Optional[float] = None
 
 
 class AutorizarCorteBody(BaseModel):
@@ -637,6 +645,13 @@ def cerrar_corte(
             merma_tipo=body.merma_tipo,
             merma_valor=body.merma_valor,
             usuario=user.email,
+            referencia_lote=body.referencia_lote,
+            capas_real=body.capas_real,
+            promedio_real=body.promedio_real,
+            unidades_cortadas=body.unidades_cortadas,
+            retazos_cantidad=body.retazos_cantidad,
+            fecha_entrega=body.fecha_entrega,
+            precio_corte=body.precio_corte,
         )
         return {"ok": True, "orden_corte": oc}
     except ValueError as e:

@@ -838,9 +838,19 @@ def quitar_rollo_de_corte(*, oc_id: str, rollo_id: str) -> dict:
 def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
                         merma_tipo: Optional[str] = None,
                         merma_valor: Optional[float] = None,
-                        usuario: str) -> dict:
-    """Cierra la orden: descuenta metros de cada rollo asignado (según metros_usados),
-    calcula diferencia teórica vs real y pasa a estado 'cortada'.
+                        usuario: str,
+                        referencia_lote: Optional[str] = None,
+                        capas_real: Optional[int] = None,
+                        promedio_real: Optional[float] = None,
+                        unidades_cortadas: Optional[dict] = None,
+                        retazos_cantidad: Optional[int] = None,
+                        fecha_entrega: Optional[str] = None,
+                        precio_corte: Optional[float] = None) -> dict:
+    """Cierra la orden con el INFORME DEL CORTADOR:
+    - Descuenta metros del inventario según metros_usados por rollo.
+    - Guarda promedio_real, capas_real, unidades cortadas por talla, retazos,
+      referencia de lote, fecha de entrega y precio del corte.
+    - Calcula la diferencia teórica vs real.
     """
     sb = _sb()
     if sb is None:
@@ -888,14 +898,34 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
     real = float(consumo_real_cortador or 0)
     diff = round((real - teorico) / teorico * 100, 2) if teorico > 0 else 0
 
-    sb.table("ordenes_corte").update({
+    update = {
         "consumo_real_cortador": real,
         "diferencia_pct": diff,
         "merma_tipo": merma_tipo,
         "merma_valor": merma_valor,
         "estado": "cortada",
         "updated_at": _now_iso(),
-    }).eq("id", oc_id).execute()
+    }
+    if referencia_lote is not None:  update["referencia_lote"] = referencia_lote.strip() or None
+    if capas_real is not None:       update["capas_real"] = int(capas_real)
+    if promedio_real is not None:    update["promedio_real"] = float(promedio_real)
+    if unidades_cortadas is not None:update["unidades_cortadas"] = unidades_cortadas or {}
+    if retazos_cantidad is not None: update["retazos_cantidad"] = int(retazos_cantidad)
+    if fecha_entrega is not None:    update["fecha_entrega"] = fecha_entrega or None
+    if precio_corte is not None:     update["precio_corte"] = float(precio_corte)
+
+    try:
+        sb.table("ordenes_corte").update(update).eq("id", oc_id).execute()
+    except Exception as e:
+        # Compat si la migración del informe no corrió
+        cols_informe = ("referencia_lote","capas_real","promedio_real",
+                         "unidades_cortadas","retazos_cantidad","fecha_entrega","precio_corte")
+        if any(c in str(e) for c in cols_informe):
+            for c in cols_informe:
+                update.pop(c, None)
+            sb.table("ordenes_corte").update(update).eq("id", oc_id).execute()
+        else:
+            raise
     return obtener_orden_corte(oc_id)
 
 

@@ -66,6 +66,13 @@ interface OrdenCorte {
   diferencia_pct?: number;
   merma_tipo?: string;
   merma_valor?: number;
+  referencia_lote?: string;
+  capas_real?: number;
+  promedio_real?: number;
+  unidades_cortadas?: Record<string, number>;
+  retazos_cantidad?: number;
+  fecha_entrega?: string;
+  precio_corte?: number;
   responsable?: string;
   fecha_limite?: string;
   fecha_envio?: string;
@@ -99,6 +106,14 @@ export default function DetalleOrdenCortePage() {
   const [consumoReal, setConsumoReal] = useState("");
   const [mermaTipo, setMermaTipo] = useState("");
   const [mermaValor, setMermaValor] = useState("");
+  // Informe del cortador
+  const [refLote, setRefLote] = useState("");
+  const [capasReal, setCapasReal] = useState("");
+  const [promedioReal, setPromedioReal] = useState("");
+  const [retazos, setRetazos] = useState("");
+  const [fechaEntrega, setFechaEntrega] = useState("");
+  const [precioCorte, setPrecioCorte] = useState("");
+  const [unidadesReal, setUnidadesReal] = useState<Record<string, string>>({});
 
   const q = useQuery<OrdenCorte>({
     queryKey: ["produccion", "corte", id],
@@ -166,14 +181,27 @@ export default function DetalleOrdenCortePage() {
   });
 
   const cerrar = useMutation({
-    mutationFn: () =>
-      api.post(`/api/produccion/corte/${id}/cerrar`, {
+    mutationFn: () => {
+      const unidadesFinal: Record<string, number> = {};
+      for (const [t, v] of Object.entries(unidadesReal)) {
+        const n = parseInt(v || "0", 10);
+        if (n > 0) unidadesFinal[t] = n;
+      }
+      return api.post(`/api/produccion/corte/${id}/cerrar`, {
         consumo_real_cortador: parseFloat(consumoReal || "0"),
         merma_tipo: mermaTipo || null,
         merma_valor: mermaValor ? parseFloat(mermaValor) : null,
-      }),
+        referencia_lote: refLote || null,
+        capas_real: capasReal ? parseInt(capasReal, 10) : null,
+        promedio_real: promedioReal ? parseFloat(promedioReal) : null,
+        unidades_cortadas: unidadesFinal,
+        retazos_cantidad: retazos ? parseInt(retazos, 10) : null,
+        fecha_entrega: fechaEntrega || null,
+        precio_corte: precioCorte ? parseFloat(precioCorte) : null,
+      });
+    },
     onSuccess: () => {
-      setMsg("Orden cerrada. Inventario descontado.");
+      setMsg("Informe guardado. Inventario descontado y orden cerrada.");
       setErr("");
       qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
     },
@@ -493,44 +521,23 @@ export default function DetalleOrdenCortePage() {
         </CardContent>
       </Card>
 
-      {/* Cierre */}
+      {/* INFORME DE CORTE */}
       {!cerrada && (oc.rollos || []).length > 0 && (
-        <Card>
-          <CardContent className="p-5 space-y-3">
-            <p className="section-label">Cierre de orden</p>
-            <p className="text-xs text-graphite">
-              El cortador reporta el consumo real total. Al cerrar se descuentan los metros de cada rollo
-              y se calcula la diferencia contra el teórico ({oc.metros_consumidos} m).
-            </p>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div>
-                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Consumo real (m) *</label>
-                <input value={consumoReal} onChange={(e) => setConsumoReal(e.target.value)}
-                  inputMode="decimal" placeholder={`${oc.metros_consumidos}`}
-                  className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm text-right tabular" />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Merma tipo (opcional)</label>
-                <input value={mermaTipo} onChange={(e) => setMermaTipo(e.target.value)}
-                  placeholder="Ej. defecto, borde, otro"
-                  className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm" />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Merma valor (opcional)</label>
-                <input value={mermaValor} onChange={(e) => setMermaValor(e.target.value)}
-                  inputMode="decimal" placeholder="0"
-                  className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm text-right tabular" />
-              </div>
-            </div>
-            <div className="flex justify-end">
-              <button onClick={() => cerrar.mutate()} disabled={cerrar.isPending || !consumoReal}
-                className="inline-flex items-center gap-2 rounded-sm bg-teal px-6 py-2.5 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-ink-900 disabled:opacity-40">
-                {cerrar.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
-                Cerrar y descontar inventario
-              </button>
-            </div>
-          </CardContent>
-        </Card>
+        <InformeCorteCard
+          oc={oc}
+          refLote={refLote} setRefLote={setRefLote}
+          capasReal={capasReal} setCapasReal={setCapasReal}
+          promedioReal={promedioReal} setPromedioReal={setPromedioReal}
+          retazos={retazos} setRetazos={setRetazos}
+          fechaEntrega={fechaEntrega} setFechaEntrega={setFechaEntrega}
+          precioCorte={precioCorte} setPrecioCorte={setPrecioCorte}
+          unidadesReal={unidadesReal} setUnidadesReal={setUnidadesReal}
+          consumoReal={consumoReal} setConsumoReal={setConsumoReal}
+          mermaTipo={mermaTipo} setMermaTipo={setMermaTipo}
+          mermaValor={mermaValor} setMermaValor={setMermaValor}
+          onCerrar={() => cerrar.mutate()}
+          isPending={cerrar.isPending}
+        />
       )}
 
       {/* Comparación al cerrar */}
@@ -635,5 +642,212 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar }: {
         </tbody>
       </table>
     </>
+  );
+}
+
+interface OrdenCorteForInforme {
+  consecutivo: string;
+  curva_trazo: Record<string, number>;
+  num_capas: number;
+  cantidad_programada?: number;
+  promedio_tecnico?: number;
+  metros_consumidos: number;
+  referencia?: { codigo_referencia: string };
+}
+
+function InformeCorteCard({
+  oc, refLote, setRefLote, capasReal, setCapasReal, promedioReal, setPromedioReal,
+  retazos, setRetazos, fechaEntrega, setFechaEntrega, precioCorte, setPrecioCorte,
+  unidadesReal, setUnidadesReal, consumoReal, setConsumoReal,
+  mermaTipo, setMermaTipo, mermaValor, setMermaValor,
+  onCerrar, isPending,
+}: {
+  oc: OrdenCorteForInforme;
+  refLote: string; setRefLote: (v: string) => void;
+  capasReal: string; setCapasReal: (v: string) => void;
+  promedioReal: string; setPromedioReal: (v: string) => void;
+  retazos: string; setRetazos: (v: string) => void;
+  fechaEntrega: string; setFechaEntrega: (v: string) => void;
+  precioCorte: string; setPrecioCorte: (v: string) => void;
+  unidadesReal: Record<string, string>; setUnidadesReal: (v: Record<string, string>) => void;
+  consumoReal: string; setConsumoReal: (v: string) => void;
+  mermaTipo: string; setMermaTipo: (v: string) => void;
+  mermaValor: string; setMermaValor: (v: string) => void;
+  onCerrar: () => void;
+  isPending: boolean;
+}) {
+  // Tallas de la curva original (para mostrar los inputs de unidades cortadas)
+  const tallas = Object.keys(oc.curva_trazo || {});
+
+  const totalUnidades = Object.values(unidadesReal)
+    .reduce((s, v) => s + (parseInt(v || "0", 10) || 0), 0);
+  const promedioRealN = parseFloat(promedioReal || "0") || 0;
+  const consumoAuto = promedioRealN * totalUnidades;
+
+  // Auto-llena el campo consumo real (metros reales) cuando cambian promedio o unidades
+  const consumoAutoStr = consumoAuto > 0 ? consumoAuto.toFixed(2) : "";
+  const consumoBind = consumoReal || consumoAutoStr;
+
+  // Deltas contra el teórico
+  const promTeo = Number(oc.promedio_tecnico || 0);
+  const metrosTeo = Number(oc.metros_consumidos || 0);
+  const capasTeo = Number(oc.num_capas || 0);
+
+  const promDelta = promedioRealN > 0 && promTeo > 0 ? promedioRealN - promTeo : null;
+  const metrosRealN = parseFloat(consumoBind || "0") || 0;
+  const metrosDelta = metrosRealN > 0 && metrosTeo > 0 ? metrosRealN - metrosTeo : null;
+  const capasRealN = parseInt(capasReal || "0", 10) || 0;
+  const capasDelta = capasRealN > 0 && capasTeo > 0 ? capasRealN - capasTeo : null;
+
+  function setUnidad(t: string, v: string) {
+    setUnidadesReal({ ...unidadesReal, [t]: v });
+  }
+
+  return (
+    <Card>
+      <CardContent className="p-5 space-y-4">
+        <p className="section-label">Informe del cortador</p>
+
+        {/* Fila 1: referencia interna + lote + fecha entrega + precio */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div>
+            <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+              Ref. interna (auto)
+            </label>
+            <div className="w-full rounded-sm border border-border bg-cloud/40 px-3 py-2 text-sm text-ink-900 tabular font-semibold">
+              {oc.consecutivo}
+            </div>
+          </div>
+          <FieldText label="Referencia de lote"    value={refLote}       onChange={setRefLote} placeholder="Lote-XXX" />
+          <FieldText label="Fecha entrega corte"   value={fechaEntrega}  onChange={setFechaEntrega} type="date" />
+          <FieldText label="Precio del corte"      value={precioCorte}   onChange={setPrecioCorte} inputMode="decimal" placeholder="0" />
+        </div>
+
+        {/* Fila 2: capas real vs teorico, promedio real vs teorico */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <ComparativoBloque
+            label="Capas"
+            teorico={capasTeo}
+            valueReal={capasReal}
+            onChangeReal={setCapasReal}
+            inputMode="numeric"
+            delta={capasDelta}
+            fmt={(n) => n.toString()}
+          />
+          <ComparativoBloque
+            label="Promedio (m/prenda)"
+            teorico={promTeo}
+            valueReal={promedioReal}
+            onChangeReal={setPromedioReal}
+            inputMode="decimal"
+            delta={promDelta}
+            fmt={(n) => n.toFixed(3)}
+          />
+          <ComparativoBloque
+            label="Metros"
+            teorico={metrosTeo}
+            valueReal={consumoBind}
+            onChangeReal={setConsumoReal}
+            inputMode="decimal"
+            delta={metrosDelta}
+            fmt={(n) => n.toFixed(2)}
+            hint={consumoAuto > 0 && !consumoReal ? `Auto = ${promedioRealN.toFixed(3)} × ${totalUnidades}` : ""}
+          />
+        </div>
+
+        {/* Fila 3: retazos + merma */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <FieldText label="Cantidad de retazos" value={retazos}    onChange={setRetazos}    inputMode="numeric" placeholder="0" />
+          <FieldText label="Merma tipo (opc.)"  value={mermaTipo}   onChange={setMermaTipo}  placeholder="Ej. borde, defecto" />
+          <FieldText label="Merma valor (opc.)" value={mermaValor}  onChange={setMermaValor} inputMode="decimal" placeholder="0" />
+        </div>
+
+        {/* Unidades cortadas por talla */}
+        <div>
+          <p className="section-label mb-2">Unidades cortadas por talla</p>
+          <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
+            {tallas.map((t) => (
+              <div key={t}>
+                <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite text-center">
+                  Talla {t}
+                  <div className="text-[0.55rem] text-graphite/70 normal-case tracking-normal">
+                    prog. {oc.curva_trazo?.[t] ?? 0}
+                  </div>
+                </label>
+                <input value={unidadesReal[t] || ""} onChange={(e) => setUnidad(t, e.target.value)}
+                  inputMode="numeric" placeholder="0"
+                  className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-sm text-center tabular" />
+              </div>
+            ))}
+          </div>
+          <p className="mt-1 text-[0.62rem] text-graphite">
+            Total cortadas: <span className="font-semibold text-ink-900 tabular">{totalUnidades}</span>
+            {oc.cantidad_programada
+              ? ` / programadas ${oc.cantidad_programada}` : ""}
+          </p>
+        </div>
+
+        <div className="flex justify-end">
+          <button onClick={onCerrar} disabled={isPending || !consumoBind}
+            className="inline-flex items-center gap-2 rounded-sm bg-teal px-6 py-2.5 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-ink-900 disabled:opacity-40">
+            {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
+            Guardar informe y cerrar
+          </button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function FieldText({ label, value, onChange, placeholder, inputMode, type }: {
+  label: string; value: string; onChange: (v: string) => void;
+  placeholder?: string; inputMode?: "decimal" | "numeric"; type?: string;
+}) {
+  return (
+    <div>
+      <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
+      <input value={value} onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder} inputMode={inputMode} type={type || "text"}
+        className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm" />
+    </div>
+  );
+}
+
+function ComparativoBloque({ label, teorico, valueReal, onChangeReal, inputMode, delta, fmt, hint }: {
+  label: string;
+  teorico: number;
+  valueReal: string;
+  onChangeReal: (v: string) => void;
+  inputMode?: "decimal" | "numeric";
+  delta: number | null;
+  fmt: (n: number) => string;
+  hint?: string;
+}) {
+  const tono = delta == null ? "text-graphite" : (delta > 0 ? "text-terracotta" : delta < 0 ? "text-teal" : "text-graphite");
+  return (
+    <div className="rounded-sm border border-border bg-cloud/30 p-3">
+      <p className="text-[0.6rem] uppercase tracking-widest text-graphite mb-2">{label}</p>
+      <div className="grid grid-cols-3 gap-2 items-end">
+        <div>
+          <p className="text-[0.55rem] text-graphite">Teórico</p>
+          <div className="rounded-sm border border-border bg-cloud/60 px-2 py-1.5 text-sm tabular text-graphite">
+            {teorico > 0 ? fmt(teorico) : "—"}
+          </div>
+        </div>
+        <div>
+          <p className="text-[0.55rem] text-graphite">Real</p>
+          <input value={valueReal} onChange={(e) => onChangeReal(e.target.value)}
+            inputMode={inputMode} placeholder="0"
+            className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-sm text-right tabular" />
+        </div>
+        <div>
+          <p className="text-[0.55rem] text-graphite">Δ</p>
+          <div className={`rounded-sm border border-border bg-white px-2 py-1.5 text-sm text-right tabular font-semibold ${tono}`}>
+            {delta == null ? "—" : (delta > 0 ? `+${fmt(delta)}` : fmt(delta))}
+          </div>
+        </div>
+      </div>
+      {hint && <p className="mt-1 text-[0.55rem] text-graphite italic">{hint}</p>}
+    </div>
   );
 }
