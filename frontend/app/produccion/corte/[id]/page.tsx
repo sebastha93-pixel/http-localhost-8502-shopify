@@ -121,13 +121,17 @@ export default function DetalleOrdenCortePage() {
     enabled: !!id,
   });
 
-  // Trae TODOS los rollos disponibles y los partimos en cliente:
-  //   - "match" (coinciden con la tela del precosteo, se muestran arriba)
-  //   - "otros" (por si el nombre no está idéntico, opción manual)
+  // Trae rollos filtrados por tela (mucho más rápido que traer los 500 disponibles).
+  // La búsqueda ilike del backend hace un match parcial (%tela%) que cubre la mayoría
+  // de casos. El fallback "Otros rollos" se dispara solo si el usuario lo pide.
   const telaRef = (q.data?.referencia?.tela || "").trim();
   const rollosInvQ = useQuery<{ rollos: RolloInv[] }>({
-    queryKey: ["produccion", "rollos", "disponibles"],
-    queryFn: () => api.get(`/api/produccion/rollos?estado=disponible&limit=500`),
+    queryKey: ["produccion", "rollos", "disponibles-tela", telaRef],
+    queryFn: () => {
+      const p = new URLSearchParams({ estado: "disponible", limit: "200" });
+      if (telaRef) p.set("tela", telaRef);
+      return api.get(`/api/produccion/rollos?${p}`);
+    },
     enabled: !!q.data && q.data.estado !== "cortada",
   });
 

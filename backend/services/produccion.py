@@ -8,12 +8,39 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from supabase import Client, create_client
 
 log = logging.getLogger(__name__)
+
+# Cache simple en memoria por endpoint (TTL segundos)
+# Vive mientras el worker esté vivo. Con 30s es suficiente para navegación fluida
+# y aún así refleja cambios recientes en pocos segundos.
+_CACHE: dict[str, tuple[float, Any]] = {}
+
+
+def _cache_get(key: str, ttl_seg: int):
+    hit = _CACHE.get(key)
+    if not hit:
+        return None
+    expires_at, val = hit
+    if time.time() > expires_at:
+        _CACHE.pop(key, None)
+        return None
+    return val
+
+
+def _cache_set(key: str, val, ttl_seg: int):
+    _CACHE[key] = (time.time() + ttl_seg, val)
+
+
+def _cache_invalidate_prefix(prefix: str):
+    for k in list(_CACHE.keys()):
+        if k.startswith(prefix):
+            _CACHE.pop(k, None)
 
 _client: Optional[Client] = None
 
@@ -285,16 +312,21 @@ def inventario_resumen() -> list[dict]:
     Retorna: [
       { descripcion_tela, tono, num_rollos, metros_disponible, metros_inicial, valor_estimado }
     ]
+    Cache 30s — la mayoría de páginas consultan este endpoint al abrirse.
     """
+    cache_key = "inventario_resumen"
+    cached = _cache_get(cache_key, ttl_seg=30)
+    if cached is not None:
+        return cached
     sb = _sb()
     if sb is None:
         return []
-    # Traer todos los rollos disponibles y agrupar en Python.
-    # Simple pero eficiente hasta ~10k rollos; después migramos a SQL agg.
+    # Traer solo columnas necesarias, no cargar rollos agotados.
+    # 5000 es holgado para MALE'DENIM (~cientos activos).
     rollos = (sb.table("rollos_tela")
-                .select("descripcion_tela,tono,metros_inicial,metros_disponible,costo_metro,estado")
+                .select("descripcion_tela,tono,metros_inicial,metros_disponible,costo_metro")
                 .neq("estado", "agotado")
-                .limit(20000)
+                .limit(5000)
                 .execute()).data or []
 
     agrupado: dict[tuple[str, str], dict] = {}
@@ -325,6 +357,7 @@ def inventario_resumen() -> list[dict]:
         row["metros_inicial"] = round(row["metros_inicial"], 2)
         row["valor_estimado"] = round(row["valor_estimado"], 0)
     out.sort(key=lambda x: (x["descripcion_tela"], x["tono"]))
+    _cache_set(cache_key, out, ttl_seg=30)
     return out
 
 
