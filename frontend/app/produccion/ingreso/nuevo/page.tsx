@@ -1,0 +1,265 @@
+"use client";
+
+/**
+ * Nuevo ingreso de tela — pantalla móvil-primero para bodega.
+ *
+ * Flujo:
+ * 1. Cabecera: textilera, tipo de documento, número, fecha.
+ * 2. Filas de rollos: se van agregando una por una. Campos grandes,
+ *    teclado numérico donde aplica (metros, ancho, costo).
+ * 3. Guardar → backend crea consecutivos y regresa los IDs.
+ * 4. Redirige al detalle del ingreso para imprimir etiquetas masivas.
+ */
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useMutation } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import { PageShell } from "@/components/page-shell";
+import { Card, CardContent } from "@/components/ui/card";
+import { Plus, Trash2, Save, Loader2, AlertCircle } from "lucide-react";
+
+interface RolloForm {
+  numero_rollo: string;
+  serial: string;
+  lote_fabrica: string;
+  tono: string;
+  referencia_tela: string;
+  descripcion_tela: string;
+  ancho: string;
+  costo_metro: string;
+  metros_inicial: string;
+}
+
+function rolloVacio(): RolloForm {
+  return {
+    numero_rollo: "", serial: "", lote_fabrica: "", tono: "",
+    referencia_tela: "", descripcion_tela: "",
+    ancho: "", costo_metro: "", metros_inicial: "",
+  };
+}
+
+const TEXTILERAS = ["Primatela", "Contacto", "Stilotex", "Megatex", "Otra"];
+const TIPOS_DOC = [
+  { v: "remision",      l: "Remisión" },
+  { v: "factura",       l: "Factura" },
+  { v: "lista_empaque", l: "Lista de empaque" },
+  { v: "consulta",      l: "Consulta (serial)" },
+];
+
+export default function NuevoIngresoPage() {
+  const router = useRouter();
+  const hoy = new Date().toISOString().slice(0, 10);
+
+  const [textilera, setTextilera] = useState("Primatela");
+  const [textileraOtra, setTextileraOtra] = useState("");
+  const [nit, setNit] = useState("");
+  const [tipoDoc, setTipoDoc] = useState("remision");
+  const [numeroDoc, setNumeroDoc] = useState("");
+  const [fecha, setFecha] = useState(hoy);
+  const [ordenCompra, setOrdenCompra] = useState("");
+  const [observaciones, setObservaciones] = useState("");
+  const [rollos, setRollos] = useState<RolloForm[]>([rolloVacio()]);
+  const [err, setErr] = useState("");
+
+  const mut = useMutation({
+    mutationFn: () => {
+      const textileraFinal = textilera === "Otra" ? textileraOtra.trim() : textilera;
+      const rollosValidos = rollos
+        .filter((r) => r.descripcion_tela.trim() && parseFloat(r.metros_inicial || "0") > 0)
+        .map((r) => ({
+          numero_rollo: r.numero_rollo || null,
+          serial: r.serial || null,
+          lote_fabrica: r.lote_fabrica || null,
+          tono: r.tono || null,
+          referencia_tela: r.referencia_tela || null,
+          descripcion_tela: r.descripcion_tela.trim().toUpperCase(),
+          ancho: r.ancho ? parseFloat(r.ancho) : null,
+          costo_metro: r.costo_metro ? parseFloat(r.costo_metro) : null,
+          metros_inicial: parseFloat(r.metros_inicial),
+        }));
+      if (rollosValidos.length === 0) throw new Error("Agrega al menos un rollo con descripción y metros");
+      return api.post<{ ok: boolean; ingreso: { id: string; numero_ingreso: string } }>(
+        "/api/produccion/ingreso",
+        {
+          textilera: textileraFinal,
+          nit_textilera: nit || null,
+          numero_documento: numeroDoc,
+          tipo_documento: tipoDoc,
+          fecha,
+          orden_compra: ordenCompra || null,
+          observaciones: observaciones || null,
+          rollos: rollosValidos,
+        },
+      );
+    },
+    onSuccess: (data) => {
+      router.push(`/produccion/ingreso/${data.ingreso.id}`);
+    },
+    onError: (e: Error) => setErr(e.message),
+  });
+
+  function actualizarRollo(idx: number, campo: keyof RolloForm, valor: string) {
+    setRollos((prev) => prev.map((r, i) => (i === idx ? { ...r, [campo]: valor } : r)));
+  }
+  function agregarRollo() {
+    // Copia campos comunes del último rollo (descripción tela, ancho, costo)
+    // para acelerar la digitación cuando son iguales.
+    const last = rollos[rollos.length - 1];
+    setRollos([
+      ...rollos,
+      { ...rolloVacio(),
+        descripcion_tela: last?.descripcion_tela || "",
+        ancho: last?.ancho || "",
+        costo_metro: last?.costo_metro || "",
+        referencia_tela: last?.referencia_tela || "",
+      },
+    ]);
+  }
+  function quitarRollo(idx: number) {
+    setRollos((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  const totalMetros = rollos.reduce((s, r) => s + (parseFloat(r.metros_inicial || "0") || 0), 0);
+  const totalRollosVal = rollos.filter((r) => r.descripcion_tela && parseFloat(r.metros_inicial || "0") > 0).length;
+
+  return (
+    <PageShell
+      title="Nuevo ingreso"
+      subtitle="Recepción de tela desde textilera"
+    >
+      <form
+        onSubmit={(e) => { e.preventDefault(); setErr(""); mut.mutate(); }}
+        className="space-y-4"
+      >
+        {/* Cabecera */}
+        <Card>
+          <CardContent className="p-5 space-y-4">
+            <p className="section-label">Cabecera</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Textilera</label>
+                <select value={textilera} onChange={(e) => setTextilera(e.target.value)}
+                  className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm">
+                  {TEXTILERAS.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+                {textilera === "Otra" && (
+                  <input value={textileraOtra} onChange={(e) => setTextileraOtra(e.target.value)}
+                    placeholder="Nombre de la textilera"
+                    className="mt-2 w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />
+                )}
+              </div>
+              <Input label="NIT (opcional)" value={nit} onChange={setNit} />
+              <div>
+                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Tipo de documento</label>
+                <select value={tipoDoc} onChange={(e) => setTipoDoc(e.target.value)}
+                  className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm">
+                  {TIPOS_DOC.map((t) => <option key={t.v} value={t.v}>{t.l}</option>)}
+                </select>
+              </div>
+              <Input label="Número del documento" value={numeroDoc} onChange={setNumeroDoc} required placeholder="Nº remisión / factura" />
+              <Input label="Fecha" type="date" value={fecha} onChange={setFecha} required />
+              <Input label="Orden de compra (opcional)" value={ordenCompra} onChange={setOrdenCompra} />
+              <div className="md:col-span-2">
+                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Observaciones</label>
+                <textarea value={observaciones} onChange={(e) => setObservaciones(e.target.value)}
+                  rows={2}
+                  className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Rollos */}
+        <Card>
+          <CardContent className="p-5 space-y-3">
+            <div className="flex items-baseline justify-between">
+              <p className="section-label">Rollos ({totalRollosVal})</p>
+              <p className="text-xs text-graphite tabular">
+                Total: <span className="font-semibold text-ink-900">{totalMetros.toFixed(2)} m</span>
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              {rollos.map((r, idx) => (
+                <div key={idx} className="rounded-sm border border-border bg-cloud/30 p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[0.62rem] uppercase tracking-[0.12em] text-graphite font-semibold">
+                      Rollo #{idx + 1}
+                    </span>
+                    {rollos.length > 1 && (
+                      <button type="button" onClick={() => quitarRollo(idx)}
+                        className="text-terracotta hover:text-crimson">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
+                    <Cell label="Nº rollo"  value={r.numero_rollo} onChange={(v) => actualizarRollo(idx, "numero_rollo", v)} />
+                    <Cell label="Serial"    value={r.serial}       onChange={(v) => actualizarRollo(idx, "serial", v)} />
+                    <Cell label="Lote"      value={r.lote_fabrica} onChange={(v) => actualizarRollo(idx, "lote_fabrica", v)} />
+                    <Cell label="Tono"      value={r.tono}         onChange={(v) => actualizarRollo(idx, "tono", v)} />
+                    <Cell label="Ref. tela" value={r.referencia_tela} onChange={(v) => actualizarRollo(idx, "referencia_tela", v)} />
+                    <Cell label="Descripción *" value={r.descripcion_tela} onChange={(v) => actualizarRollo(idx, "descripcion_tela", v)} required />
+                    <Cell label="Ancho (cm)"    value={r.ancho}        onChange={(v) => actualizarRollo(idx, "ancho", v)}        inputMode="decimal" />
+                    <Cell label="Costo/m (COP)" value={r.costo_metro}  onChange={(v) => actualizarRollo(idx, "costo_metro", v)}  inputMode="decimal" />
+                    <Cell label="Metros *"      value={r.metros_inicial} onChange={(v) => actualizarRollo(idx, "metros_inicial", v)} inputMode="decimal" required />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <button type="button" onClick={agregarRollo}
+              className="inline-flex items-center gap-2 rounded-sm border border-border bg-card px-3 py-2 text-xs font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud">
+              <Plus className="h-3.5 w-3.5" /> Agregar rollo
+            </button>
+          </CardContent>
+        </Card>
+
+        {err && (
+          <div className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta flex items-center gap-2">
+            <AlertCircle className="h-3.5 w-3.5" /> {err}
+          </div>
+        )}
+
+        <div className="sticky bottom-0 bg-white/95 backdrop-blur border-t border-border py-3 flex items-center justify-between gap-3">
+          <div className="text-xs text-graphite">
+            <span className="font-semibold text-ink-900 tabular">{totalRollosVal}</span> rollos ·
+            <span className="font-semibold text-ink-900 tabular ml-1">{totalMetros.toFixed(2)}</span> metros
+          </div>
+          <button type="submit" disabled={mut.isPending || totalRollosVal === 0}
+            className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-6 py-2.5 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-navy-700 disabled:opacity-40">
+            {mut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            Guardar ingreso
+          </button>
+        </div>
+      </form>
+    </PageShell>
+  );
+}
+
+function Input({ label, value, onChange, type = "text", required = false, placeholder = "" }: {
+  label: string; value: string; onChange: (v: string) => void; type?: string; required?: boolean; placeholder?: string;
+}) {
+  return (
+    <div>
+      <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
+      <input type={type} value={value} onChange={(e) => onChange(e.target.value)}
+        required={required} placeholder={placeholder}
+        className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />
+    </div>
+  );
+}
+
+function Cell({ label, value, onChange, inputMode, required = false }: {
+  label: string; value: string; onChange: (v: string) => void; inputMode?: "decimal" | "numeric"; required?: boolean;
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-[0.55rem] uppercase tracking-widest text-graphite">{label}</label>
+      <input value={value} onChange={(e) => onChange(e.target.value)}
+        inputMode={inputMode}
+        required={required}
+        className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-sm" />
+    </div>
+  );
+}

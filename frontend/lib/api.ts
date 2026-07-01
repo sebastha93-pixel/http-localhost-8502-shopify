@@ -5,6 +5,7 @@
 import { getToken, clearToken } from "@/lib/auth";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || "";
+export const API_BASE = BASE;
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public detail?: unknown) {
