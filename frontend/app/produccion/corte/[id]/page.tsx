@@ -33,6 +33,20 @@ interface RolloLink {
   };
 }
 
+interface RolloInv {
+  id: string;
+  codigo_interno: string;
+  barcode: string;
+  descripcion_tela: string;
+  tono?: string;
+  metros_disponible: number;
+  metros_inicial: number;
+  costo_metro?: number;
+  estado: string;
+  lote_fabrica?: string;
+  numero_rollo?: string;
+}
+
 interface OrdenCorte {
   id: string;
   consecutivo: string;
@@ -67,6 +81,7 @@ export default function DetalleOrdenCortePage() {
   const id = params?.id as string;
   const qc = useQueryClient();
   const barcodeRef = useRef<HTMLInputElement>(null);
+  const metrosRef = useRef<HTMLInputElement>(null);
 
   const [barcode, setBarcode] = useState("");
   const [metros, setMetros] = useState("");
@@ -81,6 +96,16 @@ export default function DetalleOrdenCortePage() {
     queryKey: ["produccion", "corte", id],
     queryFn: () => api.get(`/api/produccion/corte/${id}`),
     enabled: !!id,
+  });
+
+  // Rollos disponibles en inventario que hacen MATCH con la tela del precosteo.
+  // Se muestra al cortador para saber qué rollos internos tiene disponibles
+  // (código interno, tono, metros, barcode) antes de pistolear.
+  const telaRef = (q.data?.referencia?.tela || "").trim();
+  const rollosInvQ = useQuery<{ rollos: RolloInv[] }>({
+    queryKey: ["produccion", "rollos", "match-tela", telaRef],
+    queryFn: () => api.get(`/api/produccion/rollos?tela=${encodeURIComponent(telaRef)}&estado=disponible`),
+    enabled: !!telaRef && q.data?.estado !== "cortada",
   });
 
   const pistolar = useMutation({
@@ -190,6 +215,76 @@ export default function DetalleOrdenCortePage() {
         </CardContent>
       </Card>
 
+      {/* Rollos disponibles en inventario que hacen match con la tela del precosteo */}
+      {!cerrada && telaRef && (
+        <Card>
+          <CardContent className="p-0">
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+              <p className="section-label">Rollos disponibles · {telaRef}</p>
+              <p className="text-[0.65rem] text-graphite">
+                Match con la tela del precosteo
+              </p>
+            </div>
+            {rollosInvQ.isLoading ? (
+              <div className="p-6 text-xs text-graphite">Buscando rollos…</div>
+            ) : (rollosInvQ.data?.rollos || []).length === 0 ? (
+              <div className="p-6 text-xs text-terracotta">
+                No hay rollos disponibles con esta tela en inventario. Registra un ingreso o revisa el nombre de la tela.
+              </div>
+            ) : (
+              <table className="w-full text-xs">
+                <thead className="bg-cloud/40 border-b border-border">
+                  <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                    <th className="px-4 py-2">Código interno</th>
+                    <th className="px-4 py-2">Tono</th>
+                    <th className="px-4 py-2">Lote</th>
+                    <th className="px-4 py-2">Nº rollo</th>
+                    <th className="px-4 py-2 text-right">Disponible</th>
+                    <th className="px-4 py-2 tabular">Barcode</th>
+                    <th className="px-4 py-2 text-right"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(rollosInvQ.data?.rollos || []).map((r) => {
+                    const yaAsignado = (oc.rollos || []).some((l) => l.rollo_id === r.id);
+                    return (
+                      <tr key={r.id} className={`border-b border-border/40 ${yaAsignado ? "bg-teal/5" : "hover:bg-cloud/30"}`}>
+                        <td className="px-4 py-2 font-semibold tabular text-navy-600">{r.codigo_interno}</td>
+                        <td className="px-4 py-2 text-graphite">{r.tono || "—"}</td>
+                        <td className="px-4 py-2 text-graphite">{r.lote_fabrica || "—"}</td>
+                        <td className="px-4 py-2 text-graphite">{r.numero_rollo || "—"}</td>
+                        <td className="px-4 py-2 text-right tabular text-ink-900">
+                          {Number(r.metros_disponible).toFixed(2)} m
+                        </td>
+                        <td className="px-4 py-2 text-[0.65rem] text-graphite tabular">{r.barcode}</td>
+                        <td className="px-4 py-2 text-right">
+                          {yaAsignado ? (
+                            <span className="inline-flex items-center gap-1 text-[0.65rem] text-teal">
+                              <CheckCircle className="h-3 w-3" /> Asignado
+                            </span>
+                          ) : (
+                            <button type="button"
+                              onClick={() => {
+                                setBarcode(r.barcode);
+                                setMetros("");
+                                setErr("");
+                                setTimeout(() => metrosRef.current?.focus(), 30);
+                              }}
+                              className="rounded-sm border border-navy-600 bg-white px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-widest text-navy-600 hover:bg-navy-600 hover:text-white">
+                              Usar
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Pistola de rollos */}
       {!cerrada && (
         <Card>
@@ -199,7 +294,7 @@ export default function DetalleOrdenCortePage() {
               <p className="section-label">Pistolear rollo</p>
             </div>
             <p className="text-xs text-graphite">
-              Escanea el código de barras del rollo con la pistola (o tíbealo). Después escribe cuántos metros vas a usar.
+              Escanea el código de barras del rollo con la pistola, o toca "Usar" en la tabla de arriba. Después escribe cuántos metros vas a usar.
             </p>
             <form
               onSubmit={(e) => { e.preventDefault(); setErr(""); pistolar.mutate(); }}
@@ -213,7 +308,7 @@ export default function DetalleOrdenCortePage() {
               </div>
               <div>
                 <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite">Metros a usar</label>
-                <input value={metros} onChange={(e) => setMetros(e.target.value)}
+                <input ref={metrosRef} value={metros} onChange={(e) => setMetros(e.target.value)}
                   inputMode="decimal" placeholder="0"
                   className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm text-right tabular" />
               </div>
