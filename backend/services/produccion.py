@@ -44,15 +44,21 @@ def _now_iso() -> str:
 
 def next_consecutivo_mensual(prefijo: str, width: int = 4) -> str:
     """Consecutivo mensual — resetea al inicio de cada mes.
-    Devuelve `YYYYMM-NNNN`. Ejemplo: 202607-0001.
-    Usa la misma tabla `produccion_consecutivos` con clave sintética `prefijo:YYYYMM`.
+    Devuelve `YYMM-NNNN`. Ejemplo: 2607-0001 (julio 2026).
+
+    Los últimos 2 dígitos del año + mes + serial mensual.
+    Usa la misma tabla `produccion_consecutivos` con clave sintética
+    `prefijo:YYMM` — no choca con los otros consecutivos (ING, ROLLO,
+    PC, REM) porque son filas independientes por prefijo/año.
     """
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
     now = datetime.now(tz=timezone.utc)
-    yyyymm = f"{now.year}{now.month:02d}"
-    key = f"{prefijo}:{yyyymm}"
+    yy = f"{now.year % 100:02d}"
+    mm = f"{now.month:02d}"
+    yymm = f"{yy}{mm}"
+    key = f"{prefijo}:{yymm}"
     r = (sb.table("produccion_consecutivos")
            .select("ultimo").eq("prefijo", key).eq("anio", now.year)
            .limit(1).execute())
@@ -62,7 +68,7 @@ def next_consecutivo_mensual(prefijo: str, width: int = 4) -> str:
         {"prefijo": key, "anio": now.year, "ultimo": nuevo, "updated_at": _now_iso()},
         on_conflict="prefijo,anio",
     ).execute()
-    return f"{yyyymm}-{str(nuevo).zfill(width)}"
+    return f"{yymm}-{str(nuevo).zfill(width)}"
 
 
 def next_consecutivo(prefijo: str, anio: Optional[int] = None, width: int = 4) -> str:
