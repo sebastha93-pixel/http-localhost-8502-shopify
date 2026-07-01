@@ -26,6 +26,34 @@ function _puede(lista) {
   return false;
 }
 
+/* ═══════════════ NOTIFICACIONES ═══════════════ */
+var NOTIFICAR = ['sebastian.hurtado@maledenim.com', 'maria.alejandra@maledenim.com']; // reciben aviso al firmar
+
+// WhatsApp: desactivado hasta conectar un proveedor. Rellena y pon WHATSAPP_ON = true.
+var WHATSAPP_ON = false;
+var WHATSAPP_TO = ['+57XXXXXXXXXX'];   // números destino
+var WHATSAPP_ENDPOINT = '';            // URL del proveedor (Meta Cloud API / Twilio / Wati)
+var WHATSAPP_TOKEN = '';               // token / bearer
+
+function _notificar(asunto, cuerpo) {
+  try { MailApp.sendEmail(NOTIFICAR.join(','), asunto, cuerpo); } catch (e) {}
+  _whatsapp(asunto + '\n' + cuerpo);
+}
+
+function _whatsapp(msg) {
+  if (!WHATSAPP_ON || !WHATSAPP_ENDPOINT) return;   // listo para conectar (ver instrucciones)
+  for (var i = 0; i < WHATSAPP_TO.length; i++) {
+    try {
+      UrlFetchApp.fetch(WHATSAPP_ENDPOINT, {
+        method: 'post',
+        headers: { 'Authorization': 'Bearer ' + WHATSAPP_TOKEN, 'Content-Type': 'application/json' },
+        payload: JSON.stringify({ messaging_product: 'whatsapp', to: WHATSAPP_TO[i], type: 'text', text: { body: msg } }),
+        muteHttpExceptions: true
+      });
+    } catch (e) {}
+  }
+}
+
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu("MALE'DENIM")
@@ -34,6 +62,8 @@ function onOpen() {
     .addItem('Imprimir etiquetas de rollos', 'imprimirEtiquetas')
     .addSeparator()
     .addItem('Autorizar orden de corte (diseñador)', 'firmarOrdenCorte')
+    .addSeparator()
+    .addItem('Generar remisión de insumos', 'generarRemisionInsumos')
     .addToUi();
 }
 
@@ -52,13 +82,40 @@ function guardarYFirmarPrecosteo() {
     var r = ui.alert('El estado no es "Autorizada". ¿Archivar de todas formas?', ui.ButtonSet.YES_NO);
     if (r !== ui.Button.YES) return;
   }
-  h.appendRow([ new Date(), ref,
-    f.getRange('D2').getValue(), f.getRange('B3').getValue(), f.getRange('D3').getValue(),
+  var dp = ss.getSheetByName('Detalle Precosteo');
+  if (!dp) { ui.alert('Falta la hoja "Detalle Precosteo".'); return; }
+
+  // ID secuencial (trazabilidad)
+  var nExist = 0, col = h.getRange(2, 3, Math.max(h.getLastRow() - 1, 1), 1).getValues();
+  for (var i = 0; i < col.length; i++) { if (col[i][0]) nExist++; }
+  var id = 'PC-2026-' + ('0000' + (nExist + 1)).slice(-4);
+  var nombre = f.getRange('D2').getValue();
+
+  // Resumen (con ID)
+  h.appendRow([ id, new Date(), ref, nombre, f.getRange('B3').getValue(), f.getRange('D3').getValue(),
     f.getRange('F29').getValue(), f.getRange('G29').getValue(), f.getRange('B34').getValue(),
     f.getRange('D38').getValue() ]);
+
+  // Detalle: TODAS las líneas (A6:G28), rellenando la categoría combinada
+  var lines = f.getRange('A6:G28').getValues(), cat = '', out = [];
+  for (var j = 0; j < lines.length; j++) {
+    if (lines[j][0]) cat = lines[j][0];
+    var item = lines[j][1];
+    if (!item) continue;
+    out.push([new Date(), id, ref, nombre, cat, item, lines[j][2], lines[j][3], lines[j][4], lines[j][5], lines[j][6]]);
+  }
+  if (out.length) dp.getRange(dp.getLastRow() + 1, 1, out.length, 11).setValues(out);
+
+  _notificar('Precosteo firmado: ' + ref + ' (' + id + ')',
+    'Referencia ' + ref + ' — ' + nombre + '\nID: ' + id +
+    '\nCosto con IVA: ' + f.getRange('G29').getValue() +
+    '\nPrecio venta con IVA: ' + f.getRange('B34').getValue() +
+    '\nAutorizado por: ' + f.getRange('D38').getValue() +
+    '\nLíneas archivadas: ' + out.length);
+
   f.getRangeList(['B2','D2','G2','B3','D3','B38','D38','G38']).clearContent();
   f.getRange('C6:D28').clearContent();
-  ui.alert('Precosteo "' + ref + '" archivado. Formato listo en 0.');
+  ui.alert('Precosteo "' + ref + '" (' + id + ') archivado con ' + out.length + ' líneas. Formato listo en 0.');
 }
 
 /* ───────────────────────── ETIQUETAS (imprime directo) ───────────────────────── */
@@ -121,34 +178,92 @@ var ETIQUETAS_HTML =
 'DATA.forEach(function(d,i){ JsBarcode("#bc"+i, d.code, {format:"CODE128", height:48, width:1.6, fontSize:12, margin:4}); });' +
 '<\/script></body></html>';
 
-/* ─────────────────────── FIRMAR ORDEN DE CORTE ─────────────────────── */
+/* ─────────────────────── AUTORIZAR ORDEN DE CORTE (planeación) ─────────────────────── */
 function firmarOrdenCorte() {
   var ui = SpreadsheetApp.getUi();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var oc = ss.getSheetByName('Orden de Corte (formato)');
-  var co = ss.getSheetByName('Cortes');
   var hc = ss.getSheetByName('Histórico Cortes');
-  if (!oc || !co || !hc) { ui.alert('Faltan hojas: Orden de Corte / Cortes / Histórico Cortes.'); return; }
+  if (!oc || !hc) { ui.alert('Faltan hojas: Orden de Corte / Histórico Cortes.'); return; }
   if (!_puede(AUTORIZA_CORTE)) return;                 // solo el diseñador
-  var ref = oc.getRange('B5').getValue();
-  if (!ref) { ui.alert('Falta la Referencia de la prenda.'); return; }
-  var firma = oc.getRange('B31').getValue();
-  var estado = String(oc.getRange('E31').getValue()).toLowerCase();
+
+  var cons = oc.getRange('B4').getValue();
+  var tela = oc.getRange('B6').getValue();
+  var resp = oc.getRange('B8').getValue();
+  var firma = oc.getRange('B34').getValue();
+  var estado = String(oc.getRange('G34').getValue()).toLowerCase();
+  var TALLAS = [4, 6, 8, 10, 12, 14, 16];
+
+  var items = oc.getRange('A12:K16').getValues();   // A ref, B-H tallas, I cantidad, J rend.teórico, K consumo teórico
+  var validas = [];
+  for (var i = 0; i < items.length; i++) {
+    var ref = items[i][0], cant = Number(items[i][8]);
+    if (!ref || !cant) continue;
+    var rendTeo = Number(items[i][9]) || 0;
+    var consumoTeo = Number(items[i][10]) || (cant * rendTeo);
+    var curva = [], tallaVals = [];
+    for (var t = 0; t < TALLAS.length; t++) {
+      var q = Number(items[i][1 + t]);
+      tallaVals.push(q || '');
+      if (q) curva.push(TALLAS[t] + ':' + q);
+    }
+    validas.push([ref, curva.join(' '), tallaVals, cant, rendTeo, consumoTeo]);
+  }
+  if (!validas.length) { ui.alert('Agrega al menos una referencia con cantidad (curva de tallas).'); return; }
+
   if (!firma || estado !== 'autorizada') {
-    var r = ui.alert('La orden no está firmada/Autorizada. ¿Firmar y registrar de todas formas?', ui.ButtonSet.YES_NO);
+    var r = ui.alert('La orden no está firmada/Autorizada. ¿Autorizar y planear de todas formas?', ui.ButtonSet.YES_NO);
     if (r !== ui.Button.YES) return;
   }
-  var tela = oc.getRange('B6').getValue();
-  var tono = oc.getRange('D5').getValue();
-  var resp = oc.getRange('B7').getValue();
-  var cons = oc.getRange('B4').getValue();
-  var mv = oc.getRange('E11:E14').getValues(), metros = 0;
-  for (var i = 0; i < mv.length; i++) { var v = Number(mv[i][0]); if (!isNaN(v)) metros += v; }
-  co.appendRow([new Date(), tela, ref, metros, tono, resp]);
-  hc.appendRow([new Date(), cons, ref, tono, tela, metros, resp, firma]);
-  oc.getRangeList(['B4','B5','D5','B6','B7','D7','A27','B31','E31']).clearContent();
-  oc.getRange('A11:E14').clearContent();
-  oc.getRangeList(['B17','D17','B18','D18','B19','D19','B20','D20']).clearContent();
-  oc.getRange('B24:H24').clearContent();
-  ui.alert('Orden de corte "' + (cons || ref) + '" firmada y registrada (' + metros + ' m descontados de ' + tela + '). Formato listo en 0.');
+
+  var total = 0;
+  for (var j = 0; j < validas.length; j++) {
+    var v = validas[j];   // [ref, curvaStr, tallaVals(7), cant, rendTeo, consumoTeo]
+    // Fecha, Consecutivo, Ref, Tela, Curva, T4..T16, Cantidad, Rend.teórico, Consumo teórico, Consumo real, Diferencia, Responsable, Firma
+    var row = [new Date(), cons, v[0], tela, v[1]].concat(v[2]).concat([v[3], v[4], v[5], '', '', resp, firma]);
+    hc.appendRow(row);
+    total += v[5];
+  }
+
+  _notificar('Orden de corte ' + (cons || ''),
+    'Orden ' + cons + ' planeada.\nTela: ' + tela + '\nReferencias: ' + validas.length +
+    '\nConsumo teórico total: ' + total.toFixed(1) + ' m\nResponsable: ' + resp);
+
+  // NO se descuenta inventario: el Informe de Corte cruzará el consumo real más adelante.
+  oc.getRange('A12:K16').clearContent();
+  oc.getRangeList(['B6','B8','A30','B34','G34']).clearContent();
+  ui.alert('Orden "' + (cons || '') + '" planeada y archivada: ' + validas.length + ' referencia(s), ' +
+    total.toFixed(1) + ' m de consumo teórico.\nNO se descontó inventario (pendiente de cruce con consumo real).');
+}
+
+/* ─────────────────────── REMISIÓN DE INSUMOS ─────────────────────── */
+function generarRemisionInsumos() {
+  var ui = SpreadsheetApp.getUi();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ri = ss.getSheetByName('Remisión de Insumos');
+  var log = ss.getSheetByName('Remisiones Insumos');
+  if (!ri || !log) { ui.alert('Faltan hojas: Remisión de Insumos / Remisiones Insumos.'); return; }
+
+  var cons = ri.getRange('B2').getValue();
+  var fecha = ri.getRange('D2').getValue() || new Date();
+  var destino = ri.getRange('B3').getValue();
+  var destinatario = ri.getRange('D3').getValue();
+  if (!destino || !destinatario) { ui.alert('Indica el Destino y el Destinatario.'); return; }
+
+  var items = ri.getRange('A7:B16').getValues();
+  var n = 0;
+  for (var i = 0; i < items.length; i++) {
+    var ins = items[i][0], cant = Number(items[i][1]);
+    if (!ins || !cant) continue;
+    log.appendRow([fecha, cons, destino, destinatario, ins, cant]);
+    n++;
+  }
+  if (n === 0) { ui.alert('No hay insumos con cantidad para remisionar.'); return; }
+
+  _notificar('Remisión de insumos ' + (cons || ''),
+    'Remisión a ' + destinatario + ' (' + destino + ')\nConsecutivo: ' + cons + '\nInsumos: ' + n);
+
+  ri.getRange('A7:B16').clearContent();
+  ri.getRangeList(['B2','D2','B3','D3','B4']).clearContent();
+  ui.alert(n + ' insumo(s) remisionado(s) a ' + destinatario + ' (' + destino + '). Stock descontado. Formato listo.');
 }

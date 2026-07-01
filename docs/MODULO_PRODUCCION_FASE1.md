@@ -195,6 +195,18 @@ Tres documentos funcionan como **formato** (pantalla de captura): **Orden de Ing
 
 ---
 
+## 6c. Informe de Corte e Inventario de Insumos
+
+**Informe de Corte** (`Informe de Corte`) — alimentado por `Histórico Cortes` (ampliado con prendas, rendimiento teórico, consumo real, metros teóricos/reales). Resume promedios **por referencia** y **por cortador**: rendimiento teórico vs real, diferencia %, y la **diferencia de gasto en metros** (metros reales − teóricos). Sirve para afinar la precisión del manejo de tela y detectar quién/qué referencia desperdicia.
+
+La **Orden de Corte** calcula solo: prendas estimadas (= prendas/trazo × capas), rendimiento teórico (= largo trazo ÷ prendas/trazo) y diferencia % (real vs teórico). Al firmar, archiva todo en `Histórico Cortes` y descuenta el consumo real del inventario.
+
+**Inventario de Insumos** (`Inventario de Insumos`) — insumos del precosteo (cierre, marquilla, botón, remache, garra, cremallera, hilo, etiqueta, pretinera, etc.) con stock inicial, entradas, salidas (= SUMIF de remisiones), stock disponible y alerta de stock mínimo.
+
+**Remisión de Insumos** (`Remisión de Insumos` + log `Remisiones Insumos`) — formato para entregar insumos a **confeccionista** o **terminación** (destino seleccionable). Al generarla, archiva cada línea y **descuenta del stock**.
+
+---
+
 ## 7. Estructura del Google Sheet
 
 > El ingreso/rollos se capturan **en el módulo** (transcripción). El Sheet se usa para el **Precosteo**; la hoja de ingreso queda como plantilla de apoyo/pegado.
@@ -227,8 +239,8 @@ Al firmar, la fila resumen se archiva en **Histórico Precosteo** y el formato s
 
 - **Devolución del confeccionista** — recibir prendas terminadas, cerrar la remisión, cuadrar cortadas vs entregadas.
 - Enlazar `referencia_tela` y `referencia` de prenda con el catálogo de Shopify.
-- **OCR** de las hojas de las textileras para auto-cargar rollos.
-- **Correo** de notificación al cortar sin autorización.
+- **OCR con visión IA** de las hojas de las textileras (Claude/Gemini/Document AI) para leer la orden de despacho por foto y **auto-cargar los rollos** — construir en el backend por la heterogeneidad de formatos (Primatela, Contacto, Stilotex, Megatex).
+- **Notificaciones al firmar**: correo (activo vía Apps Script) y **WhatsApp** (requiere proveedor: Meta Cloud API / Twilio / Wati).
 - Otros insumos (botones, cremalleras, hilos) como inventario propio.
 - Integración del costo de confección con el módulo de finanzas.
 
