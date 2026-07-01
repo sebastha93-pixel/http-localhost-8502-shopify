@@ -98,15 +98,40 @@ export default function DetalleOrdenCortePage() {
     enabled: !!id,
   });
 
-  // Rollos disponibles en inventario que hacen MATCH con la tela del precosteo.
-  // Se muestra al cortador para saber qué rollos internos tiene disponibles
-  // (código interno, tono, metros, barcode) antes de pistolear.
+  // Trae TODOS los rollos disponibles y los partimos en cliente:
+  //   - "match" (coinciden con la tela del precosteo, se muestran arriba)
+  //   - "otros" (por si el nombre no está idéntico, opción manual)
   const telaRef = (q.data?.referencia?.tela || "").trim();
   const rollosInvQ = useQuery<{ rollos: RolloInv[] }>({
-    queryKey: ["produccion", "rollos", "match-tela", telaRef],
-    queryFn: () => api.get(`/api/produccion/rollos?tela=${encodeURIComponent(telaRef)}&estado=disponible`),
-    enabled: !!telaRef && q.data?.estado !== "cortada",
+    queryKey: ["produccion", "rollos", "disponibles"],
+    queryFn: () => api.get(`/api/produccion/rollos?estado=disponible&limit=500`),
+    enabled: !!q.data && q.data.estado !== "cortada",
   });
+
+  // Normaliza: mayúsculas, sin acentos ni signos, colapsando espacios.
+  function norm(s?: string) {
+    return (s || "")
+      .toString()
+      .normalize("NFD").replace(/[̀-ͯ]/g, "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9 ]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+  const telaNorm = norm(telaRef);
+  const telaTokens = telaNorm.split(" ").filter((t) => t.length >= 3);
+  function matcheaTela(descripcion?: string) {
+    if (!telaNorm) return false;
+    const d = norm(descripcion);
+    if (!d) return false;
+    if (d.includes(telaNorm) || telaNorm.includes(d)) return true;
+    // Coincide si comparten al menos 1 token significativo (≥3 chars)
+    return telaTokens.some((t) => d.includes(t));
+  }
+
+  const todosRollos = rollosInvQ.data?.rollos || [];
+  const rollosMatch = todosRollos.filter((r) => matcheaTela(r.descripcion_tela));
+  const rollosOtros = todosRollos.filter((r) => !matcheaTela(r.descripcion_tela));
 
   const pistolar = useMutation({
     mutationFn: () =>
@@ -215,71 +240,35 @@ export default function DetalleOrdenCortePage() {
         </CardContent>
       </Card>
 
-      {/* Rollos disponibles en inventario que hacen match con la tela del precosteo */}
-      {!cerrada && telaRef && (
+      {/* Rollos disponibles en inventario, agrupados: coinciden con la tela del precosteo primero */}
+      {!cerrada && (
         <Card>
           <CardContent className="p-0">
             <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-              <p className="section-label">Rollos disponibles · {telaRef}</p>
+              <p className="section-label">Rollos disponibles{telaRef ? ` · ${telaRef}` : ""}</p>
               <p className="text-[0.65rem] text-graphite">
-                Match con la tela del precosteo
+                {rollosMatch.length} coinciden · {rollosOtros.length} otros
               </p>
             </div>
             {rollosInvQ.isLoading ? (
               <div className="p-6 text-xs text-graphite">Buscando rollos…</div>
-            ) : (rollosInvQ.data?.rollos || []).length === 0 ? (
+            ) : todosRollos.length === 0 ? (
               <div className="p-6 text-xs text-terracotta">
-                No hay rollos disponibles con esta tela en inventario. Registra un ingreso o revisa el nombre de la tela.
+                No hay rollos disponibles en el inventario. Registra un ingreso.
               </div>
             ) : (
-              <table className="w-full text-xs">
-                <thead className="bg-cloud/40 border-b border-border">
-                  <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
-                    <th className="px-4 py-2">Código interno</th>
-                    <th className="px-4 py-2">Tono</th>
-                    <th className="px-4 py-2">Lote</th>
-                    <th className="px-4 py-2">Nº rollo</th>
-                    <th className="px-4 py-2 text-right">Disponible</th>
-                    <th className="px-4 py-2 tabular">Barcode</th>
-                    <th className="px-4 py-2 text-right"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(rollosInvQ.data?.rollos || []).map((r) => {
-                    const yaAsignado = (oc.rollos || []).some((l) => l.rollo_id === r.id);
-                    return (
-                      <tr key={r.id} className={`border-b border-border/40 ${yaAsignado ? "bg-teal/5" : "hover:bg-cloud/30"}`}>
-                        <td className="px-4 py-2 font-semibold tabular text-navy-600">{r.codigo_interno}</td>
-                        <td className="px-4 py-2 text-graphite">{r.tono || "—"}</td>
-                        <td className="px-4 py-2 text-graphite">{r.lote_fabrica || "—"}</td>
-                        <td className="px-4 py-2 text-graphite">{r.numero_rollo || "—"}</td>
-                        <td className="px-4 py-2 text-right tabular text-ink-900">
-                          {Number(r.metros_disponible).toFixed(2)} m
-                        </td>
-                        <td className="px-4 py-2 text-[0.65rem] text-graphite tabular">{r.barcode}</td>
-                        <td className="px-4 py-2 text-right">
-                          {yaAsignado ? (
-                            <span className="inline-flex items-center gap-1 text-[0.65rem] text-teal">
-                              <CheckCircle className="h-3 w-3" /> Asignado
-                            </span>
-                          ) : (
-                            <button type="button"
-                              onClick={() => {
-                                setBarcode(r.barcode);
-                                setMetros("");
-                                setErr("");
-                                setTimeout(() => metrosRef.current?.focus(), 30);
-                              }}
-                              className="rounded-sm border border-navy-600 bg-white px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-widest text-navy-600 hover:bg-navy-600 hover:text-white">
-                              Usar
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              <RollosTabla
+                match={rollosMatch}
+                otros={rollosOtros}
+                telaRef={telaRef}
+                oc={oc}
+                onUsar={(rollo) => {
+                  setBarcode(rollo.barcode);
+                  setMetros("");
+                  setErr("");
+                  setTimeout(() => metrosRef.current?.focus(), 30);
+                }}
+              />
             )}
           </CardContent>
         </Card>
@@ -438,5 +427,83 @@ function Kpi({ label, value }: { label: string; value: string }) {
       <p className="text-[0.6rem] uppercase tracking-widest text-graphite">{label}</p>
       <p className="mt-1 font-display text-lg text-ink-900 tabular">{value}</p>
     </div>
+  );
+}
+
+function RollosTabla({ match, otros, telaRef, oc, onUsar }: {
+  match: RolloInv[];
+  otros: RolloInv[];
+  telaRef: string;
+  oc: OrdenCorte;
+  onUsar: (r: RolloInv) => void;
+}) {
+  const [mostrarOtros, setMostrarOtros] = useState(false);
+  const yaAsignado = (rolloId: string) => (oc.rollos || []).some((l) => l.rollo_id === rolloId);
+
+  const renderFila = (r: RolloInv, esOtro = false) => (
+    <tr key={r.id} className={`border-b border-border/40 ${yaAsignado(r.id) ? "bg-teal/5" : "hover:bg-cloud/30"} ${esOtro ? "text-graphite/90" : ""}`}>
+      <td className="px-4 py-2 font-semibold tabular text-navy-600">{r.codigo_interno}</td>
+      <td className="px-4 py-2 text-ink-900">{r.descripcion_tela}</td>
+      <td className="px-4 py-2 text-graphite">{r.tono || "—"}</td>
+      <td className="px-4 py-2 text-graphite">{r.lote_fabrica || "—"}</td>
+      <td className="px-4 py-2 text-right tabular text-ink-900">{Number(r.metros_disponible).toFixed(2)} m</td>
+      <td className="px-4 py-2 text-[0.65rem] text-graphite tabular">{r.barcode}</td>
+      <td className="px-4 py-2 text-right">
+        {yaAsignado(r.id) ? (
+          <span className="inline-flex items-center gap-1 text-[0.65rem] text-teal">
+            <CheckCircle className="h-3 w-3" /> Asignado
+          </span>
+        ) : (
+          <button type="button" onClick={() => onUsar(r)}
+            className="rounded-sm border border-navy-600 bg-white px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-widest text-navy-600 hover:bg-navy-600 hover:text-white">
+            Usar
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+
+  return (
+    <>
+      <table className="w-full text-xs">
+        <thead className="bg-cloud/40 border-b border-border">
+          <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+            <th className="px-4 py-2">Código interno</th>
+            <th className="px-4 py-2">Descripción</th>
+            <th className="px-4 py-2">Tono</th>
+            <th className="px-4 py-2">Lote</th>
+            <th className="px-4 py-2 text-right">Disponible</th>
+            <th className="px-4 py-2 tabular">Barcode</th>
+            <th className="px-4 py-2 text-right"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {match.length === 0 && (
+            <tr>
+              <td colSpan={7} className="px-4 py-3 text-[0.7rem] text-terracotta">
+                Ningún rollo coincide con “{telaRef || "—"}”. Revisa que el nombre
+                de la tela en el precosteo coincida con la descripción del ingreso,
+                o usa uno de los otros rollos.
+              </td>
+            </tr>
+          )}
+          {match.map((r) => renderFila(r, false))}
+
+          {otros.length > 0 && (
+            <>
+              <tr className="bg-cloud/30 border-y border-border">
+                <td colSpan={7} className="px-4 py-2">
+                  <button type="button" onClick={() => setMostrarOtros((v) => !v)}
+                    className="text-[0.6rem] font-semibold uppercase tracking-widest text-graphite hover:text-ink-900">
+                    {mostrarOtros ? "▼ Ocultar" : "▶ Mostrar"} otros rollos disponibles ({otros.length})
+                  </button>
+                </td>
+              </tr>
+              {mostrarOtros && otros.map((r) => renderFila(r, true))}
+            </>
+          )}
+        </tbody>
+      </table>
+    </>
   );
 }

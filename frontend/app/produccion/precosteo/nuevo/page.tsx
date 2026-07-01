@@ -105,10 +105,13 @@ export default function NuevoPrecosteoPage() {
           iva: ivaDeLinea(l, ivaPct),
         }));
       if (items.length === 0) throw new Error("Llena al menos un renglón con valor unitario.");
-      // Utilidad se deriva del precio de venta final que el usuario tecleó
-      const costoCon = items.reduce((s, it) => s + it.valor_unitario * it.cantidad + it.iva, 0);
-      const margen = precioVentaNum > 0 && costoCon > 0
-        ? ((precioVentaNum - costoCon) / costoCon) * 100
+      // El precio de venta que el usuario teclea YA INCLUYE IVA.
+      // Para calcular la utilidad real: sacar el IVA de la venta y compararlo
+      // contra el costo SIN IVA (el IVA de compras es crédito recuperable).
+      const costoSin = items.reduce((s, it) => s + it.valor_unitario * it.cantidad, 0);
+      const precioNeto = precioVentaNum > 0 ? precioVentaNum / (1 + (ivaPct || 0) / 100) : 0;
+      const margen = precioNeto > 0 && costoSin > 0
+        ? ((precioNeto - costoSin) / costoSin) * 100
         : 0;
       return api.post<{ id: string }>("/api/produccion/precosteo", {
         codigo_referencia: codigo.trim(),
@@ -141,8 +144,11 @@ export default function NuevoPrecosteoPage() {
   const totalSin = lineas.reduce((s, l) => s + (parseFloat(l.valor_unitario || "0") || 0) * (parseFloat(l.cantidad || "0") || 0), 0);
   const totalIva = lineas.reduce((s, l) => s + ivaDeLinea(l, ivaPct), 0);
   const totalCon = totalSin + totalIva;
-  const utilidad = precioVentaNum > 0 && totalCon > 0 ? precioVentaNum - totalCon : 0;
-  const utilidadPct = precioVentaNum > 0 && totalCon > 0 ? (utilidad / totalCon) * 100 : 0;
+  // Precio de venta que teclea el usuario YA INCLUYE IVA.
+  // Sacamos el neto para calcular utilidad real (vs costo sin IVA).
+  const precioNetoVenta = precioVentaNum > 0 ? precioVentaNum / (1 + ivaPct / 100) : 0;
+  const utilidad = precioNetoVenta > 0 && totalSin > 0 ? precioNetoVenta - totalSin : 0;
+  const utilidadPct = precioNetoVenta > 0 && totalSin > 0 ? (utilidad / totalSin) * 100 : 0;
 
   // Agrupamos por categoría para dibujar sub-encabezados en la tabla
   const gruposUI: { categoria: string; indices: number[] }[] = [];
@@ -167,7 +173,7 @@ export default function NuevoPrecosteoPage() {
               <Input label="Tela *" value={tela} onChange={(v) => setTela(v.toUpperCase())} required placeholder="SANDDENIM 12OZ" />
               <Input label="Color"                value={color} onChange={setColor} placeholder="Índigo" />
               <Input label="IVA %"                value={iva} onChange={setIva} inputMode="decimal" />
-              <Input label="Precio de venta final" value={precioVenta} onChange={setPrecioVenta} inputMode="decimal" placeholder="120000" />
+              <Input label="Precio de venta (con IVA)" value={precioVenta} onChange={setPrecioVenta} inputMode="decimal" placeholder="120000" />
             </div>
           </CardContent>
         </Card>
@@ -274,9 +280,16 @@ export default function NuevoPrecosteoPage() {
                     <td />
                   </tr>
                   <tr>
-                    <td colSpan={4} className="px-2 py-1 text-right text-[0.65rem] uppercase tracking-widest text-graphite">Precio de venta</td>
+                    <td colSpan={4} className="px-2 py-1 text-right text-[0.65rem] uppercase tracking-widest text-graphite">Precio venta (con IVA)</td>
                     <td colSpan={2} className="px-2 py-1 text-right tabular font-semibold text-ink-900">
                       {precioVentaNum > 0 ? `$${precioVentaNum.toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"}
+                    </td>
+                    <td />
+                  </tr>
+                  <tr>
+                    <td colSpan={4} className="px-2 py-1 text-right text-[0.65rem] uppercase tracking-widest text-graphite">Precio venta (neto sin IVA)</td>
+                    <td colSpan={2} className="px-2 py-1 text-right tabular text-graphite">
+                      {precioNetoVenta > 0 ? `$${precioNetoVenta.toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"}
                     </td>
                     <td />
                   </tr>
@@ -342,13 +355,19 @@ export default function NuevoPrecosteoPage() {
                   </span>
                 </div>
                 <div className="flex justify-between text-xs">
-                  <span className="text-graphite">Precio de venta</span>
+                  <span className="text-graphite">Precio venta (con IVA)</span>
                   <span className="tabular font-semibold text-ink-900">
                     {precioVentaNum > 0 ? `$${precioVentaNum.toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"}
                   </span>
                 </div>
                 <div className="flex justify-between text-xs">
-                  <span className="text-graphite">Utilidad</span>
+                  <span className="text-graphite">Precio venta (neto sin IVA)</span>
+                  <span className="tabular text-graphite">
+                    {precioNetoVenta > 0 ? `$${precioNetoVenta.toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"}
+                  </span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-graphite">Utilidad (neto vs costo sin IVA)</span>
                   <span className={`tabular font-semibold ${utilidad >= 0 ? "text-teal" : "text-terracotta"}`}>
                     {precioVentaNum > 0 ? `$${utilidad.toLocaleString("es-CO", { maximumFractionDigits: 0 })} (${utilidadPct.toFixed(1)}%)` : "—"}
                   </span>
