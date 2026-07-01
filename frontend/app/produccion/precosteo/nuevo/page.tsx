@@ -19,7 +19,9 @@ interface LineaForm {
   valor_unitario: string;
   cantidad: string;
   aplica_iva: boolean;   // si true, IVA se calcula automático con iva_pct global
-  fija?: boolean;        // true = renglón de plantilla (no se borra, item read-only)
+  fija?: boolean;        // true = renglón de plantilla (no se borra, categoría fija)
+  item_editable?: boolean; // true = puedes editar el nombre del item (renglón "Otro")
+  placeholder?: string;    // placeholder del input cuando item_editable
 }
 
 /**
@@ -27,24 +29,19 @@ interface LineaForm {
  * Si quieres editar/reordenar items, solo cambia este array.
  */
 const PLANTILLA: { categoria: string; items: string[] }[] = [
-  { categoria: "MP", items: [
-    "Tela principal", "Forro bolsillo", "Etiqueta cuero",
-    "Marquilla talla", "Marquilla composición",
+  { categoria: "MATERIA PRIMA", items: [
+    "Tela principal", "Forro de bolsillo",
   ]},
-  { categoria: "PROCESO EN MP", items: [
-    "Lavandería", "Tintura especial",
-  ]},
-  { categoria: "PROCESO", items: [
-    "Corte", "Confección", "Terminación", "Bordado/estampado",
+  { categoria: "PROCESO EN MATERIA PRIMA", items: [
+    "Corte", "Confección", "Lavandería", "Teñido especial",
+    "Terminación", "Bordado/estampado",
   ]},
   { categoria: "INSUMO CONFECCION", items: [
-    "Hilo", "Cierre", "Botón", "Remaches", "Elástico",
-  ]},
-  { categoria: "INSUMO EMPAQUE", items: [
-    "Bolsa", "Sticker", "Caja", "Cinta",
+    "Cierre", "Marquilla talla",
   ]},
   { categoria: "INSUMO TERMINACION", items: [
-    "Etiqueta colgante", "Hilo colgante", "Precinto seguridad",
+    "Código de barras", "Instrucción de lavado", "Bolsa",
+    "Botón 27 L", "Remache", "Garra", "Pretinera", "Apliques",
   ]},
 ];
 
@@ -58,6 +55,12 @@ function lineasIniciales(): LineaForm[] {
         fija: true,
       });
     }
+    // Fila "Otro" editable al final de cada categoría
+    out.push({
+      categoria: g.categoria, item: "",
+      valor_unitario: "", cantidad: "1", aplica_iva: false,
+      fija: true, item_editable: true, placeholder: "Otro (opcional)",
+    });
   }
   return out;
 }
@@ -204,8 +207,12 @@ export default function NuevoPrecosteoPage() {
                         return (
                           <tr key={idx} className="border-b border-border/40">
                             <td className="px-2 py-1.5">
-                              {l.fija ? (
+                              {l.fija && !l.item_editable ? (
                                 <span className="text-ink-900">{l.item}</span>
+                              ) : l.fija && l.item_editable ? (
+                                <input value={l.item} onChange={(e) => actualizar(idx, "item", e.target.value)}
+                                  placeholder={l.placeholder || "Otro"}
+                                  className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs italic text-graphite placeholder:text-graphite/50" />
                               ) : (
                                 <div className="flex items-center gap-1">
                                   <select value={l.categoria} onChange={(e) => actualizar(idx, "categoria", e.target.value)}

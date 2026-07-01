@@ -304,8 +304,10 @@ def inventario_resumen() -> list[dict]:
 # ═══════════════════════════════════════════════════════════════════════
 
 CATEGORIAS_PRECOSTEO = (
-    "MP", "PROCESO EN MP", "PROCESO",
-    "INSUMO CONFECCION", "INSUMO EMPAQUE", "INSUMO TERMINACION",
+    "MATERIA PRIMA",
+    "PROCESO EN MATERIA PRIMA",
+    "INSUMO CONFECCION",
+    "INSUMO TERMINACION",
 )
 
 
