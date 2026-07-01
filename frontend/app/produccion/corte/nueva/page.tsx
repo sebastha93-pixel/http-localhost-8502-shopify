@@ -69,16 +69,26 @@ export default function NuevaOrdenCortePage() {
     [precosteos, referenciaId],
   );
 
-  // Auto-calcula # capas desde la curva:
-  // regla del cortador — tallas con la misma cantidad se cortan juntas → group by count.
-  // Total capas = suma de valores ÚNICOS.
+  // Auto-calcula # capas desde la curva con la regla MALE'DENIM:
+  //   Pares fijos: (6,12), (8,10), (14,16) — cada par aporta max(par).
+  //   Talla 4 sola (y cualquier talla no mapeada) → aporta su cantidad.
   const capasAutoCalc = useMemo(() => {
-    const unicos = new Set<number>();
-    for (const v of Object.values(curva)) {
-      const n = parseInt(v || "0", 10) || 0;
-      if (n > 0) unicos.add(n);
+    const PARES: [string, string][] = [["6", "12"], ["8", "10"], ["14", "16"]];
+    const q = (t: string) => parseInt(curva[t] || "0", 10) || 0;
+    let total = 0;
+    const consumidas = new Set<string>();
+    for (const [a, b] of PARES) {
+      if (curva[a] !== undefined || curva[b] !== undefined) {
+        total += Math.max(q(a), q(b));
+        consumidas.add(a); consumidas.add(b);
+      }
     }
-    return Array.from(unicos).reduce((a, b) => a + b, 0);
+    for (const [t, v] of Object.entries(curva)) {
+      if (!consumidas.has(t)) {
+        total += parseInt(v || "0", 10) || 0;
+      }
+    }
+    return total;
   }, [curva]);
 
   const totalCurva = Object.values(curva).reduce((s, v) => s + (parseInt(v || "0", 10) || 0), 0);
@@ -146,9 +156,11 @@ export default function NuevaOrdenCortePage() {
   }
 
   // Totales derivados (para la card de KPIs)
-  const largoN = parseFloat(largoTrazo || "0") || 0;
-  const metrosTeo = largoN * capasAutoCalc;
+  //   Metros teóricos = promedio_tecnico × cantidad_programada
+  //   Rendimiento    = metros_teoricos / cantidad_programada (= promedio_tecnico)
+  const prom = parseFloat(promedioTecnico || "0") || 0;
   const prendasEst = parseInt(cantidadProgramada || "0", 10) || totalCurva || 0;
+  const metrosTeo = prom > 0 && prendasEst > 0 ? prom * prendasEst : 0;
   const rendimiento = prendasEst > 0 ? metrosTeo / prendasEst : 0;
 
   if (q.isLoading) return <LoadingState label="Cargando referencias…" />;

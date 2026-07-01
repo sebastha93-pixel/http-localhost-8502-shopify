@@ -631,21 +631,45 @@ def ajustar_stock(*, rollo_id: str, metros_delta: float, nota: str,
 # ═══════════════════════════════════════════════════════════════════════
 
 def calcular_capas_desde_curva(curva: dict) -> int:
-    """Regla del cortador: dos tallas con la misma cantidad se cortan juntas
-    (comparten capas). Total capas = suma de valores únicos.
-    Ej. talla 6=10 y talla 12=10 → grupo {10} → aporta 10 capas.
+    """Regla del cortador MALE'DENIM: pares FIJOS de tallas que van juntas
+    en el mismo trazo. Talla 4 se corta sola.
+
+    Pares: (6, 12), (8, 10), (14, 16)
+    Solos: 4 (y cualquier talla no mapeada)
+
+    Para cada par: capas = max(cantidad_talla_A, cantidad_talla_B).
+    (Si difieren, se hace el máximo — el excedente se corta con capas extra
+    de esa talla; en el conteo total contamos el peor caso = max.)
+    Para tallas solas: capas = cantidad.
+    Total = suma de capas de cada bloque.
     """
     if not curva:
         return 0
-    valores_unicos = set()
-    for _, n in curva.items():
+    PARES = [("6", "12"), ("8", "10"), ("14", "16")]
+
+    # Normalizar claves y valores a int
+    curva_n: dict[str, int] = {}
+    for k, v in curva.items():
+        key = str(k).strip()
         try:
-            v = int(n)
+            val = int(v)
         except Exception:
-            v = 0
-        if v > 0:
-            valores_unicos.add(v)
-    return sum(valores_unicos)
+            val = 0
+        if val > 0:
+            curva_n[key] = val
+
+    total = 0
+    consumidas: set[str] = set()
+    for a, b in PARES:
+        if a in curva_n or b in curva_n:
+            total += max(curva_n.get(a, 0), curva_n.get(b, 0))
+            consumidas.add(a)
+            consumidas.add(b)
+    # Tallas restantes se cortan solas
+    for k, v in curva_n.items():
+        if k not in consumidas:
+            total += v
+    return total
 
 
 def crear_orden_corte(*, referencia_id: str,
@@ -674,14 +698,15 @@ def crear_orden_corte(*, referencia_id: str,
         raise ValueError("precosteo_no_firmado")
 
     curva = curva_trazo or {}
-    # Prendas totales programadas = suma de la curva
     prendas_curva = sum(int(n or 0) for n in curva.values())
     prendas_est = int(cantidad_programada) if cantidad_programada else prendas_curva
-    # Capas auto-calculadas por la regla del cortador (misma cantidad ⇒ mismo trazo)
     num_capas = calcular_capas_desde_curva(curva)
-    # Tallas distintas cortadas por trazo (aprox — tallas con cantidad > 0)
     prendas_por_trazo_est = max(1, sum(1 for v in curva.values() if int(v or 0) > 0))
-    metros_teo = round(float(largo_trazo) * num_capas, 2)
+    # Metros teóricos = promedio_tecnico × cantidad_programada.
+    # Rendimiento = metros_teoricos / cantidad_programada (equivale al promedio,
+    # se guarda por auditoría por si se editan campos por separado).
+    prom = float(promedio_tecnico or 0)
+    metros_teo = round(prom * prendas_est, 2) if (prom > 0 and prendas_est > 0) else 0
     rendimiento = round(metros_teo / prendas_est, 4) if prendas_est else 0
 
     codigo = next_consecutivo_mensual("OC", width=4)
