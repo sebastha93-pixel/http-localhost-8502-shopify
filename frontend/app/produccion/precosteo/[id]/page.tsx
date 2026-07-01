@@ -42,6 +42,7 @@ interface Precosteo {
   bloqueada: boolean;
   autorizada_por?: string;
   fecha_autorizacion?: string;
+  es_muestra_diseno?: boolean;
   items: Item[];
 }
 
@@ -99,11 +100,16 @@ export default function PrecosteoDetallePage() {
         <Link href="/produccion/precosteo" className="inline-flex items-center gap-1 text-xs text-graphite hover:text-ink-900">
           <ArrowLeft className="h-3.5 w-3.5" /> Volver a precosteos
         </Link>
-        {p.bloqueada ? (
-          <Badge tone="normal"><Lock className="inline h-2.5 w-2.5 mr-1" /> Autorizada · {p.autorizada_por}</Badge>
-        ) : (
-          <Badge tone="pendiente">Borrador · editable</Badge>
-        )}
+        <div className="flex items-center gap-2">
+          {p.es_muestra_diseno && (
+            <Badge tone="info">Muestra de diseño</Badge>
+          )}
+          {p.bloqueada ? (
+            <Badge tone="normal"><Lock className="inline h-2.5 w-2.5 mr-1" /> Autorizada · {p.autorizada_por}</Badge>
+          ) : (
+            <Badge tone="pendiente">Borrador · editable</Badge>
+          )}
+        </div>
       </div>
 
       {msg && <div className="rounded-sm border border-teal/40 bg-teal/5 px-3 py-2 text-xs text-teal flex items-center gap-2"><CheckCircle className="h-3.5 w-3.5" /> {msg}</div>}

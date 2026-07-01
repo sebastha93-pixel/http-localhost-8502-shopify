@@ -82,6 +82,7 @@ export default function NuevoPrecosteoPage() {
   const [color, setColor] = useState("");
   const [iva, setIva] = useState("19");
   const [precioVenta, setPrecioVenta] = useState("");
+  const [esMuestra, setEsMuestra] = useState(false);
   const [lineas, setLineas] = useState<LineaForm[]>(lineasIniciales());
   const [err, setErr] = useState("");
   const [confirmar, setConfirmar] = useState(false);
@@ -121,6 +122,7 @@ export default function NuevoPrecosteoPage() {
         iva_pct: ivaPct || 19,
         margen,
         items,
+        es_muestra_diseno: esMuestra,
       });
     },
     onSuccess: (data) => router.push(`/produccion/precosteo/${data.id}`),
@@ -175,6 +177,19 @@ export default function NuevoPrecosteoPage() {
               <Input label="IVA %"                value={iva} onChange={setIva} inputMode="decimal" />
               <Input label="Precio de venta (con IVA)" value={precioVenta} onChange={setPrecioVenta} inputMode="decimal" placeholder="120000" />
             </div>
+
+            <label className={`flex items-start gap-3 rounded-sm border p-3 cursor-pointer ${esMuestra ? "border-navy-600 bg-navy-600/[0.04]" : "border-border bg-cloud/30"}`}>
+              <input type="checkbox" checked={esMuestra} onChange={(e) => setEsMuestra(e.target.checked)}
+                className="mt-0.5 h-4 w-4" />
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-ink-900">Muestra de diseño</p>
+                <p className="text-[0.7rem] text-graphite mt-0.5">
+                  Marca este precosteo como muestra piloto. Podrás generar la orden de corte
+                  aunque siga en borrador, y completarás los costos reales después de la muestra
+                  para autorizar el lote definitivo.
+                </p>
+              </div>
+            </label>
           </CardContent>
         </Card>
 
@@ -375,8 +390,15 @@ export default function NuevoPrecosteoPage() {
               </div>
               <p className="text-[0.7rem] text-graphite">
                 Se guardará como <span className="font-semibold text-ink-900">borrador</span>.
-                Podrás editarlo hasta que lo firmes.
+                {esMuestra
+                  ? " Al ser muestra de diseño podrás generar corte sin firmar y editar hasta que lo autorices."
+                  : " Podrás editarlo hasta que lo firmes."}
               </p>
+              {esMuestra && (
+                <div className="rounded-sm border border-navy-600 bg-navy-600/10 px-3 py-2 text-[0.72rem] text-navy-600 font-semibold text-center">
+                  MUESTRA DE DISEÑO
+                </div>
+              )}
             </div>
             <div className="px-5 py-4 border-t border-border flex justify-end gap-2">
               <button type="button" onClick={() => setConfirmar(false)}

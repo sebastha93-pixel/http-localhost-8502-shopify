@@ -317,6 +317,7 @@ class PrecosteoIn(BaseModel):
     iva_pct:           float = 19
     margen:            float = 0
     items:             list[PrecosteoItemIn] = []
+    es_muestra_diseno: bool = False
 
 
 class PrecosteoUpdate(BaseModel):
@@ -326,6 +327,7 @@ class PrecosteoUpdate(BaseModel):
     iva_pct: Optional[float] = None
     margen:  Optional[float] = None
     items:   Optional[list[PrecosteoItemIn]] = None
+    es_muestra_diseno: Optional[bool] = None
 
 
 @router.get("/precosteo/categorias")
@@ -348,6 +350,7 @@ def crear_precosteo(
             margen=body.margen,
             items=[i.model_dump() for i in body.items],
             created_by=user.email,
+            es_muestra_diseno=body.es_muestra_diseno,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -361,9 +364,13 @@ def listar_precosteos(
     estado: Optional[str] = None,
     tela: Optional[str] = None,
     limit: int = Query(200, ge=1, le=1000),
+    disponibles_para_corte: bool = False,
     _: CurrentUser = Depends(require_permission("operaciones", "ver")),
 ) -> dict:
-    return {"precosteos": svc.listar_precosteos(estado=estado, tela=tela, limit=limit)}
+    return {"precosteos": svc.listar_precosteos(
+        estado=estado, tela=tela, limit=limit,
+        disponibles_para_corte=disponibles_para_corte,
+    )}
 
 
 @router.get("/precosteo/{precosteo_id}")
@@ -392,6 +399,7 @@ def actualizar_precosteo(
             iva_pct=body.iva_pct,
             margen=body.margen,
             items=[i.model_dump() for i in body.items] if body.items is not None else None,
+            es_muestra_diseno=body.es_muestra_diseno,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

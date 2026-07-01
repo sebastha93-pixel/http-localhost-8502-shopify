@@ -42,6 +42,29 @@ def _now_iso() -> str:
 # Consecutivos (ING-2026-0001, ROLLO-2026-000001, OC-2026-0001, ...)
 # ═══════════════════════════════════════════════════════════════════════
 
+def next_consecutivo_mensual(prefijo: str, width: int = 4) -> str:
+    """Consecutivo mensual — resetea al inicio de cada mes.
+    Devuelve `YYYYMM-NNNN`. Ejemplo: 202607-0001.
+    Usa la misma tabla `produccion_consecutivos` con clave sintética `prefijo:YYYYMM`.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    now = datetime.now(tz=timezone.utc)
+    yyyymm = f"{now.year}{now.month:02d}"
+    key = f"{prefijo}:{yyyymm}"
+    r = (sb.table("produccion_consecutivos")
+           .select("ultimo").eq("prefijo", key).eq("anio", now.year)
+           .limit(1).execute())
+    ultimo = ((r.data or [None])[0] or {}).get("ultimo") or 0
+    nuevo = ultimo + 1
+    sb.table("produccion_consecutivos").upsert(
+        {"prefijo": key, "anio": now.year, "ultimo": nuevo, "updated_at": _now_iso()},
+        on_conflict="prefijo,anio",
+    ).execute()
+    return f"{yyyymm}-{str(nuevo).zfill(width)}"
+
+
 def next_consecutivo(prefijo: str, anio: Optional[int] = None, width: int = 4) -> str:
     sb = _sb()
     if sb is None:
@@ -337,8 +360,12 @@ def _calcular_totales_precosteo(items: list[dict], iva_pct: float, margen: float
 
 def crear_precosteo(*, codigo_referencia: str, nombre: str, tela: str, color: str,
                     iva_pct: float, margen: float, items: list[dict],
-                    created_by: str) -> dict:
-    """Crea un precosteo en estado 'borrador' con sus líneas."""
+                    created_by: str, es_muestra_diseno: bool = False) -> dict:
+    """Crea un precosteo en estado 'borrador' con sus líneas.
+
+    Si es_muestra_diseno=True, el precosteo puede usarse para generar
+    órdenes de corte aunque siga en borrador (no requiere firma).
+    """
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
@@ -362,9 +389,18 @@ def crear_precosteo(*, codigo_referencia: str, nombre: str, tela: str, color: st
         "precio_sugerido_venta": totales["precio_sugerido_venta"],
         "estado": "borrador",
         "bloqueada": False,
+        "es_muestra_diseno": bool(es_muestra_diseno),
         "created_by": created_by,
     }
-    r = sb.table("referencias_precosteo").insert(row).execute()
+    try:
+        r = sb.table("referencias_precosteo").insert(row).execute()
+    except Exception as e:
+        # Compat: si la migración aún no corrió, quita el flag y reintenta
+        if "es_muestra_diseno" in str(e):
+            row.pop("es_muestra_diseno", None)
+            r = sb.table("referencias_precosteo").insert(row).execute()
+        else:
+            raise
     if not r.data:
         raise RuntimeError("no_se_pudo_crear")
     ref = r.data[0]
@@ -394,7 +430,8 @@ def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
                          tela: Optional[str] = None, color: Optional[str] = None,
                          iva_pct: Optional[float] = None, margen: Optional[float] = None,
                          items: Optional[list[dict]] = None,
-                         foto_url: Optional[str] = None) -> dict:
+                         foto_url: Optional[str] = None,
+                         es_muestra_diseno: Optional[bool] = None) -> dict:
     """Actualiza un borrador. Rechaza si el precosteo ya está bloqueado."""
     sb = _sb()
     if sb is None:
@@ -412,6 +449,7 @@ def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
     if iva_pct is not None: update["iva_pct"] = iva_pct
     if margen is not None:  update["margen"] = margen
     if foto_url is not None: update["foto_url"] = foto_url
+    if es_muestra_diseno is not None: update["es_muestra_diseno"] = bool(es_muestra_diseno)
 
     if items is not None:
         # Reemplazar líneas: borrar y volver a insertar
@@ -486,15 +524,28 @@ def eliminar_precosteo(precosteo_id: str) -> None:
 
 
 def listar_precosteos(*, estado: Optional[str] = None, tela: Optional[str] = None,
-                      limit: int = 200) -> list[dict]:
+                      limit: int = 200,
+                      disponibles_para_corte: bool = False) -> list[dict]:
+    """Lista precosteos.
+    Si `disponibles_para_corte`, devuelve TODOS los autorizados + los borradores
+    marcados como muestra de diseño (que pueden generar corte sin firma).
+    """
     sb = _sb()
     if sb is None:
         return []
     q = sb.table("referencias_precosteo").select("*").order("created_at", desc=True).limit(limit)
-    if estado:
-        q = q.eq("estado", estado)
-    if tela:
-        q = q.ilike("tela", f"%{tela}%")
+    if disponibles_para_corte:
+        # bloqueada = true (autorizados) OR es_muestra_diseno = true
+        try:
+            q = q.or_("bloqueada.eq.true,es_muestra_diseno.eq.true")
+        except Exception:
+            # Compat si la migración aún no corrió — solo bloqueados
+            q = q.eq("bloqueada", True)
+    else:
+        if estado:
+            q = q.eq("estado", estado)
+        if tela:
+            q = q.ilike("tela", f"%{tela}%")
     return (q.execute().data or [])
 
 
@@ -590,18 +641,21 @@ def crear_orden_corte(*, referencia_id: str, tono: Optional[str],
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
-    # Precosteo debe existir y estar bloqueado (firmado)
+    # Precosteo debe existir. Se permite:
+    #   - Precosteo firmado (bloqueada=True), o
+    #   - Precosteo en borrador marcado como muestra de diseño.
     p = obtener_precosteo(referencia_id)
     if not p:
         raise ValueError("precosteo_no_encontrado")
-    if not p.get("bloqueada"):
+    if not p.get("bloqueada") and not p.get("es_muestra_diseno"):
         raise ValueError("precosteo_no_firmado")
 
     prendas_est = int(prendas_por_trazo) * int(num_capas)
     metros_teo = round(float(largo_trazo) * int(num_capas), 2)
     rendimiento = round(metros_teo / prendas_est, 4) if prendas_est else 0
 
-    codigo = next_consecutivo("OC", width=4)
+    # Consecutivo mensual: YYYYMM-NNNN (resetea cada mes)
+    codigo = next_consecutivo_mensual("OC", width=4)
     row = {
         "consecutivo": codigo,
         "referencia_id": referencia_id,

@@ -23,6 +23,7 @@ interface Precosteo {
   color?: string;
   bloqueada: boolean;
   estado: string;
+  es_muestra_diseno?: boolean;
 }
 
 const TALLAS_DEFAULT: string[] = ["4", "6", "8", "10", "12", "14", "16"];
@@ -30,17 +31,19 @@ const TALLAS_DEFAULT: string[] = ["4", "6", "8", "10", "12", "14", "16"];
 export default function NuevaOrdenCortePage() {
   const router = useRouter();
 
-  // Solo precosteos firmados/autorizados sirven como referencia
+  // Precosteos disponibles para corte:
+  //   - autorizados (bloqueada=true), o
+  //   - borradores marcados como muestra de diseño.
   const q = useQuery<{ precosteos?: Precosteo[] } | Precosteo[]>({
-    queryKey: ["produccion", "precosteos", "firmados"],
-    queryFn: () => api.get("/api/produccion/precosteo?estado=autorizada"),
+    queryKey: ["produccion", "precosteos", "disponibles-corte"],
+    queryFn: () => api.get("/api/produccion/precosteo?disponibles_para_corte=true"),
   });
   const precosteos = useMemo<Precosteo[]>(() => {
     if (!q.data) return [];
     const arr = Array.isArray(q.data)
       ? q.data
       : ((q.data as { precosteos?: Precosteo[] }).precosteos || []);
-    return arr.filter((p) => p.bloqueada);
+    return arr.filter((p) => p.bloqueada || p.es_muestra_diseno);
   }, [q.data]);
 
   const [referenciaId, setReferenciaId] = useState("");
@@ -130,15 +133,18 @@ export default function NuevaOrdenCortePage() {
               <select value={referenciaId} onChange={(e) => setReferenciaId(e.target.value)} required
                 className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm">
                 <option value="">Selecciona una referencia…</option>
-                {precosteos.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.codigo_referencia} · {p.nombre}{p.tela ? ` (${p.tela})` : ""}
-                  </option>
-                ))}
+                {precosteos.map((p) => {
+                  const tag = !p.bloqueada && p.es_muestra_diseno ? " · MUESTRA" : "";
+                  return (
+                    <option key={p.id} value={p.id}>
+                      {p.codigo_referencia} · {p.nombre}{p.tela ? ` (${p.tela})` : ""}{tag}
+                    </option>
+                  );
+                })}
               </select>
               {precosteos.length === 0 && (
                 <p className="mt-1 text-[0.62rem] text-terracotta">
-                  No hay precosteos firmados aún. Firma uno en /produccion/precosteo primero.
+                  No hay precosteos disponibles. Firma uno o marca uno como muestra de diseño en /produccion/precosteo.
                 </p>
               )}
             </div>
