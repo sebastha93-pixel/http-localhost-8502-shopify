@@ -21,21 +21,19 @@ import { Plus, Trash2, Save, Loader2, AlertCircle, ScanLine, CheckCircle } from 
 
 interface RolloForm {
   numero_rollo: string;
-  serial: string;
   lote_fabrica: string;
   tono: string;
   referencia_tela: string;
   descripcion_tela: string;
-  ancho: string;
   costo_metro: string;
   metros_inicial: string;
 }
 
 function rolloVacio(): RolloForm {
   return {
-    numero_rollo: "", serial: "", lote_fabrica: "", tono: "",
+    numero_rollo: "", lote_fabrica: "", tono: "",
     referencia_tela: "", descripcion_tela: "",
-    ancho: "", costo_metro: "", metros_inicial: "",
+    costo_metro: "", metros_inicial: "",
   };
 }
 
@@ -98,12 +96,10 @@ export default function NuevoIngresoPage() {
       // Prellenar rollos
       const rolls: RolloForm[] = (d.rollos || []).map((r: Record<string, unknown>) => ({
         numero_rollo:    r.numero_rollo     != null ? String(r.numero_rollo)    : "",
-        serial:          r.serial           != null ? String(r.serial)          : "",
         lote_fabrica:    r.lote_fabrica     != null ? String(r.lote_fabrica)    : "",
         tono:            r.tono             != null ? String(r.tono)            : "",
         referencia_tela: r.referencia_tela  != null ? String(r.referencia_tela) : "",
         descripcion_tela:r.descripcion_tela != null ? String(r.descripcion_tela): "",
-        ancho:           r.ancho            != null ? String(r.ancho)           : "",
         costo_metro:     r.costo_metro      != null ? String(r.costo_metro)     : "",
         metros_inicial:  r.metros_inicial   != null ? String(r.metros_inicial)  : "",
       }));
@@ -125,12 +121,10 @@ export default function NuevoIngresoPage() {
         .filter((r) => r.descripcion_tela.trim() && parseFloat(r.metros_inicial || "0") > 0)
         .map((r) => ({
           numero_rollo: r.numero_rollo || null,
-          serial: r.serial || null,
           lote_fabrica: r.lote_fabrica || null,
           tono: r.tono || null,
           referencia_tela: r.referencia_tela || null,
           descripcion_tela: r.descripcion_tela.trim().toUpperCase(),
-          ancho: r.ancho ? parseFloat(r.ancho) : null,
           costo_metro: r.costo_metro ? parseFloat(r.costo_metro) : null,
           metros_inicial: parseFloat(r.metros_inicial),
         }));
@@ -166,7 +160,6 @@ export default function NuevoIngresoPage() {
       ...rollos,
       { ...rolloVacio(),
         descripcion_tela: last?.descripcion_tela || "",
-        ancho: last?.ancho || "",
         costo_metro: last?.costo_metro || "",
         referencia_tela: last?.referencia_tela || "",
       },
@@ -284,12 +277,10 @@ export default function NuevoIngresoPage() {
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
                     <Cell label="Nº rollo"  value={r.numero_rollo} onChange={(v) => actualizarRollo(idx, "numero_rollo", v)} />
-                    <Cell label="Serial"    value={r.serial}       onChange={(v) => actualizarRollo(idx, "serial", v)} />
                     <Cell label="Lote"      value={r.lote_fabrica} onChange={(v) => actualizarRollo(idx, "lote_fabrica", v)} />
                     <Cell label="Tono"      value={r.tono}         onChange={(v) => actualizarRollo(idx, "tono", v)} />
                     <Cell label="Ref. tela" value={r.referencia_tela} onChange={(v) => actualizarRollo(idx, "referencia_tela", v)} />
                     <Cell label="Descripción *" value={r.descripcion_tela} onChange={(v) => actualizarRollo(idx, "descripcion_tela", v)} required />
-                    <Cell label="Ancho (cm)"    value={r.ancho}        onChange={(v) => actualizarRollo(idx, "ancho", v)}        inputMode="decimal" />
                     <Cell label="Costo/m (COP)" value={r.costo_metro}  onChange={(v) => actualizarRollo(idx, "costo_metro", v)}  inputMode="decimal" />
                     <Cell label="Metros *"      value={r.metros_inicial} onChange={(v) => actualizarRollo(idx, "metros_inicial", v)} inputMode="decimal" required />
                   </div>

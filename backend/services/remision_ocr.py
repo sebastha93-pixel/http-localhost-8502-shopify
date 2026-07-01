@@ -45,12 +45,10 @@ Devuelve EXACTAMENTE este esquema (sin texto extra, solo JSON):
   "rollos": [
     {
       "numero_rollo": "número o etiqueta del rollo según la textilera",
-      "serial": "serial/código interno del rollo (si aparece)",
       "lote_fabrica": "lote de fábrica o partida (si aparece)",
       "tono": "tono/matiz del color (Ej. INDIGO 03, TONO A, etc.)",
       "referencia_tela": "referencia interna de la tela (ej. SANDDENIM 12OZ)",
       "descripcion_tela": "descripción completa de la tela (composición + peso si está)",
-      "ancho": 1.55,
       "costo_metro": 12800.0,
       "metros_inicial": 55.0
     }

@@ -123,7 +123,6 @@ function RollosDeTela({ tela, tono }: { tela: string; tono: string }) {
             <th className="px-8 py-2">Código</th>
             <th className="px-4 py-2 text-right">Metros</th>
             <th className="px-4 py-2">Lote</th>
-            <th className="px-4 py-2">Ancho</th>
             <th className="px-4 py-2">Estado</th>
           </tr>
         </thead>
@@ -137,7 +136,6 @@ function RollosDeTela({ tela, tono }: { tela: string; tono: string }) {
               </td>
               <td className="px-4 py-1.5 text-right tabular text-xs">{r.metros_disponible} / {r.metros_inicial}</td>
               <td className="px-4 py-1.5 text-xs text-graphite">{r.lote_fabrica || "—"}</td>
-              <td className="px-4 py-1.5 text-xs text-graphite">{r.ancho || "—"}</td>
               <td className="px-4 py-1.5">
                 <Badge tone={r.estado === "disponible" ? "normal" : "info"}>{r.estado}</Badge>
               </td>

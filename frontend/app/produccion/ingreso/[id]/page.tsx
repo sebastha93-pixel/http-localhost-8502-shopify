@@ -101,7 +101,6 @@ export default function DetalleIngresoPage() {
                 <th className="px-4 py-2">Código interno</th>
                 <th className="px-4 py-2">Descripción</th>
                 <th className="px-4 py-2">Tono</th>
-                <th className="px-4 py-2 text-right">Ancho</th>
                 <th className="px-4 py-2 text-right">Metros</th>
                 <th className="px-4 py-2">Lote</th>
                 <th className="px-4 py-2">Estado</th>
@@ -117,7 +116,6 @@ export default function DetalleIngresoPage() {
                   </td>
                   <td className="px-4 py-2">{r.descripcion_tela}</td>
                   <td className="px-4 py-2 text-graphite">{r.tono || "—"}</td>
-                  <td className="px-4 py-2 text-right tabular">{r.ancho || "—"}</td>
                   <td className="px-4 py-2 text-right tabular">{r.metros_disponible} / {r.metros_inicial}</td>
                   <td className="px-4 py-2 text-graphite text-xs">{r.lote_fabrica || "—"}</td>
                   <td className="px-4 py-2">

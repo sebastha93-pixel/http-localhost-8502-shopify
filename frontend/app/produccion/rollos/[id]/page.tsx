@@ -84,9 +84,7 @@ export default function RolloDetallePage() {
           <Row label="Tono"                 value={r.tono} />
           <Row label="Referencia textilera" value={r.referencia_tela} />
           <Row label="Nº rollo textilera"   value={r.numero_rollo} />
-          <Row label="Serial"               value={r.serial} />
           <Row label="Lote de fábrica"      value={r.lote_fabrica} />
-          <Row label="Ancho (cm)"           value={r.ancho} />
           <Row label="Costo por metro"      value={r.costo_metro ? `$${Number(r.costo_metro).toLocaleString("es-CO")}` : undefined} />
           <Row label="Fecha ingreso"        value={r.fecha_ingreso} />
           <Row label="Último corte"         value={r.fecha_ultimo_corte} />
