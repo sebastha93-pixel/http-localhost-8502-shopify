@@ -180,7 +180,8 @@ def crear(*, email: str, nombre: str, password_hash: str, rol: str = "user",
 
 
 def actualizar(uid: str, **campos) -> dict:
-    permitidos = {"nombre", "cargo", "rol", "permisos", "activo", "password_hash"}
+    permitidos = {"nombre", "cargo", "rol", "permisos", "activo", "password_hash",
+                  "puede_autorizar_precosteo", "puede_autorizar_corte"}
     update = {k: v for k, v in campos.items() if k in permitidos and v is not None}
     if "rol" in update:
         update["rol"] = _normalizar_rol(update["rol"])

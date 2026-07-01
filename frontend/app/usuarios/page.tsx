@@ -21,6 +21,8 @@ interface Usuario {
   rol: Rol;
   permisos?: Record<string, string[]>;
   activo: boolean;
+  puede_autorizar_precosteo?: boolean;
+  puede_autorizar_corte?: boolean;
   creado_en?: string;
 }
 
@@ -318,10 +320,16 @@ function UsuarioRow({
   const [activo, setActivo] = useState(u.activo);
   const [password, setPassword] = useState("");
   const [errEdit, setErrEdit] = useState("");
+  const [puedePrecosteo, setPuedePrecosteo] = useState(!!u.puede_autorizar_precosteo);
+  const [puedeCorte, setPuedeCorte]         = useState(!!u.puede_autorizar_corte);
 
   const mut = useMutation({
     mutationFn: () => {
-      const body: Record<string, unknown> = { nombre, cargo, rol, activo };
+      const body: Record<string, unknown> = {
+        nombre, cargo, rol, activo,
+        puede_autorizar_precosteo: puedePrecosteo,
+        puede_autorizar_corte: puedeCorte,
+      };
       if (rol === "user") body.permisos = permisos;
       if (password) body.password = password;
       return api.patch<Usuario>(`/api/auth/usuarios/${u.id}`, body);
@@ -357,11 +365,21 @@ function UsuarioRow({
             <PermisosMatrix permisos={permisos} onChange={setPermisos} />
           )}
 
-          <div className="flex items-center justify-between gap-3">
-            <label className="flex items-center gap-2 text-xs">
-              <input type="checkbox" checked={activo} onChange={(e) => setActivo(e.target.checked)} disabled={isCurrentUser} />
-              {activo ? "Activo" : "Inactivo"} {isCurrentUser && <span className="text-[0.6rem] text-graphite">(no puedes desactivarte)</span>}
-            </label>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={activo} onChange={(e) => setActivo(e.target.checked)} disabled={isCurrentUser} />
+                {activo ? "Activo" : "Inactivo"} {isCurrentUser && <span className="text-[0.6rem] text-graphite">(no puedes desactivarte)</span>}
+              </label>
+              <label className="flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={puedePrecosteo} onChange={(e) => setPuedePrecosteo(e.target.checked)} />
+                Puede firmar precosteo
+              </label>
+              <label className="flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={puedeCorte} onChange={(e) => setPuedeCorte(e.target.checked)} />
+                Puede autorizar corte
+              </label>
+            </div>
             <div className="flex items-center gap-2">
               <input
                 type="password"

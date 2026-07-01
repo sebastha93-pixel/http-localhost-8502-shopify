@@ -87,6 +87,8 @@ class UsuarioOut(BaseModel):
     rol: str
     permisos: dict = {}
     activo: bool
+    puede_autorizar_precosteo: bool = False
+    puede_autorizar_corte: bool = False
     creado_en: Optional[str] = None
 
 
@@ -106,6 +108,8 @@ class ActualizarUsuarioBody(BaseModel):
     permisos: Optional[dict] = None
     activo: Optional[bool] = None
     password: Optional[str] = Field(default=None, min_length=8)
+    puede_autorizar_precosteo: Optional[bool] = None
+    puede_autorizar_corte:     Optional[bool] = None
 
 
 # ── Login ────────────────────────────────────────────────────────────
@@ -156,6 +160,8 @@ def _to_out(u: dict) -> UsuarioOut:
         rol=u["rol"],
         permisos=u.get("permisos") or {},
         activo=u.get("activo", True),
+        puede_autorizar_precosteo=bool(u.get("puede_autorizar_precosteo")),
+        puede_autorizar_corte=bool(u.get("puede_autorizar_corte")),
         creado_en=u.get("creado_en"),
     )
 
