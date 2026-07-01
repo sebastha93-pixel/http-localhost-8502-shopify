@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * Nuevo precosteo — formato tipo Sheet.
- * Cabecera (código, nombre, tela, color, IVA, margen) + tabla de líneas.
- * Al guardar → borrador. Firmar viene después en el detalle.
+ * Nuevo precosteo — plantilla estática.
+ * 24 líneas fijas por categoría + botón "+ Otro" para renglones especiales.
+ * Se llenan solo valor unitario, cantidad y (opcional) IVA.
  */
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageShell } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
@@ -19,20 +19,52 @@ interface LineaForm {
   valor_unitario: string;
   cantidad: string;
   iva: string;
+  fija?: boolean;   // true = renglón de plantilla (no se borra, item read-only)
 }
 
-function lineaVacia(cat = "MP"): LineaForm {
-  return { categoria: cat, item: "", valor_unitario: "", cantidad: "1", iva: "0" };
+/**
+ * Plantilla estándar MALE'DENIM — orden de aparición en el form.
+ * Si quieres editar/reordenar items, solo cambia este array.
+ */
+const PLANTILLA: { categoria: string; items: string[] }[] = [
+  { categoria: "MP", items: [
+    "Tela principal", "Forro bolsillo", "Etiqueta cuero",
+    "Marquilla talla", "Marquilla composición",
+  ]},
+  { categoria: "PROCESO EN MP", items: [
+    "Lavandería", "Tintura especial",
+  ]},
+  { categoria: "PROCESO", items: [
+    "Corte", "Confección", "Terminación", "Bordado/estampado",
+  ]},
+  { categoria: "INSUMO CONFECCION", items: [
+    "Hilo", "Cierre", "Botón", "Remaches", "Elástico",
+  ]},
+  { categoria: "INSUMO EMPAQUE", items: [
+    "Bolsa", "Sticker", "Caja", "Cinta",
+  ]},
+  { categoria: "INSUMO TERMINACION", items: [
+    "Etiqueta colgante", "Hilo colgante", "Precinto seguridad",
+  ]},
+];
+
+function lineasIniciales(): LineaForm[] {
+  const out: LineaForm[] = [];
+  for (const g of PLANTILLA) {
+    for (const it of g.items) {
+      out.push({
+        categoria: g.categoria, item: it,
+        valor_unitario: "", cantidad: "1", iva: "0",
+        fija: true,
+      });
+    }
+  }
+  return out;
 }
 
 export default function NuevoPrecosteoPage() {
   const router = useRouter();
-
-  const catQ = useQuery<{ categorias: string[] }>({
-    queryKey: ["produccion", "precosteo", "categorias"],
-    queryFn: () => api.get("/api/produccion/precosteo/categorias"),
-  });
-  const categorias = catQ.data?.categorias || ["MP", "PROCESO", "INSUMO CONFECCION", "GASTOS FIJOS"];
+  const CATEGORIAS = PLANTILLA.map((p) => p.categoria);
 
   const [codigo, setCodigo] = useState("");
   const [nombre, setNombre] = useState("");
@@ -40,13 +72,14 @@ export default function NuevoPrecosteoPage() {
   const [color, setColor] = useState("");
   const [iva, setIva] = useState("19");
   const [margen, setMargen] = useState("60");
-  const [lineas, setLineas] = useState<LineaForm[]>([lineaVacia(categorias[0])]);
+  const [lineas, setLineas] = useState<LineaForm[]>(lineasIniciales());
   const [err, setErr] = useState("");
 
   const mut = useMutation({
     mutationFn: () => {
+      // Solo mandamos líneas con valor > 0 o cantidad > 0 (evita renglones vacíos de plantilla)
       const items = lineas
-        .filter((l) => l.categoria && l.item.trim() && parseFloat(l.valor_unitario || "0") >= 0)
+        .filter((l) => l.item.trim() && (parseFloat(l.valor_unitario || "0") > 0 || parseFloat(l.cantidad || "0") > 0))
         .map((l) => ({
           categoria: l.categoria,
           item: l.item.trim(),
@@ -54,7 +87,7 @@ export default function NuevoPrecosteoPage() {
           cantidad: parseFloat(l.cantidad || "0") || 0,
           iva: parseFloat(l.iva || "0") || 0,
         }));
-      if (items.length === 0) throw new Error("Agrega al menos una línea con item + valor");
+      if (items.length === 0) throw new Error("Llena al menos un renglón con valor unitario.");
       return api.post<{ id: string }>("/api/produccion/precosteo", {
         codigo_referencia: codigo.trim(),
         nombre: nombre.trim(),
@@ -72,9 +105,12 @@ export default function NuevoPrecosteoPage() {
   function actualizar(idx: number, campo: keyof LineaForm, valor: string) {
     setLineas((prev) => prev.map((l, i) => (i === idx ? { ...l, [campo]: valor } : l)));
   }
-  function agregar() {
-    const last = lineas[lineas.length - 1];
-    setLineas([...lineas, lineaVacia(last?.categoria || categorias[0])]);
+  function agregarOtro() {
+    setLineas((prev) => [...prev, {
+      categoria: CATEGORIAS[0], item: "",
+      valor_unitario: "", cantidad: "1", iva: "0",
+      fija: false,
+    }]);
   }
   function quitar(idx: number) {
     setLineas((prev) => prev.filter((_, i) => i !== idx));
@@ -85,8 +121,16 @@ export default function NuevoPrecosteoPage() {
   const totalCon = totalSin + totalIva;
   const precioSugerido = totalCon * (1 + (parseFloat(margen || "0") || 0) / 100);
 
+  // Agrupamos por categoría para dibujar sub-encabezados en la tabla
+  const gruposUI: { categoria: string; indices: number[] }[] = [];
+  lineas.forEach((l, i) => {
+    const last = gruposUI[gruposUI.length - 1];
+    if (last && last.categoria === l.categoria) last.indices.push(i);
+    else gruposUI.push({ categoria: l.categoria, indices: [i] });
+  });
+
   return (
-    <PageShell title="Nuevo precosteo" subtitle="Referencia + costos por línea">
+    <PageShell title="Nuevo precosteo" subtitle="Plantilla estándar · llena valor y cantidad">
       <form
         onSubmit={(e) => { e.preventDefault(); setErr(""); mut.mutate(); }}
         className="space-y-4"
@@ -109,9 +153,9 @@ export default function NuevoPrecosteoPage() {
           <CardContent className="p-5 space-y-3">
             <div className="flex items-baseline justify-between">
               <p className="section-label">Líneas ({lineas.length})</p>
-              <button type="button" onClick={agregar}
+              <button type="button" onClick={agregarOtro}
                 className="inline-flex items-center gap-1 rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud">
-                <Plus className="h-3.5 w-3.5" /> Línea
+                <Plus className="h-3.5 w-3.5" /> Otro
               </button>
             </div>
 
@@ -119,74 +163,87 @@ export default function NuevoPrecosteoPage() {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite border-b border-border">
-                    <th className="px-2 py-2 w-[180px]">Categoría</th>
                     <th className="px-2 py-2">Item</th>
-                    <th className="px-2 py-2 w-[110px]">Valor unit.</th>
-                    <th className="px-2 py-2 w-[80px]">Cantidad</th>
-                    <th className="px-2 py-2 w-[100px]">IVA $</th>
-                    <th className="px-2 py-2 w-[110px] text-right">Total c/IVA</th>
+                    <th className="px-2 py-2 w-[130px]">Valor unit.</th>
+                    <th className="px-2 py-2 w-[90px]">Cantidad</th>
+                    <th className="px-2 py-2 w-[110px]">IVA $</th>
+                    <th className="px-2 py-2 w-[120px] text-right">Total c/IVA</th>
                     <th className="px-2 py-2 w-[30px]" />
                   </tr>
                 </thead>
                 <tbody>
-                  {lineas.map((l, idx) => {
-                    const ts = (parseFloat(l.valor_unitario || "0") || 0) * (parseFloat(l.cantidad || "0") || 0);
-                    const tc = ts + (parseFloat(l.iva || "0") || 0);
-                    return (
-                      <tr key={idx} className="border-b border-border/40">
-                        <td className="px-2 py-1.5">
-                          <select value={l.categoria} onChange={(e) => actualizar(idx, "categoria", e.target.value)}
-                            className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs">
-                            {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
-                          </select>
-                        </td>
-                        <td className="px-2 py-1.5">
-                          <input value={l.item} onChange={(e) => actualizar(idx, "item", e.target.value)}
-                            placeholder="ej. PRECIO TELA, FORRO, CIERRE..."
-                            className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs" />
-                        </td>
-                        <td className="px-2 py-1.5">
-                          <input value={l.valor_unitario} onChange={(e) => actualizar(idx, "valor_unitario", e.target.value)}
-                            inputMode="decimal"
-                            className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs text-right tabular" />
-                        </td>
-                        <td className="px-2 py-1.5">
-                          <input value={l.cantidad} onChange={(e) => actualizar(idx, "cantidad", e.target.value)}
-                            inputMode="decimal"
-                            className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs text-right tabular" />
-                        </td>
-                        <td className="px-2 py-1.5">
-                          <input value={l.iva} onChange={(e) => actualizar(idx, "iva", e.target.value)}
-                            inputMode="decimal"
-                            className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs text-right tabular" />
-                        </td>
-                        <td className="px-2 py-1.5 text-right tabular text-ink-900 font-medium">
-                          ${tc.toLocaleString("es-CO", { maximumFractionDigits: 0 })}
-                        </td>
-                        <td className="px-2 py-1.5 text-center">
-                          {lineas.length > 1 && (
-                            <button type="button" onClick={() => quitar(idx)} className="text-terracotta hover:text-crimson">
-                              <Trash2 className="h-3 w-3" />
-                            </button>
-                          )}
+                  {gruposUI.map((g) => (
+                    <Fragment key={g.categoria}>
+                      <tr className="bg-cloud/60 border-b border-border">
+                        <td colSpan={6} className="px-2 py-1.5 text-[0.6rem] font-bold uppercase tracking-[0.16em] text-ink-900">
+                          {g.categoria}
                         </td>
                       </tr>
-                    );
-                  })}
+                      {g.indices.map((idx) => {
+                        const l = lineas[idx];
+                        const ts = (parseFloat(l.valor_unitario || "0") || 0) * (parseFloat(l.cantidad || "0") || 0);
+                        const tc = ts + (parseFloat(l.iva || "0") || 0);
+                        return (
+                          <tr key={idx} className="border-b border-border/40">
+                            <td className="px-2 py-1.5">
+                              {l.fija ? (
+                                <span className="text-ink-900">{l.item}</span>
+                              ) : (
+                                <div className="flex items-center gap-1">
+                                  <select value={l.categoria} onChange={(e) => actualizar(idx, "categoria", e.target.value)}
+                                    className="rounded-sm border border-border bg-white px-1.5 py-1 text-[0.65rem] w-[130px]">
+                                    {CATEGORIAS.map((c) => <option key={c} value={c}>{c}</option>)}
+                                  </select>
+                                  <input value={l.item} onChange={(e) => actualizar(idx, "item", e.target.value)}
+                                    placeholder="Item"
+                                    className="flex-1 rounded-sm border border-border bg-white px-2 py-1 text-xs" />
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-2 py-1.5">
+                              <input value={l.valor_unitario} onChange={(e) => actualizar(idx, "valor_unitario", e.target.value)}
+                                inputMode="decimal" placeholder="0"
+                                className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs text-right tabular" />
+                            </td>
+                            <td className="px-2 py-1.5">
+                              <input value={l.cantidad} onChange={(e) => actualizar(idx, "cantidad", e.target.value)}
+                                inputMode="decimal"
+                                className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs text-right tabular" />
+                            </td>
+                            <td className="px-2 py-1.5">
+                              <input value={l.iva} onChange={(e) => actualizar(idx, "iva", e.target.value)}
+                                inputMode="decimal"
+                                className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs text-right tabular" />
+                            </td>
+                            <td className="px-2 py-1.5 text-right tabular text-ink-900 font-medium">
+                              ${tc.toLocaleString("es-CO", { maximumFractionDigits: 0 })}
+                            </td>
+                            <td className="px-2 py-1.5 text-center">
+                              {!l.fija && (
+                                <button type="button" onClick={() => quitar(idx)} className="text-terracotta hover:text-crimson">
+                                  <Trash2 className="h-3 w-3" />
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </Fragment>
+                  ))}
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-border">
-                    <td colSpan={4} className="px-2 py-2 text-right text-[0.65rem] uppercase tracking-widest text-graphite">Total sin IVA</td>
+                    <td colSpan={3} className="px-2 py-2 text-right text-[0.65rem] uppercase tracking-widest text-graphite">Total sin IVA</td>
                     <td colSpan={2} className="px-2 py-2 text-right tabular font-semibold">${totalSin.toLocaleString("es-CO", { maximumFractionDigits: 0 })}</td>
                     <td />
                   </tr>
                   <tr>
-                    <td colSpan={4} className="px-2 py-1 text-right text-[0.65rem] uppercase tracking-widest text-graphite">Total con IVA</td>
+                    <td colSpan={3} className="px-2 py-1 text-right text-[0.65rem] uppercase tracking-widest text-graphite">Total con IVA</td>
                     <td colSpan={2} className="px-2 py-1 text-right tabular font-semibold text-ink-900">${totalCon.toLocaleString("es-CO", { maximumFractionDigits: 0 })}</td>
                     <td />
                   </tr>
                   <tr>
-                    <td colSpan={4} className="px-2 py-1 text-right text-[0.65rem] uppercase tracking-widest text-graphite">
+                    <td colSpan={3} className="px-2 py-1 text-right text-[0.65rem] uppercase tracking-widest text-graphite">
                       Precio sugerido ({margen || 0}%)
                     </td>
                     <td colSpan={2} className="px-2 py-1 text-right tabular font-bold text-navy-600 text-sm">
