@@ -855,6 +855,85 @@ def asignar_rollo_a_corte(*, oc_id: str, barcode: str,
     return obtener_orden_corte(oc_id)
 
 
+def auto_asignar_rollos_por_tono(*, oc_id: str,
+                                   tono: Optional[str] = None) -> dict:
+    """Auto-selecciona rollos disponibles con la MISMA TELA y MISMO TONO
+    de la referencia (o el tono indicado si viene) y los agrega al corte
+    hasta cubrir los metros teóricos.
+
+    Regla de negocio: no se pueden mezclar tonos en un mismo trazo — el
+    color termina saliendo distinto. Este helper reduce el riesgo humano.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    oc = obtener_orden_corte(oc_id)
+    if not oc:
+        raise ValueError("orden_no_encontrada")
+    if oc.get("estado") == "cortada":
+        raise ValueError("orden_ya_cortada")
+
+    tela = ((oc.get("referencia") or {}).get("tela") or "").strip()
+    if not tela:
+        raise ValueError("precosteo_sin_tela")
+
+    tono_target = (tono or oc.get("tono") or "").strip()
+
+    # Metros teóricos que necesita el corte
+    m_necesarios = float(oc.get("metros_consumidos") or 0)
+    if m_necesarios <= 0:
+        raise ValueError("orden_sin_metros_teoricos")
+
+    # Rollos ya asignados → no repetir
+    ya_asignados = {link.get("rollo_id") for link in (oc.get("rollos") or []) if link.get("rollo_id")}
+    m_ya = sum(float(link.get("metros_usados") or 0) for link in (oc.get("rollos") or []))
+    m_pendientes = round(m_necesarios - m_ya, 2)
+    if m_pendientes <= 0:
+        return {"ok": True, "asignados": [], "faltantes": 0,
+                "mensaje": "ya_cubierto"}
+
+    q = (sb.table("rollos_tela")
+           .select("id,codigo_interno,barcode,descripcion_tela,tono,metros_disponible")
+           .eq("estado", "disponible")
+           .ilike("descripcion_tela", f"%{tela}%")
+           .order("metros_disponible", desc=True)
+           .limit(200))
+    if tono_target:
+        q = q.eq("tono", tono_target)
+    rollos = q.execute().data or []
+
+    asignados: list[dict] = []
+    for r in rollos:
+        if r["id"] in ya_asignados:
+            continue
+        if m_pendientes <= 0:
+            break
+        disp = float(r.get("metros_disponible") or 0)
+        if disp <= 0:
+            continue
+        m_usar = round(min(m_pendientes, disp), 2)
+        # Insertar link (no descuenta inventario todavía — eso pasa al cerrar)
+        sb.table("orden_corte_rollos").insert({
+            "orden_corte_id": oc_id,
+            "rollo_id":       r["id"],
+            "metros_usados":  m_usar,
+        }).execute()
+        asignados.append({
+            "codigo_interno": r["codigo_interno"],
+            "tono":           r.get("tono"),
+            "metros_usados":  m_usar,
+        })
+        m_pendientes = round(m_pendientes - m_usar, 2)
+
+    return {
+        "ok":         m_pendientes <= 0,
+        "asignados":  asignados,
+        "faltantes":  m_pendientes if m_pendientes > 0 else 0,
+        "tono_usado": tono_target or None,
+        "tela":       tela,
+    }
+
+
 def quitar_rollo_de_corte(*, oc_id: str, rollo_id: str) -> dict:
     sb = _sb()
     if sb is None:

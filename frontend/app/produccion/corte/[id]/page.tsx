@@ -184,6 +184,27 @@ export default function DetalleOrdenCortePage() {
     onError: (e: Error) => setErr(e.message),
   });
 
+  // Auto-asignar rollos por tono (evita mezclar colores en el trazo).
+  const [tonoAuto, setTonoAuto] = useState("");
+  const autoAsignar = useMutation({
+    mutationFn: () => api.post<{
+      ok: boolean;
+      resultado: { asignados: Array<{codigo_interno: string; tono?: string; metros_usados: number}>; faltantes: number; tono_usado?: string; tela: string };
+    }>(`/api/produccion/corte/${id}/auto-asignar`, { tono: tonoAuto || null }),
+    onSuccess: (data) => {
+      const r = data.resultado;
+      const n = r.asignados.length;
+      if (r.faltantes > 0) {
+        setMsg(`Asignados ${n} rollo(s) · faltan ${r.faltantes.toFixed(2)} m (stock insuficiente del tono).`);
+      } else {
+        setMsg(`Asignados ${n} rollo(s) automáticamente · cubre los metros teóricos.`);
+      }
+      setErr("");
+      qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
+    },
+    onError: (e: Error) => { setErr(e.message); setMsg(""); },
+  });
+
   const cerrar = useMutation({
     mutationFn: () => {
       const unidadesFinal: Record<string, number> = {};
@@ -396,6 +417,44 @@ export default function DetalleOrdenCortePage() {
                     </p>
                   </>
                 )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Auto-asignar por tono — mismo color en todo el trazo */}
+      {!cerrada && telaRef && (
+        <Card>
+          <CardContent className="p-5">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <div>
+                <p className="section-label">Auto-asignar por tono</p>
+                <p className="mt-1 text-[0.7rem] text-graphite">
+                  El sistema escogerá rollos de la misma tela + mismo tono hasta cubrir los metros teóricos.
+                  Evita mezclar tonos en el trazo.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <select value={tonoAuto} onChange={(e) => setTonoAuto(e.target.value)}
+                  className="rounded-sm border border-border bg-card px-3 py-2 text-xs">
+                  <option value="">Cualquier tono disponible</option>
+                  {Array.from(new Set(rollosMatch.map((r) => r.tono).filter(Boolean) as string[]))
+                    .map((t) => {
+                      const stockTono = rollosMatch
+                        .filter((r) => r.tono === t)
+                        .reduce((s, r) => s + Number(r.metros_disponible || 0), 0);
+                      return (
+                        <option key={t} value={t}>{t} ({stockTono.toFixed(0)} m)</option>
+                      );
+                    })}
+                </select>
+                <button type="button" onClick={() => autoAsignar.mutate()}
+                  disabled={autoAsignar.isPending}
+                  className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white hover:bg-navy-700 disabled:opacity-40">
+                  {autoAsignar.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />}
+                  Auto-asignar
+                </button>
               </div>
             </div>
           </CardContent>

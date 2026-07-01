@@ -632,6 +632,30 @@ def quitar_rollo(
         raise HTTPException(400, str(e))
 
 
+class AutoAsignarBody(BaseModel):
+    tono: Optional[str] = None
+
+
+@router.post("/corte/{oc_id}/auto-asignar")
+def auto_asignar(
+    oc_id: str,
+    body: AutoAsignarBody,
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    """Auto-selecciona rollos disponibles de la misma TELA + TONO y los agrega
+    hasta cubrir los metros teóricos. Evita mezclar tonos por error humano.
+    """
+    try:
+        res = svc.auto_asignar_rollos_por_tono(oc_id=oc_id, tono=body.tono)
+        oc = svc.obtener_orden_corte(oc_id)
+        return {"ok": res["ok"], "resultado": res, "orden_corte": oc}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"auto_asignar: {str(e)[:200]}")
+
+
 @router.post("/corte/{oc_id}/cerrar")
 def cerrar_corte(
     oc_id: str,
