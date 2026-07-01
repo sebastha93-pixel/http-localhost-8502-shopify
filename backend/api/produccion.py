@@ -69,6 +69,33 @@ class IngresoIn(BaseModel):
     rollos:           list[RolloIn] = Field(min_length=1)
 
 
+@router.post("/ingreso/parse-documento")
+async def parse_documento_ingreso(
+    file: UploadFile = File(...),
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    """OCR/IA: lee remisión (PDF/JPG/PNG) de la textilera y devuelve JSON estructurado
+    listo para prellenar el form de ingreso. No guarda nada — el usuario revisa y guarda.
+    """
+    from backend.services.remision_ocr import extraer_remision
+    contenido = await file.read()
+    if len(contenido) > 25 * 1024 * 1024:
+        raise HTTPException(413, "Archivo muy grande (>25MB)")
+    if not contenido:
+        raise HTTPException(400, "Archivo vacío")
+    mime = (file.content_type or "").lower()
+    if not mime:
+        # inferir por extensión
+        name = (file.filename or "").lower()
+        if name.endswith(".pdf"):   mime = "application/pdf"
+        elif name.endswith((".jpg", ".jpeg")): mime = "image/jpeg"
+        elif name.endswith(".png"): mime = "image/png"
+    res = extraer_remision(contenido, mime)
+    if not res.get("ok"):
+        raise HTTPException(422, res.get("error") or "No se pudo extraer la remisión")
+    return res
+
+
 @router.post("/ingreso")
 def crear_ingreso(
     body: IngresoIn,

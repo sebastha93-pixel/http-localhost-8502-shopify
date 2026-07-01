@@ -21,5 +21,9 @@ PyJWT>=2.8
 email-validator>=2.1
 playwright>=1.40
 
-# Claude AI (auditoría conversaciones + informe consultor)
+# Claude AI (auditoría conversaciones + informe consultor + OCR remisiones)
 anthropic>=0.40
+
+# PDF → imagen (para OCR de remisiones de textilera con Claude vision).
+# pypdfium2 no requiere binarios del sistema (funciona en Railway).
+pypdfium2>=4.30

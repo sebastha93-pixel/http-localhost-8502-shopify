@@ -10,13 +10,14 @@
  * 3. Guardar → backend crea consecutivos y regresa los IDs.
  * 4. Redirige al detalle del ingreso para imprimir etiquetas masivas.
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, API_BASE } from "@/lib/api";
+import { getToken } from "@/lib/auth";
 import { PageShell } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { Plus, Trash2, Save, Loader2, AlertCircle } from "lucide-react";
+import { Plus, Trash2, Save, Loader2, AlertCircle, ScanLine, CheckCircle } from "lucide-react";
 
 interface RolloForm {
   numero_rollo: string;
@@ -60,6 +61,62 @@ export default function NuevoIngresoPage() {
   const [observaciones, setObservaciones] = useState("");
   const [rollos, setRollos] = useState<RolloForm[]>([rolloVacio()]);
   const [err, setErr] = useState("");
+  const [escaneando, setEscaneando] = useState(false);
+  const [msgEscaneo, setMsgEscaneo] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function escanearDocumento(f: File) {
+    setErr("");
+    setMsgEscaneo("");
+    setEscaneando(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", f);
+      const token = getToken();
+      const res = await fetch(`${API_BASE}/api/produccion/ingreso/parse-documento`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      });
+      const text = await res.text();
+      if (!res.ok) {
+        throw new Error(text.slice(0, 200) || `HTTP ${res.status}`);
+      }
+      const json = JSON.parse(text);
+      const d = json.data || {};
+      // Prellenar cabecera
+      const tx = (d.textilera || "").toString();
+      const known = TEXTILERAS.find((t) => tx.toUpperCase().includes(t.toUpperCase()));
+      if (known) { setTextilera(known); }
+      else { setTextilera("Otra"); setTextileraOtra(tx); }
+      if (d.nit_textilera)     setNit(String(d.nit_textilera));
+      if (d.tipo_documento)    setTipoDoc(String(d.tipo_documento));
+      if (d.numero_documento)  setNumeroDoc(String(d.numero_documento));
+      if (d.fecha)             setFecha(String(d.fecha));
+      if (d.orden_compra)      setOrdenCompra(String(d.orden_compra));
+      if (d.observaciones)     setObservaciones(String(d.observaciones));
+      // Prellenar rollos
+      const rolls: RolloForm[] = (d.rollos || []).map((r: Record<string, unknown>) => ({
+        numero_rollo:    r.numero_rollo     != null ? String(r.numero_rollo)    : "",
+        serial:          r.serial           != null ? String(r.serial)          : "",
+        lote_fabrica:    r.lote_fabrica     != null ? String(r.lote_fabrica)    : "",
+        tono:            r.tono             != null ? String(r.tono)            : "",
+        referencia_tela: r.referencia_tela  != null ? String(r.referencia_tela) : "",
+        descripcion_tela:r.descripcion_tela != null ? String(r.descripcion_tela): "",
+        ancho:           r.ancho            != null ? String(r.ancho)           : "",
+        costo_metro:     r.costo_metro      != null ? String(r.costo_metro)     : "",
+        metros_inicial:  r.metros_inicial   != null ? String(r.metros_inicial)  : "",
+      }));
+      if (rolls.length > 0) setRollos(rolls);
+      setMsgEscaneo(`✓ ${rolls.length} rollo(s) extraídos. Revisa y corrige antes de guardar.`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Error escaneando";
+      setErr(`Escaneo falló: ${msg}`);
+    } finally {
+      setEscaneando(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
 
   const mut = useMutation({
     mutationFn: () => {
@@ -131,6 +188,38 @@ export default function NuevoIngresoPage() {
         onSubmit={(e) => { e.preventDefault(); setErr(""); mut.mutate(); }}
         className="space-y-4"
       >
+        {/* Escanear remisión con IA */}
+        <Card>
+          <CardContent className="p-5">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="h-10 w-10 shrink-0 rounded-md grid place-items-center bg-navy-600/10 text-navy-600">
+                  <ScanLine className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="font-display text-base font-medium text-ink-900">Escanear remisión</p>
+                  <p className="text-xs text-graphite mt-0.5">
+                    Sube el PDF o foto de la remisión de la textilera. La IA extrae cabecera + rollos.
+                    Revisa antes de guardar.
+                  </p>
+                </div>
+              </div>
+              <input ref={fileRef} type="file" accept="application/pdf,image/*" className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) escanearDocumento(f); }} />
+              <button type="button" onClick={() => fileRef.current?.click()} disabled={escaneando}
+                className="inline-flex items-center gap-2 rounded-sm border border-navy-600 bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white hover:bg-navy-700 disabled:opacity-40 shrink-0">
+                {escaneando ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanLine className="h-4 w-4" />}
+                {escaneando ? "Analizando…" : "Subir remisión"}
+              </button>
+            </div>
+            {msgEscaneo && (
+              <div className="mt-3 rounded-sm border border-teal/40 bg-teal/5 px-3 py-2 text-xs text-teal flex items-center gap-2">
+                <CheckCircle className="h-3.5 w-3.5" /> {msgEscaneo}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Cabecera */}
         <Card>
           <CardContent className="p-5 space-y-4">
