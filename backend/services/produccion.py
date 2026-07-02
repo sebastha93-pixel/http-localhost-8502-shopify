@@ -1304,9 +1304,11 @@ def actualizar_confeccionista(cid: str, **campos) -> dict:
 # ═══════════════════════════════════════════════════════════════════════
 
 def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
-                    orden_corte_ids: list[str], created_by: str) -> dict:
-    """Crea una remisión: entrega de N órdenes de corte cortadas a un confeccionista.
-    - Valida que las órdenes existan y estén 'cortada' (no borrador ni autorizada).
+                    orden_corte_ids: list[str], created_by: str,
+                    tipo: str = "confeccion") -> dict:
+    """Crea una remisión: entrega de N órdenes de corte cortadas a un proveedor.
+    - `tipo`: 'confeccion' o 'terminacion' — define a qué proveedor va y
+       qué campo de la hoja de ruta se actualiza (confeccionista_id vs terminacion_id).
     - Genera consecutivo `REM-YYYY-NNNN`.
     """
     sb = _sb()
@@ -1314,14 +1316,22 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
         raise RuntimeError("Supabase no configurado")
     if not orden_corte_ids:
         raise ValueError("sin_ordenes")
+    if tipo not in ("confeccion", "terminacion"):
+        raise ValueError("tipo_invalido")
 
-    # Validar confeccionista
-    c = (sb.table("confeccionistas").select("id,nombre,activo")
+    # Validar proveedor (puede ser confección o terminación — misma tabla)
+    c = (sb.table("confeccionistas").select("id,nombre,activo,tipo")
            .eq("id", confeccionista_id).limit(1).execute()).data
     if not c:
-        raise ValueError("confeccionista_no_encontrado")
+        raise ValueError("proveedor_no_encontrado")
     if not c[0].get("activo"):
-        raise ValueError("confeccionista_inactivo")
+        raise ValueError("proveedor_inactivo")
+    # Coherencia: si tipo=confeccion, el proveedor debe ser de confección (o legacy sin tipo)
+    prov_tipo = (c[0].get("tipo") or "confeccion").lower()
+    if tipo == "confeccion" and prov_tipo != "confeccion":
+        raise ValueError("proveedor_no_es_confeccion")
+    if tipo == "terminacion" and prov_tipo != "terminacion":
+        raise ValueError("proveedor_no_es_terminacion")
 
     # Validar órdenes de corte
     for oc_id in orden_corte_ids:
@@ -1335,12 +1345,21 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
     codigo = next_consecutivo("REM", width=4)
     row = {
         "consecutivo":       codigo,
-        "confeccionista_id": confeccionista_id,
+        "confeccionista_id": confeccionista_id,   # el "destinatario" de la remisión
         "fecha_recogida":    fecha_recogida,
         "estado":            "generada",
+        "tipo":              tipo,
         "created_by":        created_by,
     }
-    r = sb.table("remisiones").insert(row).execute()
+    try:
+        r = sb.table("remisiones").insert(row).execute()
+    except Exception as e:
+        # Compat si la columna tipo aún no existe
+        if "tipo" in str(e):
+            row.pop("tipo", None)
+            r = sb.table("remisiones").insert(row).execute()
+        else:
+            raise
     if not r.data:
         raise RuntimeError("no_se_pudo_crear_remision")
     rem = r.data[0]
@@ -1352,20 +1371,30 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
     ]
     sb.table("remision_items").insert(items_rows).execute()
 
-    # Auto-crear hoja de ruta por cada orden. Precio y fecha se llenan después.
+    # Actualiza hoja de ruta según tipo:
+    #   confeccion → auto-crea la ruta con confeccionista_id (comportamiento original)
+    #   terminacion → busca la ruta existente y le asigna terminacion_id
     for oc_id in orden_corte_ids:
         try:
             existente = obtener_ruta_por_corte(oc_id)
-            if existente:
-                continue
-            crear_ruta_lote(
-                orden_corte_id=oc_id,
-                confeccionista_id=confeccionista_id,
-                remision_id=rem["id"],
-                created_by=created_by,
-            )
+            if tipo == "confeccion":
+                if existente:
+                    continue
+                crear_ruta_lote(
+                    orden_corte_id=oc_id,
+                    confeccionista_id=confeccionista_id,
+                    remision_id=rem["id"],
+                    created_by=created_by,
+                )
+            else:  # terminacion
+                if not existente:
+                    # Primero debería existir una remisión de confección para esta OC.
+                    # Igual creamos la ruta con un placeholder para que sea usable.
+                    log.warning(f"[remision-terminacion] OC {oc_id} sin ruta previa, se salta")
+                    continue
+                actualizar_ruta_lote(existente["id"], terminacion_id=confeccionista_id)
         except Exception as e:
-            log.warning(f"[remision] no se pudo crear ruta para {oc_id}: {e}")
+            log.warning(f"[remision] no se pudo actualizar ruta {oc_id}: {e}")
 
     return obtener_remision(rem["id"])
 

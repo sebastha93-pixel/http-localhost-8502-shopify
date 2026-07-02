@@ -35,15 +35,16 @@ export default function NuevaRemisionPage() {
   const router = useRouter();
   const hoy = new Date().toISOString().slice(0, 10);
 
+  const [tipo, setTipo] = useState<"confeccion" | "terminacion">("confeccion");
   const [confId, setConfId] = useState("");
   const [fechaRecogida, setFechaRecogida] = useState(hoy);
   const [ordenesSeleccionadas, setOrdenesSeleccionadas] = useState<Set<string>>(new Set());
   const [err, setErr] = useState("");
 
-  // Confeccionistas activos (solo tipo=confeccion — los de terminacion van aparte)
+  // Proveedores activos del tipo seleccionado (confección o terminación)
   const confQ = useQuery<{ confeccionistas: Confeccionista[] }>({
-    queryKey: ["produccion", "confeccionistas", "confeccion"],
-    queryFn: () => api.get("/api/produccion/confeccionistas?incluir_inactivos=false&tipo=confeccion"),
+    queryKey: ["produccion", "confeccionistas", tipo],
+    queryFn: () => api.get(`/api/produccion/confeccionistas?incluir_inactivos=false&tipo=${tipo}`),
   });
 
   // Órdenes cortadas
@@ -82,12 +83,13 @@ export default function NuevaRemisionPage() {
 
   const mut = useMutation({
     mutationFn: () => {
-      if (!confId) throw new Error("Selecciona un confeccionista");
+      if (!confId) throw new Error(tipo === "terminacion" ? "Selecciona un proveedor de terminación" : "Selecciona un confeccionista");
       if (ordenesSeleccionadas.size === 0) throw new Error("Selecciona al menos una orden de corte");
       return api.post<{ ok: boolean; remision: { id: string } }>("/api/produccion/remisiones", {
         confeccionista_id: confId,
         fecha_recogida: fechaRecogida,
         orden_corte_ids: Array.from(ordenesSeleccionadas),
+        tipo,
       });
     },
     onSuccess: (data) => router.push(`/produccion/remisiones/${data.remision.id}`),
@@ -97,21 +99,39 @@ export default function NuevaRemisionPage() {
   if (confQ.isLoading || ocQ.isLoading) return <LoadingState label="Cargando…" />;
 
   return (
-    <PageShell title="Nueva remisión" subtitle="Entrega al confeccionista">
+    <PageShell
+      title="Nueva remisión"
+      subtitle={tipo === "terminacion" ? "Entrega al proveedor de terminación" : "Entrega al confeccionista"}
+    >
       <form onSubmit={(e) => { e.preventDefault(); setErr(""); mut.mutate(); }} className="space-y-4">
         <Card>
           <CardContent className="p-5 space-y-4">
-            <p className="section-label">Cabecera</p>
+            <div className="flex items-center justify-between">
+              <p className="section-label">Cabecera</p>
+              {/* Toggle tipo de remisión */}
+              <div className="inline-flex rounded-sm border border-border overflow-hidden">
+                <button type="button"
+                  onClick={() => { setTipo("confeccion"); setConfId(""); }}
+                  className={`px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest ${tipo === "confeccion" ? "bg-navy-600 text-white" : "bg-white text-graphite hover:bg-cloud"}`}>
+                  Confección
+                </button>
+                <button type="button"
+                  onClick={() => { setTipo("terminacion"); setConfId(""); }}
+                  className={`px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest border-l border-border ${tipo === "terminacion" ? "bg-navy-600 text-white" : "bg-white text-graphite hover:bg-cloud"}`}>
+                  Terminación
+                </button>
+              </div>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {/* Combobox confeccionista */}
               <div ref={confBoxRef} className="relative">
                 <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
-                  Confeccionista *
+                  {tipo === "terminacion" ? "Proveedor terminación *" : "Confeccionista *"}
                 </label>
                 <button type="button" onClick={() => setConfOpen((v) => !v)}
                   className="w-full flex items-center justify-between rounded-sm border border-border bg-card px-3 py-2 text-sm text-left hover:bg-cloud/30">
                   <span className={confSel ? "text-ink-900" : "text-graphite/60"}>
-                    {confSel ? confSel.nombre : "Selecciona un confeccionista…"}
+                    {confSel ? confSel.nombre : (tipo === "terminacion" ? "Selecciona un proveedor…" : "Selecciona un confeccionista…")}
                   </span>
                   <ChevronDown className={`h-3.5 w-3.5 text-graphite transition-transform ${confOpen ? "rotate-180" : ""}`} />
                 </button>
@@ -121,7 +141,7 @@ export default function NuevaRemisionPage() {
                       <div className="flex items-center gap-2 rounded-sm border border-border bg-cloud/30 px-2 py-1.5">
                         <Search className="h-3.5 w-3.5 text-graphite flex-none" />
                         <input autoFocus value={confBuscar} onChange={(e) => setConfBuscar(e.target.value)}
-                          placeholder="Buscar taller…"
+                          placeholder={tipo === "terminacion" ? "Buscar proveedor…" : "Buscar taller…"}
                           className="w-full bg-transparent text-sm outline-none" />
                       </div>
                     </div>
@@ -129,7 +149,9 @@ export default function NuevaRemisionPage() {
                       {confsFiltrados.length === 0 ? (
                         <div className="px-3 py-3 text-xs text-graphite">
                           {confs.length === 0
-                            ? "No hay confeccionistas. Crea uno en /produccion/confeccionistas."
+                            ? (tipo === "terminacion"
+                                ? "No hay proveedores de terminación. Créalos en /produccion/confeccionistas con tipo 'Terminación'."
+                                : "No hay confeccionistas. Créalos en /produccion/confeccionistas.")
                             : "Ninguno coincide."}
                         </div>
                       ) : confsFiltrados.map((c) => (

@@ -720,6 +720,7 @@ class RemisionIn(BaseModel):
     confeccionista_id: str
     fecha_recogida:    str
     orden_corte_ids:   list[str] = Field(min_length=1)
+    tipo:              str = "confeccion"  # 'confeccion' | 'terminacion'
 
 
 @router.get("/confeccionistas")
@@ -787,6 +788,7 @@ def crear_remision(
             fecha_recogida=body.fecha_recogida,
             orden_corte_ids=body.orden_corte_ids,
             created_by=user.email,
+            tipo=body.tipo,
         )
         return {"ok": True, "remision": rem}
     except ValueError as e:
