@@ -825,14 +825,22 @@ def marcar_recogida(
 @router.get("/corte/{oc_id}/insumos-requeridos")
 def insumos_requeridos_corte(
     oc_id: str,
+    tipo: Optional[str] = None,  # 'confeccion' | 'terminacion' | None (ambos)
     _: CurrentUser = Depends(require_permission("operaciones", "ver")),
 ) -> dict:
-    """Calcula los insumos que el confeccionista necesita para este corte:
-    item.cantidad (del precosteo) × cantidad_a_cortar (de la OC).
-    Solo considera categorías INSUMO CONFECCION e INSUMO TERMINACION.
+    """Calcula los insumos requeridos multiplicando item.cantidad × cantidad_a_cortar.
+    Con `tipo=confeccion` filtra a categoría INSUMO CONFECCION;
+    con `tipo=terminacion` filtra a INSUMO TERMINACION.
+    Sin `tipo` devuelve ambas.
     """
+    cats: Optional[tuple[str, ...]] = None
+    t = (tipo or "").lower().strip()
+    if t == "confeccion":
+        cats = ("INSUMO CONFECCION",)
+    elif t == "terminacion":
+        cats = ("INSUMO TERMINACION",)
     try:
-        return svc.calcular_insumos_requeridos_corte(oc_id)
+        return svc.calcular_insumos_requeridos_corte(oc_id, categorias=cats)
     except ValueError as e:
         raise HTTPException(404 if str(e) == "orden_no_encontrada" else 400, str(e))
     except Exception as e:

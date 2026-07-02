@@ -1382,6 +1382,13 @@ function TerminacionCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; 
     queryFn: () => api.get("/api/produccion/confeccionistas?tipo=terminacion&incluir_inactivos=false"),
   });
 
+  // Insumos de terminación a separar antes de enviar al proveedor
+  const insumosTermQ = useQuery<{ items: Array<{item: string; total_requerido: number}>; cantidad_base?: number }>({
+    queryKey: ["insumos-terminacion", ordenCorteId],
+    queryFn: () => api.get(`/api/produccion/corte/${ordenCorteId}/insumos-requeridos?tipo=terminacion`),
+    enabled: !!ordenCorteId,
+  });
+
   const guardar = useMutation({
     mutationFn: () => {
       if (!rutaQ.data) return Promise.reject(new Error("ruta no cargada"));
@@ -1449,6 +1456,46 @@ function TerminacionCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; 
               Guardar
             </button>
           </div>
+        </div>
+
+        {/* Insumos que hay que SEPARAR físicamente antes de enviar al proveedor */}
+        <div className="rounded-sm border border-navy-600/30 bg-navy-600/[0.03]">
+          <div className="px-3 py-2 border-b border-navy-600/20 flex items-center justify-between">
+            <p className="text-[0.6rem] uppercase tracking-widest text-navy-600 font-bold">
+              Separar estos insumos (terminación)
+            </p>
+            {insumosTermQ.data?.cantidad_base != null && (
+              <p className="text-[0.6rem] text-graphite tabular">
+                Base: {insumosTermQ.data.cantidad_base} prendas
+              </p>
+            )}
+          </div>
+          {insumosTermQ.isLoading ? (
+            <div className="p-3 text-[0.7rem] text-graphite">Calculando…</div>
+          ) : !insumosTermQ.data || insumosTermQ.data.items.length === 0 ? (
+            <div className="p-3 text-[0.7rem] text-graphite">
+              El precosteo no tiene insumos de terminación con cantidad. Edita el precosteo y agrega cantidades por prenda.
+            </div>
+          ) : (
+            <table className="w-full text-[0.7rem]">
+              <thead className="bg-cloud/40 border-b border-border">
+                <tr className="text-left text-[0.55rem] uppercase tracking-widest text-graphite">
+                  <th className="px-3 py-1.5">Insumo</th>
+                  <th className="px-3 py-1.5 text-right">Cantidad a separar</th>
+                </tr>
+              </thead>
+              <tbody>
+                {insumosTermQ.data.items.map((it, i) => (
+                  <tr key={i} className="border-b border-border/40">
+                    <td className="px-3 py-1.5 text-ink-900">{it.item}</td>
+                    <td className="px-3 py-1.5 text-right tabular font-bold text-navy-600">
+                      {it.total_requerido.toLocaleString("es-CO")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
