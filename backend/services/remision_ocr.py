@@ -24,9 +24,10 @@ import anthropic
 # Haiku 4.5 con visión — 3-5× más rápido que Sonnet, precisión suficiente
 # para remisiones de textilera (tablas simples de una página).
 MODELO = "claude-haiku-4-5-20251001"
-MAX_TOKENS = 3000
-MAX_PAGINAS_PDF = 8   # cortamos ahí para no reventar tokens; suficiente para remisiones típicas
-MAX_LADO_PX = 1568    # Anthropic recomienda ≤1568px lado largo para visión (más rápido, sin pérdida)
+MAX_TOKENS = 8000     # cubre remisiones grandes (50+ rollos). El costo extra es marginal
+                       # y evita truncar el JSON en medio → error de parse.
+MAX_PAGINAS_PDF = 8    # cortamos ahí para no reventar tokens; suficiente para remisiones típicas
+MAX_LADO_PX = 1568     # Anthropic recomienda ≤1568px lado largo para visión (más rápido, sin pérdida)
 
 SYSTEM_PROMPT = """\
 Eres un asistente experto en leer remisiones y órdenes de despacho de textileras \
@@ -126,13 +127,36 @@ def _preparar_contenido_imagenes(archivos: list[tuple[bytes, str]]) -> list[dict
 
 
 def _limpiar_json(raw: str) -> str:
+    """Extrae el JSON del texto crudo de Claude.
+    Es tolerante a:
+      - texto antes/después del JSON
+      - fences ```json ... ```
+      - trailing commas
+    """
     raw = raw.strip()
+    # 1) Si viene con fences, quítalos primero
     if raw.startswith("```"):
-        raw = raw.split("```", 2)[1]
-        if raw.startswith("json"):
-            raw = raw[4:].strip()
-        raw = raw.rsplit("```", 1)[0].strip()
+        partes = raw.split("```")
+        # partes = ['', 'json\n{...}', '\n', ...]
+        if len(partes) >= 2:
+            candidato = partes[1]
+            if candidato.lstrip().startswith("json"):
+                candidato = candidato.lstrip()[4:].lstrip()
+            raw = candidato.strip()
+    # 2) Recorta desde el primer { hasta el último } (ignora texto explicativo)
+    i0 = raw.find("{")
+    i1 = raw.rfind("}")
+    if i0 != -1 and i1 != -1 and i1 > i0:
+        raw = raw[i0:i1 + 1]
     return raw
+
+
+def _reparar_json(raw: str) -> str:
+    """Aplica reparaciones típicas al JSON crudo:
+      - quita trailing commas antes de ] o }
+    """
+    import re
+    return re.sub(r",(\s*[\]}])", r"\1", raw)
 
 
 def extraer_remision(archivo_bytes: bytes, mime_type: str) -> dict:
@@ -177,11 +201,32 @@ def extraer_remision(archivo_bytes: bytes, mime_type: str) -> dict:
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": contenido}],
         )
-        raw = resp.content[0].text
-        raw = _limpiar_json(raw)
-        data = json.loads(raw)
-    except json.JSONDecodeError as e:
-        return {"ok": False, "error": f"IA devolvió JSON inválido: {e}"}
+        raw_original = resp.content[0].text
+        stop_reason = getattr(resp, "stop_reason", None)
+        # Si el modelo llegó al max_tokens, el JSON va cortado y no parsea.
+        if stop_reason == "max_tokens":
+            return {"ok": False, "error": (
+                "La remisión es muy grande y la IA se quedó sin tokens. "
+                "Sube una imagen con menos rollos por hoja, o pídeme que suba el límite."
+            )}
+        raw = _limpiar_json(raw_original)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            # Reintenta reparando trailing commas y espacios raros
+            reparado = _reparar_json(raw)
+            try:
+                data = json.loads(reparado)
+            except json.JSONDecodeError as e:
+                # Muestra el snippet cerca del error para diagnóstico
+                pos = getattr(e, "pos", 0) or 0
+                ini = max(0, pos - 80)
+                fin = min(len(reparado), pos + 80)
+                snippet = reparado[ini:fin].replace("\n", " ")
+                return {"ok": False, "error": (
+                    f"IA devolvió JSON inválido en char {pos}. "
+                    f"Contexto: …{snippet}…"
+                )}
     except Exception as e:
         return {"ok": False, "error": f"Error IA: {str(e)[:200]}"}
 
