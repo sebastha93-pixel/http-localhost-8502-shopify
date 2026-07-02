@@ -1176,9 +1176,9 @@ interface RutaCorte {
 
 // Notificar a los admins de operación. Ajustar aquí si cambian.
 const ADMINS_WA = [
-  { nombre: "Karina",    tel: "573000000000" },
-  { nombre: "Sebastián", tel: "573000000000" },
-  { nombre: "Alejandro", tel: "573000000000" },
+  { nombre: "Karina",    tel: "573005710671" },
+  { nombre: "Sebastián", tel: "573122951520" },
+  { nombre: "Alejandro", tel: "573008740405" },
 ];
 
 function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; consecutivo: string }) {
