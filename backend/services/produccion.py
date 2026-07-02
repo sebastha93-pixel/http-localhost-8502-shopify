@@ -1605,7 +1605,7 @@ def actualizar_ruta_lote(ruta_id: str, **campos) -> dict:
         "confeccionista_id", "terminacion_id",
         "precio_confeccion", "precio_terminacion",
         "fecha_entrega_confeccion", "remision_lavanderia_url",
-        "notas",
+        "notas", "nota_confeccionista", "nota_terminacion",
     }
     update = {k: v for k, v in campos.items() if k in permitidos and v is not None}
     if not update:
@@ -1614,7 +1614,19 @@ def actualizar_ruta_lote(ruta_id: str, **campos) -> dict:
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
-    r = sb.table("hoja_ruta_lote").update(update).eq("id", ruta_id).execute()
+    try:
+        r = sb.table("hoja_ruta_lote").update(update).eq("id", ruta_id).execute()
+    except Exception as e:
+        # Compat si la migración de notas aún no corrió
+        msg = str(e)
+        if "nota_confeccionista" in msg or "nota_terminacion" in msg:
+            for c in ("nota_confeccionista", "nota_terminacion"):
+                if c in update:
+                    # Fallback: guarda en notas plana
+                    update.setdefault("notas", update.pop(c))
+            r = sb.table("hoja_ruta_lote").update(update).eq("id", ruta_id).execute()
+        else:
+            raise
     if not r.data:
         raise ValueError("no_encontrada")
     return r.data[0]

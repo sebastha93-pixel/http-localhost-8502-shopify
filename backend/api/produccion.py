@@ -1088,3 +1088,41 @@ def recibir_terminacion_publica(token: str) -> dict:
         return {"ok": True, "ruta": svc.cambiar_etapa_ruta(r["id"], "terminacion_recibida")}
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# ── Notas del confeccionista y del proveedor de terminación (público)
+class NotaBody(BaseModel):
+    nota: str = Field(min_length=1, max_length=2000)
+
+
+@publico.post("/lote/{token}/nota")
+def guardar_nota_lote(token: str, body: NotaBody) -> dict:
+    """El confeccionista deja una nota interna al lote (visible para admin)."""
+    r = svc.obtener_ruta_por_token(token)
+    if not r:
+        raise HTTPException(404, "lote_no_encontrado")
+    try:
+        # Guarda en nota_confeccionista (fallback a notas si la migración no corrió)
+        try:
+            svc.actualizar_ruta_lote(r["id"], nota_confeccionista=body.nota)
+        except Exception:
+            svc.actualizar_ruta_lote(r["id"], notas=body.nota)
+        return {"ok": True}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@publico.post("/terminacion/{token}/nota")
+def guardar_nota_terminacion(token: str, body: NotaBody) -> dict:
+    """El proveedor de terminación deja una nota."""
+    r = svc.obtener_ruta_por_token_terminacion(token)
+    if not r:
+        raise HTTPException(404, "lote_no_encontrado")
+    try:
+        try:
+            svc.actualizar_ruta_lote(r["id"], nota_terminacion=body.nota)
+        except Exception:
+            svc.actualizar_ruta_lote(r["id"], notas=body.nota)
+        return {"ok": True}
+    except ValueError as e:
+        raise HTTPException(400, str(e))

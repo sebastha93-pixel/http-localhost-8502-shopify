@@ -171,8 +171,12 @@ export default function RemisionDetallePage() {
 interface Ruta {
   id: string;
   token_publico: string;
+  token_publico_terminacion?: string;
   precio_confeccion?: number;
+  precio_terminacion?: number;
   fecha_entrega_confeccion?: string;
+  terminacion_id?: string;
+  terminacion?: { nombre?: string; telefono?: string };
   etapa: string;
   aceptado_at?: string;
 }
@@ -325,6 +329,162 @@ function RutaCard({ ordenCorteId, consecutivo, telefono, confeccionistaNombre }:
         </button>
         <a href={linkPublico} target="_blank" rel="noopener noreferrer"
           className="text-[0.65rem] text-navy-600 hover:underline">Ver ficha</a>
+      </div>
+
+      {/* Sub-card TERMINACIÓN — permite asignar proveedor + enviar remisión de terminación */}
+      <TerminacionSubCard ordenCorteId={ordenCorteId} consecutivo={consecutivo} ruta={r} />
+    </div>
+  );
+}
+
+interface Provider {
+  id: string;
+  nombre: string;
+  telefono?: string;
+}
+
+function TerminacionSubCard({ ordenCorteId, consecutivo, ruta }: {
+  ordenCorteId: string;
+  consecutivo: string;
+  ruta: Ruta & { token_publico_terminacion?: string; terminacion_id?: string; precio_terminacion?: number; terminacion?: { nombre?: string; telefono?: string } };
+}) {
+  const qc = useQueryClient();
+  const [termId, setTermId] = useState("");
+  const [precio, setPrecio] = useState("");
+  const [copiado, setCopiado] = useState(false);
+
+  const provsQ = useQuery<{ confeccionistas: Provider[] }>({
+    queryKey: ["confeccionistas", "terminacion"],
+    queryFn: () => api.get("/api/produccion/confeccionistas?tipo=terminacion&incluir_inactivos=false"),
+  });
+
+  const insumosQ = useQuery<{ items: Array<{item: string; total_requerido: number}>; cantidad_base?: number }>({
+    queryKey: ["insumos-terminacion", ordenCorteId],
+    queryFn: () => api.get(`/api/produccion/corte/${ordenCorteId}/insumos-requeridos?tipo=terminacion`),
+    enabled: !!ordenCorteId,
+  });
+
+  const guardar = useMutation({
+    mutationFn: () => api.patch(`/api/produccion/rutas/${ruta.id}`, {
+      terminacion_id: termId || null,
+      precio_terminacion: precio ? parseFloat(precio) : null,
+    }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["ruta", ordenCorteId] }),
+  });
+
+  const provs = provsQ.data?.confeccionistas || [];
+  const provSel = provs.find((p) => p.id === (termId || ruta.terminacion_id));
+
+  const linkTerm = ruta.token_publico_terminacion && typeof window !== "undefined"
+    ? `${window.location.origin}/terminacion/${ruta.token_publico_terminacion}`
+    : "";
+
+  const mensajeWA = `Hola${provSel ? " " + provSel.nombre : ""}, te comparto la remisión de terminación del lote *${consecutivo}* de MALE'DENIM. Ahí ves la ficha técnica, cantidad e insumos:\n\n${linkTerm}`;
+  const telClean = (provSel?.telefono || ruta.terminacion?.telefono || "").replace(/\D/g, "");
+  const telFinal = telClean.startsWith("57") ? telClean : telClean ? `57${telClean}` : "";
+  const waUrl = telFinal
+    ? `https://wa.me/${telFinal}?text=${encodeURIComponent(mensajeWA)}`
+    : `https://wa.me/?text=${encodeURIComponent(mensajeWA)}`;
+
+  async function copiarLink() {
+    try {
+      await navigator.clipboard.writeText(linkTerm);
+      setCopiado(true);
+      setTimeout(() => setCopiado(false), 2000);
+    } catch { /* noop */ }
+  }
+
+  return (
+    <div className="mt-3 rounded-sm border border-border bg-cloud/20 p-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-[0.6rem] uppercase tracking-widest text-graphite font-bold">
+          Terminación (proveedor terminación)
+        </p>
+        <p className="text-[0.6rem] text-graphite">Remisión aparte de la de confección</p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <div>
+          <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite">Proveedor terminación</label>
+          <select value={termId || ruta.terminacion_id || ""} onChange={(e) => setTermId(e.target.value)}
+            className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-xs">
+            <option value="">Selecciona…</option>
+            {provs.map((p) => (
+              <option key={p.id} value={p.id}>{p.nombre}</option>
+            ))}
+          </select>
+          {provs.length === 0 && !provsQ.isLoading && (
+            <p className="mt-1 text-[0.6rem] text-terracotta">
+              No hay proveedores de terminación. Créalos en /produccion/confeccionistas.
+            </p>
+          )}
+        </div>
+        <div>
+          <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite">Precio terminación</label>
+          <input value={precio} onChange={(e) => setPrecio(e.target.value)}
+            inputMode="decimal" placeholder={ruta.precio_terminacion != null ? String(ruta.precio_terminacion) : "0"}
+            className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-xs text-right tabular" />
+        </div>
+      </div>
+
+      {/* Insumos a separar */}
+      <div className="rounded-sm border border-navy-600/30 bg-navy-600/[0.03]">
+        <div className="px-3 py-2 border-b border-navy-600/20 flex items-center justify-between">
+          <p className="text-[0.6rem] uppercase tracking-widest text-navy-600 font-bold">
+            Separar estos insumos (terminación)
+          </p>
+          {insumosQ.data?.cantidad_base != null && (
+            <p className="text-[0.6rem] text-graphite tabular">Base: {insumosQ.data.cantidad_base} prendas</p>
+          )}
+        </div>
+        {insumosQ.isLoading ? (
+          <div className="p-3 text-[0.7rem] text-graphite">Calculando…</div>
+        ) : !insumosQ.data || insumosQ.data.items.length === 0 ? (
+          <div className="p-3 text-[0.7rem] text-graphite">
+            El precosteo no tiene insumos de terminación con cantidad.
+          </div>
+        ) : (
+          <table className="w-full text-[0.7rem]">
+            <thead className="bg-cloud/40 border-b border-border">
+              <tr className="text-left text-[0.55rem] uppercase tracking-widest text-graphite">
+                <th className="px-3 py-1.5">Insumo</th>
+                <th className="px-3 py-1.5 text-right">Cantidad a separar</th>
+              </tr>
+            </thead>
+            <tbody>
+              {insumosQ.data.items.map((it, i) => (
+                <tr key={i} className="border-b border-border/40">
+                  <td className="px-3 py-1.5 text-ink-900">{it.item}</td>
+                  <td className="px-3 py-1.5 text-right tabular font-bold text-navy-600">
+                    {it.total_requerido.toLocaleString("es-CO")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button onClick={() => guardar.mutate()} disabled={guardar.isPending || (!termId && !precio)}
+          className="inline-flex items-center gap-1 rounded-sm border border-border bg-cloud px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud/80 disabled:opacity-40">
+          {guardar.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+          Guardar
+        </button>
+        <a href={waUrl} target="_blank" rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 rounded-sm bg-[#25D366] px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-white hover:opacity-90">
+          <MessageCircle className="h-3 w-3" /> WhatsApp a terminación
+        </a>
+        {linkTerm && (
+          <>
+            <button type="button" onClick={copiarLink}
+              className="inline-flex items-center gap-1 rounded-sm border border-border bg-white px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-graphite hover:bg-cloud">
+              <Copy className="h-3 w-3" /> {copiado ? "Copiado" : "Copiar link"}
+            </button>
+            <a href={linkTerm} target="_blank" rel="noopener noreferrer"
+              className="text-[0.65rem] text-navy-600 hover:underline">Ver ficha terminación</a>
+          </>
+        )}
       </div>
     </div>
   );

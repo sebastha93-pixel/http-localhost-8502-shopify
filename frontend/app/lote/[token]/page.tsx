@@ -51,6 +51,22 @@ export default function LotePublicoPage() {
     enabled: !!token,
   });
 
+  const [nota, setNota] = useState("");
+  const [notaMsg, setNotaMsg] = useState("");
+  const guardarNota = useMutation({
+    mutationFn: () => fetchJSON(`${API_BASE}/api/publico/lote/${token}/nota`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nota: nota.trim() }),
+    }),
+    onSuccess: () => {
+      setNotaMsg("Nota enviada.");
+      setNota("");
+      setTimeout(() => setNotaMsg(""), 3000);
+    },
+    onError: (e: Error) => setErr(e.message),
+  });
+
   const aceptar = useMutation({
     mutationFn: () => fetchJSON(`${API_BASE}/api/publico/lote/${token}/aceptar`, {
       method: "POST",
@@ -196,6 +212,23 @@ export default function LotePublicoPage() {
             <AlertCircle className="h-3.5 w-3.5" /> {err}
           </div>
         )}
+
+        {/* Nota */}
+        <div className="rounded-sm border border-border bg-white p-4 space-y-2">
+          <p className="text-[0.6rem] uppercase tracking-widest text-graphite">Nota para MALE&apos;DENIM (opcional)</p>
+          <textarea value={nota} onChange={(e) => setNota(e.target.value)}
+            rows={3} maxLength={2000}
+            placeholder="Ej. faltó un cierre, cambio de fecha, dudas del lote…"
+            className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm" />
+          <div className="flex items-center justify-between">
+            {notaMsg && <p className="text-xs text-teal">{notaMsg}</p>}
+            <button onClick={() => guardarNota.mutate()} disabled={guardarNota.isPending || !nota.trim()}
+              className="ml-auto inline-flex items-center gap-1 rounded-sm border border-border bg-cloud px-3 py-1.5 text-xs font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud/80 disabled:opacity-40">
+              {guardarNota.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Enviar nota
+            </button>
+          </div>
+        </div>
 
         {/* Botón aceptar */}
         {!yaAceptado ? (
