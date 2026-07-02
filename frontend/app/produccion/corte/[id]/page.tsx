@@ -205,7 +205,9 @@ export default function DetalleOrdenCortePage() {
   const insumosQ = useQuery<InsumosResp>({
     queryKey: ["produccion", "corte", id, "insumos-requeridos"],
     queryFn: () => api.get(`/api/produccion/corte/${id}/insumos-requeridos`),
-    enabled: !!id,
+    // Solo trae los insumos cuando el corte YA está cerrado (unidades reales).
+    // Antes del cierre no tiene sentido — la cantidad real solo se conoce al cierre.
+    enabled: !!id && q.data?.estado === "cortada",
   });
 
   // Auto-asignar rollos por tono (evita mezclar colores en el trazo).
@@ -447,19 +449,17 @@ export default function DetalleOrdenCortePage() {
         </Card>
       )}
 
-      {/* Insumos requeridos — cálculo automático desde el precosteo */}
+      {/* Insumos requeridos — cálculo automático desde el precosteo.
+          Solo aparece cuando el informe está CERRADO (unidades reales conocidas).
+          Sirve para adelantar la remisión de insumos al confeccionista. */}
+      {cerrada && (
       <Card>
         <CardContent className="p-0">
           <div className="px-4 py-3 border-b border-border flex items-center justify-between">
             <p className="section-label">Insumos requeridos (auto desde precosteo)</p>
             {insumosQ.data?.cantidad_base != null && (
               <p className="text-[0.65rem] text-graphite">
-                Base: {insumosQ.data.cantidad_base} unidades{" "}
-                <span className="text-graphite/60">
-                  ({insumosQ.data.origen_cantidad === "unidades_cortadas" ? "cortadas" :
-                    insumosQ.data.origen_cantidad === "cantidad_programada" ? "programadas" :
-                    "suma curva"})
-                </span>
+                Base: {insumosQ.data.cantidad_base} unidades cortadas
               </p>
             )}
           </div>
@@ -467,7 +467,7 @@ export default function DetalleOrdenCortePage() {
             <div className="p-6 text-xs text-graphite">Calculando insumos…</div>
           ) : !insumosQ.data || insumosQ.data.items.length === 0 ? (
             <div className="p-6 text-xs text-graphite">
-              El precosteo no tiene insumos con cantidad definida. Edita el precosteo y agrega cantidades por prenda para que el sistema calcule automáticamente.
+              El precosteo no tiene insumos con cantidad definida. Edita el precosteo y agrega cantidades por prenda (para 1 unidad) para que el sistema calcule automáticamente.
             </div>
           ) : (
             <>
@@ -518,6 +518,7 @@ export default function DetalleOrdenCortePage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* Auto-asignar por tono — mismo color en todo el trazo */}
       {!cerrada && telaRef && (
