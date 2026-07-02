@@ -810,3 +810,25 @@ def marcar_recogida(
         return {"ok": True, "remision": svc.marcar_remision_recogida(rem_id)}
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# INSUMOS REQUERIDOS POR ORDEN DE CORTE (auto desde precosteo)
+# ═══════════════════════════════════════════════════════════════════════
+
+@router.get("/corte/{oc_id}/insumos-requeridos")
+def insumos_requeridos_corte(
+    oc_id: str,
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
+) -> dict:
+    """Calcula los insumos que el confeccionista necesita para este corte:
+    item.cantidad (del precosteo) × cantidad_a_cortar (de la OC).
+    Solo considera categorías INSUMO CONFECCION e INSUMO TERMINACION.
+    """
+    try:
+        return svc.calcular_insumos_requeridos_corte(oc_id)
+    except ValueError as e:
+        raise HTTPException(404 if str(e) == "orden_no_encontrada" else 400, str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"insumos_requeridos: {str(e)[:200]}")

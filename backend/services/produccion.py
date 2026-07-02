@@ -1362,3 +1362,95 @@ def marcar_remision_recogida(rem_id: str) -> dict:
     if not r:
         raise ValueError("no_encontrado")
     return obtener_remision(rem_id)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# INSUMOS REQUERIDOS POR ORDEN DE CORTE (auto desde precosteo)
+# ═══════════════════════════════════════════════════════════════════════
+
+# Qué categorías del precosteo se consideran "insumos que van con el corte"
+CATEGORIAS_INSUMOS_CORTE = ("INSUMO CONFECCION", "INSUMO TERMINACION")
+
+
+def calcular_insumos_requeridos_corte(oc_id: str) -> dict:
+    """Dado un corte, calcula los insumos que se necesitan multiplicando la
+    cantidad de cada insumo del precosteo por la cantidad de prendas a cortar.
+
+    Regla:
+      total_requerido = item.cantidad (del precosteo, por prenda)
+                        × cantidad_a_cortar (de la OC)
+
+    Cantidad base:
+      - Si la orden ya está cerrada → usa la suma real cortada por talla.
+      - Si sigue en proceso → usa cantidad_programada (o suma de la curva).
+    """
+    oc = obtener_orden_corte(oc_id)
+    if not oc:
+        raise ValueError("orden_no_encontrada")
+
+    # Cantidad base para el cálculo
+    if oc.get("estado") == "cortada":
+        unidades = oc.get("unidades_cortadas") or {}
+        cantidad_base = sum(int(v or 0) for v in unidades.values())
+        origen = "unidades_cortadas"
+    else:
+        cantidad_base = int(oc.get("cantidad_programada") or 0)
+        if cantidad_base <= 0:
+            curva = oc.get("curva_trazo") or {}
+            cantidad_base = sum(int(v or 0) for v in curva.values())
+            origen = "suma_curva"
+        else:
+            origen = "cantidad_programada"
+
+    ref = oc.get("referencia") or {}
+    ref_id = oc.get("referencia_id")
+    if not ref_id or cantidad_base <= 0:
+        return {
+            "cantidad_base": cantidad_base,
+            "origen_cantidad": origen,
+            "referencia": ref.get("codigo_referencia"),
+            "items": [],
+            "total_costo": 0,
+        }
+
+    p = obtener_precosteo(ref_id)
+    if not p:
+        return {
+            "cantidad_base": cantidad_base,
+            "origen_cantidad": origen,
+            "referencia": ref.get("codigo_referencia"),
+            "items": [],
+            "total_costo": 0,
+        }
+
+    items = []
+    total_costo = 0.0
+    for it in (p.get("items") or []):
+        cat = (it.get("categoria") or "").upper().strip()
+        if cat not in CATEGORIAS_INSUMOS_CORTE:
+            continue
+        base_por_prenda = float(it.get("cantidad") or 0)
+        if base_por_prenda <= 0:
+            continue
+        total_req = round(base_por_prenda * cantidad_base, 3)
+        vu = float(it.get("valor_unitario") or 0)
+        costo = round(vu * total_req, 2)
+        total_costo += costo
+        items.append({
+            "categoria":           cat,
+            "item":                it.get("item"),
+            "cantidad_por_prenda": base_por_prenda,
+            "total_requerido":     total_req,
+            "valor_unitario":      vu,
+            "costo_total":         costo,
+        })
+
+    return {
+        "orden_corte":     oc.get("consecutivo"),
+        "referencia":      ref.get("codigo_referencia"),
+        "nombre":          ref.get("nombre"),
+        "cantidad_base":   cantidad_base,
+        "origen_cantidad": origen,
+        "items":           items,
+        "total_costo":     round(total_costo, 2),
+    }

@@ -184,6 +184,30 @@ export default function DetalleOrdenCortePage() {
     onError: (e: Error) => setErr(e.message),
   });
 
+  // Insumos requeridos: item.cantidad × cantidad_a_cortar por cada insumo del precosteo
+  interface InsumoReq {
+    categoria: string;
+    item: string;
+    cantidad_por_prenda: number;
+    total_requerido: number;
+    valor_unitario: number;
+    costo_total: number;
+  }
+  interface InsumosResp {
+    orden_corte?: string;
+    referencia?: string;
+    nombre?: string;
+    cantidad_base?: number;
+    origen_cantidad?: string;
+    items: InsumoReq[];
+    total_costo?: number;
+  }
+  const insumosQ = useQuery<InsumosResp>({
+    queryKey: ["produccion", "corte", id, "insumos-requeridos"],
+    queryFn: () => api.get(`/api/produccion/corte/${id}/insumos-requeridos`),
+    enabled: !!id,
+  });
+
   // Auto-asignar rollos por tono (evita mezclar colores en el trazo).
   const [tonoAuto, setTonoAuto] = useState("");
   const autoAsignar = useMutation({
@@ -422,6 +446,78 @@ export default function DetalleOrdenCortePage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Insumos requeridos — cálculo automático desde el precosteo */}
+      <Card>
+        <CardContent className="p-0">
+          <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+            <p className="section-label">Insumos requeridos (auto desde precosteo)</p>
+            {insumosQ.data?.cantidad_base != null && (
+              <p className="text-[0.65rem] text-graphite">
+                Base: {insumosQ.data.cantidad_base} unidades{" "}
+                <span className="text-graphite/60">
+                  ({insumosQ.data.origen_cantidad === "unidades_cortadas" ? "cortadas" :
+                    insumosQ.data.origen_cantidad === "cantidad_programada" ? "programadas" :
+                    "suma curva"})
+                </span>
+              </p>
+            )}
+          </div>
+          {insumosQ.isLoading ? (
+            <div className="p-6 text-xs text-graphite">Calculando insumos…</div>
+          ) : !insumosQ.data || insumosQ.data.items.length === 0 ? (
+            <div className="p-6 text-xs text-graphite">
+              El precosteo no tiene insumos con cantidad definida. Edita el precosteo y agrega cantidades por prenda para que el sistema calcule automáticamente.
+            </div>
+          ) : (
+            <>
+              <table className="w-full text-xs">
+                <thead className="bg-cloud/60 border-b border-border">
+                  <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                    <th className="px-4 py-2">Categoría</th>
+                    <th className="px-4 py-2">Insumo</th>
+                    <th className="px-4 py-2 text-right">×/prenda</th>
+                    <th className="px-4 py-2 text-right">× {insumosQ.data.cantidad_base}</th>
+                    <th className="px-4 py-2 text-right">Total requerido</th>
+                    <th className="px-4 py-2 text-right">Costo total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {insumosQ.data.items.map((it, i) => (
+                    <tr key={i} className="border-b border-border/40 hover:bg-cloud/30">
+                      <td className="px-4 py-2 text-graphite text-[0.6rem] uppercase tracking-widest">{it.categoria}</td>
+                      <td className="px-4 py-2 text-ink-900 font-medium">{it.item}</td>
+                      <td className="px-4 py-2 text-right tabular text-graphite">{it.cantidad_por_prenda}</td>
+                      <td className="px-4 py-2 text-right tabular text-graphite">{insumosQ.data?.cantidad_base}</td>
+                      <td className="px-4 py-2 text-right tabular font-semibold text-navy-600">
+                        {it.total_requerido.toLocaleString("es-CO")}
+                      </td>
+                      <td className="px-4 py-2 text-right tabular">
+                        {it.costo_total > 0
+                          ? `$${it.costo_total.toLocaleString("es-CO", { maximumFractionDigits: 0 })}`
+                          : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                {(insumosQ.data.total_costo || 0) > 0 && (
+                  <tfoot>
+                    <tr className="bg-cloud/40 border-t-2 border-border">
+                      <td colSpan={5} className="px-4 py-2 text-right text-[0.6rem] uppercase tracking-widest text-graphite">Costo total insumos</td>
+                      <td className="px-4 py-2 text-right tabular font-bold text-ink-900">
+                        ${(insumosQ.data.total_costo || 0).toLocaleString("es-CO", { maximumFractionDigits: 0 })}
+                      </td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+              <div className="px-4 py-3 border-t border-border text-[0.65rem] text-graphite">
+                Lista para la remisión al confeccionista. El conteo físico solo debe verificar estos totales.
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Auto-asignar por tono — mismo color en todo el trazo */}
       {!cerrada && telaRef && (
