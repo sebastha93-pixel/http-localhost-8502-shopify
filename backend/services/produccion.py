@@ -1279,11 +1279,21 @@ def actualizar_confeccionista(cid: str, **campos) -> dict:
         raise ValueError("nada_que_actualizar")
     if "nombre" in update:
         update["nombre"] = str(update["nombre"]).strip()
+    if "tipo" in update and update["tipo"] not in ("confeccion", "terminacion"):
+        raise ValueError("tipo_invalido")
     update["updated_at"] = _now_iso()
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
-    r = sb.table("confeccionistas").update(update).eq("id", cid).execute()
+    try:
+        r = sb.table("confeccionistas").update(update).eq("id", cid).execute()
+    except Exception as e:
+        # Compat si la columna `tipo` aún no existe en la DB
+        if "tipo" in str(e) and "tipo" in update:
+            update.pop("tipo", None)
+            r = sb.table("confeccionistas").update(update).eq("id", cid).execute()
+        else:
+            raise
     if not r.data:
         raise ValueError("no_encontrado")
     return r.data[0]

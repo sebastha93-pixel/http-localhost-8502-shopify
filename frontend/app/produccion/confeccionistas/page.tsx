@@ -148,13 +148,16 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
   const [direccion, setDireccion] = useState(c.direccion || "");
   const [tipo, setTipo] = useState(c.tipo || "confeccion");
 
+  const [errEdit, setErrEdit] = useState("");
   const mut = useMutation({
     mutationFn: (body: Record<string, unknown>) =>
       api.patch(`/api/produccion/confeccionistas/${c.id}`, body),
     onSuccess: () => {
       setEditando(false);
+      setErrEdit("");
       qc.invalidateQueries({ queryKey: ["produccion", "confeccionistas"] });
     },
+    onError: (e: Error) => setErrEdit(e.message || "Error al guardar"),
   });
 
   if (editando) {
@@ -188,6 +191,11 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
           <button onClick={() => setEditando(false)} className="text-graphite hover:text-ink-900" title="Cancelar">
             <X className="h-3.5 w-3.5" />
           </button>
+          {errEdit && (
+            <div className="mt-1 text-[0.6rem] text-terracotta break-all text-right">
+              {errEdit}
+            </div>
+          )}
         </td>
       </tr>
     );
