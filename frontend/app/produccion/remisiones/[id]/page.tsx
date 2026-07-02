@@ -3,6 +3,7 @@
 /**
  * Detalle de remisión a confeccionista.
  */
+import { useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -10,7 +11,7 @@ import { api } from "@/lib/api";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Truck, Loader2 } from "lucide-react";
+import { ArrowLeft, Truck, Loader2, MessageCircle, Copy } from "lucide-react";
 
 interface Item {
   id: string;
@@ -144,7 +145,137 @@ export default function RemisionDetallePage() {
           </button>
         </div>
       )}
+
+      {/* Envío por WhatsApp por cada lote */}
+      <Card>
+        <CardContent className="p-5 space-y-3">
+          <p className="section-label">Ficha para el confeccionista</p>
+          <p className="text-xs text-graphite">
+            Para cada lote hay un link público con la ficha técnica, precio, cantidad e insumos.
+            Configura el precio + fecha entrega y envía el link por WhatsApp.
+          </p>
+          <div className="space-y-3">
+            {(rem.items || []).map((it) => (
+              <RutaCard key={it.id} ordenCorteId={it.orden_corte_id}
+                consecutivo={it.orden_corte?.consecutivo || ""}
+                telefono={rem.confeccionista?.telefono}
+                confeccionistaNombre={rem.confeccionista?.nombre} />
+            ))}
+          </div>
+        </CardContent>
+      </Card>
     </PageShell>
+  );
+}
+
+interface Ruta {
+  id: string;
+  token_publico: string;
+  precio_confeccion?: number;
+  fecha_entrega_confeccion?: string;
+  etapa: string;
+  aceptado_at?: string;
+}
+
+function RutaCard({ ordenCorteId, consecutivo, telefono, confeccionistaNombre }: {
+  ordenCorteId: string;
+  consecutivo: string;
+  telefono?: string;
+  confeccionistaNombre?: string;
+}) {
+  const qc = useQueryClient();
+  const [precio, setPrecio] = useState("");
+  const [fecha, setFecha] = useState("");
+  const [copiado, setCopiado] = useState(false);
+
+  const q = useQuery<Ruta>({
+    queryKey: ["ruta", ordenCorteId],
+    queryFn: () => api.get(`/api/produccion/rutas/por-corte/${ordenCorteId}`),
+    enabled: !!ordenCorteId,
+    retry: false,
+  });
+
+  const guardar = useMutation({
+    mutationFn: () => {
+      if (!q.data) return Promise.reject(new Error("ruta no cargada"));
+      return api.patch(`/api/produccion/rutas/${q.data.id}`, {
+        precio_confeccion: precio ? parseFloat(precio) : null,
+        fecha_entrega_confeccion: fecha || null,
+      });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["ruta", ordenCorteId] }),
+  });
+
+  if (q.isLoading) {
+    return <div className="rounded-sm border border-border bg-cloud/20 p-3 text-xs text-graphite">Cargando ficha…</div>;
+  }
+  if (!q.data) {
+    return (
+      <div className="rounded-sm border border-terracotta/40 bg-terracotta/5 p-3 text-xs text-terracotta">
+        Este lote no tiene ficha creada aún. Corre la migración de hoja_ruta_lote en Supabase y refresca.
+      </div>
+    );
+  }
+
+  const r = q.data;
+  const publicoBase = typeof window !== "undefined" ? window.location.origin : "";
+  const linkPublico = `${publicoBase}/lote/${r.token_publico}`;
+
+  const mensajeWA = `Hola${confeccionistaNombre ? " " + confeccionistaNombre : ""}, te comparto la ficha del lote *${consecutivo}* de MALE'DENIM. Ahí ves referencia, cantidad, insumos y valor acordado. Cuando abras confirma con "Aceptar lote":\n\n${linkPublico}`;
+  const telClean = (telefono || "").replace(/\D/g, "");
+  const telFinal = telClean.startsWith("57") ? telClean : telClean ? `57${telClean}` : "";
+  const waUrl = telFinal
+    ? `https://wa.me/${telFinal}?text=${encodeURIComponent(mensajeWA)}`
+    : `https://wa.me/?text=${encodeURIComponent(mensajeWA)}`;
+
+  async function copiarLink() {
+    try {
+      await navigator.clipboard.writeText(linkPublico);
+      setCopiado(true);
+      setTimeout(() => setCopiado(false), 2000);
+    } catch { /* noop */ }
+  }
+
+  return (
+    <div className="rounded-sm border border-border bg-white p-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="font-semibold text-ink-900 tabular text-sm">{consecutivo}</p>
+        <Badge tone={r.etapa === "asignado" ? "pendiente" : "normal"}>{r.etapa}</Badge>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <div>
+          <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite">Precio confección</label>
+          <input value={precio} onChange={(e) => setPrecio(e.target.value)}
+            inputMode="decimal" placeholder={r.precio_confeccion != null ? String(r.precio_confeccion) : "0"}
+            className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-xs text-right tabular" />
+        </div>
+        <div>
+          <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite">Fecha entrega</label>
+          <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)}
+            placeholder={r.fecha_entrega_confeccion || ""}
+            className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-xs" />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button onClick={() => guardar.mutate()} disabled={guardar.isPending || (!precio && !fecha)}
+          className="inline-flex items-center gap-1 rounded-sm border border-border bg-cloud px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud/80 disabled:opacity-40">
+          {guardar.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+          Guardar
+        </button>
+        <a href={waUrl} target="_blank" rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 rounded-sm bg-[#25D366] px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-white hover:opacity-90">
+          <MessageCircle className="h-3 w-3" /> Enviar por WhatsApp
+        </a>
+        <button type="button" onClick={copiarLink}
+          className="inline-flex items-center gap-1 rounded-sm border border-border bg-white px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-graphite hover:bg-cloud">
+          <Copy className="h-3 w-3" /> {copiado ? "Copiado" : "Copiar link"}
+        </button>
+        <a href={linkPublico} target="_blank" rel="noopener noreferrer"
+          className="text-[0.65rem] text-navy-600 hover:underline">Ver ficha</a>
+      </div>
+    </div>
   );
 }
 

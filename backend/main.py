@@ -216,6 +216,7 @@ app.include_router(revenue.router)
 app.include_router(meta.router)
 app.include_router(cod_acciones.router)
 app.include_router(produccion.router)
+app.include_router(produccion.publico)  # rutas públicas /api/publico/lote/:token
 
 
 @app.get("/", include_in_schema=False)

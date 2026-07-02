@@ -832,3 +832,171 @@ def insumos_requeridos_corte(
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(500, f"insumos_requeridos: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# HOJA DE RUTA · admin (autenticado)
+# ═══════════════════════════════════════════════════════════════════════
+
+class CrearRutaBody(BaseModel):
+    orden_corte_id:           str
+    confeccionista_id:        str
+    precio_confeccion:        Optional[float] = None
+    fecha_entrega_confeccion: Optional[str] = None
+    remision_id:              Optional[str] = None
+
+
+class ActualizarRutaBody(BaseModel):
+    confeccionista_id:         Optional[str] = None
+    terminacion_id:            Optional[str] = None
+    precio_confeccion:         Optional[float] = None
+    precio_terminacion:        Optional[float] = None
+    fecha_entrega_confeccion:  Optional[str] = None
+    remision_lavanderia_url:   Optional[str] = None
+    notas:                     Optional[str] = None
+
+
+class CambiarEtapaBody(BaseModel):
+    etapa: str
+
+
+@router.get("/rutas")
+def listar_rutas(
+    etapa: Optional[str] = None,
+    confeccionista_id: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=500),
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
+) -> dict:
+    return {"rutas": svc.listar_rutas(
+        etapa=etapa, confeccionista_id=confeccionista_id, limit=limit
+    )}
+
+
+@router.post("/rutas")
+def crear_ruta(
+    body: CrearRutaBody,
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    try:
+        return {"ok": True, "ruta": svc.crear_ruta_lote(
+            orden_corte_id=body.orden_corte_id,
+            confeccionista_id=body.confeccionista_id,
+            precio_confeccion=body.precio_confeccion,
+            fecha_entrega_confeccion=body.fecha_entrega_confeccion,
+            remision_id=body.remision_id,
+            created_by=user.email,
+        )}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"crear_ruta: {str(e)[:200]}")
+
+
+@router.get("/rutas/por-corte/{oc_id}")
+def ruta_por_corte(
+    oc_id: str,
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
+) -> dict:
+    r = svc.obtener_ruta_por_corte(oc_id)
+    if not r:
+        raise HTTPException(404, "no_encontrada")
+    return r
+
+
+@router.patch("/rutas/{ruta_id}")
+def actualizar_ruta(
+    ruta_id: str,
+    body: ActualizarRutaBody,
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    try:
+        campos = body.model_dump(exclude_unset=True)
+        return {"ok": True, "ruta": svc.actualizar_ruta_lote(ruta_id, **campos)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/rutas/{ruta_id}/etapa")
+def cambiar_etapa(
+    ruta_id: str,
+    body: CambiarEtapaBody,
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    try:
+        return {"ok": True, "ruta": svc.cambiar_etapa_ruta(ruta_id, body.etapa)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# HOJA DE RUTA · público (sin auth) — para el link del confeccionista
+# ═══════════════════════════════════════════════════════════════════════
+
+publico = APIRouter(prefix="/api/publico", tags=["publico"])
+
+
+@publico.get("/lote/{token}")
+def lote_publico(token: str) -> dict:
+    """Vista pública del lote — sin autenticación. Devuelve solo lo que el
+    confeccionista debe saber:
+      - Referencia + tela + color + foto
+      - Curva de tallas + total unidades
+      - Precio acordado por confección
+      - Insumos requeridos
+    """
+    r = svc.obtener_ruta_por_token(token)
+    if not r:
+        raise HTTPException(404, "lote_no_encontrado")
+
+    oc = r.get("orden_corte") or {}
+    ref = oc.get("referencia") or {}
+    conf = r.get("confeccionista") or {}
+    total_unidades = 0
+    if oc.get("unidades_cortadas"):
+        total_unidades = sum(int(v or 0) for v in (oc.get("unidades_cortadas") or {}).values())
+    if total_unidades == 0:
+        total_unidades = int(oc.get("cantidad_programada") or 0)
+
+    # Insumos requeridos — reutiliza el cálculo del corte
+    insumos: list[dict] = []
+    try:
+        oc_full = svc.calcular_insumos_requeridos_corte(r["orden_corte_id"])
+        insumos = oc_full.get("items") or []
+    except Exception:
+        insumos = []
+
+    return {
+        "consecutivo":               oc.get("consecutivo"),
+        "referencia_codigo":         ref.get("codigo_referencia"),
+        "referencia_nombre":         ref.get("nombre"),
+        "tela":                      ref.get("tela"),
+        "color":                     ref.get("color"),
+        "foto_url":                  ref.get("foto_url"),
+        "referencia_lote":           oc.get("referencia_lote"),
+        "curva":                     oc.get("curva_trazo"),
+        "unidades_cortadas":         oc.get("unidades_cortadas"),
+        "total_unidades":            total_unidades,
+        "precio_confeccion":         r.get("precio_confeccion"),
+        "fecha_entrega":             r.get("fecha_entrega_confeccion") or oc.get("fecha_entrega"),
+        "confeccionista_nombre":     conf.get("nombre"),
+        "etapa":                     r.get("etapa"),
+        "aceptado_at":               r.get("aceptado_at"),
+        "insumos":                   insumos,
+    }
+
+
+@publico.post("/lote/{token}/aceptar")
+def aceptar_lote_publico(token: str) -> dict:
+    """Endpoint público. El confeccionista clickea el botón desde el link.
+    Solo permite pasar de 'asignado' → 'aceptado'.
+    """
+    r = svc.obtener_ruta_por_token(token)
+    if not r:
+        raise HTTPException(404, "lote_no_encontrado")
+    if r.get("etapa") != "asignado":
+        raise HTTPException(400, f"ya_aceptado_o_en_progreso:{r.get('etapa')}")
+    try:
+        return {"ok": True, "ruta": svc.cambiar_etapa_ruta(r["id"], "aceptado")}
+    except ValueError as e:
+        raise HTTPException(400, str(e))

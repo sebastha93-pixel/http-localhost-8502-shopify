@@ -1314,6 +1314,21 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
     ]
     sb.table("remision_items").insert(items_rows).execute()
 
+    # Auto-crear hoja de ruta por cada orden. Precio y fecha se llenan después.
+    for oc_id in orden_corte_ids:
+        try:
+            existente = obtener_ruta_por_corte(oc_id)
+            if existente:
+                continue
+            crear_ruta_lote(
+                orden_corte_id=oc_id,
+                confeccionista_id=confeccionista_id,
+                remision_id=rem["id"],
+                created_by=created_by,
+            )
+        except Exception as e:
+            log.warning(f"[remision] no se pudo crear ruta para {oc_id}: {e}")
+
     return obtener_remision(rem["id"])
 
 
@@ -1454,3 +1469,156 @@ def calcular_insumos_requeridos_corte(oc_id: str) -> dict:
         "items":           items,
         "total_costo":     round(total_costo, 2),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# HOJA DE RUTA · confección → gap lavandería → terminación → despacho
+# ═══════════════════════════════════════════════════════════════════════
+
+# Estados válidos ordenados
+ETAPAS_RUTA = (
+    "asignado",              # link enviado, confeccionista aún no acepta
+    "aceptado",              # confeccionista aceptó
+    "en_confeccion",         # trabajando (opcional; puede saltar directo a lavandería)
+    "lavanderia",            # confeccionista terminó, envió a lavandería
+    "terminacion_recibida",  # lavandería entregó a terminación
+    "terminacion_terminada", # terminación terminó
+    "despachado",            # despacho hecho
+)
+
+
+def _ruta_orden_map():
+    return {e: i for i, e in enumerate(ETAPAS_RUTA)}
+
+
+def obtener_ruta_por_corte(oc_id: str) -> Optional[dict]:
+    sb = _sb()
+    if sb is None:
+        return None
+    r = (sb.table("hoja_ruta_lote")
+           .select("*,confeccionista:confeccionista_id(nombre,telefono),"
+                   "terminacion:terminacion_id(nombre,telefono),"
+                   "orden_corte:orden_corte_id(consecutivo,curva_trazo,unidades_cortadas,"
+                   "cantidad_programada,referencia_lote,"
+                   "referencia:referencia_id(codigo_referencia,nombre,tela,color,foto_url))")
+           .eq("orden_corte_id", oc_id).limit(1).execute()).data
+    return r[0] if r else None
+
+
+def obtener_ruta_por_token(token: str) -> Optional[dict]:
+    sb = _sb()
+    if sb is None:
+        return None
+    r = (sb.table("hoja_ruta_lote")
+           .select("*,confeccionista:confeccionista_id(nombre),"
+                   "orden_corte:orden_corte_id(consecutivo,curva_trazo,unidades_cortadas,"
+                   "cantidad_programada,referencia_lote,fecha_entrega,"
+                   "referencia:referencia_id(codigo_referencia,nombre,tela,color,foto_url))")
+           .eq("token_publico", token).limit(1).execute()).data
+    return r[0] if r else None
+
+
+def crear_ruta_lote(*, orden_corte_id: str, confeccionista_id: str,
+                     precio_confeccion: Optional[float] = None,
+                     fecha_entrega_confeccion: Optional[str] = None,
+                     remision_id: Optional[str] = None,
+                     created_by: str) -> dict:
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    # Verificar que la OC exista y esté cortada
+    oc = obtener_orden_corte(orden_corte_id)
+    if not oc:
+        raise ValueError("orden_no_encontrada")
+    if oc.get("estado") != "cortada":
+        raise ValueError("orden_no_cortada")
+    # Si ya existe hoja, devolverla (una sola por OC)
+    existente = obtener_ruta_por_corte(orden_corte_id)
+    if existente:
+        return existente
+    row = {
+        "orden_corte_id":           orden_corte_id,
+        "confeccionista_id":        confeccionista_id,
+        "precio_confeccion":        float(precio_confeccion) if precio_confeccion is not None else None,
+        "fecha_entrega_confeccion": fecha_entrega_confeccion or None,
+        "remision_id":              remision_id or None,
+        "etapa":                    "asignado",
+        "created_by":               created_by,
+    }
+    sb.table("hoja_ruta_lote").insert(row).execute()
+    return obtener_ruta_por_corte(orden_corte_id)
+
+
+def actualizar_ruta_lote(ruta_id: str, **campos) -> dict:
+    permitidos = {
+        "confeccionista_id", "terminacion_id",
+        "precio_confeccion", "precio_terminacion",
+        "fecha_entrega_confeccion", "remision_lavanderia_url",
+        "notas",
+    }
+    update = {k: v for k, v in campos.items() if k in permitidos and v is not None}
+    if not update:
+        raise ValueError("nada_que_actualizar")
+    update["updated_at"] = _now_iso()
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    r = sb.table("hoja_ruta_lote").update(update).eq("id", ruta_id).execute()
+    if not r.data:
+        raise ValueError("no_encontrada")
+    return r.data[0]
+
+
+def cambiar_etapa_ruta(ruta_id: str, etapa_nueva: str) -> dict:
+    """Cambia la etapa y estampa el timestamp correspondiente.
+    No permite retroceder (a menos que sea admin — no expuesto por defecto).
+    """
+    orden = _ruta_orden_map()
+    if etapa_nueva not in orden:
+        raise ValueError(f"etapa_invalida:{etapa_nueva}")
+
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    r = (sb.table("hoja_ruta_lote").select("etapa").eq("id", ruta_id).limit(1).execute()).data
+    if not r:
+        raise ValueError("no_encontrada")
+    actual = r[0].get("etapa") or "asignado"
+    if orden[etapa_nueva] < orden.get(actual, 0):
+        raise ValueError(f"no_se_puede_retroceder:{actual}→{etapa_nueva}")
+
+    ts_col_por_etapa = {
+        "aceptado":              "aceptado_at",
+        "en_confeccion":         "confeccion_iniciada_at",
+        "lavanderia":            "lavanderia_at",
+        "terminacion_recibida":  "terminacion_recibida_at",
+        "terminacion_terminada": "terminacion_terminada_at",
+        "despachado":            "despachado_at",
+    }
+    now = _now_iso()
+    update = {"etapa": etapa_nueva, "updated_at": now}
+    ts_col = ts_col_por_etapa.get(etapa_nueva)
+    if ts_col:
+        update[ts_col] = now
+    sb.table("hoja_ruta_lote").update(update).eq("id", ruta_id).execute()
+    r = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
+    return r[0] if r else {}
+
+
+def listar_rutas(*, etapa: Optional[str] = None,
+                  confeccionista_id: Optional[str] = None,
+                  limit: int = 200) -> list[dict]:
+    sb = _sb()
+    if sb is None:
+        return []
+    q = (sb.table("hoja_ruta_lote")
+           .select("*,confeccionista:confeccionista_id(nombre),"
+                   "terminacion:terminacion_id(nombre),"
+                   "orden_corte:orden_corte_id(consecutivo,"
+                   "referencia:referencia_id(codigo_referencia,nombre,tela))")
+           .order("created_at", desc=True).limit(limit))
+    if etapa:
+        q = q.eq("etapa", etapa)
+    if confeccionista_id:
+        q = q.eq("confeccionista_id", confeccionista_id)
+    return q.execute().data or []

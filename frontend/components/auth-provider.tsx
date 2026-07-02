@@ -17,7 +17,10 @@ const AuthCtx = createContext<Ctx>({ user: null, loading: true, logout: () => {}
 
 export const useAuth = () => useContext(AuthCtx);
 
+// Rutas públicas — no requieren token.
+// /lote/[token] es la vista del confeccionista sin login.
 const PUBLIC_PATHS = ["/login"];
+const PUBLIC_PREFIXES = ["/lote/"];
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -45,7 +48,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     staleTime: 5 * 60_000,
   });
 
-  const isPublic = PUBLIC_PATHS.includes(pathname);
+  const isPublic = PUBLIC_PATHS.includes(pathname) ||
+                   PUBLIC_PREFIXES.some((p) => pathname.startsWith(p));
   const loading = !hydrated || (!!token && meQ.isLoading);
 
   // Redirige a /login si no hay token y no es ruta pública.
