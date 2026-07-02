@@ -938,12 +938,11 @@ publico = APIRouter(prefix="/api/publico", tags=["publico"])
 
 @publico.get("/lote/{token}")
 def lote_publico(token: str) -> dict:
-    """Vista pública del lote — sin autenticación. Devuelve solo lo que el
-    confeccionista debe saber:
-      - Referencia + tela + color + foto
-      - Curva de tallas + total unidades
-      - Precio acordado por confección
-      - Insumos requeridos
+    """Vista pública del lote — sin autenticación.
+    Solo lo que el confeccionista debe ver: ficha técnica, curva de tallas,
+    cantidad total y lista de insumos de CONFECCIÓN con cantidades.
+    NO se envía: precio de confección, valores unitarios, costos totales,
+    ni datos del informe del cortador.
     """
     r = svc.obtener_ruta_por_token(token)
     if not r:
@@ -958,13 +957,22 @@ def lote_publico(token: str) -> dict:
     if total_unidades == 0:
         total_unidades = int(oc.get("cantidad_programada") or 0)
 
-    # Insumos requeridos — reutiliza el cálculo del corte
-    insumos: list[dict] = []
+    # Insumos: SOLO categoría INSUMO CONFECCION (los de terminación van en
+    # una remisión aparte, más adelante en el flujo).
+    insumos_publicos: list[dict] = []
     try:
-        oc_full = svc.calcular_insumos_requeridos_corte(r["orden_corte_id"])
-        insumos = oc_full.get("items") or []
+        calc = svc.calcular_insumos_requeridos_corte(
+            r["orden_corte_id"],
+            categorias=("INSUMO CONFECCION",),
+        )
+        for it in (calc.get("items") or []):
+            # Solo nombre + cantidad total — sin valor unitario ni costo.
+            insumos_publicos.append({
+                "item":            it.get("item"),
+                "total_requerido": it.get("total_requerido"),
+            })
     except Exception:
-        insumos = []
+        pass
 
     return {
         "consecutivo":               oc.get("consecutivo"),
@@ -977,12 +985,11 @@ def lote_publico(token: str) -> dict:
         "curva":                     oc.get("curva_trazo"),
         "unidades_cortadas":         oc.get("unidades_cortadas"),
         "total_unidades":            total_unidades,
-        "precio_confeccion":         r.get("precio_confeccion"),
         "fecha_entrega":             r.get("fecha_entrega_confeccion") or oc.get("fecha_entrega"),
         "confeccionista_nombre":     conf.get("nombre"),
         "etapa":                     r.get("etapa"),
         "aceptado_at":               r.get("aceptado_at"),
-        "insumos":                   insumos,
+        "insumos":                   insumos_publicos,
     }
 
 

@@ -11,9 +11,7 @@ import { API_BASE } from "@/lib/api";
 import { CheckCircle, Loader2, AlertCircle, Package, Scissors } from "lucide-react";
 
 interface Insumo {
-  categoria: string;
   item: string;
-  cantidad_por_prenda: number;
   total_requerido: number;
 }
 interface LotePublico {
@@ -27,7 +25,6 @@ interface LotePublico {
   curva: Record<string, number>;
   unidades_cortadas?: Record<string, number>;
   total_unidades: number;
-  precio_confeccion?: number;
   fecha_entrega?: string;
   confeccionista_nombre: string;
   etapa: string;
@@ -140,22 +137,12 @@ export default function LotePublicoPage() {
           </div>
         </div>
 
-        {/* Precio + fecha entrega */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="rounded-sm border border-teal/30 bg-teal/[0.04] p-4">
-            <p className="text-[0.6rem] uppercase tracking-widest text-teal">Valor acordado</p>
-            <p className="mt-1 font-display text-2xl text-ink-900 tabular">
-              {l.precio_confeccion != null
-                ? `$${Number(l.precio_confeccion).toLocaleString("es-CO", { maximumFractionDigits: 0 })}`
-                : "—"}
-            </p>
-          </div>
-          <div className="rounded-sm border border-border bg-white p-4">
-            <p className="text-[0.6rem] uppercase tracking-widest text-graphite">Fecha de entrega</p>
-            <p className="mt-1 font-display text-2xl text-ink-900 tabular">
-              {l.fecha_entrega || "—"}
-            </p>
-          </div>
+        {/* Fecha de entrega */}
+        <div className="rounded-sm border border-border bg-white p-4">
+          <p className="text-[0.6rem] uppercase tracking-widest text-graphite">Fecha de entrega</p>
+          <p className="mt-1 font-display text-2xl text-ink-900 tabular">
+            {l.fecha_entrega || "—"}
+          </p>
         </div>
 
         {/* Prendas por talla */}

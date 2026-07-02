@@ -1387,9 +1387,15 @@ def marcar_remision_recogida(rem_id: str) -> dict:
 CATEGORIAS_INSUMOS_CORTE = ("INSUMO CONFECCION", "INSUMO TERMINACION")
 
 
-def calcular_insumos_requeridos_corte(oc_id: str) -> dict:
+def calcular_insumos_requeridos_corte(
+    oc_id: str,
+    categorias: Optional[tuple[str, ...]] = None,
+) -> dict:
     """Dado un corte, calcula los insumos que se necesitan multiplicando la
     cantidad de cada insumo del precosteo por la cantidad de prendas a cortar.
+
+    Si `categorias` viene, restringe a esas categorías (útil para separar la
+    remisión de confección de la de terminación).
 
     Regla:
       total_requerido = item.cantidad (del precosteo, por prenda)
@@ -1438,11 +1444,12 @@ def calcular_insumos_requeridos_corte(oc_id: str) -> dict:
             "total_costo": 0,
         }
 
+    cats_filtro = tuple(c.upper() for c in categorias) if categorias else CATEGORIAS_INSUMOS_CORTE
     items = []
     total_costo = 0.0
     for it in (p.get("items") or []):
         cat = (it.get("categoria") or "").upper().strip()
-        if cat not in CATEGORIAS_INSUMOS_CORTE:
+        if cat not in cats_filtro:
             continue
         base_por_prenda = float(it.get("cantidad") or 0)
         if base_por_prenda <= 0:
