@@ -146,6 +146,7 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
   const [nombre, setNombre] = useState(c.nombre);
   const [telefono, setTelefono] = useState(c.telefono || "");
   const [direccion, setDireccion] = useState(c.direccion || "");
+  const [tipo, setTipo] = useState(c.tipo || "confeccion");
 
   const mut = useMutation({
     mutationFn: (body: Record<string, unknown>) =>
@@ -159,13 +160,28 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
   if (editando) {
     return (
       <tr className="border-b border-border bg-cloud/30">
-        <td className="px-4 py-2"><input value={nombre} onChange={(e) => setNombre(e.target.value)} className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs" /></td>
-        <td className="px-4 py-2"><Badge tone={c.tipo === "terminacion" ? "info" : "neutral"}>{c.tipo === "terminacion" ? "Terminación" : "Confección"}</Badge></td>
-        <td className="px-4 py-2"><input value={telefono} onChange={(e) => setTelefono(e.target.value)} className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs" /></td>
-        <td className="px-4 py-2"><input value={direccion} onChange={(e) => setDireccion(e.target.value)} className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs" /></td>
+        <td className="px-4 py-2">
+          <input value={nombre} onChange={(e) => setNombre(e.target.value)}
+            className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs" />
+        </td>
+        <td className="px-4 py-2">
+          <select value={tipo} onChange={(e) => setTipo(e.target.value)}
+            className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs">
+            <option value="confeccion">Confección</option>
+            <option value="terminacion">Terminación</option>
+          </select>
+        </td>
+        <td className="px-4 py-2">
+          <input value={telefono} onChange={(e) => setTelefono(e.target.value)}
+            className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs" />
+        </td>
+        <td className="px-4 py-2">
+          <input value={direccion} onChange={(e) => setDireccion(e.target.value)}
+            className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs" />
+        </td>
         <td className="px-4 py-2"><Badge tone={c.activo ? "normal" : "neutral"}>{c.activo ? "Activo" : "Inactivo"}</Badge></td>
         <td className="px-4 py-2 text-right">
-          <button onClick={() => mut.mutate({ nombre, telefono, direccion })} disabled={mut.isPending}
+          <button onClick={() => mut.mutate({ nombre, telefono, direccion, tipo })} disabled={mut.isPending}
             className="text-teal hover:text-ink-900 mr-2" title="Guardar">
             {mut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
           </button>
