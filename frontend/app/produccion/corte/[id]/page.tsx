@@ -703,6 +703,7 @@ export default function DetalleOrdenCortePage() {
       {/* Comparación al cerrar */}
       {cerrada && <InformeCerradoCard oc={oc} />}
       {cerrada && <HojaRutaCard ordenCorteId={oc.id} consecutivo={oc.consecutivo} />}
+      {cerrada && <TerminacionCard ordenCorteId={oc.id} consecutivo={oc.consecutivo} />}
     </PageShell>
   );
 }
@@ -1158,11 +1159,13 @@ function CompRead({ label, teorico, real, delta, fmt }: {
 interface RutaCorte {
   id: string;
   token_publico: string;
+  token_publico_terminacion?: string;
   etapa: string;
   precio_confeccion?: number;
   precio_terminacion?: number;
   fecha_entrega_confeccion?: string;
   remision_lavanderia_url?: string;
+  terminacion_id?: string;
   asignado_at?: string;
   aceptado_at?: string;
   confeccion_iniciada_at?: string;
@@ -1172,6 +1175,12 @@ interface RutaCorte {
   despachado_at?: string;
   confeccionista?: { nombre?: string; telefono?: string };
   terminacion?: { nombre?: string; telefono?: string };
+}
+
+interface ProveedorTerminacion {
+  id: string;
+  nombre: string;
+  telefono?: string;
 }
 
 // Notificar a los admins de operación. Ajustar aquí si cambian.
@@ -1351,6 +1360,107 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
         <textarea value={notas} onChange={(e) => setNotas(e.target.value)}
           rows={2} placeholder="Notas (opcional, no se envía en el WhatsApp)"
           className="w-full rounded-sm border border-border bg-white px-3 py-2 text-xs" />
+      </CardContent>
+    </Card>
+  );
+}
+
+function TerminacionCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; consecutivo: string }) {
+  const qc = useQueryClient();
+  const [terminacionId, setTerminacionId] = useState("");
+  const [precioTerm, setPrecioTerm] = useState("");
+
+  const rutaQ = useQuery<RutaCorte>({
+    queryKey: ["ruta-corte", ordenCorteId],
+    queryFn: () => api.get(`/api/produccion/rutas/por-corte/${ordenCorteId}`),
+    enabled: !!ordenCorteId,
+    retry: false,
+  });
+
+  const provsQ = useQuery<{ confeccionistas: ProveedorTerminacion[] }>({
+    queryKey: ["confeccionistas", "terminacion"],
+    queryFn: () => api.get("/api/produccion/confeccionistas?tipo=terminacion&incluir_inactivos=false"),
+  });
+
+  const guardar = useMutation({
+    mutationFn: () => {
+      if (!rutaQ.data) return Promise.reject(new Error("ruta no cargada"));
+      return api.patch(`/api/produccion/rutas/${rutaQ.data.id}`, {
+        terminacion_id: terminacionId || null,
+        precio_terminacion: precioTerm ? parseFloat(precioTerm) : null,
+      });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }),
+  });
+
+  if (!rutaQ.data) return null;
+  const r = rutaQ.data;
+  const provs = provsQ.data?.confeccionistas || [];
+  const provSel = provs.find((p) => p.id === (terminacionId || r.terminacion_id));
+
+  const linkTerminacion = r.token_publico_terminacion && typeof window !== "undefined"
+    ? `${window.location.origin}/terminacion/${r.token_publico_terminacion}`
+    : "";
+
+  const mensajeWA = `Hola${provSel ? " " + provSel.nombre : ""}, te comparto la remisión de terminación del lote *${consecutivo}* de MALE'DENIM. Ahí ves la ficha técnica, cantidad e insumos:\n\n${linkTerminacion}`;
+  const telClean = (provSel?.telefono || r.terminacion?.telefono || "").replace(/\D/g, "");
+  const telFinal = telClean.startsWith("57") ? telClean : telClean ? `57${telClean}` : "";
+  const waUrl = telFinal
+    ? `https://wa.me/${telFinal}?text=${encodeURIComponent(mensajeWA)}`
+    : `https://wa.me/?text=${encodeURIComponent(mensajeWA)}`;
+
+  return (
+    <Card>
+      <CardContent className="p-5 space-y-3">
+        <p className="section-label">Remisión de terminación (proveedor terminación)</p>
+        <p className="text-[0.7rem] text-graphite">
+          Asigna el proveedor de <strong>terminación</strong> — es una remisión aparte con los insumos de terminación
+          (código de barras, instrucción de lavado, bolsa, botón, etc.). El proveedor recibe un link distinto al del confeccionista.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Proveedor terminación</label>
+            <select value={terminacionId || r.terminacion_id || ""}
+              onChange={(e) => setTerminacionId(e.target.value)}
+              className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm">
+              <option value="">Selecciona…</option>
+              {provs.map((p) => (
+                <option key={p.id} value={p.id}>{p.nombre}</option>
+              ))}
+            </select>
+            {provs.length === 0 && !provsQ.isLoading && (
+              <p className="mt-1 text-[0.62rem] text-terracotta">
+                No hay proveedores de terminación. Crea uno en /produccion/confeccionistas con tipo &ldquo;Terminación&rdquo;.
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Precio terminación</label>
+            <input value={precioTerm} onChange={(e) => setPrecioTerm(e.target.value)}
+              inputMode="decimal" placeholder={r.precio_terminacion != null ? String(r.precio_terminacion) : "0"}
+              className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm text-right tabular" />
+          </div>
+          <div className="flex items-end">
+            <button onClick={() => guardar.mutate()}
+              disabled={guardar.isPending || (!terminacionId && !precioTerm)}
+              className="w-full rounded-sm border border-border bg-cloud px-3 py-2 text-xs font-semibold uppercase tracking-widest hover:bg-cloud/80 disabled:opacity-40">
+              {guardar.isPending ? <Loader2 className="inline h-3.5 w-3.5 animate-spin mr-1" /> : null}
+              Guardar
+            </button>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+          <a href={waUrl} target="_blank" rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-sm bg-[#25D366] px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-white hover:opacity-90">
+            <Send className="h-3 w-3" /> Enviar link WhatsApp
+          </a>
+          {linkTerminacion && (
+            <a href={linkTerminacion} target="_blank" rel="noopener noreferrer"
+              className="text-[0.65rem] text-navy-600 hover:underline">Ver ficha de terminación</a>
+          )}
+        </div>
       </CardContent>
     </Card>
   );

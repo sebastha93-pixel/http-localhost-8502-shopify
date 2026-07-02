@@ -19,8 +19,9 @@ export const useAuth = () => useContext(AuthCtx);
 
 // Rutas públicas — no requieren token.
 // /lote/[token] es la vista del confeccionista sin login.
+// /terminacion/[token] es la vista del proveedor de terminación.
 const PUBLIC_PATHS = ["/login"];
-const PUBLIC_PREFIXES = ["/lote/"];
+const PUBLIC_PREFIXES = ["/lote/", "/terminacion/"];
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

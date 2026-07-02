@@ -705,6 +705,7 @@ class ConfeccionistaIn(BaseModel):
     nombre:    str = Field(min_length=2)
     telefono:  Optional[str] = None
     direccion: Optional[str] = None
+    tipo:      str = "confeccion"  # 'confeccion' | 'terminacion'
 
 
 class ConfeccionistaUpdate(BaseModel):
@@ -712,6 +713,7 @@ class ConfeccionistaUpdate(BaseModel):
     telefono:  Optional[str] = None
     direccion: Optional[str] = None
     activo:    Optional[bool] = None
+    tipo:      Optional[str] = None
 
 
 class RemisionIn(BaseModel):
@@ -723,9 +725,12 @@ class RemisionIn(BaseModel):
 @router.get("/confeccionistas")
 def listar_confeccionistas(
     incluir_inactivos: bool = False,
+    tipo: Optional[str] = None,
     _: CurrentUser = Depends(require_permission("operaciones", "ver")),
 ) -> dict:
-    return {"confeccionistas": svc.listar_confeccionistas(incluir_inactivos=incluir_inactivos)}
+    return {"confeccionistas": svc.listar_confeccionistas(
+        incluir_inactivos=incluir_inactivos, tipo=tipo,
+    )}
 
 
 @router.post("/confeccionistas")
@@ -735,7 +740,8 @@ def crear_confeccionista(
 ) -> dict:
     try:
         return {"ok": True, "confeccionista": svc.crear_confeccionista(
-            nombre=body.nombre, telefono=body.telefono, direccion=body.direccion,
+            nombre=body.nombre, telefono=body.telefono,
+            direccion=body.direccion, tipo=body.tipo,
         )}
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -1005,5 +1011,72 @@ def aceptar_lote_publico(token: str) -> dict:
         raise HTTPException(400, f"ya_aceptado_o_en_progreso:{r.get('etapa')}")
     try:
         return {"ok": True, "ruta": svc.cambiar_etapa_ruta(r["id"], "aceptado")}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+# ── Vista pública de TERMINACIÓN — proveedor de terminación
+@publico.get("/terminacion/{token}")
+def terminacion_publica(token: str) -> dict:
+    """Vista para el proveedor de terminación (planchado / empaque / etiqueta).
+    Solo lo necesario: ficha técnica + cantidad + insumos de TERMINACIÓN.
+    NO se envía precio ni info del confeccionista.
+    """
+    r = svc.obtener_ruta_por_token_terminacion(token)
+    if not r:
+        raise HTTPException(404, "lote_no_encontrado")
+
+    oc = r.get("orden_corte") or {}
+    ref = oc.get("referencia") or {}
+    term = r.get("terminacion") or {}
+    total = 0
+    if oc.get("unidades_cortadas"):
+        total = sum(int(v or 0) for v in (oc.get("unidades_cortadas") or {}).values())
+    if total == 0:
+        total = int(oc.get("cantidad_programada") or 0)
+
+    insumos_pub: list[dict] = []
+    try:
+        calc = svc.calcular_insumos_requeridos_corte(
+            r["orden_corte_id"],
+            categorias=("INSUMO TERMINACION",),
+        )
+        for it in (calc.get("items") or []):
+            insumos_pub.append({
+                "item":            it.get("item"),
+                "total_requerido": it.get("total_requerido"),
+            })
+    except Exception:
+        pass
+
+    return {
+        "consecutivo":       oc.get("consecutivo"),
+        "referencia_codigo": ref.get("codigo_referencia"),
+        "referencia_nombre": ref.get("nombre"),
+        "tela":              ref.get("tela"),
+        "color":             ref.get("color"),
+        "foto_url":          ref.get("foto_url"),
+        "referencia_lote":   oc.get("referencia_lote"),
+        "curva":             oc.get("curva_trazo"),
+        "unidades_cortadas": oc.get("unidades_cortadas"),
+        "total_unidades":    total,
+        "fecha_entrega":     oc.get("fecha_entrega"),
+        "terminacion_nombre": term.get("nombre"),
+        "etapa":             r.get("etapa"),
+        "recibido_at":       r.get("terminacion_recibida_at"),
+        "insumos":           insumos_pub,
+    }
+
+
+@publico.post("/terminacion/{token}/recibir")
+def recibir_terminacion_publica(token: str) -> dict:
+    """El proveedor de terminación confirma que ya recibió el lote."""
+    r = svc.obtener_ruta_por_token_terminacion(token)
+    if not r:
+        raise HTTPException(404, "lote_no_encontrado")
+    if r.get("etapa") in ("terminacion_recibida", "terminacion_terminada", "despachado"):
+        raise HTTPException(400, f"ya_recibido:{r.get('etapa')}")
+    try:
+        return {"ok": True, "ruta": svc.cambiar_etapa_ruta(r["id"], "terminacion_recibida")}
     except ValueError as e:
         raise HTTPException(400, str(e))

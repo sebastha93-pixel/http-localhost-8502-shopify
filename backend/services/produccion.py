@@ -1217,35 +1217,63 @@ def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = No
 # ═══════════════════════════════════════════════════════════════════════
 
 def crear_confeccionista(*, nombre: str, telefono: Optional[str] = None,
-                          direccion: Optional[str] = None) -> dict:
+                          direccion: Optional[str] = None,
+                          tipo: str = "confeccion") -> dict:
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
     if not nombre.strip():
         raise ValueError("nombre_requerido")
+    if tipo not in ("confeccion", "terminacion"):
+        raise ValueError("tipo_invalido")
     row = {
         "nombre":    nombre.strip(),
         "telefono":  (telefono or "").strip() or None,
         "direccion": (direccion or "").strip() or None,
+        "tipo":      tipo,
         "activo":    True,
     }
-    r = sb.table("confeccionistas").insert(row).execute()
+    try:
+        r = sb.table("confeccionistas").insert(row).execute()
+    except Exception as e:
+        # Compat si la columna tipo aún no existe
+        if "tipo" in str(e):
+            row.pop("tipo", None)
+            r = sb.table("confeccionistas").insert(row).execute()
+        else:
+            raise
     return r.data[0]
 
 
 def listar_confeccionistas(*, incluir_inactivos: bool = False,
+                            tipo: Optional[str] = None,
                             limit: int = 200) -> list[dict]:
+    """Lista proveedores. `tipo` opcional: 'confeccion' | 'terminacion'."""
     sb = _sb()
     if sb is None:
         return []
     q = sb.table("confeccionistas").select("*").order("nombre").limit(limit)
     if not incluir_inactivos:
         q = q.eq("activo", True)
-    return q.execute().data or []
+    if tipo:
+        try:
+            q = q.eq("tipo", tipo)
+        except Exception:
+            pass  # compat si la migración no corrió
+    try:
+        return q.execute().data or []
+    except Exception as e:
+        # Compat: si la columna tipo aún no existe y filtramos por ella
+        if "tipo" in str(e):
+            q2 = sb.table("confeccionistas").select("*").order("nombre").limit(limit)
+            if not incluir_inactivos:
+                q2 = q2.eq("activo", True)
+            return q2.execute().data or []
+        raise
 
 
 def actualizar_confeccionista(cid: str, **campos) -> dict:
-    permitidos = {"nombre", "telefono", "direccion", "activo"}
+    permitidos = {"nombre", "telefono", "direccion", "activo", "tipo"}
     update = {k: v for k, v in campos.items() if k in permitidos and v is not None}
     if not update:
         raise ValueError("nada_que_actualizar")
@@ -1509,6 +1537,22 @@ def obtener_ruta_por_corte(oc_id: str) -> Optional[dict]:
                    "cantidad_programada,referencia_lote,"
                    "referencia:referencia_id(codigo_referencia,nombre,tela,color,foto_url))")
            .eq("orden_corte_id", oc_id).limit(1).execute()).data
+    return r[0] if r else None
+
+
+def obtener_ruta_por_token_terminacion(token: str) -> Optional[dict]:
+    sb = _sb()
+    if sb is None:
+        return None
+    try:
+        r = (sb.table("hoja_ruta_lote")
+               .select("*,terminacion:terminacion_id(nombre),"
+                       "orden_corte:orden_corte_id(consecutivo,curva_trazo,unidades_cortadas,"
+                       "cantidad_programada,referencia_lote,fecha_entrega,"
+                       "referencia:referencia_id(codigo_referencia,nombre,tela,color,foto_url))")
+               .eq("token_publico_terminacion", token).limit(1).execute()).data
+    except Exception:
+        return None
     return r[0] if r else None
 
 

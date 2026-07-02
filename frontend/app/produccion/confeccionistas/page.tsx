@@ -16,6 +16,7 @@ interface Confeccionista {
   nombre: string;
   telefono?: string;
   direccion?: string;
+  tipo?: string;
   activo: boolean;
 }
 
@@ -25,6 +26,7 @@ export default function ConfeccionistasPage() {
   const [nombre, setNombre] = useState("");
   const [telefono, setTelefono] = useState("");
   const [direccion, setDireccion] = useState("");
+  const [tipo, setTipo] = useState("confeccion");
   const [err, setErr] = useState("");
   const [incluirInactivos, setIncluirInactivos] = useState(false);
 
@@ -38,9 +40,10 @@ export default function ConfeccionistasPage() {
       nombre: nombre.trim(),
       telefono: telefono.trim() || null,
       direccion: direccion.trim() || null,
+      tipo,
     }),
     onSuccess: () => {
-      setNombre(""); setTelefono(""); setDireccion("");
+      setNombre(""); setTelefono(""); setDireccion(""); setTipo("confeccion");
       setMostrarNuevo(false);
       setErr("");
       qc.invalidateQueries({ queryKey: ["produccion", "confeccionistas"] });
@@ -75,6 +78,19 @@ export default function ConfeccionistasPage() {
               <Field label="Teléfono"    value={telefono}  onChange={setTelefono}  placeholder="3XXXXXXXXX" />
               <Field label="Dirección"   value={direccion} onChange={setDireccion} placeholder="Cll 10 #5-32, Medellín" />
             </div>
+            <div>
+              <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Tipo de proveedor *</label>
+              <div className="flex gap-4 text-sm">
+                <label className="inline-flex items-center gap-2">
+                  <input type="radio" name="tipo" value="confeccion" checked={tipo === "confeccion"} onChange={() => setTipo("confeccion")} />
+                  Confección
+                </label>
+                <label className="inline-flex items-center gap-2">
+                  <input type="radio" name="tipo" value="terminacion" checked={tipo === "terminacion"} onChange={() => setTipo("terminacion")} />
+                  Terminación
+                </label>
+              </div>
+            </div>
             {err && (
               <div className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta flex items-center gap-2">
                 <AlertCircle className="h-3.5 w-3.5" /> {err}
@@ -106,6 +122,7 @@ export default function ConfeccionistasPage() {
               <thead className="bg-cloud/60 border-b border-border">
                 <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
                   <th className="px-4 py-2">Nombre</th>
+                  <th className="px-4 py-2">Tipo</th>
                   <th className="px-4 py-2">Teléfono</th>
                   <th className="px-4 py-2">Dirección</th>
                   <th className="px-4 py-2">Estado</th>
@@ -143,6 +160,7 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
     return (
       <tr className="border-b border-border bg-cloud/30">
         <td className="px-4 py-2"><input value={nombre} onChange={(e) => setNombre(e.target.value)} className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs" /></td>
+        <td className="px-4 py-2"><Badge tone={c.tipo === "terminacion" ? "info" : "neutral"}>{c.tipo === "terminacion" ? "Terminación" : "Confección"}</Badge></td>
         <td className="px-4 py-2"><input value={telefono} onChange={(e) => setTelefono(e.target.value)} className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs" /></td>
         <td className="px-4 py-2"><input value={direccion} onChange={(e) => setDireccion(e.target.value)} className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs" /></td>
         <td className="px-4 py-2"><Badge tone={c.activo ? "normal" : "neutral"}>{c.activo ? "Activo" : "Inactivo"}</Badge></td>
@@ -162,6 +180,11 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
   return (
     <tr className="border-b border-border/40 hover:bg-cloud/30">
       <td className="px-4 py-2 font-semibold text-ink-900">{c.nombre}</td>
+      <td className="px-4 py-2">
+        <Badge tone={c.tipo === "terminacion" ? "info" : "neutral"}>
+          {c.tipo === "terminacion" ? "Terminación" : "Confección"}
+        </Badge>
+      </td>
       <td className="px-4 py-2 text-graphite">{c.telefono || "—"}</td>
       <td className="px-4 py-2 text-graphite">{c.direccion || "—"}</td>
       <td className="px-4 py-2"><Badge tone={c.activo ? "normal" : "neutral"}>{c.activo ? "Activo" : "Inactivo"}</Badge></td>

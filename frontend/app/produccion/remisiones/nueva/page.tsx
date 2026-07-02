@@ -40,10 +40,10 @@ export default function NuevaRemisionPage() {
   const [ordenesSeleccionadas, setOrdenesSeleccionadas] = useState<Set<string>>(new Set());
   const [err, setErr] = useState("");
 
-  // Confeccionistas activos
+  // Confeccionistas activos (solo tipo=confeccion — los de terminacion van aparte)
   const confQ = useQuery<{ confeccionistas: Confeccionista[] }>({
-    queryKey: ["produccion", "confeccionistas", false],
-    queryFn: () => api.get("/api/produccion/confeccionistas?incluir_inactivos=false"),
+    queryKey: ["produccion", "confeccionistas", "confeccion"],
+    queryFn: () => api.get("/api/produccion/confeccionistas?incluir_inactivos=false&tipo=confeccion"),
   });
 
   // Órdenes cortadas
