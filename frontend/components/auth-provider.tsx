@@ -60,10 +60,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!token && !isPublic) {
       router.replace("/login");
     }
-    if (token && isPublic && meQ.data) {
+    // Si ya estás autenticado y estás en /login, mándate a la app.
+    // No aplicamos esta regla a las otras rutas públicas (/lote/, /terminacion/)
+    // porque un admin puede necesitar ver esas vistas estando logueado.
+    if (token && pathname === "/login" && meQ.data) {
       router.replace("/centro-control");
     }
-  }, [hydrated, token, isPublic, router, meQ.data]);
+  }, [hydrated, token, pathname, isPublic, router, meQ.data]);
 
   const logout = () => {
     clearToken();
