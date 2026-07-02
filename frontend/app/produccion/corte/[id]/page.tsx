@@ -702,6 +702,7 @@ export default function DetalleOrdenCortePage() {
 
       {/* Comparación al cerrar */}
       {cerrada && <InformeCerradoCard oc={oc} />}
+      {cerrada && <HojaRutaCard ordenCorteId={oc.id} consecutivo={oc.consecutivo} />}
     </PageShell>
   );
 }
@@ -1151,5 +1152,206 @@ function CompRead({ label, teorico, real, delta, fmt }: {
         </div>
       </div>
     </div>
+  );
+}
+
+interface RutaCorte {
+  id: string;
+  token_publico: string;
+  etapa: string;
+  precio_confeccion?: number;
+  precio_terminacion?: number;
+  fecha_entrega_confeccion?: string;
+  remision_lavanderia_url?: string;
+  asignado_at?: string;
+  aceptado_at?: string;
+  confeccion_iniciada_at?: string;
+  lavanderia_at?: string;
+  terminacion_recibida_at?: string;
+  terminacion_terminada_at?: string;
+  despachado_at?: string;
+  confeccionista?: { nombre?: string; telefono?: string };
+  terminacion?: { nombre?: string; telefono?: string };
+}
+
+// Notificar a los admins de operación. Ajustar aquí si cambian.
+const ADMINS_WA = [
+  { nombre: "Karina",    tel: "573000000000" },
+  { nombre: "Sebastián", tel: "573000000000" },
+  { nombre: "Alejandro", tel: "573000000000" },
+];
+
+function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; consecutivo: string }) {
+  const qc = useQueryClient();
+  const [urlLav, setUrlLav] = useState("");
+  const [notas, setNotas] = useState("");
+
+  const q = useQuery<RutaCorte>({
+    queryKey: ["ruta-corte", ordenCorteId],
+    queryFn: () => api.get(`/api/produccion/rutas/por-corte/${ordenCorteId}`),
+    enabled: !!ordenCorteId,
+    retry: false,
+  });
+
+  const cambiarEtapa = useMutation({
+    mutationFn: (etapa: string) => api.post(`/api/produccion/rutas/${q.data?.id}/etapa`, { etapa }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }),
+  });
+  const guardarUrl = useMutation({
+    mutationFn: () => api.patch(`/api/produccion/rutas/${q.data?.id}`, {
+      remision_lavanderia_url: urlLav || null,
+    }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }),
+  });
+
+  if (q.isLoading) {
+    return (
+      <Card>
+        <CardContent className="p-5 text-xs text-graphite">Cargando hoja de ruta…</CardContent>
+      </Card>
+    );
+  }
+  if (!q.data) {
+    return (
+      <Card>
+        <CardContent className="p-5 text-xs text-terracotta">
+          No hay hoja de ruta para este lote. Crea una remisión desde /produccion/remisiones para generarla automáticamente.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const r = q.data;
+  const etapas = [
+    { key: "asignado",              label: "Asignado",         ts: r.asignado_at },
+    { key: "aceptado",              label: "Aceptado",         ts: r.aceptado_at },
+    { key: "en_confeccion",         label: "En confección",    ts: r.confeccion_iniciada_at },
+    { key: "lavanderia",            label: "Lavandería",       ts: r.lavanderia_at },
+    { key: "terminacion_recibida",  label: "En terminación",   ts: r.terminacion_recibida_at },
+    { key: "terminacion_terminada", label: "Terminado",        ts: r.terminacion_terminada_at },
+    { key: "despachado",            label: "Despachado",       ts: r.despachado_at },
+  ];
+  const idxActual = etapas.findIndex((e) => e.key === r.etapa);
+
+  const notifMsg = `MALE'DENIM · Lote *${consecutivo}* pasó a etapa *${r.etapa}*. Ver detalle: ${typeof window !== "undefined" ? window.location.origin : ""}/produccion/corte/${ordenCorteId}`;
+  function waNotifUrl(tel: string) {
+    return `https://wa.me/${tel}?text=${encodeURIComponent(notifMsg)}`;
+  }
+
+  const linkPublico = typeof window !== "undefined"
+    ? `${window.location.origin}/lote/${r.token_publico}`
+    : "";
+
+  // Botón siguiente etapa según la actual
+  function botonSiguiente() {
+    if (r.etapa === "asignado") return null; // solo confeccionista puede aceptar
+    if (r.etapa === "aceptado" || r.etapa === "en_confeccion") {
+      return (
+        <button onClick={() => cambiarEtapa.mutate("lavanderia")} disabled={cambiarEtapa.isPending}
+          className="rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
+          Marcar como enviado a lavandería
+        </button>
+      );
+    }
+    if (r.etapa === "lavanderia") {
+      return (
+        <button onClick={() => cambiarEtapa.mutate("terminacion_recibida")} disabled={cambiarEtapa.isPending}
+          className="rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
+          Marcar como recibido en terminación
+        </button>
+      );
+    }
+    if (r.etapa === "terminacion_recibida") {
+      return (
+        <button onClick={() => cambiarEtapa.mutate("terminacion_terminada")} disabled={cambiarEtapa.isPending}
+          className="rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
+          Marcar terminación terminada
+        </button>
+      );
+    }
+    if (r.etapa === "terminacion_terminada") {
+      return (
+        <button onClick={() => cambiarEtapa.mutate("despachado")} disabled={cambiarEtapa.isPending}
+          className="rounded-sm bg-teal px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-ink-900 disabled:opacity-40">
+          Marcar como despachado
+        </button>
+      );
+    }
+    return null;
+  }
+
+  return (
+    <Card>
+      <CardContent className="p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <p className="section-label">Hoja de ruta del lote</p>
+          <a href={linkPublico} target="_blank" rel="noopener noreferrer"
+            className="text-[0.65rem] text-navy-600 hover:underline">Ver ficha pública</a>
+        </div>
+
+        {/* Timeline visual */}
+        <ol className="grid grid-cols-2 md:grid-cols-7 gap-2">
+          {etapas.map((e, i) => {
+            const pasada = i <= idxActual;
+            const actual = i === idxActual;
+            return (
+              <li key={e.key} className={`rounded-sm border p-2 ${actual ? "border-navy-600 bg-navy-600/[0.06]" : pasada ? "border-teal/40 bg-teal/[0.04]" : "border-border bg-cloud/20"}`}>
+                <p className={`text-[0.55rem] uppercase tracking-widest ${actual ? "text-navy-600" : pasada ? "text-teal" : "text-graphite"}`}>
+                  {e.label}
+                </p>
+                <p className="text-[0.65rem] tabular text-ink-900 mt-1">
+                  {e.ts ? new Date(e.ts).toLocaleDateString("es-CO") : "—"}
+                </p>
+              </li>
+            );
+          })}
+        </ol>
+
+        {/* Info general */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+          <div><span className="text-graphite">Confeccionista:</span> <span className="text-ink-900 font-semibold">{r.confeccionista?.nombre || "—"}</span></div>
+          <div><span className="text-graphite">Terminación:</span> <span className="text-ink-900 font-semibold">{r.terminacion?.nombre || "—"}</span></div>
+          <div><span className="text-graphite">Precio confección:</span> <span className="text-ink-900 font-semibold tabular">{r.precio_confeccion != null ? `$${Number(r.precio_confeccion).toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"}</span></div>
+          <div><span className="text-graphite">Fecha entrega:</span> <span className="text-ink-900 font-semibold tabular">{r.fecha_entrega_confeccion || "—"}</span></div>
+        </div>
+
+        {/* Remisión de lavandería */}
+        {(r.etapa === "aceptado" || r.etapa === "en_confeccion" || r.etapa === "lavanderia" || r.remision_lavanderia_url) && (
+          <div>
+            <p className="text-[0.6rem] uppercase tracking-widest text-graphite mb-1">Remisión de lavandería (URL / referencia)</p>
+            <div className="flex items-center gap-2">
+              <input value={urlLav} onChange={(e) => setUrlLav(e.target.value)}
+                placeholder={r.remision_lavanderia_url || "Pega el link o número de remisión"}
+                className="flex-1 rounded-sm border border-border bg-white px-2 py-1.5 text-xs" />
+              <button onClick={() => guardarUrl.mutate()} disabled={guardarUrl.isPending || !urlLav}
+                className="rounded-sm border border-border bg-cloud px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest hover:bg-cloud/80 disabled:opacity-40">
+                Guardar
+              </button>
+              {r.remision_lavanderia_url && (
+                <a href={r.remision_lavanderia_url} target="_blank" rel="noopener noreferrer"
+                  className="text-[0.65rem] text-navy-600 hover:underline">Ver actual</a>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Acciones + notificación */}
+        <div className="border-t border-border pt-3 flex flex-wrap items-center gap-2">
+          {botonSiguiente()}
+          <div className="flex-1" />
+          <span className="text-[0.6rem] text-graphite uppercase tracking-widest">Notificar:</span>
+          {ADMINS_WA.map((a) => (
+            <a key={a.nombre} href={waNotifUrl(a.tel)} target="_blank" rel="noopener noreferrer"
+              className="rounded-sm bg-[#25D366] px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-widest text-white hover:opacity-90">
+              {a.nombre}
+            </a>
+          ))}
+        </div>
+
+        <textarea value={notas} onChange={(e) => setNotas(e.target.value)}
+          rows={2} placeholder="Notas (opcional, no se envía en el WhatsApp)"
+          className="w-full rounded-sm border border-border bg-white px-3 py-2 text-xs" />
+      </CardContent>
+    </Card>
   );
 }
