@@ -2013,3 +2013,165 @@ def tablero_produccion() -> dict:
     }
     _cache_set(cache_key, out, ttl_seg=60)
     return out
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CRUCE SIIGO · costeo real vs precosteo (Bloque 5)
+# ═══════════════════════════════════════════════════════════════════════
+
+# Tolerancia: desviaciones de precio/cantidad menores a esto no alertan
+TOLERANCIA_PRECIO_PCT = 1.0   # %
+TOLERANCIA_CANTIDAD = 0       # unidades exactas
+
+
+def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
+    """Cruza los lotes cortados contra los Documentos Soporte de Siigo.
+
+    Match por REFERENCIA: la auxiliar registra el DS con producto
+    "Servicio de Confección REF <codigo_referencia>". Se compara:
+      teórico = unidades_cortadas × precio_confeccion (del precosteo)
+      real    = cantidad × valor_unitario del DS
+
+    Devuelve lotes cruzados + alertas:
+      - sin_ds:            lote asignado a confección sin DS contabilizado
+      - precio_distinto:   valor unitario del DS ≠ precio del precosteo
+      - cantidad_distinta: cantidad del DS ≠ unidades cortadas
+      - ds_sin_lote:       DS con REF que no corresponde a ningún lote
+    """
+    from backend.services import siigo
+
+    if not siigo.siigo_configurado():
+        return {"ok": False, "error": "siigo_no_configurado",
+                "mensaje": "Faltan SIIGO_USERNAME / SIIGO_ACCESS_KEY / SIIGO_PARTNER_ID en Railway."}
+
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+
+    # ── Lotes: cortadas con su ruta y referencia ─────────────────
+    ocs = listar_ordenes_corte(estado="cortada", limit=500)
+    rutas = (sb.table("hoja_ruta_lote")
+               .select("orden_corte_id,precio_confeccion,confeccionista:confeccionista_id(nombre)")
+               .limit(500).execute()).data or []
+    ruta_por_oc = {r["orden_corte_id"]: r for r in rutas if r.get("orden_corte_id")}
+
+    def _norm_ref(s: Optional[str]) -> str:
+        return (s or "").upper().replace(" ", "").strip("-")
+
+    lotes = []
+    lotes_por_ref: dict[str, dict] = {}
+    for oc in ocs:
+        d = (oc.get("created_at") or "")[:10]
+        if desde and d and d < desde:
+            continue
+        ref = _norm_ref((oc.get("referencia") or {}).get("codigo_referencia"))
+        ruta = ruta_por_oc.get(oc["id"])
+        unidades = sum(int(v or 0) for v in (oc.get("unidades_cortadas") or {}).values())
+        precio = float((ruta or {}).get("precio_confeccion") or 0)
+        lote = {
+            "orden_corte_id": oc["id"],
+            "consecutivo":    oc.get("consecutivo"),
+            "referencia":     (oc.get("referencia") or {}).get("codigo_referencia"),
+            "confeccionista": ((ruta or {}).get("confeccionista") or {}).get("nombre"),
+            "unidades":       unidades,
+            "precio_teorico": precio,
+            "total_teorico":  round(unidades * precio, 2),
+            "tiene_ruta":     bool(ruta),
+            "ds":             None,
+            "estado":         "sin_ds" if ruta else "sin_asignar",
+        }
+        lotes.append(lote)
+        if ref:
+            lotes_por_ref[ref] = lote
+
+    # ── Documentos soporte de Siigo ──────────────────────────────
+    try:
+        docs = siigo.listar_documentos_soporte(desde=desde)
+    except Exception as e:
+        return {"ok": False, "error": "siigo_error", "mensaje": str(e)[:300]}
+
+    ds_sin_lote = []
+    for doc in docs:
+        for it in doc["items"]:
+            ref = _norm_ref(it.get("ref"))
+            lote = lotes_por_ref.get(ref) if ref else None
+            if not lote:
+                ds_sin_lote.append({
+                    "ds":         doc["ds"],
+                    "fecha":      doc["fecha"],
+                    "proveedor":  doc.get("proveedor_nombre") or doc.get("proveedor_id"),
+                    "descripcion": it["descripcion"],
+                    "total":      it["total_sin_iva"],
+                })
+                continue
+            lote["ds"] = {
+                "ds":             doc["ds"],
+                "fecha":          doc["fecha"],
+                "proveedor":      doc.get("proveedor_nombre") or doc.get("proveedor_id"),
+                "cantidad":       it["cantidad"],
+                "valor_unitario": it["valor_unitario"],
+                "total_real":     it["total_sin_iva"],
+                "saldo_por_pagar": doc["balance"],
+            }
+            # Estado del cruce
+            dif_precio_pct = (
+                abs(it["valor_unitario"] - lote["precio_teorico"]) / lote["precio_teorico"] * 100
+                if lote["precio_teorico"] > 0 else 0
+            )
+            if lote["precio_teorico"] > 0 and dif_precio_pct > TOLERANCIA_PRECIO_PCT:
+                lote["estado"] = "precio_distinto"
+            elif lote["unidades"] > 0 and abs(it["cantidad"] - lote["unidades"]) > TOLERANCIA_CANTIDAD:
+                lote["estado"] = "cantidad_distinta"
+            else:
+                lote["estado"] = "ok"
+            lote["desviacion"] = round(it["total_sin_iva"] - lote["total_teorico"], 2)
+
+    # ── Alertas ──────────────────────────────────────────────────
+    alertas = []
+    for l in lotes:
+        if l["estado"] == "sin_ds":
+            alertas.append({
+                "tipo": "sin_ds", "severidad": "media",
+                "mensaje": f"Lote {l['consecutivo']} (REF {l['referencia']}) asignado a "
+                           f"{l['confeccionista'] or 'confección'} sin documento soporte en Siigo.",
+            })
+        elif l["estado"] == "precio_distinto":
+            ds = l["ds"]
+            alertas.append({
+                "tipo": "precio_distinto", "severidad": "alta",
+                "mensaje": f"Lote {l['consecutivo']}: DS {ds['ds']} pagó "
+                           f"${ds['valor_unitario']:,.0f}/prenda pero el precosteo dice "
+                           f"${l['precio_teorico']:,.0f} (desviación ${l['desviacion']:,.0f}).",
+            })
+        elif l["estado"] == "cantidad_distinta":
+            ds = l["ds"]
+            alertas.append({
+                "tipo": "cantidad_distinta", "severidad": "alta",
+                "mensaje": f"Lote {l['consecutivo']}: DS {ds['ds']} contabilizó "
+                           f"{ds['cantidad']:.0f} unidades pero se cortaron {l['unidades']}.",
+            })
+    for d in ds_sin_lote:
+        alertas.append({
+            "tipo": "ds_sin_lote", "severidad": "media",
+            "mensaje": f"DS {d['ds']} de {d['proveedor']} (\"{d['descripcion'][:60]}\") "
+                       f"por ${d['total']:,.0f} no corresponde a ningún lote del OS.",
+        })
+
+    total_teorico = round(sum(l["total_teorico"] for l in lotes), 2)
+    total_real = round(sum((l.get("ds") or {}).get("total_real", 0) for l in lotes), 2)
+
+    return {
+        "ok": True,
+        "resumen": {
+            "lotes":          len(lotes),
+            "con_ds":         sum(1 for l in lotes if l.get("ds")),
+            "ok":             sum(1 for l in lotes if l["estado"] == "ok"),
+            "con_alerta":     len(alertas),
+            "total_teorico":  total_teorico,
+            "total_real":     total_real,
+            "desviacion":     round(total_real - total_teorico, 2),
+        },
+        "lotes":       lotes,
+        "ds_sin_lote": ds_sin_lote,
+        "alertas":     alertas,
+    }

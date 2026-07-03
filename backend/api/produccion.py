@@ -1186,3 +1186,22 @@ def tablero(
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(500, f"tablero: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CRUCE SIIGO · costeo real (Bloque 5)
+# ═══════════════════════════════════════════════════════════════════════
+
+@router.get("/costeo-real")
+def costeo_real(
+    desde: Optional[str] = None,  # YYYY-MM-DD — por defecto todos los lotes cortados
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
+) -> dict:
+    """Cruza lotes cortados vs Documentos Soporte de Siigo (pagos a confección).
+    Devuelve comparación teórico vs real + alertas de desviación.
+    """
+    try:
+        return svc.cruce_costeo_siigo(desde=desde)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"costeo_real: {str(e)[:200]}")
