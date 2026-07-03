@@ -76,15 +76,28 @@ export default function CosteoRealPage() {
   const data = q.data!;
 
   if (!data.ok) {
+    const siigoCaido = /503|502|504|unavailable|try in a few minutes/i.test(data.mensaje || "");
     return (
       <PageShell title="Costeo real" subtitle="Cruce con Siigo">
         <Card>
-          <CardContent className="p-8 text-center space-y-2">
+          <CardContent className="p-8 text-center space-y-3">
             <FileWarning className="mx-auto h-8 w-8 text-ochre" />
             <p className="text-sm font-semibold text-ink-900">
-              {data.error === "siigo_no_configurado" ? "Siigo no está conectado" : "Error consultando Siigo"}
+              {data.error === "siigo_no_configurado" ? "Siigo no está conectado"
+                : siigoCaido ? "Siigo está temporalmente fuera de servicio"
+                : "Error consultando Siigo"}
             </p>
-            <p className="text-xs text-graphite max-w-md mx-auto">{data.mensaje}</p>
+            {siigoCaido && (
+              <p className="text-xs text-graphite max-w-md mx-auto">
+                Es una caída del lado de Siigo, no del sistema. Suele durar unos minutos —
+                el calentador reintentará solo; también puedes reintentar ya.
+              </p>
+            )}
+            <button onClick={() => q.refetch()}
+              className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700">
+              Reintentar
+            </button>
+            <p className="text-[0.65rem] text-graphite/70 max-w-md mx-auto break-all">{data.mensaje}</p>
             {data.error === "siigo_no_configurado" && (
               <p className="text-xs text-graphite max-w-md mx-auto">
                 Copia las variables <code className="font-mono">SIIGO_USERNAME</code>,{" "}

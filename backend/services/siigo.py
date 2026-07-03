@@ -69,13 +69,13 @@ def siigo_get(path: str, params: Optional[dict] = None) -> dict:
         r = httpx.get(SIIGO_BASE + path, params=params or {}, headers=headers, timeout=60)
         if r.status_code == 200:
             return r.json()
-        if r.status_code == 429:
+        if r.status_code in (429, 502, 503, 504):
             espera = min(2 ** intento, 8)
             retry_after = r.headers.get("Retry-After")
             if retry_after and retry_after.isdigit():
                 espera = int(retry_after)
             time.sleep(espera)
-            last = f"429 intento {intento + 1}"
+            last = f"{r.status_code} intento {intento + 1}"
             continue
         raise RuntimeError(f"siigo_get {path} HTTP {r.status_code}: {r.text[:200]}")
     raise RuntimeError(f"siigo_get {path} rate-limited tras reintentos ({last})")
@@ -113,6 +113,25 @@ def listar_documentos_soporte(*, desde: Optional[str] = None,
             _refrescar_en_background(desde)
         return hit[1]
 
+    docs: list[dict] = []
+    try:
+        docs = _fetch_ds(desde)
+    except Exception as e:
+        if hit:  # hay dato viejo — servirlo antes que fallar
+            log.warning(f"[siigo] fetch fallo ({e}); sirviendo cache viejo de {key_edad(hit)}")
+            return hit[1]
+        raise
+    _data_cache[cache_key] = (time.time(), docs)
+    return docs
+
+
+def key_edad(hit) -> str:
+    mins = int((time.time() - hit[0]) / 60)
+    return f"hace {mins} min"
+
+
+def _fetch_ds(desde: Optional[str]) -> list[dict]:
+    """Fetch real contra Siigo (paginación + detalle de items)."""
     def _parse_items(raw: list) -> list[dict]:
         items = []
         for it in raw or []:
@@ -173,7 +192,6 @@ def listar_documentos_soporte(*, desde: Optional[str] = None,
         except Exception as e:
             log.warning(f"[siigo] detalle DS {d['ds']} fallo: {e}")
 
-    _data_cache[cache_key] = (time.time(), docs)
     return docs
 
 
