@@ -886,7 +886,7 @@ function InformeCorteCard({
           </div>
           <FieldText label="Referencia de lote"    value={refLote}       onChange={setRefLote} placeholder="Lote-XXX" />
           <FieldText label="Fecha entrega corte"   value={fechaEntrega}  onChange={setFechaEntrega} type="date" />
-          <FieldText label="Precio del corte"      value={precioCorte}   onChange={setPrecioCorte} inputMode="decimal" placeholder="0" />
+          <FieldText label="Precio del corte"      value={precioCorte}   onChange={setPrecioCorte} inputMode="decimal" placeholder="Auto del precosteo" />
         </div>
 
         {/* Fila 2: capas real vs teorico, promedio real vs teorico */}

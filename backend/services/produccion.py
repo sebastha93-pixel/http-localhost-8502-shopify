@@ -792,13 +792,16 @@ def crear_orden_corte(*, referencia_id: str,
 
 def listar_ordenes_corte(*, estado: Optional[str] = None,
                           limit: int = 200,
-                          sin_remision: Optional[str] = None) -> list[dict]:
+                          sin_remision: Optional[str] = None,
+                          marcar_remisiones: bool = False) -> list[dict]:
     """Lista órdenes de corte. Cache 20s.
     `sin_remision='confeccion'|'terminacion'` excluye las OCs que YA tienen
     una remisión de ese tipo — un lote no puede remitirse dos veces al
     mismo proceso.
+    `marcar_remisiones=True` anota cada OC con tiene_remision_confeccion /
+    tiene_remision_terminacion (para mostrarlas marcadas en la UI).
     """
-    cache_key = f"ordenes_corte_lista:{estado}:{limit}:{sin_remision}"
+    cache_key = f"ordenes_corte_lista:{estado}:{limit}:{sin_remision}:{marcar_remisiones}"
     cached = _cache_get(cache_key, ttl_seg=20)
     if cached is not None:
         return cached
@@ -815,6 +818,12 @@ def listar_ordenes_corte(*, estado: Optional[str] = None,
     if sin_remision in ("confeccion", "terminacion"):
         ya = _ocs_con_remision(sin_remision)
         out = [oc for oc in out if oc["id"] not in ya]
+    if marcar_remisiones:
+        con_conf = _ocs_con_remision("confeccion")
+        con_term = _ocs_con_remision("terminacion")
+        for oc in out:
+            oc["tiene_remision_confeccion"] = oc["id"] in con_conf
+            oc["tiene_remision_terminacion"] = oc["id"] in con_term
     _cache_set(cache_key, out, ttl_seg=20)
     return out
 
@@ -1092,7 +1101,13 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
     if unidades_cortadas is not None:update["unidades_cortadas"] = unidades_cortadas or {}
     if retazos_cantidad is not None: update["retazos_cantidad"] = int(retazos_cantidad)
     if fecha_entrega is not None:    update["fecha_entrega"] = fecha_entrega or None
-    if precio_corte is not None:     update["precio_corte"] = float(precio_corte)
+    if precio_corte is not None:
+        update["precio_corte"] = float(precio_corte)
+    else:
+        # Sin precio digitado → trae el del precosteo (item 'Corte')
+        auto = _precio_proceso_precosteo(oc.get("referencia_id"), "corte")
+        if auto is not None:
+            update["precio_corte"] = auto
 
     try:
         sb.table("ordenes_corte").update(update).eq("id", oc_id).execute()

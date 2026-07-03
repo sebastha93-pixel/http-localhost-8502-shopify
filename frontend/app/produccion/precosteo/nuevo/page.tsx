@@ -40,15 +40,14 @@ const PLANTILLA: { categoria: string; items: string[] }[] = [
     "Tela principal", "Forro de bolsillo",
   ]},
   { categoria: "PROCESO EN MATERIA PRIMA", items: [
-    "Corte", "Confección", "Lavandería", "Teñido especial",
-    "Terminación", "Bordado/estampado",
+    "Corte", "Confección", "Lavandería", "Terminación",
   ]},
   { categoria: "INSUMO CONFECCION", items: [
     "Cierre", "Marquilla talla",
   ]},
   { categoria: "INSUMO TERMINACION", items: [
     "Código de barras", "Instrucción de lavado", "Bolsa",
-    "Botón 27 L", "Remache", "Garra", "Pretinera", "Apliques",
+    "Botón 27 L", "Remache", "Garra", "Pretinera",
   ]},
 ];
 

@@ -10,11 +10,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { api, API_BASE } from "@/lib/api";
-import { getToken } from "@/lib/auth";
+import { api } from "@/lib/api";
 import { PageShell, LoadingState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { Save, Loader2, AlertCircle, Paperclip, CheckCircle, Search, ChevronDown } from "lucide-react";
+import { Save, Loader2, AlertCircle, Search, ChevronDown } from "lucide-react";
 
 interface Precosteo {
   id: string;
@@ -55,10 +54,6 @@ export default function NuevaOrdenCortePage() {
   const [fechaEnvio, setFechaEnvio] = useState("");
   const [indicaciones, setIndicaciones] = useState("");
   const [destinatarios, setDestinatarios] = useState("");
-  // Trazos: se guarda el archivo en memoria y se sube apenas se crea la orden.
-  const [trazosFile, setTrazosFile] = useState<File | null>(null);
-  const [subiendoTrazos, setSubiendoTrazos] = useState(false);
-  const trazosRef = useRef<HTMLInputElement>(null);
   const [curva, setCurva] = useState<Record<string, string>>(
     Object.fromEntries(TALLAS_DEFAULT.map((t) => [t, ""]))
   );
@@ -155,31 +150,7 @@ export default function NuevaOrdenCortePage() {
         trazos_url: null,
       });
     },
-    onSuccess: async (data) => {
-      const ocId = data.orden_corte.id;
-      // Si adjuntaron trazos, se suben antes de redirigir al detalle.
-      if (trazosFile) {
-        setSubiendoTrazos(true);
-        try {
-          const fd = new FormData();
-          fd.append("file", trazosFile);
-          const res = await fetch(`${API_BASE}/api/produccion/corte/${ocId}/trazos`, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${getToken()}` },
-            body: fd,
-          });
-          if (!res.ok) {
-            const text = await res.text();
-            console.warn("trazos:", text);
-          }
-        } catch {
-          // La orden ya quedó creada — los trazos se pueden reintentar en el detalle.
-        } finally {
-          setSubiendoTrazos(false);
-        }
-      }
-      router.push(`/produccion/corte/${ocId}`);
-    },
+    onSuccess: (data) => router.push(`/produccion/corte/${data.orden_corte.id}`),
     onError: (e: Error) => setErr(e.message),
   });
 
@@ -312,35 +283,6 @@ export default function NuevaOrdenCortePage() {
               </label>
               <textarea value={indicaciones} onChange={(e) => setIndicaciones(e.target.value)}
                 rows={2} className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />
-            </div>
-
-            {/* Adjuntar trazos */}
-            <div>
-              <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
-                Adjuntar trazos (PDF/imagen)
-              </label>
-              <div className="flex items-center gap-2 flex-wrap">
-                <input ref={trazosRef} type="file" accept="application/pdf,image/*" className="hidden"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) setTrazosFile(f); }} />
-                <button type="button" onClick={() => trazosRef.current?.click()}
-                  disabled={subiendoTrazos}
-                  className="inline-flex items-center gap-2 rounded-sm border border-border bg-card px-3 py-2 text-xs font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud disabled:opacity-40">
-                  {subiendoTrazos ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
-                  {trazosFile ? "Cambiar archivo" : "Adjuntar archivo"}
-                </button>
-                {trazosFile ? (
-                  <span className="inline-flex items-center gap-1.5 text-xs text-teal">
-                    <CheckCircle className="h-3.5 w-3.5" /> {trazosFile.name}
-                    <button type="button"
-                      onClick={() => { setTrazosFile(null); if (trazosRef.current) trazosRef.current.value = ""; }}
-                      className="text-terracotta hover:text-crimson font-bold" title="Quitar archivo">×</button>
-                  </span>
-                ) : (
-                  <span className="text-[0.65rem] text-graphite">
-                    Se sube automáticamente al crear la orden.
-                  </span>
-                )}
-              </div>
             </div>
 
             {/* Destinatarios correo — se envían al autorizar */}

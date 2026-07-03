@@ -584,10 +584,12 @@ def listar_cortes(
     estado: Optional[str] = None,
     limit: int = Query(200, ge=1, le=500),
     sin_remision: Optional[str] = None,  # 'confeccion' | 'terminacion'
+    marcar_remisiones: bool = False,
     _: CurrentUser = Depends(require_permission("operaciones", "ver")),
 ) -> dict:
     return {"ordenes": svc.listar_ordenes_corte(
-        estado=estado, limit=limit, sin_remision=sin_remision)}
+        estado=estado, limit=limit, sin_remision=sin_remision,
+        marcar_remisiones=marcar_remisiones)}
 
 
 @router.get("/corte/{oc_id}")

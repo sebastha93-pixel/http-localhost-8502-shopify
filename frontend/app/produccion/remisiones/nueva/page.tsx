@@ -29,6 +29,8 @@ interface OrdenCorte {
   cantidad_programada?: number;
   fecha_entrega?: string;
   referencia?: { codigo_referencia: string; nombre: string; tela?: string };
+  tiene_remision_confeccion?: boolean;
+  tiene_remision_terminacion?: boolean;
 }
 
 export default function NuevaRemisionPage() {
@@ -47,15 +49,20 @@ export default function NuevaRemisionPage() {
     queryFn: () => api.get(`/api/produccion/confeccionistas?incluir_inactivos=false&tipo=${tipo}`),
   });
 
-  // Órdenes cortadas SIN remisión del tipo seleccionado — un lote no se
-  // remite dos veces al mismo proceso.
+  // Órdenes cortadas anotadas con qué remisiones ya tienen. Las que ya
+  // tienen remisión del tipo elegido se muestran MARCADAS pero deshabilitadas
+  // — un lote no se remite dos veces al mismo proceso.
   const ocQ = useQuery<{ ordenes: OrdenCorte[] }>({
-    queryKey: ["produccion", "corte", "cortadas", tipo],
-    queryFn: () => api.get(`/api/produccion/corte?estado=cortada&sin_remision=${tipo}`),
+    queryKey: ["produccion", "corte", "cortadas", "marcadas"],
+    queryFn: () => api.get("/api/produccion/corte?estado=cortada&marcar_remisiones=true"),
   });
 
   const confs = confQ.data?.confeccionistas || [];
   const ordenes = (ocQ.data?.ordenes || []).filter((o) => o.estado === "cortada");
+
+  function yaRemitida(o: OrdenCorte): boolean {
+    return tipo === "terminacion" ? !!o.tiene_remision_terminacion : !!o.tiene_remision_confeccion;
+  }
 
   // Combobox confeccionista con lupa
   const [confBuscar, setConfBuscar] = useState("");
@@ -112,12 +119,12 @@ export default function NuevaRemisionPage() {
               {/* Toggle tipo de remisión */}
               <div className="inline-flex rounded-sm border border-border overflow-hidden">
                 <button type="button"
-                  onClick={() => { setTipo("confeccion"); setConfId(""); }}
+                  onClick={() => { setTipo("confeccion"); setConfId(""); setOrdenesSeleccionadas(new Set()); }}
                   className={`px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest ${tipo === "confeccion" ? "bg-navy-600 text-white" : "bg-white text-graphite hover:bg-cloud"}`}>
                   Confección
                 </button>
                 <button type="button"
-                  onClick={() => { setTipo("terminacion"); setConfId(""); }}
+                  onClick={() => { setTipo("terminacion"); setConfId(""); setOrdenesSeleccionadas(new Set()); }}
                   className={`px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest border-l border-border ${tipo === "terminacion" ? "bg-navy-600 text-white" : "bg-white text-graphite hover:bg-cloud"}`}>
                   Terminación
                 </button>
@@ -199,27 +206,47 @@ export default function NuevaRemisionPage() {
                     <th className="px-4 py-2">Lote</th>
                     <th className="px-4 py-2 text-right">Cantidad</th>
                     <th className="px-4 py-2">Entrega</th>
+                    <th className="px-4 py-2 text-right">Remisiones</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {ordenes.map((o) => (
-                    <tr key={o.id} className={`border-b border-border/40 ${ordenesSeleccionadas.has(o.id) ? "bg-teal/5" : "hover:bg-cloud/30"}`}>
-                      <td className="px-4 py-2">
-                        <input type="checkbox" checked={ordenesSeleccionadas.has(o.id)}
-                          onChange={() => toggleOrden(o.id)} />
-                      </td>
-                      <td className="px-4 py-2 font-semibold tabular text-navy-600">{o.consecutivo}</td>
-                      <td className="px-4 py-2 text-ink-900">
-                        {o.referencia?.codigo_referencia || "—"}
-                        <div className="text-[0.6rem] text-graphite">
-                          {o.referencia?.nombre} {o.referencia?.tela ? `· ${o.referencia.tela}` : ""}
-                        </div>
-                      </td>
-                      <td className="px-4 py-2 text-graphite">{o.referencia_lote || "—"}</td>
-                      <td className="px-4 py-2 text-right tabular">{o.cantidad_programada || "—"}</td>
-                      <td className="px-4 py-2 text-graphite tabular text-[0.65rem]">{o.fecha_entrega || "—"}</td>
-                    </tr>
-                  ))}
+                  {ordenes.map((o) => {
+                    const bloqueada = yaRemitida(o);
+                    return (
+                      <tr key={o.id}
+                        className={`border-b border-border/40 ${bloqueada ? "opacity-50 bg-cloud/20" : ordenesSeleccionadas.has(o.id) ? "bg-teal/5" : "hover:bg-cloud/30"}`}>
+                        <td className="px-4 py-2">
+                          <input type="checkbox" checked={ordenesSeleccionadas.has(o.id)}
+                            disabled={bloqueada}
+                            onChange={() => toggleOrden(o.id)} />
+                        </td>
+                        <td className="px-4 py-2 font-semibold tabular text-navy-600">{o.consecutivo}</td>
+                        <td className="px-4 py-2 text-ink-900">
+                          {o.referencia?.codigo_referencia || "—"}
+                          <div className="text-[0.6rem] text-graphite">
+                            {o.referencia?.nombre} {o.referencia?.tela ? `· ${o.referencia.tela}` : ""}
+                          </div>
+                        </td>
+                        <td className="px-4 py-2 text-graphite">{o.referencia_lote || "—"}</td>
+                        <td className="px-4 py-2 text-right tabular">{o.cantidad_programada || "—"}</td>
+                        <td className="px-4 py-2 text-graphite tabular text-[0.65rem]">{o.fecha_entrega || "—"}</td>
+                        <td className="px-4 py-2">
+                          <div className="flex flex-wrap gap-1 justify-end">
+                            {o.tiene_remision_confeccion && (
+                              <span className="rounded-sm bg-navy-600/10 px-1.5 py-0.5 text-[0.52rem] font-bold uppercase tracking-widest text-navy-600">
+                                ✓ Confección
+                              </span>
+                            )}
+                            {o.tiene_remision_terminacion && (
+                              <span className="rounded-sm bg-teal/10 px-1.5 py-0.5 text-[0.52rem] font-bold uppercase tracking-widest text-teal">
+                                ✓ Terminación
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
