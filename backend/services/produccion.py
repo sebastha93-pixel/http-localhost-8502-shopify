@@ -588,6 +588,13 @@ def listar_precosteos(*, estado: Optional[str] = None, tela: Optional[str] = Non
         if tela:
             q = q.ilike("tela", f"%{tela}%")
     out = q.execute().data or []
+    if disponibles_para_corte:
+        # Excluir precosteos que YA tienen orden de corte — un precosteo
+        # genera un solo lote; si se necesita otro lote se hace otro precosteo.
+        con_corte = (sb.table("ordenes_corte").select("referencia_id")
+                       .limit(2000).execute()).data or []
+        usados = {r["referencia_id"] for r in con_corte if r.get("referencia_id")}
+        out = [p for p in out if p["id"] not in usados]
     _cache_set(cache_key, out, ttl_seg=30)
     return out
 
