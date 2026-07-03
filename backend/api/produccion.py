@@ -1264,3 +1264,159 @@ def enviar_digest_manual(
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(500, f"digest: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# REMISIÓN IMPRIMIBLE (PDF carta con QR)
+# ═══════════════════════════════════════════════════════════════════════
+
+@router.get("/remisiones/{rem_id}/pdf")
+def remision_pdf(
+    rem_id: str,
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
+):
+    """PDF imprimible de la remisión: cabecera, órdenes, insumos a separar
+    (solo cantidades, sin valores) y firmas. QR con el consecutivo."""
+    rem = svc.obtener_remision(rem_id)
+    if not rem:
+        raise HTTPException(404, "Remisión no encontrada")
+    try:
+        pdf = _generar_remision_pdf(rem)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"remision_pdf: {str(e)[:200]}")
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="remision_{rem.get("consecutivo","")}.pdf"'},
+    )
+
+
+def _generar_remision_pdf(rem: dict) -> bytes:
+    """Remisión formato carta. Confección = el proveedor RECOGE;
+    terminación = MALE'DENIM DESPACHA. Sin valores $ — es un documento
+    de entrega física, no comercial."""
+    from io import BytesIO
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas
+    from reportlab.graphics.barcode.qr import QrCodeWidget
+    from reportlab.graphics.shapes import Drawing
+    from reportlab.graphics import renderPDF
+
+    es_term = (rem.get("tipo") or "confeccion") == "terminacion"
+    titulo = "REMISIÓN DE TERMINACIÓN" if es_term else "REMISIÓN DE CONFECCIÓN"
+    prov = rem.get("confeccionista") or {}
+
+    buf = BytesIO()
+    W, H = letter
+    c = canvas.Canvas(buf, pagesize=letter)
+
+    # ── Cabecera ──
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(20 * mm, H - 20 * mm, "MALE'DENIM")
+    c.setFont("Helvetica", 8)
+    c.drawString(20 * mm, H - 25 * mm, "That Fits · Producción")
+    c.setFont("Helvetica-Bold", 12)
+    c.drawRightString(W - 45 * mm, H - 18 * mm, titulo)
+    c.setFont("Helvetica-Bold", 14)
+    c.drawRightString(W - 45 * mm, H - 25 * mm, rem.get("consecutivo") or "")
+
+    # QR con el consecutivo (regla: todo código nuevo del módulo es QR)
+    qr_size = 22 * mm
+    qr = QrCodeWidget(rem.get("consecutivo") or rem.get("id") or "")
+    b = qr.getBounds()
+    esc = qr_size / max(b[2] - b[0], b[3] - b[1])
+    d = Drawing(qr_size, qr_size, transform=[esc, 0, 0, esc, -b[0] * esc, -b[1] * esc])
+    d.add(qr)
+    renderPDF.draw(d, c, W - 40 * mm, H - 38 * mm)
+
+    c.line(20 * mm, H - 40 * mm, W - 20 * mm, H - 40 * mm)
+
+    # ── Datos del proveedor ──
+    y = H - 48 * mm
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(20 * mm, y, "PROVEEDOR TERMINACIÓN" if es_term else "CONFECCIONISTA")
+    c.setFont("Helvetica", 10)
+    y -= 5 * mm
+    c.drawString(20 * mm, y, prov.get("nombre") or "—")
+    y -= 5 * mm
+    c.setFont("Helvetica", 9)
+    c.drawString(20 * mm, y, f"Tel: {prov.get('telefono') or '—'}   ·   Dir: {prov.get('direccion') or '—'}")
+    c.setFont("Helvetica-Bold", 9)
+    c.drawRightString(W - 20 * mm, H - 48 * mm, "FECHA DESPACHO" if es_term else "FECHA RECOGIDA")
+    c.setFont("Helvetica", 10)
+    c.drawRightString(W - 20 * mm, H - 53 * mm, rem.get("fecha_recogida") or "—")
+
+    # ── Órdenes de corte ──
+    y -= 12 * mm
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(20 * mm, y, "LOTES ENTREGADOS")
+    y -= 6 * mm
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(20 * mm, y, "Lote")
+    c.drawString(55 * mm, y, "Referencia")
+    c.drawString(110 * mm, y, "Ref. lote")
+    c.drawRightString(W - 20 * mm, y, "Unidades")
+    y -= 1.5 * mm
+    c.line(20 * mm, y, W - 20 * mm, y)
+    c.setFont("Helvetica", 9)
+    total_unidades = 0
+    for it in (rem.get("items") or []):
+        oc = it.get("orden_corte") or {}
+        ref = oc.get("referencia") or {}
+        unid = sum(int(v or 0) for v in (oc.get("unidades_cortadas") or {}).values()) \
+               or int(oc.get("cantidad_programada") or 0)
+        total_unidades += unid
+        y -= 5.5 * mm
+        c.drawString(20 * mm, y, oc.get("consecutivo") or "—")
+        c.drawString(55 * mm, y, f"{ref.get('codigo_referencia') or '—'} · {(ref.get('nombre') or '')[:28]}")
+        c.drawString(110 * mm, y, oc.get("referencia_lote") or "—")
+        c.drawRightString(W - 20 * mm, y, str(unid or "—"))
+    y -= 2 * mm
+    c.line(20 * mm, y, W - 20 * mm, y)
+    y -= 5 * mm
+    c.setFont("Helvetica-Bold", 9)
+    c.drawRightString(W - 20 * mm, y, f"TOTAL: {total_unidades} unidades")
+
+    # ── Insumos a separar (cantidades, sin valores) ──
+    tipo_insumo = "terminacion" if es_term else "confeccion"
+    cats = ("INSUMO TERMINACION",) if es_term else ("INSUMO CONFECCION",)
+    y -= 10 * mm
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(20 * mm, y, f"INSUMOS ENTREGADOS ({tipo_insumo.upper()})")
+    y -= 6 * mm
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(20 * mm, y, "Insumo")
+    c.drawRightString(W - 20 * mm, y, "Cantidad")
+    y -= 1.5 * mm
+    c.line(20 * mm, y, W - 20 * mm, y)
+    c.setFont("Helvetica", 9)
+    for it in (rem.get("items") or []):
+        try:
+            calc = svc.calcular_insumos_requeridos_corte(it["orden_corte_id"], categorias=cats)
+            for ins in (calc.get("items") or []):
+                y -= 5.5 * mm
+                if y < 45 * mm:  # salto de página si se llena
+                    c.showPage()
+                    y = H - 25 * mm
+                    c.setFont("Helvetica", 9)
+                c.drawString(20 * mm, y, str(ins.get("item") or "—"))
+                c.drawRightString(W - 20 * mm, y, f"{ins.get('total_requerido') or 0:,.0f}".replace(",", "."))
+        except Exception:
+            continue
+
+    # ── Firmas ──
+    y_f = 30 * mm
+    c.line(25 * mm, y_f, 85 * mm, y_f)
+    c.line(W - 85 * mm, y_f, W - 25 * mm, y_f)
+    c.setFont("Helvetica", 8)
+    c.drawCentredString(55 * mm, y_f - 5 * mm, "Entrega · MALE'DENIM")
+    c.drawCentredString(W - 55 * mm, y_f - 5 * mm, f"Recibe · {prov.get('nombre') or 'Proveedor'}")
+
+    c.setFont("Helvetica-Oblique", 7)
+    c.drawCentredString(W / 2, 12 * mm, "Documento de entrega física — no es factura ni cuenta de cobro.")
+
+    c.showPage()
+    c.save()
+    return buf.getvalue()
