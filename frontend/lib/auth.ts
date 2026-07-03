@@ -52,6 +52,8 @@ export const GRUPOS_PERMISOS = {
                    "historico", "b2b", "contraentrega", "inventario"],
   finanzas:       ["finanzas"],
   comercial:      ["comercial", "revenue", "inteligencia"],
+  produccion:     ["produccion"],
+  produccion_costos: ["produccion_costos"],
   configuracion:  ["configuracion", "usuarios", "auditoria"],
 } as const;
 
@@ -62,6 +64,8 @@ export const GRUPO_LABEL: Record<string, string> = {
   operaciones:    "Operaciones (logística, envíos, devoluciones, incidencias, histórico, B2B, contraentrega, inventario)",
   finanzas:       "Finanzas",
   comercial:      "Comercial (ventas, revenue, inteligencia)",
+  produccion:     "Producción (ingreso, inventario tela, corte, remisiones, lotes, proveedores)",
+  produccion_costos: "Producción · COSTOS (precosteo, costeo real, valores $) — sensible",
   configuracion:  "Configuración (configuración general, usuarios, auditoría)",
 };
 
@@ -145,5 +149,17 @@ export function puedeEscribir(user?: User | null): boolean {
       if (acciones && typeof acciones === "object" && (acciones as Record<string, boolean>).modificar) return true;
     }
   }
+  return false;
+}
+
+
+/** Permiso ESTRICTO de costos de producción: solo admin o permiso explícito.
+ * Espejo de tiene_permiso_costos del backend — para ocultar links/valores $. */
+export function puedeVerCostosProduccion(user?: { rol?: string; permisos?: Record<string, unknown> } | null): boolean {
+  if (!user) return false;
+  if (user.rol === "admin") return true;
+  const acciones = (user.permisos || {})["produccion_costos"];
+  if (Array.isArray(acciones)) return acciones.includes("ver");
+  if (acciones && typeof acciones === "object") return !!(acciones as Record<string, boolean>)["ver"];
   return false;
 }

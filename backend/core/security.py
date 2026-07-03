@@ -244,3 +244,40 @@ def require_permission(modulo: str, accion: str):
             )
         return user
     return _check
+
+
+def require_permission_estricto(modulo: str, accion: str):
+    """Como require_permission pero SIN herencia de roles legacy:
+    solo pasan admin o usuarios con permiso EXPLÍCITO en el módulo.
+    'lector' y 'operador' NO pasan aunque su rol normalmente lo permita.
+    Para datos sensibles (costos, precios de producción).
+    """
+    def _check(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+        if not user.activo:
+            raise HTTPException(403, "Usuario inactivo")
+        if user.rol == "admin":
+            return user
+        permisos = user.permisos or {}
+        acciones = permisos.get(modulo)
+        ok = (isinstance(acciones, list) and accion in acciones) or \
+             (isinstance(acciones, dict) and acciones.get(accion))
+        if not ok:
+            raise HTTPException(
+                403, f"Requiere permiso explícito de '{accion}' en '{modulo}'")
+        return user
+    return _check
+
+
+def tiene_permiso_costos(user: CurrentUser) -> bool:
+    """Helper para endpoints que degradan la respuesta (ocultan valores $)
+    en vez de rechazar: True solo para admin o permiso explícito."""
+    if not user or not user.activo:
+        return False
+    if user.rol == "admin":
+        return True
+    acciones = (user.permisos or {}).get("produccion_costos")
+    if isinstance(acciones, list):
+        return "ver" in acciones
+    if isinstance(acciones, dict):
+        return bool(acciones.get("ver"))
+    return False

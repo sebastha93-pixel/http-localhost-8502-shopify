@@ -7,7 +7,7 @@ import { ChevronDown, UserCircle, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 import { useAuth } from "@/components/auth-provider";
-import { ROL_LABEL, esAdmin } from "@/lib/auth";
+import { ROL_LABEL, esAdmin, puedeVerCostosProduccion } from "@/lib/auth";
 import { SyncButton } from "@/components/sync-button";
 
 interface NavItem {
@@ -92,11 +92,17 @@ export function Sidebar() {
   const pathname = usePathname();
   const { user } = useAuth();
 
-  // Filtra grupo Configuración: "Usuarios" y "Auditoría" solo para admin
+  // Filtra grupo Configuración: "Usuarios" y "Auditoría" solo para admin.
+  // Precosteo y Costeo real: solo con permiso estricto de costos de producción.
   const ADMIN_ONLY = ["/usuarios", "/auditoria", "/diagnostico-revenue"];
+  const COSTOS_ONLY = ["/produccion/precosteo", "/produccion/costeo"];
   const groups = NAV.groups.map((g) => ({
     ...g,
-    items: g.items.filter((it) => !ADMIN_ONLY.includes(it.href) || esAdmin(user)),
+    items: g.items.filter((it) => {
+      if (ADMIN_ONLY.includes(it.href)) return esAdmin(user);
+      if (COSTOS_ONLY.includes(it.href)) return puedeVerCostosProduccion(user);
+      return true;
+    }),
   }));
 
   return (
