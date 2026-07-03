@@ -106,6 +106,21 @@ def listar_documentos_soporte(*, desde: Optional[str] = None,
     if hit and not force and (time.time() - hit[0] < 600):
         return hit[1]
 
+    def _parse_items(raw: list) -> list[dict]:
+        items = []
+        for it in raw or []:
+            desc = it.get("description") or it.get("name") or ""
+            cant = float(it.get("quantity") or 0)
+            precio = float(it.get("price") or 0)
+            items.append({
+                "descripcion":    desc,
+                "ref":            _extraer_ref(desc),
+                "cantidad":       cant,
+                "valor_unitario": precio,
+                "total_sin_iva":  round(cant * precio, 2),
+            })
+        return items
+
     docs: list[dict] = []
     page = 1
     while page <= 50:
@@ -120,32 +135,32 @@ def listar_documentos_soporte(*, desde: Optional[str] = None,
             fecha = (p.get("date") or "")[:10]
             if desde and fecha and fecha < desde:
                 continue
-            items = []
-            for it in (p.get("items") or []):
-                desc = it.get("description") or it.get("name") or ""
-                cant = float(it.get("quantity") or 0)
-                precio = float(it.get("price") or 0)
-                items.append({
-                    "descripcion":    desc,
-                    "ref":            _extraer_ref(desc),
-                    "cantidad":       cant,
-                    "valor_unitario": precio,
-                    "total_sin_iva":  round(cant * precio, 2),
-                })
             sup = p.get("supplier") or {}
             docs.append({
+                "id":               p.get("id"),
                 "ds":               name,
                 "fecha":            fecha,
                 "proveedor_id":     sup.get("identification"),
                 "proveedor_nombre": (sup.get("branch_office") or sup.get("name") or ""),
                 "total":            float(p.get("total") or 0),
                 "balance":          float(p.get("balance") or 0),
-                "items":            items,
+                "items":            _parse_items(p.get("items")),
             })
         total = (data.get("pagination") or {}).get("total_results") or 0
         if page * 100 >= total:
             break
         page += 1
+
+    # El listado de /purchases a veces NO incluye items (descripción/REF).
+    # Para esos, pedir el detalle uno a uno — con pausa por el rate limit.
+    pendientes = [d for d in docs if not d["items"] and d.get("id")]
+    for d in pendientes[:150]:
+        try:
+            detalle = siigo_get(f"/purchases/{d['id']}")
+            d["items"] = _parse_items(detalle.get("items"))
+            time.sleep(0.4)
+        except Exception as e:
+            log.warning(f"[siigo] detalle DS {d['ds']} fallo: {e}")
 
     _data_cache[cache_key] = (time.time(), docs)
     return docs

@@ -2085,8 +2085,15 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             lotes_por_ref[ref] = lote
 
     # ── Documentos soporte de Siigo ──────────────────────────────
+    # Sin `desde` explícito, solo traer DS desde el primer lote del OS —
+    # los DS históricos pre-sistema no cruzan con nada y pedir su detalle
+    # uno a uno se comería el rate limit.
+    desde_siigo = desde
+    if not desde_siigo and ocs:
+        fechas = sorted((oc.get("created_at") or "")[:10] for oc in ocs if oc.get("created_at"))
+        desde_siigo = fechas[0] if fechas else None
     try:
-        docs = siigo.listar_documentos_soporte(desde=desde)
+        docs = siigo.listar_documentos_soporte(desde=desde_siigo)
     except Exception as e:
         return {"ok": False, "error": "siigo_error", "mensaje": str(e)[:300]}
 
