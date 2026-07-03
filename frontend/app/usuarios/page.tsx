@@ -237,6 +237,34 @@ function PermisosMatrix({
     setKey(key, Array.from(actual));
   }
 
+  // Tocar un submódulo cuando el ÁREA tiene permisos: primero se "explota"
+  // el permiso del área en cada submódulo y luego se aplica el cambio —
+  // así la herencia no bloquea la edición fina.
+  function toggleSub(grupo: string, sub: string, accion: Accion) {
+    const delGrupo = permisos[grupo] || [];
+    if (delGrupo.length > 0) {
+      const p = { ...permisos };
+      delete p[grupo];
+      for (const s2 of SUBMODULOS[grupo] || []) {
+        p[s2] = [...delGrupo];
+      }
+      // aplicar el toggle sobre el estado explotado
+      const actual = new Set(p[sub] || []);
+      if (actual.has(accion)) {
+        actual.delete(accion);
+        if (accion === "ver") { actual.delete("modificar"); actual.delete("borrar"); }
+      } else {
+        actual.add(accion);
+        if (accion !== "ver") actual.add("ver");
+      }
+      if (Array.from(actual).length === 0) delete p[sub];
+      else p[sub] = Array.from(actual);
+      onChange(p);
+      return;
+    }
+    toggle(sub, accion);
+  }
+
   // "Todos" del grupo: otorga las 3 acciones a nivel de GRUPO (cubre todos
   // los submódulos de una) y limpia las llaves de submódulo redundantes.
   function grupoTodos(g: string) {
@@ -244,13 +272,14 @@ function PermisosMatrix({
   }
   function toggleTodos(g: string) {
     const p = { ...permisos };
-    if (grupoTodos(g)) {
+    const subs = SUBMODULOS[g] || [];
+    const hayAlgo = (p[g] || []).length > 0 || subs.some((sub) => (p[sub] || []).length > 0);
+    if (hayAlgo) {
+      // Limpia el área completa (grupo + submódulos) — "salir rápido"
       delete p[g];
+      for (const sub of subs) delete p[sub];
     } else {
       p[g] = [...ACCIONES];
-      for (const sub of SUBMODULOS[g] || []) {
-        if (sub !== g) delete p[sub];
-      }
     }
     onChange(p);
   }
@@ -332,10 +361,17 @@ function PermisosMatrix({
                 </td>
                 {ACCIONES.map((a) => (
                   <td key={a} className="px-3 py-2 text-center">
-                    <input type="checkbox"
-                      checked={(permisos[g] || []).includes(a)}
-                      onChange={() => toggle(g, a)}
-                      className="rounded border-graphite/40 cursor-pointer h-4 w-4" />
+                    {tieneSubs ? (
+                      // Con submódulos las acciones van POR SUBMÓDULO (despliega ▾)
+                      <span className="text-[0.6rem] text-graphite/50">
+                        {(permisos[g] || []).includes(a) ? "✓" : "·"}
+                      </span>
+                    ) : (
+                      <input type="checkbox"
+                        checked={(permisos[g] || []).includes(a)}
+                        onChange={() => toggle(g, a)}
+                        className="rounded border-graphite/40 cursor-pointer h-4 w-4" />
+                    )}
                   </td>
                 ))}
               </tr>
@@ -359,9 +395,8 @@ function PermisosMatrix({
                         <td key={a} className="px-3 py-1.5 text-center">
                           <input type="checkbox"
                             checked={heredado || (permisos[sub] || []).includes(a)}
-                            disabled={heredado}
-                            onChange={() => toggle(sub, a)}
-                            className="rounded border-graphite/40 cursor-pointer h-3.5 w-3.5 disabled:opacity-50" />
+                            onChange={() => toggleSub(g, sub, a)}
+                            className="rounded border-graphite/40 cursor-pointer h-3.5 w-3.5" />
                         </td>
                       );
                     })}
@@ -374,9 +409,9 @@ function PermisosMatrix({
         </tbody>
       </table>
       <p className="px-4 py-2 text-[0.62rem] text-graphite italic border-t border-border">
-        &quot;Todos&quot; otorga ver + modificar + borrar en toda el área de una vez. En Producción
-        puedes desplegar y dar permisos por submódulo (si el área tiene permisos, los submódulos
-        los heredan). &quot;Modificar&quot; y &quot;Borrar&quot; implican &quot;Ver&quot;.
+        &quot;Todos&quot; marca (o limpia) el área completa de una vez. En Producción las acciones
+        se dan POR SUBMÓDULO: despliega con la flecha y marca cada uno. &quot;Modificar&quot; y
+        &quot;Borrar&quot; implican &quot;Ver&quot; automáticamente.
       </p>
     </div>
   );
