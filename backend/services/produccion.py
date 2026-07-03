@@ -1369,7 +1369,7 @@ def crear_confeccionista(*, nombre: str, telefono: Optional[str] = None,
         raise RuntimeError("Supabase no configurado")
     if not nombre.strip():
         raise ValueError("nombre_requerido")
-    if tipo not in ("confeccion", "terminacion", "lavanderia"):
+    if tipo not in ("confeccion", "terminacion", "lavanderia", "otros"):
         raise ValueError("tipo_invalido")
     row = {
         "nombre":    nombre.strip(),

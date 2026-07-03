@@ -74,7 +74,7 @@ const NAV: { home: NavItem; groups: NavGroup[] } = {
         { label: "Lotes",           href: "/produccion/lotes" },
         { label: "Orden corte",     href: "/produccion/corte" },
         { label: "Remisiones",      href: "/produccion/remisiones" },
-        { label: "Confeccionistas", href: "/produccion/confeccionistas" },
+        { label: "Proveedores",     href: "/produccion/confeccionistas" },
       ],
     },
     {

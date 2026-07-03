@@ -51,13 +51,13 @@ export default function ConfeccionistasPage() {
     onError: (e: Error) => setErr(e.message),
   });
 
-  if (q.isLoading) return <LoadingState label="Cargando confeccionistas…" />;
+  if (q.isLoading) return <LoadingState label="Cargando proveedores…" />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
   const lista = q.data?.confeccionistas || [];
 
   return (
-    <PageShell title="Confeccionistas" subtitle="Confección · terminación · lavanderías">
+    <PageShell title="Proveedores" subtitle="Confección · terminación · lavanderías · otros">
       <div className="flex items-center justify-between">
         <label className="flex items-center gap-2 text-xs text-graphite">
           <input type="checkbox" checked={incluirInactivos} onChange={(e) => setIncluirInactivos(e.target.checked)} />
@@ -93,6 +93,10 @@ export default function ConfeccionistasPage() {
                   <input type="radio" name="tipo" value="lavanderia" checked={tipo === "lavanderia"} onChange={() => setTipo("lavanderia")} />
                   Lavandería
                 </label>
+                <label className="inline-flex items-center gap-2">
+                  <input type="radio" name="tipo" value="otros" checked={tipo === "otros"} onChange={() => setTipo("otros")} />
+                  Otros
+                </label>
               </div>
             </div>
             {err && (
@@ -119,7 +123,7 @@ export default function ConfeccionistasPage() {
         <CardContent className="p-0">
           {lista.length === 0 ? (
             <div className="p-10 text-center text-sm text-graphite">
-              No hay confeccionistas registrados aún.
+              No hay proveedores registrados aún.
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -179,6 +183,7 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
             <option value="confeccion">Confección</option>
             <option value="terminacion">Terminación</option>
             <option value="lavanderia">Lavandería</option>
+            <option value="otros">Otros</option>
           </select>
         </td>
         <td className="px-4 py-2">
@@ -213,7 +218,7 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
       <td className="px-4 py-2 font-semibold text-ink-900">{c.nombre}</td>
       <td className="px-4 py-2">
         <Badge tone={c.tipo === "terminacion" ? "info" : c.tipo === "lavanderia" ? "pendiente" : "neutral"}>
-          {c.tipo === "terminacion" ? "Terminación" : c.tipo === "lavanderia" ? "Lavandería" : "Confección"}
+          {({ terminacion: "Terminación", lavanderia: "Lavandería", otros: "Otros" }[c.tipo || ""] || "Confección")}
         </Badge>
       </td>
       <td className="px-4 py-2 text-graphite">{c.telefono || "—"}</td>
