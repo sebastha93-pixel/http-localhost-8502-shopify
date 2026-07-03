@@ -1,10 +1,9 @@
 "use client";
 
 /**
- * Vista unificada de LOTES — reemplaza la navegación fragmentada entre
- * /produccion/corte, /produccion/informes-corte, /produccion/rutas.
- *
+ * Vista unificada de LOTES — tarjetas grandes con pipeline visual.
  * Un lote = una orden de corte. Los tabs filtran por estado + etapa de ruta.
+ * Pipeline: Corte → Confección → Lavandería → Terminación → Despacho.
  */
 import { useMemo, useState } from "react";
 import Link from "next/link";
@@ -12,8 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Clock, Scissors } from "lucide-react";
+import { Clock, Scissors, User, Package, Check } from "lucide-react";
 
 interface OrdenCorte {
   id: string;
@@ -22,10 +20,8 @@ interface OrdenCorte {
   referencia_lote?: string;
   cantidad_programada?: number;
   unidades_cortadas?: Record<string, number>;
-  precio_corte?: number;
   fecha_entrega?: string;
   responsable?: string;
-  diferencia_pct?: number;
   created_at: string;
   referencia?: {
     codigo_referencia: string;
@@ -58,18 +54,38 @@ const TABS = [
   { key: "terminados",  label: "Despachados" },
 ];
 
-function toneEstadoCorte(e: string): "normal" | "pendiente" | "info" | "neutral" {
-  if (e === "cortada") return "info";
-  if (e === "autorizada") return "pendiente";
-  if (e === "borrador") return "neutral";
-  return "info";
+// ── Pipeline de etapas ────────────────────────────────────────────────
+const PASOS = ["Corte", "Confección", "Lavandería", "Terminación", "Despacho"] as const;
+
+/** Devuelve el índice del paso ACTUAL (0-4); -1 si ya despachó todo. */
+function pasoActual(oc: OrdenCorte, ruta?: Ruta): number {
+  if (oc.estado !== "cortada") return 0;
+  if (!ruta) return 1; // cortada, esperando asignación a confección
+  const e = ruta.etapa;
+  if (["asignado", "aceptado", "en_confeccion"].includes(e)) return 1;
+  if (e === "lavanderia") return 2;
+  if (["terminacion_recibida", "terminacion_terminada"].includes(e)) return 3;
+  if (e === "despachado") return -1; // completo
+  return 1;
 }
-function toneEtapaRuta(e?: string): "normal" | "pendiente" | "info" | "neutral" {
-  if (!e) return "neutral";
-  if (e === "despachado" || e === "terminacion_terminada") return "normal";
-  if (e === "asignado") return "pendiente";
-  return "info";
+
+function etiquetaEstado(oc: OrdenCorte, ruta?: Ruta): { texto: string; tone: string } {
+  if (oc.estado === "borrador")   return { texto: "Borrador",       tone: "bg-cloud text-graphite" };
+  if (oc.estado === "autorizada") return { texto: "Autorizada",     tone: "bg-amber-100 text-amber-800" };
+  if (oc.estado === "en_proceso") return { texto: "En proceso",     tone: "bg-amber-100 text-amber-800" };
+  if (!ruta)                      return { texto: "Sin asignar",    tone: "bg-navy-600/10 text-navy-600" };
+  const MAPA: Record<string, { texto: string; tone: string }> = {
+    asignado:              { texto: "Asignado",              tone: "bg-navy-600/10 text-navy-600" },
+    aceptado:              { texto: "Aceptado",              tone: "bg-navy-600/10 text-navy-600" },
+    en_confeccion:         { texto: "En confección",         tone: "bg-navy-600/10 text-navy-600" },
+    lavanderia:            { texto: "En lavandería",         tone: "bg-sky-100 text-sky-800" },
+    terminacion_recibida:  { texto: "En terminación",        tone: "bg-teal/10 text-teal" },
+    terminacion_terminada: { texto: "Terminación lista",     tone: "bg-teal/10 text-teal" },
+    despachado:            { texto: "Despachado",            tone: "bg-emerald-100 text-emerald-800" },
+  };
+  return MAPA[ruta.etapa] || { texto: ruta.etapa, tone: "bg-cloud text-graphite" };
 }
+
 function diasDesde(iso?: string) {
   if (!iso) return null;
   return Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
@@ -96,7 +112,6 @@ export default function LotesPage() {
     return cortes.map((oc) => ({ oc, ruta: rutaMap.get(oc.id) }));
   }, [cortesQ.data, rutasQ.data]);
 
-  // Filtros por tab
   const filtrados = useMemo(() => {
     switch (tab) {
       case "por_cortar":
@@ -104,7 +119,7 @@ export default function LotesPage() {
       case "cortadas":
         return lotes.filter((l) => l.oc.estado === "cortada" && !l.ruta);
       case "en_ruta":
-        return lotes.filter((l) => l.ruta && !["despachado"].includes(l.ruta.etapa));
+        return lotes.filter((l) => l.ruta && l.ruta.etapa !== "despachado");
       case "terminados":
         return lotes.filter((l) => l.ruta?.etapa === "despachado");
       default:
@@ -112,13 +127,12 @@ export default function LotesPage() {
     }
   }, [lotes, tab]);
 
-  // Contadores por tab (para chips)
   const contadores = useMemo(() => {
     return {
       todas:      lotes.length,
       por_cortar: lotes.filter((l) => ["borrador", "autorizada", "en_proceso"].includes(l.oc.estado)).length,
       cortadas:   lotes.filter((l) => l.oc.estado === "cortada" && !l.ruta).length,
-      en_ruta:    lotes.filter((l) => l.ruta && !["despachado"].includes(l.ruta.etapa)).length,
+      en_ruta:    lotes.filter((l) => l.ruta && l.ruta.etapa !== "despachado").length,
       terminados: lotes.filter((l) => l.ruta?.etapa === "despachado").length,
     } as Record<string, number>;
   }, [lotes]);
@@ -138,9 +152,9 @@ export default function LotesPage() {
           const cnt = contadores[t.key] ?? 0;
           return (
             <button key={t.key} onClick={() => setTab(t.key)}
-              className={`inline-flex items-center gap-2 rounded-sm border px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest ${active ? "bg-navy-600 border-navy-600 text-white" : "border-border bg-white text-ink-900 hover:bg-cloud"}`}>
+              className={`inline-flex items-center gap-2 rounded-sm border px-4 py-2 text-[0.68rem] font-semibold uppercase tracking-widest transition-colors ${active ? "bg-navy-600 border-navy-600 text-white" : "border-border bg-white text-ink-900 hover:bg-cloud"}`}>
               {t.label}
-              <span className={`rounded-sm px-1.5 py-0.5 text-[0.55rem] tabular ${active ? "bg-white/20" : "bg-cloud text-graphite"}`}>
+              <span className={`rounded-sm px-1.5 py-0.5 text-[0.58rem] tabular ${active ? "bg-white/20" : "bg-cloud text-graphite"}`}>
                 {cnt}
               </span>
             </button>
@@ -150,69 +164,105 @@ export default function LotesPage() {
 
       {filtrados.length === 0 ? (
         <Card>
-          <CardContent className="p-10 text-center">
+          <CardContent className="p-12 text-center">
             <Scissors className="mx-auto h-8 w-8 text-graphite" />
             <p className="mt-3 text-sm text-graphite">Sin lotes en este filtro.</p>
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardContent className="p-0">
-            <table className="w-full text-xs">
-              <thead className="bg-cloud/60 border-b border-border">
-                <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
-                  <th className="px-4 py-2">Consecutivo</th>
-                  <th className="px-4 py-2">Referencia</th>
-                  <th className="px-4 py-2">Lote</th>
-                  <th className="px-4 py-2 text-right">Cantidad</th>
-                  <th className="px-4 py-2">Corte</th>
-                  <th className="px-4 py-2">Ruta</th>
-                  <th className="px-4 py-2">Confeccionista</th>
-                  <th className="px-4 py-2 text-right">Días</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtrados.map(({ oc, ruta }) => {
-                  const cantidad = oc.cantidad_programada
-                    ?? Object.values(oc.unidades_cortadas || {}).reduce<number>((s, n) => s + (Number(n) || 0), 0);
-                  const dias = diasDesde(ruta?.asignado_at || oc.created_at);
-                  return (
-                    <tr key={oc.id} className="border-b border-border/40 hover:bg-cloud/30">
-                      <td className="px-4 py-2 font-semibold tabular text-navy-600">
-                        <Link href={`/produccion/corte/${oc.id}`} className="hover:underline">
-                          {oc.consecutivo}
-                        </Link>
-                      </td>
-                      <td className="px-4 py-2 text-ink-900">
-                        {oc.referencia?.codigo_referencia || "—"}
-                        <div className="text-[0.6rem] text-graphite">
-                          {oc.referencia?.nombre} {oc.referencia?.tela ? `· ${oc.referencia.tela}` : ""}
-                        </div>
-                      </td>
-                      <td className="px-4 py-2 text-graphite">{oc.referencia_lote || "—"}</td>
-                      <td className="px-4 py-2 text-right tabular">{cantidad || "—"}</td>
-                      <td className="px-4 py-2">
-                        <Badge tone={toneEstadoCorte(oc.estado)}>{oc.estado}</Badge>
-                      </td>
-                      <td className="px-4 py-2">
-                        {ruta ? <Badge tone={toneEtapaRuta(ruta.etapa)}>{ruta.etapa}</Badge> : <span className="text-[0.65rem] text-graphite">—</span>}
-                      </td>
-                      <td className="px-4 py-2 text-graphite">{ruta?.confeccionista?.nombre || "—"}</td>
-                      <td className="px-4 py-2 text-right tabular text-graphite">
-                        {dias != null ? (
-                          <span className="inline-flex items-center gap-1">
-                            <Clock className="h-3 w-3" /> {dias}
-                          </span>
-                        ) : "—"}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </CardContent>
-        </Card>
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          {filtrados.map(({ oc, ruta }) => (
+            <LoteCard key={oc.id} oc={oc} ruta={ruta} />
+          ))}
+        </div>
       )}
     </PageShell>
+  );
+}
+
+function LoteCard({ oc, ruta }: { oc: OrdenCorte; ruta?: Ruta }) {
+  const cantidad = oc.cantidad_programada
+    ?? Object.values(oc.unidades_cortadas || {}).reduce<number>((s, n) => s + (Number(n) || 0), 0);
+  const dias = diasDesde(ruta?.asignado_at || oc.created_at);
+  const actual = pasoActual(oc, ruta);
+  const estado = etiquetaEstado(oc, ruta);
+
+  return (
+    <Link href={`/produccion/corte/${oc.id}`} className="group block">
+      <Card className="h-full transition-shadow group-hover:shadow-md">
+        <CardContent className="p-5 space-y-4">
+          {/* Cabecera: consecutivo + estado */}
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-display text-lg font-semibold tabular text-navy-600 group-hover:underline leading-none">
+                {oc.consecutivo}
+              </p>
+              <p className="mt-1.5 text-sm font-semibold text-ink-900 truncate">
+                {oc.referencia?.codigo_referencia || "—"}
+                <span className="font-normal text-graphite"> · {oc.referencia?.nombre || ""}</span>
+              </p>
+              <p className="text-[0.68rem] text-graphite truncate">
+                {oc.referencia?.tela || "sin tela"}
+                {oc.referencia_lote ? ` · Lote ${oc.referencia_lote}` : ""}
+              </p>
+            </div>
+            <span className={`shrink-0 rounded-sm px-2.5 py-1 text-[0.6rem] font-bold uppercase tracking-widest ${estado.tone}`}>
+              {estado.texto}
+            </span>
+          </div>
+
+          {/* Pipeline de etapas */}
+          <div className="flex items-center gap-1">
+            {PASOS.map((paso, i) => {
+              const completo = actual === -1 || i < actual;
+              const esActual = actual === i;
+              return (
+                <div key={paso} className="flex-1 min-w-0">
+                  <div className={`h-1.5 rounded-full ${completo ? "bg-teal" : esActual ? "bg-navy-600" : "bg-cloud"}`} />
+                  <p className={`mt-1 text-center text-[0.52rem] uppercase tracking-wider truncate ${completo ? "text-teal font-semibold" : esActual ? "text-navy-600 font-bold" : "text-graphite/50"}`}>
+                    {completo ? <Check className="inline h-2.5 w-2.5 -mt-0.5 mr-0.5" /> : null}
+                    {paso}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Datos clave */}
+          <div className="grid grid-cols-3 gap-3 border-t border-border/60 pt-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <Package className="h-4 w-4 text-graphite/60 flex-none" />
+              <div className="min-w-0">
+                <p className="text-[0.55rem] uppercase tracking-widest text-graphite">Cantidad</p>
+                <p className="text-sm font-semibold tabular text-ink-900">{cantidad || "—"}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 min-w-0">
+              <User className="h-4 w-4 text-graphite/60 flex-none" />
+              <div className="min-w-0">
+                <p className="text-[0.55rem] uppercase tracking-widest text-graphite">Confeccionista</p>
+                <p className="text-sm font-semibold text-ink-900 truncate">
+                  {ruta?.confeccionista?.nombre || "—"}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 min-w-0">
+              <Clock className="h-4 w-4 text-graphite/60 flex-none" />
+              <div className="min-w-0">
+                <p className="text-[0.55rem] uppercase tracking-widest text-graphite">Días</p>
+                <p className="text-sm font-semibold tabular text-ink-900">{dias != null ? dias : "—"}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Terminación si existe */}
+          {ruta?.terminacion?.nombre && (
+            <p className="text-[0.65rem] text-graphite">
+              Terminación: <span className="font-semibold text-ink-900">{ruta.terminacion.nombre}</span>
+            </p>
+          )}
+        </CardContent>
+      </Card>
+    </Link>
   );
 }
