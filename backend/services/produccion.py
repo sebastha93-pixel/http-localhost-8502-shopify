@@ -2185,12 +2185,28 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
     # PASO 1 — Recolectar TODOS los items que matchean cada lote.
     # Un lote puede pagarse en varios DS (pagos parciales): se ACUMULAN,
     # no se pisan (last-wins subestimaba el total y daba alertas falsas).
+    #
+    # Matching en 2 niveles:
+    #   1. REF extraída por regex ("Servicio de Confección REF 94608-1")
+    #   2. Fallback: buscar cada referencia conocida como substring de la
+    #      descripción normalizada — cubre digitación sin la palabra REF
+    #      (ej. "Confección lote 94608-1"). Solo refs de 4+ caracteres
+    #      para no matchear por accidente.
+    def _match_fallback(descripcion: str):
+        desc_norm = _norm_ref(descripcion)
+        for ref_conocida, lote_c in lotes_por_ref.items():
+            if len(ref_conocida) >= 4 and ref_conocida in desc_norm:
+                return lote_c
+        return None
+
     ds_sin_lote = []
     matches: dict[str, list] = {}   # orden_corte_id → [(doc, item)]
     for doc in docs:
         for it in doc["items"]:
             ref = _norm_ref(it.get("ref"))
             lote = lotes_por_ref.get(ref) if ref else None
+            if not lote:
+                lote = _match_fallback(it.get("descripcion") or "")
             if not lote:
                 ds_sin_lote.append({
                     "ds":         doc["ds"],
