@@ -107,6 +107,14 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"   ⚠️  Revenue scheduler no arrancó: {e}")
 
+        # Resumen diario de alertas de producción (correo vía Resend)
+        try:
+            from backend.core import produccion_scheduler
+            if produccion_scheduler.start():
+                print(f"   🧵 Producción digest activo · {produccion_scheduler.HORA_OBJETIVO_BOG}:30am Bogotá")
+        except Exception as e:
+            print(f"   ⚠️  Producción digest no arrancó: {e}")
+
         # One-time backfill: extraer custom_fields_values del raw JSONB
         # a las columnas dedicadas. Idempotente — marca done en sync_state
         # cuando termina para no repetir en cada arranque.
@@ -150,6 +158,11 @@ async def lifespan(app: FastAPI):
         scheduler.stop()
         bot_scheduler.stop()
         revenue_scheduler.stop()
+        try:
+            from backend.core import produccion_scheduler
+            produccion_scheduler.stop()
+        except Exception:
+            pass
         try:
             os.unlink(LEADER_LOCK)
         except Exception:

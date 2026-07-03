@@ -1205,3 +1205,32 @@ def costeo_real(
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(500, f"costeo_real: {str(e)[:200]}")
+
+
+@router.get("/alertas")
+def alertas_produccion(
+    incluir_costeo: bool = True,
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
+) -> dict:
+    """Todas las alertas de producción (stock bajo + lotes estancados + cruce Siigo)."""
+    try:
+        return svc.alertas_produccion(incluir_costeo=incluir_costeo)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"alertas: {str(e)[:200]}")
+
+
+@router.post("/alertas/digest")
+def enviar_digest_manual(
+    force: bool = False,
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Dispara el resumen diario de alertas por correo AHORA (para probar el canal).
+    Con force=true envía aunque no haya alertas.
+    """
+    from backend.core import produccion_scheduler
+    try:
+        return produccion_scheduler.enviar_digest(force=force)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"digest: {str(e)[:200]}")

@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { KpiCard, KpiStrip } from "@/components/kpi-card";
 import { LoadingState, ErrorState } from "@/components/page-shell";
+import { BotonWhatsApp } from "@/components/boton-whatsapp";
 import { formatMoney, formatMoneyShort, fmtDateTime, hoyBogota } from "@/lib/utils";
 import {
   ArrowRight, Loader2, TrendingUp, AlertTriangle, CheckCircle,
@@ -21,6 +22,20 @@ interface QuickAction {
   valor: number;
   href: string;
   severity: "info" | "warning" | "danger" | "success";
+}
+
+interface AlertaProduccion {
+  tipo: string;
+  severidad: string; // alta | media | baja
+  fuente: string;    // inventario | ruta | costeo
+  mensaje: string;
+}
+
+interface AlertasProduccion {
+  alertas: AlertaProduccion[];
+  total: number;
+  altas: number;
+  generado_at: string;
 }
 
 interface PedidoUrgente {
@@ -172,6 +187,12 @@ export default function CentroControlPage() {
     staleTime: 2 * 60_000,
     retry: 1,
   });
+  const alertasProdQ = useQuery({
+    queryKey: ["dashboard", "alertas-produccion"],
+    queryFn: () => api.get<AlertasProduccion>("/api/produccion/alertas"),
+    staleTime: 5 * 60_000,
+    retry: 1,
+  });
   const mpQ = useQuery({
     queryKey: ["dashboard", "mp-30d"],
     queryFn: () => {
@@ -221,6 +242,45 @@ export default function CentroControlPage() {
               <QuickActionCard key={q.label} q={q} />
             ))}
           </div>
+        </section>
+      )}
+
+      {/* ────────── ALERTAS DE PRODUCCIÓN ─────────── */}
+      {(alertasProdQ.data?.total ?? 0) > 0 && (
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <p className="section-label flex items-center gap-2">
+              <ShieldAlert className="h-3 w-3 text-terracotta" />
+              Alertas de producción ({alertasProdQ.data!.total})
+            </p>
+            <div className="flex items-center gap-3">
+              <BotonWhatsApp
+                mensaje={`⚠️ Producción MALE'DENIM · ${alertasProdQ.data!.total} alerta(s):\n\n${alertasProdQ.data!.alertas.map((a) => `${a.severidad === "alta" ? "🔴" : "🟡"} ${a.mensaje}`).join("\n")}\n\nDetalle: https://app.maledenim.com/produccion/costeo`}
+                label="Compartir" />
+              <Link href="/produccion/costeo" className="text-[0.65rem] text-navy-600 hover:underline">
+                Ver costeo real →
+              </Link>
+            </div>
+          </div>
+          <Card>
+            <CardContent className="p-4 space-y-2">
+              {alertasProdQ.data!.alertas.slice(0, 8).map((a, i) => (
+                <div key={i}
+                  className={`rounded-sm border px-3 py-2 text-xs ${a.severidad === "alta" ? "border-terracotta/40 bg-terracotta/[0.05] text-terracotta" : "border-ochre/40 bg-ochre/[0.05] text-ink-900"}`}>
+                  <span className="mr-2 rounded-sm bg-white/60 px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-widest text-graphite">
+                    {a.fuente}
+                  </span>
+                  {a.mensaje}
+                </div>
+              ))}
+              {alertasProdQ.data!.total > 8 && (
+                <p className="text-[0.65rem] text-graphite">
+                  … y {alertasProdQ.data!.total - 8} más en{" "}
+                  <Link href="/produccion/costeo" className="text-navy-600 hover:underline">Costeo real</Link>.
+                </p>
+              )}
+            </CardContent>
+          </Card>
         </section>
       )}
 

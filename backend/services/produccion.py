@@ -2182,3 +2182,56 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
         "ds_sin_lote": ds_sin_lote,
         "alertas":     alertas,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ALERTAS DE PRODUCCIÓN · agregador (tablero + cruce Siigo)
+# ═══════════════════════════════════════════════════════════════════════
+
+def alertas_produccion(*, incluir_costeo: bool = True) -> dict:
+    """Junta TODAS las alertas del módulo de producción en una sola lista:
+      - stock_bajo:   tela+tono bajo el mínimo (tablero)
+      - estancado:    lote >7 días sin llegar a bodega (tablero)
+      - costeo:       desviaciones del cruce Siigo (sin_ds, precio, cantidad, ds_sin_lote)
+    Se usa en el Centro de Control y en el resumen diario por correo.
+    """
+    alertas: list[dict] = []
+
+    # ── Tablero (rápido, cache 60s) ──────────────────────────────
+    try:
+        t = tablero_produccion()
+        for tela in (t.get("inventario", {}).get("telas_bajas") or []):
+            alertas.append({
+                "tipo": "stock_bajo", "severidad": "media", "fuente": "inventario",
+                "mensaje": f"Tela {tela['descripcion_tela']} tono {tela['tono']}: quedan "
+                           f"{tela['metros_disponible']:.1f} m ({tela['num_rollos']} rollos) — "
+                           f"bajo el mínimo de {t['inventario']['stock_minimo']} m.",
+            })
+        for l in (t.get("ruta", {}).get("estancados") or []):
+            alertas.append({
+                "tipo": "estancado", "severidad": "alta" if l["dias"] > 14 else "media",
+                "fuente": "ruta",
+                "mensaje": f"Lote {l['consecutivo'] or '—'} lleva {l['dias']} días en etapa "
+                           f"'{l['etapa']}' sin llegar a bodega.",
+            })
+    except Exception as e:
+        log.warning(f"[alertas] tablero fallo: {e}")
+
+    # ── Cruce Siigo (usa cache 10 min del cruce) ─────────────────
+    if incluir_costeo:
+        try:
+            cruce = cruce_costeo_siigo()
+            if cruce.get("ok"):
+                for a in (cruce.get("alertas") or []):
+                    alertas.append({**a, "fuente": "costeo"})
+        except Exception as e:
+            log.warning(f"[alertas] cruce siigo fallo: {e}")
+
+    orden_sev = {"alta": 0, "media": 1, "baja": 2}
+    alertas.sort(key=lambda a: orden_sev.get(a.get("severidad"), 3))
+    return {
+        "alertas": alertas,
+        "total": len(alertas),
+        "altas": sum(1 for a in alertas if a.get("severidad") == "alta"),
+        "generado_at": _now_iso(),
+    }
