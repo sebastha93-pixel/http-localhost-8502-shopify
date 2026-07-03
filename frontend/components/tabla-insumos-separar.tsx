@@ -12,6 +12,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { MEDIDAS_CIERRES, TALLAS_CIERRES } from "@/lib/cierres";
 
 interface Item {
   item: string;
@@ -73,6 +74,37 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, className = "" }: {
             ))}
           </tbody>
         </table>
+      )}
+
+      {/* Regla MALE'DENIM: medidas de cierres por talla según tipo de tiro */}
+      {tipo === "confeccion" && (
+        <div className="border-t border-navy-600/20">
+          <p className="px-3 pt-2 text-[0.55rem] uppercase tracking-widest text-graphite font-bold">
+            Medidas cierres por talla (cm)
+          </p>
+          <table className="w-full text-[0.65rem] mt-1">
+            <thead>
+              <tr className="text-left text-[0.5rem] uppercase tracking-widest text-graphite border-b border-border/60">
+                <th className="px-3 py-1">Tiro</th>
+                {TALLAS_CIERRES.map((t) => (
+                  <th key={t} className="px-1 py-1 text-center">T{t}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(MEDIDAS_CIERRES).map(([tiro, medidas]) => (
+                <tr key={tiro} className="border-b border-border/30 last:border-0">
+                  <td className="px-3 py-1 font-semibold text-ink-900 whitespace-nowrap">{tiro}</td>
+                  {TALLAS_CIERRES.map((t) => (
+                    <td key={t} className="px-1 py-1 text-center tabular text-graphite">
+                      {medidas[t]}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );

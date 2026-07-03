@@ -846,6 +846,16 @@ def asignar_rollo_a_corte(*, oc_id: str, barcode: str,
         raise ValueError("rollo_no_encontrado")
     if rollo.get("estado") == "agotado":
         raise ValueError("rollo_agotado")
+
+    # Upsert por (orden_corte_id, rollo_id)
+    existing = (sb.table("orden_corte_rollos").select("id")
+                 .eq("orden_corte_id", oc_id).eq("rollo_id", rollo["id"])
+                 .limit(1).execute()).data
+
+    # Un rollo reservado en OTRO corte no se puede volver a tomar
+    if rollo.get("estado") == "en_corte" and not existing:
+        raise ValueError("rollo_reservado_en_otro_corte")
+
     disp = float(rollo.get("metros_disponible") or 0)
     m = float(metros_reservar or 0)
     if m <= 0:
@@ -853,10 +863,6 @@ def asignar_rollo_a_corte(*, oc_id: str, barcode: str,
     if m > disp:
         raise ValueError(f"metros_insuficientes: rollo tiene {disp}m disponibles")
 
-    # Upsert por (orden_corte_id, rollo_id)
-    existing = (sb.table("orden_corte_rollos").select("id")
-                 .eq("orden_corte_id", oc_id).eq("rollo_id", rollo["id"])
-                 .limit(1).execute()).data
     if existing:
         sb.table("orden_corte_rollos").update({"metros_usados": m}).eq("id", existing[0]["id"]).execute()
     else:
@@ -865,6 +871,10 @@ def asignar_rollo_a_corte(*, oc_id: str, barcode: str,
             "rollo_id": rollo["id"],
             "metros_usados": m,
         }).execute()
+    # Reserva: el rollo deja de estar disponible para otros cortes
+    sb.table("rollos_tela").update({
+        "estado": "en_corte", "updated_at": _now_iso(),
+    }).eq("id", rollo["id"]).execute()
     return obtener_orden_corte(oc_id)
 
 
@@ -931,6 +941,9 @@ def auto_asignar_rollos_por_tono(*, oc_id: str,
             "rollo_id":       r["id"],
             "metros_usados":  m_usar,
         }).execute()
+        sb.table("rollos_tela").update({
+            "estado": "en_corte", "updated_at": _now_iso(),
+        }).eq("id", r["id"]).execute()
         asignados.append({
             "codigo_interno": r["codigo_interno"],
             "tono":           r.get("tono"),
@@ -957,6 +970,15 @@ def quitar_rollo_de_corte(*, oc_id: str, rollo_id: str) -> dict:
     if oc.get("estado") == "cortada":
         raise ValueError("orden_ya_cortada")
     sb.table("orden_corte_rollos").delete().eq("orden_corte_id", oc_id).eq("rollo_id", rollo_id).execute()
+    # Libera la reserva (solo si no quedó vinculado a otro corte)
+    otros = (sb.table("orden_corte_rollos").select("id")
+               .eq("rollo_id", rollo_id).limit(1).execute()).data
+    if not otros:
+        rollo = obtener_rollo(rollo_id)
+        if rollo and rollo.get("estado") == "en_corte":
+            sb.table("rollos_tela").update({
+                "estado": "disponible", "updated_at": _now_iso(),
+            }).eq("id", rollo_id).execute()
     return obtener_orden_corte(oc_id)
 
 
@@ -1002,7 +1024,9 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
         nuevo = round(float(rollo["metros_disponible"]) - m, 2)
         if nuevo < 0:
             raise ValueError(f"metros_negativos_en_rollo_{rollo['codigo_interno']}")
-        estado_nuevo = "agotado" if nuevo <= 0 else rollo.get("estado")
+        # Al cerrar: si quedó tela, el rollo vuelve a estar disponible;
+        # si no, queda agotado. Libera la reserva 'en_corte'.
+        estado_nuevo = "agotado" if nuevo <= 0 else "disponible"
         sb.table("rollos_tela").update({
             "metros_disponible": nuevo,
             "estado": estado_nuevo,
