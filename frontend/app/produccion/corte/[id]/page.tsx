@@ -705,7 +705,21 @@ export default function DetalleOrdenCortePage() {
       {/* Comparación al cerrar */}
       {cerrada && <InformeCerradoCard oc={oc} />}
       {cerrada && <HojaRutaCard ordenCorteId={oc.id} consecutivo={oc.consecutivo} />}
-      {cerrada && <TerminacionCard ordenCorteId={oc.id} consecutivo={oc.consecutivo} />}
+      {/* La remisión de terminación se hace en /produccion/remisiones/nueva (tipo Terminación) */}
+      {cerrada && (
+        <Card>
+          <CardContent className="p-4 flex items-center justify-between gap-3">
+            <p className="text-xs text-graphite">
+              ¿Insumos de terminación? Se entregan con una <strong>remisión de terminación</strong> —
+              mismo proceso que con el confeccionista.
+            </p>
+            <Link href="/produccion/remisiones/nueva"
+              className="shrink-0 rounded-sm border border-border bg-cloud px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud/80">
+              Nueva remisión de terminación
+            </Link>
+          </CardContent>
+        </Card>
+      )}
     </PageShell>
   );
 }
@@ -1361,112 +1375,6 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
         {/* Timeline de notas — histórico completo (confeccionista + terminación + admin) */}
         <div className="border-t border-border pt-3">
           <TimelineNotas rutaId={r.id} />
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function TerminacionCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; consecutivo: string }) {
-  const qc = useQueryClient();
-  const [terminacionId, setTerminacionId] = useState("");
-
-  const rutaQ = useQuery<RutaCorte>({
-    queryKey: ["ruta-corte", ordenCorteId],
-    queryFn: () => api.get(`/api/produccion/rutas/por-corte/${ordenCorteId}`),
-    enabled: !!ordenCorteId,
-    retry: false,
-  });
-
-  const provsQ = useQuery<{ confeccionistas: ProveedorTerminacion[] }>({
-    queryKey: ["confeccionistas", "terminacion"],
-    queryFn: () => api.get("/api/produccion/confeccionistas?tipo=terminacion&incluir_inactivos=false"),
-  });
-
-  // La tabla de insumos vive en el componente compartido <TablaInsumosSeparar />.
-
-  const guardar = useMutation({
-    mutationFn: () => {
-      if (!rutaQ.data) return Promise.reject(new Error("ruta no cargada"));
-      // El precio de terminación viene del precosteo — el backend lo trae solo.
-      return api.patch(`/api/produccion/rutas/${rutaQ.data.id}`, {
-        terminacion_id: terminacionId || null,
-      });
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }),
-  });
-
-  if (!rutaQ.data) return null;
-  const r = rutaQ.data;
-  const provs = provsQ.data?.confeccionistas || [];
-  const provSel = provs.find((p) => p.id === (terminacionId || r.terminacion_id));
-
-  const linkTerminacion = r.token_publico_terminacion && typeof window !== "undefined"
-    ? `${window.location.origin}/terminacion/${r.token_publico_terminacion}`
-    : "";
-
-  const mensajeWA = `Hola${provSel ? " " + provSel.nombre : ""}, te comparto la remisión de terminación del lote *${consecutivo}* de MALE'DENIM. Ahí ves la ficha técnica, cantidad e insumos:\n\n${linkTerminacion}`;
-  const telClean = (provSel?.telefono || r.terminacion?.telefono || "").replace(/\D/g, "");
-  const telFinal = telClean.startsWith("57") ? telClean : telClean ? `57${telClean}` : "";
-  const waUrl = telFinal
-    ? `https://wa.me/${telFinal}?text=${encodeURIComponent(mensajeWA)}`
-    : `https://wa.me/?text=${encodeURIComponent(mensajeWA)}`;
-
-  return (
-    <Card>
-      <CardContent className="p-5 space-y-3">
-        <p className="section-label">Remisión de terminación (proveedor terminación)</p>
-        <p className="text-[0.7rem] text-graphite">
-          Asigna el proveedor de <strong>terminación</strong> — es una remisión aparte con los insumos de terminación
-          (código de barras, instrucción de lavado, bolsa, botón, etc.). El proveedor recibe un link distinto al del confeccionista.
-        </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div>
-            <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Proveedor terminación</label>
-            <select value={terminacionId || r.terminacion_id || ""}
-              onChange={(e) => setTerminacionId(e.target.value)}
-              className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm">
-              <option value="">Selecciona…</option>
-              {provs.map((p) => (
-                <option key={p.id} value={p.id}>{p.nombre}</option>
-              ))}
-            </select>
-            {provs.length === 0 && !provsQ.isLoading && (
-              <p className="mt-1 text-[0.62rem] text-terracotta">
-                No hay proveedores de terminación. Crea uno en /produccion/confeccionistas con tipo &ldquo;Terminación&rdquo;.
-              </p>
-            )}
-          </div>
-          <div>
-            <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Precio terminación (del precosteo)</label>
-            <div className="w-full rounded-sm border border-border bg-cloud/40 px-3 py-2 text-sm text-right tabular font-semibold text-ink-900">
-              {r.precio_terminacion != null
-                ? `$${Number(r.precio_terminacion).toLocaleString("es-CO")}`
-                : "— sin precio en el precosteo"}
-            </div>
-          </div>
-          <div className="flex items-end">
-            <button onClick={() => guardar.mutate()}
-              disabled={guardar.isPending || !terminacionId}
-              className="w-full rounded-sm border border-border bg-cloud px-3 py-2 text-xs font-semibold uppercase tracking-widest hover:bg-cloud/80 disabled:opacity-40">
-              {guardar.isPending ? <Loader2 className="inline h-3.5 w-3.5 animate-spin mr-1" /> : null}
-              Guardar
-            </button>
-          </div>
-        </div>
-
-        <TablaInsumosSeparar ordenCorteId={ordenCorteId} tipo="terminacion" />
-
-        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
-          <a href={waUrl} target="_blank" rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-sm bg-[#25D366] px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-white hover:opacity-90">
-            <Send className="h-3 w-3" /> Enviar link WhatsApp
-          </a>
-          {linkTerminacion && (
-            <a href={linkTerminacion} target="_blank" rel="noopener noreferrer"
-              className="text-[0.65rem] text-navy-600 hover:underline">Ver ficha de terminación</a>
-          )}
         </div>
       </CardContent>
     </Card>
