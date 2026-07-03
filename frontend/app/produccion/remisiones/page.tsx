@@ -9,6 +9,7 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { fmtFecha } from "@/lib/utils";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -61,6 +62,7 @@ export default function RemisionesPage() {
       ) : (
         <Card>
           <CardContent className="p-0">
+            <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
                 <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
@@ -88,7 +90,7 @@ export default function RemisionesPage() {
                         </span>
                       </td>
                       <td className="px-4 py-2 text-ink-900">{r.confeccionista?.nombre || "—"}</td>
-                      <td className="px-4 py-2 tabular">{r.fecha_recogida}</td>
+                      <td className="px-4 py-2 tabular">{fmtFecha(r.fecha_recogida)}</td>
                       <td className="px-4 py-2 text-graphite tabular text-[0.65rem]">
                         {new Date(r.created_at).toLocaleDateString("es-CO")}
                       </td>
@@ -102,6 +104,7 @@ export default function RemisionesPage() {
                 })}
               </tbody>
             </table>
+            </div>
           </CardContent>
         </Card>
       )}

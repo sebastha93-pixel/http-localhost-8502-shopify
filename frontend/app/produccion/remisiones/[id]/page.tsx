@@ -3,11 +3,12 @@
 /**
  * Detalle de remisión a confeccionista.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { fmtFecha } from "@/lib/utils";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -49,9 +50,11 @@ export default function RemisionDetallePage() {
     enabled: !!id,
   });
 
+  const [errAccion, setErrAccion] = useState("");
   const recogida = useMutation({
     mutationFn: () => api.post(`/api/produccion/remisiones/${id}/recogida`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["produccion", "remision", id] }),
+    onSuccess: () => { setErrAccion(""); qc.invalidateQueries({ queryKey: ["produccion", "remision", id] }); },
+    onError: (e: Error) => setErrAccion(`No se pudo marcar la remisión: ${e.message}`),
   });
 
   if (q.isLoading) return <LoadingState label="Cargando remisión…" />;
@@ -85,7 +88,7 @@ export default function RemisionDetallePage() {
           <Info label={esTerm ? "Proveedor terminación" : "Confeccionista"} value={rem.confeccionista?.nombre || "—"} />
           <Info label="Teléfono"         value={rem.confeccionista?.telefono || "—"} />
           <Info label="Dirección"        value={rem.confeccionista?.direccion || "—"} />
-          <Info label={esTerm ? "Fecha despacho" : "Fecha recogida"} value={rem.fecha_recogida} />
+          <Info label={esTerm ? "Fecha despacho" : "Fecha recogida"} value={fmtFecha(rem.fecha_recogida)} />
           <Info label="Órdenes"          value={String(rem.items?.length || 0)} />
           <Info label="Total unidades"   value={String(totalUnidades)} />
         </CardContent>
@@ -100,6 +103,7 @@ export default function RemisionDetallePage() {
           {(rem.items || []).length === 0 ? (
             <div className="p-8 text-center text-xs text-graphite">Sin órdenes.</div>
           ) : (
+            <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
                 <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
@@ -132,16 +136,23 @@ export default function RemisionDetallePage() {
                         {totalOC || it.orden_corte?.cantidad_programada || "—"}
                       </td>
                       <td className="px-4 py-2 text-graphite text-[0.65rem] tabular">
-                        {it.orden_corte?.fecha_entrega || "—"}
+                        {fmtFecha(it.orden_corte?.fecha_entrega)}
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+            </div>
           )}
         </CardContent>
       </Card>
+
+      {errAccion && (
+        <div role="alert" className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta">
+          {errAccion}
+        </div>
+      )}
 
       {!yaRecogida && (
         <div className="flex justify-end">
@@ -203,7 +214,8 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
   const esTerminacion = tipo === "terminacion";
   const qc = useQueryClient();
   const [fecha, setFecha] = useState("");
-  const [copiado, setCopiado] = useState(false);
+  const [copiado, setCopiado] = useState<"ok" | "error" | "">("");
+  const [errCard, setErrCard] = useState("");
 
   const q = useQuery<Ruta>({
     queryKey: ["ruta", ordenCorteId],
@@ -211,6 +223,11 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
     enabled: !!ordenCorteId,
     retry: false,
   });
+
+  // El input date ignora placeholder: al cargar la ruta, mostrar la fecha guardada.
+  useEffect(() => {
+    if (q.data?.fecha_entrega_confeccion) setFecha(q.data.fecha_entrega_confeccion);
+  }, [q.data?.fecha_entrega_confeccion]);
 
   // La tabla de insumos vive en el componente compartido <TablaInsumosSeparar />.
 
@@ -222,11 +239,20 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
         fecha_entrega_confeccion: fecha || null,
       });
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["ruta", ordenCorteId] }),
+    onSuccess: () => { setErrCard(""); qc.invalidateQueries({ queryKey: ["ruta", ordenCorteId] }); },
+    onError: (e: Error) => setErrCard(`No se pudo guardar la fecha: ${e.message}`),
   });
 
   if (q.isLoading) {
     return <div className="rounded-sm border border-border bg-cloud/20 p-3 text-xs text-graphite">Cargando ficha…</div>;
+  }
+  if (q.isError) {
+    return (
+      <div role="alert" className="rounded-sm border border-terracotta/40 bg-terracotta/5 p-3 text-xs text-terracotta">
+        No se pudo cargar la ficha de este lote (error de red o del servidor).{" "}
+        <button onClick={() => q.refetch()} className="underline font-semibold">Reintentar</button>
+      </div>
+    );
   }
   if (!q.data) {
     return (
@@ -240,7 +266,8 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
   const publicoBase = typeof window !== "undefined" ? window.location.origin : "";
   const linkPublico = esTerminacion
     ? `${publicoBase}/terminacion/${r.token_publico_terminacion || ""}`
-    : `${publicoBase}/lote/${r.token_publico}`;
+    : `${publicoBase}/lote/${r.token_publico || ""}`;
+  const linkOk = esTerminacion ? !!r.token_publico_terminacion : !!r.token_publico;
 
   // Al proveedor se le habla por la REFERENCIA de la prenda, no por el código interno.
   const refMsg = referencia || consecutivo;
@@ -254,17 +281,30 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
   async function copiarLink() {
     try {
       await navigator.clipboard.writeText(linkPublico);
-      setCopiado(true);
-      setTimeout(() => setCopiado(false), 2000);
-    } catch { /* noop */ }
+      setCopiado("ok");
+    } catch {
+      setCopiado("error");
+    }
+    setTimeout(() => setCopiado(""), 2500);
   }
 
   return (
     <div className="rounded-sm border border-border bg-white p-3 space-y-3">
       <div className="flex items-center justify-between">
         <p className="font-semibold text-ink-900 tabular text-sm">{consecutivo}</p>
-        <Badge tone={r.etapa === "asignado" ? "pendiente" : "normal"}>{r.etapa}</Badge>
+        <Badge tone={r.etapa === "asignado" ? "pendiente" : "normal"}>
+          {({ asignado: "Asignado", aceptado: "Aceptado", en_confeccion: "En confección",
+              lavanderia: "En lavandería", terminacion_recibida: "En terminación",
+              terminacion_terminada: "Terminación lista", despachado: "En bodega",
+            }[r.etapa] || r.etapa)}
+        </Badge>
       </div>
+
+      {errCard && (
+        <div role="alert" className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta">
+          {errCard}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
         <div>
@@ -275,7 +315,7 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
             {(() => {
               const p = esTerminacion ? r.precio_terminacion : r.precio_confeccion;
               return p != null
-                ? `$${Number(p).toLocaleString("es-CO")}`
+                ? `$${Number(p).toLocaleString("es-CO", { maximumFractionDigits: 0 })}`
                 : "— sin precio en el precosteo";
             })()}
           </div>
@@ -301,9 +341,9 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
             Guardar fecha
           </button>
         )}
-        {esTerminacion && !r.token_publico_terminacion ? (
+        {!linkOk ? (
           <p className="text-[0.65rem] text-terracotta">
-            Este lote aún no tiene link de terminación. Corre la migración de proveedores en Supabase y refresca.
+            Este lote aún no tiene link {esTerminacion ? "de terminación" : "público"}. Corre la migración correspondiente en Supabase y refresca.
           </p>
         ) : (
           <>
@@ -313,7 +353,7 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
             </a>
             <button type="button" onClick={copiarLink}
               className="inline-flex items-center gap-1 rounded-sm border border-border bg-white px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-graphite hover:bg-cloud">
-              <Copy className="h-3 w-3" /> {copiado ? "Copiado" : "Copiar link"}
+              <Copy className="h-3 w-3" /> {copiado === "ok" ? "Copiado ✓" : copiado === "error" ? "No se pudo copiar" : "Copiar link"}
             </button>
             <a href={linkPublico} target="_blank" rel="noopener noreferrer"
               className="text-[0.65rem] text-navy-600 hover:underline">Ver ficha</a>

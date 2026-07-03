@@ -35,6 +35,7 @@ export function TimelineNotas({ rutaId, permiteAgregar = true }: {
 }) {
   const qc = useQueryClient();
   const [msg, setMsg] = useState("");
+  const [errNota, setErrNota] = useState("");
 
   const q = useQuery<{ notas: Nota[] }>({
     queryKey: ["notas-ruta", rutaId],
@@ -46,7 +47,9 @@ export function TimelineNotas({ rutaId, permiteAgregar = true }: {
     mutationFn: () => api.post(`/api/produccion/rutas/${rutaId}/notas`, {
       mensaje: msg.trim(),
     }),
+    onError: (e: Error) => setErrNota(`No se pudo guardar la nota: ${e.message}`),
     onSuccess: () => {
+      setErrNota("");
       setMsg("");
       qc.invalidateQueries({ queryKey: ["notas-ruta", rutaId] });
     },
@@ -95,6 +98,9 @@ export function TimelineNotas({ rutaId, permiteAgregar = true }: {
           <textarea value={msg} onChange={(e) => setMsg(e.target.value)}
             rows={2} maxLength={5000} placeholder="Agregar nota…"
             className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-xs" />
+          {errNota && (
+            <p role="alert" className="text-[0.65rem] text-terracotta">{errNota}</p>
+          )}
           <div className="flex justify-end">
             <button onClick={() => agregar.mutate()}
               disabled={agregar.isPending || !msg.trim()}

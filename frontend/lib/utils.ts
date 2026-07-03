@@ -64,6 +64,23 @@ export function fmtTime(iso?: string | null): string {
   });
 }
 
+/** "3 jul 2026" — para fechas tipo YYYY-MM-DD (sin hora, sin shift de zona).
+ * Usar en fechas de negocio: recogida, entrega, despacho. */
+export function fmtFecha(fecha?: string | null): string {
+  if (!fecha) return "—";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(fecha);
+  if (!m) return fecha;
+  const MESES = ["ene", "feb", "mar", "abr", "may", "jun",
+                 "jul", "ago", "sep", "oct", "nov", "dic"];
+  return `${parseInt(m[3], 10)} ${MESES[parseInt(m[2], 10) - 1]} ${m[1]}`;
+}
+
+/** Hoy en Bogotá como YYYY-MM-DD (para defaults de inputs date — evita que
+ * después de las 7 PM el default UTC salte al día siguiente). */
+export function hoyBogotaISO(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Bogota" }).format(new Date());
+}
+
 /** Fecha de "hoy" en Bogotá, formato largo */
 export function hoyBogota(): string {
   return new Date().toLocaleDateString("es-CO", {

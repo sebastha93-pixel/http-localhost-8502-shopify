@@ -10,7 +10,7 @@ import { api } from "@/lib/api";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { KpiCard } from "@/components/kpi-card";
-import { AlertTriangle, Clock } from "lucide-react";
+import { AlertTriangle, CheckCircle, Clock } from "lucide-react";
 
 interface Tablero {
   inventario: {
@@ -115,7 +115,7 @@ export default function TableroProduccionPage() {
               <Clock className="h-3.5 w-3.5 text-terracotta" /> Lotes estancados (&gt;7 días sin llegar a bodega)
             </p>
             {t.ruta.estancados.length === 0 ? (
-              <p className="text-xs text-graphite">Ninguno — todo fluye. 🎉</p>
+              <p className="flex items-center gap-1.5 text-xs text-sage"><CheckCircle className="h-3.5 w-3.5" /> Ninguno — todo fluye.</p>
             ) : (
               <table className="w-full text-xs">
                 <tbody>
@@ -176,6 +176,7 @@ export default function TableroProduccionPage() {
           {t.corte.ultimos.length === 0 ? (
             <p className="p-8 text-center text-xs text-graphite">Aún no hay cortes cerrados.</p>
           ) : (
+            <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
                 <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
@@ -212,6 +213,7 @@ export default function TableroProduccionPage() {
                 })}
               </tbody>
             </table>
+            </div>
           )}
         </CardContent>
       </Card>

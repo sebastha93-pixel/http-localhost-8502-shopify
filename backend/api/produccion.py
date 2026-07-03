@@ -961,9 +961,11 @@ publico = APIRouter(prefix="/api/publico", tags=["publico"])
 def lote_publico(token: str) -> dict:
     """Vista pública del lote — sin autenticación.
     Solo lo que el confeccionista debe ver: ficha técnica, curva de tallas,
-    cantidad total y lista de insumos de CONFECCIÓN con cantidades.
-    NO se envía: precio de confección, valores unitarios, costos totales,
-    ni datos del informe del cortador.
+    cantidad total, insumos de CONFECCIÓN con cantidades y SU valor acordado
+    (precio_confeccion — regla de Sebastián: "el confeccionista solo ve el
+    valor acordado de confección").
+    NO se envía: precio de corte, valores unitarios de insumos, costos
+    totales, ni datos del informe del cortador.
     """
     r = svc.obtener_ruta_por_token(token)
     if not r:
@@ -1011,6 +1013,8 @@ def lote_publico(token: str) -> dict:
         "etapa":                     r.get("etapa"),
         "aceptado_at":               r.get("aceptado_at"),
         "insumos":                   insumos_publicos,
+        # Valor acordado del SERVICIO de confección — el único precio que ve.
+        "precio_confeccion":         r.get("precio_confeccion"),
     }
 
 

@@ -8,6 +8,7 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { API_BASE } from "@/lib/api";
+import { fmtFecha } from "@/lib/utils";
 import { CheckCircle, Loader2, Package, Scissors, Sparkles } from "lucide-react";
 
 interface Insumo { item: string; total_requerido: number }
@@ -96,7 +97,9 @@ export default function TerminacionPublicaPage() {
 
   const l = q.data;
   const yaRecibido = ["terminacion_recibida", "terminacion_terminada", "despachado"].includes(l.etapa);
-  const unidades = l.unidades_cortadas || l.curva || {};
+  const unidades = Object.keys(l.unidades_cortadas || {}).length
+    ? l.unidades_cortadas!
+    : (l.curva || {});
 
   return (
     <div className="min-h-screen bg-cloud/20 py-6 px-4">
@@ -154,7 +157,7 @@ export default function TerminacionPublicaPage() {
         <div className="rounded-sm border border-border bg-white p-4">
           <p className="text-[0.6rem] uppercase tracking-widest text-graphite">Fecha de entrega esperada</p>
           <p className="mt-1 font-display text-2xl text-ink-900 tabular">
-            {l.fecha_entrega || "—"}
+            {fmtFecha(l.fecha_entrega)}
           </p>
         </div>
 

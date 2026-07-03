@@ -11,7 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { PageShell, LoadingState } from "@/components/page-shell";
+import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Save, Loader2, AlertCircle, Search, ChevronDown } from "lucide-react";
 
@@ -181,6 +181,8 @@ export default function NuevaOrdenCortePage() {
   const rendimiento = prendasEst > 0 ? metrosTeo / prendasEst : 0;
 
   if (q.isLoading) return <LoadingState label="Cargando referencias…" />;
+  // Error de red ≠ "no hay precosteos" — antes mandaba a firmar precosteos que sí existían.
+  if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
   return (
     <PageShell title="Nueva orden de corte" subtitle="Trazo + curva de tallas">
@@ -349,7 +351,7 @@ export default function NuevaOrdenCortePage() {
         </Card>
 
         {err && (
-          <div className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta flex items-center gap-2">
+          <div role="alert" className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta flex items-center gap-2">
             <AlertCircle className="h-3.5 w-3.5" /> {err}
           </div>
         )}

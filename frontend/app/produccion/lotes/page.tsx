@@ -139,12 +139,22 @@ export default function LotesPage() {
 
   if (cortesQ.isLoading || rutasQ.isLoading) return <LoadingState label="Cargando lotes…" />;
   if (cortesQ.isError) return <ErrorState error={cortesQ.error} onRetry={() => cortesQ.refetch()} />;
+  // Si SOLO fallan las rutas, mostramos los cortes pero con aviso — sin esto
+  // todos los lotes aparecían "Sin asignar" en silencio.
+  const rutasFallaron = rutasQ.isError;
 
   return (
     <PageShell
       title="Lotes"
       subtitle="Vista unificada · corte → ruta → ingreso a bodega"
     >
+      {rutasFallaron && (
+        <div role="alert" className="rounded-sm border border-ochre/40 bg-ochre/[0.06] px-3 py-2 text-xs text-ink-900">
+          No se pudo cargar el estado de las rutas — los lotes pueden aparecer &quot;Sin asignar&quot; temporalmente.{" "}
+          <button onClick={() => rutasQ.refetch()} className="underline font-semibold">Reintentar</button>
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="flex flex-wrap gap-2">
         {TABS.map((t) => {

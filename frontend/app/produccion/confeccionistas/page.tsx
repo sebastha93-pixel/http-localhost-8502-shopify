@@ -92,7 +92,7 @@ export default function ConfeccionistasPage() {
               </div>
             </div>
             {err && (
-              <div className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta flex items-center gap-2">
+              <div role="alert" className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta flex items-center gap-2">
                 <AlertCircle className="h-3.5 w-3.5" /> {err}
               </div>
             )}
@@ -118,6 +118,7 @@ export default function ConfeccionistasPage() {
               No hay confeccionistas registrados aún.
             </div>
           ) : (
+            <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
                 <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
@@ -133,6 +134,7 @@ export default function ConfeccionistasPage() {
                 {lista.map((c) => <FilaConfeccionista key={c.id} c={c} />)}
               </tbody>
             </table>
+            </div>
           )}
         </CardContent>
       </Card>
@@ -213,13 +215,19 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
       <td className="px-4 py-2 text-graphite">{c.direccion || "—"}</td>
       <td className="px-4 py-2"><Badge tone={c.activo ? "normal" : "neutral"}>{c.activo ? "Activo" : "Inactivo"}</Badge></td>
       <td className="px-4 py-2 text-right">
-        <button onClick={() => setEditando(true)} className="text-graphite hover:text-navy-600 mr-2" title="Editar">
+        <button onClick={() => setEditando(true)} aria-label={`Editar ${c.nombre}`}
+          className="p-1.5 text-graphite hover:text-navy-600 mr-1" title="Editar">
           <Pencil className="h-3.5 w-3.5" />
         </button>
-        <button onClick={() => mut.mutate({ activo: !c.activo })}
-          className="text-graphite hover:text-terracotta text-[0.65rem] font-semibold uppercase tracking-widest">
-          {c.activo ? "Desactivar" : "Activar"}
+        <button onClick={() => mut.mutate({ activo: !c.activo })} disabled={mut.isPending}
+          className="text-graphite hover:text-terracotta text-[0.65rem] font-semibold uppercase tracking-widest disabled:opacity-40">
+          {mut.isPending ? "…" : c.activo ? "Desactivar" : "Activar"}
         </button>
+        {errEdit && (
+          <div role="alert" className="mt-1 text-[0.6rem] text-terracotta break-all text-right">
+            {errEdit}
+          </div>
+        )}
       </td>
     </tr>
   );

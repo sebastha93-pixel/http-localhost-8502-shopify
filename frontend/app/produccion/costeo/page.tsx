@@ -59,7 +59,9 @@ const ESTADO_UI: Record<string, { texto: string; tone: string }> = {
 };
 
 const money = (n?: number) =>
-  n != null ? `$${n.toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—";
+  n != null
+    ? `${n < 0 ? "-" : ""}$${Math.abs(n).toLocaleString("es-CO", { maximumFractionDigits: 0 })}`
+    : "—";
 
 export default function CosteoRealPage() {
   const q = useQuery<Respuesta>({
@@ -97,7 +99,10 @@ export default function CosteoRealPage() {
     );
   }
 
-  const r = data.resumen!;
+  const r = data.resumen ?? {
+    lotes: 0, con_ds: 0, ok: 0, con_alerta: 0,
+    total_teorico: 0, total_real: 0, desviacion: 0,
+  };
   const lotes = data.lotes || [];
   const alertas = data.alertas || [];
   const dsSinLote = data.ds_sin_lote || [];
@@ -199,6 +204,7 @@ export default function CosteoRealPage() {
         <Card>
           <CardContent className="p-5 space-y-2">
             <p className="section-label">Documentos soporte sin lote en el OS ({dsSinLote.length})</p>
+            <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <tbody>
                 {dsSinLote.map((d, i) => (
@@ -212,6 +218,7 @@ export default function CosteoRealPage() {
                 ))}
               </tbody>
             </table>
+            </div>
             <p className="text-[0.65rem] text-graphite">
               Pueden ser lotes viejos (antes del OS), REF mal escrita en Siigo, o pagos de terminación/lavandería.
             </p>

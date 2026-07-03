@@ -11,6 +11,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, API_BASE } from "@/lib/api";
+import { fmtFecha } from "@/lib/utils";
 import { TablaInsumosSeparar } from "@/components/tabla-insumos-separar";
 import { TimelineNotas } from "@/components/timeline-notas";
 import { getToken } from "@/lib/auth";
@@ -240,8 +241,15 @@ export default function DetalleOrdenCortePage() {
         const n = parseInt(v || "0", 10);
         if (n > 0) unidadesFinal[t] = n;
       }
+      // Mismo fallback que muestra el input "Metros · Real": si el cortador
+      // no digitó metros, se envía el auto-cálculo promedio × unidades
+      // (antes se enviaba 0 aunque la pantalla mostraba el valor auto).
+      const totalUnid = Object.values(unidadesFinal).reduce((s, n) => s + n, 0);
+      const promN = parseFloat(promedioReal || "0") || 0;
+      const consumoAuto = promN > 0 && totalUnid > 0 ? promN * totalUnid : 0;
+      const consumoFinal = parseFloat(consumoReal || "0") || consumoAuto;
       return api.post(`/api/produccion/corte/${id}/cerrar`, {
-        consumo_real_cortador: parseFloat(consumoReal || "0"),
+        consumo_real_cortador: consumoFinal,
         merma_tipo: mermaTipo || null,
         merma_valor: mermaValor ? parseFloat(mermaValor) : null,
         referencia_lote: refLote || null,
@@ -339,7 +347,9 @@ export default function DetalleOrdenCortePage() {
           <ArrowLeft className="h-3.5 w-3.5" /> Volver a órdenes
         </Link>
         <Badge tone={cerrada ? "normal" : "pendiente"}>
-          {cerrada ? <><Lock className="inline h-2.5 w-2.5 mr-1" />Cortada</> : oc.estado}
+          {cerrada
+            ? <><Lock className="inline h-2.5 w-2.5 mr-1" />Cortada</>
+            : ({ borrador: "Borrador", autorizada: "Autorizada", en_proceso: "En proceso" }[oc.estado] || oc.estado)}
         </Badge>
       </div>
 
@@ -473,6 +483,7 @@ export default function DetalleOrdenCortePage() {
             </div>
           ) : (
             <>
+              <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead className="bg-cloud/60 border-b border-border">
                   <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
@@ -513,6 +524,7 @@ export default function DetalleOrdenCortePage() {
                   </tfoot>
                 )}
               </table>
+              </div>
               <div className="px-4 py-3 border-t border-border text-[0.65rem] text-graphite">
                 Lista para la remisión al confeccionista. El conteo físico solo debe verificar estos totales.
               </div>
@@ -642,6 +654,7 @@ export default function DetalleOrdenCortePage() {
               Aún no hay rollos pistoleados.
             </div>
           ) : (
+            <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
                 <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
@@ -670,8 +683,10 @@ export default function DetalleOrdenCortePage() {
                     <td className="px-4 py-2 text-right">
                       {!cerrada && (
                         <button onClick={() => quitar.mutate(l.rollo_id)}
-                          className="text-terracotta hover:text-crimson">
-                          <Trash2 className="h-3 w-3" />
+                          disabled={quitar.isPending}
+                          aria-label="Quitar rollo del corte"
+                          className="p-2 -m-1 text-terracotta hover:text-crimson disabled:opacity-40">
+                          <Trash2 className="h-4 w-4" />
                         </button>
                       )}
                     </td>
@@ -679,6 +694,7 @@ export default function DetalleOrdenCortePage() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </CardContent>
       </Card>
@@ -753,6 +769,7 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar }: {
 
   return (
     <>
+      <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <thead className="bg-cloud/40 border-b border-border">
           <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
@@ -792,6 +809,7 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar }: {
           )}
         </tbody>
       </table>
+      </div>
     </>
   );
 }
@@ -1034,7 +1052,7 @@ function InformeCerradoCard({ oc }: { oc: OrdenCorte }) {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <ReadKV label="Ref. interna"     value={oc.consecutivo} bold />
           <ReadKV label="Referencia lote"  value={oc.referencia_lote || "—"} />
-          <ReadKV label="Fecha entrega"    value={oc.fecha_entrega || "—"} />
+          <ReadKV label="Fecha entrega"    value={fmtFecha(oc.fecha_entrega)} />
           <ReadKV label="Precio del corte" value={oc.precio_corte != null ? `$${Number(oc.precio_corte).toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"} />
         </div>
 
@@ -1194,6 +1212,7 @@ const ADMINS_WA = [
 function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; consecutivo: string }) {
   const qc = useQueryClient();
   const [urlLav, setUrlLav] = useState("");
+  const [errRuta, setErrRuta] = useState("");
 
   const q = useQuery<RutaCorte>({
     queryKey: ["ruta-corte", ordenCorteId],
@@ -1204,13 +1223,15 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
 
   const cambiarEtapa = useMutation({
     mutationFn: (etapa: string) => api.post(`/api/produccion/rutas/${q.data?.id}/etapa`, { etapa }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }),
+    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }); },
+    onError: (e: Error) => setErrRuta(`No se pudo cambiar la etapa: ${e.message}`),
   });
   const guardarUrl = useMutation({
     mutationFn: () => api.patch(`/api/produccion/rutas/${q.data?.id}`, {
       remision_lavanderia_url: urlLav || null,
     }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }),
+    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }); },
+    onError: (e: Error) => setErrRuta(`No se pudo guardar la remisión de lavandería: ${e.message}`),
   });
 
   if (q.isLoading) {
@@ -1298,6 +1319,12 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
             className="text-[0.65rem] text-navy-600 hover:underline">Ver ficha pública</a>
         </div>
 
+        {errRuta && (
+          <div role="alert" className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta">
+            {errRuta}
+          </div>
+        )}
+
         {/* Timeline visual */}
         <ol className="grid grid-cols-2 md:grid-cols-7 gap-2">
           {etapas.map((e, i) => {
@@ -1321,7 +1348,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
           <div><span className="text-graphite">Confeccionista:</span> <span className="text-ink-900 font-semibold">{r.confeccionista?.nombre || "—"}</span></div>
           <div><span className="text-graphite">Terminación:</span> <span className="text-ink-900 font-semibold">{r.terminacion?.nombre || "—"}</span></div>
           <div><span className="text-graphite">Precio confección:</span> <span className="text-ink-900 font-semibold tabular">{r.precio_confeccion != null ? `$${Number(r.precio_confeccion).toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"}</span></div>
-          <div><span className="text-graphite">Fecha entrega:</span> <span className="text-ink-900 font-semibold tabular">{r.fecha_entrega_confeccion || "—"}</span></div>
+          <div><span className="text-graphite">Fecha entrega:</span> <span className="text-ink-900 font-semibold tabular">{fmtFecha(r.fecha_entrega_confeccion)}</span></div>
         </div>
 
         {/* Remisión de lavandería */}

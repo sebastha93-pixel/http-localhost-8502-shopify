@@ -249,6 +249,10 @@ export default function NuevoPrecosteoPage() {
                     <div className="max-h-64 overflow-y-auto">
                       {stockQ.isLoading ? (
                         <div className="px-3 py-3 text-xs text-graphite">Cargando inventario…</div>
+                      ) : stockQ.isError ? (
+                        <div role="alert" className="px-3 py-3 text-xs text-terracotta">
+                          No se pudo cargar el inventario de telas (error de red). Cierra y vuelve a abrir para reintentar.
+                        </div>
                       ) : telasFiltradas.length === 0 ? (
                         <div className="px-3 py-3 text-xs text-graphite">
                           {telasInventario.length === 0
@@ -421,7 +425,7 @@ export default function NuevoPrecosteoPage() {
         </Card>
 
         {err && (
-          <div className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta flex items-center gap-2">
+          <div role="alert" className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta flex items-center gap-2">
             <AlertCircle className="h-3.5 w-3.5" /> {err}
           </div>
         )}

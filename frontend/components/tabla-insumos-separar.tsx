@@ -51,6 +51,12 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, className = "" }: {
 
       {q.isLoading ? (
         <div className="p-3 text-[0.7rem] text-graphite">Calculando…</div>
+      ) : q.isError ? (
+        <div className="p-3 text-[0.7rem] text-terracotta" role="alert">
+          No se pudo calcular la lista de insumos (error de red).{" "}
+          <button onClick={() => q.refetch()} className="underline font-semibold">Reintentar</button>
+          {" "}— NO envíes el lote sin verificar los insumos.
+        </div>
       ) : !q.data || q.data.items.length === 0 ? (
         <div className="p-3 text-[0.7rem] text-graphite">
           El precosteo no tiene insumos de {label} con cantidad. Edita el precosteo y agrega cantidades por prenda.

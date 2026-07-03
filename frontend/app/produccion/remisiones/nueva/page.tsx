@@ -10,7 +10,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { PageShell, LoadingState } from "@/components/page-shell";
+import { fmtFecha, hoyBogotaISO } from "@/lib/utils";
+import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Save, Loader2, AlertCircle, Search, ChevronDown } from "lucide-react";
 
@@ -35,7 +36,7 @@ interface OrdenCorte {
 
 export default function NuevaRemisionPage() {
   const router = useRouter();
-  const hoy = new Date().toISOString().slice(0, 10);
+  const hoy = hoyBogotaISO(); // Bogotá — toISOString saltaba al día siguiente después de las 7 PM
 
   const [tipo, setTipo] = useState<"confeccion" | "terminacion">("confeccion");
   const [confId, setConfId] = useState("");
@@ -105,6 +106,8 @@ export default function NuevaRemisionPage() {
   });
 
   if (confQ.isLoading || ocQ.isLoading) return <LoadingState label="Cargando…" />;
+  if (confQ.isError) return <ErrorState error={confQ.error} onRetry={() => confQ.refetch()} />;
+  if (ocQ.isError) return <ErrorState error={ocQ.error} onRetry={() => ocQ.refetch()} />;
 
   return (
     <PageShell
@@ -197,6 +200,7 @@ export default function NuevaRemisionPage() {
                 No hay órdenes de corte cerradas disponibles.
               </div>
             ) : (
+              <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead className="bg-cloud/40 border-b border-border">
                   <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
@@ -229,7 +233,7 @@ export default function NuevaRemisionPage() {
                         </td>
                         <td className="px-4 py-2 text-graphite">{o.referencia_lote || "—"}</td>
                         <td className="px-4 py-2 text-right tabular">{o.cantidad_programada || "—"}</td>
-                        <td className="px-4 py-2 text-graphite tabular text-[0.65rem]">{o.fecha_entrega || "—"}</td>
+                        <td className="px-4 py-2 text-graphite tabular text-[0.65rem]">{fmtFecha(o.fecha_entrega)}</td>
                         <td className="px-4 py-2">
                           <div className="flex flex-wrap gap-1 justify-end">
                             {o.tiene_remision_confeccion && (
@@ -249,12 +253,13 @@ export default function NuevaRemisionPage() {
                   })}
                 </tbody>
               </table>
+              </div>
             )}
           </CardContent>
         </Card>
 
         {err && (
-          <div className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta flex items-center gap-2">
+          <div role="alert" className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta flex items-center gap-2">
             <AlertCircle className="h-3.5 w-3.5" /> {err}
           </div>
         )}

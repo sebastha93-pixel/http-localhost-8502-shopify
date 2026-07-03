@@ -8,6 +8,7 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { API_BASE } from "@/lib/api";
+import { fmtFecha } from "@/lib/utils";
 import { CheckCircle, Loader2, AlertCircle, Package, Scissors } from "lucide-react";
 
 interface Insumo {
@@ -29,6 +30,7 @@ interface LotePublico {
   confeccionista_nombre: string;
   etapa: string;
   aceptado_at?: string;
+  precio_confeccion?: number | null;
   insumos: Insumo[];
 }
 
@@ -99,7 +101,9 @@ export default function LotePublicoPage() {
 
   const l = q.data;
   const yaAceptado = l.etapa !== "asignado";
-  const unidades = l.unidades_cortadas || l.curva || {};
+  const unidades = Object.keys(l.unidades_cortadas || {}).length
+    ? l.unidades_cortadas!
+    : (l.curva || {});
 
   return (
     <div className="min-h-screen bg-cloud/20 py-6 px-4">
@@ -153,12 +157,22 @@ export default function LotePublicoPage() {
           </div>
         </div>
 
-        {/* Fecha de entrega */}
+        {/* Fecha de entrega + valor acordado */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {l.precio_confeccion != null && (
+          <div className="rounded-sm border border-border bg-white p-4">
+            <p className="text-[0.6rem] uppercase tracking-widest text-graphite">Valor acordado por prenda</p>
+            <p className="mt-1 font-display text-2xl text-ink-900 tabular">
+              ${Number(l.precio_confeccion).toLocaleString("es-CO", { maximumFractionDigits: 0 })}
+            </p>
+          </div>
+        )}
         <div className="rounded-sm border border-border bg-white p-4">
           <p className="text-[0.6rem] uppercase tracking-widest text-graphite">Fecha de entrega</p>
           <p className="mt-1 font-display text-2xl text-ink-900 tabular">
-            {l.fecha_entrega || "—"}
+            {fmtFecha(l.fecha_entrega)}
           </p>
+        </div>
         </div>
 
         {/* Prendas por talla */}
