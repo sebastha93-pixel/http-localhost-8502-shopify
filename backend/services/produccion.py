@@ -1643,7 +1643,52 @@ def marcar_remision_recogida(rem_id: str, usuario: str = "sistema") -> dict:
                      f"{len(descontados)} insumos descontados")
     except Exception as e:
         log.warning(f"[insumos] descuento remisión {rem_id} falló: {e}")
+
+    # NOTIFICACIÓN al proveedor: mensaje con el link de su ficha para que
+    # verifique y acepte. Si la WhatsApp Cloud API está configurada se envía
+    # SOLO; si no, el frontend recibe el wa.me armado y lo abre de una.
+    try:
+        rem["whatsapp"] = _notificar_remision_whatsapp(rem)
+    except Exception as e:
+        log.warning(f"[wa] notificación remisión {rem_id} falló: {e}")
+        rem["whatsapp"] = []
     return rem
+
+
+def _notificar_remision_whatsapp(rem: dict) -> list[dict]:
+    """Arma (y si se puede, ENVÍA) el WhatsApp por cada lote de la remisión."""
+    from urllib.parse import quote
+    from backend.services import whatsapp_cloud as wa
+
+    es_term = (rem.get("tipo") or "confeccion") == "terminacion"
+    prov = rem.get("confeccionista") or {}
+    tel = (prov.get("telefono") or "").strip()
+    base = os.environ.get("APP_PUBLIC_URL", "https://app.maledenim.com").rstrip("/")
+    salidas = []
+    for it in (rem.get("items") or []):
+        ruta = obtener_ruta_por_corte(it["orden_corte_id"])
+        if not ruta:
+            continue
+        token = ruta.get("token_publico_terminacion") if es_term else ruta.get("token_publico")
+        if not token:
+            continue
+        link = f"{base}/{'terminacion' if es_term else 'lote'}/{token}"
+        oc = it.get("orden_corte") or {}
+        ref = (oc.get("referencia") or {}).get("codigo_referencia") or oc.get("consecutivo") or ""
+        mensaje = (f"Hola {prov.get('nombre') or ''}, MALE'DENIM te despachó el lote "
+                   f"referencia *{ref}*. Verifica cantidades e insumos en tu ficha y "
+                   f"confirma con \"Aceptar lote\":\n\n{link}")
+        envio = wa.enviar_texto(tel, mensaje)
+        tel_norm = "".join(c for c in tel if c.isdigit())
+        tel_norm = tel_norm if tel_norm.startswith("57") else (f"57{tel_norm}" if tel_norm else "")
+        salidas.append({
+            "referencia": ref,
+            "telefono": tel_norm,
+            "enviado": bool(envio.get("enviado")),
+            "wa_url": (f"https://wa.me/{tel_norm}?text={quote(mensaje)}"
+                       if tel_norm else f"https://wa.me/?text={quote(mensaje)}"),
+        })
+    return salidas
 
 
 # ═══════════════════════════════════════════════════════════════════════

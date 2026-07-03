@@ -69,9 +69,25 @@ export default function RemisionDetallePage() {
       setImprimiendo(false);
     }
   }
+  const [waEnviado, setWaEnviado] = useState<"auto" | "manual" | "">("");
   const recogida = useMutation({
-    mutationFn: () => api.post(`/api/produccion/remisiones/${id}/recogida`),
-    onSuccess: () => { setErrAccion(""); qc.invalidateQueries({ queryKey: ["produccion", "remision", id] }); },
+    mutationFn: () => api.post<{ ok: boolean; remision: { whatsapp?: { enviado: boolean; wa_url: string }[] } }>(
+      `/api/produccion/remisiones/${id}/recogida`),
+    onSuccess: (data) => {
+      setErrAccion("");
+      qc.invalidateQueries({ queryKey: ["produccion", "remision", id] });
+      // Notificación al proveedor: si la API de WhatsApp está activa ya se
+      // envió sola; si no, abrimos WhatsApp con el mensaje listo (un solo tap).
+      const wa = data.remision?.whatsapp || [];
+      if (wa.length === 0) return;
+      if (wa.every((w) => w.enviado)) {
+        setWaEnviado("auto");
+      } else {
+        setWaEnviado("manual");
+        const pendiente = wa.find((w) => !w.enviado);
+        if (pendiente?.wa_url) window.open(pendiente.wa_url, "_blank");
+      }
+    },
     onError: (e: Error) => setErrAccion(`No se pudo marcar la remisión: ${e.message}`),
   });
 
@@ -176,6 +192,17 @@ export default function RemisionDetallePage() {
       {errAccion && (
         <div role="alert" className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta">
           {errAccion}
+        </div>
+      )}
+
+      {waEnviado === "auto" && (
+        <div role="status" className="rounded-sm border border-teal/40 bg-teal/[0.06] px-3 py-2 text-xs text-teal">
+          ✓ Remisión marcada y WhatsApp enviado automáticamente al proveedor.
+        </div>
+      )}
+      {waEnviado === "manual" && (
+        <div role="status" className="rounded-sm border border-navy-600/40 bg-navy-600/[0.05] px-3 py-2 text-xs text-ink-900">
+          Remisión marcada — se abrió WhatsApp con el mensaje al proveedor: solo dale enviar.
         </div>
       )}
 

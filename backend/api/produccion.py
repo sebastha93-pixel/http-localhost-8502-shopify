@@ -1105,8 +1105,9 @@ def lote_publico(token: str) -> dict:
 
 @publico.post("/lote/{token}/aceptar")
 def aceptar_lote_publico(token: str) -> dict:
-    """Endpoint público. El confeccionista clickea el botón desde el link.
-    Solo permite pasar de 'asignado' → 'aceptado'.
+    """Endpoint público. El confeccionista clickea "Aceptar lote" desde el link.
+    Al aceptar, el lote pasa directo a EN CONFECCIÓN (regla de negocio:
+    aceptar = ya lo tiene y empieza a trabajar). Estampa ambas fechas.
     """
     r = svc.obtener_ruta_por_token(token)
     if not r:
@@ -1114,7 +1115,9 @@ def aceptar_lote_publico(token: str) -> dict:
     if r.get("etapa") != "asignado":
         raise HTTPException(400, f"ya_aceptado_o_en_progreso:{r.get('etapa')}")
     try:
-        return {"ok": True, "ruta": svc.cambiar_etapa_ruta(r["id"], "aceptado")}
+        svc.cambiar_etapa_ruta(r["id"], "aceptado")          # estampa aceptado_at
+        ruta = svc.cambiar_etapa_ruta(r["id"], "en_confeccion")  # estampa inicio
+        return {"ok": True, "ruta": ruta}
     except ValueError as e:
         raise HTTPException(400, str(e))
 
