@@ -1075,6 +1075,8 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
                         promedio_real: Optional[float] = None,
                         unidades_cortadas: Optional[dict] = None,
                         retazos_cantidad: Optional[int] = None,
+                        espigas_metros: Optional[dict] = None,
+                        retazos_metros: Optional[float] = None,
                         fecha_entrega: Optional[str] = None,
                         precio_corte: Optional[float] = None) -> dict:
     """Cierra la orden con el INFORME DEL CORTADOR:
@@ -1105,6 +1107,30 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
             except (TypeError, ValueError):
                 raise ValueError(f"unidades_invalidas_talla_{talla}")
         unidades_cortadas = limpio
+
+    # Si el informe viene POR ESPIGAS, el consumo real se recalcula acá
+    # (no se confía en el cálculo del cliente):
+    #   consumo = Σ (metros_espiga + 0.02) × capas_espiga + retazos_metros
+    #   capas_espiga = max(unidades cortadas de las tallas de la espiga)
+    ESPIGAS_DEF = (("4",), ("6", "12"), ("8", "10"), ("14", "16"))
+    if espigas_metros:
+        try:
+            unid = {str(k): _int0(v) for k, v in (unidades_cortadas or {}).items()}
+            consumo_calc = 0.0
+            for esp in ESPIGAS_DEF:
+                key = "-".join(esp)
+                largo = float(espigas_metros.get(key) or 0)
+                capas_e = max([unid.get(t, 0) for t in esp] + [0])
+                if largo > 0 and capas_e > 0:
+                    consumo_calc += (largo + 0.02) * capas_e
+            consumo_calc += float(retazos_metros or 0)
+            if consumo_calc > 0:
+                consumo_real_cortador = round(consumo_calc, 2)
+                total_u = sum(unid.values())
+                if total_u > 0 and promedio_real is None:
+                    promedio_real = round(consumo_calc / total_u, 4)
+        except (TypeError, ValueError):
+            raise ValueError("espigas_metros_invalido")
 
     doc_ref = oc["consecutivo"]
 
@@ -1168,6 +1194,8 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
     if promedio_real is not None:    update["promedio_real"] = float(promedio_real)
     if unidades_cortadas is not None:update["unidades_cortadas"] = unidades_cortadas or {}
     if retazos_cantidad is not None: update["retazos_cantidad"] = int(retazos_cantidad)
+    if espigas_metros is not None:  update["espigas_metros"] = espigas_metros
+    if retazos_metros is not None:  update["retazos_metros"] = float(retazos_metros)
     if fecha_entrega is not None:    update["fecha_entrega"] = fecha_entrega or None
     if precio_corte is not None:
         update["precio_corte"] = float(precio_corte)
@@ -1182,7 +1210,8 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
     except Exception as e:
         # Compat si la migración del informe no corrió
         cols_informe = ("referencia_lote","capas_real","promedio_real",
-                         "unidades_cortadas","retazos_cantidad","fecha_entrega","precio_corte")
+                         "unidades_cortadas","retazos_cantidad","fecha_entrega","precio_corte",
+                         "espigas_metros","retazos_metros")
         if any(c in str(e) for c in cols_informe):
             log.error(f"[cerrar_corte] {doc_ref}: migración informe faltante — "
                       f"se descartaron columnas del informe del cortador: {e}")

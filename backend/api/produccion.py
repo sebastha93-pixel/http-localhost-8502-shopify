@@ -216,25 +216,12 @@ def etiqueta_rollo(
     )
 
 
-def _generar_etiqueta_pdf(rollo: dict) -> bytes:
-    """Genera una etiqueta 10×10 cm en PDF con:
-    - Código QR grande (contiene el barcode del rollo — lo lee la pistola 2D
-      o cualquier celular; la pistola devuelve el mismo string de siempre)
-    - Código interno legible arriba
-    - Descripción tela · tono · ancho · metros · lote · fecha
-    Usa reportlab (QrCodeWidget incluido, sin dependencias nuevas).
-    """
-    from io import BytesIO
+def _dibujar_etiqueta(c, W, H, rollo: dict) -> None:
+    """Dibuja UNA etiqueta 10×10 en el canvas (página actual)."""
     from reportlab.lib.pagesizes import mm
-    from reportlab.pdfgen import canvas
     from reportlab.graphics.barcode.qr import QrCodeWidget
     from reportlab.graphics.shapes import Drawing
     from reportlab.graphics import renderPDF
-
-    buf = BytesIO()
-    # Página 100 × 100 mm
-    W, H = 100 * mm, 100 * mm
-    c = canvas.Canvas(buf, pagesize=(W, H))
 
     # Header: código interno
     c.setFont("Helvetica-Bold", 14)
@@ -275,9 +262,56 @@ def _generar_etiqueta_pdf(rollo: dict) -> bytes:
     c.setFont("Helvetica-Oblique", 7)
     c.drawCentredString(W / 2, 5 * mm, "MALE'DENIM · Rollo de tela")
 
-    c.showPage()
+
+def _generar_etiquetas_pdf(rollos: list[dict]) -> bytes:
+    """PDF con UNA PÁGINA POR ROLLO — cada etiqueta con su propia info.
+    (El bug anterior: 'imprimir todas' generaba una sola etiqueta.)"""
+    from io import BytesIO
+    from reportlab.lib.pagesizes import mm
+    from reportlab.pdfgen import canvas
+
+    buf = BytesIO()
+    W, H = 100 * mm, 100 * mm
+    c = canvas.Canvas(buf, pagesize=(W, H))
+    for rollo in rollos:
+        _dibujar_etiqueta(c, W, H, rollo)
+        c.showPage()   # ← página nueva por rollo
     c.save()
     return buf.getvalue()
+
+
+def _generar_etiqueta_pdf(rollo: dict) -> bytes:
+    """Etiqueta individual (compat)."""
+    return _generar_etiquetas_pdf([rollo])
+
+
+class EtiquetasLoteBody(BaseModel):
+    rollo_ids: list[str] = Field(min_length=1, max_length=200)
+
+
+@router.post("/rollos/etiquetas")
+def etiquetas_lote(
+    body: EtiquetasLoteBody,
+    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
+):
+    """PDF con las etiquetas de los rollos seleccionados — una página por rollo."""
+    rollos = []
+    for rid in body.rollo_ids:
+        r = svc.obtener_rollo(rid)
+        if r:
+            rollos.append(r)
+    if not rollos:
+        raise HTTPException(404, "Ningún rollo encontrado")
+    try:
+        pdf = _generar_etiquetas_pdf(rollos)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"etiquetas: {str(e)[:200]}")
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="etiquetas_{len(rollos)}_rollos.pdf"'},
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -509,6 +543,8 @@ class CerrarCorteBody(BaseModel):
     promedio_real:     Optional[float] = None
     unidades_cortadas: Optional[dict] = None
     retazos_cantidad:  Optional[int] = None
+    espigas_metros:    Optional[dict] = None   # {"4": 1.2, "6-12": 2.4, ...} m extendidos
+    retazos_metros:    Optional[float] = None  # retazos medidos en METROS
     fecha_entrega:     Optional[str] = None
     precio_corte:      Optional[float] = None
 
@@ -690,6 +726,8 @@ def cerrar_corte(
             promedio_real=body.promedio_real,
             unidades_cortadas=body.unidades_cortadas,
             retazos_cantidad=body.retazos_cantidad,
+            espigas_metros=body.espigas_metros,
+            retazos_metros=body.retazos_metros,
             fecha_entrega=body.fecha_entrega,
             precio_corte=body.precio_corte,
         )

@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { PAREJA_TALLA } from "@/lib/espigas";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Save, Loader2, AlertCircle, Search, ChevronDown } from "lucide-react";
@@ -155,7 +156,13 @@ export default function NuevaOrdenCortePage() {
   });
 
   function actualizarCurva(t: string, v: string) {
-    setCurva((prev) => ({ ...prev, [t]: v }));
+    setCurva((prev) => {
+      const next = { ...prev, [t]: v };
+      // Espigas: la pareja se corta junta → misma cantidad automática
+      const pareja = PAREJA_TALLA[t];
+      if (pareja && pareja in next) next[pareja] = v;
+      return next;
+    });
   }
   function agregarTalla() {
     const t = tallaExtra.trim();
