@@ -170,3 +170,25 @@ export function puedeVerCostosProduccion(user?: { rol?: string; permisos?: Recor
   if (acciones && typeof acciones === "object") return !!(acciones as Record<string, boolean>)["ver"];
   return false;
 }
+
+
+/** ¿El usuario puede VER este módulo? Espejo de _check_permiso del backend:
+ * admin → todo; lector/legacy lectura → ver todo; operador legacy → todo;
+ * user → necesita permiso en el GRUPO del módulo o en el módulo mismo. */
+export function puedeVerModulo(
+  user: { rol?: string; permisos?: Record<string, unknown> } | null | undefined,
+  modulo: string,
+): boolean {
+  if (!user) return false;
+  const rol = user.rol || "";
+  if (rol === "admin" || rol === "operador") return true;
+  if (rol === "lector" || rol === "lectura") return true; // solo-lectura ve todo
+  const permisos = (user.permisos || {}) as Record<string, unknown>;
+  const candidatos = [_MODULO_A_GRUPO[modulo], modulo].filter(Boolean) as string[];
+  for (const k of candidatos) {
+    const acciones = permisos[k];
+    if (Array.isArray(acciones) && acciones.includes("ver")) return true;
+    if (acciones && typeof acciones === "object" && (acciones as Record<string, boolean>)["ver"]) return true;
+  }
+  return false;
+}

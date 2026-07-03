@@ -218,15 +218,16 @@ def etiqueta_rollo(
 
 def _generar_etiqueta_pdf(rollo: dict) -> bytes:
     """Genera una etiqueta 10×10 cm en PDF con:
-    - Código de barras Code128 (barcode del rollo)
+    - Código QR grande (contiene el barcode del rollo — lo lee la pistola 2D
+      o cualquier celular; la pistola devuelve el mismo string de siempre)
     - Código interno legible arriba
     - Descripción tela · tono · ancho · metros · lote · fecha
-    Usa reportlab (ya presente en requirements para otros PDFs).
+    Usa reportlab (QrCodeWidget incluido, sin dependencias nuevas).
     """
     from io import BytesIO
     from reportlab.lib.pagesizes import mm
     from reportlab.pdfgen import canvas
-    from reportlab.graphics.barcode import code128
+    from reportlab.graphics.barcode.qr import QrCodeWidget
     from reportlab.graphics.shapes import Drawing
     from reportlab.graphics import renderPDF
 
@@ -237,16 +238,25 @@ def _generar_etiqueta_pdf(rollo: dict) -> bytes:
 
     # Header: código interno
     c.setFont("Helvetica-Bold", 14)
-    c.drawCentredString(W / 2, H - 10 * mm, rollo["codigo_interno"])
+    c.drawCentredString(W / 2, H - 9 * mm, rollo["codigo_interno"])
 
-    # Barcode Code128
-    bc = code128.Code128(rollo["barcode"], barHeight=18 * mm, barWidth=0.5 * mm)
-    bc_w = bc.width
-    bc.drawOn(c, (W - bc_w) / 2, H - 40 * mm)
+    # QR grande y centrado — codifica el barcode (mismo valor que antes)
+    qr_size = 42 * mm
+    qr = QrCodeWidget(rollo["barcode"])
+    b = qr.getBounds()
+    escala = qr_size / max(b[2] - b[0], b[3] - b[1])
+    d = Drawing(qr_size, qr_size,
+                transform=[escala, 0, 0, escala, -b[0] * escala, -b[1] * escala])
+    d.add(qr)
+    renderPDF.draw(d, c, (W - qr_size) / 2, H - 12 * mm - qr_size)
+
+    # Barcode legible bajo el QR (por si hay que digitarlo a mano)
+    c.setFont("Helvetica", 8)
+    c.drawCentredString(W / 2, H - 14 * mm - qr_size, rollo["barcode"])
 
     # Datos
     c.setFont("Helvetica-Bold", 11)
-    y = H - 55 * mm
+    y = H - 22 * mm - qr_size
     c.drawCentredString(W / 2, y, (rollo.get("descripcion_tela") or "—").upper())
     y -= 6 * mm
     c.setFont("Helvetica", 9)

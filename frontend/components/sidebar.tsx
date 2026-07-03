@@ -7,12 +7,13 @@ import { ChevronDown, UserCircle, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 import { useAuth } from "@/components/auth-provider";
-import { ROL_LABEL, esAdmin, puedeVerCostosProduccion } from "@/lib/auth";
+import { ROL_LABEL, esAdmin, puedeVerCostosProduccion, puedeVerModulo } from "@/lib/auth";
 import { SyncButton } from "@/components/sync-button";
 
 interface NavItem {
   label: string;
   href: string;
+  permiso?: string;  // módulo requerido para VER este link (admin ve todo)
 }
 
 interface NavGroup {
@@ -28,53 +29,53 @@ const NAV: { home: NavItem; groups: NavGroup[] } = {
       title: "Operaciones",
       defaultOpen: true,
       items: [
-        { label: "Logística",     href: "/logistica" },
-        { label: "Contraentrega", href: "/contraentrega" },
-        { label: "Envíos",        href: "/envios" },
-        { label: "B2B",           href: "/b2b" },
-        { label: "Devoluciones",  href: "/devoluciones" },
-        { label: "Incidencias",   href: "/incidencias" },
-        { label: "Histórico",     href: "/historico" },
+        { label: "Logística",     href: "/logistica",     permiso: "logistica" },
+        { label: "Contraentrega", href: "/contraentrega", permiso: "contraentrega" },
+        { label: "Envíos",        href: "/envios",        permiso: "envios" },
+        { label: "B2B",           href: "/b2b",           permiso: "b2b" },
+        { label: "Devoluciones",  href: "/devoluciones",  permiso: "devoluciones" },
+        { label: "Incidencias",   href: "/incidencias",   permiso: "incidencias" },
+        { label: "Histórico",     href: "/historico",     permiso: "historico" },
       ],
     },
     {
       title: "Finanzas",
       items: [
-        { label: "Finanzas",     href: "/finanzas" },
-        { label: "Conciliación", href: "/conciliacion" },
-        { label: "Facturación",  href: "/facturacion" },
-        { label: "MercadoPago",  href: "/mercadopago" },
-        { label: "Addi",         href: "/addi" },
+        { label: "Finanzas",     href: "/finanzas",     permiso: "finanzas" },
+        { label: "Conciliación", href: "/conciliacion", permiso: "finanzas" },
+        { label: "Facturación",  href: "/facturacion",  permiso: "finanzas" },
+        { label: "MercadoPago",  href: "/mercadopago",  permiso: "finanzas" },
+        { label: "Addi",         href: "/addi",         permiso: "finanzas" },
       ],
     },
     {
       title: "Comercial",
       items: [
-        { label: "Comercial",  href: "/comercial" },
-        { label: "Inventario", href: "/inventario" },
-        { label: "Revenue IA", href: "/revenue" },
+        { label: "Comercial",  href: "/comercial",  permiso: "comercial" },
+        { label: "Inventario", href: "/inventario", permiso: "inventario" },
+        { label: "Revenue IA", href: "/revenue",    permiso: "revenue" },
       ],
     },
     {
       title: "Inteligencia",
       items: [
-        { label: "Inteligencia", href: "/inteligencia" },
-        { label: "Reportes",     href: "/reportes" },
+        { label: "Inteligencia", href: "/inteligencia", permiso: "inteligencia" },
+        { label: "Reportes",     href: "/reportes",     permiso: "inteligencia" },
       ],
     },
     {
       title: "Producción",
       items: [
-        { label: "Producción",      href: "/produccion" },
-        { label: "Tablero",         href: "/produccion/tablero" },
+        { label: "Producción",      href: "/produccion",                 permiso: "produccion" },
+        { label: "Tablero",         href: "/produccion/tablero",         permiso: "produccion" },
         { label: "Costeo real",     href: "/produccion/costeo" },
-        { label: "Ingreso",         href: "/produccion/ingreso" },
-        { label: "Inventario",      href: "/produccion/inventario" },
+        { label: "Ingreso",         href: "/produccion/ingreso",         permiso: "produccion_ingreso" },
+        { label: "Inventario",      href: "/produccion/inventario",      permiso: "produccion_ingreso" },
         { label: "Precosteo",       href: "/produccion/precosteo" },
-        { label: "Lotes",           href: "/produccion/lotes" },
-        { label: "Orden corte",     href: "/produccion/corte" },
-        { label: "Remisiones",      href: "/produccion/remisiones" },
-        { label: "Proveedores",     href: "/produccion/confeccionistas" },
+        { label: "Lotes",           href: "/produccion/lotes",           permiso: "produccion_corte" },
+        { label: "Orden corte",     href: "/produccion/corte",           permiso: "produccion_corte" },
+        { label: "Remisiones",      href: "/produccion/remisiones",      permiso: "produccion_remisiones" },
+        { label: "Proveedores",     href: "/produccion/confeccionistas", permiso: "produccion_proveedores" },
       ],
     },
     {
@@ -92,18 +93,22 @@ export function Sidebar() {
   const pathname = usePathname();
   const { user } = useAuth();
 
-  // Filtra grupo Configuración: "Usuarios" y "Auditoría" solo para admin.
-  // Precosteo y Costeo real: solo con permiso estricto de costos de producción.
+  // Cada link se muestra SOLO si el usuario tiene permiso de ver su módulo.
+  // Reglas especiales: admin-only (Configuración) y costos de producción.
   const ADMIN_ONLY = ["/usuarios", "/auditoria", "/diagnostico-revenue"];
   const COSTOS_ONLY = ["/produccion/precosteo", "/produccion/costeo"];
-  const groups = NAV.groups.map((g) => ({
-    ...g,
-    items: g.items.filter((it) => {
-      if (ADMIN_ONLY.includes(it.href)) return esAdmin(user);
-      if (COSTOS_ONLY.includes(it.href)) return puedeVerCostosProduccion(user);
-      return true;
-    }),
-  }));
+  const groups = NAV.groups
+    .map((g) => ({
+      ...g,
+      items: g.items.filter((it) => {
+        if (ADMIN_ONLY.includes(it.href)) return esAdmin(user);
+        if (COSTOS_ONLY.includes(it.href)) return puedeVerCostosProduccion(user);
+        if (it.permiso) return puedeVerModulo(user, it.permiso);
+        return true;
+      }),
+    }))
+    // Grupos sin ningún link visible desaparecen completos
+    .filter((g) => g.items.length > 0);
 
   return (
     <aside className="fixed inset-y-0 left-0 z-30 flex w-60 flex-col bg-ink-950 text-concrete">
