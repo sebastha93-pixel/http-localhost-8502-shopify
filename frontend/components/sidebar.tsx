@@ -71,6 +71,7 @@ const NAV: { home: NavItem; groups: NavGroup[] } = {
         { label: "Costeo real",     href: "/produccion/costeo" },
         { label: "Ingreso",         href: "/produccion/ingreso",         permiso: "produccion_ingreso" },
         { label: "Inventario",      href: "/produccion/inventario",      permiso: "produccion_ingreso" },
+        { label: "Insumos",         href: "/produccion/insumos",         permiso: "produccion_ingreso" },
         { label: "Precosteo",       href: "/produccion/precosteo" },
         { label: "Lotes",           href: "/produccion/lotes",           permiso: "produccion_corte" },
         { label: "Orden corte",     href: "/produccion/corte",           permiso: "produccion_corte" },

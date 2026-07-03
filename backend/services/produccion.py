@@ -1616,17 +1616,33 @@ def obtener_remision(rem_id: str) -> Optional[dict]:
     return {**r[0], "items": items}
 
 
-def marcar_remision_recogida(rem_id: str) -> dict:
+def marcar_remision_recogida(rem_id: str, usuario: str = "sistema") -> dict:
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
+    # Update CONDICIONAL: solo si aún no estaba recogida — así el descuento
+    # de insumos corre exactamente UNA vez aunque haya doble click.
     r = (sb.table("remisiones").update({
         "estado": "recogida",
         "updated_at": _now_iso(),
-    }).eq("id", rem_id).execute()).data
+    }).eq("id", rem_id).neq("estado", "recogida").execute()).data
     if not r:
-        raise ValueError("no_encontrado")
-    return obtener_remision(rem_id)
+        # Ya estaba recogida (o no existe) — devolver estado actual sin re-descontar
+        rem = obtener_remision(rem_id)
+        if not rem:
+            raise ValueError("no_encontrado")
+        return rem
+    rem = obtener_remision(rem_id)
+    # SALIDA automática de insumos del inventario (tolerante a fallos:
+    # la remisión queda marcada aunque el descuento falle — se loggea)
+    try:
+        descontados = descontar_insumos_remision(rem, usuario)
+        if descontados:
+            log.info(f"[insumos] remisión {rem.get('consecutivo')}: "
+                     f"{len(descontados)} insumos descontados")
+    except Exception as e:
+        log.warning(f"[insumos] descuento remisión {rem_id} falló: {e}")
+    return rem
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2165,7 +2181,7 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
     # ── Lotes: cortadas con su ruta y referencia ─────────────────
     ocs = listar_ordenes_corte(estado="cortada", limit=500)
     rutas = (sb.table("hoja_ruta_lote")
-               .select("orden_corte_id,precio_confeccion,confeccionista:confeccionista_id(nombre)")
+               .select("orden_corte_id,precio_confeccion,etapa,lavanderia_at,confeccionista:confeccionista_id(nombre)")
                .limit(500).execute()).data or []
     ruta_por_oc = {r["orden_corte_id"]: r for r in rutas if r.get("orden_corte_id")}
 
@@ -2187,6 +2203,9 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             "consecutivo":    oc.get("consecutivo"),
             "referencia":     (oc.get("referencia") or {}).get("codigo_referencia"),
             "confeccionista": ((ruta or {}).get("confeccionista") or {}).get("nombre"),
+            # El DS se vuelve exigible cuando el confeccionista ENTREGÓ
+            # (lote pasó a lavandería). Antes de eso no se alerta.
+            "entregado_at":   (ruta or {}).get("lavanderia_at"),
             "unidades":       unidades,
             "precio_teorico": precio,
             "total_teorico":  round(unidades * precio, 2),
@@ -2280,12 +2299,26 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
 
     # ── Alertas ──────────────────────────────────────────────────
     alertas = []
+    ahora = datetime.now(timezone.utc)
     for l in lotes:
         if l["estado"] == "sin_ds":
+            # Solo alerta si el lote ya fue ENTREGADO al siguiente proceso
+            # (salió a lavandería) hace más de 1 día y sigue sin DS.
+            entregado = l.get("entregado_at")
+            if not entregado:
+                continue  # el confeccionista aún trabaja — no es exigible
+            try:
+                ent_dt = datetime.fromisoformat(str(entregado).replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                continue
+            if (ahora - ent_dt).total_seconds() < 86400:
+                continue  # menos de 1 día — gracia para contabilizar
+            dias = int((ahora - ent_dt).total_seconds() // 86400)
             alertas.append({
                 "tipo": "sin_ds", "severidad": "media",
-                "mensaje": f"Lote {l['consecutivo']} (REF {l['referencia']}) asignado a "
-                           f"{l['confeccionista'] or 'confección'} sin documento soporte en Siigo.",
+                "mensaje": f"Lote {l['consecutivo']} (REF {l['referencia']}) — "
+                           f"{l['confeccionista'] or 'confección'} entregó hace {dias} día(s) "
+                           f"y aún no tiene documento soporte en Siigo.",
             })
         elif l["estado"] == "precio_distinto":
             ds = l["ds"]
@@ -2380,3 +2413,113 @@ def alertas_produccion(*, incluir_costeo: bool = True) -> dict:
         "altas": sum(1 for a in alertas if a.get("severidad") == "alta"),
         "generado_at": _now_iso(),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# INVENTARIO DE INSUMOS · cierres, botones, marquillas, bolsas…
+# Entradas: ingreso manual. Salidas: automáticas al entregar la remisión.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _norm_insumo(nombre: str) -> str:
+    return (nombre or "").strip().upper()
+
+
+def listar_insumos() -> list[dict]:
+    sb = _sb()
+    if sb is None:
+        return []
+    return (sb.table("insumos").select("*")
+              .order("categoria").order("nombre").execute()).data or []
+
+
+def movimientos_insumos(limit: int = 100) -> list[dict]:
+    sb = _sb()
+    if sb is None:
+        return []
+    return (sb.table("insumos_movimientos")
+              .select("*,insumo:insumo_id(nombre,unidad)")
+              .order("created_at", desc=True).limit(limit).execute()).data or []
+
+
+def _upsert_insumo(sb, nombre: str, categoria: str, unidad: str = "und") -> dict:
+    """Busca el insumo por nombre normalizado; si no existe lo crea en 0."""
+    nom = _norm_insumo(nombre)
+    r = (sb.table("insumos").select("*").eq("nombre", nom).limit(1).execute()).data
+    if r:
+        return r[0]
+    ins = sb.table("insumos").insert({
+        "nombre": nom, "categoria": categoria or "OTRO",
+        "unidad": unidad or "und", "cantidad_disponible": 0,
+    }).execute()
+    return ins.data[0]
+
+
+def _mover_insumo(sb, insumo: dict, delta: float, tipo: str,
+                  doc_ref: Optional[str], usuario: str, nota: str = "") -> None:
+    nuevo = round(float(insumo.get("cantidad_disponible") or 0) + delta, 3)
+    sb.table("insumos").update({
+        "cantidad_disponible": nuevo, "updated_at": _now_iso(),
+    }).eq("id", insumo["id"]).execute()
+    sb.table("insumos_movimientos").insert({
+        "insumo_id": insumo["id"], "tipo": tipo, "cantidad": delta,
+        "doc_ref": doc_ref, "nota": nota[:500] if nota else None, "usuario": usuario,
+    }).execute()
+
+
+def ingreso_insumos(*, items: list[dict], doc_ref: Optional[str],
+                    usuario: str) -> dict:
+    """Registra la ENTRADA de insumos al inventario.
+    items: [{nombre, categoria, cantidad, unidad?}]
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    registrados = []
+    for it in items:
+        nombre = _norm_insumo(it.get("nombre") or "")
+        cantidad = float(it.get("cantidad") or 0)
+        if not nombre or cantidad <= 0:
+            continue
+        insumo = _upsert_insumo(sb, nombre, it.get("categoria") or "OTRO",
+                                it.get("unidad") or "und")
+        _mover_insumo(sb, insumo, cantidad, "ingreso", doc_ref, usuario,
+                      nota="Ingreso de insumos")
+        registrados.append({"nombre": nombre, "cantidad": cantidad})
+    if not registrados:
+        raise ValueError("sin_items_validos")
+    return {"ok": True, "registrados": registrados}
+
+
+def descontar_insumos_remision(rem: dict, usuario: str) -> list[dict]:
+    """SALIDA automática: al entregar la remisión (recogida/despachada) se
+    descuentan los insumos calculados del precosteo para cada lote.
+    El stock PUEDE quedar negativo — mejor visible que bloqueado; el
+    inventario de insumos es control, no restricción de la operación.
+    """
+    sb = _sb()
+    if sb is None:
+        return []
+    tipo_rem = (rem.get("tipo") or "confeccion")
+    cats = ("INSUMO TERMINACION",) if tipo_rem == "terminacion" else ("INSUMO CONFECCION",)
+    cat_insumo = cats[0]
+    doc_ref = rem.get("consecutivo")
+    descontados = []
+    for it in (rem.get("items") or []):
+        try:
+            calc = calcular_insumos_requeridos_corte(it["orden_corte_id"], categorias=cats)
+        except Exception as e:
+            log.warning(f"[insumos] calculo fallo OC {it.get('orden_corte_id')}: {e}")
+            continue
+        for ins in (calc.get("items") or []):
+            nombre = _norm_insumo(ins.get("item") or "")
+            req = float(ins.get("total_requerido") or 0)
+            if not nombre or req <= 0:
+                continue
+            try:
+                insumo = _upsert_insumo(sb, nombre, cat_insumo)
+                _mover_insumo(sb, insumo, -req, "salida", doc_ref, usuario,
+                              nota=f"Entrega remisión {doc_ref}")
+                descontados.append({"nombre": nombre, "cantidad": req})
+            except Exception as e:
+                log.warning(f"[insumos] descuento fallo {nombre}: {e}")
+    return descontados

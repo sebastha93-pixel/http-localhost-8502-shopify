@@ -866,10 +866,10 @@ def detalle_remision(
 @router.post("/remisiones/{rem_id}/recogida")
 def marcar_recogida(
     rem_id: str,
-    _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
 ) -> dict:
     try:
-        return {"ok": True, "remision": svc.marcar_remision_recogida(rem_id)}
+        return {"ok": True, "remision": svc.marcar_remision_recogida(rem_id, usuario=user.email)}
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -1458,3 +1458,54 @@ def _generar_remision_pdf(rem: dict) -> bytes:
     c.showPage()
     c.save()
     return buf.getvalue()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# INVENTARIO DE INSUMOS
+# ═══════════════════════════════════════════════════════════════════════
+
+class InsumoItemIn(BaseModel):
+    nombre:    str = Field(min_length=1)
+    categoria: str = "INSUMO CONFECCION"
+    cantidad:  float = Field(gt=0)
+    unidad:    str = "und"
+
+
+class IngresoInsumosBody(BaseModel):
+    items:   list[InsumoItemIn] = Field(min_length=1, max_length=100)
+    doc_ref: Optional[str] = None   # factura/remisión del proveedor de insumos
+
+
+@router.get("/insumos")
+def listar_insumos(
+    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
+) -> dict:
+    return {"insumos": svc.listar_insumos()}
+
+
+@router.get("/insumos/movimientos")
+def movimientos_insumos(
+    limit: int = Query(100, ge=1, le=500),
+    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
+) -> dict:
+    return {"movimientos": svc.movimientos_insumos(limit=limit)}
+
+
+@router.post("/insumos/ingreso")
+def ingreso_insumos(
+    body: IngresoInsumosBody,
+    user: CurrentUser = Depends(require_permission("produccion_ingreso", "modificar")),
+) -> dict:
+    """Entrada de insumos al inventario (la salida es automática al
+    entregar remisiones)."""
+    try:
+        return svc.ingreso_insumos(
+            items=[i.model_dump() for i in body.items],
+            doc_ref=body.doc_ref,
+            usuario=user.email,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"ingreso_insumos: {str(e)[:200]}")
