@@ -12,6 +12,7 @@ import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, API_BASE } from "@/lib/api";
 import { TablaInsumosSeparar } from "@/components/tabla-insumos-separar";
+import { TimelineNotas } from "@/components/timeline-notas";
 import { getToken } from "@/lib/auth";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
@@ -1194,7 +1195,6 @@ const ADMINS_WA = [
 function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; consecutivo: string }) {
   const qc = useQueryClient();
   const [urlLav, setUrlLav] = useState("");
-  const [notas, setNotas] = useState("");
 
   const q = useQuery<RutaCorte>({
     queryKey: ["ruta-corte", ordenCorteId],
@@ -1358,9 +1358,10 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
           ))}
         </div>
 
-        <textarea value={notas} onChange={(e) => setNotas(e.target.value)}
-          rows={2} placeholder="Notas (opcional, no se envía en el WhatsApp)"
-          className="w-full rounded-sm border border-border bg-white px-3 py-2 text-xs" />
+        {/* Timeline de notas — histórico completo (confeccionista + terminación + admin) */}
+        <div className="border-t border-border pt-3">
+          <TimelineNotas rutaId={r.id} />
+        </div>
       </CardContent>
     </Card>
   );

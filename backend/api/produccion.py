@@ -1099,32 +1099,70 @@ class NotaBody(BaseModel):
 
 @publico.post("/lote/{token}/nota")
 def guardar_nota_lote(token: str, body: NotaBody) -> dict:
-    """El confeccionista deja una nota interna al lote (visible para admin)."""
+    """El confeccionista deja una nota — se agrega al timeline (no sobrescribe)."""
     r = svc.obtener_ruta_por_token(token)
     if not r:
         raise HTTPException(404, "lote_no_encontrado")
     try:
-        # Guarda en nota_confeccionista (fallback a notas si la migración no corrió)
-        try:
-            svc.actualizar_ruta_lote(r["id"], nota_confeccionista=body.nota)
-        except Exception:
-            svc.actualizar_ruta_lote(r["id"], notas=body.nota)
+        svc.crear_nota_ruta(ruta_id=r["id"], actor="confeccionista",
+                             mensaje=body.nota,
+                             autor=(r.get("confeccionista") or {}).get("nombre"))
         return {"ok": True}
     except ValueError as e:
         raise HTTPException(400, str(e))
+    except Exception as e:
+        # Fallback si la migración de notas_hoja_ruta aún no corrió → guarda en campo viejo
+        try:
+            svc.actualizar_ruta_lote(r["id"], nota_confeccionista=body.nota)
+            return {"ok": True, "warning": "notas timeline no disponible, guardado en campo legacy"}
+        except Exception:
+            raise HTTPException(500, f"guardar_nota: {str(e)[:200]}")
 
 
 @publico.post("/terminacion/{token}/nota")
 def guardar_nota_terminacion(token: str, body: NotaBody) -> dict:
-    """El proveedor de terminación deja una nota."""
+    """El proveedor de terminación deja una nota — se agrega al timeline."""
     r = svc.obtener_ruta_por_token_terminacion(token)
     if not r:
         raise HTTPException(404, "lote_no_encontrado")
     try:
+        svc.crear_nota_ruta(ruta_id=r["id"], actor="terminacion",
+                             mensaje=body.nota,
+                             autor=(r.get("terminacion") or {}).get("nombre"))
+        return {"ok": True}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
         try:
             svc.actualizar_ruta_lote(r["id"], nota_terminacion=body.nota)
+            return {"ok": True, "warning": "notas timeline no disponible, guardado en campo legacy"}
         except Exception:
-            svc.actualizar_ruta_lote(r["id"], notas=body.nota)
-        return {"ok": True}
+            raise HTTPException(500, f"guardar_nota: {str(e)[:200]}")
+
+
+# ── Admin: listar y agregar notas de una ruta
+class NotaAdminBody(BaseModel):
+    mensaje: str = Field(min_length=1, max_length=5000)
+
+
+@router.get("/rutas/{ruta_id}/notas")
+def listar_notas_ruta(
+    ruta_id: str,
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
+) -> dict:
+    return {"notas": svc.listar_notas_ruta(ruta_id)}
+
+
+@router.post("/rutas/{ruta_id}/notas")
+def agregar_nota_ruta(
+    ruta_id: str,
+    body: NotaAdminBody,
+    user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    try:
+        return {"ok": True, "nota": svc.crear_nota_ruta(
+            ruta_id=ruta_id, actor="admin",
+            mensaje=body.mensaje, autor=user.email,
+        )}
     except ValueError as e:
         raise HTTPException(400, str(e))

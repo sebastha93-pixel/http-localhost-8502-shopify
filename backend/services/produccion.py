@@ -1724,3 +1724,51 @@ def listar_rutas(*, etapa: Optional[str] = None,
     if confeccionista_id:
         q = q.eq("confeccionista_id", confeccionista_id)
     return q.execute().data or []
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# NOTAS · timeline por hoja de ruta
+# ═══════════════════════════════════════════════════════════════════════
+
+def crear_nota_ruta(*, ruta_id: str, actor: str, mensaje: str,
+                     autor: Optional[str] = None) -> dict:
+    """Agrega una nota al histórico de la ruta.
+    - actor: 'confeccionista' | 'terminacion' | 'admin'
+    - autor: email o identificador (opcional)
+    """
+    if actor not in ("confeccionista", "terminacion", "admin"):
+        raise ValueError("actor_invalido")
+    msg = (mensaje or "").strip()
+    if not msg:
+        raise ValueError("mensaje_vacio")
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    row = {
+        "ruta_id": ruta_id,
+        "actor":   actor,
+        "autor":   autor or None,
+        "mensaje": msg[:5000],
+    }
+    r = sb.table("notas_hoja_ruta").insert(row).execute()
+    if not r.data:
+        raise RuntimeError("no_se_pudo_crear_nota")
+    return r.data[0]
+
+
+def listar_notas_ruta(ruta_id: str) -> list[dict]:
+    sb = _sb()
+    if sb is None:
+        return []
+    try:
+        r = (sb.table("notas_hoja_ruta")
+               .select("*")
+               .eq("ruta_id", ruta_id)
+               .order("created_at", desc=False)
+               .limit(500)
+               .execute())
+        return r.data or []
+    except Exception as e:
+        # Compat si la migración aún no corrió
+        log.warning(f"[notas] tabla notas_hoja_ruta no disponible: {e}")
+        return []
