@@ -37,7 +37,8 @@ def consecutivo(
     if prefijo not in ("ING", "ROLLO", "OC", "REM", "RI", "PC"):
         raise HTTPException(400, "prefijo_invalido")
     try:
-        return {"ok": True, "consecutivo": svc.next_consecutivo(prefijo)}
+        # Solo lectura — antes incrementaba el contador con cada GET/refresh.
+        return {"ok": True, **svc.peek_consecutivo(prefijo)}
     except Exception as e:
         raise HTTPException(500, f"consecutivo: {str(e)[:200]}")
 

@@ -76,6 +76,19 @@ def _incrementar_consecutivo(*, prefijo_key: str, anio: int) -> int:
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
+    # Camino atómico: RPC en Postgres (INSERT ... ON CONFLICT ... RETURNING).
+    # Dos requests concurrentes NUNCA reciben el mismo número.
+    try:
+        r = sb.rpc("next_consecutivo_atomico",
+                   {"p_prefijo": prefijo_key, "p_anio": anio}).execute()
+        if isinstance(r.data, int):
+            return r.data
+        if isinstance(r.data, list) and r.data:
+            return int(r.data[0] if isinstance(r.data[0], int) else r.data[0]["ultimo"])
+    except Exception as e:
+        log.debug(f"[consecutivo] RPC no disponible, fallback read-upsert: {e}")
+    # Fallback (pre-migración): read → upsert. NO es atómico — el UNIQUE del
+    # documento en DB atrapa la colisión con un error en vez de duplicar.
     r = (sb.table("produccion_consecutivos")
            .select("ultimo")
            .eq("prefijo", prefijo_key)
@@ -110,6 +123,19 @@ def next_consecutivo(prefijo: str, anio: Optional[int] = None, width: int = 4,
 def next_consecutivo_mensual(prefijo: str, width: int = 4) -> str:
     """Alias de compat — usa next_consecutivo(formato='mensual')."""
     return next_consecutivo(prefijo, width=width, formato="mensual")
+
+
+def peek_consecutivo(prefijo: str) -> dict:
+    """Consulta el último consecutivo SIN incrementarlo (para debug/preview).
+    El GET del API usaba next_consecutivo y quemaba números con cada refresh.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    r = (sb.table("produccion_consecutivos").select("prefijo,anio,ultimo")
+           .like("prefijo", f"{prefijo}%")
+           .order("updated_at", desc=True).limit(5).execute())
+    return {"prefijo": prefijo, "contadores": r.data or []}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -746,6 +772,13 @@ def crear_orden_corte(*, referencia_id: str,
         raise ValueError("precosteo_no_encontrado")
     if not p.get("bloqueada") and not p.get("es_muestra_diseno"):
         raise ValueError("precosteo_no_firmado")
+    # Regla de negocio: un precosteo = un lote. El filtro del selector tiene
+    # cache de 30s — esta validación en servidor evita el doble corte por
+    # doble click / dos pestañas.
+    existente = (sb.table("ordenes_corte").select("id,consecutivo")
+                   .eq("referencia_id", referencia_id).limit(1).execute()).data
+    if existente:
+        raise ValueError(f"precosteo_ya_tiene_corte:{existente[0].get('consecutivo')}")
 
     curva = curva_trazo or {}
     prendas_curva = sum(int(n or 0) for n in curva.values())
@@ -1017,10 +1050,14 @@ def quitar_rollo_de_corte(*, oc_id: str, rollo_id: str) -> dict:
     if oc.get("estado") == "cortada":
         raise ValueError("orden_ya_cortada")
     sb.table("orden_corte_rollos").delete().eq("orden_corte_id", oc_id).eq("rollo_id", rollo_id).execute()
-    # Libera la reserva (solo si no quedó vinculado a otro corte)
-    otros = (sb.table("orden_corte_rollos").select("id")
-               .eq("rollo_id", rollo_id).limit(1).execute()).data
-    if not otros:
+    # Libera la reserva — solo si no quedó vinculado a otro corte ABIERTO.
+    # Los links de órdenes ya cortadas son histórico y no cuentan.
+    otros = (sb.table("orden_corte_rollos")
+               .select("id,orden_corte:orden_corte_id(estado)")
+               .eq("rollo_id", rollo_id).limit(20).execute()).data or []
+    abiertos = [o for o in otros
+                if (o.get("orden_corte") or {}).get("estado") != "cortada"]
+    if not abiertos:
         rollo = obtener_rollo(rollo_id)
         if rollo and rollo.get("estado") == "en_corte":
             sb.table("rollos_tela").update({
@@ -1058,8 +1095,22 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
     if not rollos:
         raise ValueError("orden_sin_rollos")
 
+    # Sanitizar unidades_cortadas ANTES de tocar nada — un valor no numérico
+    # guardado aquí rompería el tablero y el cruce Siigo para siempre.
+    if unidades_cortadas is not None:
+        limpio: dict = {}
+        for talla, v in (unidades_cortadas or {}).items():
+            try:
+                limpio[str(talla)] = int(float(v or 0))
+            except (TypeError, ValueError):
+                raise ValueError(f"unidades_invalidas_talla_{talla}")
+        unidades_cortadas = limpio
+
     doc_ref = oc["consecutivo"]
-    # Descuenta cada rollo por sus metros_usados
+
+    # PASO 1 — Pre-validar TODOS los rollos antes de descontar ninguno.
+    # Si uno no alcanza, se falla aquí sin dejar descuentos a medias.
+    descuentos: list[tuple[str, float, float]] = []  # (rollo_id, metros, nuevo_disponible)
     for link in rollos:
         rollo_id = link.get("rollo_id")
         m = float(link.get("metros_usados") or 0)
@@ -1071,8 +1122,18 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
         nuevo = round(float(rollo["metros_disponible"]) - m, 2)
         if nuevo < 0:
             raise ValueError(f"metros_negativos_en_rollo_{rollo['codigo_interno']}")
-        # Al cerrar: si quedó tela, el rollo vuelve a estar disponible;
-        # si no, queda agotado. Libera la reserva 'en_corte'.
+        descuentos.append((rollo_id, m, nuevo))
+
+    # PASO 2 — Claim atómico: marcar 'cortada' condicionado a que NO lo esté ya.
+    # Dos cierres concurrentes → solo uno pasa; el otro recibe orden_ya_cortada.
+    claim = (sb.table("ordenes_corte")
+               .update({"estado": "cortada", "updated_at": _now_iso()})
+               .eq("id", oc_id).neq("estado", "cortada").execute())
+    if not claim.data:
+        raise ValueError("orden_ya_cortada")
+
+    # PASO 3 — Descontar (ya pre-validado; la reserva 'en_corte' se libera aquí)
+    for rollo_id, m, nuevo in descuentos:
         estado_nuevo = "agotado" if nuevo <= 0 else "disponible"
         sb.table("rollos_tela").update({
             "metros_disponible": nuevo,
@@ -1123,6 +1184,8 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
         cols_informe = ("referencia_lote","capas_real","promedio_real",
                          "unidades_cortadas","retazos_cantidad","fecha_entrega","precio_corte")
         if any(c in str(e) for c in cols_informe):
+            log.error(f"[cerrar_corte] {doc_ref}: migración informe faltante — "
+                      f"se descartaron columnas del informe del cortador: {e}")
             for c in cols_informe:
                 update.pop(c, None)
             sb.table("ordenes_corte").update(update).eq("id", oc_id).execute()
@@ -1141,6 +1204,17 @@ def eliminar_orden_corte(oc_id: str) -> None:
         raise ValueError("orden_no_encontrada")
     if oc.get("estado") == "cortada":
         raise ValueError("no_se_puede_eliminar_cortada")
+    # Liberar la reserva de los rollos asignados ANTES de borrar —
+    # si no, quedan en 'en_corte' huérfanos e inutilizables.
+    for link in (oc.get("rollos") or []):
+        rollo_id = link.get("rollo_id")
+        if not rollo_id:
+            continue
+        rollo = obtener_rollo(rollo_id)
+        if rollo and rollo.get("estado") == "en_corte":
+            sb.table("rollos_tela").update({
+                "estado": "disponible", "updated_at": _now_iso(),
+            }).eq("id", rollo_id).execute()
     # orden_corte_rollos cae por CASCADE
     sb.table("ordenes_corte").delete().eq("id", oc_id).execute()
 
@@ -1899,6 +1973,15 @@ def listar_notas_ruta(ruta_id: str) -> list[dict]:
 # TABLERO DE PRODUCCIÓN · eficiencia + stock + valor + ruta
 # ═══════════════════════════════════════════════════════════════════════
 
+
+def _int0(v) -> int:
+    """int tolerante: valores no numéricos (datos viejos) cuentan como 0."""
+    try:
+        return int(float(v or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 STOCK_MINIMO_METROS = 50  # tela+tono con menos de esto se marca "baja"
 
 
@@ -1937,7 +2020,7 @@ def tablero_produccion() -> dict:
             created = datetime.fromisoformat(str(oc.get("created_at", "")).replace("Z", "+00:00"))
         except Exception:
             created = None
-        unidades = sum(int(v or 0) for v in (oc.get("unidades_cortadas") or {}).values())
+        unidades = sum(_int0(v) for v in (oc.get("unidades_cortadas") or {}).values())
         if created and (created.year, created.month) == mes_actual:
             unidades_mes += unidades
         teo = float(oc.get("metros_consumidos") or 0)
@@ -2066,7 +2149,7 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             continue
         ref = _norm_ref((oc.get("referencia") or {}).get("codigo_referencia"))
         ruta = ruta_por_oc.get(oc["id"])
-        unidades = sum(int(v or 0) for v in (oc.get("unidades_cortadas") or {}).values())
+        unidades = sum(_int0(v) for v in (oc.get("unidades_cortadas") or {}).values())
         precio = float((ruta or {}).get("precio_confeccion") or 0)
         lote = {
             "orden_corte_id": oc["id"],
@@ -2097,7 +2180,11 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
     except Exception as e:
         return {"ok": False, "error": "siigo_error", "mensaje": str(e)[:300]}
 
+    # PASO 1 — Recolectar TODOS los items que matchean cada lote.
+    # Un lote puede pagarse en varios DS (pagos parciales): se ACUMULAN,
+    # no se pisan (last-wins subestimaba el total y daba alertas falsas).
     ds_sin_lote = []
+    matches: dict[str, list] = {}   # orden_corte_id → [(doc, item)]
     for doc in docs:
         for it in doc["items"]:
             ref = _norm_ref(it.get("ref"))
@@ -2111,27 +2198,38 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                     "total":      it["total_sin_iva"],
                 })
                 continue
-            lote["ds"] = {
-                "ds":             doc["ds"],
-                "fecha":          doc["fecha"],
-                "proveedor":      doc.get("proveedor_nombre") or doc.get("proveedor_id"),
-                "cantidad":       it["cantidad"],
-                "valor_unitario": it["valor_unitario"],
-                "total_real":     it["total_sin_iva"],
-                "saldo_por_pagar": doc["balance"],
-            }
-            # Estado del cruce
-            dif_precio_pct = (
-                abs(it["valor_unitario"] - lote["precio_teorico"]) / lote["precio_teorico"] * 100
-                if lote["precio_teorico"] > 0 else 0
-            )
-            if lote["precio_teorico"] > 0 and dif_precio_pct > TOLERANCIA_PRECIO_PCT:
-                lote["estado"] = "precio_distinto"
-            elif lote["unidades"] > 0 and abs(it["cantidad"] - lote["unidades"]) > TOLERANCIA_CANTIDAD:
-                lote["estado"] = "cantidad_distinta"
-            else:
-                lote["estado"] = "ok"
-            lote["desviacion"] = round(it["total_sin_iva"] - lote["total_teorico"], 2)
+            matches.setdefault(lote["orden_corte_id"], []).append((doc, it))
+
+    # PASO 2 — Evaluar cada lote contra la SUMA de sus DS.
+    for lote in lotes:
+        pares = matches.get(lote["orden_corte_id"]) or []
+        if not pares:
+            continue
+        cantidad_total = sum(it["cantidad"] for _, it in pares)
+        total_real = round(sum(it["total_sin_iva"] for _, it in pares), 2)
+        valor_unit = round(total_real / cantidad_total, 2) if cantidad_total > 0 else 0
+        lote["ds"] = {
+            "ds":              " + ".join(d["ds"] for d, _ in pares),
+            "fecha":           max(d["fecha"] for d, _ in pares),
+            "proveedor":       (pares[0][0].get("proveedor_nombre")
+                                or pares[0][0].get("proveedor_id")),
+            "cantidad":        cantidad_total,
+            "valor_unitario":  valor_unit,
+            "total_real":      total_real,
+            "saldo_por_pagar": round(sum(
+                d["balance"] for d in {d["ds"]: d for d, _ in pares}.values()), 2),
+        }
+        dif_precio_pct = (
+            abs(valor_unit - lote["precio_teorico"]) / lote["precio_teorico"] * 100
+            if lote["precio_teorico"] > 0 else 0
+        )
+        if lote["precio_teorico"] > 0 and dif_precio_pct > TOLERANCIA_PRECIO_PCT:
+            lote["estado"] = "precio_distinto"
+        elif lote["unidades"] > 0 and abs(cantidad_total - lote["unidades"]) > TOLERANCIA_CANTIDAD:
+            lote["estado"] = "cantidad_distinta"
+        else:
+            lote["estado"] = "ok"
+        lote["desviacion"] = round(total_real - lote["total_teorico"], 2)
 
     # ── Alertas ──────────────────────────────────────────────────
     alertas = []

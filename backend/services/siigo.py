@@ -84,7 +84,9 @@ def siigo_get(path: str, params: Optional[dict] = None) -> dict:
 # DOCUMENTOS SOPORTE (DS) — pagos a confeccionistas/terminación
 # ═══════════════════════════════════════════════════════════════════════
 
-REF_RE = re.compile(r"REF[\s.:#-]*([A-Z0-9][A-Z0-9\-]*)", re.IGNORECASE)
+# \bREF\b + separador OBLIGATORIO: sin él, "Referencia 505" matchearía
+# y extraería "ERENCIA" en vez de la referencia real.
+REF_RE = re.compile(r"\bREF(?:ERENCIA)?\b[\s.:#-]+([A-Z0-9][A-Z0-9\-]*)", re.IGNORECASE)
 
 
 def _extraer_ref(texto: str) -> Optional[str]:
@@ -146,14 +148,18 @@ def listar_documentos_soporte(*, desde: Optional[str] = None,
                 "balance":          float(p.get("balance") or 0),
                 "items":            _parse_items(p.get("items")),
             })
-        total = (data.get("pagination") or {}).get("total_results") or 0
-        if page * 100 >= total:
+        # Cortar por tamaño de página, no por total_results — si Siigo omite
+        # pagination.total_results, `or 0` cortaría tras la página 1 en silencio.
+        if len(results) < 100:
             break
         page += 1
 
     # El listado de /purchases a veces NO incluye items (descripción/REF).
     # Para esos, pedir el detalle uno a uno — con pausa por el rate limit.
     pendientes = [d for d in docs if not d["items"] and d.get("id")]
+    if len(pendientes) > 150:
+        log.warning(f"[siigo] {len(pendientes)} DS sin items en listado; "
+                    f"solo se detallan 150 — el resto no cruzará este ciclo")
     for d in pendientes[:150]:
         try:
             detalle = siigo_get(f"/purchases/{d['id']}")
