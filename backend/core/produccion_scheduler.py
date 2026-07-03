@@ -152,3 +152,48 @@ def status() -> dict:
         "destinatarios": _destinatarios(),
         **_estado,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CALENTADOR del cruce Siigo — mantiene el caché de DS siempre tibio
+# para que /produccion/costeo responda al instante.
+# ═══════════════════════════════════════════════════════════════════════
+
+_warm_thread: threading.Thread | None = None
+_warm_stop = threading.Event()
+WARM_INTERVAL_MIN = int(os.environ.get("SIIGO_WARM_INTERVAL_MIN", "10"))
+
+
+def _loop_warm():
+    log.info(f"[siigo-warm] calentador activo · cada {WARM_INTERVAL_MIN} min")
+    if _warm_stop.wait(timeout=90):  # esperar al boot
+        return
+    while not _warm_stop.is_set():
+        try:
+            from backend.services import produccion as svc
+            from backend.services import siigo
+            if siigo.siigo_configurado():
+                svc.cruce_costeo_siigo()
+                log.info("[siigo-warm] cache DS/cruce refrescado")
+        except Exception as e:
+            log.warning(f"[siigo-warm] fallo: {e}")
+        rem = WARM_INTERVAL_MIN * 60
+        while rem > 0 and not _warm_stop.is_set():
+            tick = min(60.0, rem)
+            if _warm_stop.wait(timeout=tick):
+                return
+            rem -= tick
+
+
+def start_warmer() -> bool:
+    global _warm_thread
+    if _warm_thread is not None and _warm_thread.is_alive():
+        return False
+    _warm_stop.clear()
+    _warm_thread = threading.Thread(target=_loop_warm, daemon=True, name="siigo-warm")
+    _warm_thread.start()
+    return True
+
+
+def stop_warmer():
+    _warm_stop.set()

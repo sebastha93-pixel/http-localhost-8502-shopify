@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 import time
 from typing import Any, Optional
 
@@ -105,7 +106,11 @@ def listar_documentos_soporte(*, desde: Optional[str] = None,
     """
     cache_key = f"ds:{desde}"
     hit = _data_cache.get(cache_key)
-    if hit and not force and (time.time() - hit[0] < 600):
+    fresco = hit and (time.time() - hit[0] < 600)
+    if hit and not force:
+        if not fresco:
+            # Stale-while-revalidate: servir el dato viejo YA y refrescar atrás.
+            _refrescar_en_background(desde)
         return hit[1]
 
     def _parse_items(raw: list) -> list[dict]:
@@ -170,3 +175,28 @@ def listar_documentos_soporte(*, desde: Optional[str] = None,
 
     _data_cache[cache_key] = (time.time(), docs)
     return docs
+
+
+_refresh_en_curso: set = set()
+_refresh_lock = threading.Lock()
+
+
+def _refrescar_en_background(desde: Optional[str]) -> None:
+    """Refresca la lista de DS en un thread aparte (una sola vez a la vez)."""
+    key = f"ds:{desde}"
+    with _refresh_lock:
+        if key in _refresh_en_curso:
+            return
+        _refresh_en_curso.add(key)
+
+    def _run():
+        try:
+            listar_documentos_soporte(desde=desde, force=True)
+            log.info(f"[siigo] cache DS refrescado en background ({key})")
+        except Exception as e:
+            log.warning(f"[siigo] refresh background fallo: {e}")
+        finally:
+            with _refresh_lock:
+                _refresh_en_curso.discard(key)
+
+    threading.Thread(target=_run, daemon=True, name="siigo-refresh").start()
