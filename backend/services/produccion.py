@@ -1369,7 +1369,7 @@ def crear_confeccionista(*, nombre: str, telefono: Optional[str] = None,
         raise RuntimeError("Supabase no configurado")
     if not nombre.strip():
         raise ValueError("nombre_requerido")
-    if tipo not in ("confeccion", "terminacion"):
+    if tipo not in ("confeccion", "terminacion", "lavanderia"):
         raise ValueError("tipo_invalido")
     row = {
         "nombre":    nombre.strip(),
@@ -1726,6 +1726,7 @@ def obtener_ruta_por_corte(oc_id: str) -> Optional[dict]:
     r = (sb.table("hoja_ruta_lote")
            .select("*,confeccionista:confeccionista_id(nombre,telefono),"
                    "terminacion:terminacion_id(nombre,telefono),"
+                   "lavanderia:lavanderia_id(nombre,telefono),"
                    "orden_corte:orden_corte_id(consecutivo,curva_trazo,unidades_cortadas,"
                    "cantidad_programada,referencia_lote,"
                    "referencia:referencia_id(codigo_referencia,nombre,tela,color,foto_url))")
@@ -1822,7 +1823,7 @@ def crear_ruta_lote(*, orden_corte_id: str, confeccionista_id: str,
 
 def actualizar_ruta_lote(ruta_id: str, **campos) -> dict:
     permitidos = {
-        "confeccionista_id", "terminacion_id",
+        "confeccionista_id", "terminacion_id", "lavanderia_id",
         "precio_confeccion", "precio_terminacion",
         "fecha_entrega_confeccion", "remision_lavanderia_url",
         "notas", "nota_confeccionista", "nota_terminacion",
@@ -1911,6 +1912,7 @@ def listar_rutas(*, etapa: Optional[str] = None,
     q = (sb.table("hoja_ruta_lote")
            .select("*,confeccionista:confeccionista_id(nombre),"
                    "terminacion:terminacion_id(nombre),"
+                   "lavanderia:lavanderia_id(nombre),"
                    "orden_corte:orden_corte_id(consecutivo,"
                    "referencia:referencia_id(codigo_referencia,nombre,tela))")
            .order("created_at", desc=True).limit(limit))

@@ -1,7 +1,7 @@
 -- ═══════════════════════════════════════════════════════════════════
 -- RESET DE DATOS DE PRUEBA · Módulo Producción
--- Borra TODO lo transaccional para arrancar una prueba desde cero.
--- CONSERVA: confeccionistas/proveedores (directorio real) y usuarios.
+-- Borra TODO lo transaccional para arrancar una prueba desde cero,
+-- INCLUYENDO el directorio de proveedores. CONSERVA: usuarios.
 -- Correr en Supabase SQL Editor. IRREVERSIBLE.
 -- ═══════════════════════════════════════════════════════════════════
 
@@ -31,6 +31,9 @@ DELETE FROM ordenes_ingreso;
 -- 6. Reiniciar consecutivos (ING, OC, REM, ROLLO, etc. vuelven a 0001)
 DELETE FROM produccion_consecutivos;
 
+-- 7. Directorio de proveedores (confeccionistas/terminación/lavanderías)
+DELETE FROM confeccionistas;
+
 COMMIT;
 
 -- Verificación: todo debe dar 0
@@ -40,4 +43,4 @@ UNION ALL SELECT 'ordenes_corte', COUNT(*) FROM ordenes_corte
 UNION ALL SELECT 'referencias_precosteo', COUNT(*) FROM referencias_precosteo
 UNION ALL SELECT 'rollos_tela', COUNT(*) FROM rollos_tela
 UNION ALL SELECT 'ordenes_ingreso', COUNT(*) FROM ordenes_ingreso
-UNION ALL SELECT 'confeccionistas (SE CONSERVAN)', COUNT(*) FROM confeccionistas;
+UNION ALL SELECT 'confeccionistas', COUNT(*) FROM confeccionistas;

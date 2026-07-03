@@ -57,7 +57,7 @@ export default function ConfeccionistasPage() {
   const lista = q.data?.confeccionistas || [];
 
   return (
-    <PageShell title="Confeccionistas" subtitle="Directorio de talleres">
+    <PageShell title="Confeccionistas" subtitle="Confección · terminación · lavanderías">
       <div className="flex items-center justify-between">
         <label className="flex items-center gap-2 text-xs text-graphite">
           <input type="checkbox" checked={incluirInactivos} onChange={(e) => setIncluirInactivos(e.target.checked)} />
@@ -65,14 +65,14 @@ export default function ConfeccionistasPage() {
         </label>
         <button onClick={() => setMostrarNuevo(true)}
           className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white hover:bg-navy-700">
-          <Plus className="h-3.5 w-3.5" /> Nuevo confeccionista
+          <Plus className="h-3.5 w-3.5" /> Nuevo proveedor
         </button>
       </div>
 
       {mostrarNuevo && (
         <Card>
           <CardContent className="p-5 space-y-3">
-            <p className="section-label">Nuevo confeccionista</p>
+            <p className="section-label">Nuevo proveedor</p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <Field label="Nombre *"    value={nombre}    onChange={setNombre}    placeholder="Taller Alba" />
               <Field label="Teléfono"    value={telefono}  onChange={setTelefono}  placeholder="3XXXXXXXXX" />
@@ -88,6 +88,10 @@ export default function ConfeccionistasPage() {
                 <label className="inline-flex items-center gap-2">
                   <input type="radio" name="tipo" value="terminacion" checked={tipo === "terminacion"} onChange={() => setTipo("terminacion")} />
                   Terminación
+                </label>
+                <label className="inline-flex items-center gap-2">
+                  <input type="radio" name="tipo" value="lavanderia" checked={tipo === "lavanderia"} onChange={() => setTipo("lavanderia")} />
+                  Lavandería
                 </label>
               </div>
             </div>
@@ -174,6 +178,7 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
             className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs">
             <option value="confeccion">Confección</option>
             <option value="terminacion">Terminación</option>
+            <option value="lavanderia">Lavandería</option>
           </select>
         </td>
         <td className="px-4 py-2">
@@ -207,8 +212,8 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
     <tr className="border-b border-border/40 hover:bg-cloud/30">
       <td className="px-4 py-2 font-semibold text-ink-900">{c.nombre}</td>
       <td className="px-4 py-2">
-        <Badge tone={c.tipo === "terminacion" ? "info" : "neutral"}>
-          {c.tipo === "terminacion" ? "Terminación" : "Confección"}
+        <Badge tone={c.tipo === "terminacion" ? "info" : c.tipo === "lavanderia" ? "pendiente" : "neutral"}>
+          {c.tipo === "terminacion" ? "Terminación" : c.tipo === "lavanderia" ? "Lavandería" : "Confección"}
         </Badge>
       </td>
       <td className="px-4 py-2 text-graphite">{c.telefono || "—"}</td>

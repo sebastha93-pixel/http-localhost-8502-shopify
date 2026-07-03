@@ -39,6 +39,7 @@ interface Ruta {
   despachado_at?: string;
   confeccionista?: { nombre: string };
   terminacion?: { nombre: string };
+  lavanderia?: { nombre: string };
 }
 
 interface LoteRow {
@@ -266,9 +267,15 @@ function LoteCard({ oc, ruta }: { oc: OrdenCorte; ruta?: Ruta }) {
           </div>
 
           {/* Terminación si existe */}
-          {ruta?.terminacion?.nombre && (
+          {(ruta?.lavanderia?.nombre || ruta?.terminacion?.nombre) && (
             <p className="text-[0.65rem] text-graphite">
-              Terminación: <span className="font-semibold text-ink-900">{ruta.terminacion.nombre}</span>
+              {ruta?.lavanderia?.nombre && (
+                <>Lavandería: <span className="font-semibold text-ink-900">{ruta.lavanderia.nombre}</span></>
+              )}
+              {ruta?.lavanderia?.nombre && ruta?.terminacion?.nombre && " · "}
+              {ruta?.terminacion?.nombre && (
+                <>Terminación: <span className="font-semibold text-ink-900">{ruta.terminacion.nombre}</span></>
+              )}
             </p>
           )}
         </CardContent>

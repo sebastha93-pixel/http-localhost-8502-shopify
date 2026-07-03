@@ -1194,6 +1194,8 @@ interface RutaCorte {
   despachado_at?: string;
   confeccionista?: { nombre?: string; telefono?: string };
   terminacion?: { nombre?: string; telefono?: string };
+  lavanderia_id?: string;
+  lavanderia?: { nombre?: string; telefono?: string };
 }
 
 interface ProveedorTerminacion {
@@ -1213,12 +1215,29 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
   const qc = useQueryClient();
   const [urlLav, setUrlLav] = useState("");
   const [errRuta, setErrRuta] = useState("");
+  const [lavanderiaId, setLavanderiaId] = useState("");
 
   const q = useQuery<RutaCorte>({
     queryKey: ["ruta-corte", ordenCorteId],
     queryFn: () => api.get(`/api/produccion/rutas/por-corte/${ordenCorteId}`),
     enabled: !!ordenCorteId,
     retry: false,
+  });
+
+  // Lavanderías del directorio — para marcar a cuál se envía el lote
+  const lavanderiasQ = useQuery<{ confeccionistas: { id: string; nombre: string }[] }>({
+    queryKey: ["confeccionistas", "lavanderia"],
+    queryFn: () => api.get("/api/produccion/confeccionistas?tipo=lavanderia&incluir_inactivos=false"),
+  });
+
+  // Enviar a lavandería = guardar CUÁL lavandería + cambiar etapa
+  const enviarLavanderia = useMutation({
+    mutationFn: async () => {
+      await api.patch(`/api/produccion/rutas/${q.data?.id}`, { lavanderia_id: lavanderiaId });
+      return api.post(`/api/produccion/rutas/${q.data?.id}/etapa`, { etapa: "lavanderia" });
+    },
+    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }); },
+    onError: (e: Error) => setErrRuta(`No se pudo enviar a lavandería: ${e.message}`),
   });
 
   const cambiarEtapa = useMutation({
@@ -1277,10 +1296,28 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
     if (r.etapa === "asignado") return null; // solo confeccionista puede aceptar
     if (r.etapa === "aceptado" || r.etapa === "en_confeccion") {
       return (
-        <button onClick={() => cambiarEtapa.mutate("lavanderia")} disabled={cambiarEtapa.isPending}
-          className="rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
-          Marcar como enviado a lavandería
-        </button>
+        <div className="flex flex-wrap items-end gap-2">
+          <div>
+            <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite">Lavandería *</label>
+            <select value={lavanderiaId} onChange={(e) => setLavanderiaId(e.target.value)}
+              className="rounded-sm border border-border bg-card px-3 py-2 text-xs min-w-[180px]">
+              <option value="">Selecciona lavandería…</option>
+              {(lavanderiasQ.data?.confeccionistas || []).map((l) => (
+                <option key={l.id} value={l.id}>{l.nombre}</option>
+              ))}
+            </select>
+            {(lavanderiasQ.data?.confeccionistas || []).length === 0 && !lavanderiasQ.isLoading && (
+              <p className="mt-1 text-[0.6rem] text-terracotta">
+                No hay lavanderías. Créalas en Confeccionistas con tipo &ldquo;Lavandería&rdquo;.
+              </p>
+            )}
+          </div>
+          <button onClick={() => enviarLavanderia.mutate()}
+            disabled={enviarLavanderia.isPending || cambiarEtapa.isPending || !lavanderiaId}
+            className="rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
+            Marcar como enviado a lavandería
+          </button>
+        </div>
       );
     }
     if (r.etapa === "lavanderia") {
@@ -1346,6 +1383,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
         {/* Info general */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
           <div><span className="text-graphite">Confeccionista:</span> <span className="text-ink-900 font-semibold">{r.confeccionista?.nombre || "—"}</span></div>
+          <div><span className="text-graphite">Lavandería:</span> <span className="text-ink-900 font-semibold">{r.lavanderia?.nombre || "—"}</span></div>
           <div><span className="text-graphite">Terminación:</span> <span className="text-ink-900 font-semibold">{r.terminacion?.nombre || "—"}</span></div>
           <div><span className="text-graphite">Precio confección:</span> <span className="text-ink-900 font-semibold tabular">{r.precio_confeccion != null ? `$${Number(r.precio_confeccion).toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"}</span></div>
           <div><span className="text-graphite">Fecha entrega:</span> <span className="text-ink-900 font-semibold tabular">{fmtFecha(r.fecha_entrega_confeccion)}</span></div>

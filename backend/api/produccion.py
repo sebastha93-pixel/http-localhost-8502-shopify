@@ -870,6 +870,7 @@ class CrearRutaBody(BaseModel):
 class ActualizarRutaBody(BaseModel):
     confeccionista_id:         Optional[str] = None
     terminacion_id:            Optional[str] = None
+    lavanderia_id:             Optional[str] = None
     precio_confeccion:         Optional[float] = None
     precio_terminacion:        Optional[float] = None
     fecha_entrega_confeccion:  Optional[str] = None
