@@ -12,7 +12,7 @@ const MODULOS = [
   { href: "/produccion/corte",         label: "Orden de corte",  desc: "Trazo, curva y consumo real (pistolea rollos)",  icon: Scissors, activo: true },
   { href: "/produccion/remisiones",    label: "Remisiones",      desc: "Entregas a confeccionista",                    icon: FileText, activo: true },
   { href: "/produccion/confeccionistas", label: "Confeccionistas", desc: "Directorio de talleres",                       icon: Users,   activo: true },
-  { href: "/produccion/tablero",       label: "Tablero",         desc: "Eficiencia · stock mínimo · valor",             icon: BarChart3, activo: false },
+  { href: "/produccion/tablero",       label: "Tablero",         desc: "Eficiencia · stock mínimo · valor",             icon: BarChart3, activo: true },
 ];
 
 export default function ProduccionHome() {

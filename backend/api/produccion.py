@@ -1170,3 +1170,19 @@ def agregar_nota_ruta(
         )}
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# TABLERO DE PRODUCCIÓN
+# ═══════════════════════════════════════════════════════════════════════
+
+@router.get("/tablero")
+def tablero(
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
+) -> dict:
+    """KPIs de producción: inventario, eficiencia de corte y ruta de lotes."""
+    try:
+        return svc.tablero_produccion()
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"tablero: {str(e)[:200]}")

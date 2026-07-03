@@ -1893,3 +1893,123 @@ def listar_notas_ruta(ruta_id: str) -> list[dict]:
         # Compat si la migración aún no corrió
         log.warning(f"[notas] tabla notas_hoja_ruta no disponible: {e}")
         return []
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# TABLERO DE PRODUCCIÓN · eficiencia + stock + valor + ruta
+# ═══════════════════════════════════════════════════════════════════════
+
+STOCK_MINIMO_METROS = 50  # tela+tono con menos de esto se marca "baja"
+
+
+def tablero_produccion() -> dict:
+    """KPIs del módulo de producción. Cache 60s.
+
+    - Inventario: metros disponibles, valor, telas bajo stock mínimo.
+    - Corte: unidades cortadas del mes, eficiencia teórico vs real.
+    - Ruta: lotes por etapa + lotes estancados (>7 días sin ingreso a bodega).
+    """
+    cache_key = "tablero_produccion"
+    cached = _cache_get(cache_key, ttl_seg=60)
+    if cached is not None:
+        return cached
+    sb = _sb()
+    if sb is None:
+        return {}
+
+    # ── Inventario ────────────────────────────────────────────────
+    inv = inventario_resumen()
+    metros_disp = round(sum(t["metros_disponible"] for t in inv), 2)
+    valor_inv = round(sum(t["valor_estimado"] for t in inv), 0)
+    telas_bajas = [t for t in inv if 0 < t["metros_disponible"] < STOCK_MINIMO_METROS]
+
+    # ── Cortes ────────────────────────────────────────────────────
+    cortes = listar_ordenes_corte(estado="cortada", limit=200)
+    hoy = datetime.now(timezone.utc)
+    mes_actual = (hoy.year, hoy.month)
+
+    unidades_mes = 0
+    metros_teoricos = 0.0
+    metros_reales = 0.0
+    ultimos = []
+    for oc in cortes:
+        try:
+            created = datetime.fromisoformat(str(oc.get("created_at", "")).replace("Z", "+00:00"))
+        except Exception:
+            created = None
+        unidades = sum(int(v or 0) for v in (oc.get("unidades_cortadas") or {}).values())
+        if created and (created.year, created.month) == mes_actual:
+            unidades_mes += unidades
+        teo = float(oc.get("metros_consumidos") or 0)
+        real = float(oc.get("consumo_real_cortador") or 0)
+        if teo > 0 and real > 0:
+            metros_teoricos += teo
+            metros_reales += real
+        if len(ultimos) < 10:
+            ref = oc.get("referencia") or {}
+            ultimos.append({
+                "id":             oc["id"],
+                "consecutivo":    oc.get("consecutivo"),
+                "referencia":     ref.get("codigo_referencia"),
+                "nombre":         ref.get("nombre"),
+                "unidades":       unidades,
+                "metros_teorico": teo,
+                "metros_real":    real,
+                "diferencia_pct": oc.get("diferencia_pct"),
+                "promedio_real":  oc.get("promedio_real"),
+            })
+
+    eficiencia_pct = (
+        round((metros_reales - metros_teoricos) / metros_teoricos * 100, 2)
+        if metros_teoricos > 0 else None
+    )
+
+    # ── Ruta (lotes en proceso) ───────────────────────────────────
+    rutas = (sb.table("hoja_ruta_lote")
+               .select("etapa,asignado_at,despachado_at,"
+                       "orden_corte:orden_corte_id(consecutivo)")
+               .limit(500).execute()).data or []
+    por_etapa: dict[str, int] = {}
+    estancados = []
+    for r in rutas:
+        etapa = r.get("etapa") or "asignado"
+        por_etapa[etapa] = por_etapa.get(etapa, 0) + 1
+        if etapa != "despachado" and r.get("asignado_at"):
+            try:
+                asignado = datetime.fromisoformat(str(r["asignado_at"]).replace("Z", "+00:00"))
+                dias = (hoy - asignado).days
+                if dias > 7:
+                    estancados.append({
+                        "consecutivo": (r.get("orden_corte") or {}).get("consecutivo"),
+                        "etapa": etapa,
+                        "dias": dias,
+                    })
+            except Exception:
+                pass
+    estancados.sort(key=lambda x: -x["dias"])
+
+    out = {
+        "inventario": {
+            "metros_disponibles": metros_disp,
+            "valor_estimado":     valor_inv,
+            "num_telas":          len(inv),
+            "telas_bajas":        telas_bajas[:10],
+            "stock_minimo":       STOCK_MINIMO_METROS,
+        },
+        "corte": {
+            "ordenes_cortadas":  len(cortes),
+            "unidades_mes":      unidades_mes,
+            "eficiencia_pct":    eficiencia_pct,  # + = se gastó más tela que lo teórico
+            "metros_teoricos":   round(metros_teoricos, 2),
+            "metros_reales":     round(metros_reales, 2),
+            "ultimos":           ultimos,
+        },
+        "ruta": {
+            "por_etapa":   por_etapa,
+            "en_proceso":  sum(v for k, v in por_etapa.items() if k != "despachado"),
+            "en_bodega":   por_etapa.get("despachado", 0),
+            "estancados":  estancados[:10],
+        },
+    }
+    _cache_set(cache_key, out, ttl_seg=60)
+    return out
