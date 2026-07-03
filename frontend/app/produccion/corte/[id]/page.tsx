@@ -7,11 +7,11 @@
  * - Botón cerrar → registra consumo real, descuenta inventario, marca 'cortada'
  */
 import { useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, API_BASE } from "@/lib/api";
-import { fmtFecha } from "@/lib/utils";
+import { fmtFecha, hoyBogotaISO } from "@/lib/utils";
 import { ESPIGAS, PAREJA_TALLA, labelEspiga, capasDeEspiga, SOBRANTE_ESPIGA_M } from "@/lib/espigas";
 import { TimelineNotas } from "@/components/timeline-notas";
 import { getToken } from "@/lib/auth";
@@ -737,6 +737,7 @@ export default function DetalleOrdenCortePage() {
 
       {/* Comparación al cerrar */}
       {cerrada && <InformeCerradoCard oc={oc} />}
+      {cerrada && <GenerarRemisionCard ordenCorteId={oc.id} />}
       {cerrada && <HojaRutaCard ordenCorteId={oc.id} consecutivo={oc.consecutivo} />}
     </PageShell>
   );
@@ -1495,6 +1496,81 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
         <div className="border-t border-border pt-3">
           <TimelineNotas rutaId={r.id} />
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+
+/** Generar la remisión de insumos de CONFECCIÓN directo desde el corte cerrado.
+ * Los insumos salen de las UNIDADES REALES cortadas por talla (el cálculo del
+ * backend usa unidades_cortadas cuando la orden ya está cerrada).
+ * Solo aparece si el lote aún no tiene hoja de ruta (= no tiene remisión). */
+function GenerarRemisionCard({ ordenCorteId }: { ordenCorteId: string }) {
+  const router = useRouter();
+  const [confId, setConfId] = useState("");
+  const [errRem, setErrRem] = useState("");
+
+  // ¿Ya tiene ruta? (la crea la remisión de confección) → no mostrar
+  const rutaQ = useQuery<{ id: string }>({
+    queryKey: ["ruta-corte", ordenCorteId],
+    queryFn: () => api.get(`/api/produccion/rutas/por-corte/${ordenCorteId}`),
+    enabled: !!ordenCorteId,
+    retry: false,
+  });
+
+  const confsQ = useQuery<{ confeccionistas: { id: string; nombre: string }[] }>({
+    queryKey: ["confeccionistas", "confeccion"],
+    queryFn: () => api.get("/api/produccion/confeccionistas?tipo=confeccion&incluir_inactivos=false"),
+  });
+
+  const crear = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; remision: { id: string } }>("/api/produccion/remisiones", {
+      confeccionista_id: confId,
+      fecha_recogida: hoyBogotaISO(),
+      orden_corte_ids: [ordenCorteId],
+      tipo: "confeccion",
+    }),
+    onSuccess: (data) => router.push(`/produccion/remisiones/${data.remision.id}`),
+    onError: (e: Error) => setErrRem(e.message),
+  });
+
+  // Si ya hay ruta (remisión creada), no mostrar nada
+  if (rutaQ.isLoading || rutaQ.data) return null;
+
+  const confs = confsQ.data?.confeccionistas || [];
+
+  return (
+    <Card>
+      <CardContent className="p-5 space-y-3">
+        <p className="section-label">Generar remisión de confección</p>
+        <p className="text-xs text-graphite">
+          El informe está guardado — genera la remisión de insumos con las
+          <strong> unidades reales cortadas por talla</strong> y asigna el confeccionista.
+        </p>
+        <div className="flex flex-wrap items-end gap-2">
+          <div>
+            <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite">Confeccionista *</label>
+            <select value={confId} onChange={(e) => setConfId(e.target.value)}
+              className="rounded-sm border border-border bg-card px-3 py-2 text-sm min-w-[200px]">
+              <option value="">Selecciona…</option>
+              {confs.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+            </select>
+            {confs.length === 0 && !confsQ.isLoading && (
+              <p className="mt-1 text-[0.6rem] text-terracotta">No hay confeccionistas activos.</p>
+            )}
+          </div>
+          <button onClick={() => crear.mutate()} disabled={crear.isPending || !confId}
+            className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
+            {crear.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            Generar remisión
+          </button>
+        </div>
+        {errRem && (
+          <div role="alert" className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta">
+            {errRem}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

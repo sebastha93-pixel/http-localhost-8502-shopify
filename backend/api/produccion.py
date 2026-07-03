@@ -14,7 +14,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, Up
 from pydantic import BaseModel, Field
 
 from backend.core.security import (CurrentUser, require_role, require_permission,
-                                    require_permission_estricto, tiene_permiso_costos)
+                                    require_permission_estricto, tiene_permiso_costos,
+                                    require_permission_any, tiene_permiso)
 from backend.services import produccion as svc
 
 router = APIRouter(prefix="/api/produccion", tags=["produccion"])
@@ -606,7 +607,7 @@ def autorizar_corte(
 async def subir_trazos_corte(
     oc_id: str,
     file: UploadFile = File(...),
-    _: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "modificar")),
 ) -> dict:
     contenido = await file.read()
     if len(contenido) > 15 * 1024 * 1024:
@@ -627,27 +628,49 @@ async def subir_trazos_corte(
         raise HTTPException(500, f"trazos: {str(e)[:200]}")
 
 
+def _es_solo_cortador(user: CurrentUser) -> bool:
+    """Cortador puro: tiene permiso de cortador pero NO el módulo completo."""
+    return (tiene_permiso(user, "produccion_cortador", "ver")
+            and not tiene_permiso(user, "produccion_corte", "ver")
+            and user.rol != "admin")
+
+
+def _corte_es_del_cortador(oc: dict, user: CurrentUser) -> bool:
+    """El corte le pertenece si el responsable coincide con su nombre."""
+    resp = (oc.get("responsable") or "").strip().upper()
+    nombre = (user.nombre or "").strip().upper()
+    if not resp or not nombre:
+        return False
+    return resp in nombre or nombre in resp
+
+
 @router.get("/corte")
 def listar_cortes(
     estado: Optional[str] = None,
     limit: int = Query(200, ge=1, le=500),
     sin_remision: Optional[str] = None,  # 'confeccion' | 'terminacion'
     marcar_remisiones: bool = False,
-    _: CurrentUser = Depends(require_permission("produccion_corte", "ver")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "ver")),
 ) -> dict:
-    return {"ordenes": svc.listar_ordenes_corte(
+    ordenes = svc.listar_ordenes_corte(
         estado=estado, limit=limit, sin_remision=sin_remision,
-        marcar_remisiones=marcar_remisiones)}
+        marcar_remisiones=marcar_remisiones)
+    # Cortador puro: SOLO ve los cortes donde él es el responsable
+    if _es_solo_cortador(user):
+        ordenes = [oc for oc in ordenes if _corte_es_del_cortador(oc, user)]
+    return {"ordenes": ordenes}
 
 
 @router.get("/corte/{oc_id}")
 def detalle_corte(
     oc_id: str,
-    _: CurrentUser = Depends(require_permission("produccion_corte", "ver")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "ver")),
 ) -> dict:
     oc = svc.obtener_orden_corte(oc_id)
     if not oc:
         raise HTTPException(404, "Orden de corte no encontrada")
+    if _es_solo_cortador(user) and not _corte_es_del_cortador(oc, user):
+        raise HTTPException(403, "Este corte no está asignado a ti")
     return oc
 
 
@@ -655,7 +678,7 @@ def detalle_corte(
 def pistolear_rollo(
     oc_id: str,
     body: PistolearRolloBody,
-    _: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "modificar")),
 ) -> dict:
     try:
         oc = svc.asignar_rollo_a_corte(
@@ -675,7 +698,7 @@ def pistolear_rollo(
 def quitar_rollo(
     oc_id: str,
     rollo_id: str,
-    _: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "modificar")),
 ) -> dict:
     try:
         oc = svc.quitar_rollo_de_corte(oc_id=oc_id, rollo_id=rollo_id)
@@ -692,7 +715,7 @@ class AutoAsignarBody(BaseModel):
 def auto_asignar(
     oc_id: str,
     body: AutoAsignarBody,
-    _: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "modificar")),
 ) -> dict:
     """Auto-selecciona rollos disponibles de la misma TELA + TONO y los agrega
     hasta cubrir los metros teóricos. Evita mezclar tonos por error humano.
@@ -712,8 +735,13 @@ def auto_asignar(
 def cerrar_corte(
     oc_id: str,
     body: CerrarCorteBody,
-    user: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "modificar")),
 ) -> dict:
+    # Cortador puro: solo puede cerrar SUS cortes asignados
+    if _es_solo_cortador(user):
+        oc_check = svc.obtener_orden_corte(oc_id)
+        if not oc_check or not _corte_es_del_cortador(oc_check, user):
+            raise HTTPException(403, "Este corte no está asignado a ti")
     try:
         oc = svc.cerrar_orden_corte(
             oc_id=oc_id,
@@ -781,7 +809,7 @@ class RemisionIn(BaseModel):
 def listar_confeccionistas(
     incluir_inactivos: bool = False,
     tipo: Optional[str] = None,
-    _: CurrentUser = Depends(require_permission("produccion_proveedores", "ver")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_proveedores", "produccion_cortador"), "ver")),
 ) -> dict:
     return {"confeccionistas": svc.listar_confeccionistas(
         incluir_inactivos=incluir_inactivos, tipo=tipo,
@@ -824,7 +852,7 @@ def listar_remisiones(
     estado: Optional[str] = None,
     confeccionista_id: Optional[str] = None,
     limit: int = Query(200, ge=1, le=500),
-    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ) -> dict:
     return {"remisiones": svc.listar_remisiones(
         estado=estado, confeccionista_id=confeccionista_id, limit=limit,
@@ -834,7 +862,7 @@ def listar_remisiones(
 @router.post("/remisiones")
 def crear_remision(
     body: RemisionIn,
-    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "modificar")),
 ) -> dict:
     try:
         rem = svc.crear_remision(
@@ -855,7 +883,7 @@ def crear_remision(
 @router.get("/remisiones/{rem_id}")
 def detalle_remision(
     rem_id: str,
-    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ) -> dict:
     rem = svc.obtener_remision(rem_id)
     if not rem:
@@ -866,7 +894,7 @@ def detalle_remision(
 @router.post("/remisiones/{rem_id}/recogida")
 def marcar_recogida(
     rem_id: str,
-    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "modificar")),
 ) -> dict:
     try:
         return {"ok": True, "remision": svc.marcar_remision_recogida(rem_id, usuario=user.email)}
@@ -882,7 +910,7 @@ def marcar_recogida(
 def insumos_requeridos_corte(
     oc_id: str,
     tipo: Optional[str] = None,  # 'confeccion' | 'terminacion' | None (ambos)
-    user: CurrentUser = Depends(require_permission("produccion_corte", "ver")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "ver")),
 ) -> dict:
     """Calcula los insumos requeridos multiplicando item.cantidad × cantidad_a_cortar.
     Con `tipo=confeccion` filtra a categoría INSUMO CONFECCION;
@@ -943,7 +971,7 @@ def listar_rutas(
     etapa: Optional[str] = None,
     confeccionista_id: Optional[str] = None,
     limit: int = Query(200, ge=1, le=500),
-    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ) -> dict:
     return {"rutas": svc.listar_rutas(
         etapa=etapa, confeccionista_id=confeccionista_id, limit=limit
@@ -953,7 +981,7 @@ def listar_rutas(
 @router.post("/rutas")
 def crear_ruta(
     body: CrearRutaBody,
-    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "modificar")),
 ) -> dict:
     try:
         return {"ok": True, "ruta": svc.crear_ruta_lote(
@@ -974,7 +1002,7 @@ def crear_ruta(
 @router.get("/rutas/por-corte/{oc_id}")
 def ruta_por_corte(
     oc_id: str,
-    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ) -> dict:
     r = svc.obtener_ruta_por_corte(oc_id)
     if not r:
@@ -986,7 +1014,7 @@ def ruta_por_corte(
 def actualizar_ruta(
     ruta_id: str,
     body: ActualizarRutaBody,
-    _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "modificar")),
 ) -> dict:
     try:
         campos = body.model_dump(exclude_unset=True)
@@ -999,7 +1027,7 @@ def actualizar_ruta(
 def cambiar_etapa(
     ruta_id: str,
     body: CambiarEtapaBody,
-    _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "modificar")),
 ) -> dict:
     try:
         return {"ok": True, "ruta": svc.cambiar_etapa_ruta(ruta_id, body.etapa)}
@@ -1214,7 +1242,7 @@ class NotaAdminBody(BaseModel):
 @router.get("/rutas/{ruta_id}/notas")
 def listar_notas_ruta(
     ruta_id: str,
-    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ) -> dict:
     return {"notas": svc.listar_notas_ruta(ruta_id)}
 
@@ -1223,7 +1251,7 @@ def listar_notas_ruta(
 def agregar_nota_ruta(
     ruta_id: str,
     body: NotaAdminBody,
-    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "modificar")),
 ) -> dict:
     try:
         return {"ok": True, "nota": svc.crear_nota_ruta(
@@ -1311,7 +1339,7 @@ def enviar_digest_manual(
 @router.get("/remisiones/{rem_id}/pdf")
 def remision_pdf(
     rem_id: str,
-    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ):
     """PDF imprimible de la remisión: cabecera, órdenes, insumos a separar
     (solo cantidades, sin valores) y firmas. QR con el consecutivo."""
@@ -1526,7 +1554,7 @@ class SeparacionBody(BaseModel):
 def guardar_separacion(
     ruta_id: str,
     body: SeparacionBody,
-    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "modificar")),
 ) -> dict:
     """Checklist de separación de insumos: marca items contados y el
     'todo OK' final con responsable (BAY / HENRY HURTADO)."""

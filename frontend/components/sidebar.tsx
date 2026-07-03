@@ -73,9 +73,9 @@ const NAV: { home: NavItem; groups: NavGroup[] } = {
         { label: "Inventario",      href: "/produccion/inventario",      permiso: "produccion_ingreso" },
         { label: "Insumos",         href: "/produccion/insumos",         permiso: "produccion_ingreso" },
         { label: "Precosteo",       href: "/produccion/precosteo" },
-        { label: "Lotes",           href: "/produccion/lotes",           permiso: "produccion_corte" },
-        { label: "Orden corte",     href: "/produccion/corte",           permiso: "produccion_corte" },
-        { label: "Remisiones",      href: "/produccion/remisiones",      permiso: "produccion_remisiones" },
+        { label: "Lotes",           href: "/produccion/lotes",           permiso: "produccion_corte|produccion_cortador" },
+        { label: "Orden corte",     href: "/produccion/corte",           permiso: "produccion_corte|produccion_cortador" },
+        { label: "Remisiones",      href: "/produccion/remisiones",      permiso: "produccion_remisiones|produccion_cortador" },
         { label: "Proveedores",     href: "/produccion/confeccionistas", permiso: "produccion_proveedores" },
       ],
     },
@@ -104,7 +104,10 @@ export function Sidebar() {
       items: g.items.filter((it) => {
         if (ADMIN_ONLY.includes(it.href)) return esAdmin(user);
         if (COSTOS_ONLY.includes(it.href)) return puedeVerCostosProduccion(user);
-        if (it.permiso) return puedeVerModulo(user, it.permiso);
+        if (it.permiso) {
+          // Varios permisos separados por | — con cualquiera se muestra
+          return it.permiso.split("|").some((m) => puedeVerModulo(user, m));
+        }
         return true;
       }),
     }))

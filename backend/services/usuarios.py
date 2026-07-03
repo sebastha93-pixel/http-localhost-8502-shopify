@@ -61,7 +61,8 @@ MODULOS_GRUPOS = {
     "finanzas":       ["finanzas"],
     "comercial":      ["comercial", "revenue", "inteligencia"],
     "produccion":     ["produccion", "produccion_ingreso", "produccion_corte",
-                       "produccion_remisiones", "produccion_proveedores"],
+                       "produccion_remisiones", "produccion_proveedores",
+                       "produccion_cortador"],
     "produccion_costos": ["produccion_costos"],
     "configuracion":  ["configuracion", "usuarios", "auditoria"],
 }

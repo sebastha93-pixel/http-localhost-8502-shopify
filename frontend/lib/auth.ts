@@ -53,7 +53,8 @@ export const GRUPOS_PERMISOS = {
   finanzas:       ["finanzas"],
   comercial:      ["comercial", "revenue", "inteligencia"],
   produccion:     ["produccion", "produccion_ingreso", "produccion_corte",
-                   "produccion_remisiones", "produccion_proveedores"],
+                   "produccion_remisiones", "produccion_proveedores",
+                   "produccion_cortador"],
   produccion_costos: ["produccion_costos"],
   configuracion:  ["configuracion", "usuarios", "auditoria"],
 } as const;
@@ -85,6 +86,7 @@ export const MODULO_LABEL: Record<string, string> = {
   produccion_corte:        "Órdenes de corte",
   produccion_remisiones:   "Remisiones y hoja de ruta",
   produccion_proveedores:  "Proveedores (directorio)",
+  produccion_cortador:     "Cortador (solo sus cortes asignados + informe + entrega)",
   produccion_costos:       "Precosteo · Costeo real · valores $",
   centro_control: "Centro de control",
   logistica: "Logística",

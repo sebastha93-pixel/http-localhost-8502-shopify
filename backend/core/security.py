@@ -281,3 +281,23 @@ def tiene_permiso_costos(user: CurrentUser) -> bool:
     if isinstance(acciones, dict):
         return bool(acciones.get("ver"))
     return False
+
+
+def tiene_permiso(user: CurrentUser, modulo: str, accion: str) -> bool:
+    """Wrapper público de _check_permiso — para lógica condicional en endpoints."""
+    return _check_permiso(user, modulo, accion)
+
+
+def require_permission_any(modulos: tuple, accion: str):
+    """Pasa si el usuario tiene la acción en CUALQUIERA de los módulos.
+    Para roles acotados (ej. cortador) que comparten endpoints con el
+    módulo completo pero con permiso propio."""
+    def _check(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+        for m in modulos:
+            if _check_permiso(user, m, accion):
+                return user
+        raise HTTPException(
+            status_code=403,
+            detail=f"Sin permiso para '{accion}' en {'/'.join(modulos)}",
+        )
+    return _check
