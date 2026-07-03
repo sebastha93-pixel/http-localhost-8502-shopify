@@ -1370,7 +1370,6 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
 function TerminacionCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; consecutivo: string }) {
   const qc = useQueryClient();
   const [terminacionId, setTerminacionId] = useState("");
-  const [precioTerm, setPrecioTerm] = useState("");
 
   const rutaQ = useQuery<RutaCorte>({
     queryKey: ["ruta-corte", ordenCorteId],
@@ -1389,9 +1388,9 @@ function TerminacionCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; 
   const guardar = useMutation({
     mutationFn: () => {
       if (!rutaQ.data) return Promise.reject(new Error("ruta no cargada"));
+      // El precio de terminación viene del precosteo — el backend lo trae solo.
       return api.patch(`/api/produccion/rutas/${rutaQ.data.id}`, {
         terminacion_id: terminacionId || null,
-        precio_terminacion: precioTerm ? parseFloat(precioTerm) : null,
       });
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }),
@@ -1440,14 +1439,16 @@ function TerminacionCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; 
             )}
           </div>
           <div>
-            <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Precio terminación</label>
-            <input value={precioTerm} onChange={(e) => setPrecioTerm(e.target.value)}
-              inputMode="decimal" placeholder={r.precio_terminacion != null ? String(r.precio_terminacion) : "0"}
-              className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm text-right tabular" />
+            <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Precio terminación (del precosteo)</label>
+            <div className="w-full rounded-sm border border-border bg-cloud/40 px-3 py-2 text-sm text-right tabular font-semibold text-ink-900">
+              {r.precio_terminacion != null
+                ? `$${Number(r.precio_terminacion).toLocaleString("es-CO")}`
+                : "— sin precio en el precosteo"}
+            </div>
           </div>
           <div className="flex items-end">
             <button onClick={() => guardar.mutate()}
-              disabled={guardar.isPending || (!terminacionId && !precioTerm)}
+              disabled={guardar.isPending || !terminacionId}
               className="w-full rounded-sm border border-border bg-cloud px-3 py-2 text-xs font-semibold uppercase tracking-widest hover:bg-cloud/80 disabled:opacity-40">
               {guardar.isPending ? <Loader2 className="inline h-3.5 w-3.5 animate-spin mr-1" /> : null}
               Guardar

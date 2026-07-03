@@ -195,7 +195,6 @@ function RutaCard({ ordenCorteId, consecutivo, tipo, telefono, confeccionistaNom
 }) {
   const esTerminacion = tipo === "terminacion";
   const qc = useQueryClient();
-  const [precio, setPrecio] = useState("");
   const [fecha, setFecha] = useState("");
   const [copiado, setCopiado] = useState(false);
 
@@ -211,13 +210,10 @@ function RutaCard({ ordenCorteId, consecutivo, tipo, telefono, confeccionistaNom
   const guardar = useMutation({
     mutationFn: () => {
       if (!q.data) return Promise.reject(new Error("ruta no cargada"));
-      const patch: Record<string, unknown> = esTerminacion
-        ? { precio_terminacion: precio ? parseFloat(precio) : null }
-        : {
-            precio_confeccion: precio ? parseFloat(precio) : null,
-            fecha_entrega_confeccion: fecha || null,
-          };
-      return api.patch(`/api/produccion/rutas/${q.data.id}`, patch);
+      // El precio viene del precosteo (bloqueado) — solo se edita la fecha.
+      return api.patch(`/api/produccion/rutas/${q.data.id}`, {
+        fecha_entrega_confeccion: fecha || null,
+      });
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ruta", ordenCorteId] }),
   });
@@ -264,16 +260,16 @@ function RutaCard({ ordenCorteId, consecutivo, tipo, telefono, confeccionistaNom
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
         <div>
           <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite">
-            {esTerminacion ? "Precio terminación" : "Precio confección"}
+            {esTerminacion ? "Precio terminación (del precosteo)" : "Precio confección (del precosteo)"}
           </label>
-          <input value={precio} onChange={(e) => setPrecio(e.target.value)}
-            inputMode="decimal"
-            placeholder={
-              esTerminacion
-                ? (r.precio_terminacion != null ? String(r.precio_terminacion) : "0")
-                : (r.precio_confeccion != null ? String(r.precio_confeccion) : "0")
-            }
-            className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-xs text-right tabular" />
+          <div className="w-full rounded-sm border border-border bg-cloud/40 px-2 py-1.5 text-xs text-right tabular font-semibold text-ink-900">
+            {(() => {
+              const p = esTerminacion ? r.precio_terminacion : r.precio_confeccion;
+              return p != null
+                ? `$${Number(p).toLocaleString("es-CO")}`
+                : "— sin precio en el precosteo";
+            })()}
+          </div>
         </div>
         {!esTerminacion && (
           <div>
@@ -289,11 +285,13 @@ function RutaCard({ ordenCorteId, consecutivo, tipo, telefono, confeccionistaNom
       <TablaInsumosSeparar ordenCorteId={ordenCorteId} tipo={tipo} />
 
       <div className="flex flex-wrap items-center gap-2">
-        <button onClick={() => guardar.mutate()} disabled={guardar.isPending || (!precio && !fecha)}
-          className="inline-flex items-center gap-1 rounded-sm border border-border bg-cloud px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud/80 disabled:opacity-40">
-          {guardar.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-          Guardar
-        </button>
+        {!esTerminacion && (
+          <button onClick={() => guardar.mutate()} disabled={guardar.isPending || !fecha}
+            className="inline-flex items-center gap-1 rounded-sm border border-border bg-cloud px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud/80 disabled:opacity-40">
+            {guardar.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+            Guardar fecha
+          </button>
+        )}
         {esTerminacion && !r.token_publico_terminacion ? (
           <p className="text-[0.65rem] text-terracotta">
             Este lote aún no tiene link de terminación. Corre la migración de proveedores en Supabase y refresca.

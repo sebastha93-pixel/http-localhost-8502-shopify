@@ -1410,7 +1410,12 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
                     # Igual creamos la ruta con un placeholder para que sea usable.
                     log.warning(f"[remision-terminacion] OC {oc_id} sin ruta previa, se salta")
                     continue
-                actualizar_ruta_lote(existente["id"], terminacion_id=confeccionista_id)
+                # Precio de terminación: sale del precosteo firmado (bloqueado)
+                oc_row = obtener_orden_corte(oc_id) or {}
+                precio_term = existente.get("precio_terminacion") or _precio_proceso_precosteo(
+                    oc_row.get("referencia_id"), "terminacion")
+                actualizar_ruta_lote(existente["id"], terminacion_id=confeccionista_id,
+                                     precio_terminacion=precio_term)
         except Exception as e:
             log.warning(f"[remision] no se pudo actualizar ruta {oc_id}: {e}")
 
@@ -1626,6 +1631,30 @@ def obtener_ruta_por_token(token: str) -> Optional[dict]:
     return r[0] if r else None
 
 
+def _precio_proceso_precosteo(referencia_id: Optional[str], proceso: str) -> Optional[float]:
+    """Busca en el precosteo el valor unitario del proceso 'confeccion' o
+    'terminacion' (items de PROCESO EN MATERIA PRIMA). El precio del lote
+    sale del precosteo firmado — no se digita a mano.
+    """
+    if not referencia_id:
+        return None
+    p = obtener_precosteo(referencia_id)
+    if not p:
+        return None
+    import unicodedata
+    def _norm(s: str) -> str:
+        return unicodedata.normalize("NFD", (s or "")).encode("ascii", "ignore").decode().lower().strip()
+    target = _norm(proceso)
+    for it in (p.get("items") or []):
+        cat = _norm(it.get("categoria") or "")
+        if "proceso" not in cat:
+            continue
+        if target in _norm(it.get("item") or ""):
+            vu = float(it.get("valor_unitario") or 0)
+            return vu if vu > 0 else None
+    return None
+
+
 def crear_ruta_lote(*, orden_corte_id: str, confeccionista_id: str,
                      precio_confeccion: Optional[float] = None,
                      fecha_entrega_confeccion: Optional[str] = None,
@@ -1644,6 +1673,9 @@ def crear_ruta_lote(*, orden_corte_id: str, confeccionista_id: str,
     existente = obtener_ruta_por_corte(orden_corte_id)
     if existente:
         return existente
+    # Precio de confección: sale del precosteo firmado (bloqueado, no se digita)
+    if precio_confeccion is None:
+        precio_confeccion = _precio_proceso_precosteo(oc.get("referencia_id"), "confeccion")
     row = {
         "orden_corte_id":           orden_corte_id,
         "confeccionista_id":        confeccionista_id,
@@ -1671,6 +1703,20 @@ def actualizar_ruta_lote(ruta_id: str, **campos) -> dict:
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
+    # Al asignar terminación sin precio: trae el precio del precosteo (bloqueado)
+    if "terminacion_id" in update and "precio_terminacion" not in update:
+        try:
+            ruta = (sb.table("hoja_ruta_lote").select("orden_corte_id,precio_terminacion")
+                      .eq("id", ruta_id).limit(1).execute()).data
+            if ruta and not ruta[0].get("precio_terminacion"):
+                oc_row = (sb.table("ordenes_corte").select("referencia_id")
+                            .eq("id", ruta[0]["orden_corte_id"]).limit(1).execute()).data
+                if oc_row:
+                    p = _precio_proceso_precosteo(oc_row[0].get("referencia_id"), "terminacion")
+                    if p is not None:
+                        update["precio_terminacion"] = p
+        except Exception as e:
+            log.warning(f"[ruta] auto-precio terminacion fallo: {e}")
     try:
         r = sb.table("hoja_ruta_lote").update(update).eq("id", ruta_id).execute()
     except Exception as e:
