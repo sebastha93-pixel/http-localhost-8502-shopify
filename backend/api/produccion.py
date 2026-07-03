@@ -1509,3 +1509,34 @@ def ingreso_insumos(
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(500, f"ingreso_insumos: {str(e)[:200]}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SEPARACIÓN DE INSUMOS (checklist + responsable)
+# ═══════════════════════════════════════════════════════════════════════
+
+class SeparacionBody(BaseModel):
+    tipo:        str = Field(pattern="^(confeccion|terminacion)$")
+    items:       dict = {}
+    responsable: Optional[str] = None   # BAY | HENRY HURTADO
+    ok:          bool = False
+
+
+@router.post("/rutas/{ruta_id}/separacion")
+def guardar_separacion(
+    ruta_id: str,
+    body: SeparacionBody,
+    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+) -> dict:
+    """Checklist de separación de insumos: marca items contados y el
+    'todo OK' final con responsable (BAY / HENRY HURTADO)."""
+    try:
+        return {"ok": True, "separacion": svc.guardar_separacion(
+            ruta_id, tipo=body.tipo, items=body.items,
+            responsable=body.responsable, ok=body.ok, usuario=user.email,
+        )}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"separacion: {str(e)[:200]}")

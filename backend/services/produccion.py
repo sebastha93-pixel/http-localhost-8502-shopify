@@ -2523,3 +2523,50 @@ def descontar_insumos_remision(rem: dict, usuario: str) -> list[dict]:
             except Exception as e:
                 log.warning(f"[insumos] descuento fallo {nombre}: {e}")
     return descontados
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SEPARACIÓN DE INSUMOS · checklist con responsable (BAY / HENRY HURTADO)
+# ═══════════════════════════════════════════════════════════════════════
+
+RESPONSABLES_SEPARACION = ("BAY", "HENRY HURTADO")
+
+
+def guardar_separacion(ruta_id: str, *, tipo: str, items: dict,
+                       responsable: Optional[str] = None,
+                       ok: bool = False, usuario: str = "") -> dict:
+    """Guarda el checklist de separación de insumos del lote.
+    Estructura en hoja_ruta_lote.separacion_insumos:
+      { "confeccion": {"items": {"CIERRE": true, ...}, "ok": true,
+                        "responsable": "BAY", "completado_at": "...",
+                        "guardado_por": "email"} , "terminacion": {...} }
+    """
+    if tipo not in ("confeccion", "terminacion"):
+        raise ValueError("tipo_invalido")
+    if ok and (responsable or "").strip().upper() not in RESPONSABLES_SEPARACION:
+        raise ValueError("responsable_requerido")
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    r = (sb.table("hoja_ruta_lote").select("id,separacion_insumos")
+           .eq("id", ruta_id).limit(1).execute()).data
+    if not r:
+        raise ValueError("ruta_no_encontrada")
+    actual = r[0].get("separacion_insumos") or {}
+    entrada = {
+        "items":        {str(k): bool(v) for k, v in (items or {}).items()},
+        "ok":           bool(ok),
+        "responsable":  (responsable or "").strip().upper() or None,
+        "guardado_por": usuario,
+    }
+    entrada["completado_at"] = _now_iso() if ok else None
+    actual[tipo] = entrada
+    try:
+        sb.table("hoja_ruta_lote").update({
+            "separacion_insumos": actual, "updated_at": _now_iso(),
+        }).eq("id", ruta_id).execute()
+    except Exception as e:
+        if "separacion_insumos" in str(e):
+            raise ValueError("migracion_separacion_pendiente")
+        raise
+    return entrada

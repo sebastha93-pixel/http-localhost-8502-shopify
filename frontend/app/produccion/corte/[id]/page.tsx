@@ -13,7 +13,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, API_BASE } from "@/lib/api";
 import { fmtFecha } from "@/lib/utils";
 import { ESPIGAS, PAREJA_TALLA, labelEspiga, capasDeEspiga, SOBRANTE_ESPIGA_M } from "@/lib/espigas";
-import { TablaInsumosSeparar } from "@/components/tabla-insumos-separar";
 import { TimelineNotas } from "@/components/timeline-notas";
 import { getToken } from "@/lib/auth";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";

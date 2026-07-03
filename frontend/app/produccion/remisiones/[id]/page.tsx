@@ -218,6 +218,12 @@ export default function RemisionDetallePage() {
 interface Ruta {
   id: string;
   token_publico: string;
+  separacion_insumos?: Record<string, {
+    items?: Record<string, boolean>;
+    ok?: boolean;
+    responsable?: string | null;
+    completado_at?: string | null;
+  }>;
   token_publico_terminacion?: string;
   precio_confeccion?: number;
   precio_terminacion?: number;
@@ -356,7 +362,9 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
       </div>
 
       {/* Insumos que hay que SEPARAR físicamente antes de enviar */}
-      <TablaInsumosSeparar ordenCorteId={ordenCorteId} tipo={tipo} />
+      <TablaInsumosSeparar ordenCorteId={ordenCorteId} tipo={tipo}
+        rutaId={r.id}
+        separacionInicial={(r.separacion_insumos || {})[tipo] || null} />
 
       <div className="flex flex-wrap items-center gap-2">
         {!esTerminacion && (
