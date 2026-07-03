@@ -705,21 +705,6 @@ export default function DetalleOrdenCortePage() {
       {/* Comparación al cerrar */}
       {cerrada && <InformeCerradoCard oc={oc} />}
       {cerrada && <HojaRutaCard ordenCorteId={oc.id} consecutivo={oc.consecutivo} />}
-      {/* La remisión de terminación se hace en /produccion/remisiones/nueva (tipo Terminación) */}
-      {cerrada && (
-        <Card>
-          <CardContent className="p-4 flex items-center justify-between gap-3">
-            <p className="text-xs text-graphite">
-              ¿Insumos de terminación? Se entregan con una <strong>remisión de terminación</strong> —
-              mismo proceso que con el confeccionista.
-            </p>
-            <Link href="/produccion/remisiones/nueva"
-              className="shrink-0 rounded-sm border border-border bg-cloud px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud/80">
-              Nueva remisión de terminación
-            </Link>
-          </CardContent>
-        </Card>
-      )}
     </PageShell>
   );
 }
@@ -1253,7 +1238,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
     { key: "lavanderia",            label: "Lavandería",       ts: r.lavanderia_at },
     { key: "terminacion_recibida",  label: "En terminación",   ts: r.terminacion_recibida_at },
     { key: "terminacion_terminada", label: "Terminado",        ts: r.terminacion_terminada_at },
-    { key: "despachado",            label: "Despachado",       ts: r.despachado_at },
+    { key: "despachado",            label: "Ingreso a bodega", ts: r.despachado_at },
   ];
   const idxActual = etapas.findIndex((e) => e.key === r.etapa);
 
@@ -1297,7 +1282,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
       return (
         <button onClick={() => cambiarEtapa.mutate("despachado")} disabled={cambiarEtapa.isPending}
           className="rounded-sm bg-teal px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-ink-900 disabled:opacity-40">
-          Marcar como despachado
+          Marcar ingreso a bodega
         </button>
       );
     }

@@ -51,11 +51,11 @@ const TABS = [
   { key: "por_cortar",  label: "Por cortar" },
   { key: "cortadas",    label: "Cortadas" },
   { key: "en_ruta",     label: "En ruta" },
-  { key: "terminados",  label: "Despachados" },
+  { key: "terminados",  label: "En bodega" },
 ];
 
 // ── Pipeline de etapas ────────────────────────────────────────────────
-const PASOS = ["Corte", "Confección", "Lavandería", "Terminación", "Despacho"] as const;
+const PASOS = ["Corte", "Confección", "Lavandería", "Terminación", "Bodega"] as const;
 
 /** Devuelve el índice del paso ACTUAL (0-4); -1 si ya despachó todo. */
 function pasoActual(oc: OrdenCorte, ruta?: Ruta): number {
@@ -81,7 +81,7 @@ function etiquetaEstado(oc: OrdenCorte, ruta?: Ruta): { texto: string; tone: str
     lavanderia:            { texto: "En lavandería",         tone: "bg-sky-100 text-sky-800" },
     terminacion_recibida:  { texto: "En terminación",        tone: "bg-teal/10 text-teal" },
     terminacion_terminada: { texto: "Terminación lista",     tone: "bg-teal/10 text-teal" },
-    despachado:            { texto: "Despachado",            tone: "bg-emerald-100 text-emerald-800" },
+    despachado:            { texto: "En bodega",             tone: "bg-emerald-100 text-emerald-800" },
   };
   return MAPA[ruta.etapa] || { texto: ruta.etapa, tone: "bg-cloud text-graphite" };
 }
@@ -143,7 +143,7 @@ export default function LotesPage() {
   return (
     <PageShell
       title="Lotes"
-      subtitle="Vista unificada · corte → ruta → despacho"
+      subtitle="Vista unificada · corte → ruta → ingreso a bodega"
     >
       {/* Tabs */}
       <div className="flex flex-wrap gap-2">
