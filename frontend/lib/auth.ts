@@ -52,7 +52,8 @@ export const GRUPOS_PERMISOS = {
                    "historico", "b2b", "contraentrega", "inventario"],
   finanzas:       ["finanzas"],
   comercial:      ["comercial", "revenue", "inteligencia"],
-  produccion:     ["produccion"],
+  produccion:     ["produccion", "produccion_ingreso", "produccion_corte",
+                   "produccion_remisiones", "produccion_proveedores"],
   produccion_costos: ["produccion_costos"],
   configuracion:  ["configuracion", "usuarios", "auditoria"],
 } as const;
@@ -64,8 +65,8 @@ export const GRUPO_LABEL: Record<string, string> = {
   operaciones:    "Operaciones (logística, envíos, devoluciones, incidencias, histórico, B2B, contraentrega, inventario)",
   finanzas:       "Finanzas",
   comercial:      "Comercial (ventas, revenue, inteligencia)",
-  produccion:     "Producción (ingreso, inventario tela, corte, remisiones, lotes, proveedores)",
-  produccion_costos: "Producción · COSTOS (precosteo, costeo real, valores $) — sensible",
+  produccion:     "Producción",
+  produccion_costos: "Producción · COSTOS ($) — sensible",
   configuracion:  "Configuración (configuración general, usuarios, auditoría)",
 };
 
@@ -79,6 +80,12 @@ for (const [grupo, modulos] of Object.entries(GRUPOS_PERMISOS)) {
 export const MODULOS = Object.values(GRUPOS_PERMISOS).flat() as readonly string[];
 
 export const MODULO_LABEL: Record<string, string> = {
+  produccion:              "Tablero y vista general",
+  produccion_ingreso:      "Ingreso e inventario de tela",
+  produccion_corte:        "Órdenes de corte",
+  produccion_remisiones:   "Remisiones y hoja de ruta",
+  produccion_proveedores:  "Proveedores (directorio)",
+  produccion_costos:       "Precosteo · Costeo real · valores $",
   centro_control: "Centro de control",
   logistica: "Logística",
   contraentrega: "Contraentrega",

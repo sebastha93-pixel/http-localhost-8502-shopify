@@ -74,7 +74,7 @@ class IngresoIn(BaseModel):
 @router.post("/ingreso/parse-documento")
 async def parse_documento_ingreso(
     file: UploadFile = File(...),
-    _: CurrentUser = Depends(require_permission("produccion", "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_ingreso", "modificar")),
 ) -> dict:
     """OCR/IA: lee remisión (PDF/JPG/PNG) de la textilera y devuelve JSON estructurado
     listo para prellenar el form de ingreso. No guarda nada — el usuario revisa y guarda.
@@ -101,7 +101,7 @@ async def parse_documento_ingreso(
 @router.post("/ingreso")
 def crear_ingreso(
     body: IngresoIn,
-    user: CurrentUser = Depends(require_permission("produccion", "modificar")),
+    user: CurrentUser = Depends(require_permission("produccion_ingreso", "modificar")),
 ) -> dict:
     """Crea una orden de ingreso completa (cabecera + N rollos + movimientos)."""
     try:
@@ -129,7 +129,7 @@ def listar_ingresos(
     textilera: Optional[str] = None,
     estado: Optional[str] = None,
     limit: int = Query(100, ge=1, le=500),
-    _: CurrentUser = Depends(require_permission("produccion", "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
 ) -> dict:
     return {"ingresos": svc.listar_ingresos(textilera=textilera, estado=estado, limit=limit)}
 
@@ -137,7 +137,7 @@ def listar_ingresos(
 @router.get("/ingreso/{ingreso_id}")
 def detalle_ingreso(
     ingreso_id: str,
-    _: CurrentUser = Depends(require_permission("produccion", "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
 ) -> dict:
     ing = svc.obtener_ingreso(ingreso_id)
     if not ing:
@@ -155,7 +155,7 @@ def listar_rollos(
     estado: Optional[str] = None,
     tono: Optional[str] = None,
     limit: int = Query(500, ge=1, le=2000),
-    _: CurrentUser = Depends(require_permission("produccion", "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
 ) -> dict:
     return {"rollos": svc.listar_rollos(tela=tela, estado=estado, tono=tono, limit=limit)}
 
@@ -163,7 +163,7 @@ def listar_rollos(
 @router.get("/rollos/{rollo_id}")
 def detalle_rollo(
     rollo_id: str,
-    _: CurrentUser = Depends(require_permission("produccion", "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
 ) -> dict:
     r = svc.obtener_rollo(rollo_id)
     if not r:
@@ -174,7 +174,7 @@ def detalle_rollo(
 @router.get("/rollos/barcode/{barcode}")
 def rollo_por_barcode(
     barcode: str,
-    _: CurrentUser = Depends(require_permission("produccion", "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
 ) -> dict:
     r = svc.obtener_rollo_por_barcode(barcode)
     if not r:
@@ -184,7 +184,7 @@ def rollo_por_barcode(
 
 @router.get("/inventario/resumen")
 def inventario_resumen(
-    _: CurrentUser = Depends(require_permission("produccion", "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
 ) -> dict:
     return {"resumen": svc.inventario_resumen()}
 
@@ -196,7 +196,7 @@ def inventario_resumen(
 @router.get("/rollos/{rollo_id}/etiqueta")
 def etiqueta_rollo(
     rollo_id: str,
-    _: CurrentUser = Depends(require_permission("produccion", "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
 ):
     """Genera PDF de etiqueta 10×10 cm con barcode Code128.
     Compatible con impresoras Zebra en modo raster (PDF).
@@ -511,7 +511,7 @@ class AutorizarCorteBody(BaseModel):
 @router.post("/corte")
 def crear_corte(
     body: CrearCorteBody,
-    user: CurrentUser = Depends(require_permission("produccion", "modificar")),
+    user: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
 ) -> dict:
     try:
         oc = svc.crear_orden_corte(
@@ -539,7 +539,7 @@ def crear_corte(
 def autorizar_corte(
     oc_id: str,
     body: AutorizarCorteBody,
-    user: CurrentUser = Depends(require_permission("produccion", "modificar")),
+    user: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
 ) -> dict:
     try:
         oc = svc.autorizar_orden_corte(
@@ -560,7 +560,7 @@ def autorizar_corte(
 async def subir_trazos_corte(
     oc_id: str,
     file: UploadFile = File(...),
-    _: CurrentUser = Depends(require_permission("produccion", "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
 ) -> dict:
     contenido = await file.read()
     if len(contenido) > 15 * 1024 * 1024:
@@ -587,7 +587,7 @@ def listar_cortes(
     limit: int = Query(200, ge=1, le=500),
     sin_remision: Optional[str] = None,  # 'confeccion' | 'terminacion'
     marcar_remisiones: bool = False,
-    _: CurrentUser = Depends(require_permission("produccion", "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_corte", "ver")),
 ) -> dict:
     return {"ordenes": svc.listar_ordenes_corte(
         estado=estado, limit=limit, sin_remision=sin_remision,
@@ -597,7 +597,7 @@ def listar_cortes(
 @router.get("/corte/{oc_id}")
 def detalle_corte(
     oc_id: str,
-    _: CurrentUser = Depends(require_permission("produccion", "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_corte", "ver")),
 ) -> dict:
     oc = svc.obtener_orden_corte(oc_id)
     if not oc:
@@ -609,7 +609,7 @@ def detalle_corte(
 def pistolear_rollo(
     oc_id: str,
     body: PistolearRolloBody,
-    _: CurrentUser = Depends(require_permission("produccion", "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
 ) -> dict:
     try:
         oc = svc.asignar_rollo_a_corte(
@@ -629,7 +629,7 @@ def pistolear_rollo(
 def quitar_rollo(
     oc_id: str,
     rollo_id: str,
-    _: CurrentUser = Depends(require_permission("produccion", "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
 ) -> dict:
     try:
         oc = svc.quitar_rollo_de_corte(oc_id=oc_id, rollo_id=rollo_id)
@@ -646,7 +646,7 @@ class AutoAsignarBody(BaseModel):
 def auto_asignar(
     oc_id: str,
     body: AutoAsignarBody,
-    _: CurrentUser = Depends(require_permission("produccion", "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
 ) -> dict:
     """Auto-selecciona rollos disponibles de la misma TELA + TONO y los agrega
     hasta cubrir los metros teóricos. Evita mezclar tonos por error humano.
@@ -666,7 +666,7 @@ def auto_asignar(
 def cerrar_corte(
     oc_id: str,
     body: CerrarCorteBody,
-    user: CurrentUser = Depends(require_permission("produccion", "modificar")),
+    user: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
 ) -> dict:
     try:
         oc = svc.cerrar_orden_corte(
@@ -694,7 +694,7 @@ def cerrar_corte(
 @router.delete("/corte/{oc_id}")
 def eliminar_corte(
     oc_id: str,
-    _: CurrentUser = Depends(require_permission("produccion", "borrar")),
+    _: CurrentUser = Depends(require_permission("produccion_corte", "borrar")),
 ) -> dict:
     try:
         svc.eliminar_orden_corte(oc_id)
@@ -733,7 +733,7 @@ class RemisionIn(BaseModel):
 def listar_confeccionistas(
     incluir_inactivos: bool = False,
     tipo: Optional[str] = None,
-    _: CurrentUser = Depends(require_permission("produccion", "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_proveedores", "ver")),
 ) -> dict:
     return {"confeccionistas": svc.listar_confeccionistas(
         incluir_inactivos=incluir_inactivos, tipo=tipo,
@@ -743,7 +743,7 @@ def listar_confeccionistas(
 @router.post("/confeccionistas")
 def crear_confeccionista(
     body: ConfeccionistaIn,
-    _: CurrentUser = Depends(require_permission("produccion", "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_proveedores", "modificar")),
 ) -> dict:
     try:
         return {"ok": True, "confeccionista": svc.crear_confeccionista(
@@ -760,7 +760,7 @@ def crear_confeccionista(
 def actualizar_confeccionista(
     cid: str,
     body: ConfeccionistaUpdate,
-    _: CurrentUser = Depends(require_permission("produccion", "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_proveedores", "modificar")),
 ) -> dict:
     try:
         campos = body.model_dump(exclude_unset=True)
@@ -776,7 +776,7 @@ def listar_remisiones(
     estado: Optional[str] = None,
     confeccionista_id: Optional[str] = None,
     limit: int = Query(200, ge=1, le=500),
-    _: CurrentUser = Depends(require_permission("produccion", "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
 ) -> dict:
     return {"remisiones": svc.listar_remisiones(
         estado=estado, confeccionista_id=confeccionista_id, limit=limit,
@@ -786,7 +786,7 @@ def listar_remisiones(
 @router.post("/remisiones")
 def crear_remision(
     body: RemisionIn,
-    user: CurrentUser = Depends(require_permission("produccion", "modificar")),
+    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
 ) -> dict:
     try:
         rem = svc.crear_remision(
@@ -807,7 +807,7 @@ def crear_remision(
 @router.get("/remisiones/{rem_id}")
 def detalle_remision(
     rem_id: str,
-    _: CurrentUser = Depends(require_permission("produccion", "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
 ) -> dict:
     rem = svc.obtener_remision(rem_id)
     if not rem:
@@ -818,7 +818,7 @@ def detalle_remision(
 @router.post("/remisiones/{rem_id}/recogida")
 def marcar_recogida(
     rem_id: str,
-    _: CurrentUser = Depends(require_permission("produccion", "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
 ) -> dict:
     try:
         return {"ok": True, "remision": svc.marcar_remision_recogida(rem_id)}
@@ -834,7 +834,7 @@ def marcar_recogida(
 def insumos_requeridos_corte(
     oc_id: str,
     tipo: Optional[str] = None,  # 'confeccion' | 'terminacion' | None (ambos)
-    user: CurrentUser = Depends(require_permission("produccion", "ver")),
+    user: CurrentUser = Depends(require_permission("produccion_corte", "ver")),
 ) -> dict:
     """Calcula los insumos requeridos multiplicando item.cantidad × cantidad_a_cortar.
     Con `tipo=confeccion` filtra a categoría INSUMO CONFECCION;
@@ -895,7 +895,7 @@ def listar_rutas(
     etapa: Optional[str] = None,
     confeccionista_id: Optional[str] = None,
     limit: int = Query(200, ge=1, le=500),
-    _: CurrentUser = Depends(require_permission("produccion", "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
 ) -> dict:
     return {"rutas": svc.listar_rutas(
         etapa=etapa, confeccionista_id=confeccionista_id, limit=limit
@@ -905,7 +905,7 @@ def listar_rutas(
 @router.post("/rutas")
 def crear_ruta(
     body: CrearRutaBody,
-    user: CurrentUser = Depends(require_permission("produccion", "modificar")),
+    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
 ) -> dict:
     try:
         return {"ok": True, "ruta": svc.crear_ruta_lote(
@@ -926,7 +926,7 @@ def crear_ruta(
 @router.get("/rutas/por-corte/{oc_id}")
 def ruta_por_corte(
     oc_id: str,
-    _: CurrentUser = Depends(require_permission("produccion", "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
 ) -> dict:
     r = svc.obtener_ruta_por_corte(oc_id)
     if not r:
@@ -938,7 +938,7 @@ def ruta_por_corte(
 def actualizar_ruta(
     ruta_id: str,
     body: ActualizarRutaBody,
-    _: CurrentUser = Depends(require_permission("produccion", "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
 ) -> dict:
     try:
         campos = body.model_dump(exclude_unset=True)
@@ -951,7 +951,7 @@ def actualizar_ruta(
 def cambiar_etapa(
     ruta_id: str,
     body: CambiarEtapaBody,
-    _: CurrentUser = Depends(require_permission("produccion", "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
 ) -> dict:
     try:
         return {"ok": True, "ruta": svc.cambiar_etapa_ruta(ruta_id, body.etapa)}
@@ -1166,7 +1166,7 @@ class NotaAdminBody(BaseModel):
 @router.get("/rutas/{ruta_id}/notas")
 def listar_notas_ruta(
     ruta_id: str,
-    _: CurrentUser = Depends(require_permission("produccion", "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
 ) -> dict:
     return {"notas": svc.listar_notas_ruta(ruta_id)}
 
@@ -1175,7 +1175,7 @@ def listar_notas_ruta(
 def agregar_nota_ruta(
     ruta_id: str,
     body: NotaAdminBody,
-    user: CurrentUser = Depends(require_permission("produccion", "modificar")),
+    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
 ) -> dict:
     try:
         return {"ok": True, "nota": svc.crear_nota_ruta(

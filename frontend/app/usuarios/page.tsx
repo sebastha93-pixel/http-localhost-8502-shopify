@@ -5,13 +5,13 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
 import {
-  ROL_LABEL, esAdmin, GRUPOS, GRUPO_LABEL, ACCIONES, ACCION_LABEL,
+  ROL_LABEL, esAdmin, GRUPOS, GRUPO_LABEL, MODULO_LABEL, ACCIONES, ACCION_LABEL,
   type Rol, type Accion,
 } from "@/lib/auth";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, UserPlus, Shield, Edit, Check, X } from "lucide-react";
+import { Loader2, UserPlus, Shield, Edit, Check, X, ChevronDown } from "lucide-react";
 
 interface Usuario {
   id: string;
@@ -209,22 +209,50 @@ function PermisosMatrix({
   permisos: Record<string, string[]>;
   onChange: (p: Record<string, string[]>) => void;
 }) {
-  function toggle(grupo: string, accion: Accion) {
-    const actual = new Set(permisos[grupo] || []);
+  const [abiertos, setAbiertos] = useState<Record<string, boolean>>({});
+
+  // Submódulos por grupo (solo producción tiene desglose fino con
+  // enforcement real en el backend; el resto valida a nivel de grupo).
+  const SUBMODULOS: Record<string, string[]> = {
+    produccion: ["produccion", "produccion_ingreso", "produccion_corte",
+                 "produccion_remisiones", "produccion_proveedores"],
+  };
+
+  function setKey(key: string, acciones: string[]) {
+    const p = { ...permisos };
+    if (acciones.length === 0) delete p[key];
+    else p[key] = acciones;
+    onChange(p);
+  }
+
+  function toggle(key: string, accion: Accion) {
+    const actual = new Set(permisos[key] || []);
     if (actual.has(accion)) {
       actual.delete(accion);
-      // Si quitan "ver", también quitar las acciones de escritura
-      // (no tiene sentido modificar sin ver).
-      if (accion === "ver") {
-        actual.delete("modificar");
-        actual.delete("borrar");
-      }
+      if (accion === "ver") { actual.delete("modificar"); actual.delete("borrar"); }
     } else {
       actual.add(accion);
-      // Si marcan modificar/borrar, asegurar que "ver" esté.
       if (accion !== "ver") actual.add("ver");
     }
-    onChange({ ...permisos, [grupo]: Array.from(actual) });
+    setKey(key, Array.from(actual));
+  }
+
+  // "Todos" del grupo: otorga las 3 acciones a nivel de GRUPO (cubre todos
+  // los submódulos de una) y limpia las llaves de submódulo redundantes.
+  function grupoTodos(g: string) {
+    return ACCIONES.every((a) => (permisos[g] || []).includes(a));
+  }
+  function toggleTodos(g: string) {
+    const p = { ...permisos };
+    if (grupoTodos(g)) {
+      delete p[g];
+    } else {
+      p[g] = [...ACCIONES];
+      for (const sub of SUBMODULOS[g] || []) {
+        if (sub !== g) delete p[sub];
+      }
+    }
+    onChange(p);
   }
 
   function presetTodo() {
@@ -264,7 +292,8 @@ function PermisosMatrix({
       <table className="w-full text-sm">
         <thead className="bg-card border-b border-border">
           <tr>
-            <th className="px-4 py-2 text-left text-[0.6rem] font-semibold uppercase tracking-[0.1em] text-graphite">Área</th>
+            <th className="px-4 py-2 text-left text-[0.6rem] font-semibold uppercase tracking-[0.1em] text-graphite">Área / submódulo</th>
+            <th className="px-3 py-2 text-center text-[0.6rem] font-semibold uppercase tracking-[0.1em] text-navy-600">Todos</th>
             {ACCIONES.map((a) => (
               <th key={a} className="px-3 py-2 text-center text-[0.6rem] font-semibold uppercase tracking-[0.1em] text-graphite">
                 {ACCION_LABEL[a]}
@@ -274,29 +303,80 @@ function PermisosMatrix({
         </thead>
         <tbody>
           {GRUPOS.map((g) => {
-            const acciones = permisos[g] || [];
-            return (
+            const subs = SUBMODULOS[g] || [];
+            const tieneSubs = subs.length > 1;
+            const abierto = !!abiertos[g];
+            const grupoActivo = (permisos[g] || []).length > 0;
+            const filas = [];
+
+            // ── Fila del grupo ──
+            filas.push(
               <tr key={g} className="border-b border-border/40 hover:bg-card/60">
                 <td className="px-4 py-2 text-sm text-ink-900 max-w-[420px]">
-                  <div className="font-medium">{GRUPO_LABEL[g] || g}</div>
+                  <div className="flex items-center gap-2">
+                    {tieneSubs ? (
+                      <button type="button"
+                        onClick={() => setAbiertos((prev) => ({ ...prev, [g]: !prev[g] }))}
+                        aria-label={abierto ? "Contraer" : "Desplegar submódulos"}
+                        className="text-graphite hover:text-ink-900 -ml-1 p-0.5">
+                        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${abierto ? "" : "-rotate-90"}`} />
+                      </button>
+                    ) : <span className="w-4" />}
+                    <span className="font-medium">{GRUPO_LABEL[g] || g}</span>
+                  </div>
+                </td>
+                <td className="px-3 py-2 text-center">
+                  <input type="checkbox" checked={grupoTodos(g)} onChange={() => toggleTodos(g)}
+                    title="Otorgar todo en esta área"
+                    className="rounded border-navy-600/50 accent-navy-600 cursor-pointer h-4 w-4" />
                 </td>
                 {ACCIONES.map((a) => (
                   <td key={a} className="px-3 py-2 text-center">
-                    <input
-                      type="checkbox"
-                      checked={acciones.includes(a)}
+                    <input type="checkbox"
+                      checked={(permisos[g] || []).includes(a)}
                       onChange={() => toggle(g, a)}
-                      className="rounded border-graphite/40 cursor-pointer h-4 w-4"
-                    />
+                      className="rounded border-graphite/40 cursor-pointer h-4 w-4" />
                   </td>
                 ))}
               </tr>
             );
+
+            // ── Sub-filas (solo si el grupo está desplegado) ──
+            if (tieneSubs && abierto) {
+              for (const sub of subs) {
+                filas.push(
+                  <tr key={sub} className="border-b border-border/30 bg-cloud/20">
+                    <td className="pl-12 pr-4 py-1.5 text-xs text-graphite">
+                      {MODULO_LABEL[sub] || sub}
+                      {grupoActivo && (
+                        <span className="ml-2 text-[0.55rem] uppercase tracking-widest text-teal">heredado del área</span>
+                      )}
+                    </td>
+                    <td />
+                    {ACCIONES.map((a) => {
+                      const heredado = (permisos[g] || []).includes(a);
+                      return (
+                        <td key={a} className="px-3 py-1.5 text-center">
+                          <input type="checkbox"
+                            checked={heredado || (permisos[sub] || []).includes(a)}
+                            disabled={heredado}
+                            onChange={() => toggle(sub, a)}
+                            className="rounded border-graphite/40 cursor-pointer h-3.5 w-3.5 disabled:opacity-50" />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              }
+            }
+            return filas;
           })}
         </tbody>
       </table>
       <p className="px-4 py-2 text-[0.62rem] text-graphite italic border-t border-border">
-        Cada área agrupa varios módulos. "Modificar" y "Borrar" implican "Ver" automáticamente. Borrar es destructivo: úsalo solo cuando sea necesario.
+        &quot;Todos&quot; otorga ver + modificar + borrar en toda el área de una vez. En Producción
+        puedes desplegar y dar permisos por submódulo (si el área tiene permisos, los submódulos
+        los heredan). &quot;Modificar&quot; y &quot;Borrar&quot; implican &quot;Ver&quot;.
       </p>
     </div>
   );

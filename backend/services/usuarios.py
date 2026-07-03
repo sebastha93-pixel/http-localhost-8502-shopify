@@ -60,7 +60,8 @@ MODULOS_GRUPOS = {
                        "historico", "b2b", "contraentrega", "inventario"],
     "finanzas":       ["finanzas"],
     "comercial":      ["comercial", "revenue", "inteligencia"],
-    "produccion":     ["produccion"],
+    "produccion":     ["produccion", "produccion_ingreso", "produccion_corte",
+                       "produccion_remisiones", "produccion_proveedores"],
     "produccion_costos": ["produccion_costos"],
     "configuracion":  ["configuracion", "usuarios", "auditoria"],
 }
