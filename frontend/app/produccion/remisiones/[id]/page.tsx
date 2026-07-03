@@ -167,6 +167,7 @@ export default function RemisionDetallePage() {
             {(rem.items || []).map((it) => (
               <RutaCard key={it.id} ordenCorteId={it.orden_corte_id}
                 consecutivo={it.orden_corte?.consecutivo || ""}
+                referencia={it.orden_corte?.referencia?.codigo_referencia || ""}
                 tipo={rem.tipo === "terminacion" ? "terminacion" : "confeccion"}
                 telefono={rem.confeccionista?.telefono}
                 confeccionistaNombre={rem.confeccionista?.nombre} />
@@ -191,9 +192,10 @@ interface Ruta {
   aceptado_at?: string;
 }
 
-function RutaCard({ ordenCorteId, consecutivo, tipo, telefono, confeccionistaNombre }: {
+function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confeccionistaNombre }: {
   ordenCorteId: string;
   consecutivo: string;
+  referencia?: string;
   tipo: "confeccion" | "terminacion";
   telefono?: string;
   confeccionistaNombre?: string;
@@ -240,7 +242,9 @@ function RutaCard({ ordenCorteId, consecutivo, tipo, telefono, confeccionistaNom
     ? `${publicoBase}/terminacion/${r.token_publico_terminacion || ""}`
     : `${publicoBase}/lote/${r.token_publico}`;
 
-  const mensajeWA = `Hola${confeccionistaNombre ? " " + confeccionistaNombre : ""}, te comparto la ficha del lote *${consecutivo}* de MALE'DENIM. Ahí ves referencia, cantidad, insumos y valor acordado. Cuando abras confirma con "Aceptar lote":\n\n${linkPublico}`;
+  // Al proveedor se le habla por la REFERENCIA de la prenda, no por el código interno.
+  const refMsg = referencia || consecutivo;
+  const mensajeWA = `Hola${confeccionistaNombre ? " " + confeccionistaNombre : ""}, te comparto la ficha del lote referencia *${refMsg}* de MALE'DENIM. Ahí ves referencia, cantidad, insumos y valor acordado. Cuando abras confirma con "Aceptar lote":\n\n${linkPublico}`;
   const telClean = (telefono || "").replace(/\D/g, "");
   const telFinal = telClean.startsWith("57") ? telClean : telClean ? `57${telClean}` : "";
   const waUrl = telFinal
