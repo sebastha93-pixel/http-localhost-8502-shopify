@@ -69,53 +69,47 @@ def _now_iso() -> str:
 # Consecutivos (ING-2026-0001, ROLLO-2026-000001, OC-2026-0001, ...)
 # ═══════════════════════════════════════════════════════════════════════
 
-def next_consecutivo_mensual(prefijo: str, width: int = 4) -> str:
-    """Consecutivo mensual — resetea al inicio de cada mes.
-    Devuelve `YYMM-NNNN`. Ejemplo: 2607-0001 (julio 2026).
-
-    Los últimos 2 dígitos del año + mes + serial mensual.
-    Usa la misma tabla `produccion_consecutivos` con clave sintética
-    `prefijo:YYMM` — no choca con los otros consecutivos (ING, ROLLO,
-    PC, REM) porque son filas independientes por prefijo/año.
+def _incrementar_consecutivo(*, prefijo_key: str, anio: int) -> int:
+    """Incrementa atómicamente el contador para (prefijo_key, anio) y devuelve
+    el número nuevo. Motor compartido para todos los formatos de consecutivo.
     """
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
-    now = datetime.now(tz=timezone.utc)
-    yy = f"{now.year % 100:02d}"
-    mm = f"{now.month:02d}"
-    yymm = f"{yy}{mm}"
-    key = f"{prefijo}:{yymm}"
     r = (sb.table("produccion_consecutivos")
-           .select("ultimo").eq("prefijo", key).eq("anio", now.year)
+           .select("ultimo")
+           .eq("prefijo", prefijo_key)
+           .eq("anio", anio)
            .limit(1).execute())
     ultimo = ((r.data or [None])[0] or {}).get("ultimo") or 0
     nuevo = ultimo + 1
     sb.table("produccion_consecutivos").upsert(
-        {"prefijo": key, "anio": now.year, "ultimo": nuevo, "updated_at": _now_iso()},
+        {"prefijo": prefijo_key, "anio": anio, "ultimo": nuevo, "updated_at": _now_iso()},
         on_conflict="prefijo,anio",
     ).execute()
-    return f"{yymm}-{str(nuevo).zfill(width)}"
+    return nuevo
 
 
-def next_consecutivo(prefijo: str, anio: Optional[int] = None, width: int = 4) -> str:
-    sb = _sb()
-    if sb is None:
-        raise RuntimeError("Supabase no configurado")
-    anio = anio or datetime.now(tz=timezone.utc).year
-    r = (sb.table("produccion_consecutivos")
-           .select("ultimo")
-           .eq("prefijo", prefijo)
-           .eq("anio", anio)
-           .limit(1)
-           .execute())
-    ultimo = ((r.data or [None])[0] or {}).get("ultimo") or 0
-    nuevo = ultimo + 1
-    sb.table("produccion_consecutivos").upsert(
-        {"prefijo": prefijo, "anio": anio, "ultimo": nuevo, "updated_at": _now_iso()},
-        on_conflict="prefijo,anio",
-    ).execute()
-    return f"{prefijo}-{anio}-{str(nuevo).zfill(width)}"
+def next_consecutivo(prefijo: str, anio: Optional[int] = None, width: int = 4,
+                     formato: str = "anual") -> str:
+    """Consecutivo secuencial. `formato` decide el layout:
+      - "anual"   → `PREFIJO-YYYY-NNNN` (ej. ING-2026-0001)
+      - "mensual" → `YYMM-NNNN`         (ej. 2607-0001, resetea cada mes)
+    """
+    now = datetime.now(tz=timezone.utc)
+    anio_ef = anio or now.year
+    if formato == "mensual":
+        yymm = f"{now.year % 100:02d}{now.month:02d}"
+        prefijo_key = f"{prefijo}:{yymm}"
+        nuevo = _incrementar_consecutivo(prefijo_key=prefijo_key, anio=now.year)
+        return f"{yymm}-{str(nuevo).zfill(width)}"
+    nuevo = _incrementar_consecutivo(prefijo_key=prefijo, anio=anio_ef)
+    return f"{prefijo}-{anio_ef}-{str(nuevo).zfill(width)}"
+
+
+def next_consecutivo_mensual(prefijo: str, width: int = 4) -> str:
+    """Alias de compat — usa next_consecutivo(formato='mensual')."""
+    return next_consecutivo(prefijo, width=width, formato="mensual")
 
 
 # ═══════════════════════════════════════════════════════════════════════
