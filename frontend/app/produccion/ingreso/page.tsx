@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
@@ -21,6 +22,7 @@ interface Ingreso {
 }
 
 export default function IngresosPage() {
+  const router = useRouter();
   const q = useQuery<{ ingresos: Ingreso[] }>({
     queryKey: ["produccion", "ingresos"],
     queryFn: () => api.get("/api/produccion/ingreso?limit=100"),
@@ -67,8 +69,16 @@ export default function IngresosPage() {
               </thead>
               <tbody>
                 {ingresos.map((i) => (
-                  <tr key={i.id} className="border-b border-border hover:bg-cloud/50">
-                    <td className="px-4 py-3 font-medium text-ink-900 tabular">{i.numero_ingreso}</td>
+                  <tr key={i.id}
+                    onClick={() => router.push(`/produccion/ingreso/${i.id}`)}
+                    className="border-b border-border hover:bg-cloud/50 cursor-pointer">
+                    <td className="px-4 py-3 tabular">
+                      <Link href={`/produccion/ingreso/${i.id}`}
+                        className="font-semibold text-navy-600 hover:underline"
+                        onClick={(e) => e.stopPropagation()}>
+                        {i.numero_ingreso}
+                      </Link>
+                    </td>
                     <td className="px-4 py-3 text-ink-900">{i.textilera}</td>
                     <td className="px-4 py-3 text-graphite text-xs">
                       {i.tipo_documento} · {i.numero_documento}
