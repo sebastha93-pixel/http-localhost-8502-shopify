@@ -14,7 +14,8 @@ import { api, API_BASE } from "@/lib/api";
 import { fmtFecha, hoyBogotaISO } from "@/lib/utils";
 import { ESPIGAS, PAREJA_TALLA, labelEspiga, capasDeEspiga, SOBRANTE_ESPIGA_M } from "@/lib/espigas";
 import { TimelineNotas } from "@/components/timeline-notas";
-import { getToken } from "@/lib/auth";
+import { getToken, puedeAccionModulo } from "@/lib/auth";
+import { useAuth } from "@/components/auth-provider";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -1508,6 +1509,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
  * Solo aparece si el lote aún no tiene hoja de ruta (= no tiene remisión). */
 function GenerarRemisionCard({ ordenCorteId }: { ordenCorteId: string }) {
   const router = useRouter();
+  const { user } = useAuth();
   const [confId, setConfId] = useState("");
   const [errRem, setErrRem] = useState("");
 
@@ -1535,6 +1537,9 @@ function GenerarRemisionCard({ ordenCorteId }: { ordenCorteId: string }) {
     onError: (e: Error) => setErrRem(e.message),
   });
 
+  // Solo el encargado de insumos/remisiones genera — el cortador NO.
+  // Al cortador cerrar el informe, el lote queda "listo" en la cola de Remisiones.
+  if (!puedeAccionModulo(user, "produccion_remisiones", "modificar")) return null;
   // Si ya hay ruta (remisión creada), no mostrar nada
   if (rutaQ.isLoading || rutaQ.data) return null;
 
@@ -1545,8 +1550,9 @@ function GenerarRemisionCard({ ordenCorteId }: { ordenCorteId: string }) {
       <CardContent className="p-5 space-y-3">
         <p className="section-label">Generar remisión de confección</p>
         <p className="text-xs text-graphite">
-          El informe está guardado — genera la remisión de insumos con las
-          <strong> unidades reales cortadas por talla</strong> y asigna el confeccionista.
+          El cortador guardó el informe — este lote está <strong>listo para remisión</strong>.
+          Cuenta los insumos de confección y genera la remisión con las
+          <strong> unidades reales cortadas por talla</strong>.
         </p>
         <div className="flex flex-wrap items-end gap-2">
           <div>

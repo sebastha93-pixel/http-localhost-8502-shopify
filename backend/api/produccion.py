@@ -862,7 +862,7 @@ def listar_remisiones(
 @router.post("/remisiones")
 def crear_remision(
     body: RemisionIn,
-    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "modificar")),
+    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
 ) -> dict:
     try:
         rem = svc.crear_remision(
@@ -1414,36 +1414,73 @@ def _generar_remision_pdf(rem: dict) -> bytes:
     c.setFont("Helvetica", 10)
     c.drawRightString(W - 20 * mm, H - 53 * mm, rem.get("fecha_recogida") or "—")
 
-    # ── Órdenes de corte ──
+    # ── Lotes entregados — formato del cuaderno: desglose POR TALLA,
+    #    tela, promedio real y metros consumidos ──
     y -= 12 * mm
     c.setFont("Helvetica-Bold", 9)
-    c.drawString(20 * mm, y, "LOTES ENTREGADOS")
-    y -= 6 * mm
-    c.setFont("Helvetica-Bold", 8)
-    c.drawString(20 * mm, y, "Lote")
-    c.drawString(55 * mm, y, "Referencia")
-    c.drawString(110 * mm, y, "Ref. lote")
-    c.drawRightString(W - 20 * mm, y, "Unidades")
-    y -= 1.5 * mm
-    c.line(20 * mm, y, W - 20 * mm, y)
-    c.setFont("Helvetica", 9)
+    c.drawString(20 * mm, y, "CANTIDADES DE CORTE ENTREGADAS")
     total_unidades = 0
     for it in (rem.get("items") or []):
         oc = it.get("orden_corte") or {}
         ref = oc.get("referencia") or {}
-        unid = sum(int(v or 0) for v in (oc.get("unidades_cortadas") or {}).values()) \
-               or int(oc.get("cantidad_programada") or 0)
+        unid_map = {t: int(v or 0) for t, v in (oc.get("unidades_cortadas") or {}).items() if int(v or 0) > 0}
+        unid = sum(unid_map.values()) or int(oc.get("cantidad_programada") or 0)
         total_unidades += unid
-        y -= 5.5 * mm
-        c.drawString(20 * mm, y, oc.get("consecutivo") or "—")
-        c.drawString(55 * mm, y, f"{ref.get('codigo_referencia') or '—'} · {(ref.get('nombre') or '')[:28]}")
-        c.drawString(110 * mm, y, oc.get("referencia_lote") or "—")
-        c.drawRightString(W - 20 * mm, y, str(unid or "—"))
-    y -= 2 * mm
+
+        # Referencia grande (como el 85609-2 del cuaderno)
+        y -= 8 * mm
+        c.setFont("Helvetica-Bold", 13)
+        c.drawString(20 * mm, y, f"{ref.get('codigo_referencia') or '—'}")
+        c.setFont("Helvetica", 9)
+        c.drawString(60 * mm, y, (ref.get("nombre") or "")[:34])
+        c.drawRightString(W - 20 * mm, y, f"Lote {oc.get('consecutivo') or '—'}")
+
+        # Tallas: fila TALLA / fila CANTIDAD
+        if unid_map:
+            tallas_ord = sorted(unid_map.keys(), key=lambda t: (len(t), t))
+            y -= 7 * mm
+            x = 25 * mm
+            col = min(16 * mm, (W - 70 * mm) / max(len(tallas_ord), 1))
+            c.setFont("Helvetica-Bold", 9)
+            for t in tallas_ord:
+                c.drawCentredString(x, y, f"T{t}")
+                x += col
+            c.setFont("Helvetica-Bold", 8)
+            c.drawRightString(W - 20 * mm, y, "TOTAL")
+            y -= 5.5 * mm
+            x = 25 * mm
+            c.setFont("Helvetica", 10)
+            for t in tallas_ord:
+                c.drawCentredString(x, y, str(unid_map[t]))
+                x += col
+            c.setFont("Helvetica-Bold", 11)
+            c.drawRightString(W - 20 * mm, y, str(unid))
+            # línea bajo las tallas
+            y -= 2 * mm
+            c.line(22 * mm, y, W - 20 * mm, y)
+
+        # Tela · promedio · metros · retazos (los datos del informe)
+        y -= 6 * mm
+        c.setFont("Helvetica", 9)
+        tela = ref.get("tela") or "—"
+        color = ref.get("color") or ""
+        prom = oc.get("promedio_real")
+        metros = oc.get("consumo_real_cortador")
+        retazos_m = oc.get("retazos_metros")
+        partes = [f"Tela: {tela}{(' ' + color) if color else ''}"]
+        if prom:    partes.append(f"Prom: {float(prom):.3f}")
+        if metros:  partes.append(f"Tela usada: {float(metros):.2f} m")
+        if retazos_m: partes.append(f"Retazos: {float(retazos_m):.2f} m")
+        c.drawString(20 * mm, y, "   ·   ".join(partes))
+        if oc.get("referencia_lote"):
+            y -= 5 * mm
+            c.drawString(20 * mm, y, f"Ref. lote: {oc.get('referencia_lote')}")
+
+    y -= 4 * mm
     c.line(20 * mm, y, W - 20 * mm, y)
     y -= 5 * mm
-    c.setFont("Helvetica-Bold", 9)
-    c.drawRightString(W - 20 * mm, y, f"TOTAL: {total_unidades} unidades")
+    c.setFont("Helvetica-Bold", 10)
+    c.drawRightString(W - 20 * mm, y, f"TOTAL ENTREGADO: {total_unidades} unidades")
 
     # ── Insumos a separar (cantidades, sin valores) ──
     tipo_insumo = "terminacion" if es_term else "confeccion"

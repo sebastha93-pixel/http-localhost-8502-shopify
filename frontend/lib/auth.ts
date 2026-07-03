@@ -194,3 +194,26 @@ export function puedeVerModulo(
   }
   return false;
 }
+
+
+/** ¿El usuario puede ejecutar `accion` en `modulo`? (espejo de _check_permiso).
+ * Nota: lector solo pasa con accion "ver". */
+export function puedeAccionModulo(
+  user: { rol?: string; permisos?: Record<string, unknown> } | null | undefined,
+  modulo: string,
+  accion: string,
+): boolean {
+  if (!user) return false;
+  const rol = user.rol || "";
+  if (rol === "admin") return true;
+  if (rol === "operador") return accion !== "borrar";
+  if (rol === "lector" || rol === "lectura") return accion === "ver";
+  const permisos = (user.permisos || {}) as Record<string, unknown>;
+  const candidatos = [_MODULO_A_GRUPO[modulo], modulo].filter(Boolean) as string[];
+  for (const k of candidatos) {
+    const acciones = permisos[k];
+    if (Array.isArray(acciones) && acciones.includes(accion)) return true;
+    if (acciones && typeof acciones === "object" && (acciones as Record<string, boolean>)[accion]) return true;
+  }
+  return false;
+}

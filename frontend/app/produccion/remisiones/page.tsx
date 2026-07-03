@@ -13,7 +13,7 @@ import { fmtFecha } from "@/lib/utils";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Plus, FileText } from "lucide-react";
+import { Plus, FileText, Scissors } from "lucide-react";
 
 interface Remision {
   id: string;
@@ -37,6 +37,18 @@ export default function RemisionesPage() {
     queryFn: () => api.get("/api/produccion/remisiones"),
   });
 
+  // Lotes que el cortador ya cerró y AÚN no tienen remisión de confección —
+  // la cola de trabajo del encargado de insumos.
+  const listosQ = useQuery<{ ordenes: { id: string; consecutivo: string;
+    tiene_remision_confeccion?: boolean;
+    referencia?: { codigo_referencia: string; nombre: string } }[] }>({
+    queryKey: ["produccion", "corte", "listos-remision"],
+    queryFn: () => api.get("/api/produccion/corte?estado=cortada&marcar_remisiones=true"),
+    staleTime: 60_000,
+    retry: 1,
+  });
+  const listos = (listosQ.data?.ordenes || []).filter((o) => !o.tiene_remision_confeccion);
+
   if (q.isLoading) return <LoadingState label="Cargando remisiones…" />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
@@ -51,6 +63,29 @@ export default function RemisionesPage() {
           <Plus className="h-3.5 w-3.5" /> Nueva remisión
         </Link>
       </div>
+
+      {listos.length > 0 && (
+        <Card>
+          <CardContent className="p-4">
+            <p className="section-label flex items-center gap-2 mb-2">
+              <Scissors className="h-3.5 w-3.5 text-navy-600" />
+              Lotes listos para remisión de confección ({listos.length})
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {listos.map((o) => (
+                <Link key={o.id} href={`/produccion/corte/${o.id}`}
+                  className="inline-flex items-center gap-2 rounded-sm border border-navy-600/40 bg-navy-600/[0.05] px-3 py-1.5 text-xs hover:bg-navy-600/10">
+                  <span className="font-semibold tabular text-navy-600">{o.consecutivo}</span>
+                  <span className="text-graphite">{o.referencia?.codigo_referencia || ""}</span>
+                </Link>
+              ))}
+            </div>
+            <p className="mt-2 text-[0.65rem] text-graphite">
+              El cortador ya guardó el informe. Entra al lote, cuenta los insumos y genera la remisión.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       {lista.length === 0 ? (
         <Card>

@@ -1610,8 +1610,9 @@ def obtener_remision(rem_id: str) -> Optional[dict]:
     items = (sb.table("remision_items")
                .select("*,orden_corte:orden_corte_id("
                        "consecutivo,referencia_lote,cantidad_programada,"
-                       "unidades_cortadas,fecha_entrega,"
-                       "referencia:referencia_id(codigo_referencia,nombre,tela))")
+                       "unidades_cortadas,fecha_entrega,promedio_real,"
+                       "consumo_real_cortador,retazos_metros,retazos_cantidad,"
+                       "referencia:referencia_id(codigo_referencia,nombre,tela,color))")
                .eq("remision_id", rem_id).execute()).data or []
     return {**r[0], "items": items}
 
