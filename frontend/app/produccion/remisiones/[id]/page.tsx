@@ -233,7 +233,8 @@ export default function RemisionDetallePage() {
                 referencia={it.orden_corte?.referencia?.codigo_referencia || ""}
                 tipo={rem.tipo === "terminacion" ? "terminacion" : "confeccion"}
                 telefono={rem.confeccionista?.telefono}
-                confeccionistaNombre={rem.confeccionista?.nombre} />
+                confeccionistaNombre={rem.confeccionista?.nombre}
+                remisionId={rem.id} />
             ))}
           </div>
         </CardContent>
@@ -261,13 +262,14 @@ interface Ruta {
   aceptado_at?: string;
 }
 
-function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confeccionistaNombre }: {
+function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confeccionistaNombre, remisionId }: {
   ordenCorteId: string;
   consecutivo: string;
   referencia?: string;
   tipo: "confeccion" | "terminacion";
   telefono?: string;
   confeccionistaNombre?: string;
+  remisionId?: string;
 }) {
   const esTerminacion = tipo === "terminacion";
   const qc = useQueryClient();
@@ -390,7 +392,7 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
 
       {/* Insumos que hay que SEPARAR físicamente antes de enviar */}
       <TablaInsumosSeparar ordenCorteId={ordenCorteId} tipo={tipo}
-        rutaId={r.id}
+        rutaId={r.id} remisionId={remisionId}
         separacionInicial={(r.separacion_insumos || {})[tipo] || null} />
 
       <div className="flex flex-wrap items-center gap-2">

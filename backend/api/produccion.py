@@ -1599,12 +1599,80 @@ def guardar_separacion(
     """Checklist de separación de insumos: marca items contados y el
     'todo OK' final con responsable (BAY / HENRY HURTADO)."""
     try:
-        return {"ok": True, "separacion": svc.guardar_separacion(
+        sep = svc.guardar_separacion(
             ruta_id, tipo=body.tipo, items=body.items,
             responsable=body.responsable, ok=body.ok, usuario=user.email,
-        )}
+        )
+        impresion = "manual"
+        if body.ok:
+            # Al confirmar el conteo, mandar la remisión a la impresora RICOH.
+            # Auto-total si PRINTER_EMAIL está configurado (email-to-print);
+            # si no, el frontend abre el PDF con el diálogo de impresión.
+            impresion = _imprimir_remision_de_ruta(ruta_id, body.tipo)
+        return {"ok": True, "separacion": sep, "impresion": impresion}
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(500, f"separacion: {str(e)[:200]}")
+
+
+def _remision_de_ruta(ruta_id: str, tipo: str) -> Optional[dict]:
+    """Encuentra la remisión del tipo dado asociada al lote de esta ruta."""
+    import os as _os
+    sb = svc._sb()
+    if sb is None:
+        return None
+    ruta = (sb.table("hoja_ruta_lote").select("orden_corte_id")
+              .eq("id", ruta_id).limit(1).execute()).data
+    if not ruta:
+        return None
+    items = (sb.table("remision_items").select("remision_id")
+               .eq("orden_corte_id", ruta[0]["orden_corte_id"]).execute()).data or []
+    for it in items:
+        rem = svc.obtener_remision(it["remision_id"])
+        if rem and (rem.get("tipo") or "confeccion") == tipo:
+            return rem
+    return None
+
+
+def _imprimir_remision_de_ruta(ruta_id: str, tipo: str) -> str:
+    """Envía el PDF de la remisión a la impresora (email-to-print de la RICOH).
+    Devuelve 'auto' si se despachó a la impresora, 'manual' si el frontend
+    debe abrir el diálogo de impresión."""
+    import base64
+    import os as _os
+    printer_email = _os.environ.get("PRINTER_EMAIL", "").strip()
+    resend_key = _os.environ.get("RESEND_API_KEY", "").strip()
+    if not (printer_email and resend_key):
+        return "manual"
+    rem = _remision_de_ruta(ruta_id, tipo)
+    if not rem:
+        return "manual"
+    try:
+        pdf = _generar_remision_pdf(rem)
+        import httpx as _httpx
+        r = _httpx.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {resend_key}",
+                     "Content-Type": "application/json"},
+            json={
+                "from": _os.environ.get("RESEND_FROM", "orden-corte@maledenim.com").strip(),
+                "to": [printer_email],
+                "subject": f"Imprimir remisión {rem.get('consecutivo')}",
+                "text": "Remisión adjunta para impresión automática.",
+                "attachments": [{
+                    "filename": f"remision_{rem.get('consecutivo')}.pdf",
+                    "content": base64.b64encode(pdf).decode(),
+                }],
+            },
+            timeout=25,
+        )
+        if r.status_code < 400:
+            return "auto"
+        import logging as _lg
+        _lg.getLogger(__name__).warning(f"[print] resend fallo: {r.text[:200]}")
+    except Exception as e:
+        import logging as _lg
+        _lg.getLogger(__name__).warning(f"[print] fallo: {e}")
+    return "manual"

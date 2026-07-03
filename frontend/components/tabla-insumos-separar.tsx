@@ -13,7 +13,8 @@
  */
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, API_BASE } from "@/lib/api";
+import { getToken } from "@/lib/auth";
 import { fmtDateTime } from "@/lib/utils";
 import { MEDIDAS_CIERRES, TALLAS_CIERRES } from "@/lib/cierres";
 import { CheckCircle, Loader2 } from "lucide-react";
@@ -36,10 +37,11 @@ export interface SeparacionEstado {
   completado_at?: string | null;
 }
 
-export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, separacionInicial, className = "" }: {
+export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, separacionInicial, className = "" }: {
   ordenCorteId: string;
   tipo: "confeccion" | "terminacion";
   rutaId?: string;
+  remisionId?: string;
   separacionInicial?: SeparacionEstado | null;
   className?: string;
 }) {
@@ -48,6 +50,22 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, separacionInic
   const [responsable, setResponsable] = useState("");
   const [confirmado, setConfirmado] = useState<SeparacionEstado | null>(null);
   const [errSep, setErrSep] = useState("");
+  const [impresion, setImpresion] = useState<"auto" | "manual" | "">("");
+
+  async function imprimirRemision() {
+    if (!remisionId) return;
+    try {
+      const r = await fetch(`${API_BASE}/api/produccion/remisiones/${remisionId}/pdf`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!r.ok) return;
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const win = window.open(url, "_blank");
+      // Disparar el diálogo de impresión apenas cargue el PDF
+      if (win) win.addEventListener("load", () => { try { win.print(); } catch { /* noop */ } });
+    } catch { /* la remisión sigue imprimible desde el botón Imprimir */ }
+  }
 
   // Cargar estado guardado de la hoja de ruta
   useEffect(() => {
@@ -66,15 +84,24 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, separacionInic
 
   const guardar = useMutation({
     mutationFn: (payload: { items: Record<string, boolean>; ok: boolean; responsable?: string }) => {
-      if (!rutaId) return Promise.reject(new Error("sin hoja de ruta"));
-      return api.post(`/api/produccion/rutas/${rutaId}/separacion`, { tipo, ...payload });
+      if (!rutaId) return Promise.reject<{ impresion?: string }>(new Error("sin hoja de ruta"));
+      return api.post(`/api/produccion/rutas/${rutaId}/separacion`, { tipo, ...payload }) as Promise<{ impresion?: string }>;
     },
-    onSuccess: (_d, vars) => {
+    onSuccess: (d: { impresion?: string }, vars) => {
       setErrSep("");
       if (vars.ok) {
         setConfirmado({ ok: true, responsable: vars.responsable, completado_at: new Date().toISOString() });
         qc.invalidateQueries({ queryKey: ["ruta", ordenCorteId] });
         qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] });
+        // Impresión de la remisión en la RICOH:
+        //  - "auto": el backend ya la mandó a la impresora (email-to-print)
+        //  - "manual": abrimos el PDF con el diálogo de impresión listo
+        if (d?.impresion === "auto") {
+          setImpresion("auto");
+        } else if (remisionId) {
+          setImpresion("manual");
+          imprimirRemision();
+        }
       }
     },
     onError: (e: Error) => setErrSep(
@@ -116,11 +143,13 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, separacionInic
       </div>
 
       {confirmado?.ok && (
-        <div className="px-3 py-2 bg-teal/[0.08] border-b border-teal/30 flex items-center gap-2 text-xs text-teal">
+        <div className="px-3 py-2 bg-teal/[0.08] border-b border-teal/30 flex items-center gap-2 text-xs text-teal flex-wrap">
           <CheckCircle className="h-4 w-4 flex-none" />
           <span className="font-semibold">Separación completa</span>
           · Responsable: <span className="font-bold">{confirmado.responsable}</span>
           {confirmado.completado_at && <span className="text-teal/70">· {fmtDateTime(confirmado.completado_at)}</span>}
+          {impresion === "auto" && <span className="font-semibold">· 🖨 Enviada a la RICOH</span>}
+          {impresion === "manual" && <span>· Se abrió la remisión para imprimir</span>}
         </div>
       )}
 
