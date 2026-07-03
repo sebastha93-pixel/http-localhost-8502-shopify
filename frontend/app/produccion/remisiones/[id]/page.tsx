@@ -59,6 +59,11 @@ export default function RemisionDetallePage() {
 
   const rem = q.data;
   const yaRecogida = rem.estado === "recogida";
+  // Confección: el confeccionista RECOGE. Terminación: MALE'DENIM DESPACHA.
+  const esTerm = rem.tipo === "terminacion";
+  const labelEstado = yaRecogida
+    ? (esTerm ? "Despachada" : "Recogida")
+    : (esTerm ? "Por despachar" : "Por recoger");
 
   const totalUnidades = (rem.items || []).reduce((s, it) => {
     const u = it.orden_corte?.unidades_cortadas || {};
@@ -71,16 +76,16 @@ export default function RemisionDetallePage() {
         <Link href="/produccion/remisiones" className="inline-flex items-center gap-1 text-xs text-graphite hover:text-ink-900">
           <ArrowLeft className="h-3.5 w-3.5" /> Volver a remisiones
         </Link>
-        <Badge tone={yaRecogida ? "normal" : "pendiente"}>{rem.estado}</Badge>
+        <Badge tone={yaRecogida ? "normal" : "pendiente"}>{labelEstado}</Badge>
       </div>
 
       {/* Info general */}
       <Card>
         <CardContent className="p-5 grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Info label="Confeccionista"   value={rem.confeccionista?.nombre || "—"} />
+          <Info label={esTerm ? "Proveedor terminación" : "Confeccionista"} value={rem.confeccionista?.nombre || "—"} />
           <Info label="Teléfono"         value={rem.confeccionista?.telefono || "—"} />
           <Info label="Dirección"        value={rem.confeccionista?.direccion || "—"} />
-          <Info label="Fecha recogida"   value={rem.fecha_recogida} />
+          <Info label={esTerm ? "Fecha despacho" : "Fecha recogida"} value={rem.fecha_recogida} />
           <Info label="Órdenes"          value={String(rem.items?.length || 0)} />
           <Info label="Total unidades"   value={String(totalUnidades)} />
         </CardContent>
@@ -143,7 +148,7 @@ export default function RemisionDetallePage() {
           <button onClick={() => recogida.mutate()} disabled={recogida.isPending}
             className="inline-flex items-center gap-2 rounded-sm bg-teal px-6 py-2.5 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-ink-900 disabled:opacity-40">
             {recogida.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Truck className="h-4 w-4" />}
-            Marcar como recogida
+            {esTerm ? "Marcar como despachada" : "Marcar como recogida"}
           </button>
         </div>
       )}

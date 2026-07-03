@@ -583,9 +583,11 @@ async def subir_trazos_corte(
 def listar_cortes(
     estado: Optional[str] = None,
     limit: int = Query(200, ge=1, le=500),
+    sin_remision: Optional[str] = None,  # 'confeccion' | 'terminacion'
     _: CurrentUser = Depends(require_permission("operaciones", "ver")),
 ) -> dict:
-    return {"ordenes": svc.listar_ordenes_corte(estado=estado, limit=limit)}
+    return {"ordenes": svc.listar_ordenes_corte(
+        estado=estado, limit=limit, sin_remision=sin_remision)}
 
 
 @router.get("/corte/{oc_id}")

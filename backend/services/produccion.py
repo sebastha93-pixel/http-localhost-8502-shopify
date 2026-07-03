@@ -791,9 +791,14 @@ def crear_orden_corte(*, referencia_id: str,
 
 
 def listar_ordenes_corte(*, estado: Optional[str] = None,
-                          limit: int = 200) -> list[dict]:
-    """Lista órdenes de corte. Cache 20s."""
-    cache_key = f"ordenes_corte_lista:{estado}:{limit}"
+                          limit: int = 200,
+                          sin_remision: Optional[str] = None) -> list[dict]:
+    """Lista órdenes de corte. Cache 20s.
+    `sin_remision='confeccion'|'terminacion'` excluye las OCs que YA tienen
+    una remisión de ese tipo — un lote no puede remitirse dos veces al
+    mismo proceso.
+    """
+    cache_key = f"ordenes_corte_lista:{estado}:{limit}:{sin_remision}"
     cached = _cache_get(cache_key, ttl_seg=20)
     if cached is not None:
         return cached
@@ -807,8 +812,34 @@ def listar_ordenes_corte(*, estado: Optional[str] = None,
     if estado:
         q = q.eq("estado", estado)
     out = q.execute().data or []
+    if sin_remision in ("confeccion", "terminacion"):
+        ya = _ocs_con_remision(sin_remision)
+        out = [oc for oc in out if oc["id"] not in ya]
     _cache_set(cache_key, out, ttl_seg=20)
     return out
+
+
+def _ocs_con_remision(tipo: str) -> set:
+    """IDs de órdenes de corte que ya tienen una remisión del tipo dado.
+    Compat: si la columna `tipo` no existe aún, toda remisión cuenta como
+    confección (comportamiento pre-migración).
+    """
+    sb = _sb()
+    if sb is None:
+        return set()
+    try:
+        rems = (sb.table("remisiones").select("id,tipo").limit(2000).execute()).data or []
+        rem_ids = [r["id"] for r in rems if (r.get("tipo") or "confeccion") == tipo]
+    except Exception:
+        if tipo != "confeccion":
+            return set()
+        rems = (sb.table("remisiones").select("id").limit(2000).execute()).data or []
+        rem_ids = [r["id"] for r in rems]
+    if not rem_ids:
+        return set()
+    items = (sb.table("remision_items").select("orden_corte_id")
+               .in_("remision_id", rem_ids).limit(5000).execute()).data or []
+    return {it["orden_corte_id"] for it in items if it.get("orden_corte_id")}
 
 
 def obtener_orden_corte(oc_id: str) -> Optional[dict]:
@@ -1352,6 +1383,7 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
         raise ValueError("proveedor_no_es_terminacion")
 
     # Validar órdenes de corte
+    ya_remitidas = _ocs_con_remision(tipo)
     for oc_id in orden_corte_ids:
         oc = (sb.table("ordenes_corte").select("id,estado,consecutivo")
                 .eq("id", oc_id).limit(1).execute()).data
@@ -1359,6 +1391,9 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
             raise ValueError(f"orden_corte_no_encontrada:{oc_id}")
         if oc[0].get("estado") != "cortada":
             raise ValueError(f"orden_no_cortada:{oc[0].get('consecutivo')}")
+        # Un lote no puede tener dos remisiones del mismo tipo
+        if oc_id in ya_remitidas:
+            raise ValueError(f"lote_ya_tiene_remision_{tipo}:{oc[0].get('consecutivo')}")
 
     codigo = next_consecutivo("REM", width=4)
     row = {

@@ -47,10 +47,11 @@ export default function NuevaRemisionPage() {
     queryFn: () => api.get(`/api/produccion/confeccionistas?incluir_inactivos=false&tipo=${tipo}`),
   });
 
-  // Órdenes cortadas
+  // Órdenes cortadas SIN remisión del tipo seleccionado — un lote no se
+  // remite dos veces al mismo proceso.
   const ocQ = useQuery<{ ordenes: OrdenCorte[] }>({
-    queryKey: ["produccion", "corte", "cortadas"],
-    queryFn: () => api.get("/api/produccion/corte?estado=cortada"),
+    queryKey: ["produccion", "corte", "cortadas", tipo],
+    queryFn: () => api.get(`/api/produccion/corte?estado=cortada&sin_remision=${tipo}`),
   });
 
   const confs = confQ.data?.confeccionistas || [];
