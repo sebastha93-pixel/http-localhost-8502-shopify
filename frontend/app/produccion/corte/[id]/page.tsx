@@ -1301,15 +1301,33 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
     queryFn: () => api.get("/api/produccion/confeccionistas?tipo=lavanderia&incluir_inactivos=false"),
   });
 
-  // Enviar a lavandería = guardar CUÁL lavandería + cambiar etapa
-  const enviarLavanderia = useMutation({
-    mutationFn: async () => {
-      await api.patch(`/api/produccion/rutas/${q.data?.id}`, { lavanderia_id: lavanderiaId });
-      return api.post(`/api/produccion/rutas/${q.data?.id}/etapa`, { etapa: "lavanderia" });
-    },
-    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }); },
-    onError: (e: Error) => setErrRuta(`No se pudo enviar a lavandería: ${e.message}`),
-  });
+  // Subir la remisión de recogida de la lavandería (foto/PDF) —
+  // al subirla, el backend marca la etapa "lavanderia" INMEDIATAMENTE.
+  const [subiendoLav, setSubiendoLav] = useState(false);
+  async function subirRemisionLavanderia(file: File) {
+    if (!q.data?.id) return;
+    setSubiendoLav(true);
+    setErrRuta("");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (lavanderiaId) fd.append("lavanderia_id", lavanderiaId);
+      const r = await fetch(`${API_BASE}/api/produccion/rutas/${q.data.id}/remision-lavanderia`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${getToken()}` },
+        body: fd,
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.detail || `HTTP ${r.status}`);
+      }
+      qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] });
+    } catch (e) {
+      setErrRuta(`No se pudo subir la remisión de lavandería: ${e instanceof Error ? e.message : "error"}`);
+    } finally {
+      setSubiendoLav(false);
+    }
+  }
 
   const cambiarEtapa = useMutation({
     mutationFn: (etapa: string) => api.post(`/api/produccion/rutas/${q.data?.id}/etapa`, { etapa }),
@@ -1379,15 +1397,26 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
             </select>
             {(lavanderiasQ.data?.confeccionistas || []).length === 0 && !lavanderiasQ.isLoading && (
               <p className="mt-1 text-[0.6rem] text-terracotta">
-                No hay lavanderías. Créalas en Confeccionistas con tipo &ldquo;Lavandería&rdquo;.
+                No hay lavanderías. Créalas en Proveedores con tipo &ldquo;Lavandería&rdquo;.
               </p>
             )}
           </div>
-          <button onClick={() => enviarLavanderia.mutate()}
-            disabled={enviarLavanderia.isPending || cambiarEtapa.isPending || !lavanderiaId}
-            className="rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
-            Marcar como enviado a lavandería
-          </button>
+          <div>
+            <label className="rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700 cursor-pointer inline-flex items-center gap-2 aria-disabled:opacity-40"
+              aria-disabled={!lavanderiaId || subiendoLav}>
+              {subiendoLav ? "Subiendo…" : "Subir remisión de recogida"}
+              <input type="file" accept=".pdf,image/*" className="hidden"
+                disabled={!lavanderiaId || subiendoLav}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) subirRemisionLavanderia(f);
+                  e.target.value = "";
+                }} />
+            </label>
+            <p className="mt-1 text-[0.6rem] text-graphite">
+              Al subir la foto/PDF, el lote queda en <strong>Lavandería</strong> de una vez.
+            </p>
+          </div>
         </div>
       );
     }
@@ -1463,7 +1492,9 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
         {/* Remisión de lavandería */}
         {(r.etapa === "aceptado" || r.etapa === "en_confeccion" || r.etapa === "lavanderia" || r.remision_lavanderia_url) && (
           <div>
-            <p className="text-[0.6rem] uppercase tracking-widest text-graphite mb-1">Remisión de lavandería (URL / referencia)</p>
+            <p className="text-[0.6rem] uppercase tracking-widest text-graphite mb-1">
+              Remisión de lavandería (URL / referencia) — al guardarla el lote pasa a Lavandería
+            </p>
             <div className="flex items-center gap-2">
               <input value={urlLav} onChange={(e) => setUrlLav(e.target.value)}
                 placeholder={r.remision_lavanderia_url || "Pega el link o número de remisión"}

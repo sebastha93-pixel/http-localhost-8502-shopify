@@ -9,11 +9,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, API_BASE } from "@/lib/api";
+import { getToken } from "@/lib/auth";
 import { fmtFecha, hoyBogotaISO } from "@/lib/utils";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { Save, Loader2, AlertCircle, Search, ChevronDown } from "lucide-react";
+import { Save, Loader2, AlertCircle, Search, ChevronDown, Printer, CheckCircle, MessageCircle, ArrowRight } from "lucide-react";
 
 interface Confeccionista {
   id: string;
@@ -90,20 +91,119 @@ export default function NuevaRemisionPage() {
     });
   }
 
+  interface WaSalida { referencia: string; enviado: boolean; wa_url: string }
+  interface RespuestaCrear {
+    ok: boolean;
+    remision: { id: string; consecutivo?: string };
+    impresion?: string;          // "auto" | "manual" (solo terminación)
+    whatsapp?: WaSalida[];       // links al proveedor de terminación
+  }
+  // Resultado de la creación de una remisión de TERMINACIÓN: en vez de
+  // redirigir, mostramos el panel con impresión + envío de WhatsApp.
+  const [creada, setCreada] = useState<RespuestaCrear | null>(null);
+
+  async function imprimirRemision(remId: string) {
+    try {
+      const r = await fetch(`${API_BASE}/api/produccion/remisiones/${remId}/pdf`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!r.ok) return;
+      const blob = await r.blob();
+      const win = window.open(URL.createObjectURL(blob), "_blank");
+      if (win) win.addEventListener("load", () => { try { win.print(); } catch { /* noop */ } });
+    } catch { /* el botón Imprimir sigue disponible */ }
+  }
+
   const mut = useMutation({
     mutationFn: () => {
       if (!confId) throw new Error(tipo === "terminacion" ? "Selecciona un proveedor de terminación" : "Selecciona un confeccionista");
       if (ordenesSeleccionadas.size === 0) throw new Error("Selecciona al menos una orden de corte");
-      return api.post<{ ok: boolean; remision: { id: string } }>("/api/produccion/remisiones", {
+      return api.post<RespuestaCrear>("/api/produccion/remisiones", {
         confeccionista_id: confId,
         fecha_recogida: fechaRecogida,
         orden_corte_ids: Array.from(ordenesSeleccionadas),
         tipo,
       });
     },
-    onSuccess: (data) => router.push(`/produccion/remisiones/${data.remision.id}`),
+    onSuccess: (data) => {
+      if (tipo === "terminacion") {
+        setCreada(data);
+        // Impresión de la remisión de insumos de terminación:
+        // "auto" = ya salió por la RICOH; "manual" = abrimos el diálogo.
+        if (data.impresion !== "auto") imprimirRemision(data.remision.id);
+      } else {
+        router.push(`/produccion/remisiones/${data.remision.id}`);
+      }
+    },
     onError: (e: Error) => setErr(e.message),
   });
+
+  if (creada) {
+    const wa = creada.whatsapp || [];
+    const nombreProv = confs.find((c) => c.id === confId)?.nombre || "el proveedor";
+    return (
+      <PageShell title="Remisión de terminación creada" subtitle={creada.remision.consecutivo || ""}>
+        <Card>
+          <CardContent className="p-6 space-y-4">
+            <div className="flex items-center gap-2 text-teal">
+              <CheckCircle className="h-5 w-5" />
+              <p className="text-sm font-semibold">Lote asignado a terminación ({nombreProv})</p>
+            </div>
+
+            {/* Impresión */}
+            <div className="rounded-sm border border-border bg-cloud/30 px-4 py-3 flex flex-wrap items-center gap-3 text-xs">
+              <Printer className="h-4 w-4 text-navy-600 flex-none" />
+              {creada.impresion === "auto" ? (
+                <span className="text-teal font-semibold">Remisión de insumos enviada a la RICOH 🖨</span>
+              ) : (
+                <>
+                  <span className="text-graphite">Se abrió el PDF con el diálogo de impresión.</span>
+                  <button onClick={() => imprimirRemision(creada.remision.id)}
+                    className="rounded-sm border border-border bg-white px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest hover:bg-cloud">
+                    Volver a imprimir
+                  </button>
+                </>
+              )}
+            </div>
+
+            {/* WhatsApp al proveedor de terminación */}
+            <div className="rounded-sm border border-border bg-cloud/30 px-4 py-3 space-y-2 text-xs">
+              <div className="flex items-center gap-2 text-graphite">
+                <MessageCircle className="h-4 w-4 text-[#25D366] flex-none" />
+                <span>Link del lote para {nombreProv}:</span>
+              </div>
+              {wa.length === 0 ? (
+                <p className="text-terracotta">No se pudo armar el link (¿el lote tiene hoja de ruta?). Envíalo desde el detalle de la remisión.</p>
+              ) : wa.map((w, i) => (
+                <div key={i} className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold text-ink-900">REF {w.referencia}</span>
+                  {w.enviado ? (
+                    <span className="text-teal font-semibold">✓ WhatsApp enviado automáticamente</span>
+                  ) : (
+                    <a href={w.wa_url} target="_blank" rel="noopener noreferrer"
+                      className="rounded-sm bg-[#25D366] px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-white hover:opacity-90">
+                      Enviar WhatsApp
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <button onClick={() => router.push(`/produccion/remisiones/${creada.remision.id}`)}
+                className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-5 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700">
+                Ver la remisión <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+              <button onClick={() => router.push("/produccion/remisiones")}
+                className="rounded-sm border border-border bg-white px-4 py-2 text-xs font-semibold uppercase tracking-widest text-graphite hover:bg-cloud">
+                Ir a remisiones
+              </button>
+            </div>
+          </CardContent>
+        </Card>
+      </PageShell>
+    );
+  }
 
   if (confQ.isLoading || ocQ.isLoading) return <LoadingState label="Cargando…" />;
   if (confQ.isError) return <ErrorState error={confQ.error} onRetry={() => confQ.refetch()} />;

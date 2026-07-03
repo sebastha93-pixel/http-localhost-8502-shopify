@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from backend.core.security import (CurrentUser, require_role, require_permission,
@@ -872,7 +872,18 @@ def crear_remision(
             created_by=user.email,
             tipo=body.tipo,
         )
-        return {"ok": True, "remision": rem}
+        extra: dict = {}
+        if body.tipo == "terminacion":
+            # Al asignar el lote a terminación: se imprime la remisión de
+            # insumos de terminación y se envía el link al proveedor.
+            extra["impresion"] = _imprimir_remision(rem)
+            try:
+                extra["whatsapp"] = svc._notificar_remision_whatsapp(rem)
+            except Exception as e:
+                import logging as _lg
+                _lg.getLogger(__name__).warning(f"[wa] notif terminacion fallo: {e}")
+                extra["whatsapp"] = []
+        return {"ok": True, "remision": rem, **extra}
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
@@ -1021,6 +1032,36 @@ def actualizar_ruta(
         return {"ok": True, "ruta": svc.actualizar_ruta_lote(ruta_id, **campos)}
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.post("/rutas/{ruta_id}/remision-lavanderia")
+async def subir_remision_lavanderia(
+    ruta_id: str,
+    file: UploadFile = File(...),
+    lavanderia_id: Optional[str] = Form(None),
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "modificar")),
+) -> dict:
+    """Sube la foto/PDF de la remisión de recogida de la lavandería.
+    Al subirla, la etapa del lote pasa a 'lavanderia' INMEDIATAMENTE."""
+    try:
+        data = await file.read()
+        if len(data) > 15 * 1024 * 1024:
+            raise HTTPException(400, "archivo_muy_grande_max_15mb")
+        res = svc.subir_remision_lavanderia(
+            ruta_id,
+            file_bytes=data,
+            filename=file.filename or "remision.pdf",
+            content_type=file.content_type or "application/octet-stream",
+            lavanderia_id=lavanderia_id or None,
+        )
+        return {"ok": True, **res}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"remision_lavanderia: {str(e)[:200]}")
 
 
 @router.post("/rutas/{ruta_id}/etapa")
@@ -1637,6 +1678,14 @@ def _remision_de_ruta(ruta_id: str, tipo: str) -> Optional[dict]:
 
 
 def _imprimir_remision_de_ruta(ruta_id: str, tipo: str) -> str:
+    """Busca la remisión del lote y la manda a la impresora."""
+    rem = _remision_de_ruta(ruta_id, tipo)
+    if not rem:
+        return "manual"
+    return _imprimir_remision(rem)
+
+
+def _imprimir_remision(rem: dict) -> str:
     """Envía el PDF de la remisión a la impresora (email-to-print de la RICOH).
     Devuelve 'auto' si se despachó a la impresora, 'manual' si el frontend
     debe abrir el diálogo de impresión."""
@@ -1645,9 +1694,6 @@ def _imprimir_remision_de_ruta(ruta_id: str, tipo: str) -> str:
     printer_email = _os.environ.get("PRINTER_EMAIL", "").strip()
     resend_key = _os.environ.get("RESEND_API_KEY", "").strip()
     if not (printer_email and resend_key):
-        return "manual"
-    rem = _remision_de_ruta(ruta_id, tipo)
-    if not rem:
         return "manual"
     try:
         pdf = _generar_remision_pdf(rem)

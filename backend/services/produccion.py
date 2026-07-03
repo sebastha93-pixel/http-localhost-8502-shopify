@@ -1955,6 +1955,16 @@ def actualizar_ruta_lote(ruta_id: str, **campos) -> dict:
             raise
     if not r.data:
         raise ValueError("no_encontrada")
+    # Regla: guardar la remisión de recogida de la lavandería marca la etapa
+    # 'lavanderia' de una vez (sin botón aparte).
+    if update.get("remision_lavanderia_url"):
+        try:
+            avanzar_etapa_si_antes(ruta_id, "lavanderia")
+        except Exception as e:
+            log.warning(f"[ruta] avance a lavanderia (patch) fallo: {e}")
+        r2 = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
+        if r2:
+            return r2[0]
     return r.data[0]
 
 
@@ -1992,6 +2002,62 @@ def cambiar_etapa_ruta(ruta_id: str, etapa_nueva: str) -> dict:
     sb.table("hoja_ruta_lote").update(update).eq("id", ruta_id).execute()
     r = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
     return r[0] if r else {}
+
+
+def avanzar_etapa_si_antes(ruta_id: str, etapa_objetivo: str) -> Optional[dict]:
+    """Avanza la etapa SOLO si la actual va antes que la objetivo.
+    Si ya está en esa etapa o más adelante, no hace nada (idempotente)."""
+    orden = _ruta_orden_map()
+    if etapa_objetivo not in orden:
+        raise ValueError(f"etapa_invalida:{etapa_objetivo}")
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    r = (sb.table("hoja_ruta_lote").select("etapa").eq("id", ruta_id).limit(1).execute()).data
+    if not r:
+        raise ValueError("no_encontrada")
+    actual = r[0].get("etapa") or "asignado"
+    if orden.get(actual, 0) >= orden[etapa_objetivo]:
+        return None
+    return cambiar_etapa_ruta(ruta_id, etapa_objetivo)
+
+
+def subir_remision_lavanderia(ruta_id: str, *, file_bytes: bytes, filename: str,
+                              content_type: str,
+                              lavanderia_id: Optional[str] = None) -> dict:
+    """Sube la foto/PDF de la remisión de recogida de la lavandería y marca
+    la etapa 'lavanderia' INMEDIATAMENTE (regla de Sebastián: el estado de
+    lavandería se marca al subir la remisión de recogida)."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    ext = (filename.rsplit(".", 1)[-1] if "." in filename else "pdf").lower()
+    if ext not in ("pdf", "png", "jpg", "jpeg", "webp"):
+        raise ValueError("formato_no_soportado")
+    bucket = "produccion-trazos"
+    path = f"rutas/{ruta_id}/remision_lavanderia.{ext}"
+    try:
+        try:
+            sb.storage.from_(bucket).remove([path])
+        except Exception:
+            pass
+        sb.storage.from_(bucket).upload(
+            path, file_bytes,
+            {"content-type": content_type or "application/octet-stream", "upsert": "true"},
+        )
+    except Exception as e:
+        raise RuntimeError(f"subir_remision_lavanderia: {str(e)[:200]}")
+    url = sb.storage.from_(bucket).get_public_url(path)
+    update = {"remision_lavanderia_url": url, "updated_at": _now_iso()}
+    if lavanderia_id:
+        update["lavanderia_id"] = lavanderia_id
+    sb.table("hoja_ruta_lote").update(update).eq("id", ruta_id).execute()
+    try:
+        avanzar_etapa_si_antes(ruta_id, "lavanderia")
+    except Exception as e:
+        log.warning(f"[ruta] avance a lavanderia fallo: {e}")
+    r = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
+    return {"url": url, "ruta": r[0] if r else {}}
 
 
 def listar_rutas(*, etapa: Optional[str] = None,
