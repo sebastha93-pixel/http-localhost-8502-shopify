@@ -16,7 +16,7 @@ interface ResumenLinea {
   num_rollos: number;
   metros_disponible: number;
   metros_inicial: number;
-  valor_estimado: number;
+  valor_estimado?: number;
 }
 
 interface Rollo {
@@ -82,7 +82,8 @@ export default function InventarioPage() {
   const resumen = resumenQ.data?.resumen || [];
   const totalMetros = resumen.reduce((s, r) => s + r.metros_disponible, 0);
   const totalRollos = resumen.reduce((s, r) => s + r.num_rollos, 0);
-  const totalValor = resumen.reduce((s, r) => s + r.valor_estimado, 0);
+  const conValor = resumen.some((r) => r.valor_estimado != null);
+  const totalValor = resumen.reduce((s, r) => s + (r.valor_estimado || 0), 0);
 
   return (
     <PageShell
@@ -91,11 +92,11 @@ export default function InventarioPage() {
       onRefresh={() => resumenQ.refetch()}
     >
       <Card>
-        <CardContent className="p-4 grid grid-cols-2 md:grid-cols-4 gap-4">
+        <CardContent className={`p-4 grid grid-cols-2 ${conValor ? "md:grid-cols-4" : "md:grid-cols-3"} gap-4`}>
           <Kpi label="Telas distintas" value={new Set(resumen.map((r) => r.descripcion_tela)).size.toString()} />
           <Kpi label="Rollos totales"  value={totalRollos.toString()} />
           <Kpi label="Metros disponibles" value={totalMetros.toLocaleString("es-CO", { maximumFractionDigits: 0 })} />
-          <Kpi label="Valor estimado" value={"$" + totalValor.toLocaleString("es-CO", { maximumFractionDigits: 0 })} />
+          {conValor && <Kpi label="Valor estimado" value={"$" + totalValor.toLocaleString("es-CO", { maximumFractionDigits: 0 })} />}
         </CardContent>
       </Card>
 

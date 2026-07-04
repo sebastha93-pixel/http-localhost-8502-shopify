@@ -156,7 +156,7 @@ def listar_rollos(
     estado: Optional[str] = None,
     tono: Optional[str] = None,
     limit: int = Query(500, ge=1, le=2000),
-    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_ingreso", "produccion_cortador"), "ver")),
 ) -> dict:
     return {"rollos": svc.listar_rollos(tela=tela, estado=estado, tono=tono, limit=limit)}
 
@@ -164,7 +164,7 @@ def listar_rollos(
 @router.get("/rollos/{rollo_id}")
 def detalle_rollo(
     rollo_id: str,
-    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_ingreso", "produccion_cortador"), "ver")),
 ) -> dict:
     r = svc.obtener_rollo(rollo_id)
     if not r:
@@ -175,7 +175,7 @@ def detalle_rollo(
 @router.get("/rollos/barcode/{barcode}")
 def rollo_por_barcode(
     barcode: str,
-    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_ingreso", "produccion_cortador"), "ver")),
 ) -> dict:
     r = svc.obtener_rollo_por_barcode(barcode)
     if not r:
@@ -185,9 +185,13 @@ def rollo_por_barcode(
 
 @router.get("/inventario/resumen")
 def inventario_resumen(
-    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_ingreso", "produccion_cortador"), "ver")),
 ) -> dict:
-    return {"resumen": svc.inventario_resumen()}
+    resumen = svc.inventario_resumen()
+    # Los valores de compra son costos — solo produccion_costos los ve.
+    if not tiene_permiso_costos(user):
+        resumen = [{k: v for k, v in r.items() if k != "valor_estimado"} for r in resumen]
+    return {"resumen": resumen}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -293,7 +297,7 @@ class EtiquetasLoteBody(BaseModel):
 @router.post("/rollos/etiquetas")
 def etiquetas_lote(
     body: EtiquetasLoteBody,
-    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_ingreso", "produccion_cortador"), "ver")),
 ):
     """PDF con las etiquetas de los rollos seleccionados — una página por rollo."""
     rollos = []
