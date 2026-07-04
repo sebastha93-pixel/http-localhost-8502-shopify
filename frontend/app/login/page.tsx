@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { homePath } from "@/lib/nav";
 import { User, setToken } from "@/lib/auth";
 import { Card, CardContent } from "@/components/ui/card";
 import { Loader2, Lock, Mail, AlertCircle } from "lucide-react";
@@ -26,7 +27,7 @@ export default function LoginPage() {
     onSuccess: (data) => {
       setToken(data.access_token);
       qc.setQueryData(["auth", "me"], data.user);
-      router.replace("/centro-control");
+      router.replace(homePath(data.user));
     },
     onError: (err: Error) => {
       setError(err.message || "Error al iniciar sesión");

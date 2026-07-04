@@ -7,112 +7,20 @@ import { ChevronDown, UserCircle, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 import { useAuth } from "@/components/auth-provider";
-import { ROL_LABEL, esAdmin, puedeVerCostosProduccion, puedeVerModulo } from "@/lib/auth";
+import { ROL_LABEL, puedeVerModulo } from "@/lib/auth";
+import { NAV_HOME, gruposVisibles, homePath, type NavGroup, type NavItem } from "@/lib/nav";
 import { SyncButton } from "@/components/sync-button";
-
-interface NavItem {
-  label: string;
-  href: string;
-  permiso?: string;  // módulo requerido para VER este link (admin ve todo)
-}
-
-interface NavGroup {
-  title: string;
-  items: NavItem[];
-  defaultOpen?: boolean;
-}
-
-const NAV: { home: NavItem; groups: NavGroup[] } = {
-  home: { label: "Centro de Control", href: "/centro-control" },
-  groups: [
-    {
-      title: "Operaciones",
-      defaultOpen: true,
-      items: [
-        { label: "Logística",     href: "/logistica",     permiso: "logistica" },
-        { label: "Contraentrega", href: "/contraentrega", permiso: "contraentrega" },
-        { label: "Envíos",        href: "/envios",        permiso: "envios" },
-        { label: "B2B",           href: "/b2b",           permiso: "b2b" },
-        { label: "Devoluciones",  href: "/devoluciones",  permiso: "devoluciones" },
-        { label: "Incidencias",   href: "/incidencias",   permiso: "incidencias" },
-        { label: "Histórico",     href: "/historico",     permiso: "historico" },
-      ],
-    },
-    {
-      title: "Finanzas",
-      items: [
-        { label: "Finanzas",     href: "/finanzas",     permiso: "finanzas" },
-        { label: "Conciliación", href: "/conciliacion", permiso: "finanzas" },
-        { label: "Facturación",  href: "/facturacion",  permiso: "finanzas" },
-        { label: "MercadoPago",  href: "/mercadopago",  permiso: "finanzas" },
-        { label: "Addi",         href: "/addi",         permiso: "finanzas" },
-      ],
-    },
-    {
-      title: "Comercial",
-      items: [
-        { label: "Comercial",  href: "/comercial",  permiso: "comercial" },
-        { label: "Inventario", href: "/inventario", permiso: "inventario" },
-        { label: "Revenue IA", href: "/revenue",    permiso: "revenue" },
-      ],
-    },
-    {
-      title: "Inteligencia",
-      items: [
-        { label: "Inteligencia", href: "/inteligencia", permiso: "inteligencia" },
-        { label: "Reportes",     href: "/reportes",     permiso: "inteligencia" },
-      ],
-    },
-    {
-      title: "Producción",
-      items: [
-        { label: "Producción",      href: "/produccion",                 permiso: "produccion" },
-        { label: "Tablero",         href: "/produccion/tablero",         permiso: "produccion" },
-        { label: "Costeo real",     href: "/produccion/costeo" },
-        { label: "Ingreso",         href: "/produccion/ingreso",         permiso: "produccion_ingreso" },
-        { label: "Inventario",      href: "/produccion/inventario",      permiso: "produccion_ingreso|produccion_cortador" },
-        { label: "Insumos",         href: "/produccion/insumos",         permiso: "produccion_ingreso" },
-        { label: "Precosteo",       href: "/produccion/precosteo" },
-        { label: "Lotes",           href: "/produccion/lotes",           permiso: "produccion_corte|produccion_cortador" },
-        { label: "Orden corte",     href: "/produccion/corte",           permiso: "produccion_corte|produccion_cortador" },
-        { label: "Remisiones",      href: "/produccion/remisiones",      permiso: "produccion_remisiones|produccion_cortador" },
-        { label: "Proveedores",     href: "/produccion/confeccionistas", permiso: "produccion_proveedores" },
-      ],
-    },
-    {
-      title: "Configuración",
-      items: [
-        { label: "Usuarios",            href: "/usuarios" },
-        { label: "Auditoría",           href: "/auditoria" },
-        { label: "Diagnóstico Revenue", href: "/diagnostico-revenue" },
-      ],
-    },
-  ],
-};
 
 export function Sidebar() {
   const pathname = usePathname();
   const { user } = useAuth();
 
-  // Cada link se muestra SOLO si el usuario tiene permiso de ver su módulo.
-  // Reglas especiales: admin-only (Configuración) y costos de producción.
-  const ADMIN_ONLY = ["/usuarios", "/auditoria", "/diagnostico-revenue"];
-  const COSTOS_ONLY = ["/produccion/precosteo", "/produccion/costeo"];
-  const groups = NAV.groups
-    .map((g) => ({
-      ...g,
-      items: g.items.filter((it) => {
-        if (ADMIN_ONLY.includes(it.href)) return esAdmin(user);
-        if (COSTOS_ONLY.includes(it.href)) return puedeVerCostosProduccion(user);
-        if (it.permiso) {
-          // Varios permisos separados por | — con cualquiera se muestra
-          return it.permiso.split("|").some((m) => puedeVerModulo(user, m));
-        }
-        return true;
-      }),
-    }))
-    // Grupos sin ningún link visible desaparecen completos
-    .filter((g) => g.items.length > 0);
+  // Visibilidad centralizada en lib/nav.ts (misma fuente que /inicio)
+  const groups = gruposVisibles(user);
+  // Home según permisos: Centro de Control, o Inicio (launcher de módulos)
+  const home: NavItem = puedeVerModulo(user, "centro_control")
+    ? NAV_HOME
+    : { label: "Inicio", href: "/inicio" };
 
   return (
     <aside className="fixed inset-y-0 left-0 z-30 flex w-60 flex-col bg-ink-950 text-concrete">
@@ -128,7 +36,7 @@ export function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-        <NavLink item={NAV.home} pathname={pathname} highlight />
+        <NavLink item={home} pathname={pathname} highlight />
 
         {groups.map((g) => (
           <NavGroupCollapsible key={g.title} group={g} pathname={pathname} />

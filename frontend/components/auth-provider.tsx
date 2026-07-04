@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { homePath } from "@/lib/nav";
 import { User, getToken, clearToken } from "@/lib/auth";
 import { Loader2 } from "lucide-react";
 
@@ -64,7 +65,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // No aplicamos esta regla a las otras rutas públicas (/lote/, /terminacion/)
     // porque un admin puede necesitar ver esas vistas estando logueado.
     if (token && pathname === "/login" && meQ.data) {
-      router.replace("/centro-control");
+      router.replace(homePath(meQ.data));
     }
   }, [hydrated, token, pathname, isPublic, router, meQ.data]);
 
