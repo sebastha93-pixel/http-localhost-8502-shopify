@@ -69,20 +69,23 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    // Ordenado según el FLUJO del proceso productivo:
+    // vista general → precosteo → tela entra → corte → despacho →
+    // remisiones → seguimiento del lote → costeo real → directorio.
     title: "Producción",
     items: [
-      { label: "Producción",  href: "/produccion",                 permiso: "produccion",         desc: "Vista general del módulo" },
-      { label: "Tablero",     href: "/produccion/tablero",         permiso: "produccion",         desc: "Alertas y estado global" },
-      { label: "Costeo real", href: "/produccion/costeo",                                         desc: "Cruce con Siigo" },
-      { label: "Ingreso",     href: "/produccion/ingreso",         permiso: "produccion_ingreso", desc: "Entradas de tela" },
-      { label: "Inventario",  href: "/produccion/inventario",      permiso: "produccion_ingreso|produccion_cortador", desc: "Telas y rollos disponibles" },
-      { label: "Insumos",     href: "/produccion/insumos",         permiso: "produccion_ingreso", desc: "Stock de insumos" },
-      { label: "Precosteo",   href: "/produccion/precosteo",                                      desc: "Costeo por referencia" },
-      { label: "Lotes",       href: "/produccion/lotes",           permiso: "produccion_corte|produccion_cortador", desc: "Lotes en proceso" },
-      { label: "Orden corte", href: "/produccion/corte",           permiso: "produccion_corte|produccion_cortador", desc: "Cortes asignados e informe" },
-      { label: "Remisiones",  href: "/produccion/remisiones",      permiso: "produccion_remisiones", desc: "Entregas e insumos por lote" },
-      { label: "Mis despachos", href: "/produccion/mis-despachos",   permiso: "produccion_cortador",   desc: "Unidades despachadas por corte" },
-      { label: "Proveedores", href: "/produccion/confeccionistas", permiso: "produccion_proveedores", desc: "Confección, lavandería, terminación" },
+      { label: "Producción",    href: "/produccion",                 permiso: "produccion",         desc: "Vista general del módulo" },
+      { label: "Tablero",       href: "/produccion/tablero",         permiso: "produccion",         desc: "Alertas y estado global" },
+      { label: "Precosteo",     href: "/produccion/precosteo",                                      desc: "1 · Costeo por referencia" },
+      { label: "Ingreso",       href: "/produccion/ingreso",         permiso: "produccion_ingreso", desc: "2 · Entradas de tela" },
+      { label: "Inventario",    href: "/produccion/inventario",      permiso: "produccion_ingreso|produccion_cortador", desc: "3 · Telas y rollos disponibles" },
+      { label: "Insumos",       href: "/produccion/insumos",         permiso: "produccion_ingreso", desc: "4 · Stock de insumos" },
+      { label: "Orden corte",   href: "/produccion/corte",           permiso: "produccion_corte|produccion_cortador", desc: "5 · Cortes asignados e informe" },
+      { label: "Mis despachos", href: "/produccion/mis-despachos",   permiso: "produccion_cortador", desc: "6 · Unidades despachadas por corte" },
+      { label: "Remisiones",    href: "/produccion/remisiones",      permiso: "produccion_remisiones", desc: "6 · Entregas e insumos por lote" },
+      { label: "Lotes",         href: "/produccion/lotes",           permiso: "produccion_corte|produccion_cortador", desc: "7 · Seguimiento del lote en proceso" },
+      { label: "Costeo real",   href: "/produccion/costeo",                                         desc: "8 · Cierre con Siigo" },
+      { label: "Proveedores",   href: "/produccion/confeccionistas", permiso: "produccion_proveedores", desc: "Directorio: confección, lavandería, terminación" },
     ],
   },
   {
