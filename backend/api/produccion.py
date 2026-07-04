@@ -851,12 +851,24 @@ def actualizar_confeccionista(
         raise HTTPException(500, f"actualizar_conf: {str(e)[:200]}")
 
 
+@router.get("/mis-despachos")
+def mis_despachos(
+    user: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "ver")),
+) -> dict:
+    """Control interno del cortador: unidades despachadas por corte.
+    El cortador puro solo ve sus propios cortes."""
+    rows = svc.despachos_por_corte()
+    if _es_solo_cortador(user):
+        rows = [r for r in rows if _corte_es_del_cortador(r, user)]
+    return {"despachos": rows}
+
+
 @router.get("/remisiones")
 def listar_remisiones(
     estado: Optional[str] = None,
     confeccionista_id: Optional[str] = None,
     limit: int = Query(200, ge=1, le=500),
-    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
 ) -> dict:
     return {"remisiones": svc.listar_remisiones(
         estado=estado, confeccionista_id=confeccionista_id, limit=limit,
@@ -898,7 +910,7 @@ def crear_remision(
 @router.get("/remisiones/{rem_id}")
 def detalle_remision(
     rem_id: str,
-    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
 ) -> dict:
     rem = svc.obtener_remision(rem_id)
     if not rem:
@@ -986,7 +998,7 @@ def listar_rutas(
     etapa: Optional[str] = None,
     confeccionista_id: Optional[str] = None,
     limit: int = Query(200, ge=1, le=500),
-    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
 ) -> dict:
     return {"rutas": svc.listar_rutas(
         etapa=etapa, confeccionista_id=confeccionista_id, limit=limit
@@ -996,7 +1008,7 @@ def listar_rutas(
 @router.post("/rutas")
 def crear_ruta(
     body: CrearRutaBody,
-    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "modificar")),
+    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
 ) -> dict:
     try:
         return {"ok": True, "ruta": svc.crear_ruta_lote(
@@ -1029,7 +1041,7 @@ def ruta_por_corte(
 def actualizar_ruta(
     ruta_id: str,
     body: ActualizarRutaBody,
-    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
 ) -> dict:
     try:
         campos = body.model_dump(exclude_unset=True)
@@ -1043,7 +1055,7 @@ async def subir_remision_lavanderia(
     ruta_id: str,
     file: UploadFile = File(...),
     lavanderia_id: Optional[str] = Form(None),
-    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
 ) -> dict:
     """Sube la foto/PDF de la remisión de recogida de la lavandería.
     Al subirla, la etapa del lote pasa a 'lavanderia' INMEDIATAMENTE."""
@@ -1072,7 +1084,7 @@ async def subir_remision_lavanderia(
 def cambiar_etapa(
     ruta_id: str,
     body: CambiarEtapaBody,
-    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
 ) -> dict:
     try:
         return {"ok": True, "ruta": svc.cambiar_etapa_ruta(ruta_id, body.etapa)}
@@ -1387,7 +1399,7 @@ def enviar_digest_manual(
 @router.get("/remisiones/{rem_id}/pdf")
 def remision_pdf(
     rem_id: str,
-    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
 ):
     """PDF imprimible de la remisión: cabecera, órdenes, insumos a separar
     (solo cantidades, sin valores) y firmas. QR con el consecutivo."""
@@ -1639,7 +1651,7 @@ class SeparacionBody(BaseModel):
 def guardar_separacion(
     ruta_id: str,
     body: SeparacionBody,
-    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "modificar")),
+    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
 ) -> dict:
     """Checklist de separación de insumos: marca items contados y el
     'todo OK' final con responsable (BAY / HENRY HURTADO)."""

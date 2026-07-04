@@ -86,7 +86,7 @@ export const MODULO_LABEL: Record<string, string> = {
   produccion_corte:        "Órdenes de corte",
   produccion_remisiones:   "Remisiones y hoja de ruta",
   produccion_proveedores:  "Proveedores (directorio)",
-  produccion_cortador:     "Cortador (sus cortes asignados + informe + entrega + ver inventario de telas)",
+  produccion_cortador:     "Cortador (sus cortes + informe + mis despachos + ver inventario de telas)",
   produccion_costos:       "Precosteo · Costeo real · valores $",
   centro_control: "Centro de control",
   logistica: "Logística",

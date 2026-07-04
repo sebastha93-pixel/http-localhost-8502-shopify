@@ -868,6 +868,56 @@ def listar_ordenes_corte(*, estado: Optional[str] = None,
     return out
 
 
+def despachos_por_corte(limit: int = 200) -> list[dict]:
+    """Control interno del cortador: por cada corte cerrado, las unidades
+    que despachó por talla + el estado de la remisión de confección.
+    NO incluye insumos, precios ni datos de proveedores."""
+    sb = _sb()
+    if sb is None:
+        return []
+    ocs = listar_ordenes_corte(estado="cortada", limit=limit)
+    # Mapa oc_id → remisión de confección (para saber si ya se despachó)
+    rem_por_oc: dict[str, dict] = {}
+    try:
+        rems = (sb.table("remisiones")
+                  .select("id,consecutivo,estado,tipo,fecha_recogida,updated_at")
+                  .limit(2000).execute()).data or []
+        conf = {r["id"]: r for r in rems if (r.get("tipo") or "confeccion") == "confeccion"}
+        if conf:
+            items = (sb.table("remision_items").select("remision_id,orden_corte_id")
+                       .in_("remision_id", list(conf.keys())).limit(5000).execute()).data or []
+            for it in items:
+                if it.get("orden_corte_id"):
+                    rem_por_oc[it["orden_corte_id"]] = conf[it["remision_id"]]
+    except Exception as e:
+        log.warning(f"[despachos] remisiones no disponibles: {e}")
+    out = []
+    for oc in ocs:
+        unidades = oc.get("unidades_cortadas") or {}
+        try:
+            total = sum(int(v or 0) for v in unidades.values())
+        except Exception:
+            total = 0
+        rem = rem_por_oc.get(oc["id"])
+        out.append({
+            "id":            oc["id"],
+            "consecutivo":   oc.get("consecutivo"),
+            "referencia":    (oc.get("referencia") or {}).get("codigo_referencia"),
+            "nombre":        (oc.get("referencia") or {}).get("nombre"),
+            "responsable":   oc.get("responsable"),
+            "fecha_entrega": oc.get("fecha_entrega"),
+            "unidades":      unidades,
+            "total":         total,
+            "remision": None if not rem else {
+                "id":             rem["id"],
+                "consecutivo":    rem.get("consecutivo"),
+                "despachada":     rem.get("estado") == "recogida",
+                "fecha_recogida": rem.get("fecha_recogida"),
+            },
+        })
+    return out
+
+
 def _ocs_con_remision(tipo: str) -> set:
     """IDs de órdenes de corte que ya tienen una remisión del tipo dado.
     Compat: si la columna `tipo` no existe aún, toda remisión cuenta como
