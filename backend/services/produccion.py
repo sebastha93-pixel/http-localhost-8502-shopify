@@ -868,6 +868,49 @@ def listar_ordenes_corte(*, estado: Optional[str] = None,
     return out
 
 
+def reset_datos_produccion() -> dict:
+    """Borra TODO lo transaccional del módulo Producción para arrancar de
+    cero (equivalente a SUPABASE_RESET_PRODUCCION.sql). CONSERVA usuarios.
+    Solo lo invoca el endpoint admin. IRREVERSIBLE."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    # Orden FK-seguro: hijos primero. (tabla, columna_para_filtro, valor_imposible)
+    UUID_CERO = "00000000-0000-0000-0000-000000000000"
+    tablas = [
+        ("notas_hoja_ruta",        "id",      UUID_CERO),
+        ("hoja_ruta_lote",         "id",      UUID_CERO),
+        ("remision_items",         "id",      UUID_CERO),
+        ("remisiones",             "id",      UUID_CERO),
+        ("orden_corte_rollos",     "id",      UUID_CERO),
+        ("ordenes_corte",          "id",      UUID_CERO),
+        ("precosteo_items",        "id",      UUID_CERO),
+        ("referencias_precosteo",  "id",      UUID_CERO),
+        ("movimientos_inventario", "id",      UUID_CERO),
+        ("rollos_tela",            "id",      UUID_CERO),
+        ("ordenes_ingreso",        "id",      UUID_CERO),
+        ("insumos_movimientos",    "id",      UUID_CERO),
+        ("insumos",                "id",      UUID_CERO),
+        ("produccion_consecutivos","prefijo", "___nunca___"),
+        ("confeccionistas",        "id",      UUID_CERO),
+    ]
+    borradas: dict[str, int] = {}
+    errores: dict[str, str] = {}
+    for tabla, col, imposible in tablas:
+        try:
+            r = sb.table(tabla).delete().neq(col, imposible).execute()
+            borradas[tabla] = len(r.data or [])
+        except Exception as e:
+            msg = str(e)
+            if "does not exist" in msg:
+                borradas[tabla] = 0  # tabla aún no migrada — nada que borrar
+            else:
+                errores[tabla] = msg[:150]
+    _cache_invalidate_prefix("")  # limpiar TODO el cache del módulo
+    log.warning(f"[reset] produccion reseteada: {borradas} errores={errores}")
+    return {"borradas": borradas, "errores": errores, "ok": not errores}
+
+
 def despachos_por_corte(limit: int = 200) -> list[dict]:
     """Control interno del cortador: por cada corte cerrado, las unidades
     que despachó por talla + el estado de la remisión de confección.

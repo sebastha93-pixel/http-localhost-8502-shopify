@@ -851,6 +851,40 @@ def actualizar_confeccionista(
         raise HTTPException(500, f"actualizar_conf: {str(e)[:200]}")
 
 
+class ResetProduccionBody(BaseModel):
+    confirmacion: str  # debe ser exactamente "RESET"
+
+
+@router.post("/admin/reset-datos")
+def reset_datos_produccion(
+    body: ResetProduccionBody,
+    user: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Borra TODOS los datos transaccionales de producción (telas, cortes,
+    remisiones, precosteos, insumos, proveedores, consecutivos).
+    CONSERVA usuarios. Solo admin + confirmación explícita. IRREVERSIBLE."""
+    if body.confirmacion != "RESET":
+        raise HTTPException(400, "confirmacion_invalida: escribe RESET")
+    try:
+        res = svc.reset_datos_produccion()
+        # Rastro en auditoría (tabla acciones) — best effort
+        try:
+            sb = svc._sb()
+            if sb is not None:
+                sb.table("acciones").insert({
+                    "orden": "PRODUCCION",
+                    "tipo": "reset_produccion",
+                    "descripcion": f"Reset módulo producción: {res.get('borradas')}",
+                    "autor": user.email,
+                }).execute()
+        except Exception:
+            pass
+        return res
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"reset: {str(e)[:200]}")
+
+
 @router.get("/mis-despachos")
 def mis_despachos(
     user: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "ver")),
