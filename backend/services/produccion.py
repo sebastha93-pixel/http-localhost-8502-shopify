@@ -1485,7 +1485,8 @@ def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = No
 
 def crear_confeccionista(*, nombre: str, telefono: Optional[str] = None,
                           direccion: Optional[str] = None,
-                          tipo: str = "confeccion") -> dict:
+                          tipo: str = "confeccion",
+                          documento: Optional[str] = None) -> dict:
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
@@ -1497,18 +1498,22 @@ def crear_confeccionista(*, nombre: str, telefono: Optional[str] = None,
         "nombre":    nombre.strip(),
         "telefono":  (telefono or "").strip() or None,
         "direccion": (direccion or "").strip() or None,
+        "documento": (documento or "").strip() or None,
         "tipo":      tipo,
         "activo":    True,
     }
     try:
         r = sb.table("confeccionistas").insert(row).execute()
     except Exception as e:
-        # Compat si la columna tipo aún no existe
-        if "tipo" in str(e):
+        # Compat si columnas nuevas (documento/tipo) aún no existen
+        msg = str(e)
+        if "documento" in msg:
+            row.pop("documento", None)
+        elif "tipo" in msg:
             row.pop("tipo", None)
-            r = sb.table("confeccionistas").insert(row).execute()
         else:
             raise
+        r = sb.table("confeccionistas").insert(row).execute()
     return r.data[0]
 
 
@@ -1540,7 +1545,7 @@ def listar_confeccionistas(*, incluir_inactivos: bool = False,
 
 
 def actualizar_confeccionista(cid: str, **campos) -> dict:
-    permitidos = {"nombre", "telefono", "direccion", "activo", "tipo"}
+    permitidos = {"nombre", "telefono", "direccion", "activo", "tipo", "documento"}
     update = {k: v for k, v in campos.items() if k in permitidos and v is not None}
     if not update:
         raise ValueError("nada_que_actualizar")
@@ -1555,9 +1560,10 @@ def actualizar_confeccionista(cid: str, **campos) -> dict:
     try:
         r = sb.table("confeccionistas").update(update).eq("id", cid).execute()
     except Exception as e:
-        # Compat si la columna `tipo` aún no existe en la DB
-        if "tipo" in str(e) and "tipo" in update:
-            update.pop("tipo", None)
+        # Compat si columnas nuevas (`tipo`, `documento`) aún no existen en la DB
+        if ("tipo" in str(e) and "tipo" in update) or ("documento" in str(e) and "documento" in update):
+            update.pop("tipo", None) if "tipo" in str(e) else None
+            update.pop("documento", None) if "documento" in str(e) else None
             r = sb.table("confeccionistas").update(update).eq("id", cid).execute()
         else:
             raise
@@ -2385,13 +2391,31 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
 
     # ── Lotes: cortadas con su ruta y referencia ─────────────────
     ocs = listar_ordenes_corte(estado="cortada", limit=500)
-    rutas = (sb.table("hoja_ruta_lote")
-               .select("orden_corte_id,precio_confeccion,etapa,lavanderia_at,confeccionista:confeccionista_id(nombre)")
-               .limit(500).execute()).data or []
+    try:
+        rutas = (sb.table("hoja_ruta_lote")
+                   .select("orden_corte_id,precio_confeccion,etapa,lavanderia_at,"
+                           "confeccionista:confeccionista_id(nombre,documento)")
+                   .limit(500).execute()).data or []
+    except Exception:
+        # Compat si la columna documento aún no existe
+        rutas = (sb.table("hoja_ruta_lote")
+                   .select("orden_corte_id,precio_confeccion,etapa,lavanderia_at,"
+                           "confeccionista:confeccionista_id(nombre)")
+                   .limit(500).execute()).data or []
     ruta_por_oc = {r["orden_corte_id"]: r for r in rutas if r.get("orden_corte_id")}
 
     def _norm_ref(s: Optional[str]) -> str:
         return (s or "").upper().replace(" ", "").strip("-")
+
+    def _norm_doc(s) -> str:
+        """Solo dígitos. El NIT en Siigo puede venir con o sin dígito de
+        verificación — la comparación tolera esa diferencia."""
+        return "".join(c for c in str(s or "") if c.isdigit())
+
+    def _doc_match(a: str, b: str) -> bool:
+        if not a or not b:
+            return False
+        return a == b or a == b[:-1] or b == a[:-1]
 
     lotes = []
     lotes_por_ref: dict[str, dict] = {}
@@ -2408,6 +2432,7 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             "consecutivo":    oc.get("consecutivo"),
             "referencia":     (oc.get("referencia") or {}).get("codigo_referencia"),
             "confeccionista": ((ruta or {}).get("confeccionista") or {}).get("nombre"),
+            "documento":      _norm_doc(((ruta or {}).get("confeccionista") or {}).get("documento")),
             # El DS se vuelve exigible cuando el confeccionista ENTREGÓ
             # (lote pasó a lavandería). Antes de eso no se alerta.
             "entregado_at":   (ruta or {}).get("lavanderia_at"),
@@ -2452,14 +2477,31 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                 return lote_c
         return None
 
+    def _match_por_documento(doc_prov: str):
+        """Nivel 3: anclar por cédula/NIT del proveedor. Si el DS viene de
+        un proveedor con documento registrado y ese proveedor tiene UN solo
+        lote pendiente de DS, la factura llega aunque la REF esté mal
+        digitada o falte. Con varios lotes no se adivina."""
+        if not doc_prov:
+            return None
+        candidatos = [l for l in lotes
+                      if l.get("documento") and _doc_match(l["documento"], doc_prov)
+                      and l["estado"] == "sin_ds"]
+        return candidatos[0] if len(candidatos) == 1 else None
+
     ds_sin_lote = []
     matches: dict[str, list] = {}   # orden_corte_id → [(doc, item)]
     for doc in docs:
+        doc_prov = _norm_doc(doc.get("proveedor_id"))
         for it in doc["items"]:
             ref = _norm_ref(it.get("ref"))
             lote = lotes_por_ref.get(ref) if ref else None
             if not lote:
                 lote = _match_fallback(it.get("descripcion") or "")
+            via_documento = False
+            if not lote:
+                lote = _match_por_documento(doc_prov)
+                via_documento = lote is not None
             if not lote:
                 ds_sin_lote.append({
                     "ds":         doc["ds"],
@@ -2469,6 +2511,15 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                     "total":      it["total_sin_iva"],
                 })
                 continue
+            # Verificación cruzada: si el lote matcheó por REF pero el
+            # documento del proveedor NO coincide, avisar (posible DS de
+            # otro proveedor con la misma REF digitada).
+            if (not via_documento and doc_prov and lote.get("documento")
+                    and not _doc_match(lote["documento"], doc_prov)):
+                lote["proveedor_distinto"] = {
+                    "ds": doc["ds"],
+                    "proveedor_ds": doc.get("proveedor_nombre") or doc_prov,
+                }
             matches.setdefault(lote["orden_corte_id"], []).append((doc, it))
 
     # PASO 2 — Evaluar cada lote contra la SUMA de sus DS.
@@ -2539,6 +2590,25 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                 "tipo": "cantidad_distinta", "severidad": "alta",
                 "mensaje": f"Lote {l['consecutivo']}: DS {ds['ds']} contabilizó "
                            f"{ds['cantidad']:.0f} unidades pero se cortaron {l['unidades']}.",
+            })
+    # Proveedores de lotes activos SIN documento registrado — el ancla del
+    # cruce. Aviso una sola vez por proveedor.
+    sin_doc = sorted({l["confeccionista"] for l in lotes
+                      if l.get("tiene_ruta") and l.get("confeccionista") and not l.get("documento")})
+    for nombre in sin_doc:
+        alertas.append({
+            "tipo": "proveedor_sin_documento", "severidad": "media",
+            "mensaje": f"El proveedor {nombre} no tiene cédula/NIT registrado en Proveedores — "
+                       f"sin ese documento el cruce con Siigo depende solo de la REF digitada.",
+        })
+    for l in lotes:
+        pd = l.get("proveedor_distinto")
+        if pd:
+            alertas.append({
+                "tipo": "proveedor_distinto", "severidad": "alta",
+                "mensaje": f"Lote {l['consecutivo']}: el DS {pd['ds']} matcheó por REF pero "
+                           f"viene de {pd['proveedor_ds']}, que NO es el proveedor asignado "
+                           f"({l['confeccionista']}). Verifica en Siigo.",
             })
     for d in ds_sin_lote:
         alertas.append({

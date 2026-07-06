@@ -16,6 +16,7 @@ interface Confeccionista {
   nombre: string;
   telefono?: string;
   direccion?: string;
+  documento?: string;
   tipo?: string;
   activo: boolean;
 }
@@ -26,6 +27,7 @@ export default function ConfeccionistasPage() {
   const [nombre, setNombre] = useState("");
   const [telefono, setTelefono] = useState("");
   const [direccion, setDireccion] = useState("");
+  const [documento, setDocumento] = useState("");
   const [tipo, setTipo] = useState("confeccion");
   const [err, setErr] = useState("");
   const [incluirInactivos, setIncluirInactivos] = useState(false);
@@ -40,10 +42,11 @@ export default function ConfeccionistasPage() {
       nombre: nombre.trim(),
       telefono: telefono.trim() || null,
       direccion: direccion.trim() || null,
+      documento: documento.trim() || null,
       tipo,
     }),
     onSuccess: () => {
-      setNombre(""); setTelefono(""); setDireccion(""); setTipo("confeccion");
+      setNombre(""); setTelefono(""); setDireccion(""); setDocumento(""); setTipo("confeccion");
       setMostrarNuevo(false);
       setErr("");
       qc.invalidateQueries({ queryKey: ["produccion", "confeccionistas"] });
@@ -73,11 +76,16 @@ export default function ConfeccionistasPage() {
         <Card>
           <CardContent className="p-5 space-y-3">
             <p className="section-label">Nuevo proveedor</p>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
               <Field label="Nombre *"    value={nombre}    onChange={setNombre}    placeholder="Taller Alba" />
+              <Field label="CC / NIT"    value={documento} onChange={setDocumento} placeholder="Como está en Siigo" />
               <Field label="Teléfono"    value={telefono}  onChange={setTelefono}  placeholder="3XXXXXXXXX" />
               <Field label="Dirección"   value={direccion} onChange={setDireccion} placeholder="Cll 10 #5-32, Medellín" />
             </div>
+            <p className="text-[0.65rem] text-graphite">
+              La <strong>cédula/NIT</strong> es el ancla del costeo real: los documentos soporte de Siigo
+              se cruzan contra este número aunque la REF esté mal digitada.
+            </p>
             <div>
               <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Tipo de proveedor *</label>
               <div className="flex gap-4 text-sm">
@@ -132,6 +140,7 @@ export default function ConfeccionistasPage() {
                 <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
                   <th className="px-4 py-2">Nombre</th>
                   <th className="px-4 py-2">Tipo</th>
+                  <th className="px-4 py-2">CC / NIT</th>
                   <th className="px-4 py-2">Teléfono</th>
                   <th className="px-4 py-2">Dirección</th>
                   <th className="px-4 py-2">Estado</th>
@@ -156,6 +165,7 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
   const [nombre, setNombre] = useState(c.nombre);
   const [telefono, setTelefono] = useState(c.telefono || "");
   const [direccion, setDireccion] = useState(c.direccion || "");
+  const [documento, setDocumento] = useState(c.documento || "");
   const [tipo, setTipo] = useState(c.tipo || "confeccion");
 
   const [errEdit, setErrEdit] = useState("");
@@ -187,6 +197,11 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
           </select>
         </td>
         <td className="px-4 py-2">
+          <input value={documento} onChange={(e) => setDocumento(e.target.value)}
+            placeholder="CC / NIT"
+            className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs" />
+        </td>
+        <td className="px-4 py-2">
           <input value={telefono} onChange={(e) => setTelefono(e.target.value)}
             className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs" />
         </td>
@@ -196,7 +211,7 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
         </td>
         <td className="px-4 py-2"><Badge tone={c.activo ? "normal" : "neutral"}>{c.activo ? "Activo" : "Inactivo"}</Badge></td>
         <td className="px-4 py-2 text-right">
-          <button onClick={() => mut.mutate({ nombre, telefono, direccion, tipo })} disabled={mut.isPending}
+          <button onClick={() => mut.mutate({ nombre, telefono, direccion, tipo, documento: documento.trim() || null })} disabled={mut.isPending}
             className="text-teal hover:text-ink-900 mr-2" title="Guardar">
             {mut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
           </button>
@@ -220,6 +235,9 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
         <Badge tone={c.tipo === "terminacion" ? "info" : c.tipo === "lavanderia" ? "pendiente" : "neutral"}>
           {({ terminacion: "Terminación", lavanderia: "Lavandería", otros: "Otros" }[c.tipo || ""] || "Confección")}
         </Badge>
+      </td>
+      <td className="px-4 py-2 tabular text-graphite">
+        {c.documento || <span className="text-terracotta font-semibold" title="Sin documento el cruce con Siigo depende solo de la REF">falta ⚠</span>}
       </td>
       <td className="px-4 py-2 text-graphite">{c.telefono || "—"}</td>
       <td className="px-4 py-2 text-graphite">{c.direccion || "—"}</td>

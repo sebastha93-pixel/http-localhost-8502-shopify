@@ -791,13 +791,15 @@ class ConfeccionistaIn(BaseModel):
     nombre:    str = Field(min_length=2)
     telefono:  Optional[str] = None
     direccion: Optional[str] = None
-    tipo:      str = "confeccion"  # 'confeccion' | 'terminacion'
+    documento: Optional[str] = None  # cédula/NIT — ancla del cruce Siigo
+    tipo:      str = "confeccion"  # 'confeccion' | 'terminacion' | 'lavanderia' | 'otros'
 
 
 class ConfeccionistaUpdate(BaseModel):
     nombre:    Optional[str] = None
     telefono:  Optional[str] = None
     direccion: Optional[str] = None
+    documento: Optional[str] = None
     activo:    Optional[bool] = None
     tipo:      Optional[str] = None
 
@@ -829,6 +831,7 @@ def crear_confeccionista(
         return {"ok": True, "confeccionista": svc.crear_confeccionista(
             nombre=body.nombre, telefono=body.telefono,
             direccion=body.direccion, tipo=body.tipo,
+            documento=body.documento,
         )}
     except ValueError as e:
         raise HTTPException(400, str(e))
