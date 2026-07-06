@@ -26,11 +26,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { ...init, headers, cache: "no-store" });
 
   if (res.status === 401) {
+    // Mostrar la razón REAL del backend (Credenciales inválidas, Usuario
+    // inactivo, Token expirado…) en vez del genérico "No autenticado".
+    let detalle = "";
+    try {
+      detalle = ((await res.json()) as { detail?: string })?.detail || "";
+    } catch { /* sin body */ }
     clearToken();
     if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
       window.location.href = "/login";
     }
-    throw new ApiError(401, "No autenticado");
+    throw new ApiError(401, detalle || "No autenticado");
   }
 
   if (!res.ok) {
