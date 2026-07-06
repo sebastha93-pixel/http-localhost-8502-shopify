@@ -111,3 +111,50 @@ def listar_casos(status: Optional[str] = None) -> list[dict]:
         q = q.eq("status", status)
     r = q.order("created_at", desc=True).execute()
     return r.data or []
+
+
+def registrar_evento(case_id: str, event_type: str, description: str = "",
+                     created_by: str = "sistema") -> dict:
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("supabase_no_configurado")
+    data = {
+        "case_id": case_id,
+        "event_type": event_type,
+        "description": description,
+        "created_by": created_by,
+    }
+    r = sb.table("postventa_timeline").insert(data).execute()
+    return (r.data or [data])[0]
+
+
+def cambiar_estado(case_id: str, nuevo_estado: str, *, actor: str = "sistema",
+                   motivo: str = "") -> dict:
+    """Cambia el estado validando la transición y registra timeline + notifica."""
+    caso = obtener_caso(case_id)
+    if caso is None:
+        raise ValueError("caso_no_encontrado")
+    actual = caso.get("status", "")
+    if not L.transicion_valida(actual, nuevo_estado):
+        raise ValueError("transicion_invalida")
+
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("supabase_no_configurado")
+
+    campos = {"status": nuevo_estado, "updated_at": _ahora()}
+    if nuevo_estado in L.ESTADOS_TERMINALES:
+        campos["closed_at"] = _ahora()
+    r = sb.table("postventa_cases").update(campos).eq("id", case_id).execute()
+
+    desc = f"{actual} → {nuevo_estado}" + (f" · {motivo}" if motivo else "")
+    registrar_evento(case_id, "cambio_estado", desc, created_by=actor)
+
+    caso_actualizado = {**caso, **campos}
+    _notificar_estado(caso_actualizado, nuevo_estado)
+    return caso_actualizado
+
+
+def _notificar_estado(caso: dict, estado: str) -> None:
+    """Placeholder — se implementa en la tarea de notificaciones (Task 7)."""
+    return None

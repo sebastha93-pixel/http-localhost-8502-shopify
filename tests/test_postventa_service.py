@@ -18,6 +18,10 @@ class FakeSupabase:
         self._payload = data
         return self
 
+    def update(self, data):
+        self._payload = data
+        return self
+
     def select(self, *a, **k):
         return self
 
@@ -52,3 +56,23 @@ def test_crear_caso_tipo_invalido(monkeypatch):
     monkeypatch.setattr(svc, "_sb", lambda: FakeSupabase())
     with pytest.raises(ValueError, match="tipo_invalido"):
         svc.crear_caso(tipo="xxx", reason="talla_pequena")
+
+
+def test_cambiar_estado_valido(monkeypatch):
+    fake = FakeSupabase()
+    monkeypatch.setattr(svc, "_sb", lambda: fake)
+    monkeypatch.setattr(svc, "obtener_caso",
+                        lambda cid: {"id": cid, "status": "pendiente_validacion"})
+    monkeypatch.setattr(svc, "_notificar_estado", lambda caso, estado: None)
+    caso = svc.cambiar_estado("c1", "aprobado", actor="u1")
+    assert caso["status"] == "aprobado"
+    # se registró el evento en timeline
+    assert any(t[0] == "postventa_timeline" for t in fake.inserted)
+
+
+def test_cambiar_estado_invalido(monkeypatch):
+    monkeypatch.setattr(svc, "_sb", lambda: FakeSupabase())
+    monkeypatch.setattr(svc, "obtener_caso",
+                        lambda cid: {"id": cid, "status": "creado"})
+    with pytest.raises(ValueError, match="transicion_invalida"):
+        svc.cambiar_estado("c1", "factura_emitida", actor="u1")
