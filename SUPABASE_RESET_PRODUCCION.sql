@@ -28,10 +28,15 @@ DELETE FROM movimientos_inventario;
 DELETE FROM rollos_tela;
 DELETE FROM ordenes_ingreso;
 
--- 6. Reiniciar consecutivos (ING, OC, REM, ROLLO, etc. vuelven a 0001)
+-- 6. Inventario de insumos (stock + movimientos)
+-- Si estas tablas aún no existen (migración pendiente), comenta estas 2 líneas.
+DELETE FROM insumos_movimientos;
+DELETE FROM insumos;
+
+-- 7. Reiniciar consecutivos (ING, OC, REM, ROLLO, etc. vuelven a 0001)
 DELETE FROM produccion_consecutivos;
 
--- 7. Directorio de proveedores (confeccionistas/terminación/lavanderías)
+-- 8. Directorio de proveedores (confección/terminación/lavandería/otros)
 DELETE FROM confeccionistas;
 
 COMMIT;
@@ -43,4 +48,5 @@ UNION ALL SELECT 'ordenes_corte', COUNT(*) FROM ordenes_corte
 UNION ALL SELECT 'referencias_precosteo', COUNT(*) FROM referencias_precosteo
 UNION ALL SELECT 'rollos_tela', COUNT(*) FROM rollos_tela
 UNION ALL SELECT 'ordenes_ingreso', COUNT(*) FROM ordenes_ingreso
+UNION ALL SELECT 'insumos', COUNT(*) FROM insumos
 UNION ALL SELECT 'confeccionistas', COUNT(*) FROM confeccionistas;
