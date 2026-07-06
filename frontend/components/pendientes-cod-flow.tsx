@@ -76,7 +76,9 @@ export function PendientesCodFlow({ pedido }: { pedido: Pedido }) {
     setAutorizando(true);
     setAutorizError("");
     try {
-      const id = pedido.orden_tienda || pedido.orden_melonn;
+      // MISMA clave que usa el contacto (orden_melonn) — si difieren,
+      // el gate del backend no encuentra el contacto y bloquea con 409.
+      const id = pedido.orden_melonn || pedido.orden_tienda;
       await api.post(`/api/melonn/pedidos/${id}/autorizar-despacho`);
       setAutorizado(true);
       qc.invalidateQueries({ queryKey: ["melonn"] });

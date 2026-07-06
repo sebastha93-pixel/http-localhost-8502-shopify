@@ -7,7 +7,8 @@ from typing import List
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from backend.core.security import CurrentUser, require_role, require_permission
+from backend.core.security import (CurrentUser, require_role, require_permission,
+                                    require_permission_any)
 from backend.services import clientes as svc
 
 
@@ -18,7 +19,7 @@ router = APIRouter(prefix="/api/clientes", tags=["clientes"])
 def clasificacion(
     email: str = Query("", description="Email del cliente (opcional si hay teléfono)"),
     telefono: str = Query("", description="Teléfono del cliente (opcional si hay email)"),
-    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
+    _: CurrentUser = Depends(require_permission_any(("operaciones", "comercial"), "ver")),
 ) -> dict:
     """Clasifica un cliente. Busca por email primero, fallback a teléfono."""
     return svc.clasificar(email=email, telefono=telefono)
@@ -36,7 +37,7 @@ class BulkReq(BaseModel):
 @router.post("/clasificacion/bulk")
 def clasificacion_bulk(
     body: BulkReq,
-    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
+    _: CurrentUser = Depends(require_permission_any(("operaciones", "comercial"), "ver")),
 ) -> dict:
     """Clasifica varios clientes. Cada item con email y/o teléfono. Max 100."""
     items = [{"email": i.email, "telefono": i.telefono} for i in body.items[:100]]

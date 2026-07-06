@@ -104,7 +104,7 @@ export function ClienteHistorial({ email, telefono }: { email?: string; telefono
   const key = e || `tel:${t}`;
   const tieneInput = (e && e.includes("@")) || !!t;
 
-  const { data, isLoading } = useQuery<Clasificacion>({
+  const { data, isLoading, isError, refetch } = useQuery<Clasificacion>({
     queryKey: ["cliente-clasif", key],
     queryFn: () => api.get<Clasificacion>(
       `/api/clientes/clasificacion?email=${encodeURIComponent(e)}&telefono=${encodeURIComponent(t)}`,
@@ -112,12 +112,22 @@ export function ClienteHistorial({ email, telefono }: { email?: string; telefono
     enabled: tieneInput,
     staleTime: 60 * 60_000,
     refetchOnWindowFocus: false,
+    retry: 1,
   });
 
   if (!tieneInput) {
     return (
       <div className="rounded-md bg-concrete/40 border border-border px-3 py-2 text-xs text-graphite">
         Sin email ni teléfono del cliente — no se puede clasificar.
+      </div>
+    );
+  }
+  if (isError) {
+    return (
+      <div className="rounded-md bg-concrete/40 border border-border px-3 py-2 text-xs text-graphite">
+        No se pudo consultar el historial del cliente.{" "}
+        <button onClick={() => refetch()} className="underline font-semibold">Reintentar</button>
+        {" "}— puedes continuar el flujo de contacto normalmente.
       </div>
     );
   }

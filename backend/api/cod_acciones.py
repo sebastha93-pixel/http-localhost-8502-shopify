@@ -77,6 +77,25 @@ def _resolver_otro_id(orden: str) -> str | None:
     return None
 
 
+def _buscar_fila(sb, orden: str) -> dict | None:
+    """Busca la fila de cod_acciones por orden_melonn O orden_tienda,
+    y si no aparece, resuelve el otro identificador y reintenta."""
+    def _q(valor: str):
+        try:
+            r = (sb.table("cod_acciones").select("*")
+                   .or_(f"orden_melonn.eq.{valor},orden_tienda.eq.{valor}")
+                   .limit(1).execute())
+            return r.data[0] if r.data else None
+        except Exception:
+            return None
+    row = _q(orden)
+    if row is None:
+        otro = _resolver_otro_id(orden)
+        if otro:
+            row = _q(otro)
+    return row
+
+
 @router.get("/{orden_melonn}")
 def get_accion(
     orden_melonn: str,
@@ -87,14 +106,12 @@ def get_accion(
     if sb is None:
         raise HTTPException(503, "supabase_no_configurado")
     try:
-        r = (sb.table("cod_acciones")
-               .select("*")
-               .eq("orden_melonn", orden_melonn)
-               .limit(1)
-               .execute())
-        if not r.data:
+        # Buscar por AMBAS claves (orden_melonn / orden_tienda): el contacto
+        # pudo registrarse con cualquiera de las dos según el componente.
+        row = _buscar_fila(sb, orden_melonn)
+        if row is None:
             return {"ok": True, "orden_melonn": orden_melonn, "existe": False}
-        return {"ok": True, "existe": True, **r.data[0]}
+        return {"ok": True, "existe": True, **row}
     except Exception as e:
         # Si la tabla no existe, devolver shape válido para que el front muestre estado vacío.
         err = str(e)
@@ -125,8 +142,12 @@ def registrar_contacto(
     # los dos para que el gate de autorizar-despacho encuentre la fila).
     orden_tienda_resuelto = _resolver_otro_id(orden_melonn)
     try:
+        # Si ya existe una fila para este pedido (con cualquiera de las dos
+        # claves), reutilizar su PK — no crear una fila duplicada.
+        existente = _buscar_fila(sb, orden_melonn)
+        pk = existente["orden_melonn"] if existente else orden_melonn
         payload = {
-            "orden_melonn": orden_melonn,
+            "orden_melonn": pk,
             "contacto_via": body.via,
             "contacto_at": now_iso,
             "contacto_por": getattr(user, "email", None) or "",
@@ -134,6 +155,9 @@ def registrar_contacto(
         }
         if orden_tienda_resuelto:
             payload["orden_tienda"] = orden_tienda_resuelto
+        elif pk != orden_melonn:
+            # El path era la "otra" clave — guardarla en orden_tienda
+            payload.setdefault("orden_tienda", orden_melonn)
         sb.table("cod_acciones").upsert(payload, on_conflict="orden_melonn").execute()
         return {"ok": True, "contacto_via": body.via, "contacto_at": now_iso}
     except Exception as e:
