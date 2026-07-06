@@ -1546,7 +1546,7 @@ def actualizar_confeccionista(cid: str, **campos) -> dict:
         raise ValueError("nada_que_actualizar")
     if "nombre" in update:
         update["nombre"] = str(update["nombre"]).strip()
-    if "tipo" in update and update["tipo"] not in ("confeccion", "terminacion"):
+    if "tipo" in update and update["tipo"] not in ("confeccion", "terminacion", "lavanderia", "otros"):
         raise ValueError("tipo_invalido")
     update["updated_at"] = _now_iso()
     sb = _sb()
