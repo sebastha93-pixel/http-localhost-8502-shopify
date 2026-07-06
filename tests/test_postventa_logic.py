@@ -20,3 +20,20 @@ def test_no_se_puede_salir_de_estado_terminal():
 def test_cualquiera_puede_ir_a_cerrado():
     assert L.transicion_valida("escalado", "cerrado") is True
     assert L.transicion_valida("aprobado", "cerrado") is True
+
+
+def test_validar_tipo():
+    assert L.validar_tipo("cambio_talla") is True
+    assert L.validar_tipo("garantia") is True
+    assert L.validar_tipo("inexistente") is False
+
+
+def test_validar_motivo():
+    assert L.validar_motivo("talla_pequena") is True
+    assert L.validar_motivo("error_asesoria") is True
+    assert L.validar_motivo("no_existe") is False
+
+
+def test_validar_prioridad():
+    assert L.validar_prioridad("alta") is True
+    assert L.validar_prioridad("urgentisima") is False

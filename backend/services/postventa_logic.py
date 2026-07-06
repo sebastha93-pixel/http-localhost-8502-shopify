@@ -51,3 +51,31 @@ def transicion_valida(actual: str, nuevo: str) -> bool:
     if nuevo == "cerrado":
         return True
     return nuevo in TRANSICIONES.get(actual, set())
+
+
+# ── Catálogos ────────────────────────────────────────────────────────
+TIPOS: set[str] = {
+    "cambio_talla", "cambio_ref", "reembolso", "bono", "garantia",
+}
+
+MOTIVOS: list[str] = [
+    "talla_pequena", "talla_grande", "no_le_gusto_como_quedo",
+    "color_diferente", "producto_defectuoso", "producto_equivocado",
+    "pedido_incompleto", "demora_entrega", "arrepentimiento",
+    "calidad_percibida", "error_asesoria", "error_logistico",
+    "cambio_por_otro", "garantia", "otro",
+]
+
+PRIORIDADES: set[str] = {"baja", "media", "alta"}
+
+
+def validar_tipo(t: str) -> bool:
+    return t in TIPOS
+
+
+def validar_motivo(m: str) -> bool:
+    return m in MOTIVOS
+
+
+def validar_prioridad(p: str) -> bool:
+    return p in PRIORIDADES
