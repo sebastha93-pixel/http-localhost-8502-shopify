@@ -1642,7 +1642,89 @@ class IngresoInsumosBody(BaseModel):
 def listar_insumos(
     _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
 ) -> dict:
+    # Backfill perezoso: insumos viejos sin código QR reciben el suyo acá
+    try:
+        svc.asegurar_codigos_insumos()
+    except Exception:
+        pass
     return {"insumos": svc.listar_insumos()}
+
+
+def _dibujar_etiqueta_insumo(c, W, H, ins: dict) -> None:
+    """Etiqueta 10×10 del insumo — QR con su código INS-YYYY-NNNN."""
+    from reportlab.lib.pagesizes import mm
+    from reportlab.graphics.barcode.qr import QrCodeWidget
+    from reportlab.graphics.shapes import Drawing
+    from reportlab.graphics import renderPDF
+
+    codigo = ins.get("codigo") or ""
+    c.setFont("Helvetica-Bold", 14)
+    c.drawCentredString(W / 2, H - 9 * mm, codigo or "SIN CÓDIGO")
+
+    qr_size = 42 * mm
+    qr = QrCodeWidget(codigo or ins.get("id") or "")
+    b = qr.getBounds()
+    escala = qr_size / max(b[2] - b[0], b[3] - b[1])
+    d = Drawing(qr_size, qr_size,
+                transform=[escala, 0, 0, escala, -b[0] * escala, -b[1] * escala])
+    d.add(qr)
+    renderPDF.draw(d, c, (W - qr_size) / 2, H - 12 * mm - qr_size)
+
+    c.setFont("Helvetica", 8)
+    c.drawCentredString(W / 2, H - 14 * mm - qr_size, codigo)
+
+    c.setFont("Helvetica-Bold", 11)
+    y = H - 22 * mm - qr_size
+    nombre = (ins.get("nombre") or "—").upper()
+    c.drawCentredString(W / 2, y, nombre[:32])
+    y -= 6 * mm
+    c.setFont("Helvetica", 9)
+    c.drawCentredString(W / 2, y, f"Categoría: {ins.get('categoria') or '—'}   ·   Unidad: {ins.get('unidad') or 'und'}")
+
+    c.setFont("Helvetica-Oblique", 7)
+    c.drawCentredString(W / 2, 5 * mm, "MALE'DENIM · Insumo")
+
+
+class EtiquetasInsumosBody(BaseModel):
+    insumo_ids: list[str] = Field(min_length=1, max_length=200)
+
+
+@router.post("/insumos/etiquetas")
+def etiquetas_insumos(
+    body: EtiquetasInsumosBody,
+    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
+) -> Response:
+    """PDF con una página por insumo — etiqueta QR para marcar cajas/estantes."""
+    from io import BytesIO
+    from reportlab.lib.pagesizes import mm
+    from reportlab.pdfgen import canvas as _canvas
+
+    svc.asegurar_codigos_insumos()
+    todos = {i["id"]: i for i in svc.listar_insumos()}
+    seleccion = [todos[i] for i in body.insumo_ids if i in todos]
+    if not seleccion:
+        raise HTTPException(404, "insumos_no_encontrados")
+    buf = BytesIO()
+    W, H = 100 * mm, 100 * mm
+    c = _canvas.Canvas(buf, pagesize=(W, H))
+    for ins in seleccion:
+        _dibujar_etiqueta_insumo(c, W, H, ins)
+        c.showPage()
+    c.save()
+    return Response(content=buf.getvalue(), media_type="application/pdf",
+                    headers={"Content-Disposition": 'inline; filename="etiquetas_insumos.pdf"'})
+
+
+@router.get("/insumos/barcode/{codigo}")
+def insumo_por_codigo(
+    codigo: str,
+    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
+) -> dict:
+    """Lookup por QR pistoleado — para entradas/salidas escaneando."""
+    ins = svc.obtener_insumo_por_codigo(codigo)
+    if not ins:
+        raise HTTPException(404, "insumo_no_encontrado")
+    return ins
 
 
 @router.get("/insumos/movimientos")

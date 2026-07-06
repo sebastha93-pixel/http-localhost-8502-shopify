@@ -2717,16 +2717,67 @@ def movimientos_insumos(limit: int = 100) -> list[dict]:
 
 
 def _upsert_insumo(sb, nombre: str, categoria: str, unidad: str = "und") -> dict:
-    """Busca el insumo por nombre normalizado; si no existe lo crea en 0."""
+    """Busca el insumo por nombre normalizado; si no existe lo crea en 0
+    con su código QR único (INS-YYYY-NNNN)."""
     nom = _norm_insumo(nombre)
     r = (sb.table("insumos").select("*").eq("nombre", nom).limit(1).execute()).data
     if r:
         return r[0]
-    ins = sb.table("insumos").insert({
+    row = {
         "nombre": nom, "categoria": categoria or "OTRO",
         "unidad": unidad or "und", "cantidad_disponible": 0,
-    }).execute()
+    }
+    try:
+        row["codigo"] = next_consecutivo("INS", width=4)
+    except Exception as e:
+        log.warning(f"[insumos] consecutivo INS fallo: {e}")
+    try:
+        ins = sb.table("insumos").insert(row).execute()
+    except Exception as e:
+        if "codigo" in str(e):  # compat: migración pendiente
+            row.pop("codigo", None)
+            ins = sb.table("insumos").insert(row).execute()
+        else:
+            raise
     return ins.data[0]
+
+
+def asegurar_codigos_insumos() -> int:
+    """Backfill: asigna código INS a los insumos existentes que no lo tienen.
+    Devuelve cuántos se codificaron."""
+    sb = _sb()
+    if sb is None:
+        return 0
+    try:
+        sin = (sb.table("insumos").select("id").is_("codigo", "null")
+                 .limit(500).execute()).data or []
+    except Exception:
+        return 0  # columna aún no existe
+    n = 0
+    for row in sin:
+        try:
+            sb.table("insumos").update({
+                "codigo": next_consecutivo("INS", width=4),
+                "updated_at": _now_iso(),
+            }).eq("id", row["id"]).execute()
+            n += 1
+        except Exception as e:
+            log.warning(f"[insumos] backfill codigo fallo: {e}")
+    return n
+
+
+def obtener_insumo_por_codigo(codigo: str) -> Optional[dict]:
+    """Para pistolear el QR del insumo (entradas/salidas futuras)."""
+    sb = _sb()
+    if sb is None:
+        return None
+    try:
+        r = (sb.table("insumos").select("*")
+               .eq("codigo", (codigo or "").upper().strip())
+               .limit(1).execute()).data
+    except Exception:
+        return None
+    return r[0] if r else None
 
 
 def _mover_insumo(sb, insumo: dict, delta: float, tipo: str,

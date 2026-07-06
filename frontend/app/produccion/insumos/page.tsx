@@ -7,17 +7,19 @@
  */
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, API_BASE } from "@/lib/api";
+import { getToken } from "@/lib/auth";
 import { fmtDateTime } from "@/lib/utils";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { Plus, Loader2, AlertCircle, Save, Trash2, PackagePlus } from "lucide-react";
+import { Plus, Loader2, AlertCircle, Save, Trash2, PackagePlus, QrCode } from "lucide-react";
 
 interface Insumo {
   id: string;
   nombre: string;
   categoria: string;
   unidad: string;
+  codigo?: string;
   cantidad_disponible: number;
 }
 
@@ -53,6 +55,37 @@ export default function InsumosPage() {
     { nombre: "", categoria: "INSUMO CONFECCION", cantidad: "" },
   ]);
   const [err, setErr] = useState("");
+  // Selección de insumos para imprimir etiquetas QR (cajas/estantes)
+  const [seleccion, setSeleccion] = useState<Set<string>>(new Set());
+  const [imprimiendo, setImprimiendo] = useState(false);
+
+  function toggleSeleccion(id: string) {
+    setSeleccion((prev) => {
+      const s = new Set(prev);
+      if (s.has(id)) s.delete(id); else s.add(id);
+      return s;
+    });
+  }
+
+  async function imprimirEtiquetas(ids: string[]) {
+    if (ids.length === 0) return;
+    setImprimiendo(true);
+    setErr("");
+    try {
+      const r = await fetch(`${API_BASE}/api/produccion/insumos/etiquetas`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ insumo_ids: ids }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const blob = await r.blob();
+      window.open(URL.createObjectURL(blob), "_blank");
+    } catch (e) {
+      setErr(`No se pudo generar el PDF de etiquetas: ${e instanceof Error ? e.message : "error"}`);
+    } finally {
+      setImprimiendo(false);
+    }
+  }
 
   const q = useQuery<{ insumos: Insumo[] }>({
     queryKey: ["produccion", "insumos"],
@@ -105,6 +138,21 @@ export default function InsumosPage() {
           <PackagePlus className="h-3.5 w-3.5" /> Registrar ingreso
         </button>
       </div>
+
+      {seleccion.size > 0 && (
+        <div className="sticky top-2 z-20 flex items-center justify-between gap-3 rounded-sm border border-navy-600/40 bg-navy-600/[0.06] backdrop-blur px-4 py-2.5">
+          <p className="text-xs font-semibold text-navy-600 tabular">{seleccion.size} insumo(s) seleccionado(s)</p>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setSeleccion(new Set())}
+              className="text-[0.65rem] uppercase tracking-widest text-graphite hover:text-ink-900">Limpiar</button>
+            <button onClick={() => imprimirEtiquetas(Array.from(seleccion))} disabled={imprimiendo}
+              className="inline-flex items-center gap-1.5 rounded-sm bg-navy-600 px-3 py-1.5 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
+              {imprimiendo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <QrCode className="h-3.5 w-3.5" />}
+              Imprimir etiquetas QR
+            </button>
+          </div>
+        </div>
+      )}
 
       {negativos.length > 0 && (
         <div role="alert" className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta">
@@ -189,6 +237,13 @@ export default function InsumosPage() {
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
                 <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                  <th className="px-4 py-2 w-[36px]">
+                    <input type="checkbox"
+                      checked={insumos.length > 0 && seleccion.size === insumos.length}
+                      onChange={() => setSeleccion(seleccion.size === insumos.length ? new Set() : new Set(insumos.map((x) => x.id)))}
+                      aria-label="Seleccionar todos" className="h-4 w-4 cursor-pointer" />
+                  </th>
+                  <th className="px-4 py-2">Código</th>
                   <th className="px-4 py-2">Insumo</th>
                   <th className="px-4 py-2">Categoría</th>
                   <th className="px-4 py-2 text-right">Disponible</th>
@@ -197,7 +252,12 @@ export default function InsumosPage() {
               </thead>
               <tbody>
                 {insumos.map((i) => (
-                  <tr key={i.id} className="border-b border-border/40 hover:bg-cloud/30">
+                  <tr key={i.id} className={`border-b border-border/40 ${seleccion.has(i.id) ? "bg-navy-600/[0.05]" : "hover:bg-cloud/30"}`}>
+                    <td className="px-4 py-2">
+                      <input type="checkbox" checked={seleccion.has(i.id)} onChange={() => toggleSeleccion(i.id)}
+                        aria-label={`Seleccionar ${i.nombre}`} className="h-4 w-4 cursor-pointer" />
+                    </td>
+                    <td className="px-4 py-2 tabular text-navy-600 font-semibold">{i.codigo || "—"}</td>
                     <td className="px-4 py-2 font-semibold text-ink-900">{i.nombre}</td>
                     <td className="px-4 py-2 text-graphite">{CAT_LABEL[i.categoria] || i.categoria}</td>
                     <td className={`px-4 py-2 text-right tabular font-bold ${i.cantidad_disponible < 0 ? "text-terracotta" : i.cantidad_disponible === 0 ? "text-graphite" : "text-ink-900"}`}>
