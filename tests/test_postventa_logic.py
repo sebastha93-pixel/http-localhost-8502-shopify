@@ -37,3 +37,24 @@ def test_validar_motivo():
 def test_validar_prioridad():
     assert L.validar_prioridad("alta") is True
     assert L.validar_prioridad("urgentisima") is False
+
+
+def test_calcular_diferencia_reemplazo_mas_caro():
+    # nueva ref cuesta más -> cobra (positivo)
+    assert L.calcular_diferencia(100000.0, 130000.0) == 30000.0
+
+
+def test_calcular_diferencia_reemplazo_mas_barato():
+    # nueva ref cuesta menos -> devuelve (negativo)
+    assert L.calcular_diferencia(100000.0, 80000.0) == -20000.0
+
+
+def test_calcular_diferencia_reembolso_devuelve_todo():
+    # sin reemplazo (reembolso/bono) -> devuelve todo el original
+    assert L.calcular_diferencia(100000.0, None) == -100000.0
+
+
+def test_formato_case_number():
+    assert L.formato_case_number(2026, 1) == "PV-2026-0001"
+    assert L.formato_case_number(2026, 45) == "PV-2026-0045"
+    assert L.formato_case_number(2026, 1234) == "PV-2026-1234"

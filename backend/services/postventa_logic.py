@@ -79,3 +79,24 @@ def validar_motivo(m: str) -> bool:
 
 def validar_prioridad(p: str) -> bool:
     return p in PRIORIDADES
+
+
+# ── Cálculos ─────────────────────────────────────────────────────────
+def calcular_diferencia(original: float, requested: Optional[float]) -> float:
+    """Diferencia de precio del item. Convención: + cobra, - devuelve.
+
+    - requested None (reembolso/bono) -> se devuelve todo el original.
+    - requested con valor -> requested - original.
+    Se usa Decimal para no arrastrar error de punto flotante y se
+    devuelve float con 2 decimales (COP).
+    """
+    o = Decimal(str(original))
+    if requested is None:
+        return float(-o)
+    r = Decimal(str(requested))
+    return float(r - o)
+
+
+def formato_case_number(anio: int, consecutivo: int) -> str:
+    """Consecutivo legible: PV-2026-0001 (mínimo 4 dígitos, crece si hace falta)."""
+    return f"PV-{anio}-{consecutivo:04d}"
