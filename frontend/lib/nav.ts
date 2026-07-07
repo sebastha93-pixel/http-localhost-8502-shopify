@@ -39,6 +39,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: "Envíos",        href: "/envios",        permiso: "envios",        desc: "Guías y transportadoras" },
       { label: "B2B",           href: "/b2b",           permiso: "b2b",           desc: "Pedidos mayoristas" },
       { label: "Devoluciones",  href: "/devoluciones",  permiso: "devoluciones",  desc: "Retornos y cambios" },
+      { label: "Postventa",     href: "/postventa",     permiso: "postventa",     desc: "Cambios, devoluciones y garantías con IA" },
       { label: "Incidencias",   href: "/incidencias",   permiso: "incidencias",   desc: "Casos abiertos" },
       { label: "Histórico",     href: "/historico",     permiso: "historico",     desc: "Movimientos pasados" },
     ],

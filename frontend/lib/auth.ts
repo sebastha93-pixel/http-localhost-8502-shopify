@@ -50,6 +50,7 @@ export const GRUPOS_PERMISOS = {
   centro_control: ["centro_control"],
   operaciones:    ["logistica", "envios", "devoluciones", "incidencias",
                    "historico", "b2b", "contraentrega", "inventario"],
+  postventa:      ["postventa"],
   finanzas:       ["finanzas"],
   comercial:      ["comercial", "revenue", "inteligencia"],
   produccion:     ["produccion", "produccion_ingreso", "produccion_corte",
@@ -64,6 +65,7 @@ export const GRUPOS = Object.keys(GRUPOS_PERMISOS) as Array<keyof typeof GRUPOS_
 export const GRUPO_LABEL: Record<string, string> = {
   centro_control: "Centro de control",
   operaciones:    "Operaciones (logística, envíos, devoluciones, incidencias, histórico, B2B, contraentrega, inventario)",
+  postventa:      "Postventa (cambios, devoluciones y garantías con IA)",
   finanzas:       "Finanzas",
   comercial:      "Comercial (ventas, revenue, inteligencia)",
   produccion:     "Producción",

@@ -30,3 +30,6 @@ pypdfium2>=4.30
 
 # PDF de etiquetas Zebra 10×10 con Code128 (produccion.ingreso).
 reportlab>=4.0
+
+# Tests
+pytest>=8.0
