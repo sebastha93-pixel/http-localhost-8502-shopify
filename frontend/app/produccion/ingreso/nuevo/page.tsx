@@ -12,7 +12,7 @@
  */
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, API_BASE } from "@/lib/api";
 import { getToken } from "@/lib/auth";
 import { PageShell } from "@/components/page-shell";
@@ -37,7 +37,6 @@ function rolloVacio(): RolloForm {
   };
 }
 
-const TEXTILERAS = ["Primatela", "Contacto", "Stilotex", "Megatex", "Otra"];
 const TIPOS_DOC = [
   { v: "remision",      l: "Remisión" },
   { v: "factura",       l: "Factura" },
@@ -49,9 +48,27 @@ export default function NuevoIngresoPage() {
   const router = useRouter();
   const hoy = new Date().toISOString().slice(0, 10);
 
-  const [textilera, setTextilera] = useState("Primatela");
+  const [textileraId, setTextileraId] = useState("");   // "" = ninguna, "otra" = nueva
+  const [textilera, setTextilera] = useState("");        // nombre final
   const [textileraOtra, setTextileraOtra] = useState("");
   const [nit, setNit] = useState("");
+
+  // Textileras del directorio de proveedores (con su NIT para el cruce Siigo)
+  const textilerasQ = useQuery<{ confeccionistas: { id: string; nombre: string; documento?: string }[] }>({
+    queryKey: ["produccion", "confeccionistas", "textilera"],
+    queryFn: () => api.get("/api/produccion/confeccionistas?tipo=textilera&incluir_inactivos=false"),
+  });
+  const textileras = textilerasQ.data?.confeccionistas || [];
+
+  function elegirTextilera(id: string) {
+    setTextileraId(id);
+    if (id === "otra" || id === "") {
+      setTextilera(""); setNit("");
+      return;
+    }
+    const t = textileras.find((x) => x.id === id);
+    if (t) { setTextilera(t.nombre); setNit(t.documento || ""); }
+  }
   const [tipoDoc, setTipoDoc] = useState("remision");
   const [numeroDoc, setNumeroDoc] = useState("");
   const [fecha, setFecha] = useState(hoy);
@@ -84,10 +101,11 @@ export default function NuevoIngresoPage() {
       const d = json.data || {};
       // Prellenar cabecera
       const tx = (d.textilera || "").toString();
-      const known = TEXTILERAS.find((t) => tx.toUpperCase().includes(t.toUpperCase()));
-      if (known) { setTextilera(known); }
-      else { setTextilera("Otra"); setTextileraOtra(tx); }
-      if (d.nit_textilera)     setNit(String(d.nit_textilera));
+      const known = textileras.find((t) => tx.toUpperCase().includes(t.nombre.toUpperCase())
+        || t.nombre.toUpperCase().includes(tx.toUpperCase()));
+      if (known) { elegirTextilera(known.id); }
+      else if (tx) { setTextileraId("otra"); setTextilera(tx); setTextileraOtra(tx); }
+      if (d.nit_textilera && !known) setNit(String(d.nit_textilera));
       if (d.tipo_documento)    setTipoDoc(String(d.tipo_documento));
       if (d.numero_documento)  setNumeroDoc(String(d.numero_documento));
       if (d.fecha)             setFecha(String(d.fecha));
@@ -116,7 +134,8 @@ export default function NuevoIngresoPage() {
 
   const mut = useMutation({
     mutationFn: () => {
-      const textileraFinal = textilera === "Otra" ? textileraOtra.trim() : textilera;
+      const textileraFinal = textileraId === "otra" ? textileraOtra.trim() : textilera;
+      if (!textileraFinal) throw new Error("Selecciona la textilera");
       const rollosValidos = rollos
         .filter((r) => r.descripcion_tela.trim() && parseFloat(r.metros_inicial || "0") > 0)
         .map((r) => ({
@@ -219,18 +238,34 @@ export default function NuevoIngresoPage() {
             <p className="section-label">Cabecera</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
-                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Textilera</label>
-                <select value={textilera} onChange={(e) => setTextilera(e.target.value)}
+                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Textilera *</label>
+                <select value={textileraId} onChange={(e) => elegirTextilera(e.target.value)}
                   className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm">
-                  {TEXTILERAS.map((t) => <option key={t} value={t}>{t}</option>)}
+                  <option value="">Selecciona una textilera…</option>
+                  {textileras.map((t) => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+                  <option value="otra">+ Otra (regístrala en Proveedores)</option>
                 </select>
-                {textilera === "Otra" && (
+                {textileras.length === 0 && !textilerasQ.isLoading && (
+                  <p className="mt-1 text-[0.6rem] text-terracotta">
+                    No hay textileras. Créalas en{" "}
+                    <a href="/produccion/confeccionistas" className="underline font-semibold">Proveedores</a>{" "}
+                    con tipo &ldquo;Textilera&rdquo; y su NIT.
+                  </p>
+                )}
+                {textileraId === "otra" && (
                   <input value={textileraOtra} onChange={(e) => setTextileraOtra(e.target.value)}
                     placeholder="Nombre de la textilera"
                     className="mt-2 w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />
                 )}
               </div>
-              <Input label="NIT (opcional)" value={nit} onChange={setNit} />
+              <div>
+                <Input label="NIT (para cruce con Siigo)" value={nit} onChange={setNit} />
+                {textileraId && textileraId !== "otra" && !nit && (
+                  <p className="mt-1 text-[0.6rem] text-ochre">
+                    Esta textilera no tiene NIT — agrégalo en Proveedores para poder cruzar la compra.
+                  </p>
+                )}
+              </div>
               <div>
                 <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Tipo de documento</label>
                 <select value={tipoDoc} onChange={(e) => setTipoDoc(e.target.value)}

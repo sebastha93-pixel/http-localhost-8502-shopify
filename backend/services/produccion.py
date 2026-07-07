@@ -1492,7 +1492,7 @@ def crear_confeccionista(*, nombre: str, telefono: Optional[str] = None,
         raise RuntimeError("Supabase no configurado")
     if not nombre.strip():
         raise ValueError("nombre_requerido")
-    if tipo not in ("confeccion", "terminacion", "lavanderia", "otros"):
+    if tipo not in ("confeccion", "terminacion", "lavanderia", "otros", "textilera"):
         raise ValueError("tipo_invalido")
     row = {
         "nombre":    nombre.strip(),
@@ -1551,7 +1551,7 @@ def actualizar_confeccionista(cid: str, **campos) -> dict:
         raise ValueError("nada_que_actualizar")
     if "nombre" in update:
         update["nombre"] = str(update["nombre"]).strip()
-    if "tipo" in update and update["tipo"] not in ("confeccion", "terminacion", "lavanderia", "otros"):
+    if "tipo" in update and update["tipo"] not in ("confeccion", "terminacion", "lavanderia", "otros", "textilera"):
         raise ValueError("tipo_invalido")
     update["updated_at"] = _now_iso()
     sb = _sb()
