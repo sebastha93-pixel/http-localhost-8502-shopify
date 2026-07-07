@@ -98,6 +98,21 @@ def test_notificar_estado_sin_plantilla_no_envia(monkeypatch):
     assert enviados == []
 
 
+def test_notificar_estado_excepcion_registra_timeline(monkeypatch):
+    # Spec §7.2: si el envío WhatsApp lanza excepción, el caso NO se rompe
+    # y queda un evento de timeline "no entregado".
+    def _raise(tel, msg):
+        raise RuntimeError("wa caido")
+    eventos = []
+    monkeypatch.setattr(svc.whatsapp_cloud, "enviar_texto", _raise)
+    monkeypatch.setattr(svc, "registrar_evento",
+                        lambda *a, **k: eventos.append(a))
+    caso = {"id": "c1", "customer_phone": "3001234567", "case_number": "PV-2026-0004"}
+    svc._notificar_estado(caso, "aprobado")  # no debe lanzar
+    assert len(eventos) == 1
+    assert "no entregado" in eventos[0][2]
+
+
 def test_agregar_item_calcula_diferencia(monkeypatch):
     fake = FakeSupabase()
     monkeypatch.setattr(svc, "_sb", lambda: fake)

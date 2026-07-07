@@ -187,6 +187,16 @@ def _notificar_estado(caso: dict, estado: str) -> None:
         )
     except Exception as e:  # notificación es secundaria: no romper el caso
         log.warning(f"[postventa] fallo notificacion wa: {e}")
+        # Spec §7.2: dejar rastro en timeline de la notificación no entregada.
+        # El registro tampoco debe romper el caso, por eso va en su propio try.
+        try:
+            registrar_evento(
+                caso["id"], "notificacion_wa",
+                f"WhatsApp '{estado}' no entregado (error: {str(e)[:120]})",
+                created_by="sistema",
+            )
+        except Exception:
+            pass
     return None
 
 

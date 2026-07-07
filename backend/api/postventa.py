@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from backend.core.security import CurrentUser, require_permission
 from backend.services import postventa as svc

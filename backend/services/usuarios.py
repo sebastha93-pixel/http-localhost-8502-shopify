@@ -58,6 +58,7 @@ MODULOS_GRUPOS = {
     "centro_control": ["centro_control"],
     "operaciones":    ["logistica", "envios", "devoluciones", "incidencias",
                        "historico", "b2b", "contraentrega", "inventario"],
+    "postventa":      ["postventa"],
     "finanzas":       ["finanzas"],
     "comercial":      ["comercial", "revenue", "inteligencia"],
     "produccion":     ["produccion", "produccion_ingreso", "produccion_corte",
