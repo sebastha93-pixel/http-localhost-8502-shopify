@@ -22,12 +22,10 @@ export default function PostventaPage() {
   return (
     <PageShell title="Postventa" subtitle="Cambios, devoluciones y garantías">
       {dash.data && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <div className="grid grid-cols-3 gap-3 mb-4">
           <KpiBox label="Abiertos" value={dash.data.abiertos} />
           <KpiBox label="Cerrados" value={dash.data.cerrados} />
           <KpiBox label="Total" value={dash.data.total} />
-          <KpiBox label="En error fiscal"
-                  value={dash.data.por_estado["error"] ?? 0} />
         </div>
       )}
 

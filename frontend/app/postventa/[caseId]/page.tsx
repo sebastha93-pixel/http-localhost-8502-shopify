@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { obtenerCaso, cambiarEstado, ESTADOS_LABEL, type EstadoPostventa } from "@/lib/postventa";
 
 // Transiciones ofrecidas en UI (espejo del backend postventa_logic.TRANSICIONES).
-const ACCIONES: Record<string, string[]> = {
+const ACCIONES: Record<string, EstadoPostventa[]> = {
   creado: ["pendiente_validacion"],
   pendiente_validacion: ["aprobado", "rechazado", "escalado"],
   aprobado: ["nota_credito_emitida", "cerrado"],
@@ -58,7 +58,7 @@ export default function CasoDetallePage() {
           <button key={a} disabled={mut.isPending}
                   onClick={() => mut.mutate(a)}
                   className="rounded-sm border border-border bg-card px-3 py-2 text-xs font-medium text-graphite transition-colors hover:bg-cloud disabled:opacity-50">
-            {ESTADOS_LABEL[a as EstadoPostventa] ?? a}
+            {ESTADOS_LABEL[a] ?? a}
           </button>
         ))}
         {acciones.length === 0 && (
