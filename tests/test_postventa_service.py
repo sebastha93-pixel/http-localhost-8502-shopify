@@ -115,6 +115,21 @@ def test_notificar_estado_sin_plantilla_no_envia(monkeypatch):
     assert enviados == []
 
 
+def test_notificar_estado_rechazo_incluye_motivo(monkeypatch):
+    # Si Meta rechaza, el timeline debe decir POR QUÉ (diagnóstico directo).
+    monkeypatch.setattr(svc.whatsapp_cloud, "enviar_texto",
+                        lambda tel, msg: {"enviado": False,
+                                          "detalle": "(#131047) Re-engagement message"})
+    eventos = []
+    monkeypatch.setattr(svc, "registrar_evento",
+                        lambda *a, **k: eventos.append(a))
+    caso = {"id": "c1", "customer_phone": "3001234567", "case_number": "PV-2026-0004"}
+    svc._notificar_estado(caso, "aprobado")
+    assert len(eventos) == 1
+    assert "no entregado" in eventos[0][2]
+    assert "131047" in eventos[0][2]  # el motivo de Meta queda en el timeline
+
+
 def test_notificar_estado_excepcion_registra_timeline(monkeypatch):
     # Spec §7.2: si el envío WhatsApp lanza excepción, el caso NO se rompe
     # y queda un evento de timeline "no entregado".
