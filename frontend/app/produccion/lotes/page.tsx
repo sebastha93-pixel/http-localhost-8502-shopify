@@ -11,7 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { Clock, Scissors, User, Package, Check } from "lucide-react";
+import { Clock, Scissors, User, Package, Check, ArrowRight } from "lucide-react";
 
 interface OrdenCorte {
   id: string;
@@ -90,6 +90,23 @@ function etiquetaEstado(oc: OrdenCorte, ruta?: Ruta): { texto: string; tone: str
 function diasDesde(iso?: string) {
   if (!iso) return null;
   return Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
+}
+
+/** Qué sigue para este lote — para que se entienda la acción sin capacitación. */
+function siguienteAccion(oc: OrdenCorte, ruta?: Ruta): { texto: string; hecho?: boolean } | null {
+  if (oc.estado === "borrador")   return { texto: "Autoriza y pistolea los rollos para cortar" };
+  if (oc.estado === "autorizada") return { texto: "Pistolea los rollos y sube el informe de corte" };
+  if (oc.estado === "en_proceso") return { texto: "Sube el informe de corte para cerrar el lote" };
+  if (oc.estado !== "cortada")    return null;
+  if (!ruta)                      return { texto: "Cuenta los insumos y genera la remisión de confección" };
+  const e = ruta.etapa;
+  if (["asignado", "aceptado", "en_confeccion"].includes(e))
+    return { texto: "Sube la remisión de recogida cuando salga a lavandería" };
+  if (e === "lavanderia")            return { texto: "Marca recibido cuando llegue a terminación" };
+  if (e === "terminacion_recibida")  return { texto: "Marca terminación lista al terminar el proceso" };
+  if (e === "terminacion_terminada") return { texto: "Marca ingreso a bodega para cerrar el lote" };
+  if (e === "despachado")            return { texto: "Lote completo — en bodega", hecho: true };
+  return null;
 }
 
 export default function LotesPage() {
@@ -197,6 +214,7 @@ function LoteCard({ oc, ruta }: { oc: OrdenCorte; ruta?: Ruta }) {
   const dias = diasDesde(ruta?.asignado_at || oc.created_at);
   const actual = pasoActual(oc, ruta);
   const estado = etiquetaEstado(oc, ruta);
+  const siguiente = siguienteAccion(oc, ruta);
 
   return (
     <Link href={`/produccion/corte/${oc.id}`} className="group block">
@@ -265,6 +283,16 @@ function LoteCard({ oc, ruta }: { oc: OrdenCorte; ruta?: Ruta }) {
               </div>
             </div>
           </div>
+
+          {/* Qué sigue — acción clara para el operario */}
+          {siguiente && (
+            <div className={`flex items-center gap-2 rounded-sm px-3 py-2 text-[0.7rem] ${siguiente.hecho ? "bg-teal/[0.06] text-teal" : "bg-navy-600/[0.05] text-navy-600"}`}>
+              {siguiente.hecho
+                ? <Check className="h-3.5 w-3.5 flex-none" />
+                : <ArrowRight className="h-3.5 w-3.5 flex-none" />}
+              <span className="font-medium">{siguiente.texto}</span>
+            </div>
+          )}
 
           {/* Terminación si existe */}
           {(ruta?.lavanderia?.nombre || ruta?.terminacion?.nombre) && (
