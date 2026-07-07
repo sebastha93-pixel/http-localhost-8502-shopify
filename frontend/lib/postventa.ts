@@ -37,6 +37,39 @@ export const ESTADOS_LABEL: Record<EstadoPostventa, string> = {
   escalado: "Escalado",
 };
 
+// Catálogos para el formulario de nuevo caso (espejo del backend).
+export const TIPOS: { value: string; label: string }[] = [
+  { value: "cambio_talla", label: "Cambio de talla" },
+  { value: "cambio_ref", label: "Cambio por otra referencia" },
+  { value: "reembolso", label: "Reembolso (devolución de dinero)" },
+  { value: "bono", label: "Bono / gift card" },
+  { value: "garantia", label: "Garantía" },
+];
+
+export const MOTIVOS: { value: string; label: string }[] = [
+  { value: "talla_pequena", label: "Talla pequeña" },
+  { value: "talla_grande", label: "Talla grande" },
+  { value: "no_le_gusto_como_quedo", label: "No le gustó cómo le quedó" },
+  { value: "color_diferente", label: "Color diferente al esperado" },
+  { value: "producto_defectuoso", label: "Producto defectuoso" },
+  { value: "producto_equivocado", label: "Producto equivocado" },
+  { value: "pedido_incompleto", label: "Pedido incompleto" },
+  { value: "demora_entrega", label: "Demora en la entrega" },
+  { value: "arrepentimiento", label: "Se arrepintió de la compra" },
+  { value: "calidad_percibida", label: "Calidad percibida" },
+  { value: "error_asesoria", label: "Error de asesoría" },
+  { value: "error_logistico", label: "Error logístico" },
+  { value: "cambio_por_otro", label: "Cambio por otro producto" },
+  { value: "garantia", label: "Garantía" },
+  { value: "otro", label: "Otro" },
+];
+
+export const PRIORIDADES: { value: string; label: string }[] = [
+  { value: "baja", label: "Baja" },
+  { value: "media", label: "Media" },
+  { value: "alta", label: "Alta" },
+];
+
 export const listarCasos = (status?: string) =>
   api.get<CasoPostventa[]>(`/api/postventa/casos${status ? `?status=${status}` : ""}`);
 

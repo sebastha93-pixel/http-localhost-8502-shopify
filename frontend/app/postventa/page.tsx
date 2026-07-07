@@ -21,6 +21,12 @@ export default function PostventaPage() {
 
   return (
     <PageShell title="Postventa" subtitle="Cambios, devoluciones y garantías">
+      <div className="flex justify-end mb-4">
+        <Link href="/postventa/nuevo"
+          className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-navy-700">
+          + Nuevo caso
+        </Link>
+      </div>
       {dash.data && (
         <div className="grid grid-cols-3 gap-3 mb-4">
           <KpiBox label="Abiertos" value={dash.data.abiertos} />
