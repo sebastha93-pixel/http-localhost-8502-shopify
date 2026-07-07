@@ -291,6 +291,34 @@ def enriquecer(pedidos: list) -> list:
                     except Exception:
                         pass
 
+            # ── Guía real desde el fulfillment de Shopify ─────────────────────
+            # Shopify guarda transportadora + número + link de rastreo en el
+            # fulfillment. Antes se ignoraban → la guía no aparecía salvo que
+            # Melonn mandara su link o alguien la digitara a mano.
+            # Buscamos en TODOS los fulfillments (a veces el primero viene sin
+            # tracking y un fulfillment posterior sí lo trae).
+            def _primer(*vals):
+                for v in vals:
+                    if isinstance(v, list):
+                        v = v[0] if v else None
+                    if v:
+                        return str(v).strip()
+                return ""
+
+            for f in fulls:
+                num = _primer(f.get("tracking_number"), f.get("tracking_numbers"))
+                comp = _primer(f.get("tracking_company"))
+                url = _primer(f.get("tracking_url"), f.get("tracking_urls"))
+                if num and not p.get("guia_real"):
+                    p["guia_real"] = num
+                if comp and not p.get("carrier_real"):
+                    p["carrier_real"] = comp
+                # link_guia: si Melonn no dejó link, usar el de Shopify
+                if url and not p.get("link_guia"):
+                    p["link_guia"] = url
+                if p.get("guia_real") and p.get("carrier_real"):
+                    break
+
         # Tienda / canal
         if not p.get("tienda"):
             p["tienda"] = "MALE'DENIM"
