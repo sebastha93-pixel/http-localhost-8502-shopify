@@ -76,3 +76,23 @@ def test_cambiar_estado_invalido(monkeypatch):
                         lambda cid: {"id": cid, "status": "creado"})
     with pytest.raises(ValueError, match="transicion_invalida"):
         svc.cambiar_estado("c1", "factura_emitida", actor="u1")
+
+
+def test_notificar_estado_envia_wa(monkeypatch):
+    enviados = []
+    monkeypatch.setattr(svc.whatsapp_cloud, "enviar_texto",
+                        lambda tel, msg: enviados.append((tel, msg)) or {"enviado": True})
+    monkeypatch.setattr(svc, "registrar_evento", lambda *a, **k: {})
+    caso = {"id": "c1", "customer_phone": "3001234567", "case_number": "PV-2026-0004"}
+    svc._notificar_estado(caso, "aprobado")
+    assert len(enviados) == 1
+    assert "PV-2026-0004" in enviados[0][1]
+
+
+def test_notificar_estado_sin_plantilla_no_envia(monkeypatch):
+    enviados = []
+    monkeypatch.setattr(svc.whatsapp_cloud, "enviar_texto",
+                        lambda tel, msg: enviados.append((tel, msg)))
+    caso = {"id": "c1", "customer_phone": "3001234567", "case_number": "PV-2026-0004"}
+    svc._notificar_estado(caso, "pendiente_validacion")  # sin plantilla
+    assert enviados == []

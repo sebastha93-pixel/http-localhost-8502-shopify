@@ -14,6 +14,7 @@ from typing import Optional
 from supabase import create_client, Client
 
 from backend.services import postventa_logic as L
+from backend.services import whatsapp_cloud
 
 log = logging.getLogger("postventa")
 _client: Optional[Client] = None
@@ -155,6 +156,33 @@ def cambiar_estado(case_id: str, nuevo_estado: str, *, actor: str = "sistema",
     return caso_actualizado
 
 
+PLANTILLAS_WA: dict[str, str] = {
+    "aprobado": "¡Hola! 💛 Tu solicitud {case_number} en MALE Denim fue APROBADA. "
+                "Pronto te contamos los siguientes pasos.",
+    "nota_credito_emitida": "Generamos tu nota crédito para la solicitud {case_number}. "
+                            "Ya quedó en el sistema ✅.",
+    "factura_emitida": "¡Listo! Tu cambio de la solicitud {case_number} va en camino. "
+                       "Gracias por confiar en MALE Denim 💛.",
+    "rechazado": "Sobre tu solicitud {case_number}: no fue posible aprobarla. "
+                 "Escríbenos y con gusto te explicamos.",
+}
+
+
 def _notificar_estado(caso: dict, estado: str) -> None:
-    """Placeholder — se implementa en la tarea de notificaciones (Task 7)."""
+    """Envía WhatsApp en los momentos clave. Nunca bloquea el flujo del caso."""
+    plantilla = PLANTILLAS_WA.get(estado)
+    telefono = (caso.get("customer_phone") or "").strip()
+    if not plantilla or not telefono:
+        return None
+    mensaje = plantilla.format(case_number=caso.get("case_number", ""))
+    try:
+        res = whatsapp_cloud.enviar_texto(telefono, mensaje)
+        ok = bool(res.get("enviado")) if isinstance(res, dict) else False
+        registrar_evento(
+            caso["id"], "notificacion_wa",
+            f"WhatsApp '{estado}' {'enviado' if ok else 'no entregado'}",
+            created_by="sistema",
+        )
+    except Exception as e:  # notificación es secundaria: no romper el caso
+        log.warning(f"[postventa] fallo notificacion wa: {e}")
     return None
