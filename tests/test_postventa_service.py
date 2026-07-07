@@ -58,6 +58,23 @@ def test_crear_caso_tipo_invalido(monkeypatch):
         svc.crear_caso(tipo="xxx", reason="talla_pequena")
 
 
+def test_crear_caso_incluye_brand_id_default(monkeypatch):
+    monkeypatch.delenv("BRAND_ID", raising=False)  # default 'male'
+    monkeypatch.setattr(svc, "_sb", lambda: FakeSupabase())
+    monkeypatch.setattr(svc, "_siguiente_consecutivo", lambda anio: 1)
+    caso = svc.crear_caso(tipo="cambio_talla", reason="talla_pequena")
+    assert caso["brand_id"] == "male"
+
+
+def test_crear_caso_respeta_brand_id_env(monkeypatch):
+    # El día que otra marca use su despliegue, BRAND_ID aísla sus datos.
+    monkeypatch.setenv("BRAND_ID", "lira")
+    monkeypatch.setattr(svc, "_sb", lambda: FakeSupabase())
+    monkeypatch.setattr(svc, "_siguiente_consecutivo", lambda anio: 1)
+    caso = svc.crear_caso(tipo="cambio_talla", reason="talla_pequena")
+    assert caso["brand_id"] == "lira"
+
+
 def test_cambiar_estado_valido(monkeypatch):
     fake = FakeSupabase()
     monkeypatch.setattr(svc, "_sb", lambda: fake)

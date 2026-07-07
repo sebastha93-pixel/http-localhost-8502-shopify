@@ -38,8 +38,19 @@ def _ahora() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _brand_id() -> str:
+    """Marca (tenant) del despliegue actual. Base para multi-tenant.
+
+    Cada despliegue sirve a UNA marca; se controla con la env var BRAND_ID.
+    El día que se comercialice a otra marca, su despliegue usa otro valor y
+    los datos quedan aislados por esta columna. Default 'male'.
+    """
+    return os.environ.get("BRAND_ID", "male").strip() or "male"
+
+
 def _siguiente_consecutivo(anio: int) -> int:
-    """Cuenta cuántos casos existen del año y devuelve el siguiente número.
+    """Cuenta cuántos casos existen del año PARA ESTA MARCA y devuelve el
+    siguiente número. El consecutivo es por marca (cada tenant su propia serie).
 
     Simple y suficiente para el volumen de MALE Denim. Si en el futuro hay
     concurrencia alta, se migra a una secuencia postgres.
@@ -50,6 +61,7 @@ def _siguiente_consecutivo(anio: int) -> int:
     inicio = f"{anio}-01-01T00:00:00+00:00"
     r = (sb.table("postventa_cases")
            .select("id", count="exact")
+           .eq("brand_id", _brand_id())
            .gte("created_at", inicio)
            .execute())
     return (getattr(r, "count", None) or 0) + 1
@@ -77,6 +89,7 @@ def crear_caso(*, tipo: str, reason: str, customer_email: str = "",
     case_number = L.formato_case_number(anio, _siguiente_consecutivo(anio))
 
     data = {
+        "brand_id": _brand_id(),
         "case_number": case_number,
         "shopify_order_id": shopify_order_id or None,
         "shopify_order_name": shopify_order_name or None,
@@ -100,7 +113,8 @@ def obtener_caso(case_id: str) -> Optional[dict]:
     sb = _sb()
     if sb is None:
         return None
-    r = sb.table("postventa_cases").select("*").eq("id", case_id).limit(1).execute()
+    r = (sb.table("postventa_cases").select("*")
+           .eq("id", case_id).eq("brand_id", _brand_id()).limit(1).execute())
     filas = r.data or []
     return filas[0] if filas else None
 
@@ -109,7 +123,7 @@ def listar_casos(status: Optional[str] = None) -> list[dict]:
     sb = _sb()
     if sb is None:
         return []
-    q = sb.table("postventa_cases").select("*")
+    q = sb.table("postventa_cases").select("*").eq("brand_id", _brand_id())
     if status:
         q = q.eq("status", status)
     r = q.order("created_at", desc=True).execute()
@@ -122,6 +136,7 @@ def registrar_evento(case_id: str, event_type: str, description: str = "",
     if sb is None:
         raise RuntimeError("supabase_no_configurado")
     data = {
+        "brand_id": _brand_id(),
         "case_id": case_id,
         "event_type": event_type,
         "description": description,
@@ -209,6 +224,7 @@ def agregar_item(case_id: str, *, original_sku: str = "", original_variant: str 
         raise RuntimeError("supabase_no_configurado")
     diferencia = L.calcular_diferencia(original_price, requested_price)
     data = {
+        "brand_id": _brand_id(),
         "case_id": case_id,
         "original_sku": original_sku or None,
         "original_variant": original_variant or None,
@@ -229,6 +245,7 @@ def agregar_evidencia(case_id: str, file_url: str, file_type: str = "",
     if sb is None:
         raise RuntimeError("supabase_no_configurado")
     data = {
+        "brand_id": _brand_id(),
         "case_id": case_id,
         "file_url": file_url,
         "file_type": file_type or None,
