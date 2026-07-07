@@ -15,6 +15,7 @@ from supabase import create_client, Client
 
 from backend.services import postventa_logic as L
 from backend.services import whatsapp_cloud
+from backend.services import clientes
 
 log = logging.getLogger("postventa")
 _client: Optional[Client] = None
@@ -186,3 +187,46 @@ def _notificar_estado(caso: dict, estado: str) -> None:
     except Exception as e:  # notificación es secundaria: no romper el caso
         log.warning(f"[postventa] fallo notificacion wa: {e}")
     return None
+
+
+def agregar_item(case_id: str, *, original_sku: str = "", original_variant: str = "",
+                 original_price: float = 0, requested_sku: str = "",
+                 requested_variant: str = "",
+                 requested_price: Optional[float] = None) -> dict:
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("supabase_no_configurado")
+    diferencia = L.calcular_diferencia(original_price, requested_price)
+    data = {
+        "case_id": case_id,
+        "original_sku": original_sku or None,
+        "original_variant": original_variant or None,
+        "original_price": original_price,
+        "requested_sku": requested_sku or None,
+        "requested_variant": requested_variant or None,
+        "requested_price": requested_price,
+        "price_difference": diferencia,
+        "item_status": "pendiente",
+    }
+    r = sb.table("postventa_items").insert(data).execute()
+    return (r.data or [data])[0]
+
+
+def agregar_evidencia(case_id: str, file_url: str, file_type: str = "",
+                      uploaded_by: Optional[str] = None) -> dict:
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("supabase_no_configurado")
+    data = {
+        "case_id": case_id,
+        "file_url": file_url,
+        "file_type": file_type or None,
+        "uploaded_by": uploaded_by,
+    }
+    r = sb.table("postventa_evidence").insert(data).execute()
+    return (r.data or [data])[0]
+
+
+def pedido_shopify(email: str = "", telefono: str = "") -> dict:
+    """Trae historial Shopify del cliente reutilizando el servicio existente."""
+    return clientes.clasificar(email=email, telefono=telefono)

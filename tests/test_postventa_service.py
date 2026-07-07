@@ -96,3 +96,25 @@ def test_notificar_estado_sin_plantilla_no_envia(monkeypatch):
     caso = {"id": "c1", "customer_phone": "3001234567", "case_number": "PV-2026-0004"}
     svc._notificar_estado(caso, "pendiente_validacion")  # sin plantilla
     assert enviados == []
+
+
+def test_agregar_item_calcula_diferencia(monkeypatch):
+    fake = FakeSupabase()
+    monkeypatch.setattr(svc, "_sb", lambda: fake)
+    item = svc.agregar_item("c1", original_sku="A-M", original_price=100000.0,
+                            requested_sku="A-L", requested_price=130000.0)
+    assert item["price_difference"] == 30000.0
+    assert item["item_status"] == "pendiente"
+
+
+def test_agregar_item_reembolso(monkeypatch):
+    monkeypatch.setattr(svc, "_sb", lambda: FakeSupabase())
+    item = svc.agregar_item("c1", original_sku="A-M", original_price=100000.0)
+    assert item["price_difference"] == -100000.0
+
+
+def test_pedido_shopify_reusa_clientes(monkeypatch):
+    monkeypatch.setattr(svc.clientes, "clasificar",
+                        lambda email="", telefono="": {"tier": "vip", "pedidos": []})
+    r = svc.pedido_shopify(email="a@b.com")
+    assert r["tier"] == "vip"
