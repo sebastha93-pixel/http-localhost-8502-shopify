@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -230,3 +231,20 @@ def agregar_evidencia(case_id: str, file_url: str, file_type: str = "",
 def pedido_shopify(email: str = "", telefono: str = "") -> dict:
     """Trae historial Shopify del cliente reutilizando el servicio existente."""
     return clientes.clasificar(email=email, telefono=telefono)
+
+
+def contadores_dashboard() -> dict:
+    """Contadores para el dashboard básico. Los KPIs profundos son Fase 6."""
+    casos = listar_casos()
+    por_estado = Counter(c.get("status", "?") for c in casos)
+    motivos = Counter(c.get("reason", "?") for c in casos)
+    cerrados = por_estado.get("cerrado", 0) + por_estado.get("rechazado", 0)
+    abiertos = len(casos) - cerrados
+    top = [{"motivo": m, "total": n} for m, n in motivos.most_common(5)]
+    return {
+        "por_estado": dict(por_estado),
+        "abiertos": abiertos,
+        "cerrados": cerrados,
+        "top_motivos": top,
+        "total": len(casos),
+    }

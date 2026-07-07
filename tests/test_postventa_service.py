@@ -118,3 +118,19 @@ def test_pedido_shopify_reusa_clientes(monkeypatch):
                         lambda email="", telefono="": {"tier": "vip", "pedidos": []})
     r = svc.pedido_shopify(email="a@b.com")
     assert r["tier"] == "vip"
+
+
+def test_contadores_dashboard(monkeypatch):
+    casos = [
+        {"status": "creado", "reason": "talla_pequena"},
+        {"status": "creado", "reason": "talla_pequena"},
+        {"status": "cerrado", "reason": "color_diferente"},
+        {"status": "aprobado", "reason": "talla_grande"},
+    ]
+    monkeypatch.setattr(svc, "listar_casos", lambda status=None: casos)
+    d = svc.contadores_dashboard()
+    assert d["por_estado"]["creado"] == 2
+    assert d["cerrados"] == 1
+    assert d["abiertos"] == 3
+    assert d["top_motivos"][0]["motivo"] == "talla_pequena"
+    assert d["top_motivos"][0]["total"] == 2
