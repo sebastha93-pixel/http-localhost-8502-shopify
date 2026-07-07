@@ -195,9 +195,18 @@ def _notificar_estado(caso: dict, estado: str) -> None:
     try:
         res = whatsapp_cloud.enviar_texto(telefono, mensaje)
         ok = bool(res.get("enviado")) if isinstance(res, dict) else False
+        # Guardar el motivo del rechazo (respuesta de Meta) para diagnóstico
+        # directo desde el timeline: ventana 24h, token, config, etc.
+        if ok:
+            resultado = "enviado"
+        else:
+            motivo_fallo = ""
+            if isinstance(res, dict):
+                motivo_fallo = str(res.get("motivo") or res.get("detalle") or "")[:150]
+            resultado = "no entregado" + (f" · {motivo_fallo}" if motivo_fallo else "")
         registrar_evento(
             caso["id"], "notificacion_wa",
-            f"WhatsApp '{estado}' {'enviado' if ok else 'no entregado'}",
+            f"WhatsApp '{estado}' {resultado}",
             created_by="sistema",
         )
     except Exception as e:  # notificación es secundaria: no romper el caso
