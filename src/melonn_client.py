@@ -547,6 +547,36 @@ def refrescar_un_pedido(identificador: str) -> dict:
 
     # Normalizar el detail al schema interno del caché.
     # Reusamos la lógica del list normalizer si el detail tiene los campos.
+    def _merge_webhook(viejo: dict, actualizado: dict) -> dict:
+        """Fusiona una actualización de webhook sobre el pedido en caché sin
+        borrar los campos enriquecidos desde Shopify (cliente/ciudad/producto/
+        guía). Regla: el webhook solo pisa un campo enriquecido si trae valor;
+        si viene vacío, se conserva el del caché."""
+        ENRIQUECIDOS = {
+            "tienda", "nombre_comprador", "telefono_comprador",
+            "ciudad_destino", "region_destino", "email_comprador",
+            "sku", "producto", "variante", "imagen_producto",
+            "precio_unitario", "cantidad", "line_items",
+            "fecha_despacho", "fecha_promesa", "fecha_entrega",
+            "guia_real", "carrier_real", "link_guia", "external_order_id",
+        }
+        def _vacio(v):
+            if v is None:
+                return True
+            if isinstance(v, str):
+                return not v.strip()
+            if isinstance(v, (int, float)):
+                return v == 0
+            if isinstance(v, (list, dict)):
+                return len(v) == 0
+            return False
+        merged = dict(viejo)
+        for k, v in actualizado.items():
+            if k in ENRIQUECIDOS and _vacio(v):
+                continue  # no borrar dato enriquecido con un vacío del webhook
+            merged[k] = v
+        return merged
+
     try:
         nuevo = _normalizar(detail)
     except Exception:
@@ -574,7 +604,13 @@ def refrescar_un_pedido(identificador: str) -> dict:
         p_om = (p.get("orden_melonn") or "").lstrip("Mm")
         p_ot = p.get("orden_tienda") or ""
         if (nuevo_om and p_om == nuevo_om) or (nuevo_ot and p_ot == nuevo_ot):
-            pedidos[i] = nuevo
+            # MERGE (no reemplazo): el webhook trae estado/logística frescos
+            # pero NO trae los campos enriquecidos desde Shopify (cliente,
+            # ciudad, producto, guía…). Reemplazar el pedido completo borraba
+            # esos datos → el pedido aparecía sin cliente/ciudad tras cada
+            # cambio de estado. Preservamos lo enriquecido si el webhook viene
+            # vacío en ese campo.
+            pedidos[i] = _merge_webhook(p, nuevo)
             encontrado = True
             break
 
