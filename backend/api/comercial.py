@@ -142,6 +142,55 @@ def clientes(
         raise HTTPException(503, f"Error: {str(e)[:200]}")
 
 
+@router.get("/asesores-map")
+def asesores_map(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """RF-01 — Diagnóstico: muestra el mapa actual SHOPIFY_USERS_MAP y los
+    user_id de Shopify vistos en pedidos recientes con el nombre que resuelven.
+    Sirve para identificar cuál id muestra 'Nombre 4' y corregirlo en Railway."""
+    import os as _os, json as _json
+    from datetime import timedelta
+    sm = _shopify_metrics()
+    try:
+        mapa_actual = _json.loads(_os.environ.get("SHOPIFY_USERS_MAP", "").strip() or "{}")
+    except Exception:
+        mapa_actual = {"__error__": "SHOPIFY_USERS_MAP no es JSON válido"}
+
+    vistos: dict = {}
+    try:
+        from shopify_client import _get
+        hoy = sm.hoy_bogota()
+        d = hoy - timedelta(days=45)
+        while d <= hoy:
+            try:
+                resp = _get("/orders.json", {
+                    "status": "any",
+                    "created_at_min": sm._iso_inicio(d),
+                    "created_at_max": sm._iso_fin(d),
+                    "limit": 250, "fields": "id,user_id",
+                })
+                for o in (resp.get("orders") or []):
+                    uid = o.get("user_id")
+                    if uid:
+                        vistos[str(uid)] = vistos.get(str(uid), 0) + 1
+            except Exception:
+                pass
+            d += timedelta(days=1)
+    except Exception as e:
+        return {"mapa_actual": mapa_actual, "error": str(e)[:200]}
+
+    asesores = [
+        {"user_id": uid, "pedidos_45d": n,
+         "nombre_actual": sm._nombre_asesor(uid),
+         "mapeado": uid in mapa_actual}
+        for uid, n in sorted(vistos.items(), key=lambda x: -x[1])
+    ]
+    return {
+        "mapa_actual": mapa_actual,
+        "asesores_vistos": asesores,
+        "instruccion": "Edita SHOPIFY_USERS_MAP en Railway: reemplaza el nombre del user_id que muestre 'Nombre 4' por 'Manuela Gómez'.",
+    }
+
+
 @router.get("/debug/ordenes-hoy")
 def debug_ordenes_hoy(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     """
