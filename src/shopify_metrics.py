@@ -79,6 +79,34 @@ def _fetch_orders_dia(d: date, status: str = "any") -> list:
     return orders
 
 
+def _fetch_orders_rango(desde: date, hasta: date, fields: str,
+                        status: str = "any") -> list:
+    """Trae TODAS las órdenes del rango [desde, hasta] en UNA pasada con
+    paginación por cursor — en vez de una llamada por día. Antes: 1 request
+    por día (30 para 30d, 365 para YTD) y truncaba en 250 si un día tenía
+    más. Ahora ~N/250 requests para todo el rango, sin truncar."""
+    from shopify_client import paginar
+    out: list = []
+    params = {
+        "status": status,
+        "created_at_min": _iso_inicio(desde),
+        "created_at_max": _iso_fin(hasta),
+        "limit": 250,
+        "fields": fields,
+    }
+    try:
+        for page in paginar("/orders.json", "orders", params):
+            out.extend(page)
+    except Exception as e:
+        import logging as _lg
+        _lg.getLogger("shopify_metrics").warning(f"rango fetch: {e}")
+        try:
+            out = _get("/orders.json", params).get("orders", []) or []
+        except Exception:
+            pass
+    return out
+
+
 def _revenue_sin_iva(o: dict) -> float:
     """
     Revenue de UN orden SIN IVA — alineado con "Total sales" de Shopify Home.
@@ -182,22 +210,18 @@ def top_productos(n: int = 5, dias: int = 30) -> list:
         hoy = hoy_bogota()
         agregado: dict = defaultdict(lambda: {"revenue": 0.0, "unidades": 0, "nombre": "", "sku": ""})
 
-        for i in range(dias):
-            d = hoy - timedelta(days=i)
-            try:
-                orders = _fetch_orders_dia(d)
-            except Exception:
-                continue
-            for o in orders:
-                for it in o.get("line_items") or []:
-                    sku = (it.get("sku") or "").strip() or it.get("title") or "—"
-                    nombre = it.get("title") or sku
-                    precio = float(it.get("price") or 0)
-                    qty    = int(it.get("quantity") or 0)
-                    agregado[sku]["sku"]      = sku
-                    agregado[sku]["nombre"]   = nombre
-                    agregado[sku]["revenue"] += precio * qty
-                    agregado[sku]["unidades"]+= qty
+        desde_tp = hoy - timedelta(days=max(dias - 1, 0))
+        orders = _fetch_orders_rango(desde_tp, hoy, "id,line_items,cancelled_at")
+        for o in orders:
+            for it in o.get("line_items") or []:
+                sku = (it.get("sku") or "").strip() or it.get("title") or "—"
+                nombre = it.get("title") or sku
+                precio = float(it.get("price") or 0)
+                qty    = int(it.get("quantity") or 0)
+                agregado[sku]["sku"]      = sku
+                agregado[sku]["nombre"]   = nombre
+                agregado[sku]["revenue"] += precio * qty
+                agregado[sku]["unidades"]+= qty
 
         ranked = sorted(agregado.values(), key=lambda x: x["revenue"], reverse=True)[:n]
         total = sum(p["revenue"] for p in agregado.values()) or 1.0
@@ -515,21 +539,14 @@ def desglose_ventas(
         asesor_agg: dict = defaultdict(lambda: {"ventas": 0.0, "num_pedidos": 0, "unidades": 0})
         unidades_total = 0
 
-        d = desde
+        # Optimizado: UNA pasada por todo el rango (paginación por cursor).
+        _orders_rango = _fetch_orders_rango(
+            desde, hasta,
+            "id,total_price,subtotal_price,total_tax,taxes_included,total_discounts,source_name,user_id,cancelled_at,line_items",
+        )
+        d = hasta
         while d <= hasta:
-            try:
-                params = {
-                    "status": "any",
-                    "created_at_min": _iso_inicio(d),
-                    "created_at_max": _iso_fin(d),
-                    "limit": 250,
-                    # line_items para contar unidades vendidas (UPT).
-                    "fields": "id,total_price,subtotal_price,total_tax,taxes_included,total_discounts,source_name,user_id,cancelled_at,line_items",
-                }
-                resp = _get("/orders.json", params)
-                orders = resp.get("orders", []) or []
-            except Exception:
-                orders = []
+            orders = _orders_rango
 
             for o in orders:
                 # Excluir cancelados del cálculo de revenue
@@ -665,19 +682,13 @@ def ventas_por_fit_talla(periodo: str = "30d",
         unid_total = 0
         canales_vistos: set = set()
 
-        d = desde
+        _orders_rango = _fetch_orders_rango(
+            desde, hasta,
+            "id,total_price,total_tax,source_name,cancelled_at,line_items",
+        )
+        d = hasta
         while d <= hasta:
-            try:
-                resp = _get("/orders.json", {
-                    "status": "any",
-                    "created_at_min": _iso_inicio(d),
-                    "created_at_max": _iso_fin(d),
-                    "limit": 250,
-                    "fields": "id,total_price,total_tax,source_name,cancelled_at,line_items",
-                })
-                orders = resp.get("orders", []) or []
-            except Exception:
-                orders = []
+            orders = _orders_rango
 
             for o in orders:
                 if o.get("cancelled_at"):
