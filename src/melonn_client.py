@@ -117,6 +117,65 @@ _DB_PATH        = Path(__file__).parent.parent / "data" / "db" / "maledenim.db"
 _JSON_BOOTSTRAP = Path(__file__).parent.parent / "data" / "logistica" / "bootstrap.json"
 _SB_TABLA       = "melonn_cache"    # tabla en Supabase
 
+# Campos que se enriquecen desde Shopify/detail y que NO deben re-consultarse
+# ni borrarse: se heredan del caché entre syncs (traer-y-guardar) y se
+# preservan cuando un webhook actualiza el estado del pedido.
+_CAMPOS_ENRIQUECIDOS = (
+    "tienda", "nombre_comprador", "telefono_comprador",
+    "ciudad_destino", "region_destino", "email_comprador",
+    "sku", "producto", "variante", "imagen_producto",
+    "precio_unitario", "cantidad", "line_items",
+    "fecha_despacho", "fecha_promesa", "fecha_entrega",
+    "guia_real", "carrier_real", "link_guia", "external_order_id",
+)
+
+
+def _campo_vacio(v) -> bool:
+    if v is None:
+        return True
+    if isinstance(v, str):
+        return not v.strip()
+    if isinstance(v, (int, float)):
+        return v == 0
+    if isinstance(v, (list, dict)):
+        return len(v) == 0
+    return False
+
+
+def _clave_pedido(p: dict) -> str:
+    """Clave estable de un pedido: prioriza orden_melonn, cae a orden_tienda."""
+    om = (p.get("orden_melonn") or "").lstrip("Mm")
+    if om:
+        return f"M{om}"
+    return f"T{p.get('orden_tienda') or ''}"
+
+
+def _heredar_enriquecidos(frescos: list) -> list:
+    """Copia los campos enriquecidos del caché anterior a los pedidos frescos
+    de Melonn, para no re-consultar Shopify lo que ya trajimos. Solo rellena
+    campos vacíos del pedido fresco — el estado/logística fresco manda."""
+    try:
+        hit = _cache_leer(ignorar_ttl=True)
+    except Exception:
+        hit = None
+    if not hit:
+        return frescos
+    viejos = hit[0] or []
+    idx = {_clave_pedido(p): p for p in viejos}
+    heredados = 0
+    for p in frescos:
+        prev = idx.get(_clave_pedido(p))
+        if not prev:
+            continue
+        for c in _CAMPOS_ENRIQUECIDOS:
+            if _campo_vacio(p.get(c)) and not _campo_vacio(prev.get(c)):
+                p[c] = prev[c]
+                if c == "nombre_comprador":
+                    heredados += 1
+    if heredados:
+        log.info(f"[enrich] {heredados} pedidos heredaron datos del caché (sin re-consultar Shopify)")
+    return frescos
+
 # ── Clasificación de estados ───────────────────────────────────────────────────
 #
 # Fuente: documentación oficial API Melonn (31 estados definidos)
@@ -1136,7 +1195,13 @@ def _fetch_api() -> list:
         if sub in ("pendiente_despacho", "en_transito", "novedad", "entregado"):
             resultado.append(p)
 
-    # Enriquecer con datos de cliente y fechas desde Shopify (batch)
+    # Traer-y-guardar: heredar del caché anterior los campos ya enriquecidos
+    # (cliente, ciudad, producto, guía) para NO volver a consultarlos en
+    # Shopify. El enricher salta los pedidos que ya tienen nombre_comprador,
+    # así que solo consulta los NUEVOS o los que aún no se enriquecieron.
+    resultado = _heredar_enriquecidos(resultado)
+
+    # Enriquecer con datos de cliente y fechas desde Shopify (solo faltantes)
     if _SHOPIFY_ENRICHER_OK and resultado:
         try:
             resultado = _enricher.enriquecer(resultado)
