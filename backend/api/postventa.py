@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from backend.core.security import CurrentUser, require_permission
 from backend.services import postventa as svc
+from backend.services import postventa_siigo as siigo_svc
 
 router = APIRouter(prefix="/api/postventa", tags=["postventa"])
 
@@ -108,3 +109,13 @@ def buscar_shopify(email: str = "", telefono: str = "",
 @router.get("/dashboard")
 def dashboard(_: CurrentUser = Depends(require_permission("postventa", "ver"))):
     return svc.contadores_dashboard()
+
+
+@router.get("/siigo/discovery")
+def siigo_discovery(
+    _: CurrentUser = Depends(require_permission("postventa", "modificar")),
+):
+    """FASE 0 del motor fiscal: descubrimiento SOLO LECTURA de la config Siigo
+    (tipos de doc NC/FV, impuestos, formas de pago, vendedores) + muestra de
+    facturas para ubicar el enlace con el pedido Shopify. No emite nada."""
+    return siigo_svc.diagnostico()
