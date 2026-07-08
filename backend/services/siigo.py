@@ -218,3 +218,75 @@ def _refrescar_en_background(desde: Optional[str]) -> None:
                 _refresh_en_curso.discard(key)
 
     threading.Thread(target=_run, daemon=True, name="siigo-refresh").start()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# INVENTARIO Y VENTAS POR TIENDA — RF-06 / RF-03 (Módulo Inventario/Comercial)
+# ═══════════════════════════════════════════════════════════════════════
+# Las tiendas físicas (Florida, Arrayanes) llevan su inventario y ventas en
+# Siigo. Antes de armar los reportes hay que descubrir CÓMO están modeladas:
+# ¿bodegas (warehouses)? ¿centros de costo? ¿sucursales? Estas funciones
+# exponen la estructura cruda para confirmarlo.
+
+def listar_bodegas() -> list[dict]:
+    """GET /warehouses — bodegas de Siigo (posible fuente de stock por tienda)."""
+    try:
+        data = siigo_get("/warehouses")
+        # Siigo devuelve lista directa o {results:[...]}
+        if isinstance(data, list):
+            return data
+        return data.get("results") or data.get("data") or []
+    except Exception as e:
+        log.warning(f"[siigo] warehouses: {e}")
+        return []
+
+
+def listar_centros_costo() -> list[dict]:
+    """GET /cost-centers — centros de costo (posible etiqueta de tienda en ventas)."""
+    try:
+        data = siigo_get("/cost-centers")
+        if isinstance(data, list):
+            return data
+        return data.get("results") or data.get("data") or []
+    except Exception as e:
+        log.warning(f"[siigo] cost-centers: {e}")
+        return []
+
+
+def muestra_productos(limit: int = 5) -> dict:
+    """Muestra cruda de /products para ver cómo viene el stock (available_quantity,
+    warehouses, etc.) y decidir cómo sacar el inventario por tienda."""
+    try:
+        data = siigo_get("/products", {"page": 1, "page_size": limit})
+        results = data.get("results") or data.get("data") or (data if isinstance(data, list) else [])
+        return {"total": data.get("pagination", {}).get("total_results") if isinstance(data, dict) else None,
+                "muestra": results[:limit]}
+    except Exception as e:
+        return {"error": str(e)[:200]}
+
+
+def muestra_facturas_venta(desde: Optional[str] = None, limit: int = 3) -> dict:
+    """Muestra cruda de /invoices (facturas de venta) para ver cómo se etiqueta
+    la tienda/sucursal en cada factura (cost_center, warehouse, seller, etc.)."""
+    try:
+        params = {"page": 1, "page_size": limit}
+        if desde:
+            params["created_start"] = desde
+        data = siigo_get("/invoices", params)
+        results = data.get("results") or data.get("data") or (data if isinstance(data, list) else [])
+        return {"total": data.get("pagination", {}).get("total_results") if isinstance(data, dict) else None,
+                "muestra": results[:limit]}
+    except Exception as e:
+        return {"error": str(e)[:200]}
+
+
+def descubrir_estructura_tiendas() -> dict:
+    """Diagnóstico único: junta bodegas, centros de costo y muestras de productos
+    y facturas para confirmar cómo están Florida y Arrayanes en Siigo."""
+    return {
+        "configurado":   siigo_configurado(),
+        "bodegas":       listar_bodegas(),
+        "centros_costo": listar_centros_costo(),
+        "productos":     muestra_productos(limit=3),
+        "facturas":      muestra_facturas_venta(limit=2),
+    }

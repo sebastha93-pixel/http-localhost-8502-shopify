@@ -49,3 +49,17 @@ def productos(
         return {"status": status, "total": len(items), "productos": items}
     except Exception as e:
         raise HTTPException(503, f"Error: {str(e)[:200]}")
+
+
+@router.get("/siigo/descubrir")
+def siigo_descubrir(_: CurrentUser = Depends(require_role("admin"))) -> dict:
+    """RF-06/RF-03 — Diagnóstico: estructura cruda de Siigo (bodegas, centros de
+    costo, muestra de productos y facturas) para confirmar cómo están modeladas
+    Florida y Arrayanes antes de construir los reportes por tienda."""
+    from backend.services import siigo
+    if not siigo.siigo_configurado():
+        raise HTTPException(503, "Siigo no configurado (faltan SIIGO_* en Railway).")
+    try:
+        return siigo.descubrir_estructura_tiendas()
+    except Exception as e:
+        raise HTTPException(503, f"siigo: {str(e)[:200]}")
