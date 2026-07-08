@@ -125,7 +125,7 @@ _CAMPOS_ENRIQUECIDOS = (
     "ciudad_destino", "region_destino", "email_comprador",
     "sku", "producto", "variante", "imagen_producto",
     "precio_unitario", "cantidad", "line_items",
-    "fecha_despacho", "fecha_promesa", "fecha_entrega",
+    "fecha_despacho", "fecha_despacho_confiable", "fecha_promesa", "fecha_entrega",
     "guia_real", "carrier_real", "link_guia", "external_order_id",
 )
 
@@ -1356,9 +1356,16 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
     # (= orden_tienda en nuestro modelo), no el internal_order_number.
     indices = []
     for i, p in enumerate(pedidos):
-        if p.get("nombre_comprador"):
+        if not p.get("orden_tienda"):
             continue
-        if p.get("orden_tienda"):
+        # (a) pedidos manuales sin datos de cliente
+        falta_cliente = not p.get("nombre_comprador")
+        # (b) pedidos EN TRÁNSITO cuya fecha de despacho aún no viene de Melonn
+        #     (la de Shopify = fecha del registro de fulfillment, no del despacho
+        #     real → inflaba los días en tránsito y disparaba RIESGO falso).
+        falta_despacho = (p.get("sub_estado_logistico") == "en_transito"
+                          and not p.get("fecha_despacho_confiable"))
+        if falta_cliente or falta_despacho:
             indices.append(i)
 
     if not indices:
@@ -1466,9 +1473,18 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
         if direccion and not p.get("direccion"):
             p["direccion"] = direccion
 
-        # Fechas (formato ISO YYYY-MM-DD)
+        # Fecha de despacho REAL de Melonn — es la fuente autoritativa
+        # (Shopify da la fecha del registro de fulfillment, no del despacho).
+        # Por eso dispatch_date SIEMPRE gana y se marca como confiable.
+        dd = detail.get("dispatch_date") or ""
+        if dd:
+            try:
+                p["fecha_despacho"] = str(dd).split("T")[0]
+                p["fecha_despacho_confiable"] = True
+            except Exception:
+                pass
+        # Entrega / promesa: solo rellenar si faltan.
         for src_key, dst_key in [
-            ("dispatch_date",  "fecha_despacho"),
             ("delivery_date",  "fecha_entrega"),
             ("promise_date",   "fecha_promesa"),
         ]:

@@ -280,8 +280,15 @@ def enriquecer(pedidos: list) -> list:
         fulls = o.get("fulfillments") or []
         if fulls:
             f0 = fulls[0]
-            # fecha_despacho: solo rellenar si Melonn no la devolvió
-            if not p.get("fecha_despacho"):
+            # fecha_despacho: el created_at del fulfillment de Shopify es cuando
+            # se CREÓ el registro de fulfillment (Melonn lo crea al importar el
+            # pedido), NO cuando el paquete salió realmente. Para pedidos
+            # despachados por Melonn eso infla los "días en tránsito" y dispara
+            # RIESGO falso → la fecha real viene del dispatch_date de Melonn.
+            # Solo usamos la de Shopify como respaldo para envíos NO-Melonn.
+            comp0 = (f0.get("tracking_company") or "").strip().lower()
+            es_melonn = "melonn" in comp0
+            if not p.get("fecha_despacho") and not es_melonn:
                 raw_dt = f0.get("created_at") or ""
                 if raw_dt:
                     try:
