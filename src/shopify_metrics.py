@@ -599,6 +599,157 @@ def desglose_ventas(
     return _cached(key, _calc, ttl=ttl)
 
 
+# ─── RF-05: Ventas por Fit y Talla ────────────────────────────────────────────
+def _resolver_periodo(periodo: str, desde_custom: Optional[str],
+                      hasta_custom: Optional[str]) -> tuple:
+    """Devuelve (desde, hasta) para un período nombrado o custom."""
+    hoy = hoy_bogota()
+    if periodo == "hoy":      return hoy, hoy
+    if periodo == "ayer":     return hoy - timedelta(days=1), hoy - timedelta(days=1)
+    if periodo == "7d":       return hoy - timedelta(days=6), hoy
+    if periodo == "mes":      return hoy.replace(day=1), hoy
+    if periodo == "ytd":      return date(hoy.year, 1, 1), hoy
+    if periodo == "custom":
+        try:
+            d = datetime.fromisoformat((desde_custom or "")[:10]).date()
+            h = datetime.fromisoformat((hasta_custom or "")[:10]).date()
+            if h < d: d, h = h, d
+            if (h - d).days > 365: d = h - timedelta(days=365)
+            return d, h
+        except Exception:
+            pass
+    return hoy - timedelta(days=29), hoy   # 30d default
+
+
+def _mapa_tipos_producto() -> dict:
+    """product_id (str) → {fit (product_type), nombre}. Cache 30 min.
+    El Fit sale del 'tipo de producto' de Shopify (RF-05)."""
+    key = f"ptypes_{hoy_bogota().isoformat()}"
+
+    def _calc():
+        from shopify_client import paginar
+        m: dict = {}
+        try:
+            for page in paginar("/products.json", "products",
+                                {"status": "any", "limit": 250,
+                                 "fields": "id,product_type,title"}):
+                for p in page:
+                    m[str(p.get("id"))] = {
+                        "fit": (p.get("product_type") or "").strip() or "Sin tipo",
+                        "nombre": p.get("title") or "",
+                    }
+        except Exception:
+            pass
+        return m
+    return _cached(key, _calc, ttl=1800)
+
+
+def ventas_por_fit_talla(periodo: str = "30d",
+                         desde_custom: Optional[str] = None,
+                         hasta_custom: Optional[str] = None,
+                         canal: Optional[str] = None) -> dict:
+    """RF-05 — ventas netas, unidades, participación y ticket promedio por
+    Fit (tipo de producto) y por Talla (variante). Filtro opcional por canal."""
+    desde, hasta = _resolver_periodo(periodo, desde_custom, hasta_custom)
+    key = f"vft_{periodo}_{desde.isoformat()}_{hasta.isoformat()}_{canal or ''}"
+
+    def _calc():
+        tipos = _mapa_tipos_producto()
+
+        def _nuevo():
+            return {"ventas": 0.0, "unidades": 0, "pedidos": set()}
+        fit_agg: dict = defaultdict(_nuevo)
+        talla_agg: dict = defaultdict(_nuevo)
+        matriz: dict = defaultdict(lambda: {"ventas": 0.0, "unidades": 0})
+        neto_total = 0.0
+        unid_total = 0
+        canales_vistos: set = set()
+
+        d = desde
+        while d <= hasta:
+            try:
+                resp = _get("/orders.json", {
+                    "status": "any",
+                    "created_at_min": _iso_inicio(d),
+                    "created_at_max": _iso_fin(d),
+                    "limit": 250,
+                    "fields": "id,total_price,total_tax,source_name,cancelled_at,line_items",
+                })
+                orders = resp.get("orders", []) or []
+            except Exception:
+                orders = []
+
+            for o in orders:
+                if o.get("cancelled_at"):
+                    continue
+                canal_o = _canal_label(o.get("source_name", ""))
+                canales_vistos.add(canal_o)
+                if canal and canal_o != canal:
+                    continue
+                f = _factor_sin_iva(o)
+                oid = o.get("id")
+                for li in (o.get("line_items") or []):
+                    qty = int(li.get("quantity") or 0)
+                    if qty <= 0:
+                        continue
+                    linea_neto = float(li.get("price") or 0) * qty * f
+                    pid = str(li.get("product_id") or "")
+                    info = tipos.get(pid) or {}
+                    fit = info.get("fit") or (li.get("title") or "Sin tipo").split(" - ")[0].strip() or "Sin tipo"
+                    talla = (li.get("variant_title") or "").strip() or "Única"
+
+                    fit_agg[fit]["ventas"] += linea_neto
+                    fit_agg[fit]["unidades"] += qty
+                    fit_agg[fit]["pedidos"].add(oid)
+                    talla_agg[talla]["ventas"] += linea_neto
+                    talla_agg[talla]["unidades"] += qty
+                    talla_agg[talla]["pedidos"].add(oid)
+                    mk = f"{fit}||{talla}"
+                    matriz[mk]["ventas"] += linea_neto
+                    matriz[mk]["unidades"] += qty
+                    neto_total += linea_neto
+                    unid_total += qty
+            d += timedelta(days=1)
+
+        def _lista(agg: dict, campo: str) -> list:
+            out = []
+            for k, v in agg.items():
+                npd = len(v["pedidos"])
+                out.append({
+                    campo: k,
+                    "ventas": round(v["ventas"], 0),
+                    "unidades": v["unidades"],
+                    "num_pedidos": npd,
+                    "participacion": round(v["ventas"] / neto_total * 100, 1) if neto_total else 0,
+                    "ticket_promedio": round(v["ventas"] / npd, 0) if npd else 0,
+                })
+            out.sort(key=lambda x: x["ventas"], reverse=True)
+            return out
+
+        matriz_out = [
+            {"fit": mk.split("||")[0], "talla": mk.split("||")[1],
+             "ventas": round(mv["ventas"], 0), "unidades": mv["unidades"]}
+            for mk, mv in matriz.items()
+        ]
+        matriz_out.sort(key=lambda x: x["ventas"], reverse=True)
+
+        return {
+            "periodo": periodo,
+            "desde": desde.isoformat(),
+            "hasta": hasta.isoformat(),
+            "canal": canal or "todos",
+            "canales": sorted(canales_vistos),
+            "neto": round(neto_total, 0),
+            "unidades": unid_total,
+            "por_fit": _lista(fit_agg, "fit"),
+            "por_talla": _lista(talla_agg, "talla"),
+            "matriz": matriz_out,
+        }
+
+    ttl = 600 if periodo == "hoy" else 1800
+    return _cached(key, _calc, ttl=ttl)
+
+
 def inventario_shopify() -> dict:
     """
     Conteo de productos en Shopify por status:

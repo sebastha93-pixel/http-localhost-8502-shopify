@@ -50,6 +50,14 @@ interface DesgloseResp {
   por_asesor: Array<{ nombre: string; ventas: number; num_pedidos: number; unidades: number; upt: number; pct: number }>;
 }
 
+interface FitTallaResp {
+  neto: number;
+  unidades: number;
+  canales: string[];
+  por_fit:   Array<{ fit: string;   ventas: number; unidades: number; num_pedidos: number; participacion: number; ticket_promedio: number }>;
+  por_talla: Array<{ talla: string; ventas: number; unidades: number; num_pedidos: number; participacion: number; ticket_promedio: number }>;
+}
+
 type PeriodoDesglose = "hoy" | "ayer" | "7d" | "30d" | "mes" | "ytd" | "custom";
 
 function Sparkline({ data, height = 60 }: { data: number[]; height?: number }) {
@@ -98,7 +106,9 @@ export default function ComercialPage() {
   const hace30 = new Date(Date.now() - 29 * 86400_000).toISOString().slice(0, 10);
   const [rangoDesde, setRangoDesde] = useState<string>(hace30);
   const [rangoHasta, setRangoHasta] = useState<string>(hoyISO);
-  const [tabActivo, setTabActivo] = useState<"ventas" | "comp" | "clientes">("ventas");
+  const [tabActivo, setTabActivo] = useState<"ventas" | "comp" | "clientes" | "fittalla">("ventas");
+  const [periodoFT, setPeriodoFT] = useState<PeriodoDesglose>("30d");
+  const [canalFT, setCanalFT] = useState<string>("");
 
   const overview = useQuery<OverviewResp>({
     queryKey: ["comercial-overview"],
@@ -138,6 +148,15 @@ export default function ComercialPage() {
     enabled: tabActivo === "ventas" && (periodoDesglose !== "custom" || !!(rangoDesde && rangoHasta)),
   });
 
+  const ft = useQuery<FitTallaResp>({
+    queryKey: ["comercial-fittalla", periodoFT, canalFT],
+    queryFn: () => api.get<FitTallaResp>(
+      `/api/comercial/fit-talla?periodo=${periodoFT}${canalFT ? `&canal=${encodeURIComponent(canalFT)}` : ""}`),
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+    enabled: tabActivo === "fittalla",
+  });
+
   if (overview.isLoading) return <LoadingState label="Cargando métricas comerciales…" />;
   if (overview.error || !overview.data) return <ErrorState error={overview.error} onRetry={() => overview.refetch()} />;
 
@@ -165,6 +184,7 @@ export default function ComercialPage() {
           <TabsTrigger value="ventas">Ventas</TabsTrigger>
           <TabsTrigger value="comp">Comparativas</TabsTrigger>
           <TabsTrigger value="clientes">Clientes</TabsTrigger>
+          <TabsTrigger value="fittalla">Fit y Talla</TabsTrigger>
         </TabsList>
 
         {/* ─── TAB VENTAS ─── */}
@@ -481,11 +501,83 @@ export default function ComercialPage() {
             </>
           )}
         </TabsContent>
+
+        {/* ─── TAB FIT Y TALLA (RF-05) ─── */}
+        <TabsContent value="fittalla" className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Periodo</span>
+            <div className="inline-flex overflow-hidden rounded-sm border border-border bg-card">
+              {(["hoy","ayer","7d","30d","mes","ytd"] as PeriodoDesglose[]).map((pp) => (
+                <button key={pp} onClick={() => setPeriodoFT(pp)}
+                  className={`px-3 py-1.5 text-xs font-medium transition-colors ${periodoFT === pp ? "bg-ink-900 text-white" : "text-graphite hover:bg-cloud"}`}>
+                  {PERIODO_LABELS[pp]}
+                </button>
+              ))}
+            </div>
+            <select value={canalFT} onChange={(e) => setCanalFT(e.target.value)}
+              className="rounded-sm border border-border bg-card px-3 py-1.5 text-xs">
+              <option value="">Todos los canales</option>
+              {(ft.data?.canales || []).map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+
+          {ft.isLoading ? (
+            <LoadingState label="Cargando ventas por fit y talla…" />
+          ) : ft.error || !ft.data ? (
+            <ErrorState error={ft.error} onRetry={() => ft.refetch()} />
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <FitTallaTabla titulo="Ventas por Fit" col="Fit"
+                filas={ft.data.por_fit.map((r) => ({ nombre: r.fit, ...r }))} />
+              <FitTallaTabla titulo="Ventas por Talla" col="Talla"
+                filas={ft.data.por_talla.map((r) => ({ nombre: r.talla, ...r }))} />
+            </div>
+          )}
+        </TabsContent>
       </Tabs>
 
       <p className="mt-2 text-[0.65rem] text-graphite/70">
         Próximamente: códigos de descuento más usados · cohorts de retención.
       </p>
     </PageShell>
+  );
+}
+
+function FitTallaTabla({ titulo, col, filas }: {
+  titulo: string; col: string;
+  filas: Array<{ nombre: string; ventas: number; unidades: number; num_pedidos: number; participacion: number; ticket_promedio: number }>;
+}) {
+  return (
+    <Card>
+      <CardContent className="space-y-3 p-5">
+        <SectionHeading title={titulo} hint="Netas sin IVA" />
+        {filas.length === 0 ? (
+          <p className="py-4 text-center text-sm text-graphite">Sin ventas en este período.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="border-b border-border">
+                <tr>
+                  {[col, "Unidades", "Ventas netas", "Ticket", "% part."].map((h, i) => (
+                    <th key={h} className={`py-2 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i === 0 ? "text-left" : "text-right"}`}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {filas.map((r) => (
+                  <tr key={r.nombre} className="transition-colors hover:bg-cloud/50">
+                    <td className="py-2.5 font-medium text-ink-900">{r.nombre}</td>
+                    <td className="py-2.5 text-right text-ink-900 tabular-nums">{r.unidades.toLocaleString("es-CO")}</td>
+                    <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{formatMoney(r.ventas)}</td>
+                    <td className="py-2.5 text-right text-graphite tabular-nums">{formatMoney(r.ticket_promedio)}</td>
+                    <td className="py-2.5 text-right text-graphite tabular-nums">{r.participacion.toFixed(1)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

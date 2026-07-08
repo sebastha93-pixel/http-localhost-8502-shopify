@@ -247,6 +247,25 @@ def desglose(
         raise HTTPException(503, f"Error: {str(e)[:200]}")
 
 
+@router.get("/fit-talla")
+def fit_talla(
+    periodo: str = Query("30d", pattern="^(hoy|ayer|7d|30d|mes|ytd|custom)$"),
+    desde:   str = Query(""),
+    hasta:   str = Query(""),
+    canal:   str = Query(""),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
+) -> dict:
+    """RF-05 — Ventas por Fit y Talla (netas, unidades, participación, ticket)."""
+    try:
+        sm = _shopify_metrics()
+        return sm.ventas_por_fit_talla(
+            periodo=periodo, desde_custom=desde, hasta_custom=hasta,
+            canal=canal or None,
+        )
+    except Exception as e:
+        raise HTTPException(503, f"Error: {str(e)[:200]}")
+
+
 @router.get("/inventario")
 def inventario(
     _: CurrentUser = Depends(require_permission("comercial", "modificar")),
