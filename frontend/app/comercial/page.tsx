@@ -44,8 +44,10 @@ interface DesgloseResp {
   descuentos: number;
   num_pedidos: number;
   ticket_promedio: number;
-  por_canal:  Array<{ label: string;  ventas: number; num_pedidos: number; pct: number }>;
-  por_asesor: Array<{ nombre: string; ventas: number; num_pedidos: number; pct: number }>;
+  unidades?: number;
+  upt?: number;
+  por_canal:  Array<{ label: string;  ventas: number; num_pedidos: number; unidades: number; upt: number; pct: number }>;
+  por_asesor: Array<{ nombre: string; ventas: number; num_pedidos: number; unidades: number; upt: number; pct: number }>;
 }
 
 type PeriodoDesglose = "hoy" | "ayer" | "7d" | "30d" | "mes" | "ytd" | "custom";
@@ -266,7 +268,7 @@ export default function ComercialPage() {
                       <table className="w-full text-sm">
                         <thead className="border-b border-border">
                           <tr>
-                            {["Canal", "Pedidos", "Ventas", "%"].map((h, i) => (
+                            {["Canal", "Pedidos", "Unidades", "UPT", "Ventas", "%"].map((h, i) => (
                               <th key={h} className={`py-2 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i === 0 ? "text-left" : "text-right"}`}>
                                 {h}
                               </th>
@@ -278,6 +280,8 @@ export default function ComercialPage() {
                             <tr key={c.label} className="transition-colors hover:bg-cloud/50">
                               <td className="py-2.5 font-medium text-ink-900">{c.label}</td>
                               <td className="py-2.5 text-right text-ink-900 tabular-nums">{c.num_pedidos}</td>
+                              <td className="py-2.5 text-right text-ink-900 tabular-nums">{(c.unidades ?? 0).toLocaleString("es-CO")}</td>
+                              <td className="py-2.5 text-right text-graphite tabular-nums">{(c.upt ?? 0).toFixed(1)}</td>
                               <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{formatMoney(c.ventas)}</td>
                               <td className="py-2.5 text-right text-graphite tabular-nums">{c.pct.toFixed(1)}%</td>
                             </tr>
@@ -300,7 +304,7 @@ export default function ComercialPage() {
                       <table className="w-full text-sm">
                         <thead className="border-b border-border">
                           <tr>
-                            {["Asesor", "Pedidos", "Ventas netas", "Ticket promedio", "% participación"].map((h, i) => (
+                            {["Asesor", "Pedidos", "Unidades", "UPT", "Ventas netas", "Ticket promedio", "% participación"].map((h, i) => (
                               <th key={h} className={`py-2 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i === 0 ? "text-left" : "text-right"}`}>
                                 {h}
                               </th>
@@ -314,6 +318,8 @@ export default function ComercialPage() {
                               <tr key={a.nombre} className="transition-colors hover:bg-cloud/50">
                                 <td className="py-2.5 font-medium text-ink-900">{a.nombre}</td>
                                 <td className="py-2.5 text-right text-ink-900 tabular-nums">{a.num_pedidos}</td>
+                                <td className="py-2.5 text-right text-ink-900 tabular-nums">{(a.unidades ?? 0).toLocaleString("es-CO")}</td>
+                                <td className="py-2.5 text-right text-graphite tabular-nums">{(a.upt ?? 0).toFixed(1)}</td>
                                 <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{formatMoney(a.ventas)}</td>
                                 <td className="py-2.5 text-right text-graphite tabular-nums">{formatMoney(ticket)}</td>
                                 <td className="py-2.5 text-right text-graphite tabular-nums">{a.pct.toFixed(1)}%</td>
@@ -325,12 +331,16 @@ export default function ComercialPage() {
                           {(() => {
                             const totalPedidos = desg.data.por_asesor.reduce((s, a) => s + a.num_pedidos, 0);
                             const totalVentas  = desg.data.por_asesor.reduce((s, a) => s + a.ventas, 0);
+                            const totalUnid    = desg.data.por_asesor.reduce((s, a) => s + (a.unidades ?? 0), 0);
                             const ticketProm   = totalPedidos > 0 ? totalVentas / totalPedidos : 0;
+                            const uptTotal     = totalPedidos > 0 ? totalUnid / totalPedidos : 0;
                             const totalPct     = desg.data.por_asesor.reduce((s, a) => s + a.pct, 0);
                             return (
                               <tr>
                                 <td className="py-2.5 font-medium text-ink-900">Total</td>
                                 <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{totalPedidos}</td>
+                                <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{totalUnid.toLocaleString("es-CO")}</td>
+                                <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{uptTotal.toFixed(1)}</td>
                                 <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{formatMoney(totalVentas)}</td>
                                 <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{formatMoney(ticketProm)}</td>
                                 <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{totalPct.toFixed(1)}%</td>

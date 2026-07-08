@@ -510,8 +510,10 @@ def desglose_ventas(
         neto  = 0.0
         descuentos = 0.0
         num = 0
-        canal_agg: dict = defaultdict(lambda: {"ventas": 0.0, "num_pedidos": 0})
-        asesor_agg: dict = defaultdict(lambda: {"ventas": 0.0, "num_pedidos": 0})
+        # RF-02: además de ventas y pedidos, contamos unidades para el UPT.
+        canal_agg: dict = defaultdict(lambda: {"ventas": 0.0, "num_pedidos": 0, "unidades": 0})
+        asesor_agg: dict = defaultdict(lambda: {"ventas": 0.0, "num_pedidos": 0, "unidades": 0})
+        unidades_total = 0
 
         d = desde
         while d <= hasta:
@@ -521,7 +523,8 @@ def desglose_ventas(
                     "created_at_min": _iso_inicio(d),
                     "created_at_max": _iso_fin(d),
                     "limit": 250,
-                    "fields": "id,total_price,subtotal_price,total_tax,taxes_included,total_discounts,source_name,user_id,cancelled_at",
+                    # line_items para contar unidades vendidas (UPT).
+                    "fields": "id,total_price,subtotal_price,total_tax,taxes_included,total_discounts,source_name,user_id,cancelled_at,line_items",
                 }
                 resp = _get("/orders.json", params)
                 orders = resp.get("orders", []) or []
@@ -545,9 +548,16 @@ def desglose_ventas(
                 descuentos += desc_neto
                 num        += 1
 
+                # Unidades vendidas del pedido (suma de cantidades de líneas)
+                unidades_orden = sum(
+                    int(li.get("quantity") or 0) for li in (o.get("line_items") or [])
+                )
+                unidades_total += unidades_orden
+
                 canal = _canal_label(o.get("source_name", ""))
                 canal_agg[canal]["ventas"]       += sub_neto
                 canal_agg[canal]["num_pedidos"]  += 1
+                canal_agg[canal]["unidades"]     += unidades_orden
 
                 # Solo los draft orders tienen user_id (creados por staff)
                 uid = o.get("user_id")
@@ -555,15 +565,18 @@ def desglose_ventas(
                     nombre = _nombre_asesor(uid)
                     asesor_agg[nombre]["ventas"]      += sub_neto
                     asesor_agg[nombre]["num_pedidos"] += 1
+                    asesor_agg[nombre]["unidades"]    += unidades_orden
 
             d += timedelta(days=1)
 
-        # Ordenar por ventas desc y calcular pct
+        # Ordenar por ventas desc y calcular pct + UPT (unidades por pedido)
         def _rankear(agg: dict, key_nombre: str) -> list:
             items = [{key_nombre: k, **v} for k, v in agg.items()]
             items.sort(key=lambda x: x["ventas"], reverse=True)
             for it in items:
                 it["pct"] = round(it["ventas"] / neto * 100, 1) if neto else 0
+                # RF-02: UPT = unidades / número de pedidos, con un decimal
+                it["upt"] = round(it["unidades"] / it["num_pedidos"], 1) if it["num_pedidos"] else 0
             return items
 
         return {
@@ -574,6 +587,8 @@ def desglose_ventas(
             "neto":        round(neto, 0),
             "descuentos":  round(descuentos, 0),
             "num_pedidos": num,
+            "unidades":    unidades_total,
+            "upt":         round(unidades_total / num, 1) if num else 0,
             "ticket_promedio": round(neto / num, 0) if num else 0,
             "por_canal":   _rankear(canal_agg, "label"),
             "por_asesor":  _rankear(asesor_agg, "nombre"),
