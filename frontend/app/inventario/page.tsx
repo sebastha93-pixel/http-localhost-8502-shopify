@@ -353,6 +353,111 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
   );
 }
 
+/** RF-07 — Antigüedad de inventario: referencias ordenadas por días desde su
+ * lanzamiento (Shopify), con buckets de envejecimiento y stock por canal. */
+function TablaAntiguedad({ productos }: { productos: Producto[] }) {
+  const [q, setQ] = useState("");
+  const [tipo, setTipo] = useState("");
+
+  const tipos = useMemo(
+    () => Array.from(new Set(productos.map((p) => p.tipo).filter(Boolean))).sort(),
+    [productos],
+  );
+
+  // Solo productos con stock (los agotados no son "inventario" que envejece)
+  const filas = useMemo(() => {
+    const term = q.trim().toUpperCase();
+    return productos
+      .filter((p) => p.total_stock > 0 || (p.stock_melonn ?? 0) > 0)
+      .filter((p) => (tipo ? p.tipo === tipo : true))
+      .filter((p) => !term || p.titulo.toUpperCase().includes(term) || (p.sku_principal || "").toUpperCase().includes(term))
+      .map((p) => ({ ...p, dias: p.dias_publicado ?? -1 }))
+      .sort((a, b) => b.dias - a.dias);
+  }, [productos, q, tipo]);
+
+  const buckets = useMemo(() => {
+    const b = { b0: 0, b30: 0, b60: 0, b90: 0 };
+    for (const p of filas) {
+      const d = p.dias_publicado ?? 0;
+      if (d <= 30) b.b0++;
+      else if (d <= 60) b.b30++;
+      else if (d <= 90) b.b60++;
+      else b.b90++;
+    }
+    return b;
+  }, [filas]);
+
+  const fmtFechaLanz = (iso?: string) =>
+    iso ? new Date(iso).toLocaleDateString("es-CO", { day: "2-digit", month: "short", year: "numeric" }) : "—";
+
+  const toneDias = (d: number) =>
+    d > 90 ? "text-terracotta" : d > 60 ? "text-ochre" : "text-ink-900";
+
+  return (
+    <div className="space-y-3">
+      <KpiStrip
+        items={[
+          { label: "0–30 días",  value: buckets.b0 },
+          { label: "31–60 días", value: buckets.b30 },
+          { label: "61–90 días", value: buckets.b60, tone: buckets.b60 > 0 ? "default" : "default" },
+          { label: "+90 días",   value: buckets.b90, tone: buckets.b90 > 0 ? "danger" : "default" },
+        ]}
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2 rounded-sm border border-border bg-card px-2 py-1.5">
+          <Search className="h-3.5 w-3.5 text-graphite" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Referencia o SKU…"
+            className="w-40 bg-transparent text-xs outline-none" />
+        </div>
+        <select value={tipo} onChange={(e) => setTipo(e.target.value)}
+          className="rounded-sm border border-border bg-card px-3 py-1.5 text-xs">
+          <option value="">Todos los fit</option>
+          {tipos.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <span className="text-xs text-graphite tabular-nums">{filas.length} referencia(s)</span>
+      </div>
+      <Card>
+        <CardContent className="p-0 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="border-b border-border bg-cloud/40">
+              <tr className="text-left text-[0.6rem] uppercase tracking-[0.12em] text-graphite">
+                <th className="px-3 py-2">Referencia</th>
+                <th className="px-3 py-2">Fit</th>
+                <th className="px-3 py-2">Lanzamiento</th>
+                <th className="px-3 py-2 text-right">Días en inventario</th>
+                <th className="px-3 py-2 text-right">Stock Shopify</th>
+                <th className="px-3 py-2 text-right">Stock Melonn</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {filas.length === 0 ? (
+                <tr><td colSpan={6} className="px-3 py-8 text-center text-sm text-graphite">Sin referencias con stock.</td></tr>
+              ) : filas.map((p) => (
+                <tr key={p.id} className="hover:bg-cloud/40">
+                  <td className="px-3 py-2.5">
+                    <span className="font-medium text-ink-900">{p.titulo}</span>
+                    {p.sku_principal && <span className="block text-[0.6rem] text-graphite tabular-nums">{skuAgrupado(p)}</span>}
+                  </td>
+                  <td className="px-3 py-2.5 text-graphite">{p.tipo || "—"}</td>
+                  <td className="px-3 py-2.5 text-graphite tabular-nums">{fmtFechaLanz(p.published_at)}</td>
+                  <td className={`px-3 py-2.5 text-right font-semibold tabular-nums ${p.dias_publicado != null ? toneDias(p.dias_publicado) : "text-graphite"}`}>
+                    {p.dias_publicado != null ? `${p.dias_publicado} d` : "—"}
+                  </td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-ink-900">{p.total_stock}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-graphite">{p.stock_melonn ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </CardContent>
+      </Card>
+      <p className="text-[0.62rem] text-graphite/70">
+        Antigüedad = días desde la fecha de lanzamiento en Shopify. Florida y Arrayanes se sumarán cuando se conecte el inventario de Siigo.
+      </p>
+    </div>
+  );
+}
+
 export default function InventarioPage() {
   const resumen = useQuery<ResumenResp>({
     queryKey: ["inv-resumen"],
@@ -411,6 +516,7 @@ export default function InventarioPage() {
         <TabsList>
           <TabsTrigger value="activos">Activos ({activos.data?.total || 0})</TabsTrigger>
           <TabsTrigger value="borradores">Borradores ({borradores.data?.total || 0})</TabsTrigger>
+          <TabsTrigger value="antiguedad">Antigüedad</TabsTrigger>
         </TabsList>
 
         <TabsContent value="activos">
@@ -426,6 +532,14 @@ export default function InventarioPage() {
             <Card><CardContent className="p-8 text-center text-sm text-graphite">Cargando borradores…</CardContent></Card>
           ) : (
             <TablaProductos productos={borradores.data.productos} mostrarStock={false} />
+          )}
+        </TabsContent>
+
+        <TabsContent value="antiguedad">
+          {activos.isLoading || !activos.data ? (
+            <Card><CardContent className="p-8 text-center text-sm text-graphite">Cargando antigüedad…</CardContent></Card>
+          ) : (
+            <TablaAntiguedad productos={activos.data.productos} />
           )}
         </TabsContent>
       </Tabs>
