@@ -14,13 +14,13 @@ interface PageShellProps {
 export function PageShell({ title, subtitle, isFetching, onRefresh, children }: PageShellProps) {
   return (
     <div className="space-y-6">
-      <div className="flex items-end justify-between border-b border-border pb-5">
-        <div>
-          <h1 className="font-display text-[1.85rem] font-medium tracking-tight text-ink-900 dark:text-foreground">
+      <div className="flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="font-display text-2xl font-medium tracking-tight text-ink-900 dark:text-foreground md:text-[1.7rem]">
             {title}
           </h1>
           {subtitle && (
-            <p className="mt-1 text-sm text-graphite">
+            <p className="mt-1 text-sm leading-snug text-graphite">
               {subtitle}
               {isFetching && <Loader2 className="inline ml-2 h-3 w-3 animate-spin text-steel-500" />}
             </p>
@@ -29,7 +29,7 @@ export function PageShell({ title, subtitle, isFetching, onRefresh, children }: 
         {onRefresh && (
           <button
             onClick={onRefresh}
-            className="rounded-sm border border-border bg-card px-3.5 py-1.5 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-ink-900 transition-colors hover:bg-cloud dark:text-foreground dark:hover:bg-ink-800"
+            className="shrink-0 self-start rounded-sm border border-border bg-card px-3.5 py-1.5 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-ink-900 transition-colors hover:bg-cloud dark:text-foreground dark:hover:bg-ink-800 sm:self-auto"
           >
             Refrescar
           </button>

@@ -72,7 +72,7 @@
 
 /* Section header con tracking editorial */
 .section-label {
-  @apply text-[0.62rem] font-bold tracking-[0.18em] uppercase text-graphite;
+  @apply text-[0.68rem] font-bold tracking-[0.16em] uppercase text-graphite;
 }
 
 /* === MARCA: pespunte selvedge ============================================= */
