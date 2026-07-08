@@ -293,6 +293,7 @@ def descubrir_estructura_tiendas() -> dict:
 
 
 # ── RF-06: Inventario por bodega/tienda (Florida, Arrayanes, Melonn…) ──────────
+TIENDAS_FISICAS = {"Florida", "Arrayanes"}  # tiendas físicas (Melonn = e-commerce, va en Inventario Shopify)
 _INV_CACHE: dict = {"ts": 0.0, "data": None}
 
 
@@ -333,11 +334,15 @@ def inventario_por_bodega(*, force: bool = False, max_paginas: int = 80) -> dict
             stock = {}
             total = 0.0
             for w in (pr.get("warehouses") or []):
+                nombre = w.get("name")
+                # Solo tiendas físicas — Melonn/online se ve en Inventario Shopify.
+                if nombre not in TIENDAS_FISICAS:
+                    continue
                 q = float(w.get("quantity") or 0)
                 if q == 0:
                     continue
-                bodegas[w.get("id")] = w.get("name")
-                stock[w.get("name")] = stock.get(w.get("name"), 0) + q
+                bodegas[w.get("id")] = nombre
+                stock[nombre] = stock.get(nombre, 0) + q
                 total += q
             if total <= 0:
                 continue

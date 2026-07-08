@@ -363,7 +363,7 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
 /** RF-06 - Inventario por tienda/bodega desde Siigo (Florida, Arrayanes, Melonn). */
 function TablaPorTienda({ data }: { data: PorTiendaResp }) {
   const [q, setQ] = useState("");
-  const orden = ["MELONN", "Florida", "Arrayanes", "INSUMOS", "Segundas", "Sin asignar"];
+  const orden = ["Florida", "Arrayanes"];
   const bodegas = [...data.bodegas].sort((a, b) => {
     const ia = orden.indexOf(a), ib = orden.indexOf(b);
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
@@ -382,7 +382,7 @@ function TablaPorTienda({ data }: { data: PorTiendaResp }) {
   return (
     <div className="space-y-3">
       <KpiStrip
-        items={bodegas.filter((b) => ["MELONN","Florida","Arrayanes"].includes(b)).map((b) => ({
+        items={bodegas.filter((b) => ["Florida","Arrayanes"].includes(b)).map((b) => ({
           label: `Stock ${b}`, value: Math.round(totalesBodega[b] || 0),
         }))}
       />
@@ -428,7 +428,7 @@ function TablaPorTienda({ data }: { data: PorTiendaResp }) {
         </CardContent>
       </Card>
       <p className="text-[0.62rem] text-graphite/70">
-        Fuente: Siigo (stock por bodega). Fit y Color se agregaran cruzando con Shopify por SKU.
+        Solo tiendas físicas (Florida y Arrayanes). El stock online/Melonn está en la pestaña Activos. Fuente: Siigo. Fit y Color se agregaran cruzando con Shopify por SKU.
       </p>
     </div>
   );
