@@ -51,6 +51,21 @@ def productos(
         raise HTTPException(503, f"Error: {str(e)[:200]}")
 
 
+@router.get("/por-tienda")
+def por_tienda(
+    force: bool = Query(False),
+    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+) -> dict:
+    """RF-06 — Inventario disponible por tienda/bodega (Florida, Arrayanes, Melonn…)."""
+    from backend.services import siigo
+    if not siigo.siigo_configurado():
+        raise HTTPException(503, "Siigo no configurado.")
+    try:
+        return siigo.inventario_por_bodega(force=force)
+    except Exception as e:
+        raise HTTPException(503, f"siigo: {str(e)[:200]}")
+
+
 @router.get("/siigo/descubrir")
 def siigo_descubrir(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     """RF-06/RF-03 — Diagnóstico: estructura cruda de Siigo (bodegas, centros de

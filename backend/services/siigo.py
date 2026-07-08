@@ -290,3 +290,65 @@ def descubrir_estructura_tiendas() -> dict:
         "productos":     muestra_productos(limit=3),
         "facturas":      muestra_facturas_venta(limit=2),
     }
+
+
+# ── RF-06: Inventario por bodega/tienda (Florida, Arrayanes, Melonn…) ──────────
+_INV_CACHE: dict = {"ts": 0.0, "data": None}
+
+
+def _parse_ref_talla(code: str) -> tuple:
+    """SKU MALE'DENIM '92633-1T6' → (referencia '92633-1', talla '6')."""
+    import re as _re
+    m = _re.match(r"^(.*?T)(\d+)$", (code or "").strip(), _re.IGNORECASE)
+    if m:
+        return m.group(1).rstrip("Tt"), m.group(2)
+    return (code or "").strip(), ""
+
+
+def inventario_por_bodega(*, force: bool = False, max_paginas: int = 80) -> dict:
+    """Inventario por tienda desde Siigo (stock por bodega). Cache 30 min."""
+    now = time.time()
+    if not force and _INV_CACHE["data"] and (now - _INV_CACHE["ts"] < 1800):
+        return _INV_CACHE["data"]
+    bodegas: dict = {}
+    filas: list[dict] = []
+    page = 1
+    total_api = None
+    while page <= max_paginas:
+        try:
+            data = siigo_get("/products", {"page": page, "page_size": 100})
+        except Exception as e:
+            log.warning(f"[siigo] inventario page {page}: {e}")
+            break
+        results = data.get("results") or []
+        if isinstance(data, dict):
+            total_api = (data.get("pagination") or {}).get("total_results", total_api)
+        if not results:
+            break
+        for pr in results:
+            if not pr.get("stock_control"):
+                continue
+            code = pr.get("code") or ""
+            ref, talla = _parse_ref_talla(code)
+            stock = {}
+            total = 0.0
+            for w in (pr.get("warehouses") or []):
+                q = float(w.get("quantity") or 0)
+                if q == 0:
+                    continue
+                bodegas[w.get("id")] = w.get("name")
+                stock[w.get("name")] = stock.get(w.get("name"), 0) + q
+                total += q
+            if total <= 0:
+                continue
+            filas.append({"code": code, "referencia": ref, "talla": talla,
+                          "nombre": pr.get("name") or "", "stock": stock, "total": total})
+        if len(results) < 100:
+            break
+        page += 1
+        time.sleep(0.5)
+    out = {"bodegas": sorted(set(bodegas.values())), "referencias": filas,
+           "total_referencias": len(filas), "total_api": total_api}
+    _INV_CACHE["ts"] = now
+    _INV_CACHE["data"] = out
+    return out

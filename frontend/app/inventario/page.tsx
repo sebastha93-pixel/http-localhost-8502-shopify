@@ -60,6 +60,12 @@ interface ProductosResp {
   productos: Producto[];
 }
 
+interface PorTiendaResp {
+  bodegas: string[];
+  referencias: Array<{ code: string; referencia: string; talla: string; nombre: string; stock: Record<string, number>; total: number }>;
+  total_referencias: number;
+}
+
 type Filtro = "todos" | "con_stock" | "sin_stock" | "stock_bajo";
 
 function shopifyAdminUrl(handle: string): string {
@@ -353,6 +359,81 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
   );
 }
 
+
+/** RF-06 - Inventario por tienda/bodega desde Siigo (Florida, Arrayanes, Melonn). */
+function TablaPorTienda({ data }: { data: PorTiendaResp }) {
+  const [q, setQ] = useState("");
+  const orden = ["MELONN", "Florida", "Arrayanes", "INSUMOS", "Segundas", "Sin asignar"];
+  const bodegas = [...data.bodegas].sort((a, b) => {
+    const ia = orden.indexOf(a), ib = orden.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  });
+  const filas = useMemo(() => {
+    const term = q.trim().toUpperCase();
+    return data.referencias
+      .filter((r) => !term || r.referencia.toUpperCase().includes(term) || r.code.toUpperCase().includes(term) || r.nombre.toUpperCase().includes(term))
+      .sort((a, b) => b.total - a.total);
+  }, [data.referencias, q]);
+  const totalesBodega = useMemo(() => {
+    const t: Record<string, number> = {};
+    for (const r of filas) for (const b of bodegas) t[b] = (t[b] || 0) + (r.stock[b] || 0);
+    return t;
+  }, [filas, bodegas]);
+  return (
+    <div className="space-y-3">
+      <KpiStrip
+        items={bodegas.filter((b) => ["MELONN","Florida","Arrayanes"].includes(b)).map((b) => ({
+          label: `Stock ${b}`, value: Math.round(totalesBodega[b] || 0),
+        }))}
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2 rounded-sm border border-border bg-card px-2 py-1.5">
+          <Search className="h-3.5 w-3.5 text-graphite" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Referencia, SKU o nombre..."
+            className="w-48 bg-transparent text-xs outline-none" />
+        </div>
+        <span className="text-xs text-graphite tabular-nums">{filas.length} referencia(s) con stock</span>
+      </div>
+      <Card>
+        <CardContent className="p-0 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="border-b border-border bg-cloud/40">
+              <tr className="text-left text-[0.6rem] uppercase tracking-[0.12em] text-graphite">
+                <th className="px-3 py-2">Referencia</th>
+                <th className="px-3 py-2">Talla</th>
+                {bodegas.map((b) => <th key={b} className="px-3 py-2 text-right">{b}</th>)}
+                <th className="px-3 py-2 text-right">Total</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {filas.length === 0 ? (
+                <tr><td colSpan={bodegas.length + 3} className="px-3 py-8 text-center text-sm text-graphite">Sin referencias con stock.</td></tr>
+              ) : filas.map((r) => (
+                <tr key={r.code} className="hover:bg-cloud/40">
+                  <td className="px-3 py-2.5">
+                    <span className="font-medium text-ink-900 tabular-nums">{r.referencia}</span>
+                    <span className="block text-[0.58rem] text-graphite truncate max-w-[280px]">{r.nombre}</span>
+                  </td>
+                  <td className="px-3 py-2.5 text-graphite tabular-nums">{r.talla ? `T${r.talla}` : "-"}</td>
+                  {bodegas.map((b) => (
+                    <td key={b} className={`px-3 py-2.5 text-right tabular-nums ${r.stock[b] ? "text-ink-900" : "text-graphite/40"}`}>
+                      {r.stock[b] ? Math.round(r.stock[b]) : "."}
+                    </td>
+                  ))}
+                  <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-navy-600">{Math.round(r.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </CardContent>
+      </Card>
+      <p className="text-[0.62rem] text-graphite/70">
+        Fuente: Siigo (stock por bodega). Fit y Color se agregaran cruzando con Shopify por SKU.
+      </p>
+    </div>
+  );
+}
+
 /** RF-07 — Antigüedad de inventario: referencias ordenadas por días desde su
  * lanzamiento (Shopify), con buckets de envejecimiento y stock por canal. */
 function TablaAntiguedad({ productos }: { productos: Producto[] }) {
@@ -480,6 +561,15 @@ export default function InventarioPage() {
     refetchOnWindowFocus: false,
   });
 
+  const [tab, setTab] = useState("activos");
+  const porTienda = useQuery<PorTiendaResp>({
+    queryKey: ["inv-por-tienda"],
+    queryFn: () => api.get<PorTiendaResp>("/api/inventario/por-tienda"),
+    staleTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
+    enabled: tab === "tiendas",
+  });
+
   if (resumen.isLoading) return <LoadingState label="Cargando inventario…" />;
   if (resumen.error) return <ErrorState error={resumen.error} onRetry={() => resumen.refetch()} />;
 
@@ -512,10 +602,11 @@ export default function InventarioPage() {
       )}
 
       {/* Tabla con tabs activos / borradores */}
-      <Tabs defaultValue="activos">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="activos">Activos ({activos.data?.total || 0})</TabsTrigger>
           <TabsTrigger value="borradores">Borradores ({borradores.data?.total || 0})</TabsTrigger>
+          <TabsTrigger value="tiendas">Por tienda</TabsTrigger>
           <TabsTrigger value="antiguedad">Antigüedad</TabsTrigger>
         </TabsList>
 
@@ -532,6 +623,16 @@ export default function InventarioPage() {
             <Card><CardContent className="p-8 text-center text-sm text-graphite">Cargando borradores…</CardContent></Card>
           ) : (
             <TablaProductos productos={borradores.data.productos} mostrarStock={false} />
+          )}
+        </TabsContent>
+
+        <TabsContent value="tiendas">
+          {porTienda.isLoading || !porTienda.data ? (
+            <Card><CardContent className="p-8 text-center text-sm text-graphite">Cargando inventario por tienda desde Siigo... (puede tardar la primera vez)</CardContent></Card>
+          ) : porTienda.error ? (
+            <ErrorState error={porTienda.error} onRetry={() => porTienda.refetch()} />
+          ) : (
+            <TablaPorTienda data={porTienda.data} />
           )}
         </TabsContent>
 
