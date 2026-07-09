@@ -213,6 +213,17 @@ def actualizar(uid: str, **campos) -> dict:
         raise
 
 
+def eliminar(uid: str) -> dict:
+    """Elimina un usuario definitivamente. Devuelve el registro borrado."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    res = sb.table("usuarios").delete().eq("id", uid).execute()
+    if not res.data:
+        raise ValueError(f"Usuario {uid} no encontrado")
+    return res.data[0]
+
+
 # ── Helper de chequeo de permisos ─────────────────────────────────────
 def tiene_permiso(usuario: dict, modulo: str, accion: str) -> bool:
     """Verifica si un usuario tiene permiso para una acción en un módulo.

@@ -11,7 +11,7 @@ import {
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, UserPlus, Shield, Edit, Check, X, ChevronDown } from "lucide-react";
+import { Loader2, UserPlus, Shield, Edit, Check, X, ChevronDown, Trash2 } from "lucide-react";
 
 interface Usuario {
   id: string;
@@ -453,6 +453,19 @@ function UsuarioRow({
     onError: (e: Error) => setErrEdit(e.message || "Error desconocido"),
   });
 
+  const eliminar = useMutation({
+    mutationFn: () => api.del<void>(`/api/auth/usuarios/${u.id}`),
+    onSuccess: () => onSaved(),
+    onError: (e: Error) => alert(`No se pudo eliminar: ${e.message || "error desconocido"}`),
+  });
+  function confirmarEliminar() {
+    const ok = window.confirm(
+      `¿Eliminar definitivamente a ${u.nombre} (${u.email})?\n\n` +
+      "Esta acción no se puede deshacer. Si solo quieres bloquear su acceso, usa Editar → Inactivo."
+    );
+    if (ok) eliminar.mutate();
+  }
+
   if (isEditing) {
     return (
       <tr className="border-b border-border bg-steel-300/15">
@@ -538,9 +551,18 @@ function UsuarioRow({
         <Badge tone={u.activo ? "normal" : "neutral"}>{u.activo ? "Activo" : "Inactivo"}</Badge>
       </td>
       <td className="px-4 py-3 text-right">
-        <button onClick={onEdit} className="inline-flex items-center gap-1 text-xs font-medium text-ink-900 transition-colors hover:text-navy-600">
-          <Edit className="h-3 w-3" /> Editar
-        </button>
+        <div className="inline-flex items-center gap-3">
+          <button onClick={onEdit} className="inline-flex items-center gap-1 text-xs font-medium text-ink-900 transition-colors hover:text-navy-600">
+            <Edit className="h-3 w-3" /> Editar
+          </button>
+          {!isCurrentUser && (
+            <button onClick={confirmarEliminar} disabled={eliminar.isPending}
+              title="Eliminar usuario definitivamente"
+              className="inline-flex items-center gap-1 text-xs font-medium text-graphite transition-colors hover:text-terracotta disabled:opacity-50">
+              {eliminar.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />} Eliminar
+            </button>
+          )}
+        </div>
       </td>
     </tr>
   );

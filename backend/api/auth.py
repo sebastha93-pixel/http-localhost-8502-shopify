@@ -289,3 +289,30 @@ def actualizar_usuario(
             detail="No se pudo guardar el usuario. Contacta al administrador.",
         )
     return _to_out(u)
+
+
+@router.delete("/usuarios/{uid}", status_code=204)
+def eliminar_usuario(
+    uid: str,
+    actor: CurrentUser = Depends(require_role("admin")),
+) -> None:
+    """Elimina un usuario definitivamente. Guardas:
+    - no puedes eliminarte a ti mismo (usa desactivar si hace falta);
+    - no se puede eliminar al último admin activo (evita lockout)."""
+    if actor.id == uid:
+        raise HTTPException(status_code=400, detail="No puedes eliminarte a ti mismo")
+    u = svc.obtener_por_id(uid)
+    if not u:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    if u.get("rol") == "admin":
+        admins_activos = [x for x in svc.listar() if x.get("rol") == "admin" and x.get("activo")]
+        if len(admins_activos) <= 1:
+            raise HTTPException(status_code=400, detail="No se puede eliminar al último admin activo")
+    try:
+        svc.eliminar(uid)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="No se pudo eliminar el usuario. Contacta al administrador.")
