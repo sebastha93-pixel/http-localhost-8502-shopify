@@ -3,7 +3,8 @@ backend.services.whatsapp_cloud — Envío automático por WhatsApp Cloud API.
 
 Requiere la WABA propia (tarea #89):
   WHATSAPP_PHONE_NUMBER_ID  — número emisor (Meta for Developers → API Setup)
-  META_SYSTEM_USER_TOKEN    — ya existe en Railway (mismo del webhook)
+  WHATSAPP_TOKEN            — token permanente de la app nueva de WhatsApp
+                              (fallback: META_SYSTEM_USER_TOKEN de la app vieja)
 
 Mientras la WABA no esté configurada, `configurado()` devuelve False y los
 flujos caen al modo manual (el frontend abre wa.me con el mensaje armado).
@@ -22,9 +23,16 @@ log = logging.getLogger("whatsapp")
 GRAPH = "https://graph.facebook.com/v23.0"
 
 
+def _token() -> str:
+    """Token de la app de WhatsApp. La WABA nueva vive en su propia app de Meta,
+    con su propio token (WHATSAPP_TOKEN); si no está, cae al token del sistema
+    de la app vieja (META_SYSTEM_USER_TOKEN) por si comparten usuario."""
+    return (os.environ.get("WHATSAPP_TOKEN", "").strip()
+            or os.environ.get("META_SYSTEM_USER_TOKEN", "").strip())
+
+
 def configurado() -> bool:
-    return bool(os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "").strip()
-                and os.environ.get("META_SYSTEM_USER_TOKEN", "").strip())
+    return bool(os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "").strip() and _token())
 
 
 def _normalizar(telefono: str) -> str:
@@ -43,7 +51,7 @@ def enviar_texto(telefono: str, mensaje: str) -> dict:
     if not tel:
         return {"enviado": False, "motivo": "sin_telefono"}
     phone_id = os.environ["WHATSAPP_PHONE_NUMBER_ID"].strip()
-    token = os.environ["META_SYSTEM_USER_TOKEN"].strip()
+    token = _token()
     try:
         r = httpx.post(
             f"{GRAPH}/{phone_id}/messages",
@@ -71,7 +79,7 @@ def enviar_plantilla(telefono: str, plantilla: str,
     if not tel:
         return {"enviado": False, "motivo": "sin_telefono"}
     phone_id = os.environ["WHATSAPP_PHONE_NUMBER_ID"].strip()
-    token = os.environ["META_SYSTEM_USER_TOKEN"].strip()
+    token = _token()
     componentes = []
     if variables:
         componentes = [{
@@ -102,10 +110,10 @@ def estado_numero() -> dict:
     Devuelve display_phone_number, verified_name y quality_rating."""
     if not configurado():
         return {"configurado": False,
-                "falta": [v for v in ("WHATSAPP_PHONE_NUMBER_ID", "META_SYSTEM_USER_TOKEN")
-                          if not os.environ.get(v, "").strip()]}
+                "falta": (["WHATSAPP_PHONE_NUMBER_ID"] if not os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "").strip() else [])
+                         + (["WHATSAPP_TOKEN"] if not _token() else [])}
     phone_id = os.environ["WHATSAPP_PHONE_NUMBER_ID"].strip()
-    token = os.environ["META_SYSTEM_USER_TOKEN"].strip()
+    token = _token()
     try:
         r = httpx.get(
             f"{GRAPH}/{phone_id}",
@@ -123,9 +131,9 @@ def estado_numero() -> dict:
 def listar_plantillas() -> dict:
     """Plantillas de la WABA con su estado de aprobación (requiere WHATSAPP_WABA_ID)."""
     waba_id = os.environ.get("WHATSAPP_WABA_ID", "").strip()
-    token = os.environ.get("META_SYSTEM_USER_TOKEN", "").strip()
+    token = _token()
     if not waba_id or not token:
-        return {"ok": False, "error": "falta WHATSAPP_WABA_ID o META_SYSTEM_USER_TOKEN"}
+        return {"ok": False, "error": "falta WHATSAPP_WABA_ID o WHATSAPP_TOKEN"}
     try:
         r = httpx.get(
             f"{GRAPH}/{waba_id}/message_templates",

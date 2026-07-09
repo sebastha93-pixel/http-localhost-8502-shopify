@@ -57,16 +57,20 @@ def _system_token() -> str:
 
 
 def _verify_signature(body: bytes, header_signature: str) -> bool:
-    """Verifica que el webhook venga firmado por Meta usando META_APP_SECRET.
+    """Verifica que el webhook venga firmado por Meta.
+    Acepta la firma de cualquiera de las dos apps que apuntan a este endpoint:
+    META_APP_SECRET (app original) o WHATSAPP_APP_SECRET (app de la WABA nueva).
     Header: X-Hub-Signature-256: sha256=HEX"""
-    secret = _app_secret()
-    if not secret or not header_signature:
+    if not header_signature or not header_signature.startswith("sha256="):
         return False
-    if not header_signature.startswith("sha256="):
-        return False
-    expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     received = header_signature[7:]
-    return hmac.compare_digest(expected, received)
+    secretos = [x for x in (_app_secret(),
+                            os.environ.get("WHATSAPP_APP_SECRET", "").strip()) if x]
+    for secret in secretos:
+        expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+        if hmac.compare_digest(expected, received):
+            return True
+    return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
