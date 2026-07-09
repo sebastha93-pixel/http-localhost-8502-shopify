@@ -51,8 +51,32 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Descarga un archivo autenticado (Bearer) y dispara el guardado en el navegador. */
+async function download(path: string, fallbackName: string): Promise<void> {
+  const token = getToken();
+  const res = await fetch(`${BASE}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try { msg = ((await res.json()) as { detail?: { error?: string } | string })?.detail as string || msg; } catch {}
+    throw new ApiError(res.status, typeof msg === "string" ? msg : JSON.stringify(msg));
+  }
+  const disp = res.headers.get("Content-Disposition") || "";
+  const m = disp.match(/filename="?([^";]+)"?/);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = m?.[1] || fallbackName;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export const api = {
   get:  <T>(path: string) => request<T>(path),
+  download,
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
   patch: <T>(path: string, body?: unknown) =>

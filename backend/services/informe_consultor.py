@@ -272,3 +272,117 @@ def guardar_informe(informe: dict[str, Any]) -> str | None:
     except Exception as e:
         print(f"⚠️ guardar_informe falló: {e}")
         return None
+
+
+# ─── Export XLSX ──────────────────────────────────────────────────────────────
+
+def informe_a_xlsx(informe: dict[str, Any]) -> bytes:
+    """Convierte el informe A-I a un .xlsx con una hoja por sección.
+    Formato pensado para que el director comercial lo lea sin tocar nada:
+    encabezados con fondo, columnas anchas, montos COP con separador de miles."""
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    header_font = Font(bold=True, color="FFFFFF", size=10, name="Arial")
+    header_fill = PatternFill("solid", start_color="1F2A44")  # navy Selvedge
+    body_font = Font(size=10, name="Arial")
+    wrap = Alignment(vertical="top", wrap_text=True)
+    COP = '#,##0'
+
+    def hoja(nombre: str, headers: list[str], filas: list[list[Any]],
+             anchos: list[int], money_cols: tuple[int, ...] = ()) -> None:
+        ws = wb.create_sheet(title=nombre[:31])
+        ws.append(headers)
+        for c in range(1, len(headers) + 1):
+            cell = ws.cell(row=1, column=c)
+            cell.font = header_font
+            cell.fill = header_fill
+        for fila in filas:
+            ws.append(fila)
+        for i, ancho in enumerate(anchos, start=1):
+            ws.column_dimensions[get_column_letter(i)].width = ancho
+        for row in ws.iter_rows(min_row=2):
+            for cell in row:
+                cell.font = body_font
+                cell.alignment = wrap
+                if cell.column in money_cols and isinstance(cell.value, (int, float)):
+                    cell.number_format = COP
+        ws.freeze_panes = "A2"
+
+    r = informe.get("resumen") or {}
+    meta = informe.get("_metadata") or {}
+    hoja("Resumen", ["Métrica", "Valor"], [
+        ["Generado", (meta.get("generado_at") or "")[:16].replace("T", " ")],
+        ["Días analizados", meta.get("days_back")],
+        ["Conversaciones analizadas", meta.get("conversaciones_analizadas")],
+        ["Total conversaciones", r.get("total_conversaciones")],
+        ["Ganadas", r.get("ganadas")],
+        ["Perdidas", r.get("perdidas")],
+        ["Inconclusas", r.get("inconclusas")],
+        ["Tasa de conversión %", r.get("conv_rate_pct")],
+        ["Valor recuperable estimado (COP)", r.get("valor_recuperable_estimado_cop")],
+        ["Diagnóstico", r.get("diagnostico_general")],
+    ], [34, 90], money_cols=(2,))
+
+    hoja("A Razones de pérdida", ["Razón", "Impacto COP", "Frecuencia", "Cita de ejemplo"],
+         [[x.get("razon"), x.get("impacto_cop"), x.get("frecuencia"), x.get("ejemplo_cita")]
+          for x in informe.get("seccion_a_top10_razones_perdida") or []],
+         [45, 14, 11, 70], money_cols=(2,))
+
+    hoja("B Patrones", ["Patrón", "Cita textual", "Frecuencia"],
+         [[x.get("patron"), x.get("cita_textual"), x.get("frecuencia")]
+          for x in informe.get("seccion_b_patrones_perdidas") or []],
+         [50, 70, 11])
+
+    hoja("C Errores asesoras", ["Error", "Cita textual", "Asesora"],
+         [[x.get("error"), x.get("cita_textual"), x.get("asesora_ejemplo")]
+          for x in informe.get("seccion_c_errores_asesoras") or []],
+         [50, 70, 20])
+
+    hoja("D Preguntas frecuentes", ["Pregunta", "Frecuencia"],
+         [[x.get("pregunta"), x.get("frecuencia")]
+          for x in informe.get("seccion_d_preguntas_frecuentes_clientas") or []],
+         [80, 11])
+
+    e = informe.get("seccion_e_diff_compra_vs_no") or {}
+    gan, per = e.get("ganadoras_hacen") or [], e.get("perdidas_hacen") or []
+    hoja("E Compra vs No compra", ["Las que COMPRAN — la asesora hace", "Las que NO compran — la asesora hace"],
+         [[gan[i] if i < len(gan) else "", per[i] if i < len(per) else ""]
+          for i in range(max(len(gan), len(per)) or 1)],
+         [70, 70])
+
+    hoja("F Oportunidades", ["Oportunidad", "Impacto COP mensual", "Esfuerzo"],
+         [[x.get("oportunidad"), x.get("impacto_cop_mensual"), x.get("esfuerzo")]
+          for x in informe.get("seccion_f_oportunidades") or []],
+         [70, 18, 10], money_cols=(2,))
+
+    hoja("G Plan de acción", ["Acción", "Impacto COP", "Esfuerzo", "Responsable", "Plazo (días)"],
+         [[x.get("accion"), x.get("impacto_cop"), x.get("esfuerzo"), x.get("responsable"), x.get("plazo_dias")]
+          for x in informe.get("seccion_g_plan_accion") or []],
+         [65, 14, 10, 20, 11], money_cols=(2,))
+
+    hoja("H Frases que matan", ["Frase", "Por qué mata la venta"],
+         [[x.get("frase"), x.get("por_que_mata_venta")]
+          for x in informe.get("seccion_h_top20_frases_negativas") or []],
+         [70, 70])
+
+    hoja("I Mejores prácticas", ["Frase", "Por qué funciona"],
+         [[x.get("frase"), x.get("por_que_funciona")]
+          for x in informe.get("seccion_i_top20_mejores_practicas") or []],
+         [70, 70])
+
+    hoja("Asesoras", ["Asesora", "Conv. totales", "Ganadas", "Perdidas", "Conv. %",
+                      "Fortalezas", "Debilidades", "Recomendación"],
+         [[x.get("asesora"), x.get("conv_totales"), x.get("ganadas"), x.get("perdidas"),
+           x.get("conv_rate_pct"), " · ".join(x.get("fortalezas") or []),
+           " · ".join(x.get("debilidades") or []), x.get("recomendacion")]
+          for x in informe.get("comparativa_asesoras") or []],
+         [20, 12, 10, 10, 10, 55, 55, 60])
+
+    wb.remove(wb["Sheet"])  # hoja default vacía
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

@@ -3469,6 +3469,29 @@ def get_informe_consultor(
     return informe
 
 
+@router.get("/informe-consultor/xlsx")
+def get_informe_consultor_xlsx(
+    days_back: int = Query(7, ge=1, le=90),
+    advisor_id: str | None = Query(None),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
+):
+    """Informe consultor como archivo Excel (una hoja por sección A-I)."""
+    from fastapi.responses import Response
+
+    informe = informe_svc.generar_informe(days_back=days_back, advisor_id=advisor_id)
+    if "error" in informe:
+        raise HTTPException(status_code=400, detail=informe)
+
+    contenido = informe_svc.informe_a_xlsx(informe)
+    fecha = (informe.get("_metadata") or {}).get("generado_at", "")[:10]
+    nombre = f"informe_consultor_{fecha or 'hoy'}_{days_back}d.xlsx"
+    return Response(
+        content=contenido,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nombre}"'},
+    )
+
+
 @router.post("/informe-consultor/run-weekly")
 def run_informe_semanal(
     _: CurrentUser = Depends(require_role("admin")),

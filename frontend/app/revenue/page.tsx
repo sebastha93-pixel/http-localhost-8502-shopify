@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { StatusBadge as ConvStatusBadge } from "@/components/status-badge";
 import { DateRangePicker } from "@/components/date-range-picker";
-import { ExternalLink, Search, X, Sparkles, Filter, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, AlertCircle, Copy, Check } from "lucide-react";
+import { ExternalLink, Search, X, Sparkles, Filter, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, AlertCircle, Copy, Check, Loader2, FileSpreadsheet } from "lucide-react";
 
 interface DetailResp {
   conversation: any;
@@ -1555,6 +1555,18 @@ export default function RevenuePage() {
     leads_hoy: { ganados: number; perdidos: number; activos_nuevos: number; valor_ganado: number; valor_perdido: number };
     leads_sin_tareas?: number | null;
   };
+  const [informeDescargando, setInformeDescargando] = useState(false);
+  async function descargarInforme() {
+    setInformeDescargando(true);
+    try {
+      await api.download("/api/revenue/informe-consultor/xlsx?days_back=7", "informe_consultor.xlsx");
+    } catch (e) {
+      alert(`No se pudo generar el informe: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setInformeDescargando(false);
+    }
+  }
+
   const briefingQ = useQuery<Briefing>({
     queryKey: ["revenue", "briefing-hoy"],
     queryFn: () => api.get("/api/revenue/briefing-hoy"),
@@ -1635,12 +1647,24 @@ ${asesoras || "  · sin asignaciones"}`;
                 {briefingQ.data.fecha_bogota} · zona horaria Bogotá · actualiza cada 1 min
               </p>
             </div>
-            <button
-              onClick={copiarBriefing}
-              className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-medium text-ink-900 transition-colors hover:bg-cloud"
-            >
-              {briefingCopied ? <><Check className="h-3.5 w-3.5 text-sage" /> Copiado</> : <><Copy className="h-3.5 w-3.5" /> Copiar reporte</>}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={descargarInforme}
+                disabled={informeDescargando}
+                title="Analiza las conversaciones de los últimos 7 días con IA y descarga el informe consultor en Excel (tarda ~1 min)"
+                className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-medium text-ink-900 transition-colors hover:bg-cloud disabled:opacity-50"
+              >
+                {informeDescargando
+                  ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Generando informe…</>
+                  : <><FileSpreadsheet className="h-3.5 w-3.5" /> Informe consultor (Excel)</>}
+              </button>
+              <button
+                onClick={copiarBriefing}
+                className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-medium text-ink-900 transition-colors hover:bg-cloud"
+              >
+                {briefingCopied ? <><Check className="h-3.5 w-3.5 text-sage" /> Copiado</> : <><Copy className="h-3.5 w-3.5" /> Copiar reporte</>}
+              </button>
+            </div>
           </div>
 
           <div className="p-5 space-y-4">
