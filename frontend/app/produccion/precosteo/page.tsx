@@ -74,7 +74,7 @@ export default function PrecosteoListPage() {
           ) : (
             <table className="w-full text-sm">
               <thead className="bg-cloud/60 border-b border-border">
-                <tr className="text-left text-[0.62rem] uppercase tracking-[0.12em] text-graphite">
+                <tr className="text-left text-[0.7rem] uppercase tracking-[0.12em] text-graphite">
                   <th className="px-4 py-3">Código</th>
                   <th className="px-4 py-3">Nombre</th>
                   <th className="px-4 py-3">Tela</th>

@@ -92,7 +92,7 @@ export function BotButton() {
             <Bot className="h-3.5 w-3.5 text-steel flex-none" />
           )}
           <div className="min-w-0 flex-1">
-            <p className="text-[0.55rem] font-bold uppercase tracking-[0.2em] text-steel/60">
+            <p className="text-[0.68rem] font-bold uppercase tracking-[0.2em] text-steel/60">
               {running ? "Bot corriendo..." : "Bot Melonn"}
             </p>
             <p className="text-[0.65rem] text-concrete/70 truncate">
@@ -137,7 +137,7 @@ function BotPanel({
           <div className="flex items-center gap-2">
             <Bot className="h-5 w-5" />
             <div>
-              <p className="text-[0.6rem] font-bold uppercase tracking-[0.2em] text-steel/70">
+              <p className="text-[0.7rem] font-bold uppercase tracking-[0.2em] text-steel/70">
                 Bot Melonn
               </p>
               <p className="text-base font-bold">
@@ -219,7 +219,7 @@ function BotPanel({
           {/* Log */}
           {status.log && status.log.length > 0 && (
             <div>
-              <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-1">Log</p>
+              <p className="text-[0.7rem] font-bold uppercase tracking-wider text-graphite mb-1">Log</p>
               <div className="rounded-md bg-concrete/40 border border-border p-2 max-h-32 overflow-y-auto text-xs font-mono space-y-0.5">
                 {status.log.slice(-10).map((l, i) => (
                   <div key={i} className="text-graphite">{l}</div>

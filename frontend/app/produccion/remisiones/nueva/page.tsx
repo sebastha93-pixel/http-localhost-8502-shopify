@@ -236,7 +236,7 @@ export default function NuevaRemisionPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {/* Combobox confeccionista */}
               <div ref={confBoxRef} className="relative">
-                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
                   {tipo === "terminacion" ? "Proveedor terminación *" : "Confeccionista *"}
                 </label>
                 <button type="button" onClick={() => setConfOpen((v) => !v)}
@@ -278,7 +278,7 @@ export default function NuevaRemisionPage() {
                 )}
               </div>
               <div>
-                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
                   Fecha de recogida *
                 </label>
                 <input type="date" value={fechaRecogida} onChange={(e) => setFechaRecogida(e.target.value)} required
@@ -303,7 +303,7 @@ export default function NuevaRemisionPage() {
               <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead className="bg-cloud/40 border-b border-border">
-                  <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                  <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                     <th className="px-4 py-2 w-[40px]"></th>
                     <th className="px-4 py-2">Consecutivo</th>
                     <th className="px-4 py-2">Referencia</th>
@@ -327,7 +327,7 @@ export default function NuevaRemisionPage() {
                         <td className="px-4 py-2 font-semibold tabular text-navy-600">{o.consecutivo}</td>
                         <td className="px-4 py-2 text-ink-900">
                           {o.referencia?.codigo_referencia || "—"}
-                          <div className="text-[0.6rem] text-graphite">
+                          <div className="text-[0.7rem] text-graphite">
                             {o.referencia?.nombre} {o.referencia?.tela ? `· ${o.referencia.tela}` : ""}
                           </div>
                         </td>
@@ -337,12 +337,12 @@ export default function NuevaRemisionPage() {
                         <td className="px-4 py-2">
                           <div className="flex flex-wrap gap-1 justify-end">
                             {o.tiene_remision_confeccion && (
-                              <span className="rounded-sm bg-navy-600/10 px-1.5 py-0.5 text-[0.52rem] font-bold uppercase tracking-widest text-navy-600">
+                              <span className="rounded-sm bg-navy-600/10 px-1.5 py-0.5 text-[0.68rem] font-bold uppercase tracking-widest text-navy-600">
                                 ✓ Confección
                               </span>
                             )}
                             {o.tiene_remision_terminacion && (
-                              <span className="rounded-sm bg-teal/10 px-1.5 py-0.5 text-[0.52rem] font-bold uppercase tracking-widest text-teal">
+                              <span className="rounded-sm bg-teal/10 px-1.5 py-0.5 text-[0.68rem] font-bold uppercase tracking-widest text-teal">
                                 ✓ Terminación
                               </span>
                             )}

@@ -267,7 +267,7 @@ export default function CentroControlPage() {
               {alertasProdQ.data!.alertas.slice(0, 8).map((a, i) => (
                 <div key={i}
                   className={`rounded-sm border px-3 py-2 text-xs ${a.severidad === "alta" ? "border-terracotta/40 bg-terracotta/[0.05] text-terracotta" : "border-ochre/40 bg-ochre/[0.05] text-ink-900"}`}>
-                  <span className="mr-2 rounded-sm bg-white/60 px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-widest text-graphite">
+                  <span className="mr-2 rounded-sm bg-white/60 px-1.5 py-0.5 text-[0.68rem] font-bold uppercase tracking-widest text-graphite">
                     {a.fuente}
                   </span>
                   {a.mensaje}
@@ -653,7 +653,7 @@ function QuickActionCard({ q }: { q: QuickAction }) {
     >
       <div className="flex items-start justify-between">
         <div>
-          <p className="text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">{q.label}</p>
+          <p className="text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">{q.label}</p>
           <p className="mt-0.5 font-display tabular-nums text-2xl font-medium text-ink-900">{q.count}</p>
           {q.valor > 0 && (
             <p className="mt-0.5 text-xs text-graphite tabular-nums">{formatMoney(q.valor)}</p>

@@ -145,7 +145,7 @@ export default function TableroProduccionPage() {
           ) : (
             <table className="w-full text-xs">
               <thead className="border-b border-border">
-                <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                   <th className="py-1.5">Tela</th>
                   <th className="py-1.5">Tono</th>
                   <th className="py-1.5 text-right">Rollos</th>
@@ -179,7 +179,7 @@ export default function TableroProduccionPage() {
             <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
-                <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                   <th className="px-5 py-2">Consecutivo</th>
                   <th className="px-5 py-2">Referencia</th>
                   <th className="px-5 py-2 text-right">Unidades</th>

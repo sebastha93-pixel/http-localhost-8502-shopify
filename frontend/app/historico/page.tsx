@@ -71,7 +71,7 @@ function PedidoDetalleHistorico({ p, onClose }: { p: PedidoArchivo; onClose: () 
       {/* Header */}
       <div className="flex items-center justify-between bg-ink-900 px-5 py-3 text-white">
         <div>
-          <p className="text-[0.62rem] uppercase tracking-[0.12em] text-white/60">Orden</p>
+          <p className="text-[0.7rem] uppercase tracking-[0.12em] text-white/60">Orden</p>
           <p className="font-display text-base font-medium tabular-nums">#{p.orden} {p.orden_melonn ? <span className="text-white/50 font-normal">· Melonn {p.orden_melonn}</span> : null}</p>
         </div>
         <button onClick={onClose} className="text-white/60 hover:text-white" aria-label="Cerrar">
@@ -124,7 +124,7 @@ function PedidoDetalleHistorico({ p, onClose }: { p: PedidoArchivo; onClose: () 
           )}
           {p.tuvo_novedad && (
             <div className="rounded-sm border border-terracotta/25 bg-terracotta/[0.05] px-3 py-2">
-              <p className="mb-1 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Tuvo novedad</p>
+              <p className="mb-1 text-[0.7rem] uppercase tracking-[0.12em] text-graphite">Tuvo novedad</p>
               <p className="text-sm font-medium text-terracotta">{p.motivo_novedad || "Sí (sin motivo registrado)"}</p>
             </div>
           )}
@@ -173,7 +173,7 @@ function PedidoDetalleHistorico({ p, onClose }: { p: PedidoArchivo; onClose: () 
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <p className="mb-0.5 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">{label}</p>
+      <p className="mb-0.5 text-[0.7rem] uppercase tracking-[0.12em] text-graphite">{label}</p>
       {children}
     </div>
   );
@@ -240,7 +240,7 @@ export default function HistoricoPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-cloud/60 border-b border-border">
-                <tr className="text-left text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                <tr className="text-left text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
                   <th className="px-3 py-2.5">Orden</th>
                   <th className="px-3 py-2.5">Cliente</th>
                   <th className="px-3 py-2.5">Ciudad</th>

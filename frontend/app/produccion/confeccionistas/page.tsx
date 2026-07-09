@@ -87,7 +87,7 @@ export default function ConfeccionistasPage() {
               se cruzan contra este número aunque la REF esté mal digitada.
             </p>
             <div>
-              <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Tipo de proveedor *</label>
+              <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Tipo de proveedor *</label>
               <div className="flex gap-4 text-sm">
                 <label className="inline-flex items-center gap-2">
                   <input type="radio" name="tipo" value="confeccion" checked={tipo === "confeccion"} onChange={() => setTipo("confeccion")} />
@@ -141,7 +141,7 @@ export default function ConfeccionistasPage() {
             <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
-                <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                   <th className="px-4 py-2">Nombre</th>
                   <th className="px-4 py-2">Tipo</th>
                   <th className="px-4 py-2">CC / NIT</th>
@@ -224,7 +224,7 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
             <X className="h-3.5 w-3.5" />
           </button>
           {errEdit && (
-            <div className="mt-1 text-[0.6rem] text-terracotta break-all text-right">
+            <div className="mt-1 text-[0.7rem] text-terracotta break-all text-right">
               {errEdit}
             </div>
           )}
@@ -257,7 +257,7 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
           {mut.isPending ? "…" : c.activo ? "Desactivar" : "Activar"}
         </button>
         {errEdit && (
-          <div role="alert" className="mt-1 text-[0.6rem] text-terracotta break-all text-right">
+          <div role="alert" className="mt-1 text-[0.7rem] text-terracotta break-all text-right">
             {errEdit}
           </div>
         )}
@@ -271,7 +271,7 @@ function Field({ label, value, onChange, placeholder }: {
 }) {
   return (
     <div>
-      <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
+      <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
       <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
         className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />
     </div>

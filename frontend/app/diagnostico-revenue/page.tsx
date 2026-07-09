@@ -186,7 +186,7 @@ ${asesoras || "  · sin asignaciones"}`;
     >
       {/* Selector de ventana */}
       <div className="flex flex-wrap items-center gap-3">
-        <label className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Ventana</label>
+        <label className="text-[0.7rem] uppercase tracking-[0.14em] text-graphite">Ventana</label>
         <div className="inline-flex overflow-hidden rounded-sm border border-border bg-card">
           {[3, 8, 15, 30, 60].map((dd) => (
             <button
@@ -263,10 +263,10 @@ ${asesoras || "  · sin asignaciones"}`;
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b border-border">
-                          <th className="text-left py-1 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Asesora</th>
-                          <th className="text-right py-1 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Asig.</th>
-                          <th className="text-right py-1 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Atend.</th>
-                          <th className="text-right py-1 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Pend.</th>
+                          <th className="text-left py-1 text-[0.7rem] uppercase tracking-[0.12em] text-graphite">Asesora</th>
+                          <th className="text-right py-1 text-[0.7rem] uppercase tracking-[0.12em] text-graphite">Asig.</th>
+                          <th className="text-right py-1 text-[0.7rem] uppercase tracking-[0.12em] text-graphite">Atend.</th>
+                          <th className="text-right py-1 text-[0.7rem] uppercase tracking-[0.12em] text-graphite">Pend.</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -524,9 +524,9 @@ ${asesoras || "  · sin asignaciones"}`;
             <table className="w-full text-sm">
               <thead className="border-b border-border">
                 <tr>
-                  <th className="text-left py-2 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Status</th>
-                  <th className="text-right py-2 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Cantidad</th>
-                  <th className="text-right py-2 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">%</th>
+                  <th className="text-left py-2 text-[0.7rem] uppercase tracking-[0.12em] text-graphite">Status</th>
+                  <th className="text-right py-2 text-[0.7rem] uppercase tracking-[0.12em] text-graphite">Cantidad</th>
+                  <th className="text-right py-2 text-[0.7rem] uppercase tracking-[0.12em] text-graphite">%</th>
                 </tr>
               </thead>
               <tbody>

@@ -163,7 +163,7 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
       <div className="flex items-center justify-between px-5 py-3 bg-gradient-to-r from-ink to-[#1A2B2F] text-white">
         <div className="flex items-center gap-3">
           <div>
-            <p className="text-[0.6rem] font-bold uppercase tracking-[0.2em] text-steel/70">Orden</p>
+            <p className="text-[0.7rem] font-bold uppercase tracking-[0.2em] text-steel/70">Orden</p>
             <p className="text-lg font-bold">{pedido.orden_tienda || pedido.orden_melonn}</p>
           </div>
           {pedido.orden_tienda && pedido.orden_melonn && pedido.orden_tienda !== pedido.orden_melonn && (
@@ -227,7 +227,7 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
 
           {tel && (
             <div className="flex items-center gap-2 rounded-md bg-concrete/50 px-3 py-2">
-              <span className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Contactar</span>
+              <span className="text-[0.7rem] font-bold uppercase tracking-wider text-graphite">Contactar</span>
               <a
                 href={`tel:+57${tel}`}
                 onClick={() => { if (esPendiente && canWrite) contactoMut.mutate("llamada"); }}
@@ -259,7 +259,7 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
           {/* Respuesta del cliente (solo en Pendientes, después de contactar) */}
           {esPendiente && canWrite && contactado && !respuesta && (
             <div className="rounded-md border border-navy/20 bg-navy/5 px-3 py-3 space-y-2">
-              <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">
+              <p className="text-[0.7rem] font-bold uppercase tracking-wider text-graphite">
                 ¿Cuál fue la respuesta del cliente?
               </p>
               <div className="flex flex-wrap gap-2">
@@ -295,7 +295,7 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
               respuesta === "rechazo" ? "border-rust/40 bg-rust/5" :
               "border-border bg-concrete/40"
             }`}>
-              <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Respuesta cliente</p>
+              <p className="text-[0.7rem] font-bold uppercase tracking-wider text-graphite">Respuesta cliente</p>
               <p className="text-sm font-semibold text-ink">
                 {respuesta === "aprobacion" ? "✓ Acuerdo cliente — listo para autorizar despacho" :
                  respuesta === "rechazo"    ? "✗ Cliente rechazó el pedido" :
@@ -324,14 +324,14 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
 
           {pedido.valor_num ? (
             <div className="rounded-md bg-navy/5 border border-navy/20 px-3 py-2">
-              <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Valor COD</p>
+              <p className="text-[0.7rem] font-bold uppercase tracking-wider text-graphite">Valor COD</p>
               <p className="text-lg font-bold text-navy">{formatMoneyShort(pedido.valor_num)}</p>
             </div>
           ) : null}
 
           {pedido.motivo_riesgo && pedido.motivo_riesgo !== "—" && (
             <div className="rounded-md bg-rust/5 border border-rust/20 px-3 py-2">
-              <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Motivo de riesgo</p>
+              <p className="text-[0.7rem] font-bold uppercase tracking-wider text-graphite">Motivo de riesgo</p>
               <p className="text-sm font-semibold text-ink">{pedido.motivo_riesgo}</p>
             </div>
           )}
@@ -341,7 +341,7 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
               estos botones no aplican porque aún no hay un problema que gestionar. */}
           {canWrite && mostrarAccionesCompletas && (
             <div>
-              <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-2">Marcar acción (gestión de novedad)</p>
+              <p className="text-[0.7rem] font-bold uppercase tracking-wider text-graphite mb-2">Marcar acción (gestión de novedad)</p>
               <p className="text-[0.65rem] text-graphite mb-2">
                 Registrado como: <span className="font-semibold text-ink">{currentUser}</span>
               </p>
@@ -367,7 +367,7 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
           {/* Nota libre — solo si tiene permisos */}
           {canWrite && (
             <div>
-              <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-2">Agregar nota</p>
+              <p className="text-[0.7rem] font-bold uppercase tracking-wider text-graphite mb-2">Agregar nota</p>
               <div className="flex gap-2">
                 <input
                   value={notaTxt}
@@ -396,7 +396,7 @@ export function PedidoDetalle({ pedido, onClose }: { pedido: Pedido; onClose: ()
 
         {/* Columna derecha — Timeline */}
         <div className="p-5 bg-concrete/30">
-          <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-3">
+          <p className="text-[0.7rem] font-bold uppercase tracking-wider text-graphite mb-3">
             Avance · Timeline ({timeline.length})
           </p>
 
@@ -432,7 +432,7 @@ function TimelineItem({ item }: { item: { tipo: string; descripcion: string; aut
       <div className={`flex-none w-1 rounded-full ${isNota ? "bg-graphite/30" : "bg-steel"}`} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-0.5">
-          <span className={`text-[0.6rem] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+          <span className={`text-[0.7rem] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
             isNota ? "bg-graphite/10 text-graphite" : "bg-steel/15 text-navy"
           }`}>
             {isNota ? "NOTA" : item.tipo.replace("_", " ").toUpperCase()}
@@ -468,7 +468,7 @@ function ProductosPedido({ pedido }: { pedido: Pedido }) {
   return (
     <div className="rounded-md border border-border bg-white p-3 space-y-2">
       <div className="flex items-center justify-between">
-        <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">
+        <p className="text-[0.7rem] font-bold uppercase tracking-wider text-graphite">
           {items.length === 1 ? "Producto" : `Productos (${items.length})`}
         </p>
         {totalUnidades > 1 && (
@@ -545,7 +545,7 @@ function EditarDatos({
 
   return (
     <div className="rounded-md border border-steel/30 bg-steel/5 p-3 space-y-2">
-      <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-1">
+      <p className="text-[0.7rem] font-bold uppercase tracking-wider text-graphite mb-1">
         Editar datos manuales (override)
       </p>
       <div className="grid grid-cols-1 gap-2">
@@ -583,7 +583,7 @@ function EditarDatos({
           {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Guardar"}
         </button>
       </div>
-      <p className="text-[0.6rem] text-graphite italic">
+      <p className="text-[0.7rem] text-graphite italic">
         Los datos manuales quedan registrados con tu nombre como autor y se aplican en todas las páginas.
       </p>
     </div>
@@ -596,7 +596,7 @@ function InfoRow({ icon: Icon, label, value }: { icon: React.ComponentType<{ cla
     <div className="flex items-start gap-2">
       <Icon className="h-3.5 w-3.5 text-graphite mt-0.5 flex-none" />
       <div className="min-w-0">
-        <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">{label}</p>
+        <p className="text-[0.7rem] font-bold uppercase tracking-wider text-graphite">{label}</p>
         <p className="text-sm font-semibold text-ink truncate">{value}</p>
       </div>
     </div>

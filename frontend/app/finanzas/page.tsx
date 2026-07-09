@@ -63,7 +63,7 @@ export default function FinanzasPage() {
               <thead>
                 <tr className="border-b border-border">
                   {["Estado", "Pedidos", "Valor COD", "% del total"].map((h, i) => (
-                    <th key={h} className={`py-2 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i === 0 ? "text-left" : "text-right"}`}>
+                    <th key={h} className={`py-2 text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i === 0 ? "text-left" : "text-right"}`}>
                       {h}
                     </th>
                   ))}

@@ -98,7 +98,7 @@ export default function RolloDetallePage() {
 function Kpi({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-[0.6rem] uppercase tracking-widest text-graphite">{label}</p>
+      <p className="text-[0.7rem] uppercase tracking-widest text-graphite">{label}</p>
       <p className="mt-1 font-display text-xl text-ink-900 tabular">{value}</p>
     </div>
   );
@@ -106,7 +106,7 @@ function Kpi({ label, value }: { label: string; value: string }) {
 function Row({ label, value }: { label: string; value: any }) {
   return (
     <div className="flex items-baseline gap-3 border-b border-border/40 pb-2">
-      <span className="text-[0.62rem] uppercase tracking-widest text-graphite min-w-[140px]">{label}</span>
+      <span className="text-[0.7rem] uppercase tracking-widest text-graphite min-w-[140px]">{label}</span>
       <span className="text-ink-900">{value ?? "—"}</span>
     </div>
   );

@@ -316,7 +316,7 @@ function Row({
               <div className="text-graphite">
                 {p.variante && <span>Talla {p.variante}</span>}
                 {p.items && p.items.length > 1 && (
-                  <span className="ml-1 inline-block rounded-sm bg-steel-300/20 px-1 py-0.5 text-[0.6rem] font-semibold text-navy-700">
+                  <span className="ml-1 inline-block rounded-sm bg-steel-300/20 px-1 py-0.5 text-[0.7rem] font-semibold text-navy-700">
                     +{p.items.length - 1} más
                   </span>
                 )}
@@ -408,7 +408,7 @@ function NivelBadge({ nivel }: { nivel?: NivelRiesgo }) {
 function Th({ children, align = "left" }: { children?: React.ReactNode; align?: "left" | "right" }) {
   const alignCls = align === "right" ? "text-right" : "text-left";
   return (
-    <th className={`px-3 py-2.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${alignCls}`}>
+    <th className={`px-3 py-2.5 text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite ${alignCls}`}>
       {children}
     </th>
   );
@@ -430,7 +430,7 @@ function Select({
 }) {
   return (
     <label className="flex items-center gap-2 text-xs text-graphite">
-      <span className="font-semibold uppercase tracking-[0.12em] text-[0.62rem]">{label}</span>
+      <span className="font-semibold uppercase tracking-[0.12em] text-[0.7rem]">{label}</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}

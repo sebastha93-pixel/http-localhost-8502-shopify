@@ -155,7 +155,7 @@ export default function InventarioPage() {
                         <p className="font-display text-base text-ink-900 tabular">
                           {r.metros_disponible.toLocaleString("es-CO", { maximumFractionDigits: 2 })} m
                         </p>
-                        <p className="text-[0.6rem] text-graphite tabular">
+                        <p className="text-[0.7rem] text-graphite tabular">
                           de {r.metros_inicial.toLocaleString("es-CO", { maximumFractionDigits: 0 })}
                         </p>
                       </div>
@@ -201,7 +201,7 @@ function RollosDeTela({ tela, tono, seleccion, onToggle, onSeleccionarTodos }: {
     <div className="bg-cloud/30 border-t border-border overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+          <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
             <th className="pl-8 pr-2 py-2 w-[40px]">
               <input type="checkbox" checked={todosMarcados}
                 onChange={() => onSeleccionarTodos(ids, !todosMarcados)}
@@ -244,7 +244,7 @@ function RollosDeTela({ tela, tono, seleccion, onToggle, onSeleccionarTodos }: {
 function Kpi({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-[0.6rem] uppercase tracking-widest text-graphite">{label}</p>
+      <p className="text-[0.7rem] uppercase tracking-widest text-graphite">{label}</p>
       <p className="mt-1 font-display text-xl text-ink-900 tabular">{value}</p>
     </div>
   );

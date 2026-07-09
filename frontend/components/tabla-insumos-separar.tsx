@@ -125,17 +125,17 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
   return (
     <div className={`rounded-sm border border-navy-600/30 bg-navy-600/[0.03] ${className}`}>
       <div className="px-3 py-2 border-b border-navy-600/20 flex items-center justify-between gap-2">
-        <p className="text-[0.6rem] uppercase tracking-widest text-navy-600 font-bold">
+        <p className="text-[0.7rem] uppercase tracking-widest text-navy-600 font-bold">
           Separar estos insumos ({label})
         </p>
         <div className="flex items-center gap-3">
           {total > 0 && !confirmado?.ok && (
-            <p className="text-[0.6rem] text-graphite tabular">
+            <p className="text-[0.7rem] text-graphite tabular">
               {contados}/{total} contados
             </p>
           )}
           {q.data?.cantidad_base != null && (
-            <p className="text-[0.6rem] text-graphite tabular">
+            <p className="text-[0.7rem] text-graphite tabular">
               Base: {q.data.cantidad_base} prendas
             </p>
           )}
@@ -168,7 +168,7 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
       ) : (
         <table className="w-full text-[0.7rem]">
           <thead className="bg-cloud/40 border-b border-border">
-            <tr className="text-left text-[0.55rem] uppercase tracking-widest text-graphite">
+            <tr className="text-left text-[0.68rem] uppercase tracking-widest text-graphite">
               <th className="px-3 py-1.5 w-[36px]">OK</th>
               <th className="px-3 py-1.5">Insumo</th>
               <th className="px-3 py-1.5 text-right">Cantidad a separar</th>
@@ -217,7 +217,7 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
             Marcar todo OK
           </button>
           {!todoContado && total > 0 && (
-            <span className="text-[0.6rem] text-graphite">Faltan {total - contados} por contar</span>
+            <span className="text-[0.7rem] text-graphite">Faltan {total - contados} por contar</span>
           )}
         </div>
       )}
@@ -229,7 +229,7 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
       {/* Regla MALE'DENIM: medidas de cierres por talla según tipo de tiro */}
       {tipo === "confeccion" && (
         <div className="border-t border-navy-600/20">
-          <p className="px-3 pt-2 text-[0.55rem] uppercase tracking-widest text-graphite font-bold">
+          <p className="px-3 pt-2 text-[0.68rem] uppercase tracking-widest text-graphite font-bold">
             Medidas cierres por talla (cm)
           </p>
           <table className="w-full text-[0.65rem] mt-1">

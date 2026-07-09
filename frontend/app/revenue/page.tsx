@@ -210,7 +210,7 @@ function FugasHero({
           </p>
         </div>
         <div className="text-right">
-          <p className="text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-graphite">
+          <p className="text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-graphite">
             Plata en riesgo ahora
           </p>
           <p className="font-display tabular text-xl font-medium leading-none text-terracotta">
@@ -405,18 +405,18 @@ function ConversationDetailPanel({
                     ["Cierre",    audit.closing_score],
                   ] as const).map(([k, v]) => (
                     <div key={k} className="rounded-sm border border-border bg-card px-2 py-1.5">
-                      <p className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite">{k}</p>
+                      <p className="text-[0.7rem] uppercase tracking-[0.1em] text-graphite">{k}</p>
                       <p className="font-display text-sm font-medium text-ink-900">{v ?? "—"}</p>
                     </div>
                   ))}
                 </div>
                 {audit.lost_moment && (
                   <div className="mt-3 stitch-rail pl-3 rounded-sm bg-terracotta/[0.06] py-2 pr-3">
-                    <p className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite">Momento crítico</p>
+                    <p className="text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Momento crítico</p>
                     <p className="mt-0.5 text-sm italic text-ink-900">&ldquo;{audit.lost_moment}&rdquo;</p>
                     {audit.recommended_response && (
                       <>
-                        <p className="mt-2 text-[0.62rem] uppercase tracking-[0.1em] text-graphite">Debió responder</p>
+                        <p className="mt-2 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Debió responder</p>
                         <p className="mt-0.5 text-sm italic text-sage">&ldquo;{audit.recommended_response}&rdquo;</p>
                       </>
                     )}
@@ -582,7 +582,7 @@ function TendenciasTab({ daysBack }: { daysBack: number }) {
               ["Cotización → Cierre",   conCotizacion ? Math.round((1 - cierre / conCotizacion) * 100) : 0],
             ].map(([label, pct]) => (
               <div key={label as string} className="rounded-sm border border-terracotta/25 bg-terracotta/[0.04] px-3 py-2">
-                <p className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite">{label}</p>
+                <p className="text-[0.7rem] uppercase tracking-[0.1em] text-graphite">{label}</p>
                 <p className="font-display tabular text-base font-medium text-terracotta">
                   {pct}% se fuga
                 </p>
@@ -650,9 +650,9 @@ function TendenciasTab({ daysBack }: { daysBack: number }) {
                       <div className="h-px w-full bg-border" />
                     )}
                   </div>
-                  <p className="mt-1 text-[0.6rem] tabular text-graphite">{h.hora}</p>
+                  <p className="mt-1 text-[0.7rem] tabular text-graphite">{h.hora}</p>
                   {total > 0 && (
-                    <p className="text-[0.55rem] tabular text-graphite/70">{total}</p>
+                    <p className="text-[0.68rem] tabular text-graphite/70">{total}</p>
                   )}
                 </div>
               );
@@ -688,7 +688,7 @@ function TendenciasTab({ daysBack }: { daysBack: number }) {
                     )}
                   </div>
                   <p className="mt-1 text-xs font-medium">{dia.dia_label}</p>
-                  <p className="text-[0.62rem] tabular text-graphite">
+                  <p className="text-[0.7rem] tabular text-graphite">
                     {dia.total} {dia.total === 1 ? "conv" : "convs"} · {dia.total ? `${fugaPct.toFixed(0)}% fuga` : "—"}
                   </p>
                 </div>
@@ -789,15 +789,15 @@ function LeadFieldsCard({ daysBack }: { daysBack: number }) {
         <div className="grid gap-4 md:grid-cols-2">
           {fieldNames.map((fname) => (
             <div key={fname} className="rounded-sm border border-border bg-card p-3">
-              <p className="mb-2 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">{fname}</p>
+              <p className="mb-2 text-[0.7rem] uppercase tracking-[0.12em] text-graphite">{fname}</p>
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border">
-                    <th className="text-left py-1 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Valor</th>
-                    <th className="text-right py-1 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Leads</th>
-                    <th className="text-right py-1 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Ganados</th>
-                    <th className="text-right py-1 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">% Conv.</th>
-                    <th className="text-right py-1 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Revenue</th>
+                    <th className="text-left py-1 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Valor</th>
+                    <th className="text-right py-1 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Leads</th>
+                    <th className="text-right py-1 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Ganados</th>
+                    <th className="text-right py-1 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">% Conv.</th>
+                    <th className="text-right py-1 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Revenue</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -874,7 +874,7 @@ function ChatsActivosKommoCard() {
       </div>
       <div className="p-5 grid gap-5 md:grid-cols-[auto_1fr]">
         <div className="flex flex-col items-start">
-          <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">CHATS ABIERTOS</p>
+          <p className="text-[0.7rem] uppercase tracking-[0.14em] text-graphite">CHATS ABIERTOS</p>
           <p className="font-display text-6xl text-terracotta tabular leading-none mt-1">
             {(d.chats_abiertos ?? d.chats_no_leidos).toLocaleString("es-CO")}
           </p>
@@ -884,7 +884,7 @@ function ChatsActivosKommoCard() {
         </div>
         <div className="grid gap-4 md:grid-cols-2">
           <div>
-            <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite mb-2">Por canal</p>
+            <p className="text-[0.7rem] uppercase tracking-[0.14em] text-graphite mb-2">Por canal</p>
             {Object.keys(porOrigen).length === 0 ? (
               <p className="text-xs text-graphite italic">Sin datos</p>
             ) : (
@@ -899,7 +899,7 @@ function ChatsActivosKommoCard() {
             )}
           </div>
           <div>
-            <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite mb-2">Por asesora</p>
+            <p className="text-[0.7rem] uppercase tracking-[0.14em] text-graphite mb-2">Por asesora</p>
             {porAsesora.length === 0 ? (
               <p className="text-xs text-graphite italic">Sin asignación</p>
             ) : (
@@ -953,19 +953,19 @@ function VentasEscondidasCard() {
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           <div>
-            <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Total perdidos</p>
+            <p className="text-[0.7rem] uppercase tracking-[0.14em] text-graphite">Total perdidos</p>
             <p className="font-display text-2xl text-ink-900 tabular">{total.toLocaleString("es-CO")}</p>
           </div>
           <div>
-            <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Mal clasificados</p>
+            <p className="text-[0.7rem] uppercase tracking-[0.14em] text-graphite">Mal clasificados</p>
             <p className="font-display text-2xl text-terracotta tabular">{mal.toLocaleString("es-CO")}</p>
           </div>
           <div>
-            <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">% Inflación</p>
+            <p className="text-[0.7rem] uppercase tracking-[0.14em] text-graphite">% Inflación</p>
             <p className="font-display text-2xl text-terracotta tabular">{pct}%</p>
           </div>
           <div>
-            <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Valor en muestra</p>
+            <p className="text-[0.7rem] uppercase tracking-[0.14em] text-graphite">Valor en muestra</p>
             <p className="font-display text-2xl text-ink-900 tabular">
               {valorEscondido > 0 ? `$${Math.round(valorEscondido / 1000).toLocaleString("es-CO")}K` : "—"}
             </p>
@@ -977,13 +977,13 @@ function VentasEscondidasCard() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="text-left py-2 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Lead</th>
-                  <th className="text-left py-2 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Cerrado</th>
-                  <th className="text-left py-2 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Motivo Ganado</th>
-                  <th className="text-left py-2 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Motivo Pérdida</th>
-                  <th className="text-right py-2 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Talla / Uds</th>
-                  <th className="text-right py-2 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">N° Compras</th>
-                  <th className="text-right py-2 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Valor</th>
+                  <th className="text-left py-2 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Lead</th>
+                  <th className="text-left py-2 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Cerrado</th>
+                  <th className="text-left py-2 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Motivo Ganado</th>
+                  <th className="text-left py-2 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Motivo Pérdida</th>
+                  <th className="text-right py-2 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Talla / Uds</th>
+                  <th className="text-right py-2 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">N° Compras</th>
+                  <th className="text-right py-2 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Valor</th>
                 </tr>
               </thead>
               <tbody>
@@ -1047,7 +1047,7 @@ function AlertasTab({ onSelect }: { onSelect: (id: string) => void }) {
             <option value={120}>2 horas</option>
             <option value={240}>4 horas</option>
           </select>
-          <p className="ml-auto text-[0.62rem] uppercase tracking-[0.1em] text-graphite">
+          <p className="ml-auto text-[0.7rem] uppercase tracking-[0.1em] text-graphite">
             Refresca cada 60 s
           </p>
         </div>
@@ -1135,7 +1135,7 @@ function CoachingTab({
               </option>
             ))}
           </select>
-          <span className="ml-2 text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Ventana</span>
+          <span className="ml-2 text-[0.7rem] uppercase tracking-[0.14em] text-graphite">Ventana</span>
           <div className="inline-flex overflow-hidden rounded-sm border border-border bg-card">
             {[3, 8, 15, 30].map(d => (
               <button
@@ -1186,7 +1186,7 @@ function CoachingTab({
                 const [label, value, tone] = row as [string, any, string?];
                 return (
                   <div key={i} className="rounded-sm border border-border bg-card px-3 py-2">
-                    <p className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite">{label}</p>
+                    <p className="text-[0.7rem] uppercase tracking-[0.1em] text-graphite">{label}</p>
                     <p className={`mt-1 font-display tabular text-base font-medium ${
                       tone === "sage" ? "text-sage" : tone === "terracotta" ? "text-terracotta" : "text-ink-900"
                     }`}>
@@ -1240,7 +1240,7 @@ function CoachingTab({
                 <div className="grid gap-2 md:grid-cols-2">
                   {q.data.coaching.plan_accion_30_dias.map((s: any, i: number) => (
                     <div key={i} className="rounded-sm border border-border bg-card p-3">
-                      <p className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite">Semana {s.semana}</p>
+                      <p className="text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Semana {s.semana}</p>
                       <p className="mt-0.5 text-sm font-medium text-ink-900">{s.objetivo}</p>
                       <p className="mt-1 text-xs text-graphite">{s.ejercicio}</p>
                     </div>
@@ -1277,7 +1277,7 @@ function CoachingTab({
               </div>
             )}
 
-            <p className="border-t border-border pt-2 text-[0.62rem] uppercase tracking-[0.1em] text-graphite">
+            <p className="border-t border-border pt-2 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">
               {q.data.modelo} · costo {q.data.costo_usd ? `$${q.data.costo_usd.toFixed(4)}` : "—"} USD
             </p>
           </div>
@@ -1342,7 +1342,7 @@ function CasoProblemaCard({
       <div className="space-y-3 px-4 py-3">
         {c.lost_moment && (
           <div className="stitch-rail pl-3 rounded-sm bg-terracotta/[0.05] py-2 pr-3">
-            <p className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite">
+            <p className="text-[0.7rem] uppercase tracking-[0.1em] text-graphite">
               Momento crítico — qué se dijo
             </p>
             <p className="mt-0.5 text-sm italic text-ink-900">&ldquo;{c.lost_moment}&rdquo;</p>
@@ -1350,7 +1350,7 @@ function CasoProblemaCard({
         )}
         {c.recommended_response && (
           <div className="rounded-sm bg-sage/[0.06] border-l-2 border-l-sage px-3 py-2">
-            <p className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite">
+            <p className="text-[0.7rem] uppercase tracking-[0.1em] text-graphite">
               Qué debió responder
             </p>
             <p className="mt-0.5 text-sm italic text-sage">&ldquo;{c.recommended_response}&rdquo;</p>
@@ -1442,6 +1442,28 @@ export default function RevenuePage() {
   const [replyFilter, setReplyFilter] = useState<string>("");
   const [onlyUnassigned, setOnlyUnassigned] = useState<boolean>(false);
   const searchRef = useRef<HTMLInputElement>(null);
+
+  // ── Ventana y tab persistentes en la URL (?w=h4|d7&tab=) ──
+  const urlInit = useRef(false);
+  useEffect(() => {
+    if (urlInit.current) return;
+    urlInit.current = true;
+    const q = new URLSearchParams(window.location.search);
+    const w = q.get("w");
+    if (w && /^h\d+$/.test(w)) setHoursBack(Number(w.slice(1)));
+    else if (w && /^d\d+$/.test(w)) { setHoursBack(null); setDaysBack(Number(w.slice(1))); }
+    const tab = q.get("tab");
+    if (tab) setActiveTab(tab);
+  }, []);
+  useEffect(() => {
+    if (!urlInit.current) return;
+    const q = new URLSearchParams(window.location.search);
+    const w = hoursBack !== null ? `h${hoursBack}` : `d${daysBack}`;
+    if (w !== "d1") q.set("w", w); else q.delete("w");
+    if (activeTab !== "conversaciones") q.set("tab", activeTab); else q.delete("tab");
+    const qs = q.toString();
+    window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
+  }, [hoursBack, daysBack, activeTab]);
 
   // "/" atajo para enfocar buscador
   useEffect(() => {
@@ -1596,6 +1618,7 @@ ${asesoras || "  · sin asignaciones"}`;
       title="Revenue Intelligence"
       subtitle="Auditoría comercial: conversaciones, equipo, conversión"
       isFetching={statsQ.isFetching}
+      dataUpdatedAt={Math.max(statsQ.dataUpdatedAt || 0, convsQ.dataUpdatedAt || 0)}
     >
       {/* CHATS SIN RESPONDER — espejo del 105 rojo de Kommo, el KPI operativo */}
       <ChatsActivosKommoCard />
@@ -1650,16 +1673,16 @@ ${asesoras || "  · sin asignaciones"}`;
             <div className="grid gap-4 md:grid-cols-2">
               <Card>
                 <CardContent className="p-4">
-                  <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite mb-2">Por canal · entrantes vs salientes</p>
+                  <p className="text-[0.7rem] uppercase tracking-[0.14em] text-graphite mb-2">Por canal · entrantes vs salientes</p>
                   {Object.keys(briefingQ.data.por_canal_entrantes || {}).length === 0 && Object.keys(briefingQ.data.por_canal_salientes || {}).length === 0 ? (
                     <p className="text-xs text-graphite italic">Sin canales registrados hoy.</p>
                   ) : (
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b border-border">
-                          <th className="text-left py-1 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Canal</th>
-                          <th className="text-right py-1 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Entrantes</th>
-                          <th className="text-right py-1 text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Salientes</th>
+                          <th className="text-left py-1 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Canal</th>
+                          <th className="text-right py-1 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Entrantes</th>
+                          <th className="text-right py-1 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Salientes</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1683,17 +1706,17 @@ ${asesoras || "  · sin asignaciones"}`;
 
               <Card>
                 <CardContent className="p-4">
-                  <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite mb-2">Por asesora · ordenadas por pendientes</p>
+                  <p className="text-[0.7rem] uppercase tracking-[0.14em] text-graphite mb-2">Por asesora · ordenadas por pendientes</p>
                   {briefingQ.data.por_asesora.length === 0 ? (
                     <p className="text-xs text-graphite italic">Sin asesoras con conversaciones hoy.</p>
                   ) : (
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b border-border">
-                          <th className="text-left py-1 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Asesora</th>
-                          <th className="text-right py-1 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Asig.</th>
-                          <th className="text-right py-1 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Atend.</th>
-                          <th className="text-right py-1 text-[0.62rem] uppercase tracking-[0.12em] text-graphite">Pend.</th>
+                          <th className="text-left py-1 text-[0.7rem] uppercase tracking-[0.12em] text-graphite">Asesora</th>
+                          <th className="text-right py-1 text-[0.7rem] uppercase tracking-[0.12em] text-graphite">Asig.</th>
+                          <th className="text-right py-1 text-[0.7rem] uppercase tracking-[0.12em] text-graphite">Atend.</th>
+                          <th className="text-right py-1 text-[0.7rem] uppercase tracking-[0.12em] text-graphite">Pend.</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1728,7 +1751,7 @@ ${asesoras || "  · sin asignaciones"}`;
       {/* ASESORAS EN LÍNEA — chips clicables para filtrar la lista de abajo */}
       <section>
         <div className="flex items-baseline justify-between mb-2">
-          <p className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">
+          <p className="text-[0.7rem] uppercase tracking-[0.14em] text-graphite">
             Asesoras en línea · toca para filtrar leads asignados
           </p>
           {advisorFilter && (
@@ -1790,7 +1813,7 @@ ${asesoras || "  · sin asignaciones"}`;
 
       {/* SELECTOR DE PERÍODO (dropdown estilo Shopify, ventana rolling) */}
       <div className="flex flex-wrap items-center gap-3">
-        <label className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Periodo</label>
+        <label className="text-[0.7rem] uppercase tracking-[0.14em] text-graphite">Periodo</label>
         <DateRangePicker
           showCalendar={false}
           value={{ periodo: hoursBack !== null ? `h${hoursBack}` : `d${daysBack}` }}
@@ -1799,7 +1822,7 @@ ${asesoras || "  · sin asignaciones"}`;
             { id: "h4",   label: "Últimas 4 horas" },
             { id: "h12",  label: "Últimas 12 horas" },
             { id: "d1",   label: "Hoy" },
-            { id: "d2",   label: "Últimas 48 horas" },
+            { id: "h48",  label: "Últimas 48 horas" },
             { id: "d7",   label: "Últimos 7 días" },
             { id: "d30",  label: "Últimos 30 días" },
             { id: "d90",  label: "Últimos 90 días" },
@@ -1932,7 +1955,7 @@ ${asesoras || "  · sin asignaciones"}`;
                     <thead>
                       <tr className="border-b border-border text-left">
                         {["Cliente", "Canal", "Asesora", "Estado", "Mensajes", "Última actividad", "Score IA"].map(h => (
-                          <th key={h} className="py-2 pr-3 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                          <th key={h} className="py-2 pr-3 text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
                             {h}
                           </th>
                         ))}
@@ -2073,7 +2096,7 @@ ${asesoras || "  · sin asignaciones"}`;
                     <thead>
                       <tr className="border-b border-border text-left">
                         {["#", "Asesora", "Asignadas", "Atendidas", "Atend. 24h", "Dormidos 48h", "% Resp.", "Ganadas", "Perdidas", "% Conv.", "Ticket prom.", "Tiempo resp.", "Edad cierre", "Último activo"].map(h => (
-                          <th key={h} className="py-2 pr-3 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                          <th key={h} className="py-2 pr-3 text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
                             {h}
                           </th>
                         ))}
@@ -2129,7 +2152,7 @@ ${asesoras || "  · sin asignaciones"}`;
         <TabsContent value="mensajes">
           <Card>
             <CardContent className="p-5">
-              <p className="mb-3 text-[0.62rem] uppercase tracking-[0.1em] text-graphite">Refresca cada 60 s</p>
+              <p className="mb-3 text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Refresca cada 60 s</p>
               {msgsQ.isLoading ? <LoadingState /> : msgsQ.isError ? <ErrorState error={msgsQ.error} /> : (
                 <div className="space-y-1">
                   {(msgsQ.data?.messages || []).map((m) => (

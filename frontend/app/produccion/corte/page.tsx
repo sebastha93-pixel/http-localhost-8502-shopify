@@ -72,7 +72,7 @@ export default function CortesPage() {
           <CardContent className="p-0">
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
-                <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                   <th className="px-4 py-2">Consecutivo</th>
                   <th className="px-4 py-2">Referencia</th>
                   <th className="px-4 py-2">Tono</th>
@@ -94,7 +94,7 @@ export default function CortesPage() {
                     </td>
                     <td className="px-4 py-2 text-ink-900">
                       {o.referencia?.codigo_referencia || "—"}
-                      <div className="text-[0.6rem] text-graphite">{o.referencia?.nombre || ""}</div>
+                      <div className="text-[0.7rem] text-graphite">{o.referencia?.nombre || ""}</div>
                     </td>
                     <td className="px-4 py-2 text-graphite">{o.tono || "—"}</td>
                     <td className="px-4 py-2 text-right tabular">{o.largo_trazo}</td>

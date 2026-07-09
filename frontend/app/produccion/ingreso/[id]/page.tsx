@@ -145,7 +145,7 @@ export default function DetalleIngresoPage() {
           <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-cloud/60 border-b border-border">
-              <tr className="text-left text-[0.62rem] uppercase tracking-[0.12em] text-graphite">
+              <tr className="text-left text-[0.7rem] uppercase tracking-[0.12em] text-graphite">
                 <th className="px-4 py-2 w-[36px]">
                   <input type="checkbox" checked={todosMarcados} onChange={toggleTodos}
                     aria-label="Seleccionar todos los rollos"
@@ -171,7 +171,7 @@ export default function DetalleIngresoPage() {
                   </td>
                   <td className="px-4 py-2 tabular">
                     <div className="font-semibold text-navy-600">{r.codigo_interno}</div>
-                    <div className="text-[0.6rem] text-graphite mt-0.5">Barcode: {r.barcode}</div>
+                    <div className="text-[0.7rem] text-graphite mt-0.5">Barcode: {r.barcode}</div>
                   </td>
                   <td className="px-4 py-2">{r.descripcion_tela}</td>
                   <td className="px-4 py-2 text-graphite">{r.tono || "—"}</td>
@@ -203,7 +203,7 @@ export default function DetalleIngresoPage() {
 function Kpi({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-[0.6rem] uppercase tracking-widest text-graphite">{label}</p>
+      <p className="text-[0.7rem] uppercase tracking-widest text-graphite">{label}</p>
       <p className="mt-1 font-display text-xl text-ink-900 tabular">{value}</p>
     </div>
   );

@@ -199,7 +199,7 @@ export default function NuevaOrdenCortePage() {
           <CardContent className="p-5 space-y-4">
             <p className="section-label">Referencia</p>
             <div ref={refBoxRef} className="relative">
-              <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+              <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
                 Precosteo firmado *
               </label>
               <button type="button" onClick={() => setRefOpen((v) => !v)}
@@ -243,7 +243,7 @@ export default function NuevaOrdenCortePage() {
                             </div>
                           </div>
                           {esMuestra && (
-                            <span className="ml-2 shrink-0 rounded-sm bg-navy-600/10 px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-widest text-navy-600">
+                            <span className="ml-2 shrink-0 rounded-sm bg-navy-600/10 px-1.5 py-0.5 text-[0.68rem] font-bold uppercase tracking-widest text-navy-600">
                               Muestra
                             </span>
                           )}
@@ -254,7 +254,7 @@ export default function NuevaOrdenCortePage() {
                 </div>
               )}
               {precosteos.length === 0 && (
-                <p className="mt-1 text-[0.62rem] text-terracotta">
+                <p className="mt-1 text-[0.7rem] text-terracotta">
                   No hay precosteos disponibles. Firma uno o marca uno como muestra de diseño en /produccion/precosteo.
                 </p>
               )}
@@ -263,7 +263,7 @@ export default function NuevaOrdenCortePage() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               {/* Nombre de tela — trae automático del precosteo */}
               <div>
-                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
                   Nombre de tela (auto)
                 </label>
                 <input readOnly value={precosteoSel?.tela || ""}
@@ -275,7 +275,7 @@ export default function NuevaOrdenCortePage() {
               <Input label="Cantidad programada"   value={cantidadProgramada} onChange={setCantidadProgramada} inputMode="numeric" placeholder={totalCurva > 0 ? String(totalCurva) : "0"} />
               {/* Nº capas — auto desde curva (readonly) */}
               <div>
-                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
                   Nº de capas (auto)
                 </label>
                 <div className="w-full rounded-sm border border-border bg-cloud/40 px-3 py-2 text-sm text-ink-900 tabular font-semibold">
@@ -287,7 +287,7 @@ export default function NuevaOrdenCortePage() {
             </div>
 
             <div>
-              <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+              <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
                 Indicaciones (opcional)
               </label>
               <textarea value={indicaciones} onChange={(e) => setIndicaciones(e.target.value)}
@@ -296,13 +296,13 @@ export default function NuevaOrdenCortePage() {
 
             {/* Destinatarios correo — se envían al autorizar */}
             <div>
-              <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+              <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
                 Destinatarios correo de autorización
               </label>
               <input value={destinatarios} onChange={(e) => setDestinatarios(e.target.value)}
                 placeholder="cortador@maledenim.com, produccion@maledenim.com"
                 className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />
-              <p className="mt-1 text-[0.62rem] text-graphite">
+              <p className="mt-1 text-[0.7rem] text-graphite">
                 Emails separados por coma. Al autorizar la orden se enviará el correo con asunto{" "}
                 <span className="font-semibold text-ink-900">
                   &ldquo;Orden de corte referencia {precosteoSel?.codigo_referencia || "XXXX"}&rdquo;
@@ -325,7 +325,7 @@ export default function NuevaOrdenCortePage() {
             <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
               {Object.entries(curva).map(([t, v]) => (
                 <div key={t}>
-                  <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite text-center">
+                  <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite text-center">
                     Talla {t}
                     <button type="button" onClick={() => quitarTalla(t)}
                       className="ml-1 text-terracotta hover:text-crimson" title="Quitar talla">×</button>
@@ -386,7 +386,7 @@ function Input({ label, value, onChange, required = false, placeholder = "", inp
 }) {
   return (
     <div>
-      <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
+      <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
       <input value={value} onChange={(e) => onChange(e.target.value)}
         required={required} placeholder={placeholder} inputMode={inputMode} type={type || "text"}
         className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />
@@ -397,7 +397,7 @@ function Input({ label, value, onChange, required = false, placeholder = "", inp
 function Kpi({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-[0.6rem] uppercase tracking-widest text-graphite">{label}</p>
+      <p className="text-[0.7rem] uppercase tracking-widest text-graphite">{label}</p>
       <p className="mt-1 font-display text-xl text-ink-900 tabular">{value}</p>
     </div>
   );

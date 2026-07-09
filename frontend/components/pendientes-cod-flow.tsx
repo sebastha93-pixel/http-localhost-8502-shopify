@@ -168,7 +168,7 @@ export function PendientesCodFlow({ pedido }: { pedido: Pedido }) {
 
       {/* Estado: no contestó */}
       {noContesta && (
-        <span className="text-[0.6rem] text-rust">
+        <span className="text-[0.7rem] text-rust">
           Cliente no contestó · vuelve a intentar
         </span>
       )}
@@ -204,21 +204,21 @@ export function PendientesCodFlow({ pedido }: { pedido: Pedido }) {
       )}
 
       {autorizError && (
-        <div className="inline-flex items-center gap-1 text-[0.6rem] text-crimson">
+        <div className="inline-flex items-center gap-1 text-[0.7rem] text-crimson">
           <AlertCircle className="h-3 w-3" /> {autorizError.slice(0, 80)}
         </div>
       )}
 
       {/* Hint cuando no se ha contactado */}
       {!contactado && (
-        <p className="text-[0.6rem] text-graphite italic">
+        <p className="text-[0.7rem] text-graphite italic">
           Contacta al cliente antes de autorizar
         </p>
       )}
 
       {/* Error de tabla no existe (primer setup) */}
       {data?.error === "tabla_no_existe" && (
-        <p className="text-[0.6rem] text-rust">
+        <p className="text-[0.7rem] text-rust">
           Falta crear tabla cod_acciones en Supabase
         </p>
       )}

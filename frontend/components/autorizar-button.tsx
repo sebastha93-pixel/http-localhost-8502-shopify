@@ -83,7 +83,7 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
         >
           <AlertCircle className="h-3 w-3" /> Reintentar
         </button>
-        {msg && <span className="text-[0.6rem] text-graphite max-w-[200px] text-right">{msg}</span>}
+        {msg && <span className="text-[0.7rem] text-graphite max-w-[200px] text-right">{msg}</span>}
       </div>
     );
   }
@@ -102,7 +102,7 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
         >
           <Lock className="h-3 w-3" /> Contactar primero
         </button>
-        <span className="text-[0.6rem] text-graphite">Llama o escribe por WhatsApp</span>
+        <span className="text-[0.7rem] text-graphite">Llama o escribe por WhatsApp</span>
       </div>
     );
   }
@@ -116,7 +116,7 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
         >
           <Lock className="h-3 w-3" /> Sin respuesta
         </button>
-        <span className="text-[0.6rem] text-graphite">Vuelve a contactar</span>
+        <span className="text-[0.7rem] text-graphite">Vuelve a contactar</span>
       </div>
     );
   }
@@ -137,7 +137,7 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
         >
           <Lock className="h-3 w-3" /> Falta respuesta
         </button>
-        <span className="text-[0.6rem] text-graphite">Acuerdo / No contesta / Rechazó</span>
+        <span className="text-[0.7rem] text-graphite">Acuerdo / No contesta / Rechazó</span>
       </div>
     );
   }

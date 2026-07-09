@@ -89,7 +89,7 @@ export default function RutasPage() {
           {ETAPAS.filter((e) => e.key).map((e) => (
             <button key={e.key} onClick={() => setEtapa(etapa === e.key ? "" : e.key)}
               className={`text-left rounded-sm border p-3 transition-colors ${etapa === e.key ? "border-navy-600 bg-navy-600/[0.06]" : "border-border bg-cloud/20 hover:bg-cloud/40"}`}>
-              <p className="text-[0.55rem] uppercase tracking-widest text-graphite">{e.label}</p>
+              <p className="text-[0.68rem] uppercase tracking-widest text-graphite">{e.label}</p>
               <p className="mt-1 font-display text-xl text-ink-900 tabular">{kpis[e.key] || 0}</p>
             </button>
           ))}
@@ -120,7 +120,7 @@ export default function RutasPage() {
           <CardContent className="p-0">
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
-                <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                   <th className="px-4 py-2">Consecutivo</th>
                   <th className="px-4 py-2">Referencia</th>
                   <th className="px-4 py-2">Confeccionista</th>
@@ -142,7 +142,7 @@ export default function RutasPage() {
                       </td>
                       <td className="px-4 py-2 text-ink-900">
                         {r.orden_corte?.referencia?.codigo_referencia || "—"}
-                        <div className="text-[0.6rem] text-graphite">
+                        <div className="text-[0.7rem] text-graphite">
                           {r.orden_corte?.referencia?.nombre} {r.orden_corte?.referencia?.tela ? `· ${r.orden_corte.referencia.tela}` : ""}
                         </div>
                       </td>

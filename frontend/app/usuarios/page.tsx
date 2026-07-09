@@ -103,7 +103,7 @@ export default function UsuariosPage() {
                   ["Nombre", "left"], ["Cargo", "left"], ["Email", "left"],
                   ["Rol", "left"], ["Estado", "left"], ["Acciones", "right"],
                 ].map(([h, align]) => (
-                  <th key={h} className={`px-4 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite text-${align}`}>{h}</th>
+                  <th key={h} className={`px-4 py-3 text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite text-${align}`}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -165,7 +165,7 @@ function UsuarioForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: (
             <Field label="Email" type="email" value={email} onChange={setEmail} required />
             <Field label="Contraseña (mín. 8)" type="password" value={password} onChange={setPassword} required />
             <div className="md:col-span-2">
-              <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Tipo de acceso</label>
+              <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Tipo de acceso</label>
               <select
                 value={rol}
                 onChange={(e) => setRol(e.target.value as Rol)}
@@ -301,19 +301,19 @@ function PermisosMatrix({
   return (
     <div className="border border-border rounded-sm bg-cloud/30">
       <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-        <p className="text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-ink-900">
+        <p className="text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-ink-900">
           Permisos por área
         </p>
         <div className="flex items-center gap-2">
-          <button type="button" onClick={presetSoloVer} className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite hover:text-ink-900">
+          <button type="button" onClick={presetSoloVer} className="text-[0.7rem] uppercase tracking-[0.1em] text-graphite hover:text-ink-900">
             Solo ver todo
           </button>
           <span className="text-graphite">·</span>
-          <button type="button" onClick={presetTodo} className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite hover:text-ink-900">
+          <button type="button" onClick={presetTodo} className="text-[0.7rem] uppercase tracking-[0.1em] text-graphite hover:text-ink-900">
             Ver + modificar todo
           </button>
           <span className="text-graphite">·</span>
-          <button type="button" onClick={presetNada} className="text-[0.62rem] uppercase tracking-[0.1em] text-graphite hover:text-ink-900">
+          <button type="button" onClick={presetNada} className="text-[0.7rem] uppercase tracking-[0.1em] text-graphite hover:text-ink-900">
             Limpiar
           </button>
         </div>
@@ -321,10 +321,10 @@ function PermisosMatrix({
       <table className="w-full text-sm">
         <thead className="bg-card border-b border-border">
           <tr>
-            <th className="px-4 py-2 text-left text-[0.6rem] font-semibold uppercase tracking-[0.1em] text-graphite">Área / submódulo</th>
-            <th className="px-3 py-2 text-center text-[0.6rem] font-semibold uppercase tracking-[0.1em] text-navy-600">Todos</th>
+            <th className="px-4 py-2 text-left text-[0.7rem] font-semibold uppercase tracking-[0.1em] text-graphite">Área / submódulo</th>
+            <th className="px-3 py-2 text-center text-[0.7rem] font-semibold uppercase tracking-[0.1em] text-navy-600">Todos</th>
             {ACCIONES.map((a) => (
-              <th key={a} className="px-3 py-2 text-center text-[0.6rem] font-semibold uppercase tracking-[0.1em] text-graphite">
+              <th key={a} className="px-3 py-2 text-center text-[0.7rem] font-semibold uppercase tracking-[0.1em] text-graphite">
                 {ACCION_LABEL[a]}
               </th>
             ))}
@@ -363,7 +363,7 @@ function PermisosMatrix({
                   <td key={a} className="px-3 py-2 text-center">
                     {tieneSubs ? (
                       // Con submódulos las acciones van POR SUBMÓDULO (despliega ▾)
-                      <span className="text-[0.6rem] text-graphite/50">
+                      <span className="text-[0.7rem] text-graphite/50">
                         {(permisos[g] || []).includes(a) ? "✓" : "·"}
                       </span>
                     ) : (
@@ -385,7 +385,7 @@ function PermisosMatrix({
                     <td className="pl-12 pr-4 py-1.5 text-xs text-graphite">
                       {MODULO_LABEL[sub] || sub}
                       {grupoActivo && (
-                        <span className="ml-2 text-[0.55rem] uppercase tracking-widest text-teal">heredado del área</span>
+                        <span className="ml-2 text-[0.68rem] uppercase tracking-widest text-teal">heredado del área</span>
                       )}
                     </td>
                     <td />
@@ -408,7 +408,7 @@ function PermisosMatrix({
           })}
         </tbody>
       </table>
-      <p className="px-4 py-2 text-[0.62rem] text-graphite italic border-t border-border">
+      <p className="px-4 py-2 text-[0.7rem] text-graphite italic border-t border-border">
         &quot;Todos&quot; marca (o limpia) el área completa de una vez. En Producción las acciones
         se dan POR SUBMÓDULO: despliega con la flecha y marca cada uno. &quot;Modificar&quot; y
         &quot;Borrar&quot; implican &quot;Ver&quot; automáticamente.
@@ -459,15 +459,15 @@ function UsuarioRow({
         <td colSpan={6} className="p-4 space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
-              <label className="mb-1 block text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Nombre</label>
+              <label className="mb-1 block text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Nombre</label>
               <input value={nombre} onChange={(e) => setNombre(e.target.value)} className="w-full rounded-sm border border-border bg-card px-2 py-1 text-sm" />
             </div>
             <div>
-              <label className="mb-1 block text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Cargo</label>
+              <label className="mb-1 block text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Cargo</label>
               <input value={cargo} onChange={(e) => setCargo(e.target.value)} placeholder="ej. Asesora" className="w-full rounded-sm border border-border bg-card px-2 py-1 text-sm" />
             </div>
             <div>
-              <label className="mb-1 block text-[0.6rem] uppercase tracking-[0.1em] text-graphite">Rol</label>
+              <label className="mb-1 block text-[0.7rem] uppercase tracking-[0.1em] text-graphite">Rol</label>
               <select value={rol} onChange={(e) => setRol(e.target.value as Rol)} className="w-full rounded-sm border border-border bg-card px-2 py-1 text-sm">
                 <option value="admin">Administrador</option>
                 <option value="lector">Lector</option>
@@ -484,7 +484,7 @@ function UsuarioRow({
             <div className="flex flex-wrap items-center gap-4">
               <label className="flex items-center gap-2 text-xs">
                 <input type="checkbox" checked={activo} onChange={(e) => setActivo(e.target.checked)} disabled={isCurrentUser} />
-                {activo ? "Activo" : "Inactivo"} {isCurrentUser && <span className="text-[0.6rem] text-graphite">(no puedes desactivarte)</span>}
+                {activo ? "Activo" : "Inactivo"} {isCurrentUser && <span className="text-[0.7rem] text-graphite">(no puedes desactivarte)</span>}
               </label>
               <label className="flex items-center gap-2 text-xs">
                 <input type="checkbox" checked={puedePrecosteo} onChange={(e) => setPuedePrecosteo(e.target.checked)} />
@@ -525,7 +525,7 @@ function UsuarioRow({
   return (
     <tr className="border-b border-border transition-colors hover:bg-cloud/50">
       <td className="px-4 py-3 font-medium text-ink-900">
-        {u.nombre} {isCurrentUser && <span className="ml-1 text-[0.6rem] text-steel-500">(tú)</span>}
+        {u.nombre} {isCurrentUser && <span className="ml-1 text-[0.7rem] text-steel-500">(tú)</span>}
       </td>
       <td className="px-4 py-3 text-graphite text-xs">{u.cargo || "—"}</td>
       <td className="px-4 py-3 text-graphite">{u.email}</td>
@@ -551,7 +551,7 @@ function Field({
 }: { label: string; value: string; onChange: (v: string) => void; type?: string; required?: boolean; placeholder?: string }) {
   return (
     <div>
-      <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
+      <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
       <input
         type={type}
         value={value}

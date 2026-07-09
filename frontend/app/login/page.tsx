@@ -41,7 +41,7 @@ export default function LoginPage() {
           <p className="text-[1.05rem] font-extrabold tracking-[0.35em] text-white leading-none">
             MALE&apos;DENIM
           </p>
-          <p className="mt-1.5 text-[0.55rem] font-semibold tracking-[0.4em] text-steel/70 uppercase">
+          <p className="mt-1.5 text-[0.68rem] font-semibold tracking-[0.4em] text-steel/70 uppercase">
             Operating System
           </p>
         </div>
@@ -60,7 +60,7 @@ export default function LoginPage() {
               className="space-y-4"
             >
               <div>
-                <label className="block text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-1.5">
+                <label className="block text-[0.7rem] font-bold uppercase tracking-wider text-graphite mb-1.5">
                   Email
                 </label>
                 <div className="relative">
@@ -78,7 +78,7 @@ export default function LoginPage() {
               </div>
 
               <div>
-                <label className="block text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-1.5">
+                <label className="block text-[0.7rem] font-bold uppercase tracking-wider text-graphite mb-1.5">
                   Contraseña
                 </label>
                 <div className="relative">
@@ -116,7 +116,7 @@ export default function LoginPage() {
           </CardContent>
         </Card>
 
-        <p className="mt-6 text-center text-[0.6rem] tracking-[0.25em] text-steel/40 uppercase">
+        <p className="mt-6 text-center text-[0.7rem] tracking-[0.25em] text-steel/40 uppercase">
           MALE&apos;DENIM OS · v3
         </p>
       </div>

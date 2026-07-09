@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { DateRangePicker, type Periodo } from "@/components/date-range-picker";
 import { api } from "@/lib/api";
@@ -108,6 +108,42 @@ export default function ComercialPage() {
   const [rangoHastaFT, setRangoHastaFT] = useState<string>(hoyISO);
   const [canalFT, setCanalFT] = useState<string>("");
 
+  // ── Filtros persistentes en la URL (?tab=&p=&d=&h=&fp=&fd=&fh=&canal=) ──
+  // Se leen al montar y se escriben con replaceState: la vista es compartible
+  // y al volver al módulo no se pierde lo que estabas mirando.
+  const urlInit = useRef(false);
+  useEffect(() => {
+    if (urlInit.current) return;
+    urlInit.current = true;
+    const q = new URLSearchParams(window.location.search);
+    const tab = q.get("tab");
+    if (tab && ["ventas", "comp", "clientes", "fittalla"].includes(tab)) setTabActivo(tab as typeof tabActivo);
+    const per = q.get("p");
+    if (per && ["hoy", "ayer", "7d", "30d", "mes", "ytd", "custom"].includes(per)) setPeriodoDesglose(per as PeriodoDesglose);
+    if (q.get("d")) setRangoDesde(q.get("d")!);
+    if (q.get("h")) setRangoHasta(q.get("h")!);
+    const fper = q.get("fp");
+    if (fper && ["hoy", "ayer", "7d", "30d", "mes", "ytd", "custom"].includes(fper)) setPeriodoFT(fper as PeriodoDesglose);
+    if (q.get("fd")) setRangoDesdeFT(q.get("fd")!);
+    if (q.get("fh")) setRangoHastaFT(q.get("fh")!);
+    if (q.get("canal")) setCanalFT(q.get("canal")!);
+  }, []);
+  useEffect(() => {
+    if (!urlInit.current) return;
+    const q = new URLSearchParams(window.location.search);
+    const setOrDel = (k: string, v: string, def: string) => (v && v !== def ? q.set(k, v) : q.delete(k));
+    setOrDel("tab", tabActivo, "ventas");
+    setOrDel("p", periodoDesglose, "hoy");
+    setOrDel("d", periodoDesglose === "custom" ? rangoDesde : "", "");
+    setOrDel("h", periodoDesglose === "custom" ? rangoHasta : "", "");
+    setOrDel("fp", periodoFT, "hoy");
+    setOrDel("fd", periodoFT === "custom" ? rangoDesdeFT : "", "");
+    setOrDel("fh", periodoFT === "custom" ? rangoHastaFT : "", "");
+    setOrDel("canal", canalFT, "");
+    const qs = q.toString();
+    window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
+  }, [tabActivo, periodoDesglose, rangoDesde, rangoHasta, periodoFT, rangoDesdeFT, rangoHastaFT, canalFT]);
+
   const overview = useQuery<OverviewResp>({
     queryKey: ["comercial-overview"],
     queryFn: () => api.get<OverviewResp>("/api/comercial/overview"),
@@ -171,6 +207,7 @@ export default function ComercialPage() {
       title="Comercial"
       subtitle="Ventas y clientes · Shopify"
       isFetching={overview.isFetching}
+      dataUpdatedAt={Math.max(overview.dataUpdatedAt || 0, desg.dataUpdatedAt || 0)}
       onRefresh={() => { overview.refetch(); comp.refetch(); desg.refetch(); cli.refetch(); }}
     >
       {data.errores?.length > 0 && (
@@ -191,7 +228,7 @@ export default function ComercialPage() {
         <TabsContent value="ventas" className="space-y-4">
           {/* Selector de período (estilo Shopify) */}
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Periodo</span>
+            <span className="text-[0.7rem] uppercase tracking-[0.14em] text-graphite">Periodo</span>
             <DateRangePicker
               value={{ periodo: periodoDesglose as Periodo, desde: rangoDesde, hasta: rangoHasta }}
               onChange={(v) => {
@@ -261,7 +298,7 @@ export default function ComercialPage() {
                         <thead className="border-b border-border">
                           <tr>
                             {["Canal", "Pedidos", "Unidades", "UPT", "Ventas", "%"].map((h, i) => (
-                              <th key={h} className={`py-2 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i === 0 ? "text-left" : "text-right"}`}>
+                              <th key={h} className={`py-2 text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i === 0 ? "text-left" : "text-right"}`}>
                                 {h}
                               </th>
                             ))}
@@ -297,7 +334,7 @@ export default function ComercialPage() {
                         <thead className="border-b border-border">
                           <tr>
                             {["Asesor", "Pedidos", "Unidades", "UPT", "Ventas netas", "Ticket promedio", "% participación"].map((h, i) => (
-                              <th key={h} className={`py-2 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i === 0 ? "text-left" : "text-right"}`}>
+                              <th key={h} className={`py-2 text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i === 0 ? "text-left" : "text-right"}`}>
                                 {h}
                               </th>
                             ))}
@@ -356,7 +393,7 @@ export default function ComercialPage() {
                         <thead className="border-b border-border">
                           <tr>
                             {["#", "Producto", "SKU", "Unidades", "Revenue", "% total"].map((h, i) => (
-                              <th key={h} className={`py-2 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i <= 2 ? "text-left" : "text-right"}`}>
+                              <th key={h} className={`py-2 text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i <= 2 ? "text-left" : "text-right"}`}>
                                 {h}
                               </th>
                             ))}
@@ -448,7 +485,7 @@ export default function ComercialPage() {
                         <thead className="border-b border-border">
                           <tr>
                             {["#", "Cliente", "Email", "Pedidos", "Revenue"].map((h, i) => (
-                              <th key={h} className={`py-2 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i <= 2 ? "text-left" : "text-right"}`}>
+                              <th key={h} className={`py-2 text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i <= 2 ? "text-left" : "text-right"}`}>
                                 {h}
                               </th>
                             ))}
@@ -477,7 +514,7 @@ export default function ComercialPage() {
         {/* ─── TAB FIT Y TALLA (RF-05) ─── */}
         <TabsContent value="fittalla" className="space-y-4">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Periodo</span>
+            <span className="text-[0.7rem] uppercase tracking-[0.14em] text-graphite">Periodo</span>
             <DateRangePicker
               value={{ periodo: periodoFT as Periodo, desde: rangoDesdeFT, hasta: rangoHastaFT }}
               onChange={(v) => {
@@ -532,11 +569,11 @@ function FitTallaTabla({ titulo, col, filas }: {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="px-3 py-2 text-left text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">{col}</th>
-                  <th className="whitespace-nowrap px-3 py-2 text-right text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Und.</th>
-                  <th className="whitespace-nowrap px-3 py-2 text-right text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Ventas netas</th>
-                  <th className="whitespace-nowrap px-3 py-2 text-right text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Ticket prom.</th>
-                  <th className="whitespace-nowrap px-3 py-2 text-right text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">% part.</th>
+                  <th className="px-3 py-2 text-left text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">{col}</th>
+                  <th className="whitespace-nowrap px-3 py-2 text-right text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Und.</th>
+                  <th className="whitespace-nowrap px-3 py-2 text-right text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Ventas netas</th>
+                  <th className="whitespace-nowrap px-3 py-2 text-right text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Ticket prom.</th>
+                  <th className="whitespace-nowrap px-3 py-2 text-right text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">% part.</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">

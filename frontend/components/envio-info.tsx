@@ -74,7 +74,7 @@ export function EnvioInfo({ pedido }: { pedido: Pedido }) {
   return (
     <div className="rounded-md border border-border bg-white p-3 space-y-2">
       <div className="flex items-center justify-between">
-        <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">
+        <p className="text-[0.7rem] font-bold uppercase tracking-wider text-graphite">
           Envío y rastreo
         </p>
         {canWrite && (
@@ -94,14 +94,14 @@ export function EnvioInfo({ pedido }: { pedido: Pedido }) {
           {carrier && (
             <div className="flex items-center gap-2 text-sm">
               <Truck className="h-3.5 w-3.5 text-graphite flex-none" />
-              <span className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Transportadora</span>
+              <span className="text-[0.7rem] font-bold uppercase tracking-wider text-graphite">Transportadora</span>
               <span className="text-ink font-semibold">{carrier}</span>
             </div>
           )}
           {guia && (
             <div className="flex items-center gap-2 text-sm">
               <span className="h-3.5 w-3.5 flex-none" />
-              <span className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">Guía</span>
+              <span className="text-[0.7rem] font-bold uppercase tracking-wider text-graphite">Guía</span>
               {(() => {
                 const url = trackingUrl(carrier, guia);
                 if (url) {
@@ -203,7 +203,7 @@ function EditarEnvio({
   return (
     <div className="rounded-md border border-steel/40 bg-steel/5 p-3 space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-[0.6rem] font-bold uppercase tracking-wider text-graphite">
+        <p className="text-[0.7rem] font-bold uppercase tracking-wider text-graphite">
           Editar datos de envío
         </p>
         <button onClick={onClose} className="text-graphite hover:text-ink">
@@ -213,7 +213,7 @@ function EditarEnvio({
 
       <div className="space-y-2">
         <div>
-          <label className="block text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-1">
+          <label className="block text-[0.7rem] font-bold uppercase tracking-wider text-graphite mb-1">
             Transportadora
           </label>
           <select
@@ -243,7 +243,7 @@ function EditarEnvio({
         )}
 
         <div>
-          <label className="block text-[0.6rem] font-bold uppercase tracking-wider text-graphite mb-1">
+          <label className="block text-[0.7rem] font-bold uppercase tracking-wider text-graphite mb-1">
             Número de guía
           </label>
           <input
@@ -255,7 +255,7 @@ function EditarEnvio({
         </div>
       </div>
 
-      <p className="text-[0.6rem] text-graphite italic">
+      <p className="text-[0.7rem] text-graphite italic">
         Estos datos los obtienes del tracking de Melonn. Una vez guardados,
         cualquier usuario verá la info y podrá rastrear directo con el carrier.
       </p>

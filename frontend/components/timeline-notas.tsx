@@ -74,10 +74,10 @@ export function TimelineNotas({ rutaId, permiteAgregar = true }: {
           {notas.map((n) => (
             <li key={n.id} className="rounded-sm border border-border bg-cloud/20 p-3">
               <div className="flex items-baseline justify-between gap-2 mb-1">
-                <span className={`rounded-sm px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-widest ${ACTOR_TONE[n.actor] || "bg-graphite/10 text-graphite"}`}>
+                <span className={`rounded-sm px-1.5 py-0.5 text-[0.68rem] font-bold uppercase tracking-widest ${ACTOR_TONE[n.actor] || "bg-graphite/10 text-graphite"}`}>
                   {ACTOR_LABEL[n.actor] || n.actor}
                 </span>
-                <span className="text-[0.6rem] text-graphite tabular">
+                <span className="text-[0.7rem] text-graphite tabular">
                   {new Date(n.created_at).toLocaleString("es-CO", {
                     dateStyle: "short",
                     timeStyle: "short",
@@ -85,7 +85,7 @@ export function TimelineNotas({ rutaId, permiteAgregar = true }: {
                 </span>
               </div>
               {n.autor && (
-                <p className="text-[0.6rem] text-graphite/70 mb-1">{n.autor}</p>
+                <p className="text-[0.7rem] text-graphite/70 mb-1">{n.autor}</p>
               )}
               <p className="text-xs text-ink-900 whitespace-pre-wrap">{n.mensaje}</p>
             </li>

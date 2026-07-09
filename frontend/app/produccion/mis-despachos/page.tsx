@@ -99,7 +99,7 @@ export default function MisDespachosPage() {
               <span>Envía el WhatsApp al confeccionista:</span>
               {waInfo.wa.filter((w) => !w.enviado).map((w, i) => (
                 <a key={i} href={w.wa_url} target="_blank" rel="noopener noreferrer"
-                  className="rounded-sm bg-[#25D366] px-2.5 py-1 text-[0.62rem] font-semibold uppercase tracking-widest text-white hover:opacity-90">
+                  className="rounded-sm bg-[#25D366] px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-widest text-white hover:opacity-90">
                   WhatsApp REF {w.referencia}
                 </a>
               ))}
@@ -119,7 +119,7 @@ export default function MisDespachosPage() {
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead className="bg-cloud/40 border-b border-border">
-                  <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                  <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                     <th className="px-4 py-2">Corte</th>
                     <th className="px-4 py-2">Referencia</th>
                     <th className="px-4 py-2">Unidades por talla</th>
@@ -142,13 +142,13 @@ export default function MisDespachosPage() {
                         </td>
                         <td className="px-4 py-2.5 text-ink-900">
                           <span className="font-semibold">{r.referencia || "—"}</span>
-                          {r.nombre && <span className="block text-[0.6rem] text-graphite">{r.nombre}</span>}
+                          {r.nombre && <span className="block text-[0.7rem] text-graphite">{r.nombre}</span>}
                         </td>
                         <td className="px-4 py-2.5">
                           <div className="flex flex-wrap gap-1">
                             {tallas.length === 0 ? <span className="text-graphite">—</span> :
                               tallas.map(([t, v]) => (
-                                <span key={t} className="rounded-sm bg-navy-600/[0.07] px-1.5 py-0.5 text-[0.62rem] font-semibold tabular text-navy-600">
+                                <span key={t} className="rounded-sm bg-navy-600/[0.07] px-1.5 py-0.5 text-[0.7rem] font-semibold tabular text-navy-600">
                                   T{t}: {v}
                                 </span>
                               ))}
@@ -159,13 +159,13 @@ export default function MisDespachosPage() {
                         </td>
                         <td className="px-4 py-2.5">
                           {!r.remision ? (
-                            <span className="text-[0.62rem] text-graphite">Esperando remisión de insumos</span>
+                            <span className="text-[0.7rem] text-graphite">Esperando remisión de insumos</span>
                           ) : r.remision.despachada ? (
-                            <span className="inline-flex items-center gap-1 rounded-sm bg-teal/10 px-1.5 py-0.5 text-[0.62rem] font-bold uppercase tracking-widest text-teal">
+                            <span className="inline-flex items-center gap-1 rounded-sm bg-teal/10 px-1.5 py-0.5 text-[0.7rem] font-bold uppercase tracking-widest text-teal">
                               <CheckCircle className="h-3 w-3" /> Despachado
                             </span>
                           ) : (
-                            <span className="rounded-sm bg-amber-500/10 px-1.5 py-0.5 text-[0.62rem] font-bold uppercase tracking-widest text-amber-700">
+                            <span className="rounded-sm bg-amber-500/10 px-1.5 py-0.5 text-[0.7rem] font-bold uppercase tracking-widest text-amber-700">
                               Listo para entrega
                             </span>
                           )}
@@ -175,7 +175,7 @@ export default function MisDespachosPage() {
                             <button
                               onClick={() => despachar.mutate(r.remision!.id)}
                               disabled={despachar.isPending}
-                              className="inline-flex items-center gap-1.5 rounded-sm bg-navy-600 px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
+                              className="inline-flex items-center gap-1.5 rounded-sm bg-navy-600 px-3 py-1.5 text-[0.7rem] font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
                               {despachar.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Truck className="h-3 w-3" />}
                               Marcar despachado
                             </button>
@@ -197,7 +197,7 @@ export default function MisDespachosPage() {
 function Kpi({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-[0.6rem] uppercase tracking-widest text-graphite">{label}</p>
+      <p className="text-[0.7rem] uppercase tracking-widest text-graphite">{label}</p>
       <p className="mt-1 font-display text-xl text-ink-900 tabular">{value}</p>
     </div>
   );

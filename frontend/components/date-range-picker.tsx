@@ -250,7 +250,7 @@ export function DateRangePicker({ value, onChange, presets, showCalendar = true,
               </div>
               <div className="grid grid-cols-7 gap-0.5">
                 {DIAS.map((d, i) => (
-                  <div key={i} className="flex h-7 items-center justify-center text-[0.6rem] font-semibold uppercase text-graphite">{d}</div>
+                  <div key={i} className="flex h-7 items-center justify-center text-[0.7rem] font-semibold uppercase text-graphite">{d}</div>
                 ))}
                 {celdas.map((c, i) => {
                   if (!c) return <div key={i} className="h-8" />;
@@ -280,7 +280,7 @@ export function DateRangePicker({ value, onChange, presets, showCalendar = true,
                   );
                 })}
               </div>
-              <div className="mt-2 flex items-center justify-between border-t border-border pt-2 text-[0.62rem] text-graphite">
+              <div className="mt-2 flex items-center justify-between border-t border-border pt-2 text-[0.7rem] text-graphite">
                 <span className="tabular-nums">
                   {selDesde ? fmtCorto(selDesde) : "—"} → {selHasta ? fmtCorto(selHasta) : "…"}
                 </span>

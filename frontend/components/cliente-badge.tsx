@@ -151,7 +151,7 @@ export function ClienteHistorial({ email, telefono }: { email?: string; telefono
   return (
     <div className="rounded-md bg-concrete/40 border border-border px-3 py-2 space-y-2">
       <div className="flex items-center justify-between">
-        <p className="text-[0.6rem] uppercase tracking-wider text-graphite">Historial del cliente</p>
+        <p className="text-[0.7rem] uppercase tracking-wider text-graphite">Historial del cliente</p>
         <Badge tone={def.tone}>
           <Icon className="h-3 w-3 mr-1 inline" />
           {def.label}
@@ -173,7 +173,7 @@ export function ClienteHistorial({ email, telefono }: { email?: string; telefono
 
       {/* Recomendación de acción — qué hacer con este pedido */}
       <div className="flex items-center justify-between pt-2 mt-2 border-t border-border">
-        <p className="text-[0.6rem] uppercase tracking-wider text-graphite">Recomendación</p>
+        <p className="text-[0.7rem] uppercase tracking-wider text-graphite">Recomendación</p>
         <span title={prioridad.motivo} className="inline-flex">
           <Badge tone={prioridad.tone}>
             <PrioIcon className="h-3 w-3 mr-1 inline" />
@@ -251,7 +251,7 @@ function Stat({
     : "text-ink";
   return (
     <div title={hint} className={hint ? "cursor-help" : undefined}>
-      <p className="text-[0.6rem] uppercase tracking-wider text-graphite">{label}</p>
+      <p className="text-[0.7rem] uppercase tracking-wider text-graphite">{label}</p>
       <p className={`text-sm font-bold tabular-nums ${colorClass}`}>{value}</p>
     </div>
   );

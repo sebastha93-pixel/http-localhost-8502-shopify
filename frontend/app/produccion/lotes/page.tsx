@@ -182,7 +182,7 @@ export default function LotesPage() {
             <button key={t.key} onClick={() => setTab(t.key)}
               className={`inline-flex items-center gap-2 rounded-sm border px-4 py-2 text-[0.68rem] font-semibold uppercase tracking-widest transition-colors ${active ? "bg-navy-600 border-navy-600 text-white" : "border-border bg-white text-ink-900 hover:bg-cloud"}`}>
               {t.label}
-              <span className={`rounded-sm px-1.5 py-0.5 text-[0.58rem] tabular ${active ? "bg-white/20" : "bg-cloud text-graphite"}`}>
+              <span className={`rounded-sm px-1.5 py-0.5 text-[0.68rem] tabular ${active ? "bg-white/20" : "bg-cloud text-graphite"}`}>
                 {cnt}
               </span>
             </button>
@@ -235,7 +235,7 @@ function LoteCard({ oc, ruta }: { oc: OrdenCorte; ruta?: Ruta }) {
                 {oc.referencia_lote ? ` · Lote ${oc.referencia_lote}` : ""}
               </p>
             </div>
-            <span className={`shrink-0 rounded-sm px-2.5 py-1 text-[0.6rem] font-bold uppercase tracking-widest ${estado.tone}`}>
+            <span className={`shrink-0 rounded-sm px-2.5 py-1 text-[0.7rem] font-bold uppercase tracking-widest ${estado.tone}`}>
               {estado.texto}
             </span>
           </div>
@@ -248,7 +248,7 @@ function LoteCard({ oc, ruta }: { oc: OrdenCorte; ruta?: Ruta }) {
               return (
                 <div key={paso} className="flex-1 min-w-0">
                   <div className={`h-1.5 rounded-full ${completo ? "bg-teal" : esActual ? "bg-navy-600" : "bg-cloud"}`} />
-                  <p className={`mt-1 text-center text-[0.52rem] uppercase tracking-wider truncate ${completo ? "text-teal font-semibold" : esActual ? "text-navy-600 font-bold" : "text-graphite/50"}`}>
+                  <p className={`mt-1 text-center text-[0.68rem] uppercase tracking-wider truncate ${completo ? "text-teal font-semibold" : esActual ? "text-navy-600 font-bold" : "text-graphite/50"}`}>
                     {completo ? <Check className="inline h-2.5 w-2.5 -mt-0.5 mr-0.5" /> : null}
                     {paso}
                   </p>
@@ -262,14 +262,14 @@ function LoteCard({ oc, ruta }: { oc: OrdenCorte; ruta?: Ruta }) {
             <div className="flex items-center gap-2 min-w-0">
               <Package className="h-4 w-4 text-graphite/60 flex-none" />
               <div className="min-w-0">
-                <p className="text-[0.55rem] uppercase tracking-widest text-graphite">Cantidad</p>
+                <p className="text-[0.68rem] uppercase tracking-widest text-graphite">Cantidad</p>
                 <p className="text-sm font-semibold tabular text-ink-900">{cantidad || "—"}</p>
               </div>
             </div>
             <div className="flex items-center gap-2 min-w-0">
               <User className="h-4 w-4 text-graphite/60 flex-none" />
               <div className="min-w-0">
-                <p className="text-[0.55rem] uppercase tracking-widest text-graphite">Confeccionista</p>
+                <p className="text-[0.68rem] uppercase tracking-widest text-graphite">Confeccionista</p>
                 <p className="text-sm font-semibold text-ink-900 truncate">
                   {ruta?.confeccionista?.nombre || "—"}
                 </p>
@@ -278,7 +278,7 @@ function LoteCard({ oc, ruta }: { oc: OrdenCorte; ruta?: Ruta }) {
             <div className="flex items-center gap-2 min-w-0">
               <Clock className="h-4 w-4 text-graphite/60 flex-none" />
               <div className="min-w-0">
-                <p className="text-[0.55rem] uppercase tracking-widest text-graphite">Días</p>
+                <p className="text-[0.68rem] uppercase tracking-widest text-graphite">Días</p>
                 <p className="text-sm font-semibold tabular text-ink-900">{dias != null ? dias : "—"}</p>
               </div>
             </div>

@@ -164,7 +164,7 @@ function PasoCard({ paso, contador }: { paso: Paso; contador?: number }) {
               <Icon className="h-5 w-5" />
             </div>
             {paso.n != null && (
-              <span className="absolute -top-1.5 -left-1.5 h-5 w-5 grid place-items-center rounded-full bg-navy-600 text-[0.6rem] font-bold text-white tabular">
+              <span className="absolute -top-1.5 -left-1.5 h-5 w-5 grid place-items-center rounded-full bg-navy-600 text-[0.7rem] font-bold text-white tabular">
                 {paso.n}
               </span>
             )}
@@ -173,7 +173,7 @@ function PasoCard({ paso, contador }: { paso: Paso; contador?: number }) {
             <div className="flex items-center gap-2">
               <p className="font-display text-base font-medium text-ink-900">{paso.label}</p>
               {mostrarBadge && (
-                <span className="rounded-full bg-navy-600/10 px-2 py-0.5 text-[0.6rem] font-bold tabular text-navy-600">
+                <span className="rounded-full bg-navy-600/10 px-2 py-0.5 text-[0.7rem] font-bold tabular text-navy-600">
                   {contador}
                 </span>
               )}
@@ -200,9 +200,9 @@ function AlertaTile({ label, valor, sub, href, tono, icon: Icon }: {
     <Link href={href} className={`group rounded-sm border ${estilos} px-4 py-3 flex items-center gap-3 transition-colors hover:brightness-95`}>
       <Icon className="h-5 w-5 flex-none" />
       <div className="flex-1 min-w-0">
-        <p className="text-[0.6rem] uppercase tracking-widest opacity-80">{label}</p>
+        <p className="text-[0.7rem] uppercase tracking-widest opacity-80">{label}</p>
         <p className="font-display text-2xl leading-none tabular mt-0.5">{valor}</p>
-        <p className="text-[0.62rem] opacity-70 mt-0.5">{sub}</p>
+        <p className="text-[0.7rem] opacity-70 mt-0.5">{sub}</p>
       </div>
       <ArrowRight className="h-4 w-4 flex-none opacity-40 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all" />
     </Link>
@@ -239,7 +239,7 @@ function ResetProduccionCard() {
   return (
     <Card className="border-terracotta/40 mt-4">
       <CardContent className="p-5 space-y-3">
-        <p className="text-[0.6rem] uppercase tracking-widest text-terracotta font-bold">Zona de peligro (solo admin)</p>
+        <p className="text-[0.7rem] uppercase tracking-widest text-terracotta font-bold">Zona de peligro (solo admin)</p>
         <p className="text-xs text-graphite">
           Borra <strong>todos</strong> los datos del módulo: telas, cortes, remisiones, precosteos,
           insumos, proveedores y consecutivos. Conserva usuarios y permisos. <strong>Irreversible.</strong>

@@ -75,7 +75,7 @@ export function SyncButton() {
           <RefreshCw className="h-3.5 w-3.5 text-steel flex-none" />
         )}
         <div className="min-w-0 flex-1">
-          <p className="text-[0.55rem] font-bold uppercase tracking-[0.2em] text-steel/60">
+          <p className="text-[0.68rem] font-bold uppercase tracking-[0.2em] text-steel/60">
             {mut.isPending ? "Sincronizando..." : "Sincronizar datos"}
           </p>
           <p className="text-[0.65rem] text-concrete/70 truncate">

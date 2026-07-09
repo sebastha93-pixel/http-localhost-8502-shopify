@@ -648,6 +648,14 @@ def _fit_de_nombre(nombre: str) -> str:
     return base[:1].upper() + base[1:] if base else "Sin tipo"
 
 
+def _norm_grupo(s: str) -> str:
+    """Clave de agrupación insensible a mayúsculas y tildes, para que
+    'Pantalón Liviano' y 'Pantalon liviano' caigan en el mismo grupo."""
+    import unicodedata
+    t = unicodedata.normalize("NFD", (s or "").strip().lower())
+    return "".join(c for c in t if unicodedata.category(c) != "Mn")
+
+
 def _mapa_tipos_producto() -> dict:
     """product_id (str) → {fit, nombre}. Cache 30 min. Fit = product_type de
     Shopify; si está vacío, se deriva del nombre (RF-05)."""
@@ -670,7 +678,9 @@ def _mapa_tipos_producto() -> dict:
                             "fit": tipo or _fit_de_nombre(titulo),
                             "nombre": titulo,
                         }
-            except Exception:
+            except Exception as e:
+                # Si un status falla, el mapa queda incompleto 30 min: dejarlo visible en logs.
+                print(f"[fit-talla] fallo trayendo productos status={status}: {e}", flush=True)
                 continue
         return m
     return _cached(key, _calc, ttl=1800)
@@ -693,56 +703,61 @@ def ventas_por_fit_talla(periodo: str = "30d",
         fit_agg: dict = defaultdict(_nuevo)
         talla_agg: dict = defaultdict(_nuevo)
         matriz: dict = defaultdict(lambda: {"ventas": 0.0, "unidades": 0})
+        # nombre visible por clave normalizada → el más vendido gana
+        fit_nombres: dict = defaultdict(lambda: defaultdict(int))
         neto_total = 0.0
         unid_total = 0
         canales_vistos: set = set()
 
-        _orders_rango = _fetch_orders_rango(
+        orders = _fetch_orders_rango(
             desde, hasta,
             "id,total_price,total_tax,source_name,cancelled_at,line_items",
         )
-        d = hasta
-        while d <= hasta:
-            orders = _orders_rango
-
-            for o in orders:
-                if o.get("cancelled_at"):
+        for o in orders:
+            if o.get("cancelled_at"):
+                continue
+            canal_o = _canal_label(o.get("source_name", ""))
+            canales_vistos.add(canal_o)
+            if canal and canal_o != canal:
+                continue
+            f = _factor_sin_iva(o)
+            oid = o.get("id")
+            for li in (o.get("line_items") or []):
+                qty = int(li.get("quantity") or 0)
+                if qty <= 0:
                     continue
-                canal_o = _canal_label(o.get("source_name", ""))
-                canales_vistos.add(canal_o)
-                if canal and canal_o != canal:
-                    continue
-                f = _factor_sin_iva(o)
-                oid = o.get("id")
-                for li in (o.get("line_items") or []):
-                    qty = int(li.get("quantity") or 0)
-                    if qty <= 0:
-                        continue
-                    linea_neto = float(li.get("price") or 0) * qty * f
-                    pid = str(li.get("product_id") or "")
-                    info = tipos.get(pid) or {}
-                    fit = info.get("fit") or _fit_de_nombre(li.get("title") or "") or "Sin tipo"
-                    talla = (li.get("variant_title") or "").strip() or "Única"
+                linea_neto = float(li.get("price") or 0) * qty * f
+                pid = str(li.get("product_id") or "")
+                info = tipos.get(pid) or {}
+                fit = info.get("fit") or _fit_de_nombre(li.get("title") or "") or "Sin tipo"
+                talla = (li.get("variant_title") or "").strip() or "Única"
+                fk = _norm_grupo(fit)
+                fit_nombres[fk][fit] += qty
 
-                    fit_agg[fit]["ventas"] += linea_neto
-                    fit_agg[fit]["unidades"] += qty
-                    fit_agg[fit]["pedidos"].add(oid)
-                    talla_agg[talla]["ventas"] += linea_neto
-                    talla_agg[talla]["unidades"] += qty
-                    talla_agg[talla]["pedidos"].add(oid)
-                    mk = f"{fit}||{talla}"
-                    matriz[mk]["ventas"] += linea_neto
-                    matriz[mk]["unidades"] += qty
-                    neto_total += linea_neto
-                    unid_total += qty
-            d += timedelta(days=1)
+                fit_agg[fk]["ventas"] += linea_neto
+                fit_agg[fk]["unidades"] += qty
+                fit_agg[fk]["pedidos"].add(oid)
+                talla_agg[talla]["ventas"] += linea_neto
+                talla_agg[talla]["unidades"] += qty
+                talla_agg[talla]["pedidos"].add(oid)
+                mk = f"{fk}||{talla}"
+                matriz[mk]["ventas"] += linea_neto
+                matriz[mk]["unidades"] += qty
+                neto_total += linea_neto
+                unid_total += qty
 
-        def _lista(agg: dict, campo: str) -> list:
+        def _display_fit(fk: str) -> str:
+            noms = fit_nombres.get(fk)
+            if not noms:
+                return fk
+            return max(noms.items(), key=lambda kv: kv[1])[0]
+
+        def _lista(agg: dict, campo: str, display=None) -> list:
             out = []
             for k, v in agg.items():
                 npd = len(v["pedidos"])
                 out.append({
-                    campo: k,
+                    campo: display(k) if display else k,
                     "ventas": round(v["ventas"], 0),
                     "unidades": v["unidades"],
                     "num_pedidos": npd,
@@ -753,7 +768,7 @@ def ventas_por_fit_talla(periodo: str = "30d",
             return out
 
         matriz_out = [
-            {"fit": mk.split("||")[0], "talla": mk.split("||")[1],
+            {"fit": _display_fit(mk.split("||")[0]), "talla": mk.split("||")[1],
              "ventas": round(mv["ventas"], 0), "unidades": mv["unidades"]}
             for mk, mv in matriz.items()
         ]
@@ -767,7 +782,7 @@ def ventas_por_fit_talla(periodo: str = "30d",
             "canales": sorted(canales_vistos),
             "neto": round(neto_total, 0),
             "unidades": unid_total,
-            "por_fit": _lista(fit_agg, "fit"),
+            "por_fit": _lista(fit_agg, "fit", display=_display_fit),
             "por_talla": _lista(talla_agg, "talla"),
             "matriz": matriz_out,
         }

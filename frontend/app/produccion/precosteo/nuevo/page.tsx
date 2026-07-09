@@ -226,7 +226,7 @@ export default function NuevoPrecosteoPage() {
               <Input label="Nombre *"             value={nombre} onChange={setNombre} required placeholder="SKINNY OSCURO" />
               {/* Combobox de tela — solo permite escoger telas que hay en inventario */}
               <div ref={telaBoxRef} className="relative">
-                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
                   Tela * <span className="text-graphite/60 normal-case tracking-normal">(inventario)</span>
                 </label>
                 <button type="button" onClick={() => setTelaOpen((v) => !v)}
@@ -307,7 +307,7 @@ export default function NuevoPrecosteoPage() {
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite border-b border-border">
+                  <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite border-b border-border">
                     <th className="px-2 py-2">Item</th>
                     <th className="px-2 py-2 w-[130px]">Valor unit.</th>
                     <th className="px-2 py-2 w-[90px]">Cantidad</th>
@@ -321,7 +321,7 @@ export default function NuevoPrecosteoPage() {
                   {gruposUI.map((g) => (
                     <Fragment key={g.categoria}>
                       <tr className="bg-cloud/60 border-b border-border">
-                        <td colSpan={7} className="px-2 py-1.5 text-[0.6rem] font-bold uppercase tracking-[0.16em] text-ink-900">
+                        <td colSpan={7} className="px-2 py-1.5 text-[0.7rem] font-bold uppercase tracking-[0.16em] text-ink-900">
                           {g.categoria}
                         </td>
                       </tr>
@@ -525,7 +525,7 @@ function Input({ label, value, onChange, required = false, placeholder = "", inp
 }) {
   return (
     <div>
-      <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
+      <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
       <input value={value} onChange={(e) => onChange(e.target.value)}
         required={required} placeholder={placeholder} inputMode={inputMode}
         className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />

@@ -113,7 +113,7 @@ export default function LotePublicoPage() {
           <p className="font-display text-2xl font-medium tracking-[0.28em] text-ink-900">
             MALE&apos;DENIM
           </p>
-          <p className="text-[0.55rem] tracking-[0.35em] uppercase text-graphite mt-1">
+          <p className="text-[0.68rem] tracking-[0.35em] uppercase text-graphite mt-1">
             Ficha de lote
           </p>
         </div>
@@ -121,11 +121,11 @@ export default function LotePublicoPage() {
         {/* Confeccionista + estado */}
         <div className="rounded-sm border border-border bg-white p-4 flex items-center justify-between">
           <div>
-            <p className="text-[0.6rem] uppercase tracking-widest text-graphite">Confeccionista</p>
+            <p className="text-[0.7rem] uppercase tracking-widest text-graphite">Confeccionista</p>
             <p className="font-semibold text-ink-900">{l.confeccionista_nombre}</p>
           </div>
           <div className="text-right">
-            <p className="text-[0.6rem] uppercase tracking-widest text-graphite">Estado</p>
+            <p className="text-[0.7rem] uppercase tracking-widest text-graphite">Estado</p>
             <span className={`inline-block mt-1 rounded-sm px-2 py-1 text-[0.65rem] font-bold uppercase tracking-widest ${yaAceptado ? "bg-teal/10 text-teal" : "bg-navy-600/10 text-navy-600"}`}>
               {yaAceptado ? "Aceptado" : "Pendiente"}
             </span>
@@ -144,7 +144,7 @@ export default function LotePublicoPage() {
               </div>
             )}
             <div className="flex-1 min-w-0">
-              <p className="text-[0.6rem] uppercase tracking-widest text-graphite">Referencia</p>
+              <p className="text-[0.7rem] uppercase tracking-widest text-graphite">Referencia</p>
               <p className="font-display text-lg text-ink-900">{l.referencia_codigo}</p>
               <p className="text-sm text-graphite">{l.referencia_nombre}</p>
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
@@ -161,14 +161,14 @@ export default function LotePublicoPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {l.precio_confeccion != null && (
           <div className="rounded-sm border border-border bg-white p-4">
-            <p className="text-[0.6rem] uppercase tracking-widest text-graphite">Valor acordado por prenda</p>
+            <p className="text-[0.7rem] uppercase tracking-widest text-graphite">Valor acordado por prenda</p>
             <p className="mt-1 font-display text-2xl text-ink-900 tabular">
               ${Number(l.precio_confeccion).toLocaleString("es-CO", { maximumFractionDigits: 0 })}
             </p>
           </div>
         )}
         <div className="rounded-sm border border-border bg-white p-4">
-          <p className="text-[0.6rem] uppercase tracking-widest text-graphite">Fecha de entrega</p>
+          <p className="text-[0.7rem] uppercase tracking-widest text-graphite">Fecha de entrega</p>
           <p className="mt-1 font-display text-2xl text-ink-900 tabular">
             {fmtFecha(l.fecha_entrega)}
           </p>
@@ -177,13 +177,13 @@ export default function LotePublicoPage() {
 
         {/* Prendas por talla */}
         <div className="rounded-sm border border-border bg-white p-4">
-          <p className="text-[0.6rem] uppercase tracking-widest text-graphite mb-2">
+          <p className="text-[0.7rem] uppercase tracking-widest text-graphite mb-2">
             Prendas que recibe · Total: <span className="text-ink-900 font-bold tabular">{l.total_unidades}</span>
           </p>
           <div className="grid grid-cols-4 md:grid-cols-7 gap-2">
             {Object.entries(unidades).map(([t, n]) => (
               <div key={t} className="rounded-sm bg-cloud/40 border border-border p-2 text-center">
-                <p className="text-[0.55rem] uppercase tracking-widest text-graphite">Talla {t}</p>
+                <p className="text-[0.68rem] uppercase tracking-widest text-graphite">Talla {t}</p>
                 <p className="font-display text-lg text-ink-900 tabular">{n}</p>
               </div>
             ))}
@@ -194,14 +194,14 @@ export default function LotePublicoPage() {
         <div className="rounded-sm border border-border bg-white">
           <div className="p-4 border-b border-border flex items-center gap-2">
             <Package className="h-4 w-4 text-navy-600" />
-            <p className="text-[0.6rem] uppercase tracking-widest text-graphite">Insumos que se le envían</p>
+            <p className="text-[0.7rem] uppercase tracking-widest text-graphite">Insumos que se le envían</p>
           </div>
           {l.insumos.length === 0 ? (
             <div className="p-4 text-xs text-graphite">Sin insumos registrados.</div>
           ) : (
             <table className="w-full text-xs">
               <thead className="bg-cloud/40 border-b border-border">
-                <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                   <th className="px-4 py-2">Insumo</th>
                   <th className="px-4 py-2 text-right">Total</th>
                 </tr>
@@ -229,7 +229,7 @@ export default function LotePublicoPage() {
 
         {/* Nota */}
         <div className="rounded-sm border border-border bg-white p-4 space-y-2">
-          <p className="text-[0.6rem] uppercase tracking-widest text-graphite">Nota para MALE&apos;DENIM (opcional)</p>
+          <p className="text-[0.7rem] uppercase tracking-widest text-graphite">Nota para MALE&apos;DENIM (opcional)</p>
           <textarea value={nota} onChange={(e) => setNota(e.target.value)}
             rows={3} maxLength={2000}
             placeholder="Ej. faltó un cierre, cambio de fecha, dudas del lote…"
@@ -264,7 +264,7 @@ export default function LotePublicoPage() {
           </div>
         )}
 
-        <p className="text-center text-[0.55rem] text-graphite pt-2">
+        <p className="text-center text-[0.68rem] text-graphite pt-2">
           MALE&apos;DENIM · Ficha de lote confidencial
         </p>
       </div>

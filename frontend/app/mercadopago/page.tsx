@@ -90,7 +90,7 @@ export default function MercadoPagoPage() {
           />
         </div>
         <label className="flex items-center gap-2 text-xs text-graphite">
-          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.12em]">Periodo</span>
+          <span className="text-[0.7rem] font-semibold uppercase tracking-[0.12em]">Periodo</span>
           <select
             value={dias}
             onChange={(e) => setDias(Number(e.target.value))}
@@ -157,7 +157,7 @@ export default function MercadoPagoPage() {
 
 function Th({ children, align = "left" }: { children: React.ReactNode; align?: "left" | "right" }) {
   const cls = align === "right" ? "text-right" : "text-left";
-  return <th className={`px-3 py-2.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${cls}`}>{children}</th>;
+  return <th className={`px-3 py-2.5 text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite ${cls}`}>{children}</th>;
 }
 
 function Td({

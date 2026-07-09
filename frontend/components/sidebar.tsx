@@ -65,7 +65,7 @@ function UserBox() {
         <UserCircle className="h-4 w-4 text-steel flex-none" />
         <div className="text-left min-w-0 flex-1">
           <p className="text-xs font-semibold text-concrete truncate">{user.nombre}</p>
-          <p className="text-[0.55rem] font-semibold uppercase tracking-[0.2em] text-steel/60">
+          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.2em] text-steel/60">
             {ROL_LABEL[user.rol]}
           </p>
         </div>
@@ -87,7 +87,7 @@ function NavGroupCollapsible({ group, pathname }: { group: NavGroup; pathname: s
 
   return (
     <Collapsible.Root open={open} onOpenChange={setOpen} className="mt-3">
-      <Collapsible.Trigger className="flex w-full items-center justify-between px-2 py-1.5 text-[0.55rem] font-bold uppercase tracking-[0.22em] text-steel/55 hover:text-concrete transition-colors">
+      <Collapsible.Trigger className="flex w-full items-center justify-between px-2 py-1.5 text-[0.68rem] font-bold uppercase tracking-[0.22em] text-steel/55 hover:text-concrete transition-colors">
         <span>{group.title}</span>
         <ChevronDown
           className={cn("h-3 w-3 transition-transform", open ? "rotate-0" : "-rotate-90")}

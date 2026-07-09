@@ -439,7 +439,7 @@ export default function DetalleOrdenCortePage() {
                     </a>
                   )}
                 </div>
-                <p className="mt-1 text-[0.62rem] text-graphite">PDF/JPG/PNG · máx 15MB</p>
+                <p className="mt-1 text-[0.7rem] text-graphite">PDF/JPG/PNG · máx 15MB</p>
               </div>
 
               {/* Autorizar */}
@@ -465,7 +465,7 @@ export default function DetalleOrdenCortePage() {
                       {autorizar.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                       Autorizar y enviar correo
                     </button>
-                    <p className="mt-1 text-[0.62rem] text-graphite">
+                    <p className="mt-1 text-[0.7rem] text-graphite">
                       Asunto: <span className="font-semibold text-ink-900">
                         Orden de corte referencia {oc.referencia?.codigo_referencia || "—"}
                       </span>
@@ -503,7 +503,7 @@ export default function DetalleOrdenCortePage() {
               <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead className="bg-cloud/60 border-b border-border">
-                  <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                  <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                     <th className="px-4 py-2">Categoría</th>
                     <th className="px-4 py-2">Insumo</th>
                     <th className="px-4 py-2 text-right">×/prenda</th>
@@ -515,7 +515,7 @@ export default function DetalleOrdenCortePage() {
                 <tbody>
                   {insumosQ.data.items.map((it, i) => (
                     <tr key={i} className="border-b border-border/40 hover:bg-cloud/30">
-                      <td className="px-4 py-2 text-graphite text-[0.6rem] uppercase tracking-widest">{it.categoria}</td>
+                      <td className="px-4 py-2 text-graphite text-[0.7rem] uppercase tracking-widest">{it.categoria}</td>
                       <td className="px-4 py-2 text-ink-900 font-medium">{it.item}</td>
                       <td className="px-4 py-2 text-right tabular text-graphite">{it.cantidad_por_prenda}</td>
                       <td className="px-4 py-2 text-right tabular text-graphite">{insumosQ.data?.cantidad_base}</td>
@@ -533,7 +533,7 @@ export default function DetalleOrdenCortePage() {
                 {(insumosQ.data.total_costo || 0) > 0 && (
                   <tfoot>
                     <tr className="bg-cloud/40 border-t-2 border-border">
-                      <td colSpan={5} className="px-4 py-2 text-right text-[0.6rem] uppercase tracking-widest text-graphite">Costo total insumos</td>
+                      <td colSpan={5} className="px-4 py-2 text-right text-[0.7rem] uppercase tracking-widest text-graphite">Costo total insumos</td>
                       <td className="px-4 py-2 text-right tabular font-bold text-ink-900">
                         ${(insumosQ.data.total_costo || 0).toLocaleString("es-CO", { maximumFractionDigits: 0 })}
                       </td>
@@ -639,13 +639,13 @@ export default function DetalleOrdenCortePage() {
               className="grid grid-cols-1 md:grid-cols-[1fr_150px_auto] gap-2 items-end"
             >
               <div>
-                <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite">Barcode del rollo</label>
+                <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite">Barcode del rollo</label>
                 <input ref={barcodeRef} value={barcode} onChange={(e) => setBarcode(e.target.value)}
                   autoFocus placeholder="Escanea aquí…"
                   className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm tabular" />
               </div>
               <div>
-                <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite">Metros a usar</label>
+                <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite">Metros a usar</label>
                 <input ref={metrosRef} value={metros} onChange={(e) => setMetros(e.target.value)}
                   inputMode="decimal" placeholder="0"
                   className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm text-right tabular" />
@@ -674,7 +674,7 @@ export default function DetalleOrdenCortePage() {
             <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
-                <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                   <th className="px-4 py-2">Código</th>
                   <th className="px-4 py-2">Descripción</th>
                   <th className="px-4 py-2">Tono</th>
@@ -747,7 +747,7 @@ export default function DetalleOrdenCortePage() {
 function Kpi({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-[0.6rem] uppercase tracking-widest text-graphite">{label}</p>
+      <p className="text-[0.7rem] uppercase tracking-widest text-graphite">{label}</p>
       <p className="mt-1 font-display text-lg text-ink-900 tabular">{value}</p>
     </div>
   );
@@ -791,7 +791,7 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar }: {
       <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <thead className="bg-cloud/40 border-b border-border">
-          <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+          <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
             <th className="px-4 py-2">Código interno</th>
             <th className="px-4 py-2">Descripción</th>
             <th className="px-4 py-2">Tono</th>
@@ -818,7 +818,7 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar }: {
               <tr className="bg-cloud/30 border-y border-border">
                 <td colSpan={7} className="px-4 py-2">
                   <button type="button" onClick={() => setMostrarOtros((v) => !v)}
-                    className="text-[0.6rem] font-semibold uppercase tracking-widest text-graphite hover:text-ink-900">
+                    className="text-[0.7rem] font-semibold uppercase tracking-widest text-graphite hover:text-ink-900">
                     {mostrarOtros ? "▼ Ocultar" : "▶ Mostrar"} otros rollos disponibles ({otros.length})
                   </button>
                 </td>
@@ -916,7 +916,7 @@ function InformeCorteCard({
         {/* Fila 1: referencia interna + lote + fecha entrega + precio */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <div>
-            <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+            <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
               Ref. interna (auto)
             </label>
             <div className="w-full rounded-sm border border-border bg-cloud/40 px-3 py-2 text-sm text-ink-900 tabular font-semibold">
@@ -937,9 +937,9 @@ function InformeCorteCard({
               const capas = capasDeEspiga(esp, unidadesNum);
               return (
                 <div key={key}>
-                  <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite text-center">
+                  <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite text-center">
                     Espiga {labelEspiga(esp)}
-                    <div className="text-[0.55rem] text-graphite/70 normal-case tracking-normal">
+                    <div className="text-[0.68rem] text-graphite/70 normal-case tracking-normal">
                       {capas > 0 ? `× ${capas} capas` : "llena unidades abajo"}
                     </div>
                   </label>
@@ -951,7 +951,7 @@ function InformeCorteCard({
               );
             })}
           </div>
-          <p className="mt-1 text-[0.62rem] text-graphite">
+          <p className="mt-1 text-[0.7rem] text-graphite">
             Consumo = Σ (metros + 2cm sobrante) × capas de cada espiga + retazos.
             {consumoAuto > 0 && (
               <span className="ml-1 font-semibold text-ink-900 tabular">
@@ -1008,9 +1008,9 @@ function InformeCorteCard({
           <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
             {tallas.map((t) => (
               <div key={t}>
-                <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite text-center">
+                <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite text-center">
                   Talla {t}
-                  <div className="text-[0.55rem] text-graphite/70 normal-case tracking-normal">
+                  <div className="text-[0.68rem] text-graphite/70 normal-case tracking-normal">
                     prog. {oc.curva_trazo?.[t] ?? 0}
                   </div>
                 </label>
@@ -1020,7 +1020,7 @@ function InformeCorteCard({
               </div>
             ))}
           </div>
-          <p className="mt-1 text-[0.62rem] text-graphite">
+          <p className="mt-1 text-[0.7rem] text-graphite">
             Total cortadas: <span className="font-semibold text-ink-900 tabular">{totalUnidades}</span>
             {oc.cantidad_programada
               ? ` / programadas ${oc.cantidad_programada}` : ""}
@@ -1045,7 +1045,7 @@ function FieldText({ label, value, onChange, placeholder, inputMode, type }: {
 }) {
   return (
     <div>
-      <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
+      <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
       <input value={value} onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder} inputMode={inputMode} type={type || "text"}
         className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm" />
@@ -1066,28 +1066,28 @@ function ComparativoBloque({ label, teorico, valueReal, onChangeReal, inputMode,
   const tono = delta == null ? "text-graphite" : (delta > 0 ? "text-terracotta" : delta < 0 ? "text-teal" : "text-graphite");
   return (
     <div className="rounded-sm border border-border bg-cloud/30 p-3">
-      <p className="text-[0.6rem] uppercase tracking-widest text-graphite mb-2">{label}</p>
+      <p className="text-[0.7rem] uppercase tracking-widest text-graphite mb-2">{label}</p>
       <div className="grid grid-cols-3 gap-2 items-end">
         <div>
-          <p className="text-[0.55rem] text-graphite">Teórico</p>
+          <p className="text-[0.68rem] text-graphite">Teórico</p>
           <div className="rounded-sm border border-border bg-cloud/60 px-2 py-1.5 text-sm tabular text-graphite">
             {teorico > 0 ? fmt(teorico) : "—"}
           </div>
         </div>
         <div>
-          <p className="text-[0.55rem] text-graphite">Real</p>
+          <p className="text-[0.68rem] text-graphite">Real</p>
           <input value={valueReal} onChange={(e) => onChangeReal(e.target.value)}
             inputMode={inputMode} placeholder="0"
             className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-sm text-right tabular" />
         </div>
         <div>
-          <p className="text-[0.55rem] text-graphite">Δ</p>
+          <p className="text-[0.68rem] text-graphite">Δ</p>
           <div className={`rounded-sm border border-border bg-white px-2 py-1.5 text-sm text-right tabular font-semibold ${tono}`}>
             {delta == null ? "—" : (delta > 0 ? `+${fmt(delta)}` : fmt(delta))}
           </div>
         </div>
       </div>
-      {hint && <p className="mt-1 text-[0.55rem] text-graphite italic">{hint}</p>}
+      {hint && <p className="mt-1 text-[0.68rem] text-graphite italic">{hint}</p>}
     </div>
   );
 }
@@ -1150,7 +1150,7 @@ function InformeCerradoCard({ oc }: { oc: OrdenCorte }) {
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead className="bg-cloud/60 border-b border-border">
-                  <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                  <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                     <th className="px-3 py-2">Talla</th>
                     {tallas.map((t) => (
                       <th key={t} className="px-3 py-2 text-center">{t}</th>
@@ -1213,7 +1213,7 @@ function InformeCerradoCard({ oc }: { oc: OrdenCorte }) {
 function ReadKV({ label, value, bold = false }: { label: string; value: string; bold?: boolean }) {
   return (
     <div>
-      <p className="text-[0.6rem] uppercase tracking-widest text-graphite">{label}</p>
+      <p className="text-[0.7rem] uppercase tracking-widest text-graphite">{label}</p>
       <p className={`mt-1 text-sm tabular ${bold ? "font-semibold text-navy-600" : "text-ink-900"}`}>{value}</p>
     </div>
   );
@@ -1225,18 +1225,18 @@ function CompRead({ label, teorico, real, delta, fmt }: {
   const tono = delta == null ? "text-graphite" : (delta > 0 ? "text-terracotta" : delta < 0 ? "text-teal" : "text-graphite");
   return (
     <div className="rounded-sm border border-border bg-cloud/30 p-3">
-      <p className="text-[0.6rem] uppercase tracking-widest text-graphite mb-2">{label}</p>
+      <p className="text-[0.7rem] uppercase tracking-widest text-graphite mb-2">{label}</p>
       <div className="grid grid-cols-3 gap-2">
         <div>
-          <p className="text-[0.55rem] text-graphite">Teórico</p>
+          <p className="text-[0.68rem] text-graphite">Teórico</p>
           <div className="tabular text-sm text-graphite">{teorico > 0 ? fmt(teorico) : "—"}</div>
         </div>
         <div>
-          <p className="text-[0.55rem] text-graphite">Real</p>
+          <p className="text-[0.68rem] text-graphite">Real</p>
           <div className="tabular text-sm text-ink-900 font-semibold">{real > 0 ? fmt(real) : "—"}</div>
         </div>
         <div>
-          <p className="text-[0.55rem] text-graphite">Δ</p>
+          <p className="text-[0.68rem] text-graphite">Δ</p>
           <div className={`tabular text-sm font-semibold ${tono}`}>
             {delta == null ? "—" : (delta > 0 ? `+${fmt(delta)}` : fmt(delta))}
           </div>
@@ -1387,7 +1387,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
       return (
         <div className="flex flex-wrap items-end gap-2">
           <div>
-            <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite">Lavandería *</label>
+            <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite">Lavandería *</label>
             <select value={lavanderiaId} onChange={(e) => setLavanderiaId(e.target.value)}
               className="rounded-sm border border-border bg-card px-3 py-2 text-xs min-w-[180px]">
               <option value="">Selecciona lavandería…</option>
@@ -1396,7 +1396,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
               ))}
             </select>
             {(lavanderiasQ.data?.confeccionistas || []).length === 0 && !lavanderiasQ.isLoading && (
-              <p className="mt-1 text-[0.6rem] text-terracotta">
+              <p className="mt-1 text-[0.7rem] text-terracotta">
                 No hay lavanderías. Créalas en Proveedores con tipo &ldquo;Lavandería&rdquo;.
               </p>
             )}
@@ -1413,7 +1413,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
                   e.target.value = "";
                 }} />
             </label>
-            <p className="mt-1 text-[0.6rem] text-graphite">
+            <p className="mt-1 text-[0.7rem] text-graphite">
               Al subir la foto/PDF, el lote queda en <strong>Lavandería</strong> de una vez.
             </p>
           </div>
@@ -1469,7 +1469,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
             const actual = i === idxActual;
             return (
               <li key={e.key} className={`rounded-sm border p-2 ${actual ? "border-navy-600 bg-navy-600/[0.06]" : pasada ? "border-teal/40 bg-teal/[0.04]" : "border-border bg-cloud/20"}`}>
-                <p className={`text-[0.55rem] uppercase tracking-widest ${actual ? "text-navy-600" : pasada ? "text-teal" : "text-graphite"}`}>
+                <p className={`text-[0.68rem] uppercase tracking-widest ${actual ? "text-navy-600" : pasada ? "text-teal" : "text-graphite"}`}>
                   {e.label}
                 </p>
                 <p className="text-[0.65rem] tabular text-ink-900 mt-1">
@@ -1492,7 +1492,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
         {/* Remisión de lavandería */}
         {(r.etapa === "aceptado" || r.etapa === "en_confeccion" || r.etapa === "lavanderia" || r.remision_lavanderia_url) && (
           <div>
-            <p className="text-[0.6rem] uppercase tracking-widest text-graphite mb-1">
+            <p className="text-[0.7rem] uppercase tracking-widest text-graphite mb-1">
               Remisión de lavandería (URL / referencia) — al guardarla el lote pasa a Lavandería
             </p>
             <div className="flex items-center gap-2">
@@ -1515,10 +1515,10 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
         <div className="border-t border-border pt-3 flex flex-wrap items-center gap-2">
           {botonSiguiente()}
           <div className="flex-1" />
-          <span className="text-[0.6rem] text-graphite uppercase tracking-widest">Notificar:</span>
+          <span className="text-[0.7rem] text-graphite uppercase tracking-widest">Notificar:</span>
           {ADMINS_WA.map((a) => (
             <a key={a.nombre} href={waNotifUrl(a.tel)} target="_blank" rel="noopener noreferrer"
-              className="rounded-sm bg-[#25D366] px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-widest text-white hover:opacity-90">
+              className="rounded-sm bg-[#25D366] px-2 py-1 text-[0.7rem] font-semibold uppercase tracking-widest text-white hover:opacity-90">
               {a.nombre}
             </a>
           ))}
@@ -1587,14 +1587,14 @@ function GenerarRemisionCard({ ordenCorteId }: { ordenCorteId: string }) {
         </p>
         <div className="flex flex-wrap items-end gap-2">
           <div>
-            <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite">Confeccionista *</label>
+            <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite">Confeccionista *</label>
             <select value={confId} onChange={(e) => setConfId(e.target.value)}
               className="rounded-sm border border-border bg-card px-3 py-2 text-sm min-w-[200px]">
               <option value="">Selecciona…</option>
               {confs.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
             </select>
             {confs.length === 0 && !confsQ.isLoading && (
-              <p className="mt-1 text-[0.6rem] text-terracotta">No hay confeccionistas activos.</p>
+              <p className="mt-1 text-[0.7rem] text-terracotta">No hay confeccionistas activos.</p>
             )}
           </div>
           <button onClick={() => crear.mutate()} disabled={crear.isPending || !confId}

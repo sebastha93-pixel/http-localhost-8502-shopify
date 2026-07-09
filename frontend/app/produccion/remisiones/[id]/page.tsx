@@ -147,7 +147,7 @@ export default function RemisionDetallePage() {
             <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
-                <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                   <th className="px-4 py-2">Consecutivo</th>
                   <th className="px-4 py-2">Referencia</th>
                   <th className="px-4 py-2">Lote</th>
@@ -168,7 +168,7 @@ export default function RemisionDetallePage() {
                       </td>
                       <td className="px-4 py-2 text-ink-900">
                         {it.orden_corte?.referencia?.codigo_referencia || "—"}
-                        <div className="text-[0.6rem] text-graphite">
+                        <div className="text-[0.7rem] text-graphite">
                           {it.orden_corte?.referencia?.nombre}
                         </div>
                       </td>
@@ -368,7 +368,7 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
         <div>
-          <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite">
+          <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite">
             {esTerminacion ? "Precio terminación (del precosteo)" : "Precio confección (del precosteo)"}
           </label>
           <div className="w-full rounded-sm border border-border bg-cloud/40 px-2 py-1.5 text-xs text-right tabular font-semibold text-ink-900">
@@ -382,7 +382,7 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
         </div>
         {!esTerminacion && (
           <div>
-            <label className="mb-1 block text-[0.6rem] uppercase tracking-widest text-graphite">Fecha entrega</label>
+            <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite">Fecha entrega</label>
             <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)}
               placeholder={r.fecha_entrega_confeccion || ""}
               className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-xs" />
@@ -429,7 +429,7 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
 function Info({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-[0.6rem] uppercase tracking-widest text-graphite">{label}</p>
+      <p className="text-[0.7rem] uppercase tracking-widest text-graphite">{label}</p>
       <p className="mt-1 text-sm text-ink-900">{value}</p>
     </div>
   );

@@ -166,7 +166,7 @@ export default function InsumosPage() {
           <CardContent className="p-5 space-y-3">
             <p className="section-label">Ingreso de insumos</p>
             <div className="max-w-xs">
-              <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+              <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
                 Documento (factura/remisión del proveedor)
               </label>
               <input value={docRef} onChange={(e) => setDocRef(e.target.value)} placeholder="FC-1234 (opcional)"
@@ -236,7 +236,7 @@ export default function InsumosPage() {
             <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
-                <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                   <th className="px-4 py-2 w-[36px]">
                     <input type="checkbox"
                       checked={insumos.length > 0 && seleccion.size === insumos.length}
@@ -285,7 +285,7 @@ export default function InsumosPage() {
             <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
-                <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                   <th className="px-4 py-2">Fecha</th>
                   <th className="px-4 py-2">Insumo</th>
                   <th className="px-4 py-2">Tipo</th>
@@ -299,7 +299,7 @@ export default function InsumosPage() {
                     <td className="px-4 py-2 text-graphite tabular text-[0.65rem]">{fmtDateTime(m.created_at)}</td>
                     <td className="px-4 py-2 text-ink-900">{m.insumo?.nombre || "—"}</td>
                     <td className="px-4 py-2">
-                      <span className={`rounded-sm px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-widest ${m.tipo === "ingreso" ? "bg-teal/10 text-teal" : m.tipo === "salida" ? "bg-terracotta/10 text-terracotta" : "bg-cloud text-graphite"}`}>
+                      <span className={`rounded-sm px-1.5 py-0.5 text-[0.68rem] font-bold uppercase tracking-widest ${m.tipo === "ingreso" ? "bg-teal/10 text-teal" : m.tipo === "salida" ? "bg-terracotta/10 text-terracotta" : "bg-cloud text-graphite"}`}>
                         {m.tipo}
                       </span>
                     </td>

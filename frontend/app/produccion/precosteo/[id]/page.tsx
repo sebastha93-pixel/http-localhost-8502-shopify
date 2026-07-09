@@ -158,7 +158,7 @@ export default function PrecosteoDetallePage() {
           </div>
           <table className="w-full text-xs">
             <thead className="bg-cloud/60 border-b border-border">
-              <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+              <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                 <th className="px-3 py-2">Categoría</th>
                 <th className="px-3 py-2">Item</th>
                 <th className="px-3 py-2 text-right">Valor unit.</th>
@@ -201,7 +201,7 @@ export default function PrecosteoDetallePage() {
 function Kpi({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-[0.6rem] uppercase tracking-widest text-graphite">{label}</p>
+      <p className="text-[0.7rem] uppercase tracking-widest text-graphite">{label}</p>
       <p className="mt-1 font-display text-xl text-ink-900 tabular">{value}</p>
     </div>
   );

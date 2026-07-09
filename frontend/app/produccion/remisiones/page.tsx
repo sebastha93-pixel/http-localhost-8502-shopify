@@ -100,7 +100,7 @@ export default function RemisionesPage() {
             <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
-                <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                   <th className="px-4 py-2">Consecutivo</th>
                   <th className="px-4 py-2">Tipo</th>
                   <th className="px-4 py-2">Proveedor</th>
@@ -120,7 +120,7 @@ export default function RemisionesPage() {
                         </Link>
                       </td>
                       <td className="px-4 py-2">
-                        <span className={`rounded-sm px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-widest ${esTerm ? "bg-teal/10 text-teal" : "bg-navy-600/10 text-navy-600"}`}>
+                        <span className={`rounded-sm px-1.5 py-0.5 text-[0.68rem] font-bold uppercase tracking-widest ${esTerm ? "bg-teal/10 text-teal" : "bg-navy-600/10 text-navy-600"}`}>
                           {esTerm ? "Terminación" : "Confección"}
                         </span>
                       </td>

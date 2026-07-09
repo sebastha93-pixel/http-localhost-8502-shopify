@@ -238,7 +238,7 @@ export default function NuevoIngresoPage() {
             <p className="section-label">Cabecera</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
-                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Textilera *</label>
+                <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Textilera *</label>
                 <select value={textileraId} onChange={(e) => elegirTextilera(e.target.value)}
                   className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm">
                   <option value="">Selecciona una textilera…</option>
@@ -246,7 +246,7 @@ export default function NuevoIngresoPage() {
                   <option value="otra">+ Otra (regístrala en Proveedores)</option>
                 </select>
                 {textileras.length === 0 && !textilerasQ.isLoading && (
-                  <p className="mt-1 text-[0.6rem] text-terracotta">
+                  <p className="mt-1 text-[0.7rem] text-terracotta">
                     No hay textileras. Créalas en{" "}
                     <a href="/produccion/confeccionistas" className="underline font-semibold">Proveedores</a>{" "}
                     con tipo &ldquo;Textilera&rdquo; y su NIT.
@@ -261,13 +261,13 @@ export default function NuevoIngresoPage() {
               <div>
                 <Input label="NIT (para cruce con Siigo)" value={nit} onChange={setNit} />
                 {textileraId && textileraId !== "otra" && !nit && (
-                  <p className="mt-1 text-[0.6rem] text-ochre">
+                  <p className="mt-1 text-[0.7rem] text-ochre">
                     Esta textilera no tiene NIT — agrégalo en Proveedores para poder cruzar la compra.
                   </p>
                 )}
               </div>
               <div>
-                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Tipo de documento</label>
+                <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Tipo de documento</label>
                 <select value={tipoDoc} onChange={(e) => setTipoDoc(e.target.value)}
                   className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm">
                   {TIPOS_DOC.map((t) => <option key={t.v} value={t.v}>{t.l}</option>)}
@@ -277,7 +277,7 @@ export default function NuevoIngresoPage() {
               <Input label="Fecha" type="date" value={fecha} onChange={setFecha} required />
               <Input label="Orden de compra (opcional)" value={ordenCompra} onChange={setOrdenCompra} />
               <div className="md:col-span-2">
-                <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Observaciones</label>
+                <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Observaciones</label>
                 <textarea value={observaciones} onChange={(e) => setObservaciones(e.target.value)}
                   rows={2}
                   className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />
@@ -300,7 +300,7 @@ export default function NuevoIngresoPage() {
               {rollos.map((r, idx) => (
                 <div key={idx} className="rounded-sm border border-border bg-cloud/30 p-3 space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-[0.62rem] uppercase tracking-[0.12em] text-graphite font-semibold">
+                    <span className="text-[0.7rem] uppercase tracking-[0.12em] text-graphite font-semibold">
                       Rollo #{idx + 1}
                     </span>
                     {rollos.length > 1 && (
@@ -357,7 +357,7 @@ function Input({ label, value, onChange, type = "text", required = false, placeh
 }) {
   return (
     <div>
-      <label className="mb-1.5 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
+      <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
       <input type={type} value={value} onChange={(e) => onChange(e.target.value)}
         required={required} placeholder={placeholder}
         className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />
@@ -370,7 +370,7 @@ function Cell({ label, value, onChange, inputMode, required = false }: {
 }) {
   return (
     <div>
-      <label className="mb-1 block text-[0.55rem] uppercase tracking-widest text-graphite">{label}</label>
+      <label className="mb-1 block text-[0.68rem] uppercase tracking-widest text-graphite">{label}</label>
       <input value={value} onChange={(e) => onChange(e.target.value)}
         inputMode={inputMode}
         required={required}

@@ -269,7 +269,7 @@ function Tabla({
 
 function Th({ children, align = "left" }: { children?: React.ReactNode; align?: "left" | "right" }) {
   const cls = align === "right" ? "text-right" : "text-left";
-  return <th className={`px-3 py-2.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${cls}`}>{children}</th>;
+  return <th className={`px-3 py-2.5 text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite ${cls}`}>{children}</th>;
 }
 
 // ── Modal de liquidación ─────────────────────────────────────────────
@@ -313,7 +313,7 @@ function LiquidarModal({
       >
         <div className="flex items-center justify-between bg-ink-900 px-5 py-4 text-white">
           <div>
-            <p className="text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-steel-300/70">
+            <p className="text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-steel-300/70">
               {pedido.liquidado ? "Editar liquidación" : "Registrar liquidación"}
             </p>
             <p className="font-display text-base font-medium tabular-nums">Orden {orden}</p>
@@ -380,7 +380,7 @@ function Field({
 }) {
   return (
     <div>
-      <label className="mb-1 block text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
+      <label className="mb-1 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
       <input
         type={type}
         value={value}

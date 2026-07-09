@@ -107,7 +107,7 @@ export default function AuditoriaPage() {
         </div>
 
         <label className="flex items-center gap-2 text-xs text-graphite">
-          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.12em]">Usuario</span>
+          <span className="text-[0.7rem] font-semibold uppercase tracking-[0.12em]">Usuario</span>
           <select
             value={autor}
             onChange={(e) => setAutor(e.target.value)}
@@ -119,7 +119,7 @@ export default function AuditoriaPage() {
         </label>
 
         <label className="flex items-center gap-2 text-xs text-graphite">
-          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.12em]">Tipo</span>
+          <span className="text-[0.7rem] font-semibold uppercase tracking-[0.12em]">Tipo</span>
           <select
             value={tipo}
             onChange={(e) => setTipo(e.target.value)}
@@ -145,7 +145,7 @@ export default function AuditoriaPage() {
               <thead className="bg-cloud/60 border-b border-border">
                 <tr>
                   {["Fecha · hora", "Usuario", "Tipo", "Orden", "Detalle"].map(h => (
-                    <th key={h} className="px-4 py-2.5 text-left text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">{h}</th>
+                    <th key={h} className="px-4 py-2.5 text-left text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">{h}</th>
                   ))}
                 </tr>
               </thead>

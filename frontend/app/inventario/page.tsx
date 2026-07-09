@@ -165,7 +165,7 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-cloud/60 border-b border-border">
-                <tr className="text-left text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                <tr className="text-left text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
                   <th className="px-3 py-2.5"></th>
                   <th className="px-3 py-2.5">Producto</th>
                   <th className="px-3 py-2.5">SKU</th>
@@ -426,7 +426,7 @@ function TablaPorTienda({ data }: { data: PorTiendaResp }) {
         <CardContent className="p-0 overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="border-b border-border bg-cloud/40">
-              <tr className="text-left text-[0.6rem] uppercase tracking-[0.12em] text-graphite">
+              <tr className="text-left text-[0.7rem] uppercase tracking-[0.12em] text-graphite">
                 <th className="px-3 py-2">Referencia</th>
                 <th className="px-3 py-2">Talla</th>
                 {bodegasVis.map((b) => <th key={b} className="px-3 py-2 text-right">{b}</th>)}
@@ -440,7 +440,7 @@ function TablaPorTienda({ data }: { data: PorTiendaResp }) {
                 <tr key={r.code} className="hover:bg-cloud/40">
                   <td className="px-3 py-2.5">
                     <span className="font-medium text-ink-900 tabular-nums">{r.referencia}</span>
-                    <span className="block text-[0.58rem] text-graphite truncate max-w-[280px]">{r.nombre}</span>
+                    <span className="block text-[0.68rem] text-graphite truncate max-w-[280px]">{r.nombre}</span>
                   </td>
                   <td className="px-3 py-2.5 text-graphite tabular-nums">{r.talla ? `T${r.talla}` : "-"}</td>
                   {bodegasVis.map((b) => (
@@ -455,7 +455,7 @@ function TablaPorTienda({ data }: { data: PorTiendaResp }) {
           </table>
         </CardContent>
       </Card>
-      <p className="text-[0.62rem] text-graphite/70">
+      <p className="text-[0.7rem] text-graphite/70">
         Solo tiendas físicas (Florida y Arrayanes). El stock online/Melonn está en la pestaña Activos. Fuente: Siigo. Fit y Color se agregaran cruzando con Shopify por SKU.
       </p>
     </div>
@@ -529,7 +529,7 @@ function TablaAntiguedad({ productos }: { productos: Producto[] }) {
         <CardContent className="p-0 overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="border-b border-border bg-cloud/40">
-              <tr className="text-left text-[0.6rem] uppercase tracking-[0.12em] text-graphite">
+              <tr className="text-left text-[0.7rem] uppercase tracking-[0.12em] text-graphite">
                 <th className="px-3 py-2">Referencia</th>
                 <th className="px-3 py-2">Fit</th>
                 <th className="px-3 py-2">Lanzamiento</th>
@@ -545,7 +545,7 @@ function TablaAntiguedad({ productos }: { productos: Producto[] }) {
                 <tr key={p.id} className="hover:bg-cloud/40">
                   <td className="px-3 py-2.5">
                     <span className="font-medium text-ink-900">{p.titulo}</span>
-                    {p.sku_principal && <span className="block text-[0.6rem] text-graphite tabular-nums">{skuAgrupado(p)}</span>}
+                    {p.sku_principal && <span className="block text-[0.7rem] text-graphite tabular-nums">{skuAgrupado(p)}</span>}
                   </td>
                   <td className="px-3 py-2.5 text-graphite">{p.tipo || "—"}</td>
                   <td className="px-3 py-2.5 text-graphite tabular-nums">{fmtFechaLanz(p.published_at)}</td>
@@ -560,7 +560,7 @@ function TablaAntiguedad({ productos }: { productos: Producto[] }) {
           </table>
         </CardContent>
       </Card>
-      <p className="text-[0.62rem] text-graphite/70">
+      <p className="text-[0.7rem] text-graphite/70">
         Antigüedad = días desde la fecha de lanzamiento en Shopify. Florida y Arrayanes se sumarán cuando se conecte el inventario de Siigo.
       </p>
     </div>
@@ -608,6 +608,7 @@ export default function InventarioPage() {
       title="Inventario Shopify"
       subtitle="Gestión del catálogo · activos, borradores y stock"
       isFetching={activos.isFetching || borradores.isFetching}
+      dataUpdatedAt={Math.max(resumen.dataUpdatedAt || 0, activos.dataUpdatedAt || 0)}
       onRefresh={() => { resumen.refetch(); activos.refetch(); borradores.refetch(); }}
     >
       {/* KPIs principales */}

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -8,10 +9,25 @@ interface PageShellProps {
   subtitle?: string;
   isFetching?: boolean;
   onRefresh?: () => void;
+  /** Timestamp (ms) de la última carga de datos — muestra "Actualizado hace Xm". */
+  dataUpdatedAt?: number;
   children: React.ReactNode;
 }
 
-export function PageShell({ title, subtitle, isFetching, onRefresh, children }: PageShellProps) {
+/** "Actualizado hace 4 min" con tick cada 30s. */
+function UpdatedAgo({ at }: { at: number }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  if (!at) return null;
+  const mins = Math.floor((Date.now() - at) / 60_000);
+  const txt = mins < 1 ? "hace un momento" : mins === 1 ? "hace 1 min" : mins < 60 ? `hace ${mins} min` : `hace ${Math.floor(mins / 60)} h`;
+  return <span className="text-[0.68rem] text-graphite/80 tabular-nums">Actualizado {txt}</span>;
+}
+
+export function PageShell({ title, subtitle, isFetching, onRefresh, dataUpdatedAt, children }: PageShellProps) {
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-end sm:justify-between">
@@ -26,14 +42,17 @@ export function PageShell({ title, subtitle, isFetching, onRefresh, children }: 
             </p>
           )}
         </div>
+        <div className="flex shrink-0 items-center gap-3 self-start sm:self-auto">
+        {dataUpdatedAt ? <UpdatedAgo at={dataUpdatedAt} /> : null}
         {onRefresh && (
           <button
             onClick={onRefresh}
-            className="shrink-0 self-start rounded-sm border border-border bg-card px-3.5 py-1.5 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-ink-900 transition-colors hover:bg-cloud dark:text-foreground dark:hover:bg-ink-800 sm:self-auto"
+            className="shrink-0 rounded-sm border border-border bg-card px-3.5 py-1.5 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-ink-900 transition-colors hover:bg-cloud dark:text-foreground dark:hover:bg-ink-800 sm:self-auto"
           >
             Refrescar
           </button>
         )}
+        </div>
       </div>
       {children}
     </div>

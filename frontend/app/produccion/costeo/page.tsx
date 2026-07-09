@@ -162,7 +162,7 @@ export default function CosteoRealPage() {
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead className="bg-cloud/60 border-b border-border">
-                  <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                  <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                     <th className="px-4 py-2">Lote</th>
                     <th className="px-4 py-2">Referencia</th>
                     <th className="px-4 py-2">Confeccionista</th>
@@ -198,7 +198,7 @@ export default function CosteoRealPage() {
                           {l.desviacion != null ? money(l.desviacion) : "—"}
                         </td>
                         <td className="px-4 py-2">
-                          <span className={`rounded-sm px-2 py-0.5 text-[0.55rem] font-bold uppercase tracking-widest ${ui.tone}`}>
+                          <span className={`rounded-sm px-2 py-0.5 text-[0.68rem] font-bold uppercase tracking-widest ${ui.tone}`}>
                             {ui.texto}
                           </span>
                         </td>

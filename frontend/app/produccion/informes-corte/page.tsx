@@ -58,7 +58,7 @@ export default function InformesCortePage() {
           <CardContent className="p-0">
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
-                <tr className="text-left text-[0.6rem] uppercase tracking-widest text-graphite">
+                <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                   <th className="px-4 py-2">Consecutivo</th>
                   <th className="px-4 py-2">Referencia</th>
                   <th className="px-4 py-2">Lote</th>
@@ -85,7 +85,7 @@ export default function InformesCortePage() {
                       </td>
                       <td className="px-4 py-2 text-ink-900">
                         {o.referencia?.codigo_referencia || "—"}
-                        <div className="text-[0.6rem] text-graphite">
+                        <div className="text-[0.7rem] text-graphite">
                           {o.referencia?.nombre} {o.referencia?.tela ? `· ${o.referencia.tela}` : ""}
                         </div>
                       </td>
