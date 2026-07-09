@@ -95,3 +95,51 @@ def enviar_plantilla(telefono: str, plantilla: str,
     except Exception as e:
         log.warning(f"[wa] plantilla excepcion: {e}")
         return {"enviado": False, "motivo": str(e)[:200]}
+
+
+def estado_numero() -> dict:
+    """Valida credenciales contra Meta: datos del número emisor.
+    Devuelve display_phone_number, verified_name y quality_rating."""
+    if not configurado():
+        return {"configurado": False,
+                "falta": [v for v in ("WHATSAPP_PHONE_NUMBER_ID", "META_SYSTEM_USER_TOKEN")
+                          if not os.environ.get(v, "").strip()]}
+    phone_id = os.environ["WHATSAPP_PHONE_NUMBER_ID"].strip()
+    token = os.environ["META_SYSTEM_USER_TOKEN"].strip()
+    try:
+        r = httpx.get(
+            f"{GRAPH}/{phone_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"fields": "display_phone_number,verified_name,quality_rating,code_verification_status"},
+            timeout=20,
+        )
+        if r.status_code >= 400:
+            return {"configurado": True, "ok": False, "error": r.text[:300]}
+        return {"configurado": True, "ok": True, **r.json()}
+    except Exception as e:
+        return {"configurado": True, "ok": False, "error": str(e)[:300]}
+
+
+def listar_plantillas() -> dict:
+    """Plantillas de la WABA con su estado de aprobación (requiere WHATSAPP_WABA_ID)."""
+    waba_id = os.environ.get("WHATSAPP_WABA_ID", "").strip()
+    token = os.environ.get("META_SYSTEM_USER_TOKEN", "").strip()
+    if not waba_id or not token:
+        return {"ok": False, "error": "falta WHATSAPP_WABA_ID o META_SYSTEM_USER_TOKEN"}
+    try:
+        r = httpx.get(
+            f"{GRAPH}/{waba_id}/message_templates",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"fields": "name,status,language,category,components", "limit": 100},
+            timeout=20,
+        )
+        if r.status_code >= 400:
+            return {"ok": False, "error": r.text[:300]}
+        data = r.json().get("data") or []
+        return {"ok": True, "total": len(data), "plantillas": [
+            {"nombre": t.get("name"), "estado": t.get("status"),
+             "idioma": t.get("language"), "categoria": t.get("category")}
+            for t in data
+        ]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:300]}
