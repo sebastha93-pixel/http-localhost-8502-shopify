@@ -48,7 +48,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {}
     throw new ApiError(res.status, detailMsg || `HTTP ${res.status} on ${path}`, detail);
   }
-  return res.json() as Promise<T>;
+  // 204 No Content (ej. DELETE) o cuerpo vacío: no intentar parsear JSON —
+  // en Safari res.json() sobre vacío lanza "did not match the expected pattern".
+  if (res.status === 204) return undefined as T;
+  const texto = await res.text();
+  if (!texto) return undefined as T;
+  return JSON.parse(texto) as T;
 }
 
 /** Descarga un archivo autenticado (Bearer) y dispara el guardado en el navegador. */
