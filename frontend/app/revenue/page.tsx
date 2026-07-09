@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { StatusBadge as ConvStatusBadge } from "@/components/status-badge";
+import { DateRangePicker } from "@/components/date-range-picker";
 import { ExternalLink, Search, X, Sparkles, Filter, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, AlertCircle, Copy, Check } from "lucide-react";
 
 interface DetailResp {
@@ -1787,45 +1788,33 @@ ${asesoras || "  · sin asignaciones"}`;
         </div>
       </section>
 
-      {/* SELECTOR DE PERÍODO */}
+      {/* SELECTOR DE PERÍODO (dropdown estilo Shopify, ventana rolling) */}
       <div className="flex flex-wrap items-center gap-3">
         <label className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Periodo</label>
-        <div className="inline-flex rounded-sm border border-border bg-card overflow-hidden flex-wrap">
-          {([
-            { type: "h", v: 1,    l: "1h"   },
-            { type: "h", v: 4,    l: "4h"   },
-            { type: "h", v: 12,   l: "12h"  },
-            { type: "d", v: 1,    l: "Hoy"  },
-            { type: "d", v: 2,    l: "48h"  },
-            { type: "d", v: 7,    l: "7d"   },
-            { type: "d", v: 30,   l: "30d"  },
-            { type: "d", v: 90,   l: "90d"  },
-            { type: "d", v: 365,  l: "1 año"},
-          ] as const).map((opt) => {
-            const active = opt.type === "h"
-              ? hoursBack === opt.v
-              : (hoursBack === null && daysBack === opt.v);
-            return (
-              <button
-                key={`${opt.type}${opt.v}`}
-                onClick={() => {
-                  if (opt.type === "h") {
-                    setHoursBack(opt.v);
-                  } else {
-                    setHoursBack(null);
-                    setDaysBack(opt.v);
-                  }
-                  setConvPage(1);
-                }}
-                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                  active ? "bg-ink-900 text-white" : "text-graphite hover:bg-cloud"
-                }`}
-              >
-                {opt.l}
-              </button>
-            );
-          })}
-        </div>
+        <DateRangePicker
+          showCalendar={false}
+          value={{ periodo: hoursBack !== null ? `h${hoursBack}` : `d${daysBack}` }}
+          presets={[
+            { id: "h1",   label: "Última hora" },
+            { id: "h4",   label: "Últimas 4 horas" },
+            { id: "h12",  label: "Últimas 12 horas" },
+            { id: "d1",   label: "Hoy" },
+            { id: "d2",   label: "Últimas 48 horas" },
+            { id: "d7",   label: "Últimos 7 días" },
+            { id: "d30",  label: "Últimos 30 días" },
+            { id: "d90",  label: "Últimos 90 días" },
+            { id: "d365", label: "Último año" },
+          ]}
+          onChange={(v) => {
+            if (v.periodo.startsWith("h")) {
+              setHoursBack(Number(v.periodo.slice(1)));
+            } else {
+              setHoursBack(null);
+              setDaysBack(Number(v.periodo.slice(1)));
+            }
+            setConvPage(1);
+          }}
+        />
       </div>
 
       {/* TABS */}

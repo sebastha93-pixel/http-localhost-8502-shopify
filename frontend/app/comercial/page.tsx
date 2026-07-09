@@ -196,8 +196,8 @@ export default function ComercialPage() {
               value={{ periodo: periodoDesglose as Periodo, desde: rangoDesde, hasta: rangoHasta }}
               onChange={(v) => {
                 setPeriodoDesglose(v.periodo as PeriodoDesglose);
-                setRangoDesde(v.desde);
-                setRangoHasta(v.hasta);
+                if (v.desde) setRangoDesde(v.desde);
+                if (v.hasta) setRangoHasta(v.hasta);
               }}
             />
           </div>
@@ -482,8 +482,8 @@ export default function ComercialPage() {
               value={{ periodo: periodoFT as Periodo, desde: rangoDesdeFT, hasta: rangoHastaFT }}
               onChange={(v) => {
                 setPeriodoFT(v.periodo as PeriodoDesglose);
-                setRangoDesdeFT(v.desde);
-                setRangoHastaFT(v.hasta);
+                if (v.desde) setRangoDesdeFT(v.desde);
+                if (v.hasta) setRangoHastaFT(v.hasta);
               }}
             />
             <select value={canalFT} onChange={(e) => setCanalFT(e.target.value)}
