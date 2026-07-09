@@ -3,12 +3,13 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
+import { PageShell, LoadingState, ErrorState, TableSkeleton } from "@/components/page-shell";
 import { KpiCard, KpiStrip } from "@/components/kpi-card";
+import { exportarExcel } from "@/lib/export";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Search, ExternalLink } from "lucide-react";
+import { Search, ExternalLink, Download } from "lucide-react";
 import { formatMoney } from "@/lib/utils";
 
 interface ResumenResp {
@@ -361,6 +362,15 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
 
 
 /** RF-06 - Inventario por tienda/bodega desde Siigo (Florida, Arrayanes, Melonn). */
+function ExportBtn({ onClick }: { onClick: () => void }) {
+  return (
+    <button onClick={onClick} title="Exportar a Excel (CSV)"
+      className="inline-flex items-center gap-1 rounded-sm border border-border bg-card px-2 py-1 text-[0.68rem] font-medium text-graphite transition-colors hover:bg-cloud hover:text-ink-900">
+      <Download className="h-3 w-3" /> Excel
+    </button>
+  );
+}
+
 function TablaPorTienda({ data }: { data: PorTiendaResp }) {
   const [q, setQ] = useState("");
   const [tienda, setTienda] = useState<string>("todas");
@@ -421,8 +431,32 @@ function TablaPorTienda({ data }: { data: PorTiendaResp }) {
         <span className="text-xs text-graphite tabular-nums">
           {filas.length} referencia(s) con stock{tiendaActiva !== "todas" ? ` en ${tiendaActiva}` : ""}
         </span>
+        <ExportBtn onClick={() => exportarExcel(
+          `inventario_${tiendaActiva === "todas" ? "tiendas" : tiendaActiva.toLowerCase()}`,
+          ["Referencia", "Nombre", "Talla", ...bodegasVis, "Total"],
+          filas.map((r) => [r.referencia, r.nombre, r.talla, ...bodegasVis.map((b) => Math.round(r.stock[b] || 0)), Math.round(totalFila(r))]),
+        )} />
       </div>
-      <Card>
+      {/* Móvil: tarjetas apiladas (las tablas anchas son ilegibles en el celular) */}
+      <div className="space-y-2 sm:hidden">
+        {filas.length === 0 ? (
+          <Card><CardContent className="p-6 text-center text-sm text-graphite">Sin referencias con stock.</CardContent></Card>
+        ) : filas.map((r) => (
+          <Card key={r.code}>
+            <CardContent className="space-y-1.5 p-3.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="font-medium text-ink-900 tabular-nums">{r.referencia}{r.talla ? ` · T${r.talla}` : ""}</span>
+                <span className="shrink-0 font-semibold tabular-nums text-navy-600">{Math.round(totalFila(r))} und</span>
+              </div>
+              <p className="truncate text-[0.7rem] text-graphite">{r.nombre}</p>
+              <div className="flex gap-4 text-[0.7rem] text-graphite tabular-nums">
+                {bodegasVis.map((b) => <span key={b}>{b}: <span className="font-medium text-ink-900">{Math.round(r.stock[b] || 0)}</span></span>)}
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+      <Card className="hidden sm:block">
         <CardContent className="p-0 overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="border-b border-border bg-cloud/40">
@@ -524,6 +558,10 @@ function TablaAntiguedad({ productos }: { productos: Producto[] }) {
           {tipos.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
         <span className="text-xs text-graphite tabular-nums">{filas.length} referencia(s)</span>
+        <ExportBtn onClick={() => exportarExcel("antiguedad_inventario",
+          ["Referencia", "SKU", "Fit", "Lanzamiento", "Días en inventario", "Stock Shopify", "Stock Melonn"],
+          filas.map((p) => [p.titulo, skuAgrupado(p), p.tipo || "", p.published_at ? p.published_at.slice(0, 10) : "", p.dias_publicado ?? "", p.total_stock, p.stock_melonn ?? ""]),
+        )} />
       </div>
       <Card>
         <CardContent className="p-0 overflow-x-auto">
@@ -641,7 +679,7 @@ export default function InventarioPage() {
 
         <TabsContent value="activos">
           {activos.isLoading || !activos.data ? (
-            <Card><CardContent className="p-8 text-center text-sm text-graphite">Cargando productos activos…</CardContent></Card>
+            <TableSkeleton rows={8} label="Cargando productos activos…" />
           ) : (
             <TablaProductos productos={activos.data.productos} />
           )}
@@ -649,7 +687,7 @@ export default function InventarioPage() {
 
         <TabsContent value="borradores">
           {borradores.isLoading || !borradores.data ? (
-            <Card><CardContent className="p-8 text-center text-sm text-graphite">Cargando borradores…</CardContent></Card>
+            <TableSkeleton rows={6} label="Cargando borradores…" />
           ) : (
             <TablaProductos productos={borradores.data.productos} mostrarStock={false} />
           )}
@@ -657,7 +695,7 @@ export default function InventarioPage() {
 
         <TabsContent value="tiendas">
           {porTienda.isLoading || !porTienda.data ? (
-            <Card><CardContent className="p-8 text-center text-sm text-graphite">Cargando inventario por tienda desde Siigo... (puede tardar la primera vez)</CardContent></Card>
+            <TableSkeleton rows={8} label="Cargando inventario por tienda desde Siigo… (puede tardar la primera vez)" />
           ) : porTienda.error ? (
             <ErrorState error={porTienda.error} onRetry={() => porTienda.refetch()} />
           ) : (
@@ -667,7 +705,7 @@ export default function InventarioPage() {
 
         <TabsContent value="antiguedad">
           {activos.isLoading || !activos.data ? (
-            <Card><CardContent className="p-8 text-center text-sm text-graphite">Cargando antigüedad…</CardContent></Card>
+            <TableSkeleton rows={8} label="Cargando antigüedad…" />
           ) : (
             <TablaAntiguedad productos={activos.data.productos} />
           )}

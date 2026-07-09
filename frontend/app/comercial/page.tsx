@@ -3,8 +3,10 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { DateRangePicker, type Periodo } from "@/components/date-range-picker";
+import { exportarExcel } from "@/lib/export";
+import { Download } from "lucide-react";
 import { api } from "@/lib/api";
-import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
+import { PageShell, LoadingState, ErrorState, TableSkeleton } from "@/components/page-shell";
 import { KpiStrip } from "@/components/kpi-card";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -85,6 +87,15 @@ function Sparkline({ data, height = 60 }: { data: number[]; height?: number }) {
 function DeltaBadge({ pct, up }: { pct: number; up: boolean }) {
   const tone = up ? "normal" : pct < -10 ? "critico" : "riesgo";
   return <Badge tone={tone}>{up ? "↑" : "↓"} {Math.abs(pct).toFixed(1)}%</Badge>;
+}
+
+function ExportBtn({ onClick }: { onClick: () => void }) {
+  return (
+    <button onClick={onClick} title="Exportar a Excel (CSV)"
+      className="inline-flex items-center gap-1 rounded-sm border border-border bg-card px-2 py-1 text-[0.68rem] font-medium text-graphite transition-colors hover:bg-cloud hover:text-ink-900">
+      <Download className="h-3 w-3" /> Excel
+    </button>
+  );
 }
 
 function SectionHeading({ title, hint }: { title: string; hint?: React.ReactNode }) {
@@ -240,7 +251,7 @@ export default function ComercialPage() {
           </div>
 
           {desg.isLoading || !desg.data ? (
-            <Card><CardContent className="p-8 text-center text-sm text-graphite">Cargando ventas…</CardContent></Card>
+            <TableSkeleton rows={6} label="Cargando ventas…" />
           ) : (
             <>
               {/* KPIs principales (5) → KpiStrip */}
@@ -289,7 +300,13 @@ export default function ComercialPage() {
               {/* Por canal */}
               <Card>
                 <CardContent className="space-y-3 p-5">
-                  <SectionHeading title="Ventas por canal" hint="% sobre neto" />
+                  <SectionHeading title="Ventas por canal" hint={
+                    <span className="inline-flex items-center gap-2">% sobre neto
+                      <ExportBtn onClick={() => exportarExcel("ventas_por_canal",
+                        ["Canal", "Pedidos", "Unidades", "UPT", "Ventas", "%"],
+                        desg.data!.por_canal.map((c) => [c.label, c.num_pedidos, c.unidades, c.upt, Math.round(c.ventas), c.pct]))} />
+                    </span>
+                  } />
                   {desg.data.por_canal.length === 0 ? (
                     <p className="py-4 text-center text-sm text-graphite">Sin ventas en este período.</p>
                   ) : (
@@ -325,7 +342,13 @@ export default function ComercialPage() {
               {/* Por asesor */}
               <Card>
                 <CardContent className="space-y-3 p-5">
-                  <SectionHeading title="Ventas por asesor" hint="Solo órdenes creadas por staff" />
+                  <SectionHeading title="Ventas por asesor" hint={
+                    <span className="inline-flex items-center gap-2">Solo órdenes creadas por staff
+                      <ExportBtn onClick={() => exportarExcel("ventas_por_asesor",
+                        ["Asesor", "Pedidos", "Unidades", "UPT", "Ventas", "%"],
+                        desg.data!.por_asesor.map((a) => [a.nombre, a.num_pedidos, a.unidades, a.upt, Math.round(a.ventas), a.pct]))} />
+                    </span>
+                  } />
                   {desg.data.por_asesor.length === 0 ? (
                     <p className="py-4 text-center text-sm text-graphite">Sin ventas registradas por asesor en este período.</p>
                   ) : (
@@ -423,7 +446,7 @@ export default function ComercialPage() {
         {/* ─── TAB COMPARATIVAS ─── */}
         <TabsContent value="comp" className="space-y-4">
           {comp.isLoading || !comp.data ? (
-            <Card><CardContent className="p-8 text-center text-sm text-graphite">Cargando comparativas…</CardContent></Card>
+            <TableSkeleton rows={4} label="Cargando comparativas…" />
           ) : (
             <>
               {[
@@ -462,7 +485,7 @@ export default function ComercialPage() {
         {/* ─── TAB CLIENTES ─── */}
         <TabsContent value="clientes" className="space-y-4">
           {cli.isLoading || !cli.data ? (
-            <Card><CardContent className="p-8 text-center text-sm text-graphite">Cargando análisis de clientes…</CardContent></Card>
+            <TableSkeleton rows={6} label="Cargando análisis de clientes…" />
           ) : (
             <>
               <KpiStrip
@@ -561,7 +584,16 @@ function FitTallaTabla({ titulo, col, filas }: {
   return (
     <Card>
       <CardContent className="space-y-3 p-5">
-        <SectionHeading title={titulo} hint="Ventas netas sin IVA · ordenado por venta" />
+        <SectionHeading title={titulo} hint={
+          <span className="inline-flex items-center gap-2">
+            Ventas netas sin IVA · ordenado por venta
+            <ExportBtn onClick={() => exportarExcel(
+              `${titulo.toLowerCase().replace(/ /g, "_")}`,
+              [col, "Unidades", "Ventas netas", "Ticket promedio", "% participación", "Pedidos"],
+              filas.map((r) => [r.nombre, r.unidades, Math.round(r.ventas), Math.round(r.ticket_promedio), r.participacion, r.num_pedidos]),
+            )} />
+          </span>
+        } />
         {filas.length === 0 ? (
           <p className="py-4 text-center text-sm text-graphite">Sin ventas en este período.</p>
         ) : (

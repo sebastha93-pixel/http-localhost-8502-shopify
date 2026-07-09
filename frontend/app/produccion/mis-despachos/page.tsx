@@ -116,7 +116,50 @@ export default function MisDespachosPage() {
               <Link href="/produccion/corte" className="text-navy-600 hover:underline">Orden de corte</Link>.
             </p>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+            {/* Móvil: tarjetas — el cortador usa el celular en el taller */}
+            <div className="space-y-2 p-3 sm:hidden">
+              {rows.map((r) => {
+                const tallas = Object.entries(r.unidades)
+                  .filter(([, v]) => Number(v) > 0)
+                  .sort(([a], [b]) => Number(a) - Number(b));
+                return (
+                  <div key={r.id} className="rounded-md border border-border bg-card p-3.5 space-y-2">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <Link href={`/produccion/corte/${r.id}`} className="font-semibold tabular text-navy-600 hover:underline">{r.consecutivo}</Link>
+                      <span className="font-display text-sm tabular text-ink-900">{r.total.toLocaleString("es-CO")} und</span>
+                    </div>
+                    <p className="text-xs text-ink-900"><span className="font-semibold">{r.referencia || "—"}</span>{r.nombre ? ` · ${r.nombre}` : ""}</p>
+                    <div className="flex flex-wrap gap-1">
+                      {tallas.map(([t, v]) => (
+                        <span key={t} className="rounded-sm bg-navy-600/[0.07] px-1.5 py-0.5 text-[0.7rem] font-semibold tabular text-navy-600">T{t}: {v}</span>
+                      ))}
+                    </div>
+                    <div className="flex items-center justify-between gap-2 pt-1">
+                      {!r.remision ? (
+                        <span className="text-[0.7rem] text-graphite">Esperando remisión de insumos</span>
+                      ) : r.remision.despachada ? (
+                        <span className="inline-flex items-center gap-1 rounded-sm bg-teal/10 px-1.5 py-0.5 text-[0.7rem] font-bold uppercase tracking-widest text-teal">
+                          <CheckCircle className="h-3 w-3" /> Despachado
+                        </span>
+                      ) : (
+                        <span className="rounded-sm bg-amber-500/10 px-1.5 py-0.5 text-[0.7rem] font-bold uppercase tracking-widest text-amber-700">Listo para entrega</span>
+                      )}
+                      {r.remision && !r.remision.despachada && (
+                        <button
+                          onClick={() => despachar.mutate(r.remision!.id)}
+                          disabled={despachar.isPending}
+                          className="inline-flex items-center gap-1.5 rounded-sm bg-navy-600 px-3 py-1.5 text-[0.7rem] font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
+                          {despachar.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Truck className="h-3 w-3" />}
+                          Despachar
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="hidden overflow-x-auto sm:block">
               <table className="w-full text-xs">
                 <thead className="bg-cloud/40 border-b border-border">
                   <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
@@ -187,6 +230,7 @@ export default function MisDespachosPage() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </CardContent>
       </Card>

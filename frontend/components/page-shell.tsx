@@ -59,6 +59,30 @@ export function PageShell({ title, subtitle, isFetching, onRefresh, dataUpdatedA
   );
 }
 
+/** Skeleton de tabla: header + N filas shimmer. Para cargas dentro de un tab. */
+export function TableSkeleton({ rows = 6, label }: { rows?: number; label?: string }) {
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <div className="border-b border-border bg-cloud/40 px-4 py-3">
+          <div className="h-2.5 w-40 rounded-sm bg-concrete/60 shimmer" />
+        </div>
+        <div className="divide-y divide-border">
+          {Array.from({ length: rows }).map((_, i) => (
+            <div key={i} className="flex items-center gap-6 px-4 py-3.5">
+              <div className="h-3 w-1/3 rounded-sm bg-concrete/50 shimmer" />
+              <div className="ml-auto h-3 w-14 rounded-sm bg-concrete/40 shimmer" />
+              <div className="h-3 w-20 rounded-sm bg-concrete/50 shimmer" />
+              <div className="h-3 w-12 rounded-sm bg-concrete/40 shimmer" />
+            </div>
+          ))}
+        </div>
+        {label && <p className="border-t border-border px-4 py-2.5 text-xs text-graphite">{label}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function LoadingState({ label = "Cargando…" }: { label?: string }) {
   return (
     <div className="space-y-4">
