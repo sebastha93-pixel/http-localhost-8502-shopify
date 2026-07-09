@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { DateRangePicker, type Periodo } from "@/components/date-range-picker";
 import { api } from "@/lib/api";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { KpiStrip } from "@/components/kpi-card";
@@ -86,11 +87,6 @@ function DeltaBadge({ pct, up }: { pct: number; up: boolean }) {
   return <Badge tone={tone}>{up ? "↑" : "↓"} {Math.abs(pct).toFixed(1)}%</Badge>;
 }
 
-const PERIODO_LABELS: Record<PeriodoDesglose, string> = {
-  hoy: "Hoy", ayer: "Ayer", "7d": "7d", "30d": "30d",
-  mes: "Mes", ytd: "YTD", custom: "Personalizado",
-};
-
 function SectionHeading({ title, hint }: { title: string; hint?: React.ReactNode }) {
   return (
     <div className="mb-3 flex items-center justify-between">
@@ -108,6 +104,8 @@ export default function ComercialPage() {
   const [rangoHasta, setRangoHasta] = useState<string>(hoyISO);
   const [tabActivo, setTabActivo] = useState<"ventas" | "comp" | "clientes" | "fittalla">("ventas");
   const [periodoFT, setPeriodoFT] = useState<PeriodoDesglose>("hoy");
+  const [rangoDesdeFT, setRangoDesdeFT] = useState<string>(hace30);
+  const [rangoHastaFT, setRangoHastaFT] = useState<string>(hoyISO);
   const [canalFT, setCanalFT] = useState<string>("");
 
   const overview = useQuery<OverviewResp>({
@@ -149,9 +147,11 @@ export default function ComercialPage() {
   });
 
   const ft = useQuery<FitTallaResp>({
-    queryKey: ["comercial-fittalla", periodoFT, canalFT],
+    queryKey: ["comercial-fittalla", periodoFT, periodoFT === "custom" ? `${rangoDesdeFT}_${rangoHastaFT}` : "", canalFT],
     queryFn: () => api.get<FitTallaResp>(
-      `/api/comercial/fit-talla?periodo=${periodoFT}${canalFT ? `&canal=${encodeURIComponent(canalFT)}` : ""}`),
+      periodoFT === "custom"
+        ? `/api/comercial/fit-talla?periodo=custom&desde=${rangoDesdeFT}&hasta=${rangoHastaFT}${canalFT ? `&canal=${encodeURIComponent(canalFT)}` : ""}`
+        : `/api/comercial/fit-talla?periodo=${periodoFT}${canalFT ? `&canal=${encodeURIComponent(canalFT)}` : ""}`),
     staleTime: 5 * 60_000,
     refetchOnWindowFocus: false,
     enabled: tabActivo === "fittalla",
@@ -189,45 +189,17 @@ export default function ComercialPage() {
 
         {/* ─── TAB VENTAS ─── */}
         <TabsContent value="ventas" className="space-y-4">
-          {/* Selector de período */}
+          {/* Selector de período (estilo Shopify) */}
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Periodo</span>
-            <div className="inline-flex overflow-hidden rounded-sm border border-border bg-card">
-              {(["hoy","ayer","7d","30d","mes","ytd","custom"] as PeriodoDesglose[]).map((p) => {
-                const active = periodoDesglose === p;
-                return (
-                  <button
-                    key={p}
-                    onClick={() => setPeriodoDesglose(p)}
-                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                      active ? "bg-ink-900 text-white" : "text-graphite hover:bg-cloud"
-                    }`}
-                  >
-                    {PERIODO_LABELS[p]}
-                  </button>
-                );
-              })}
-            </div>
-            {periodoDesglose === "custom" && (
-              <div className="ml-2 flex items-center gap-2 border-l border-border pl-2">
-                <input
-                  type="date"
-                  value={rangoDesde}
-                  max={rangoHasta}
-                  onChange={(e) => setRangoDesde(e.target.value)}
-                  className="rounded-sm border border-border bg-card px-2 py-1.5 text-xs text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
-                />
-                <span className="text-xs text-graphite">→</span>
-                <input
-                  type="date"
-                  value={rangoHasta}
-                  min={rangoDesde}
-                  max={hoyISO}
-                  onChange={(e) => setRangoHasta(e.target.value)}
-                  className="rounded-sm border border-border bg-card px-2 py-1.5 text-xs text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30"
-                />
-              </div>
-            )}
+            <DateRangePicker
+              value={{ periodo: periodoDesglose as Periodo, desde: rangoDesde, hasta: rangoHasta }}
+              onChange={(v) => {
+                setPeriodoDesglose(v.periodo as PeriodoDesglose);
+                setRangoDesde(v.desde);
+                setRangoHasta(v.hasta);
+              }}
+            />
           </div>
 
           {desg.isLoading || !desg.data ? (
@@ -506,14 +478,14 @@ export default function ComercialPage() {
         <TabsContent value="fittalla" className="space-y-4">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[0.62rem] uppercase tracking-[0.14em] text-graphite">Periodo</span>
-            <div className="inline-flex overflow-hidden rounded-sm border border-border bg-card">
-              {(["hoy","ayer","7d","30d","mes","ytd"] as PeriodoDesglose[]).map((pp) => (
-                <button key={pp} onClick={() => setPeriodoFT(pp)}
-                  className={`px-3 py-1.5 text-xs font-medium transition-colors ${periodoFT === pp ? "bg-ink-900 text-white" : "text-graphite hover:bg-cloud"}`}>
-                  {PERIODO_LABELS[pp]}
-                </button>
-              ))}
-            </div>
+            <DateRangePicker
+              value={{ periodo: periodoFT as Periodo, desde: rangoDesdeFT, hasta: rangoHastaFT }}
+              onChange={(v) => {
+                setPeriodoFT(v.periodo as PeriodoDesglose);
+                setRangoDesdeFT(v.desde);
+                setRangoHastaFT(v.hasta);
+              }}
+            />
             <select value={canalFT} onChange={(e) => setCanalFT(e.target.value)}
               className="rounded-sm border border-border bg-card px-3 py-1.5 text-xs">
               <option value="">Todos los canales</option>
