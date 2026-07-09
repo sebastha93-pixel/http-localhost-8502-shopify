@@ -363,36 +363,64 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
 /** RF-06 - Inventario por tienda/bodega desde Siigo (Florida, Arrayanes, Melonn). */
 function TablaPorTienda({ data }: { data: PorTiendaResp }) {
   const [q, setQ] = useState("");
+  const [tienda, setTienda] = useState<string>("todas");
   const orden = ["Florida", "Arrayanes"];
   const bodegas = [...data.bodegas].sort((a, b) => {
     const ia = orden.indexOf(a), ib = orden.indexOf(b);
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
   });
+  // Chips: Todas + cada tienda física disponible
+  const fisicas = bodegas.filter((b) => ["Florida", "Arrayanes"].includes(b));
+  // Reset del filtro si la tienda seleccionada ya no está en los datos
+  const tiendaActiva = tienda !== "todas" && !fisicas.includes(tienda) ? "todas" : tienda;
+  // Columnas visibles según el filtro
+  const bodegasVis = tiendaActiva === "todas" ? bodegas : [tiendaActiva];
   const filas = useMemo(() => {
     const term = q.trim().toUpperCase();
     return data.referencias
       .filter((r) => !term || r.referencia.toUpperCase().includes(term) || r.code.toUpperCase().includes(term) || r.nombre.toUpperCase().includes(term))
-      .sort((a, b) => b.total - a.total);
-  }, [data.referencias, q]);
+      // Al filtrar por una tienda, solo referencias con stock en esa tienda
+      .filter((r) => tiendaActiva === "todas" || (r.stock[tiendaActiva] || 0) > 0)
+      .sort((a, b) => (tiendaActiva === "todas" ? b.total - a.total : (b.stock[tiendaActiva] || 0) - (a.stock[tiendaActiva] || 0)));
+  }, [data.referencias, q, tiendaActiva]);
+  // Totales por bodega SIEMPRE sobre todas las físicas (el KPI muestra el panorama completo)
   const totalesBodega = useMemo(() => {
     const t: Record<string, number> = {};
-    for (const r of filas) for (const b of bodegas) t[b] = (t[b] || 0) + (r.stock[b] || 0);
+    const term = q.trim().toUpperCase();
+    const base = data.referencias.filter((r) => !term || r.referencia.toUpperCase().includes(term) || r.code.toUpperCase().includes(term) || r.nombre.toUpperCase().includes(term));
+    for (const r of base) for (const b of bodegas) t[b] = (t[b] || 0) + (r.stock[b] || 0);
     return t;
-  }, [filas, bodegas]);
+  }, [data.referencias, q, bodegas]);
+  // Total visible por fila = suma de las columnas mostradas (no de tiendas ocultas)
+  const totalFila = (r: PorTiendaResp["referencias"][number]) => bodegasVis.reduce((a, b) => a + (r.stock[b] || 0), 0);
   return (
     <div className="space-y-3">
       <KpiStrip
-        items={bodegas.filter((b) => ["Florida","Arrayanes"].includes(b)).map((b) => ({
+        items={fisicas.map((b) => ({
           label: `Stock ${b}`, value: Math.round(totalesBodega[b] || 0),
         }))}
       />
       <div className="flex flex-wrap items-center gap-2">
+        {/* Filtro por tienda: por defecto muestra todo */}
+        <div className="flex items-center gap-1 rounded-sm border border-border bg-card p-0.5">
+          {["todas", ...fisicas].map((t) => {
+            const activo = tiendaActiva === t;
+            return (
+              <button key={t} onClick={() => setTienda(t)}
+                className={`rounded-sm px-2.5 py-1 text-xs font-medium capitalize transition-colors ${activo ? "bg-ink-900 text-white" : "text-graphite hover:bg-cloud/60"}`}>
+                {t === "todas" ? "Todas" : t}
+              </button>
+            );
+          })}
+        </div>
         <div className="flex items-center gap-2 rounded-sm border border-border bg-card px-2 py-1.5">
           <Search className="h-3.5 w-3.5 text-graphite" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Referencia, SKU o nombre..."
             className="w-48 bg-transparent text-xs outline-none" />
         </div>
-        <span className="text-xs text-graphite tabular-nums">{filas.length} referencia(s) con stock</span>
+        <span className="text-xs text-graphite tabular-nums">
+          {filas.length} referencia(s) con stock{tiendaActiva !== "todas" ? ` en ${tiendaActiva}` : ""}
+        </span>
       </div>
       <Card>
         <CardContent className="p-0 overflow-x-auto">
@@ -401,13 +429,13 @@ function TablaPorTienda({ data }: { data: PorTiendaResp }) {
               <tr className="text-left text-[0.6rem] uppercase tracking-[0.12em] text-graphite">
                 <th className="px-3 py-2">Referencia</th>
                 <th className="px-3 py-2">Talla</th>
-                {bodegas.map((b) => <th key={b} className="px-3 py-2 text-right">{b}</th>)}
+                {bodegasVis.map((b) => <th key={b} className="px-3 py-2 text-right">{b}</th>)}
                 <th className="px-3 py-2 text-right">Total</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {filas.length === 0 ? (
-                <tr><td colSpan={bodegas.length + 3} className="px-3 py-8 text-center text-sm text-graphite">Sin referencias con stock.</td></tr>
+                <tr><td colSpan={bodegasVis.length + 3} className="px-3 py-8 text-center text-sm text-graphite">Sin referencias con stock.</td></tr>
               ) : filas.map((r) => (
                 <tr key={r.code} className="hover:bg-cloud/40">
                   <td className="px-3 py-2.5">
@@ -415,12 +443,12 @@ function TablaPorTienda({ data }: { data: PorTiendaResp }) {
                     <span className="block text-[0.58rem] text-graphite truncate max-w-[280px]">{r.nombre}</span>
                   </td>
                   <td className="px-3 py-2.5 text-graphite tabular-nums">{r.talla ? `T${r.talla}` : "-"}</td>
-                  {bodegas.map((b) => (
+                  {bodegasVis.map((b) => (
                     <td key={b} className={`px-3 py-2.5 text-right tabular-nums ${r.stock[b] ? "text-ink-900" : "text-graphite/40"}`}>
                       {r.stock[b] ? Math.round(r.stock[b]) : "."}
                     </td>
                   ))}
-                  <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-navy-600">{Math.round(r.total)}</td>
+                  <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-navy-600">{Math.round(totalFila(r))}</td>
                 </tr>
               ))}
             </tbody>
