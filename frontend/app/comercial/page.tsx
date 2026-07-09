@@ -526,7 +526,7 @@ export default function ComercialPage() {
           ) : ft.error || !ft.data ? (
             <ErrorState error={ft.error} onRetry={() => ft.refetch()} />
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4">
               <FitTallaTabla titulo="Ventas por Fit" col="Fit"
                 filas={ft.data.por_fit.map((r) => ({ nombre: r.fit, ...r }))} />
               <FitTallaTabla titulo="Ventas por Talla" col="Talla"
@@ -547,33 +547,53 @@ function FitTallaTabla({ titulo, col, filas }: {
   titulo: string; col: string;
   filas: Array<{ nombre: string; ventas: number; unidades: number; num_pedidos: number; participacion: number; ticket_promedio: number }>;
 }) {
+  const totalUnd = filas.reduce((a, r) => a + r.unidades, 0);
+  const totalVta = filas.reduce((a, r) => a + r.ventas, 0);
   return (
     <Card>
       <CardContent className="space-y-3 p-5">
-        <SectionHeading title={titulo} hint="Netas sin IVA" />
+        <SectionHeading title={titulo} hint="Ventas netas sin IVA · ordenado por venta" />
         {filas.length === 0 ? (
           <p className="py-4 text-center text-sm text-graphite">Sin ventas en este período.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="border-b border-border">
-                <tr>
-                  {[col, "Unidades", "Ventas netas", "Ticket", "% part."].map((h, i) => (
-                    <th key={h} className={`py-2 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite ${i === 0 ? "text-left" : "text-right"}`}>{h}</th>
-                  ))}
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="px-3 py-2 text-left text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">{col}</th>
+                  <th className="whitespace-nowrap px-3 py-2 text-right text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Und.</th>
+                  <th className="whitespace-nowrap px-3 py-2 text-right text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Ventas netas</th>
+                  <th className="whitespace-nowrap px-3 py-2 text-right text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">Ticket prom.</th>
+                  <th className="whitespace-nowrap px-3 py-2 text-right text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-graphite">% part.</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {filas.map((r) => (
                   <tr key={r.nombre} className="transition-colors hover:bg-cloud/50">
-                    <td className="py-2.5 font-medium text-ink-900">{r.nombre}</td>
-                    <td className="py-2.5 text-right text-ink-900 tabular-nums">{r.unidades.toLocaleString("es-CO")}</td>
-                    <td className="py-2.5 text-right font-medium text-ink-900 tabular-nums">{formatMoney(r.ventas)}</td>
-                    <td className="py-2.5 text-right text-graphite tabular-nums">{formatMoney(r.ticket_promedio)}</td>
-                    <td className="py-2.5 text-right text-graphite tabular-nums">{r.participacion.toFixed(1)}%</td>
+                    <td className="max-w-[260px] truncate px-3 py-2.5 font-medium text-ink-900" title={r.nombre}>{r.nombre}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-ink-900">{r.unidades.toLocaleString("es-CO")}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 text-right font-medium tabular-nums text-ink-900">{formatMoney(r.ventas)}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-graphite">{formatMoney(r.ticket_promedio)}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-graphite">
+                      <span className="inline-flex min-w-[3rem] items-center justify-end gap-1.5">
+                        <span className="hidden h-1.5 w-8 overflow-hidden rounded-full bg-cloud sm:inline-block">
+                          <span className="block h-full rounded-full bg-ink-900/40" style={{ width: `${Math.min(100, r.participacion)}%` }} />
+                        </span>
+                        {r.participacion.toFixed(1)}%
+                      </span>
+                    </td>
                   </tr>
                 ))}
               </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-border font-semibold text-ink-900">
+                  <td className="px-3 py-2.5 text-left">Total</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{totalUnd.toLocaleString("es-CO")}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{formatMoney(totalVta)}</td>
+                  <td className="px-3 py-2.5"></td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">100%</td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         )}

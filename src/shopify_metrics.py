@@ -638,25 +638,40 @@ def _resolver_periodo(periodo: str, desde_custom: Optional[str],
     return hoy - timedelta(days=29), hoy   # 30d default
 
 
+def _fit_de_nombre(nombre: str) -> str:
+    """Fit derivado del nombre cuando el producto no tiene 'tipo' en Shopify.
+    Toma las 2 primeras palabras (ej. 'Jean flare', 'Jean wide') para agrupar."""
+    palabras = (nombre or "").strip().split()
+    if not palabras:
+        return "Sin tipo"
+    base = " ".join(palabras[:2]).strip(" .,-")
+    return base[:1].upper() + base[1:] if base else "Sin tipo"
+
+
 def _mapa_tipos_producto() -> dict:
-    """product_id (str) → {fit (product_type), nombre}. Cache 30 min.
-    El Fit sale del 'tipo de producto' de Shopify (RF-05)."""
+    """product_id (str) → {fit, nombre}. Cache 30 min. Fit = product_type de
+    Shopify; si está vacío, se deriva del nombre (RF-05)."""
     key = f"ptypes_{hoy_bogota().isoformat()}"
 
     def _calc():
         from shopify_client import paginar
         m: dict = {}
-        try:
-            for page in paginar("/products.json", "products",
-                                {"status": "any", "limit": 250,
-                                 "fields": "id,product_type,title"}):
-                for p in page:
-                    m[str(p.get("id"))] = {
-                        "fit": (p.get("product_type") or "").strip() or "Sin tipo",
-                        "nombre": p.get("title") or "",
-                    }
-        except Exception:
-            pass
+        # OJO: /products.json NO acepta status='any' (solo active/draft/archived);
+        # con 'any' devolvía vacío y el Fit caía siempre al nombre. Traemos los 3.
+        for status in ("active", "draft", "archived"):
+            try:
+                for page in paginar("/products.json", "products",
+                                    {"status": status, "limit": 250,
+                                     "fields": "id,product_type,title"}):
+                    for p in page:
+                        titulo = p.get("title") or ""
+                        tipo = (p.get("product_type") or "").strip()
+                        m[str(p.get("id"))] = {
+                            "fit": tipo or _fit_de_nombre(titulo),
+                            "nombre": titulo,
+                        }
+            except Exception:
+                continue
         return m
     return _cached(key, _calc, ttl=1800)
 
@@ -706,7 +721,7 @@ def ventas_por_fit_talla(periodo: str = "30d",
                     linea_neto = float(li.get("price") or 0) * qty * f
                     pid = str(li.get("product_id") or "")
                     info = tipos.get(pid) or {}
-                    fit = info.get("fit") or (li.get("title") or "Sin tipo").split(" - ")[0].strip() or "Sin tipo"
+                    fit = info.get("fit") or _fit_de_nombre(li.get("title") or "") or "Sin tipo"
                     talla = (li.get("variant_title") or "").strip() or "Única"
 
                     fit_agg[fit]["ventas"] += linea_neto
