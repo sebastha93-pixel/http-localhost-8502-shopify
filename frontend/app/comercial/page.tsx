@@ -101,13 +101,13 @@ function SectionHeading({ title, hint }: { title: string; hint?: React.ReactNode
 }
 
 export default function ComercialPage() {
-  const [periodoDesglose, setPeriodoDesglose] = useState<PeriodoDesglose>("30d");
+  const [periodoDesglose, setPeriodoDesglose] = useState<PeriodoDesglose>("hoy");
   const hoyISO = new Date().toISOString().slice(0, 10);
   const hace30 = new Date(Date.now() - 29 * 86400_000).toISOString().slice(0, 10);
   const [rangoDesde, setRangoDesde] = useState<string>(hace30);
   const [rangoHasta, setRangoHasta] = useState<string>(hoyISO);
   const [tabActivo, setTabActivo] = useState<"ventas" | "comp" | "clientes" | "fittalla">("ventas");
-  const [periodoFT, setPeriodoFT] = useState<PeriodoDesglose>("30d");
+  const [periodoFT, setPeriodoFT] = useState<PeriodoDesglose>("hoy");
   const [canalFT, setCanalFT] = useState<string>("");
 
   const overview = useQuery<OverviewResp>({
