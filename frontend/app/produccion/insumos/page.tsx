@@ -8,11 +8,12 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, API_BASE } from "@/lib/api";
+import { useAuth } from "@/components/auth-provider";
 import { getToken } from "@/lib/auth";
 import { fmtDateTime } from "@/lib/utils";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { Plus, Loader2, AlertCircle, Save, Trash2, PackagePlus, QrCode } from "lucide-react";
+import { Plus, Loader2, AlertCircle, Save, Trash2, PackagePlus, QrCode, Pencil } from "lucide-react";
 
 interface Insumo {
   id: string;
@@ -95,6 +96,36 @@ export default function InsumosPage() {
     queryKey: ["produccion", "insumos", "movimientos"],
     queryFn: () => api.get("/api/produccion/insumos/movimientos?limit=50"),
   });
+
+  const { user } = useAuth();
+  const esAdmin = user?.rol === "admin";
+
+  const corregirMov = useMutation({
+    mutationFn: ({ id, cantidad }: { id: string; cantidad: number }) =>
+      api.patch(`/api/produccion/insumos/movimientos/${id}`, { cantidad }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["produccion", "insumos"] });
+    },
+    onError: (e: Error) => setErr(`No se pudo corregir: ${e.message}`),
+  });
+  const eliminarMov = useMutation({
+    mutationFn: (id: string) => api.del(`/api/produccion/insumos/movimientos/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["produccion", "insumos"] });
+    },
+    onError: (e: Error) => setErr(`No se pudo eliminar: ${e.message}`),
+  });
+  function corregirIngreso(id: string, actual: number, nombre: string) {
+    const v = window.prompt(`Nueva cantidad para el ingreso de ${nombre}:`, String(actual));
+    if (v === null) return;
+    const n = parseFloat(v.replace(",", "."));
+    if (!n || n <= 0) { setErr("Cantidad inválida."); return; }
+    corregirMov.mutate({ id, cantidad: n });
+  }
+  function eliminarIngreso(id: string, nombre: string, cantidad: number) {
+    if (!window.confirm(`¿Eliminar el ingreso de ${cantidad} de ${nombre}?\n\nEl stock se revierte. Esta acción requiere autorización de administrador y no se puede deshacer.`)) return;
+    eliminarMov.mutate(id);
+  }
 
   const ingresar = useMutation({
     mutationFn: () => {
@@ -291,6 +322,7 @@ export default function InsumosPage() {
                   <th className="px-4 py-2">Tipo</th>
                   <th className="px-4 py-2 text-right">Cantidad</th>
                   <th className="px-4 py-2">Documento</th>
+                  <th className="px-4 py-2 text-right"></th>
                 </tr>
               </thead>
               <tbody>
@@ -307,6 +339,24 @@ export default function InsumosPage() {
                       {m.cantidad > 0 ? "+" : ""}{m.cantidad.toLocaleString("es-CO")}
                     </td>
                     <td className="px-4 py-2 text-graphite">{m.doc_ref || "—"}</td>
+                    <td className="px-4 py-2 text-right">
+                      {m.tipo === "ingreso" && (
+                        <span className="inline-flex items-center gap-2.5">
+                          <button onClick={() => corregirIngreso(m.id, m.cantidad, m.insumo?.nombre || "insumo")}
+                            title="Corregir cantidad del ingreso"
+                            className="text-graphite transition-colors hover:text-navy-600">
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          {esAdmin && (
+                            <button onClick={() => eliminarIngreso(m.id, m.insumo?.nombre || "insumo", m.cantidad)}
+                              title="Eliminar ingreso (revierte stock) — solo administrador"
+                              className="text-graphite transition-colors hover:text-terracotta">
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

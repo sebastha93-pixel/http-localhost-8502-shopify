@@ -269,6 +269,153 @@ def crear_ingreso(*, textilera: str, nit_textilera: Optional[str], numero_docume
     return {"ingreso": ingreso, "rollos": rollos_creados}
 
 
+def _rollo_intacto(r: dict) -> bool:
+    """Un rollo se puede corregir/eliminar solo si nadie lo ha tocado:
+    sigue disponible y con los metros completos."""
+    return ((r.get("estado") or "") == "disponible"
+            and float(r.get("metros_disponible") or 0) == float(r.get("metros_inicial") or 0))
+
+
+def actualizar_ingreso(ingreso_id: str, **campos) -> dict:
+    """Edita la cabecera de una orden de ingreso (datos del documento)."""
+    permitidos = {"textilera", "nit_textilera", "numero_documento", "tipo_documento",
+                  "fecha", "orden_compra", "observaciones"}
+    update = {k: (v.strip() if isinstance(v, str) else v)
+              for k, v in campos.items() if k in permitidos and v is not None}
+    if not update:
+        raise ValueError("sin_campos")
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    res = sb.table("ordenes_ingreso").update(update).eq("id", ingreso_id).execute()
+    if not res.data:
+        raise ValueError("ingreso_no_encontrado")
+    return obtener_ingreso(ingreso_id) or res.data[0]
+
+
+def actualizar_rollo_ingreso(rollo_id: str, **campos) -> dict:
+    """Corrige un rollo de un ingreso. Los metros solo se pueden cambiar si el
+    rollo está intacto (nadie lo ha consumido); los datos descriptivos siempre."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    r = (sb.table("rollos_tela").select("*").eq("id", rollo_id).limit(1).execute()).data
+    if not r:
+        raise ValueError("rollo_no_encontrado")
+    rollo = r[0]
+
+    descriptivos = {"descripcion_tela", "referencia_tela", "tono", "ancho",
+                    "numero_rollo", "serial", "lote_fabrica", "costo_metro"}
+    update = {k: v for k, v in campos.items() if k in descriptivos and v is not None}
+
+    nuevos_metros = campos.get("metros_inicial")
+    if nuevos_metros is not None:
+        nuevos_metros = float(nuevos_metros)
+        if nuevos_metros <= 0:
+            raise ValueError("metros_invalidos")
+        if not _rollo_intacto(rollo):
+            raise ValueError("rollo_ya_consumido: no se pueden cambiar los metros")
+        update["metros_inicial"] = nuevos_metros
+        update["metros_disponible"] = nuevos_metros
+
+    if not update:
+        raise ValueError("sin_campos")
+    sb.table("rollos_tela").update(update).eq("id", rollo_id).execute()
+
+    if nuevos_metros is not None:
+        # sincronizar el movimiento de ingreso y el total de la cabecera
+        try:
+            sb.table("movimientos_inventario").update({"metros": nuevos_metros})               .eq("rollo_id", rollo_id).eq("tipo", "ingreso").execute()
+        except Exception as e:
+            log.warning(f"[ingreso] no se actualizó movimiento del rollo {rollo_id}: {e}")
+        ingreso_id = rollo.get("orden_ingreso_id")
+        if ingreso_id:
+            todos = (sb.table("rollos_tela").select("metros_inicial")
+                     .eq("orden_ingreso_id", ingreso_id).execute()).data or []
+            total = round(sum(float(x.get("metros_inicial") or 0) for x in todos), 2)
+            sb.table("ordenes_ingreso").update({"total_metros": total}).eq("id", ingreso_id).execute()
+
+    return (sb.table("rollos_tela").select("*").eq("id", rollo_id).limit(1).execute()).data[0]
+
+
+def eliminar_ingreso(ingreso_id: str) -> dict:
+    """Elimina una orden de ingreso completa revirtiendo el inventario.
+    Solo si NINGÚN rollo fue consumido (todos intactos)."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    ing = obtener_ingreso(ingreso_id)
+    if not ing:
+        raise ValueError("ingreso_no_encontrado")
+    rollos = ing.get("rollos") or []
+    consumidos = [r["codigo_interno"] for r in rollos if not _rollo_intacto(r)]
+    if consumidos:
+        raise ValueError(f"rollos_ya_consumidos: {', '.join(consumidos[:5])}"
+                         + (" …" if len(consumidos) > 5 else ""))
+    rollo_ids = [r["id"] for r in rollos]
+    if rollo_ids:
+        sb.table("movimientos_inventario").delete().in_("rollo_id", rollo_ids).execute()
+        sb.table("rollos_tela").delete().in_("id", rollo_ids).execute()
+    sb.table("ordenes_ingreso").delete().eq("id", ingreso_id).execute()
+    return {"ok": True, "numero_ingreso": ing.get("numero_ingreso"),
+            "rollos_eliminados": len(rollo_ids)}
+
+
+def corregir_movimiento_insumo(mov_id: str, nueva_cantidad: float, usuario: str) -> dict:
+    """Corrige la cantidad de un INGRESO de insumos ya registrado,
+    ajustando el stock por la diferencia."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    m = (sb.table("insumos_movimientos").select("*").eq("id", mov_id).limit(1).execute()).data
+    if not m:
+        raise ValueError("movimiento_no_encontrado")
+    mov = m[0]
+    if (mov.get("tipo") or "") != "ingreso":
+        raise ValueError("solo_se_pueden_corregir_ingresos")
+    nueva_cantidad = float(nueva_cantidad)
+    if nueva_cantidad <= 0:
+        raise ValueError("cantidad_invalida")
+    vieja = float(mov.get("cantidad") or 0)
+    delta = round(nueva_cantidad - vieja, 3)
+    ins = (sb.table("insumos").select("*").eq("id", mov["insumo_id"]).limit(1).execute()).data
+    if not ins:
+        raise ValueError("insumo_no_encontrado")
+    insumo = ins[0]
+    sb.table("insumos").update({
+        "cantidad_disponible": round(float(insumo.get("cantidad_disponible") or 0) + delta, 3),
+        "updated_at": _now_iso(),
+    }).eq("id", insumo["id"]).execute()
+    sb.table("insumos_movimientos").update({
+        "cantidad": nueva_cantidad,
+        "nota": f"Corregido de {vieja} a {nueva_cantidad} por {usuario}",
+    }).eq("id", mov_id).execute()
+    return {"ok": True, "anterior": vieja, "nueva": nueva_cantidad, "delta": delta}
+
+
+def eliminar_movimiento_insumo(mov_id: str, usuario: str) -> dict:
+    """Elimina un INGRESO de insumos revirtiendo el stock (autorización admin)."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    m = (sb.table("insumos_movimientos").select("*").eq("id", mov_id).limit(1).execute()).data
+    if not m:
+        raise ValueError("movimiento_no_encontrado")
+    mov = m[0]
+    if (mov.get("tipo") or "") != "ingreso":
+        raise ValueError("solo_se_pueden_eliminar_ingresos")
+    cantidad = float(mov.get("cantidad") or 0)
+    ins = (sb.table("insumos").select("*").eq("id", mov["insumo_id"]).limit(1).execute()).data
+    if ins:
+        insumo = ins[0]
+        sb.table("insumos").update({
+            "cantidad_disponible": round(float(insumo.get("cantidad_disponible") or 0) - cantidad, 3),
+            "updated_at": _now_iso(),
+        }).eq("id", insumo["id"]).execute()
+    sb.table("insumos_movimientos").delete().eq("id", mov_id).execute()
+    return {"ok": True, "revertido": cantidad}
+
+
 def listar_ingresos(*, limit: int = 100, textilera: Optional[str] = None,
                     estado: Optional[str] = None) -> list[dict]:
     sb = _sb()

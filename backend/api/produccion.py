@@ -125,6 +125,51 @@ def crear_ingreso(
         raise HTTPException(500, f"crear_ingreso: {str(e)[:200]}")
 
 
+@router.patch("/ingreso/{ingreso_id}")
+def actualizar_ingreso(
+    ingreso_id: str,
+    body: dict,
+    _: CurrentUser = Depends(require_permission("produccion_ingreso", "modificar")),
+) -> dict:
+    """Edita la cabecera del ingreso (textilera, documento, fecha, OC, notas)."""
+    try:
+        return svc.actualizar_ingreso(ingreso_id, **(body or {}))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"actualizar_ingreso: {str(e)[:200]}")
+
+
+@router.patch("/ingreso/rollos/{rollo_id}")
+def actualizar_rollo_ingreso(
+    rollo_id: str,
+    body: dict,
+    _: CurrentUser = Depends(require_permission("produccion_ingreso", "modificar")),
+) -> dict:
+    """Corrige un rollo. Metros solo si el rollo está intacto."""
+    try:
+        return svc.actualizar_rollo_ingreso(rollo_id, **(body or {}))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"actualizar_rollo: {str(e)[:200]}")
+
+
+@router.delete("/ingreso/{ingreso_id}")
+def eliminar_ingreso(
+    ingreso_id: str,
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Elimina el ingreso completo revirtiendo inventario.
+    Requiere autorización de administrador; falla si algún rollo ya se consumió."""
+    try:
+        return svc.eliminar_ingreso(ingreso_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"eliminar_ingreso: {str(e)[:200]}")
+
+
 @router.get("/ingreso")
 def listar_ingresos(
     textilera: Optional[str] = None,
@@ -1733,6 +1778,35 @@ def movimientos_insumos(
     _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
 ) -> dict:
     return {"movimientos": svc.movimientos_insumos(limit=limit)}
+
+
+@router.patch("/insumos/movimientos/{mov_id}")
+def corregir_movimiento_insumo(
+    mov_id: str,
+    body: dict,
+    user: CurrentUser = Depends(require_permission("produccion_ingreso", "modificar")),
+) -> dict:
+    """Corrige la cantidad de un ingreso de insumos (ajusta stock por la diferencia)."""
+    try:
+        return svc.corregir_movimiento_insumo(mov_id, float(body.get("cantidad") or 0), user.nombre or user.email)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"corregir_movimiento: {str(e)[:200]}")
+
+
+@router.delete("/insumos/movimientos/{mov_id}")
+def eliminar_movimiento_insumo(
+    mov_id: str,
+    user: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """Elimina un ingreso de insumos revirtiendo el stock. Solo administrador."""
+    try:
+        return svc.eliminar_movimiento_insumo(mov_id, user.nombre or user.email)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"eliminar_movimiento: {str(e)[:200]}")
 
 
 @router.post("/insumos/ingreso")
