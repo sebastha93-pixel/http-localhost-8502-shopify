@@ -52,8 +52,10 @@ function parseISO(s: string): Date {
   return new Date(y, (m || 1) - 1, d || 1);
 }
 function hoyDate(): Date {
-  const n = new Date();
-  return new Date(n.getFullYear(), n.getMonth(), n.getDate());
+  // "Hoy" en Bogotá aunque el navegador esté en otra zona horaria —
+  // así el label del botón siempre coincide con lo que resuelve el backend.
+  const iso = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Bogota" }).format(new Date());
+  return parseISO(iso);
 }
 function addDias(d: Date, n: number): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);

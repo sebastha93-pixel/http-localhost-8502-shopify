@@ -141,8 +141,47 @@ export function PedidosTable({
         {filtered.length} de {pedidos.length} pedidos
       </p>
 
+      {/* Móvil: tarjetas — la tabla ancha es ilegible en el celular */}
+      <div className="space-y-2 sm:hidden">
+        {filtered.length === 0 ? (
+          <Card><CardContent className="p-6 text-center text-sm text-graphite">{emptyMessage}</CardContent></Card>
+        ) : (
+          filtered.slice(0, limit).map((p) => {
+            const key = p.orden_melonn || p.orden_tienda;
+            const abierto = expanded?.orden_melonn === p.orden_melonn;
+            return (
+              <div
+                key={key}
+                onClick={(e) => {
+                  const target = e.target as HTMLElement;
+                  if (target.closest("input, a, button, label")) return;
+                  setExpanded(abierto ? null : p);
+                }}
+                className={`cursor-pointer rounded-md border bg-card p-3.5 space-y-2 transition-colors ${abierto ? "border-navy-600" : "border-border"}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium text-ink-900 tabular-nums">{p.orden_tienda || p.orden_melonn}</span>
+                  {has("nivel") && <NivelBadge nivel={p.nivel} />}
+                </div>
+                <p className="truncate text-xs text-ink-900">
+                  {p.nombre_comprador || <span className="text-graphite">Sin datos de cliente</span>}
+                  {p.ciudad_destino ? <span className="text-graphite"> · {p.ciudad_destino}</span> : null}
+                </p>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.7rem] text-graphite tabular-nums">
+                  {has("valor") && p.valor_num ? <span>COD <span className="font-medium text-ink-900">{formatMoneyShort(p.valor_num)}</span></span> : null}
+                  {has("dias") && <span>{p.dias_real ?? 0} día(s)</span>}
+                  {has("estado") && p.estado_melonn && <span>{estadoMelonnCorto(p.estado_melonn)}</span>}
+                  {has("tipo") && p.tipo_recaudo && <span>{p.tipo_recaudo}</span>}
+                </div>
+                {renderAction && <div className="pt-1">{renderAction(p)}</div>}
+              </div>
+            );
+          })
+        )}
+      </div>
+
       {/* Tabla */}
-      <Card>
+      <Card className="hidden sm:block">
         <CardContent className="p-0 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

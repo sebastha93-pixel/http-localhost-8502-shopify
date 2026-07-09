@@ -1136,19 +1136,17 @@ function CoachingTab({
             ))}
           </select>
           <span className="ml-2 text-[0.7rem] uppercase tracking-[0.14em] text-graphite">Ventana</span>
-          <div className="inline-flex overflow-hidden rounded-sm border border-border bg-card">
-            {[3, 8, 15, 30].map(d => (
-              <button
-                key={d}
-                onClick={() => setDays(d)}
-                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                  days === d ? "bg-ink-900 text-white" : "text-graphite hover:bg-cloud"
-                }`}
-              >
-                {d}d
-              </button>
-            ))}
-          </div>
+          <DateRangePicker
+            showCalendar={false}
+            value={{ periodo: `d${days}` }}
+            presets={[
+              { id: "d3",  label: "Últimos 3 días" },
+              { id: "d8",  label: "Últimos 8 días" },
+              { id: "d15", label: "Últimos 15 días" },
+              { id: "d30", label: "Últimos 30 días" },
+            ]}
+            onChange={(v) => setDays(Number(v.periodo.slice(1)))}
+          />
         </div>
 
         {!selectedAdvisor && (
