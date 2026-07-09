@@ -18,6 +18,7 @@ interface Rollo {
   codigo_interno: string;
   barcode: string;
   descripcion_tela: string;
+  referencia_tela?: string | null;
   tono?: string;
   ancho?: number;
   metros_inicial: number;
@@ -72,8 +73,8 @@ export default function DetalleIngresoPage() {
     onError: (e: Error) => setErrAccion(`No se pudo guardar: ${e.message}`),
   });
   const corregirRollo = useMutation({
-    mutationFn: ({ rolloId, metros }: { rolloId: string; metros: number }) =>
-      api.patch(`/api/produccion/ingreso/rollos/${rolloId}`, { metros_inicial: metros }),
+    mutationFn: ({ rolloId, body }: { rolloId: string; body: Record<string, unknown> }) =>
+      api.patch(`/api/produccion/ingreso/rollos/${rolloId}`, body),
     onSuccess: () => {
       setErrAccion("");
       qc.invalidateQueries({ queryKey: ["produccion", "ingreso", id] });
@@ -96,16 +97,36 @@ export default function DetalleIngresoPage() {
     });
     setEditando(true);
   }
-  function corregirMetros(r: Rollo) {
-    if (r.metros_disponible !== r.metros_inicial || r.estado !== "disponible") {
-      setErrAccion(`El rollo ${r.codigo_interno} ya fue consumido — no se pueden cambiar los metros.`);
-      return;
+  const [rolloEdit, setRolloEdit] = useState<string | null>(null);
+  const [formRollo, setFormRollo] = useState<Record<string, string>>({});
+
+  function abrirEdicionRollo(r: Rollo) {
+    setFormRollo({
+      descripcion_tela: r.descripcion_tela || "",
+      referencia_tela: r.referencia_tela || "",
+      tono: r.tono || "",
+      metros_inicial: String(r.metros_inicial),
+    });
+    setRolloEdit(r.id);
+    setErrAccion("");
+  }
+  function guardarRollo(r: Rollo) {
+    const intacto = r.metros_disponible === r.metros_inicial && r.estado === "disponible";
+    const body: Record<string, unknown> = {
+      descripcion_tela: formRollo.descripcion_tela?.trim() || r.descripcion_tela,
+      referencia_tela: formRollo.referencia_tela?.trim(),
+      tono: formRollo.tono?.trim(),
+    };
+    const n = parseFloat((formRollo.metros_inicial || "").replace(",", "."));
+    if (n && n > 0 && n !== r.metros_inicial) {
+      if (!intacto) {
+        setErrAccion(`El rollo ${r.codigo_interno} ya fue consumido — el nombre se puede corregir, los metros no.`);
+      } else {
+        body.metros_inicial = n;
+      }
     }
-    const v = window.prompt(`Metros del rollo ${r.codigo_interno}:`, String(r.metros_inicial));
-    if (v === null) return;
-    const n = parseFloat(v.replace(",", "."));
-    if (!n || n <= 0) { setErrAccion("Metros inválidos."); return; }
-    corregirRollo.mutate({ rolloId: r.id, metros: n });
+    corregirRollo.mutate({ rolloId: r.id, body });
+    setRolloEdit(null);
   }
   function confirmarEliminar(ing: Ingreso) {
     if (!window.confirm(
@@ -285,16 +306,60 @@ export default function DetalleIngresoPage() {
                     <div className="font-semibold text-navy-600">{r.codigo_interno}</div>
                     <div className="text-[0.7rem] text-graphite mt-0.5">Barcode: {r.barcode}</div>
                   </td>
-                  <td className="px-4 py-2">{r.descripcion_tela}</td>
-                  <td className="px-4 py-2 text-graphite">{r.tono || "—"}</td>
+                  <td className="px-4 py-2">
+                    {rolloEdit === r.id ? (
+                      <div className="space-y-1.5">
+                        <input value={formRollo.descripcion_tela || ""}
+                          onChange={(e) => setFormRollo((f) => ({ ...f, descripcion_tela: e.target.value }))}
+                          placeholder="Nombre / descripción de la tela"
+                          className="w-full min-w-[220px] rounded-sm border border-navy-600/50 bg-card px-2 py-1 text-sm" />
+                        <input value={formRollo.referencia_tela || ""}
+                          onChange={(e) => setFormRollo((f) => ({ ...f, referencia_tela: e.target.value }))}
+                          placeholder="Referencia (opcional)"
+                          className="w-full rounded-sm border border-border bg-card px-2 py-1 text-xs" />
+                      </div>
+                    ) : (
+                      <>
+                        {r.descripcion_tela}
+                        {r.referencia_tela && <span className="block text-[0.7rem] text-graphite">Ref: {r.referencia_tela}</span>}
+                      </>
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-graphite">
+                    {rolloEdit === r.id ? (
+                      <input value={formRollo.tono || ""}
+                        onChange={(e) => setFormRollo((f) => ({ ...f, tono: e.target.value }))}
+                        placeholder="Tono"
+                        className="w-20 rounded-sm border border-border bg-card px-2 py-1 text-xs" />
+                    ) : (r.tono || "—")}
+                  </td>
                   <td className="px-4 py-2 text-right tabular">
-                    <span className="inline-flex items-center gap-1.5">
-                      {r.metros_disponible} / {r.metros_inicial}
-                      <button onClick={() => corregirMetros(r)} title="Corregir metros (solo si el rollo está intacto)"
-                        className="text-graphite transition-colors hover:text-navy-600">
-                        <Pencil className="h-3 w-3" />
-                      </button>
-                    </span>
+                    {rolloEdit === r.id ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <input value={formRollo.metros_inicial || ""}
+                          onChange={(e) => setFormRollo((f) => ({ ...f, metros_inicial: e.target.value }))}
+                          disabled={r.metros_disponible !== r.metros_inicial || r.estado !== "disponible"}
+                          title={r.metros_disponible !== r.metros_inicial ? "Rollo ya consumido: metros bloqueados" : "Metros del rollo"}
+                          className="w-20 rounded-sm border border-border bg-card px-2 py-1 text-right text-sm disabled:opacity-40" />
+                        <button onClick={() => guardarRollo(r)} disabled={corregirRollo.isPending}
+                          title="Guardar cambios del rollo"
+                          className="text-teal transition-colors hover:text-teal/70 disabled:opacity-40">
+                          {corregirRollo.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                        </button>
+                        <button onClick={() => setRolloEdit(null)} title="Cancelar"
+                          className="text-graphite transition-colors hover:text-terracotta">
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5">
+                        {r.metros_disponible} / {r.metros_inicial}
+                        <button onClick={() => abrirEdicionRollo(r)} title="Editar rollo (nombre, referencia, tono y metros)"
+                          className="text-graphite transition-colors hover:text-navy-600">
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-2 text-graphite text-xs">{r.lote_fabrica || "—"}</td>
                   <td className="px-4 py-2">
