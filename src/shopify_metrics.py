@@ -799,15 +799,21 @@ def ventas_fit_por_ciudad(periodo: str = "30d",
     Agrupa ciudades sin tildes/mayúsculas ('Bogotá'=='Bogota') y muestra la
     variante más frecuente. Por ciudad: top N fits con unidades y % local."""
     desde, hasta = _resolver_periodo(periodo, desde_custom, hasta_custom)
-    key = f"vfc_{periodo}_{desde.isoformat()}_{hasta.isoformat()}"
+    key = f"vfc2_{periodo}_{desde.isoformat()}_{hasta.isoformat()}"
 
     def _calc():
         tipos = _mapa_tipos_producto()
-        agg: dict = defaultdict(lambda: defaultdict(lambda: {"unidades": 0, "ventas": 0.0}))
-        tot: dict = defaultdict(lambda: {"unidades": 0, "ventas": 0.0, "pedidos": 0})
-        nombres_ciudad: dict = defaultdict(lambda: defaultdict(int))
         fit_nombres: dict = defaultdict(lambda: defaultdict(int))
         sin_ciudad = 0
+        # dos dimensiones independientes: ciudad y departamento
+        dims = {
+            "ciudad": {"agg": defaultdict(lambda: defaultdict(lambda: {"unidades": 0, "ventas": 0.0})),
+                       "tot": defaultdict(lambda: {"unidades": 0, "ventas": 0.0, "pedidos": 0}),
+                       "nombres": defaultdict(lambda: defaultdict(int))},
+            "departamento": {"agg": defaultdict(lambda: defaultdict(lambda: {"unidades": 0, "ventas": 0.0})),
+                             "tot": defaultdict(lambda: {"unidades": 0, "ventas": 0.0, "pedidos": 0}),
+                             "nombres": defaultdict(lambda: defaultdict(int))},
+        }
 
         orders = _fetch_orders_rango(
             desde, hasta,
@@ -816,14 +822,20 @@ def ventas_fit_por_ciudad(periodo: str = "30d",
         for o in orders:
             if o.get("cancelled_at"):
                 continue
-            ciudad_raw = ((o.get("shipping_address") or {}).get("city") or "").strip()
-            if not ciudad_raw:
+            addr = o.get("shipping_address") or {}
+            lugares = {"ciudad": (addr.get("city") or "").strip(),
+                       "departamento": (addr.get("province") or "").strip()}
+            if not lugares["ciudad"] and not lugares["departamento"]:
                 sin_ciudad += 1
                 continue
-            ck = _norm_grupo(ciudad_raw)
-            nombres_ciudad[ck][ciudad_raw.title()] += 1
             f = _factor_sin_iva(o)
-            tot[ck]["pedidos"] += 1
+            claves = {}
+            for dim, raw in lugares.items():
+                if raw:
+                    k = _norm_grupo(raw)
+                    claves[dim] = k
+                    dims[dim]["nombres"][k][raw.title()] += 1
+                    dims[dim]["tot"][k]["pedidos"] += 1
             for li in (o.get("line_items") or []):
                 qty = int(li.get("quantity") or 0)
                 if qty <= 0:
@@ -833,38 +845,45 @@ def ventas_fit_por_ciudad(periodo: str = "30d",
                 fit = info.get("fit") or _fit_de_nombre(li.get("title") or "") or "Sin tipo"
                 fk = _norm_grupo(fit)
                 fit_nombres[fk][fit] += qty
-                agg[ck][fk]["unidades"] += qty
-                agg[ck][fk]["ventas"] += neto
-                tot[ck]["unidades"] += qty
-                tot[ck]["ventas"] += neto
+                for dim, k in claves.items():
+                    dims[dim]["agg"][k][fk]["unidades"] += qty
+                    dims[dim]["agg"][k][fk]["ventas"] += neto
+                    dims[dim]["tot"][k]["unidades"] += qty
+                    dims[dim]["tot"][k]["ventas"] += neto
 
         def _disp(d: dict) -> str:
             return max(d.items(), key=lambda kv: kv[1])[0] if d else "?"
 
-        ciudades = []
-        for ck, t in tot.items():
-            if t["unidades"] <= 0:
-                continue
-            fits = sorted(agg[ck].items(), key=lambda kv: kv[1]["unidades"], reverse=True)
-            ciudades.append({
-                "ciudad": _disp(nombres_ciudad[ck]),
-                "pedidos": t["pedidos"],
-                "unidades": t["unidades"],
-                "ventas": round(t["ventas"], 0),
-                "fits": [{
-                    "fit": _disp(fit_nombres[fk]),
-                    "unidades": v["unidades"],
-                    "ventas": round(v["ventas"], 0),
-                    "pct": round(v["unidades"] / t["unidades"] * 100, 1),
-                } for fk, v in fits[:top_fits]],
-            })
-        ciudades.sort(key=lambda c: c["ventas"], reverse=True)
+        def _lista(dim: str, campo: str) -> list:
+            out = []
+            for k, t in dims[dim]["tot"].items():
+                if t["unidades"] <= 0:
+                    continue
+                fits = sorted(dims[dim]["agg"][k].items(), key=lambda kv: kv[1]["unidades"], reverse=True)
+                out.append({
+                    campo: _disp(dims[dim]["nombres"][k]),
+                    "pedidos": t["pedidos"],
+                    "unidades": t["unidades"],
+                    "ventas": round(t["ventas"], 0),
+                    "fits": [{
+                        "fit": _disp(fit_nombres[fk]),
+                        "unidades": v["unidades"],
+                        "ventas": round(v["ventas"], 0),
+                        "pct": round(v["unidades"] / t["unidades"] * 100, 1),
+                    } for fk, v in fits[:top_fits]],
+                })
+            out.sort(key=lambda c: c["ventas"], reverse=True)
+            return out
+
+        ciudades = _lista("ciudad", "ciudad")
+        departamentos = _lista("departamento", "departamento")
         return {
             "periodo": periodo,
             "desde": desde.isoformat(), "hasta": hasta.isoformat(),
             "sin_ciudad": sin_ciudad,
             "total_ciudades": len(ciudades),
             "ciudades": ciudades,
+            "departamentos": departamentos,
         }
 
     ttl = 600 if periodo == "hoy" else 1800

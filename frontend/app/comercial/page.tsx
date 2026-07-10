@@ -60,13 +60,15 @@ interface UbicacionResp {
   por_departamento: Array<{ departamento: string; pedidos: number; unidades: number; ventas: number; pct: number }>;
 }
 
+interface FitLugar {
+  pedidos: number; unidades: number; ventas: number;
+  fits: Array<{ fit: string; unidades: number; ventas: number; pct: number }>;
+}
 interface FitCiudadResp {
   sin_ciudad: number;
   total_ciudades: number;
-  ciudades: Array<{
-    ciudad: string; pedidos: number; unidades: number; ventas: number;
-    fits: Array<{ fit: string; unidades: number; ventas: number; pct: number }>;
-  }>;
+  ciudades: Array<FitLugar & { ciudad: string }>;
+  departamentos: Array<FitLugar & { departamento: string }>;
 }
 
 interface FitTallaResp {
@@ -609,7 +611,14 @@ export default function ComercialPage() {
                 filas={ft.data.por_fit.map((r) => ({ nombre: r.fit, ...r }))} />
               <FitTallaTabla titulo="Ventas por Talla" col="Talla"
                 filas={ft.data.por_talla.map((r) => ({ nombre: r.talla, ...r }))} />
-              {fc.data && fc.data.ciudades.length > 0 && <FitPorCiudad data={fc.data} />}
+              {fc.data && fc.data.departamentos?.length > 0 && (
+                <FitPorLugar titulo="Fit más vendido por departamento" campo="departamento"
+                  filas={fc.data.departamentos.map((d) => ({ nombre: d.departamento, ...d }))} />
+              )}
+              {fc.data && fc.data.ciudades.length > 0 && (
+                <FitPorLugar titulo="Fit más vendido por ciudad" campo="ciudad"
+                  filas={fc.data.ciudades.map((c) => ({ nombre: c.ciudad, ...c }))} />
+              )}
             </div>
           )}
         </TabsContent>
@@ -687,16 +696,22 @@ function TablaUbicacion({ titulo, campo, filas }: {
   );
 }
 
-function FitPorCiudad({ data }: { data: FitCiudadResp }) {
+function FitPorLugar({ titulo, campo, filas }: {
+  titulo: string; campo: string;
+  filas: Array<FitLugar & { nombre: string }>;
+}) {
+  const [verTodas, setVerTodas] = useState(false);
+  const visibles = verTodas ? filas : filas.slice(0, 15);
+  const label = campo === "ciudad" ? "Ciudad" : "Departamento";
   return (
     <Card>
       <CardContent className="space-y-3 p-5">
-        <SectionHeading title="Fit más vendido por ciudad" hint={
+        <SectionHeading title={titulo} hint={
           <span className="inline-flex items-center gap-2">
-            {data.total_ciudades} ciudades · por unidades · destino de envío Shopify
-            <ExportBtn onClick={() => exportarExcel("fit_por_ciudad",
-              ["Ciudad", "Pedidos", "Unidades", "Ventas netas", "Fit #1", "Und #1", "% #1", "Fit #2", "Und #2", "Fit #3", "Und #3"],
-              data.ciudades.map((c) => [c.ciudad, c.pedidos, c.unidades, Math.round(c.ventas),
+            {filas.length} {campo === "ciudad" ? "ciudades" : "departamentos"} · por unidades · destino de envío
+            <ExportBtn onClick={() => exportarExcel(`fit_por_${campo}`,
+              [label, "Pedidos", "Unidades", "Ventas netas", "Fit #1", "Und #1", "% #1", "Fit #2", "Und #2", "Fit #3", "Und #3"],
+              filas.map((c) => [c.nombre, c.pedidos, c.unidades, Math.round(c.ventas),
                 c.fits[0]?.fit || "", c.fits[0]?.unidades ?? "", c.fits[0]?.pct ?? "",
                 c.fits[1]?.fit || "", c.fits[1]?.unidades ?? "",
                 c.fits[2]?.fit || "", c.fits[2]?.unidades ?? ""]),
@@ -707,7 +722,7 @@ function FitPorCiudad({ data }: { data: FitCiudadResp }) {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border">
-                <th className="px-3 py-2 text-left text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Ciudad</th>
+                <th className="px-3 py-2 text-left text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</th>
                 <th className="whitespace-nowrap px-3 py-2 text-right text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Und.</th>
                 <th className="whitespace-nowrap px-3 py-2 text-right text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Ventas netas</th>
                 <th className="px-3 py-2 text-left text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Fit dominante</th>
@@ -715,9 +730,9 @@ function FitPorCiudad({ data }: { data: FitCiudadResp }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {data.ciudades.slice(0, 20).map((c) => (
-                <tr key={c.ciudad} className="transition-colors hover:bg-cloud/50">
-                  <td className="max-w-[180px] truncate px-3 py-2.5 font-medium text-ink-900" title={c.ciudad}>{c.ciudad}</td>
+              {visibles.map((c) => (
+                <tr key={c.nombre} className="transition-colors hover:bg-cloud/50">
+                  <td className="max-w-[180px] truncate px-3 py-2.5 font-medium text-ink-900" title={c.nombre}>{c.nombre}</td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-ink-900">{c.unidades.toLocaleString("es-CO")}</td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-ink-900">{formatMoney(c.ventas)}</td>
                   <td className="whitespace-nowrap px-3 py-2.5">
@@ -736,8 +751,10 @@ function FitPorCiudad({ data }: { data: FitCiudadResp }) {
             </tbody>
           </table>
         </div>
-        {data.ciudades.length > 20 && (
-          <p className="text-[0.7rem] text-graphite">Mostrando las 20 ciudades con más venta de {data.total_ciudades} — el Excel incluye todas.</p>
+        {filas.length > 15 && (
+          <button onClick={() => setVerTodas((v) => !v)} className="text-xs font-medium text-navy-600 hover:underline">
+            {verTodas ? "Ver menos" : `Ver ${campo === "ciudad" ? "las" : "los"} ${filas.length} — o exporta el Excel completo`}
+          </button>
         )}
       </CardContent>
     </Card>
