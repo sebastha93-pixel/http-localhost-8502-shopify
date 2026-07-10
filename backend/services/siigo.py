@@ -357,3 +357,62 @@ def inventario_por_bodega(*, force: bool = False, max_paginas: int = 80) -> dict
     _INV_CACHE["ts"] = now
     _INV_CACHE["data"] = out
     return out
+
+
+# ─── Ventas de tiendas físicas (facturas por centro de costo) ────────────────
+
+TIENDAS_CC = {774: "Tienda Florida", 677: "Tienda Arrayanes"}
+_VT_CACHE: dict = {}
+_VT_TS: dict = {}
+
+
+def ventas_tiendas(desde: str, hasta: str) -> list[dict]:
+    """Ventas de las tiendas físicas (Florida/Arrayanes) desde facturas Siigo,
+    atribuidas por centro de costo. Neto sin IVA = sum(price*qty) de items
+    (price viene pre-IVA en Siigo). Cacheado 10 min si incluye hoy, 30 si no."""
+    import time as _t
+    key = f"{desde}_{hasta}"
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    hoy = _dt.now(_tz(_td(hours=-5))).date().isoformat()  # Bogotá
+    ttl = 600 if hasta >= str(hoy) else 1800
+    now = _t.time()
+    if key in _VT_CACHE and (now - _VT_TS.get(key, 0)) < ttl:
+        return _VT_CACHE[key]
+
+    agg = {cc: {"label": nom, "num_pedidos": 0, "unidades": 0, "ventas": 0.0}
+           for cc, nom in TIENDAS_CC.items()}
+    page = 1
+    while True:
+        data = siigo_get("/invoices", {
+            "date_start": desde, "date_end": hasta,
+            "page": page, "page_size": 100,
+        })
+        results = data.get("results") or []
+        for f in results:
+            cc = f.get("cost_center")
+            if cc not in agg:
+                continue
+            # filtro defensivo por fecha (el filtro server-side de Siigo a
+            # veces devuelve de más en rangos de un solo día)
+            fecha = (f.get("date") or "")[:10]
+            if fecha and not (desde <= fecha <= hasta):
+                continue
+            items = f.get("items") or []
+            agg[cc]["num_pedidos"] += 1
+            agg[cc]["unidades"] += int(sum(float(i.get("quantity") or 0) for i in items))
+            agg[cc]["ventas"] += sum(
+                float(i.get("price") or 0) * float(i.get("quantity") or 0)
+                for i in items)
+        total = ((data.get("pagination") or {}).get("total_results") or 0)
+        if page * 100 >= total or not results:
+            break
+        page += 1
+        if page > 40:  # tope de seguridad (~4.000 facturas)
+            break
+
+    out = [{**v, "ventas": round(v["ventas"], 0),
+            "upt": round(v["unidades"] / v["num_pedidos"], 1) if v["num_pedidos"] else 0}
+           for v in agg.values() if v["num_pedidos"] > 0]
+    _VT_CACHE[key] = out
+    _VT_TS[key] = now
+    return out

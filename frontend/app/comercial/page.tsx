@@ -339,7 +339,7 @@ export default function ComercialPage() {
               <Card>
                 <CardContent className="space-y-3 p-5">
                   <SectionHeading title="Ventas por canal" hint={
-                    <span className="inline-flex items-center gap-2">% sobre neto
+                    <span className="inline-flex items-center gap-2">% sobre neto · tiendas físicas desde Siigo
                       <ExportBtn onClick={() => exportarExcel("ventas_por_canal",
                         ["Canal", "Pedidos", "Unidades", "UPT", "Ventas", "%"],
                         desg.data!.por_canal.map((c) => [c.label, c.num_pedidos, c.unidades, c.upt, Math.round(c.ventas), c.pct]))} />

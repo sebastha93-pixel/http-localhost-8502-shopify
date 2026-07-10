@@ -288,12 +288,34 @@ def desglose(
     hasta:   str = Query("", description="ISO YYYY-MM-DD (solo si periodo=custom)"),
     _: CurrentUser = Depends(require_permission("comercial", "modificar")),
 ) -> dict:
-    """Desglose de ventas: bruto, neto, descuentos, por canal y por asesor."""
+    """Desglose de ventas: bruto, neto, descuentos, por canal y por asesor.
+    Al canal se le suman las tiendas físicas (Florida/Arrayanes) desde las
+    facturas de Siigo por centro de costo — Shopify no las ve."""
     try:
         sm = _shopify_metrics()
-        return sm.desglose_ventas(periodo=periodo, desde_custom=desde, hasta_custom=hasta)
+        data = sm.desglose_ventas(periodo=periodo, desde_custom=desde, hasta_custom=hasta)
     except Exception as e:
         raise HTTPException(503, f"Error: {str(e)[:200]}")
+
+    try:
+        from backend.services import siigo
+        if siigo.siigo_configurado():
+            tiendas = siigo.ventas_tiendas(data.get("desde"), data.get("hasta"))
+            if tiendas:
+                canales = list(data.get("por_canal") or [])
+                canales.extend(tiendas)
+                total = sum(float(c.get("ventas") or 0) for c in canales) or 1.0
+                for c in canales:
+                    c["pct"] = round(float(c.get("ventas") or 0) / total * 100, 1)
+                canales.sort(key=lambda c: float(c.get("ventas") or 0), reverse=True)
+                data["por_canal"] = canales
+                data["tiendas_siigo"] = True
+    except Exception as e:
+        # Siigo caído no debe tumbar el desglose de Shopify
+        import logging
+        logging.getLogger("comercial").warning(f"ventas_tiendas siigo: {e}")
+
+    return data
 
 
 @router.get("/fit-talla")
