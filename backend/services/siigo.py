@@ -381,10 +381,20 @@ def ventas_tiendas(desde: str, hasta: str) -> list[dict]:
 
     agg = {cc: {"label": nom, "num_pedidos": 0, "unidades": 0, "ventas": 0.0}
            for cc, nom in TIENDAS_CC.items()}
+    # El filtro server-side de Siigo NO va por la fecha del documento (parece
+    # ir por fecha de registro, y las tiendas registran al día siguiente).
+    # Pedimos una ventana ampliada ±3 días y el corte exacto lo hace el
+    # filtro por f["date"] de abajo.
+    from datetime import date as _date, timedelta as _td2
+    try:
+        _ds = (_date.fromisoformat(desde) - _td2(days=3)).isoformat()
+        _dh = (_date.fromisoformat(hasta) + _td2(days=3)).isoformat()
+    except Exception:
+        _ds, _dh = desde, hasta
     page = 1
     while True:
         data = siigo_get("/invoices", {
-            "date_start": desde, "date_end": hasta,
+            "date_start": _ds, "date_end": _dh,
             "page": page, "page_size": 100,
         })
         results = data.get("results") or []
