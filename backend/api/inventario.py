@@ -28,7 +28,7 @@ def _sm():
 
 @router.get("/resumen")
 def resumen(
-    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
 ) -> dict:
     """KPIs del catálogo: activos, borrador, archivados, stock total, sin stock."""
     try:
@@ -41,7 +41,7 @@ def resumen(
 def productos(
     status: str = Query("active", pattern="^(active|draft|archived)$"),
     limit: int = Query(250, ge=1, le=500),
-    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
 ) -> dict:
     """Lista productos con stock por variante."""
     try:
@@ -54,7 +54,7 @@ def productos(
 @router.get("/por-tienda")
 def por_tienda(
     force: bool = Query(False),
-    _: CurrentUser = Depends(require_permission("operaciones", "modificar")),
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
 ) -> dict:
     """RF-06 — Inventario disponible por tienda/bodega (Florida, Arrayanes, Melonn…)."""
     from backend.services import siigo
