@@ -791,6 +791,86 @@ def ventas_por_fit_talla(periodo: str = "30d",
     return _cached(key, _calc, ttl=ttl)
 
 
+def ventas_fit_por_ciudad(periodo: str = "30d",
+                          desde_custom: Optional[str] = None,
+                          hasta_custom: Optional[str] = None,
+                          top_fits: int = 3) -> dict:
+    """Fit más vendido por ciudad de envío (Shopify shipping_address.city).
+    Agrupa ciudades sin tildes/mayúsculas ('Bogotá'=='Bogota') y muestra la
+    variante más frecuente. Por ciudad: top N fits con unidades y % local."""
+    desde, hasta = _resolver_periodo(periodo, desde_custom, hasta_custom)
+    key = f"vfc_{periodo}_{desde.isoformat()}_{hasta.isoformat()}"
+
+    def _calc():
+        tipos = _mapa_tipos_producto()
+        agg: dict = defaultdict(lambda: defaultdict(lambda: {"unidades": 0, "ventas": 0.0}))
+        tot: dict = defaultdict(lambda: {"unidades": 0, "ventas": 0.0, "pedidos": 0})
+        nombres_ciudad: dict = defaultdict(lambda: defaultdict(int))
+        fit_nombres: dict = defaultdict(lambda: defaultdict(int))
+        sin_ciudad = 0
+
+        orders = _fetch_orders_rango(
+            desde, hasta,
+            "id,total_price,total_tax,source_name,cancelled_at,line_items,shipping_address",
+        )
+        for o in orders:
+            if o.get("cancelled_at"):
+                continue
+            ciudad_raw = ((o.get("shipping_address") or {}).get("city") or "").strip()
+            if not ciudad_raw:
+                sin_ciudad += 1
+                continue
+            ck = _norm_grupo(ciudad_raw)
+            nombres_ciudad[ck][ciudad_raw.title()] += 1
+            f = _factor_sin_iva(o)
+            tot[ck]["pedidos"] += 1
+            for li in (o.get("line_items") or []):
+                qty = int(li.get("quantity") or 0)
+                if qty <= 0:
+                    continue
+                neto = float(li.get("price") or 0) * qty * f
+                info = tipos.get(str(li.get("product_id") or "")) or {}
+                fit = info.get("fit") or _fit_de_nombre(li.get("title") or "") or "Sin tipo"
+                fk = _norm_grupo(fit)
+                fit_nombres[fk][fit] += qty
+                agg[ck][fk]["unidades"] += qty
+                agg[ck][fk]["ventas"] += neto
+                tot[ck]["unidades"] += qty
+                tot[ck]["ventas"] += neto
+
+        def _disp(d: dict) -> str:
+            return max(d.items(), key=lambda kv: kv[1])[0] if d else "?"
+
+        ciudades = []
+        for ck, t in tot.items():
+            if t["unidades"] <= 0:
+                continue
+            fits = sorted(agg[ck].items(), key=lambda kv: kv[1]["unidades"], reverse=True)
+            ciudades.append({
+                "ciudad": _disp(nombres_ciudad[ck]),
+                "pedidos": t["pedidos"],
+                "unidades": t["unidades"],
+                "ventas": round(t["ventas"], 0),
+                "fits": [{
+                    "fit": _disp(fit_nombres[fk]),
+                    "unidades": v["unidades"],
+                    "ventas": round(v["ventas"], 0),
+                    "pct": round(v["unidades"] / t["unidades"] * 100, 1),
+                } for fk, v in fits[:top_fits]],
+            })
+        ciudades.sort(key=lambda c: c["ventas"], reverse=True)
+        return {
+            "periodo": periodo,
+            "desde": desde.isoformat(), "hasta": hasta.isoformat(),
+            "sin_ciudad": sin_ciudad,
+            "total_ciudades": len(ciudades),
+            "ciudades": ciudades,
+        }
+
+    ttl = 600 if periodo == "hoy" else 1800
+    return _cached(key, _calc, ttl=ttl)
+
+
 def inventario_shopify() -> dict:
     """
     Conteo de productos en Shopify por status:

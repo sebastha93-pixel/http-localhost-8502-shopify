@@ -315,6 +315,21 @@ def fit_talla(
         raise HTTPException(503, f"Error: {str(e)[:200]}")
 
 
+@router.get("/fit-ciudad")
+def fit_ciudad(
+    periodo: str = Query("30d", pattern="^(hoy|ayer|7d|30d|mes|ytd|custom)$"),
+    desde:   str = Query(""),
+    hasta:   str = Query(""),
+    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
+) -> dict:
+    """Fit más vendido por ciudad de envío (Shopify)."""
+    try:
+        sm = _shopify_metrics()
+        return sm.ventas_fit_por_ciudad(periodo=periodo, desde_custom=desde, hasta_custom=hasta)
+    except Exception as e:
+        raise HTTPException(503, f"Error: {str(e)[:200]}")
+
+
 @router.get("/inventario")
 def inventario(
     _: CurrentUser = Depends(require_permission("comercial", "modificar")),

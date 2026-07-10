@@ -53,6 +53,15 @@ interface DesgloseResp {
   por_asesor: Array<{ nombre: string; ventas: number; num_pedidos: number; unidades: number; upt: number; pct: number }>;
 }
 
+interface FitCiudadResp {
+  sin_ciudad: number;
+  total_ciudades: number;
+  ciudades: Array<{
+    ciudad: string; pedidos: number; unidades: number; ventas: number;
+    fits: Array<{ fit: string; unidades: number; ventas: number; pct: number }>;
+  }>;
+}
+
 interface FitTallaResp {
   neto: number;
   unidades: number;
@@ -191,6 +200,16 @@ export default function ComercialPage() {
     staleTime: 5 * 60_000,
     refetchOnWindowFocus: false,
     enabled: tabActivo === "ventas" && (periodoDesglose !== "custom" || !!(rangoDesde && rangoHasta)),
+  });
+
+  const fc = useQuery<FitCiudadResp>({
+    queryKey: ["comercial-fitciudad", periodoFT, periodoFT === "custom" ? `${rangoDesdeFT}_${rangoHastaFT}` : ""],
+    queryFn: () => api.get<FitCiudadResp>(
+      periodoFT === "custom"
+        ? `/api/comercial/fit-ciudad?periodo=custom&desde=${rangoDesdeFT}&hasta=${rangoHastaFT}`
+        : `/api/comercial/fit-ciudad?periodo=${periodoFT}`),
+    enabled: tabActivo === "fittalla",
+    staleTime: 5 * 60_000,
   });
 
   const ft = useQuery<FitTallaResp>({
@@ -563,6 +582,7 @@ export default function ComercialPage() {
                 filas={ft.data.por_fit.map((r) => ({ nombre: r.fit, ...r }))} />
               <FitTallaTabla titulo="Ventas por Talla" col="Talla"
                 filas={ft.data.por_talla.map((r) => ({ nombre: r.talla, ...r }))} />
+              {fc.data && fc.data.ciudades.length > 0 && <FitPorCiudad data={fc.data} />}
             </div>
           )}
         </TabsContent>
@@ -572,6 +592,63 @@ export default function ComercialPage() {
         Próximamente: códigos de descuento más usados · cohorts de retención.
       </p>
     </PageShell>
+  );
+}
+
+function FitPorCiudad({ data }: { data: FitCiudadResp }) {
+  return (
+    <Card>
+      <CardContent className="space-y-3 p-5">
+        <SectionHeading title="Fit más vendido por ciudad" hint={
+          <span className="inline-flex items-center gap-2">
+            {data.total_ciudades} ciudades · por unidades · destino de envío Shopify
+            <ExportBtn onClick={() => exportarExcel("fit_por_ciudad",
+              ["Ciudad", "Pedidos", "Unidades", "Ventas netas", "Fit #1", "Und #1", "% #1", "Fit #2", "Und #2", "Fit #3", "Und #3"],
+              data.ciudades.map((c) => [c.ciudad, c.pedidos, c.unidades, Math.round(c.ventas),
+                c.fits[0]?.fit || "", c.fits[0]?.unidades ?? "", c.fits[0]?.pct ?? "",
+                c.fits[1]?.fit || "", c.fits[1]?.unidades ?? "",
+                c.fits[2]?.fit || "", c.fits[2]?.unidades ?? ""]),
+            )} />
+          </span>
+        } />
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="px-3 py-2 text-left text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Ciudad</th>
+                <th className="whitespace-nowrap px-3 py-2 text-right text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Und.</th>
+                <th className="whitespace-nowrap px-3 py-2 text-right text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Ventas netas</th>
+                <th className="px-3 py-2 text-left text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Fit dominante</th>
+                <th className="hidden px-3 py-2 text-left text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite md:table-cell">Siguientes</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {data.ciudades.slice(0, 20).map((c) => (
+                <tr key={c.ciudad} className="transition-colors hover:bg-cloud/50">
+                  <td className="max-w-[180px] truncate px-3 py-2.5 font-medium text-ink-900" title={c.ciudad}>{c.ciudad}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-ink-900">{c.unidades.toLocaleString("es-CO")}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-ink-900">{formatMoney(c.ventas)}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5">
+                    {c.fits[0] ? (
+                      <span className="inline-flex items-center gap-2">
+                        <span className="rounded-sm bg-navy-600/[0.08] px-2 py-0.5 text-xs font-semibold text-navy-600">{c.fits[0].fit}</span>
+                        <span className="text-xs tabular-nums text-graphite">{c.fits[0].unidades} und · {c.fits[0].pct}%</span>
+                      </span>
+                    ) : "—"}
+                  </td>
+                  <td className="hidden px-3 py-2.5 text-xs text-graphite md:table-cell">
+                    {c.fits.slice(1).map((f) => `${f.fit} (${f.unidades})`).join(" · ") || "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {data.ciudades.length > 20 && (
+          <p className="text-[0.7rem] text-graphite">Mostrando las 20 ciudades con más venta de {data.total_ciudades} — el Excel incluye todas.</p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
