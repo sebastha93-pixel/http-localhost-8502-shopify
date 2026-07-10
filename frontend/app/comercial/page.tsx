@@ -53,6 +53,13 @@ interface DesgloseResp {
   por_asesor: Array<{ nombre: string; ventas: number; num_pedidos: number; unidades: number; upt: number; pct: number }>;
 }
 
+interface UbicacionResp {
+  neto_total: number;
+  sin_direccion: number;
+  por_ciudad: Array<{ ciudad: string; pedidos: number; unidades: number; ventas: number; pct: number }>;
+  por_departamento: Array<{ departamento: string; pedidos: number; unidades: number; ventas: number; pct: number }>;
+}
+
 interface FitCiudadResp {
   sin_ciudad: number;
   total_ciudades: number;
@@ -200,6 +207,16 @@ export default function ComercialPage() {
     staleTime: 5 * 60_000,
     refetchOnWindowFocus: false,
     enabled: tabActivo === "ventas" && (periodoDesglose !== "custom" || !!(rangoDesde && rangoHasta)),
+  });
+
+  const ub = useQuery<UbicacionResp>({
+    queryKey: ["comercial-ubicacion", periodoDesglose, periodoDesglose === "custom" ? `${rangoDesde}_${rangoHasta}` : ""],
+    queryFn: () => api.get<UbicacionResp>(
+      periodoDesglose === "custom"
+        ? `/api/comercial/ubicacion?periodo=custom&desde=${rangoDesde}&hasta=${rangoHasta}`
+        : `/api/comercial/ubicacion?periodo=${periodoDesglose}`),
+    enabled: tabActivo === "ventas",
+    staleTime: 5 * 60_000,
   });
 
   const fc = useQuery<FitCiudadResp>({
@@ -425,6 +442,16 @@ export default function ComercialPage() {
                 </CardContent>
               </Card>
 
+              {/* Geografía: ciudad y departamento SEPARADOS */}
+              {ub.data && (
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  <TablaUbicacion titulo="Ventas por ciudad" campo="ciudad"
+                    filas={ub.data.por_ciudad.map((r) => ({ nombre: r.ciudad, ...r }))} />
+                  <TablaUbicacion titulo="Ventas por departamento" campo="departamento"
+                    filas={ub.data.por_departamento.map((r) => ({ nombre: r.departamento, ...r }))} />
+                </div>
+              )}
+
               {/* Top productos */}
               {overview.data?.top_productos && overview.data.top_productos.length > 0 && (
                 <Card>
@@ -592,6 +619,71 @@ export default function ComercialPage() {
         Próximamente: códigos de descuento más usados · cohorts de retención.
       </p>
     </PageShell>
+  );
+}
+
+function TablaUbicacion({ titulo, campo, filas }: {
+  titulo: string; campo: string;
+  filas: Array<{ nombre: string; pedidos: number; unidades: number; ventas: number; pct: number }>;
+}) {
+  const [verTodas, setVerTodas] = useState(false);
+  const visibles = verTodas ? filas : filas.slice(0, 12);
+  return (
+    <Card>
+      <CardContent className="space-y-3 p-5">
+        <SectionHeading title={titulo} hint={
+          <span className="inline-flex items-center gap-2">
+            % sobre neto con dirección
+            <ExportBtn onClick={() => exportarExcel(`ventas_por_${campo}`,
+              [campo === "ciudad" ? "Ciudad" : "Departamento", "Pedidos", "Unidades", "Ventas netas", "% participación"],
+              filas.map((r) => [r.nombre, r.pedidos, r.unidades, Math.round(r.ventas), r.pct]))} />
+          </span>
+        } />
+        {filas.length === 0 ? (
+          <p className="py-4 text-center text-sm text-graphite">Sin ventas con dirección en este período.</p>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="px-3 py-2 text-left text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">{campo === "ciudad" ? "Ciudad" : "Departamento"}</th>
+                    <th className="whitespace-nowrap px-3 py-2 text-right text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Pedidos</th>
+                    <th className="whitespace-nowrap px-3 py-2 text-right text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Und.</th>
+                    <th className="whitespace-nowrap px-3 py-2 text-right text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Ventas netas</th>
+                    <th className="whitespace-nowrap px-3 py-2 text-right text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">% part.</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {visibles.map((r) => (
+                    <tr key={r.nombre} className="transition-colors hover:bg-cloud/50">
+                      <td className="max-w-[180px] truncate px-3 py-2.5 font-medium text-ink-900" title={r.nombre}>{r.nombre}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-graphite">{r.pedidos.toLocaleString("es-CO")}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-ink-900">{r.unidades.toLocaleString("es-CO")}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-medium tabular-nums text-ink-900">{formatMoney(r.ventas)}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-graphite">
+                        <span className="inline-flex min-w-[4.5rem] items-center justify-end gap-1.5">
+                          <span className="hidden h-1.5 w-10 overflow-hidden rounded-full bg-cloud sm:inline-block">
+                            <span className="block h-full rounded-full bg-navy-600/50" style={{ width: `${Math.min(100, r.pct)}%` }} />
+                          </span>
+                          {r.pct.toFixed(1)}%
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {filas.length > 12 && (
+              <button onClick={() => setVerTodas((v) => !v)}
+                className="text-xs font-medium text-navy-600 hover:underline">
+                {verTodas ? "Ver menos" : `Ver las ${filas.length} — o exporta el Excel completo`}
+              </button>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

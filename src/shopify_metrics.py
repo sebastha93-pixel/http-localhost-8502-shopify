@@ -871,6 +871,81 @@ def ventas_fit_por_ciudad(periodo: str = "30d",
     return _cached(key, _calc, ttl=ttl)
 
 
+def ventas_por_ubicacion(periodo: str = "30d",
+                         desde_custom: Optional[str] = None,
+                         hasta_custom: Optional[str] = None) -> dict:
+    """% de ventas por ciudad y por departamento (shipping_address de Shopify),
+    en listas separadas. Normaliza tildes/mayúsculas y muestra la variante
+    más frecuente. La participación es sobre el neto total con dirección."""
+    desde, hasta = _resolver_periodo(periodo, desde_custom, hasta_custom)
+    key = f"vub_{periodo}_{desde.isoformat()}_{hasta.isoformat()}"
+
+    def _calc():
+        ciu: dict = defaultdict(lambda: {"pedidos": 0, "unidades": 0, "ventas": 0.0})
+        dep: dict = defaultdict(lambda: {"pedidos": 0, "unidades": 0, "ventas": 0.0})
+        nom_ciu: dict = defaultdict(lambda: defaultdict(int))
+        nom_dep: dict = defaultdict(lambda: defaultdict(int))
+        sin_direccion = 0
+        neto_total = 0.0
+
+        orders = _fetch_orders_rango(
+            desde, hasta,
+            "id,total_price,total_tax,cancelled_at,line_items,shipping_address",
+        )
+        for o in orders:
+            if o.get("cancelled_at"):
+                continue
+            addr = o.get("shipping_address") or {}
+            ciudad = (addr.get("city") or "").strip()
+            depto = (addr.get("province") or "").strip()
+            if not ciudad and not depto:
+                sin_direccion += 1
+                continue
+            f = _factor_sin_iva(o)
+            unidades = sum(int(li.get("quantity") or 0) for li in (o.get("line_items") or []))
+            neto = sum(float(li.get("price") or 0) * int(li.get("quantity") or 0)
+                       for li in (o.get("line_items") or [])) * f
+            neto_total += neto
+            if ciudad:
+                ck = _norm_grupo(ciudad)
+                nom_ciu[ck][ciudad.title()] += 1
+                ciu[ck]["pedidos"] += 1
+                ciu[ck]["unidades"] += unidades
+                ciu[ck]["ventas"] += neto
+            if depto:
+                dk = _norm_grupo(depto)
+                nom_dep[dk][depto.title()] += 1
+                dep[dk]["pedidos"] += 1
+                dep[dk]["unidades"] += unidades
+                dep[dk]["ventas"] += neto
+
+        def _disp(d: dict) -> str:
+            return max(d.items(), key=lambda kv: kv[1])[0] if d else "?"
+
+        def _lista(agg: dict, nombres: dict, campo: str) -> list:
+            out = [{
+                campo: _disp(nombres[k]),
+                "pedidos": v["pedidos"],
+                "unidades": v["unidades"],
+                "ventas": round(v["ventas"], 0),
+                "pct": round(v["ventas"] / neto_total * 100, 1) if neto_total else 0,
+            } for k, v in agg.items()]
+            out.sort(key=lambda x: x["ventas"], reverse=True)
+            return out
+
+        return {
+            "periodo": periodo,
+            "desde": desde.isoformat(), "hasta": hasta.isoformat(),
+            "neto_total": round(neto_total, 0),
+            "sin_direccion": sin_direccion,
+            "por_ciudad": _lista(ciu, nom_ciu, "ciudad"),
+            "por_departamento": _lista(dep, nom_dep, "departamento"),
+        }
+
+    ttl = 600 if periodo == "hoy" else 1800
+    return _cached(key, _calc, ttl=ttl)
+
+
 def inventario_shopify() -> dict:
     """
     Conteo de productos en Shopify por status:
