@@ -393,7 +393,8 @@ def ventas_tiendas(desde: str, hasta: str) -> list[dict]:
     if key in _VT_CACHE and (now - _VT_TS.get(key, 0)) < ttl:
         return _VT_CACHE[key]
 
-    agg = {cc: {"label": nom, "num_pedidos": 0, "unidades": 0, "ventas": 0.0}
+    agg = {cc: {"label": nom, "num_pedidos": 0, "unidades": 0, "ventas": 0.0,
+                "bruto": 0.0, "descuentos": 0.0}
            for cc, nom in TIENDAS_CC.items()}
     # El filtro server-side de Siigo NO va por la fecha del documento (parece
     # ir por fecha de registro, y las tiendas registran al día siguiente).
@@ -426,10 +427,10 @@ def ventas_tiendas(desde: str, hasta: str) -> list[dict]:
             agg[cc]["unidades"] += int(sum(float(i.get("quantity") or 0) for i in items))
             # neto por item = price*qty - descuento (así cuadra con el
             # "Subtotal" del informe por centro de costo de Siigo)
-            agg[cc]["ventas"] += sum(
+            agg[cc]["bruto"] += sum(
                 float(i.get("price") or 0) * float(i.get("quantity") or 0)
-                - _desc_item(i)
                 for i in items)
+            agg[cc]["descuentos"] += sum(_desc_item(i) for i in items)
         total = ((data.get("pagination") or {}).get("total_results") or 0)
         if page * 100 >= total or not results:
             break
@@ -455,17 +456,20 @@ def ventas_tiendas(desde: str, hasta: str) -> list[dict]:
                 continue
             items = nc.get("items") or []
             agg[cc]["unidades"] -= int(sum(float(i.get("quantity") or 0) for i in items))
-            agg[cc]["ventas"] -= sum(
+            agg[cc]["bruto"] -= sum(
                 float(i.get("price") or 0) * float(i.get("quantity") or 0)
-                - _desc_item(i)
                 for i in items)
+            agg[cc]["descuentos"] -= sum(_desc_item(i) for i in items)
         if mas_nueva and mas_nueva < desde:
             break  # ya pasamos el rango (orden descendente)
         page += 1
         if page > 30:
             break
 
-    out = [{**v, "ventas": round(v["ventas"], 0),
+    out = [{**v,
+            "bruto": round(v["bruto"], 0),
+            "descuentos": round(v["descuentos"], 0),
+            "ventas": round(v["bruto"] - v["descuentos"], 0),
             "upt": round(v["unidades"] / v["num_pedidos"], 1) if v["num_pedidos"] else 0}
            for v in agg.values() if v["num_pedidos"] > 0]
     _VT_CACHE[key] = out

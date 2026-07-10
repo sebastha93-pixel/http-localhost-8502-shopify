@@ -302,14 +302,32 @@ def desglose(
         if siigo.siigo_configurado():
             tiendas = siigo.ventas_tiendas(data.get("desde"), data.get("hasta"))
             if tiendas:
-                canales = list(data.get("por_canal") or [])
-                canales.extend(tiendas)
+                # COPIAR siempre: `data` es el objeto cacheado de shopify_metrics
+                # y mutarlo duplicaba las tiendas en cada petición.
+                data = dict(data)
+                canales = [dict(c) for c in (data.get("por_canal") or [])
+                           if not str(c.get("label", "")).startswith("Tienda ")]
+                canales.extend(dict(t) for t in tiendas)
                 total = sum(float(c.get("ventas") or 0) for c in canales) or 1.0
                 for c in canales:
                     c["pct"] = round(float(c.get("ventas") or 0) / total * 100, 1)
                 canales.sort(key=lambda c: float(c.get("ventas") or 0), reverse=True)
                 data["por_canal"] = canales
                 data["tiendas_siigo"] = True
+
+                # Consolidar los KPIs del período: tiendas + canales digitales
+                t_neto = sum(float(t.get("ventas") or 0) for t in tiendas)
+                t_bruto = sum(float(t.get("bruto") or 0) for t in tiendas)
+                t_desc = sum(float(t.get("descuentos") or 0) for t in tiendas)
+                t_ped = sum(int(t.get("num_pedidos") or 0) for t in tiendas)
+                t_und = sum(int(t.get("unidades") or 0) for t in tiendas)
+                data["neto"] = round(float(data.get("neto") or 0) + t_neto, 0)
+                data["bruto"] = round(float(data.get("bruto") or 0) + t_bruto, 0)
+                data["descuentos"] = round(float(data.get("descuentos") or 0) + t_desc, 0)
+                data["num_pedidos"] = int(data.get("num_pedidos") or 0) + t_ped
+                data["unidades"] = int(data.get("unidades") or 0) + t_und
+                if data["num_pedidos"]:
+                    data["ticket_promedio"] = round(data["neto"] / data["num_pedidos"], 0)
     except Exception as e:
         # Siigo caído no debe tumbar el desglose de Shopify
         import logging
