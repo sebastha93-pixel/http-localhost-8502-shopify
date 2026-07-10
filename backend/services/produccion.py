@@ -1924,7 +1924,16 @@ def _notificar_remision_whatsapp(rem: dict) -> list[dict]:
         mensaje = (f"Hola {prov.get('nombre') or ''}, MALE'DENIM te despachó el lote "
                    f"referencia *{ref}*. Verifica cantidades e insumos en tu ficha y "
                    f"confirma con \"Aceptar lote\":\n\n{link}")
-        envio = wa.enviar_texto(tel, mensaje)
+        # 1) Plantilla (inicia conversación aunque el proveedor nunca haya escrito).
+        # 2) Si falla (ej. plantilla aún en revisión), texto libre (ventana 24h).
+        # 3) El wa.me manual siempre queda como respaldo en la respuesta.
+        plantilla = "lote_despachado_terminacion" if es_term else "lote_despachado_confeccion"
+        envio = wa.enviar_plantilla(tel, plantilla,
+                                    variables=[prov.get("nombre") or "equipo", ref or "—"],
+                                    boton_url_suffix=token)
+        if not envio.get("enviado"):
+            log.info(f"[wa] plantilla {plantilla} no salió ({envio.get('detalle') or envio.get('motivo')}); intento texto libre")
+            envio = wa.enviar_texto(tel, mensaje)
         tel_norm = "".join(c for c in tel if c.isdigit())
         tel_norm = tel_norm if tel_norm.startswith("57") else (f"57{tel_norm}" if tel_norm else "")
         salidas.append({

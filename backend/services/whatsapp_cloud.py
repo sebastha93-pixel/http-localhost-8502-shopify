@@ -71,8 +71,10 @@ def enviar_texto(telefono: str, mensaje: str) -> dict:
 
 def enviar_plantilla(telefono: str, plantilla: str,
                      variables: Optional[list] = None,
-                     idioma: str = "es") -> dict:
-    """Plantilla aprobada por Meta (inicia conversación). Ej: lote_asignado."""
+                     idioma: str = "es",
+                     boton_url_suffix: Optional[str] = None) -> dict:
+    """Plantilla aprobada por Meta (inicia conversación). Ej: lote_despachado_confeccion.
+    `boton_url_suffix`: valor dinámico del botón URL (ej. el token del lote)."""
     if not configurado():
         return {"enviado": False, "motivo": "whatsapp_no_configurado"}
     tel = _normalizar(telefono)
@@ -86,6 +88,11 @@ def enviar_plantilla(telefono: str, plantilla: str,
             "type": "body",
             "parameters": [{"type": "text", "text": str(v)[:500]} for v in variables],
         }]
+    if boton_url_suffix:
+        componentes.append({
+            "type": "button", "sub_type": "url", "index": "0",
+            "parameters": [{"type": "text", "text": str(boton_url_suffix)[:200]}],
+        })
     try:
         r = httpx.post(
             f"{GRAPH}/{phone_id}/messages",
