@@ -361,6 +361,20 @@ def inventario_por_bodega(*, force: bool = False, max_paginas: int = 80) -> dict
 
 # ─── Ventas de tiendas físicas (facturas por centro de costo) ────────────────
 
+def _desc_item(item: dict) -> float:
+    """Descuento de un item de factura/nota: Siigo lo manda como dict
+    {percentage, value} o como número plano."""
+    d = item.get("discount")
+    if not d:
+        return 0.0
+    if isinstance(d, dict):
+        return float(d.get("value") or 0)
+    try:
+        return float(d)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 TIENDAS_CC = {774: "Tienda Florida", 677: "Tienda Arrayanes"}
 _VT_CACHE: dict = {}
 _VT_TS: dict = {}
@@ -410,14 +424,45 @@ def ventas_tiendas(desde: str, hasta: str) -> list[dict]:
             items = f.get("items") or []
             agg[cc]["num_pedidos"] += 1
             agg[cc]["unidades"] += int(sum(float(i.get("quantity") or 0) for i in items))
+            # neto por item = price*qty - descuento (así cuadra con el
+            # "Subtotal" del informe por centro de costo de Siigo)
             agg[cc]["ventas"] += sum(
                 float(i.get("price") or 0) * float(i.get("quantity") or 0)
+                - _desc_item(i)
                 for i in items)
         total = ((data.get("pagination") or {}).get("total_results") or 0)
         if page * 100 >= total or not results:
             break
         page += 1
         if page > 40:  # tope de seguridad (~4.000 facturas)
+            break
+
+    # Restar NOTAS CRÉDITO (devoluciones) del período — el informe contable
+    # de Siigo las neta. Su endpoint IGNORA date_start/date_end y pagina en
+    # orden descendente por fecha: recorremos hasta pasar el inicio del rango.
+    page = 1
+    while True:
+        data = siigo_get("/credit-notes", {"page": page, "page_size": 100})
+        results = data.get("results") or []
+        if not results:
+            break
+        mas_nueva = ""
+        for nc in results:
+            fecha = (nc.get("date") or "")[:10]
+            mas_nueva = max(mas_nueva, fecha)
+            cc = nc.get("cost_center")
+            if cc not in agg or not (desde <= fecha <= hasta):
+                continue
+            items = nc.get("items") or []
+            agg[cc]["unidades"] -= int(sum(float(i.get("quantity") or 0) for i in items))
+            agg[cc]["ventas"] -= sum(
+                float(i.get("price") or 0) * float(i.get("quantity") or 0)
+                - _desc_item(i)
+                for i in items)
+        if mas_nueva and mas_nueva < desde:
+            break  # ya pasamos el rango (orden descendente)
+        page += 1
+        if page > 30:
             break
 
     out = [{**v, "ventas": round(v["ventas"], 0),
