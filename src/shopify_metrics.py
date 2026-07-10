@@ -11,6 +11,8 @@ Cache local en memoria (5 min) para no golpear la API en cada navegación.
 """
 from __future__ import annotations
 
+import json
+import os
 import time
 from datetime import datetime, date, timedelta, timezone
 from typing import Optional
@@ -25,20 +27,64 @@ _CACHE_TS: dict = {}
 _TTL_S = 300   # 5 minutos
 
 
+# Segundo nivel de cache en disco (/tmp): los workers de Uvicorn viven en el
+# mismo contenedor, así que lo que UN worker calcula (o el warmer del líder)
+# lo leen todos en ~ms en vez de repetir la descarga de Shopify (~7s).
+_CACHE_DIR = os.environ.get("METRICS_CACHE_DIR", "/tmp/maledenim-metrics-cache")
+
+
+def _cache_path(key: str) -> str:
+    import hashlib
+    h = hashlib.md5(key.encode()).hexdigest()[:16]
+    return os.path.join(_CACHE_DIR, f"{h}.json")
+
+
 def _cached(key: str, fn, ttl: int = _TTL_S):
-    """Cachea el resultado de fn() por `ttl` segundos."""
+    """Cachea fn() por `ttl` segundos en dos niveles: memoria del worker y
+    archivo compartido entre workers (mtime = timestamp del dato)."""
     now = time.time()
     if key in _CACHE and (now - _CACHE_TS.get(key, 0)) < ttl:
         return _CACHE[key]
+
+    # Nivel 2: archivo escrito por otro worker o por el warmer del líder
+    path = _cache_path(key)
+    try:
+        st = os.stat(path)
+        if (now - st.st_mtime) < ttl:
+            with open(path) as f:
+                val = json.load(f)
+            _CACHE[key] = val
+            _CACHE_TS[key] = st.st_mtime
+            return val
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+
     val = fn()
     _CACHE[key]    = val
     _CACHE_TS[key] = now
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        tmp = f"{path}.tmp.{os.getpid()}"
+        with open(tmp, "w") as f:
+            json.dump(val, f)
+        os.replace(tmp, path)  # atómico: nadie lee archivos a medias
+    except (TypeError, OSError):
+        # valor no serializable o disco lleno: el nivel memoria basta
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
     return val
 
 
 def invalidar_cache() -> None:
     _CACHE.clear()
     _CACHE_TS.clear()
+    try:
+        import shutil
+        shutil.rmtree(_CACHE_DIR, ignore_errors=True)
+    except Exception:
+        pass
 
 
 # ── Helpers de fechas ──────────────────────────────────────────────────────────
@@ -79,32 +125,50 @@ def _fetch_orders_dia(d: date, status: str = "any") -> list:
     return orders
 
 
-def _fetch_orders_rango(desde: date, hasta: date, fields: str,
+# Superset de campos que usan TODOS los informes (desglose, fit/talla,
+# ciudad, departamento, top productos). Traer siempre el superset permite
+# que una sola descarga por rango alimente todo — el costo extra por campo
+# es ínfimo comparado con pagar la paginación completa varias veces.
+_ORDERS_FIELDS = ("id,name,total_price,subtotal_price,total_tax,taxes_included,"
+                  "total_discounts,source_name,user_id,cancelled_at,"
+                  "line_items,shipping_address")
+
+
+def _fetch_orders_rango(desde: date, hasta: date, fields: str = "",
                         status: str = "any") -> list:
     """Trae TODAS las órdenes del rango [desde, hasta] en UNA pasada con
-    paginación por cursor — en vez de una llamada por día. Antes: 1 request
-    por día (30 para 30d, 365 para YTD) y truncaba en 250 si un día tenía
-    más. Ahora ~N/250 requests para todo el rango, sin truncar."""
-    from shopify_client import paginar
-    out: list = []
-    params = {
-        "status": status,
-        "created_at_min": _iso_inicio(desde),
-        "created_at_max": _iso_fin(hasta),
-        "limit": 250,
-        "fields": fields,
-    }
-    try:
-        for page in paginar("/orders.json", "orders", params):
-            out.extend(page)
-    except Exception as e:
-        import logging as _lg
-        _lg.getLogger("shopify_metrics").warning(f"rango fetch: {e}")
+    paginación por cursor, y CACHEA el resultado por rango: los informes que
+    comparten período (desglose, fit/talla, ciudad, ubicación…) reutilizan la
+    misma descarga en vez de repetirla. `fields` se ignora — siempre se trae
+    el superset _ORDERS_FIELDS para que el cache sirva a todos."""
+    key = f"orders_{desde.isoformat()}_{hasta.isoformat()}_{status}"
+
+    def _calc():
+        from shopify_client import paginar
+        out: list = []
+        params = {
+            "status": status,
+            "created_at_min": _iso_inicio(desde),
+            "created_at_max": _iso_fin(hasta),
+            "limit": 250,
+            "fields": _ORDERS_FIELDS,
+        }
         try:
-            out = _get("/orders.json", params).get("orders", []) or []
-        except Exception:
-            pass
-    return out
+            for page in paginar("/orders.json", "orders", params):
+                out.extend(page)
+        except Exception as e:
+            import logging as _lg
+            _lg.getLogger("shopify_metrics").warning(f"rango fetch: {e}")
+            try:
+                out = _get("/orders.json", params).get("orders", []) or []
+            except Exception:
+                pass
+        return out
+
+    # Rango que incluye hoy: refrescar cada 5 min (ventas en vivo).
+    # Rango cerrado en el pasado: estable, 30 min.
+    ttl = 300 if hasta >= hoy_bogota() else 1800
+    return _cached(key, _calc, ttl=ttl)
 
 
 def _revenue_sin_iva(o: dict) -> float:

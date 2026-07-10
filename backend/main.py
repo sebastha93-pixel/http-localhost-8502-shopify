@@ -96,6 +96,43 @@ async def lifespan(app: FastAPI):
             bot_scheduler.start()
         except Exception as e:
             print(f"   ⚠️  Bot scheduler no arrancó: {e}")
+
+        # Warmer de métricas Shopify: mantiene calientes las claves que ven
+        # los usuarios (desglose, fit/talla, geografía, mapa de productos)
+        # para que NADIE pague la descarga en frío (~7s). Escribe al cache de
+        # archivo compartido, así sirve a los 4 workers. Cada 8 min.
+        if os.environ.get("METRICS_WARMER", "on").lower() != "off":
+            import threading
+
+            def _warmer_loop():
+                import time as _t
+                _t.sleep(8)  # dejar respirar el boot
+                while True:
+                    t0 = _t.time()
+                    try:
+                        import sys as _sys
+                        from pathlib import Path as _P
+                        _SRC = str(_P(__file__).resolve().parent.parent / "src")
+                        if _SRC not in _sys.path:
+                            _sys.path.insert(0, _SRC)
+                        import shopify_metrics as _sm
+                        _sm._mapa_tipos_producto()
+                        _sm.desglose_ventas(periodo="hoy")
+                        _sm.desglose_ventas(periodo="30d")
+                        _sm.ventas_por_fit_talla(periodo="hoy")
+                        _sm.ventas_por_fit_talla(periodo="30d")
+                        _sm.ventas_fit_por_ciudad(periodo="30d")
+                        _sm.ventas_por_ubicacion(periodo="30d")
+                        _sm.top_productos(n=5, dias=30)
+                        _sm.ventas_del_dia()
+                        print(f"   🔥 Warmer métricas OK en {_t.time()-t0:.1f}s")
+                    except Exception as e:
+                        print(f"   ⚠️  Warmer métricas: {e}")
+                    _t.sleep(480)
+
+            threading.Thread(target=_warmer_loop, daemon=True,
+                             name="metrics-warmer").start()
+            print("   🔥 Warmer de métricas Shopify activo (cada 8 min)")
     else:
         print(f"   ⊘ Schedulers desactivados en este worker (WORKER_ROLE != leader)")
 

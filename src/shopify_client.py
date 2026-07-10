@@ -34,7 +34,7 @@ SHOPIFY_STORE   = os.environ.get("SHOPIFY_STORE", "")
 ACCESS_TOKEN    = os.environ.get("SHOPIFY_ACCESS_TOKEN", "")
 API_VERSION     = os.environ.get("SHOPIFY_API_VERSION", "2024-01")
 
-RATE_LIMIT_PAUSA  = 0.6   # segundos entre requests (Shopify: ~2 req/seg para tier estándar)
+RATE_LIMIT_PAUSA  = 0.5   # 2 req/s = refill exacto de Shopify. Con 0.3s el bucket se agota y los 429+reintentos salen MÁS caros (medido: 28s vs 5s).
 MAX_REINTENTOS    = 3
 LIMITE_POR_PAGINA = 250   # máximo que permite Shopify
 
