@@ -656,7 +656,7 @@ def autorizar_corte(
 async def subir_trazos_corte(
     oc_id: str,
     files: List[UploadFile] = File(...),
-    _: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
 ) -> dict:
     """Sube 1..N archivos de trazo/molde (Optitex, PDF, imagen). Máx 10 por corte."""
     archivos = []
@@ -686,7 +686,7 @@ async def subir_trazos_corte(
 def eliminar_trazo_corte(
     oc_id: str,
     url: str = Query(..., description="URL del trazo a eliminar"),
-    _: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
 ) -> dict:
     try:
         lista = svc.eliminar_trazo_corte(oc_id, url)
@@ -747,7 +747,7 @@ def detalle_corte(
 def pistolear_rollo(
     oc_id: str,
     body: PistolearRolloBody,
-    _: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
 ) -> dict:
     try:
         oc = svc.asignar_rollo_a_corte(
@@ -763,11 +763,26 @@ def pistolear_rollo(
         raise HTTPException(500, f"pistolear: {str(e)[:200]}")
 
 
+@router.post("/corte/{oc_id}/verificar-rollo")
+def verificar_rollo_corte(
+    oc_id: str,
+    body: dict,
+    _: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "ver")),
+) -> dict:
+    """Cortador: escanea un rollo para confirmar que está asignado a este corte. No modifica nada."""
+    try:
+        return svc.verificar_rollo_corte(oc_id, (body or {}).get("barcode") or "")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"verificar_rollo: {str(e)[:200]}")
+
+
 @router.delete("/corte/{oc_id}/rollo/{rollo_id}")
 def quitar_rollo(
     oc_id: str,
     rollo_id: str,
-    _: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
 ) -> dict:
     try:
         oc = svc.quitar_rollo_de_corte(oc_id=oc_id, rollo_id=rollo_id)
@@ -784,7 +799,7 @@ class AutoAsignarBody(BaseModel):
 def auto_asignar(
     oc_id: str,
     body: AutoAsignarBody,
-    _: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "modificar")),
+    _: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
 ) -> dict:
     """Auto-selecciona rollos disponibles de la misma TELA + TONO y los agrega
     hasta cubrir los metros teóricos. Evita mezclar tonos por error humano.
@@ -1039,7 +1054,7 @@ def marcar_recogida(
 def insumos_requeridos_corte(
     oc_id: str,
     tipo: Optional[str] = None,  # 'confeccion' | 'terminacion' | None (ambos)
-    user: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "ver")),
+    user: CurrentUser = Depends(require_permission("produccion_corte", "ver")),
 ) -> dict:
     """Calcula los insumos requeridos multiplicando item.cantidad × cantidad_a_cortar.
     Con `tipo=confeccion` filtra a categoría INSUMO CONFECCION;

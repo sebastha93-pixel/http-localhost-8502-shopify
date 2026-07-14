@@ -197,6 +197,20 @@ export default function DetalleOrdenCortePage() {
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
   });
 
+  // Rol: cortador puro = tiene produccion_cortador pero NO produccion_corte
+  // (mismo criterio que el backend _es_solo_cortador). Solo verifica y descarga.
+  const { user } = useAuth();
+  const _perms = (user?.permisos || {}) as Record<string, unknown>;
+  const esAdmin = user?.rol === "admin" || user?.rol === "operador";
+  const esCortador = !esAdmin && !!_perms["produccion_cortador"] && !_perms["produccion_corte"];
+
+  const [verifResult, setVerifResult] = useState<{ asignado: boolean; mensaje: string; rollo?: { codigo_interno?: string; descripcion_tela?: string; tono?: string } } | null>(null);
+  const verificar = useMutation({
+    mutationFn: (bc: string) => api.post<{ asignado: boolean; mensaje: string; rollo?: { codigo_interno?: string; descripcion_tela?: string; tono?: string } }>(`/api/produccion/corte/${id}/verificar-rollo`, { barcode: bc }),
+    onSuccess: (r) => { setVerifResult(r); setBarcode(""); setErr(""); setTimeout(() => barcodeRef.current?.focus(), 50); },
+    onError: (e: Error) => { setErr(e.message); setVerifResult(null); },
+  });
+
   const quitar = useMutation({
     mutationFn: (rollo_id: string) =>
       api.del(`/api/produccion/corte/${id}/rollo/${rollo_id}`),
@@ -445,8 +459,31 @@ export default function DetalleOrdenCortePage() {
         </CardContent>
       </Card>
 
+      {/* Cortador: solo DESCARGA de trazos/Optitex para plotear */}
+      {esCortador && (oc.trazos_archivos?.length || oc.trazos_url) && (
+        <Card>
+          <CardContent className="p-5 space-y-2">
+            <p className="section-label">Trazos / molde (Optitex) — para plotear</p>
+            <ul className="space-y-1">
+              {(oc.trazos_archivos && oc.trazos_archivos.length > 0
+                ? oc.trazos_archivos
+                : (oc.trazos_url ? [{ url: oc.trazos_url, filename: oc.trazos_filename }] : [])
+              ).map((t) => (
+                <li key={t.url}>
+                  <a href={t.url} target="_blank" rel="noopener noreferrer" download
+                    className="inline-flex items-center gap-2 rounded-sm border border-navy-600 bg-white px-3 py-2 text-xs font-semibold text-navy-600 hover:bg-navy-600 hover:text-white">
+                    <Paperclip className="h-3.5 w-3.5" /> {t.filename || "archivo"}
+                  </a>
+                </li>
+              ))}
+            </ul>
+            <p className="text-[0.7rem] text-graphite">Descárgalos y envíalos a plotear. Aquí no se suben ni se modifican.</p>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Trazos + destinatarios + autorizar */}
-      {!cerrada && (
+      {!cerrada && !esCortador && (
         <Card>
           <CardContent className="p-5 space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -527,7 +564,7 @@ export default function DetalleOrdenCortePage() {
         </Card>
       )}
 
-      {/* Insumos requeridos — cálculo automático desde el precosteo.
+      {/* Insumos requeridos — cálculo automático desde el precosteo. (oculto al cortador: tiene costos)
           Solo aparece cuando el informe está CERRADO (unidades reales conocidas).
           Sirve para adelantar la remisión de insumos al confeccionista. */}
       {cerrada && (
@@ -600,8 +637,8 @@ export default function DetalleOrdenCortePage() {
       </Card>
       )}
 
-      {/* Auto-asignar por tono — mismo color en todo el trazo */}
-      {!cerrada && telaRef && (
+      {/* Auto-asignar por tono — mismo color en todo el trazo (solo diseñador) */}
+      {!cerrada && !esCortador && telaRef && (
         <Card>
           <CardContent className="p-5">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
@@ -638,8 +675,8 @@ export default function DetalleOrdenCortePage() {
         </Card>
       )}
 
-      {/* Rollos disponibles en inventario, agrupados: coinciden con la tela del precosteo primero */}
-      {!cerrada && (
+      {/* Rollos disponibles en inventario (asignación — solo diseñador) */}
+      {!cerrada && !esCortador && (
         <Card>
           <CardContent className="p-0">
             <div className="px-4 py-3 border-b border-border flex items-center justify-between">
@@ -674,8 +711,50 @@ export default function DetalleOrdenCortePage() {
         </Card>
       )}
 
-      {/* Pistola de rollos */}
-      {!cerrada && (
+      {/* Cortador: verificar tela asignada (NO asigna) */}
+      {!cerrada && esCortador && (
+        <Card>
+          <CardContent className="p-5 space-y-3">
+            <div className="flex items-center gap-2">
+              <ScanLine className="h-5 w-5 text-navy-600" />
+              <p className="section-label">Verificar tela asignada</p>
+            </div>
+            <p className="text-xs text-graphite">
+              Escanea cada rollo antes de cortar para confirmar que es una tela asignada a este corte.
+            </p>
+            <form
+              onSubmit={(e) => { e.preventDefault(); setErr(""); if (barcode.trim()) verificar.mutate(barcode.trim()); }}
+              className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-end"
+            >
+              <div>
+                <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite">Barcode del rollo</label>
+                <input ref={barcodeRef} value={barcode} onChange={(e) => setBarcode(e.target.value)}
+                  autoFocus placeholder="Escanea aquí…"
+                  className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm tabular" />
+              </div>
+              <button type="submit" disabled={verificar.isPending || !barcode.trim()}
+                className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white hover:bg-navy-700 disabled:opacity-40">
+                {verificar.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanLine className="h-4 w-4" />}
+                Verificar
+              </button>
+            </form>
+            {verifResult && (
+              <div className={`rounded-sm border px-3 py-2.5 text-sm ${verifResult.asignado ? "border-teal/40 bg-teal/[0.06] text-teal" : "border-terracotta/40 bg-terracotta/[0.06] text-terracotta"}`}>
+                <div className="flex items-center gap-2 font-semibold">
+                  {verifResult.asignado ? <CheckCircle className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
+                  {verifResult.mensaje}
+                </div>
+                {verifResult.rollo?.codigo_interno && (
+                  <p className="mt-1 text-xs">{verifResult.rollo.codigo_interno} · {verifResult.rollo.descripcion_tela}{verifResult.rollo.tono ? ` · ${verifResult.rollo.tono}` : ""}</p>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Pistola de rollos (asignación — solo diseñador) */}
+      {!cerrada && !esCortador && (
         <Card>
           <CardContent className="p-5 space-y-3">
             <div className="flex items-center gap-2">
@@ -749,7 +828,7 @@ export default function DetalleOrdenCortePage() {
                       {Number(l.metros_usados).toFixed(2)} m
                     </td>
                     <td className="px-4 py-2 text-right">
-                      {!cerrada && (
+                      {!cerrada && !esCortador && (
                         <button onClick={() => quitar.mutate(l.rollo_id)}
                           disabled={quitar.isPending}
                           aria-label="Quitar rollo del corte"
@@ -789,8 +868,8 @@ export default function DetalleOrdenCortePage() {
 
       {/* Comparación al cerrar */}
       {cerrada && <InformeCerradoCard oc={oc} />}
-      {cerrada && <GenerarRemisionCard ordenCorteId={oc.id} />}
-      {cerrada && <HojaRutaCard ordenCorteId={oc.id} consecutivo={oc.consecutivo} />}
+      {cerrada && !esCortador && <GenerarRemisionCard ordenCorteId={oc.id} />}
+      {cerrada && !esCortador && <HojaRutaCard ordenCorteId={oc.id} consecutivo={oc.consecutivo} />}
     </PageShell>
   );
 }

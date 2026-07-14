@@ -1167,6 +1167,32 @@ def obtener_orden_corte(oc_id: str) -> Optional[dict]:
     return {**r[0], "rollos": rollos}
 
 
+def verificar_rollo_corte(oc_id: str, barcode: str) -> dict:
+    """Verificación del CORTADOR: ¿el rollo escaneado está asignado a este corte?
+    NO modifica nada — solo confirma que está cortando la tela correcta."""
+    oc = obtener_orden_corte(oc_id)
+    if not oc:
+        raise ValueError("orden_no_encontrada")
+    rollo = obtener_rollo_por_barcode((barcode or "").strip())
+    if not rollo:
+        return {"asignado": False, "rollo": None,
+                "mensaje": "Rollo no encontrado en el inventario."}
+    asignados_ids = {l.get("rollo_id") for l in (oc.get("rollos") or [])}
+    ok = rollo["id"] in asignados_ids
+    return {
+        "asignado": ok,
+        "rollo": {
+            "codigo_interno": rollo.get("codigo_interno"),
+            "barcode": rollo.get("barcode"),
+            "descripcion_tela": rollo.get("descripcion_tela"),
+            "tono": rollo.get("tono"),
+        },
+        "mensaje": ("Correcto: esta tela está asignada a este corte."
+                    if ok else
+                    "Esta tela NO está asignada a este corte. No la cortes."),
+    }
+
+
 def asignar_rollo_a_corte(*, oc_id: str, barcode: str,
                            metros_reservar: float) -> dict:
     """Pistolear un rollo: valida barcode → agrega a la orden con los metros reservados.
