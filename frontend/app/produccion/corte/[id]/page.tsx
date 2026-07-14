@@ -81,6 +81,7 @@ interface OrdenCorte {
   indicaciones?: string;
   trazos_url?: string;
   trazos_filename?: string;
+  precio_corte_sugerido?: number | null;
   trazos_archivos?: { url: string; filename?: string; path?: string }[];
   destinatarios_correo?: string[];
   autorizada_por?: string;
@@ -140,6 +141,7 @@ export default function DetalleOrdenCortePage() {
     setRefLote((prev) => prev || d.consecutivo || "");
     const fplan = (d.fecha_envio || d.fecha_limite || "").slice(0, 10);
     if (fplan) setFechaEntrega((prev) => prev || fplan);
+    if (d.precio_corte_sugerido != null) setPrecioCorte((prev) => prev || String(d.precio_corte_sugerido));
   }, [q.data]);
   const rollosInvQ = useQuery<{ rollos: RolloInv[] }>({
     queryKey: ["produccion", "rollos", "disponibles-tela", telaRef],

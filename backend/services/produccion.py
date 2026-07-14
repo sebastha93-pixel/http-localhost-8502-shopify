@@ -1164,7 +1164,14 @@ def obtener_orden_corte(oc_id: str) -> Optional[dict]:
     rollos = (sb.table("orden_corte_rollos")
                 .select("*,rollo:rollo_id(codigo_interno,barcode,descripcion_tela,tono,metros_disponible,metros_inicial,costo_metro,numero_rollo)")
                 .eq("orden_corte_id", oc_id).execute()).data or []
-    return {**r[0], "rollos": rollos}
+    # Precio de corte sugerido desde el precosteo firmado (para pre-llenar el
+    # informe; el cortador puede ajustarlo). Mismo origen que el auto al cerrar.
+    precio_sug = None
+    try:
+        precio_sug = _precio_proceso_precosteo(r[0].get("referencia_id"), "corte")
+    except Exception:
+        pass
+    return {**r[0], "rollos": rollos, "precio_corte_sugerido": precio_sug}
 
 
 def verificar_rollo_corte(oc_id: str, barcode: str) -> dict:
