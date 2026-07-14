@@ -275,7 +275,7 @@ export default function DetalleOrdenCortePage() {
       if (r.faltantes > 0) {
         setMsg(`Asignados ${n} rollo(s) · faltan ${r.faltantes.toFixed(2)} m (stock insuficiente del tono).`);
       } else {
-        setMsg(`Asignados ${n} rollo(s) automáticamente · cubre los metros teóricos.`);
+        setMsg(`Asignados ${n} rollo(s) · reserva +5% de colchón. Al cerrar el informe se descuenta el consumo real y el sobrante vuelve al inventario.`);
       }
       setErr("");
       qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });

@@ -1251,6 +1251,12 @@ def asignar_rollo_a_corte(*, oc_id: str, barcode: str,
     return obtener_orden_corte(oc_id)
 
 
+# Colchón de la asignación AUTOMÁTICA: se reserva 5% más de metros que el
+# teórico para evitar quedarse corto. El sobrante no consumido vuelve al
+# inventario al cerrar el informe (se descuenta el consumo real).
+BUFFER_ASIGNACION_AUTO = 1.05
+
+
 def auto_asignar_rollos_por_tono(*, oc_id: str,
                                    tono: Optional[str] = None) -> dict:
     """Auto-selecciona rollos disponibles con la MISMA TELA y MISMO TONO
@@ -1275,10 +1281,11 @@ def auto_asignar_rollos_por_tono(*, oc_id: str,
 
     tono_target = (tono or oc.get("tono") or "").strip()
 
-    # Metros teóricos que necesita el corte
-    m_necesarios = float(oc.get("metros_consumidos") or 0)
-    if m_necesarios <= 0:
+    # Metros teóricos + colchón del 5% (evita quedarse corto por variaciones)
+    m_teoricos = float(oc.get("metros_consumidos") or 0)
+    if m_teoricos <= 0:
         raise ValueError("orden_sin_metros_teoricos")
+    m_necesarios = round(m_teoricos * BUFFER_ASIGNACION_AUTO, 2)
 
     # Rollos ya asignados → no repetir
     ya_asignados = {link.get("rollo_id") for link in (oc.get("rollos") or []) if link.get("rollo_id")}
@@ -1427,20 +1434,27 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
 
     doc_ref = oc["consecutivo"]
 
-    # PASO 1 — Pre-validar TODOS los rollos antes de descontar ninguno.
-    # Si uno no alcanza, se falla aquí sin dejar descuentos a medias.
+    # PASO 1 — Descontar el CONSUMO REAL del cortador (no lo reservado).
+    # La asignación reserva con colchón (auto +5%); al cerrar, lo NO consumido
+    # vuelve al inventario. El real se reparte entre los rollos proporcional a
+    # lo que se reservó de cada uno. Sin consumo real (no vino en el informe)
+    # se cae a lo reservado, como antes.
+    reservado_total = sum(float(l.get("metros_usados") or 0) for l in rollos)
+    real_total = float(consumo_real_cortador or 0)
+    repartir_real = real_total > 0 and reservado_total > 0
     descuentos: list[tuple[str, float, float]] = []  # (rollo_id, metros, nuevo_disponible)
     for link in rollos:
         rollo_id = link.get("rollo_id")
-        m = float(link.get("metros_usados") or 0)
-        if not rollo_id or m <= 0:
+        m_reservado = float(link.get("metros_usados") or 0)
+        if not rollo_id or m_reservado <= 0:
             continue
         rollo = obtener_rollo(rollo_id)
         if not rollo:
             continue
-        nuevo = round(float(rollo["metros_disponible"]) - m, 2)
-        if nuevo < 0:
-            raise ValueError(f"metros_negativos_en_rollo_{rollo['codigo_interno']}")
+        disp = float(rollo["metros_disponible"])
+        m = round(real_total * (m_reservado / reservado_total), 2) if repartir_real else m_reservado
+        m = max(0.0, min(m, disp))  # nunca deja el rollo en negativo
+        nuevo = round(disp - m, 2)
         descuentos.append((rollo_id, m, nuevo))
 
     # PASO 2 — Claim atómico: marcar 'cortada' condicionado a que NO lo esté ya.
@@ -1466,7 +1480,7 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
             "metros": -m,
             "doc_ref": doc_ref,
             "usuario": usuario,
-            "nota": f"Corte {doc_ref}",
+            "nota": f"Corte {doc_ref} · consumo real",
         }).execute()
 
     # Calcula diferencia teórico vs real
