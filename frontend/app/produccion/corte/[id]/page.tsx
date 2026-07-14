@@ -33,6 +33,7 @@ interface RolloLink {
     metros_disponible: number;
     metros_inicial: number;
     costo_metro?: number;
+    numero_rollo?: string;
   };
 }
 
@@ -806,6 +807,7 @@ export default function DetalleOrdenCortePage() {
               <thead className="bg-cloud/60 border-b border-border">
                 <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                   <th className="px-4 py-2">Código</th>
+                  <th className="px-4 py-2">N° rollo</th>
                   <th className="px-4 py-2">Descripción</th>
                   <th className="px-4 py-2">Tono</th>
                   <th className="px-4 py-2 text-right">Disponible</th>
@@ -819,6 +821,7 @@ export default function DetalleOrdenCortePage() {
                     <td className="px-4 py-2 font-semibold tabular text-navy-600">
                       {l.rollo?.codigo_interno || "—"}
                     </td>
+                    <td className="px-4 py-2 text-graphite tabular">{l.rollo?.numero_rollo || "—"}</td>
                     <td className="px-4 py-2 text-ink-900">{l.rollo?.descripcion_tela || "—"}</td>
                     <td className="px-4 py-2 text-graphite">{l.rollo?.tono || "—"}</td>
                     <td className="px-4 py-2 text-right tabular text-graphite">
@@ -908,6 +911,7 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar, onAsignar, asignando }
   const renderFila = (r: RolloInv, esOtro = false) => (
     <tr key={r.id} className={`border-b border-border/40 ${yaAsignado(r.id) ? "bg-teal/5" : "hover:bg-cloud/30"} ${esOtro ? "text-graphite/90" : ""}`}>
       <td className="px-4 py-2 font-semibold tabular text-navy-600">{r.codigo_interno}</td>
+      <td className="px-4 py-2 text-graphite tabular">{r.numero_rollo || "—"}</td>
       <td className="px-4 py-2 text-ink-900">{r.descripcion_tela}</td>
       <td className="px-4 py-2 text-graphite">{r.tono || "—"}</td>
       <td className="px-4 py-2 text-graphite">{r.lote_fabrica || "—"}</td>
@@ -947,6 +951,7 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar, onAsignar, asignando }
         <thead className="bg-cloud/40 border-b border-border">
           <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
             <th className="px-4 py-2">Código interno</th>
+            <th className="px-4 py-2">N° rollo</th>
             <th className="px-4 py-2">Descripción</th>
             <th className="px-4 py-2">Tono</th>
             <th className="px-4 py-2">Lote</th>
@@ -958,7 +963,7 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar, onAsignar, asignando }
         <tbody>
           {match.length === 0 && (
             <tr>
-              <td colSpan={7} className="px-4 py-3 text-[0.7rem] text-terracotta">
+              <td colSpan={8} className="px-4 py-3 text-[0.7rem] text-terracotta">
                 Ningún rollo coincide con “{telaRef || "—"}”. Revisa que el nombre
                 de la tela en el precosteo coincida con la descripción del ingreso,
                 o usa uno de los otros rollos.
@@ -970,7 +975,7 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar, onAsignar, asignando }
           {otros.length > 0 && (
             <>
               <tr className="bg-cloud/30 border-y border-border">
-                <td colSpan={7} className="px-4 py-2">
+                <td colSpan={8} className="px-4 py-2">
                   <button type="button" onClick={() => setMostrarOtros((v) => !v)}
                     className="text-[0.7rem] font-semibold uppercase tracking-widest text-graphite hover:text-ink-900">
                     {mostrarOtros ? "▼ Ocultar" : "▶ Mostrar"} otros rollos disponibles ({otros.length})

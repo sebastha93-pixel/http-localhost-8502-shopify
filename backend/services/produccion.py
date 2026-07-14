@@ -1162,7 +1162,7 @@ def obtener_orden_corte(oc_id: str) -> Optional[dict]:
     if not r:
         return None
     rollos = (sb.table("orden_corte_rollos")
-                .select("*,rollo:rollo_id(codigo_interno,barcode,descripcion_tela,tono,metros_disponible,metros_inicial,costo_metro)")
+                .select("*,rollo:rollo_id(codigo_interno,barcode,descripcion_tela,tono,metros_disponible,metros_inicial,costo_metro,numero_rollo)")
                 .eq("orden_corte_id", oc_id).execute()).data or []
     return {**r[0], "rollos": rollos}
 
