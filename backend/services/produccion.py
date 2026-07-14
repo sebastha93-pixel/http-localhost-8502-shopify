@@ -1081,6 +1081,23 @@ def despachos_por_corte(limit: int = 200) -> list[dict]:
                     rem_por_oc[it["orden_corte_id"]] = conf[it["remision_id"]]
     except Exception as e:
         log.warning(f"[despachos] remisiones no disponibles: {e}")
+    # Trazos/moldes por corte (para que el cortador reciba el archivo del diseñador)
+    trazos_por_oc: dict[str, dict] = {}
+    try:
+        ids = [oc["id"] for oc in ocs]
+        if ids:
+            try:
+                tr = (sb.table("ordenes_corte")
+                        .select("id,trazos_url,trazos_filename")
+                        .in_("id", ids).execute()).data or []
+            except Exception:
+                tr = (sb.table("ordenes_corte")
+                        .select("id,trazos_url")
+                        .in_("id", ids).execute()).data or []
+            trazos_por_oc = {t["id"]: t for t in tr if t.get("trazos_url")}
+    except Exception as e:
+        log.warning(f"[despachos] trazos no disponibles: {e}")
+
     out = []
     for oc in ocs:
         unidades = oc.get("unidades_cortadas") or {}
@@ -1098,6 +1115,8 @@ def despachos_por_corte(limit: int = 200) -> list[dict]:
             "fecha_entrega": oc.get("fecha_entrega"),
             "unidades":      unidades,
             "total":         total,
+            "trazo":         (lambda t: {"url": t["trazos_url"], "filename": t.get("trazos_filename")}
+                              if t else None)(trazos_por_oc.get(oc["id"])),
             "remision": None if not rem else {
                 "id":             rem["id"],
                 "consecutivo":    rem.get("consecutivo"),
@@ -1501,7 +1520,12 @@ def subir_trazos_corte(oc_id: str, *, file_bytes: bytes, filename: str,
     if not oc:
         raise ValueError("orden_no_encontrada")
     ext = (filename.rsplit(".", 1)[-1] if "." in filename else "pdf").lower()
-    if ext not in ("pdf", "png", "jpg", "jpeg", "webp"):
+    # Formatos de trazo/molde: PDF e imágenes + nativos/exportados de Optitex
+    # (marker, plotter HPGL, DXF de intercambio con la cortadora, etc.).
+    PERMITIDOS = ("pdf", "png", "jpg", "jpeg", "webp",
+                  "mrk", "mark", "plt", "dxf", "dsn", "pds", "rul", "ord",
+                  "plx", "hpgl", "cut", "ai", "eps", "dwg", "zip")
+    if ext not in PERMITIDOS:
         raise ValueError("formato_no_soportado")
     bucket = "produccion-trazos"
     path = f"{oc_id}/trazos.{ext}"
@@ -1517,9 +1541,18 @@ def subir_trazos_corte(oc_id: str, *, file_bytes: bytes, filename: str,
     except Exception as e:
         raise RuntimeError(f"subir_trazos: {str(e)[:200]}")
     url = sb.storage.from_(bucket).get_public_url(path)
-    sb.table("ordenes_corte").update({
-        "trazos_url": url, "updated_at": _now_iso(),
-    }).eq("id", oc_id).execute()
+    try:
+        sb.table("ordenes_corte").update({
+            "trazos_url": url, "trazos_filename": filename[:200], "updated_at": _now_iso(),
+        }).eq("id", oc_id).execute()
+    except Exception as e:
+        # compat: si la columna trazos_filename no existe aún (migración pendiente)
+        if "trazos_filename" in str(e):
+            sb.table("ordenes_corte").update({
+                "trazos_url": url, "updated_at": _now_iso(),
+            }).eq("id", oc_id).execute()
+        else:
+            raise
     return url
 
 

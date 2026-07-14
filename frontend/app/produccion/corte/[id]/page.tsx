@@ -82,6 +82,7 @@ interface OrdenCorte {
   fecha_envio?: string;
   indicaciones?: string;
   trazos_url?: string;
+  trazos_filename?: string;
   destinatarios_correo?: string[];
   autorizada_por?: string;
   estado: string;
@@ -179,6 +180,21 @@ export default function DetalleOrdenCortePage() {
       setMetros("");
       qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
       setTimeout(() => barcodeRef.current?.focus(), 50);
+    },
+    onError: (e: Error) => { setErr(e.message); setMsg(""); },
+  });
+
+  // Asignación MANUAL directa desde la tabla de rollos (sin pistola): el
+  // diseñador elige el rollo y escribe los metros en la misma fila.
+  const asignarDirecto = useMutation({
+    mutationFn: (v: { barcode: string; metros: number }) =>
+      api.post(`/api/produccion/corte/${id}/pistolear`, {
+        barcode: v.barcode, metros_reservar: v.metros,
+      }),
+    onSuccess: (_d, v) => {
+      setMsg(`✓ Rollo asignado (${v.metros} m)`);
+      setErr("");
+      qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
     },
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
   });
@@ -422,8 +438,10 @@ export default function DetalleOrdenCortePage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Trazos */}
               <div>
-                <p className="section-label mb-2">Trazos</p>
-                <input ref={trazosRef} type="file" accept="application/pdf,image/*" className="hidden"
+                <p className="section-label mb-2">Trazos / molde (Optitex)</p>
+                <input ref={trazosRef} type="file"
+                  accept="application/pdf,image/*,.mrk,.mark,.plt,.dxf,.dsn,.pds,.rul,.ord,.plx,.hpgl,.cut,.ai,.eps,.dwg,.zip"
+                  className="hidden"
                   onChange={(e) => { const f = e.target.files?.[0]; if (f) subirTrazos(f); }} />
                 <div className="flex items-center gap-2">
                   <button type="button" onClick={() => trazosRef.current?.click()}
@@ -433,13 +451,13 @@ export default function DetalleOrdenCortePage() {
                     {oc.trazos_url ? "Cambiar" : "Subir archivo"}
                   </button>
                   {oc.trazos_url && (
-                    <a href={oc.trazos_url} target="_blank" rel="noopener noreferrer"
+                    <a href={oc.trazos_url} target="_blank" rel="noopener noreferrer" download
                       className="inline-flex items-center gap-1 text-xs text-teal hover:underline">
-                      <CheckCircle className="h-3.5 w-3.5" /> Ver trazos
+                      <CheckCircle className="h-3.5 w-3.5" /> {oc.trazos_filename || "Ver archivo"}
                     </a>
                   )}
                 </div>
-                <p className="mt-1 text-[0.7rem] text-graphite">PDF/JPG/PNG · máx 15MB</p>
+                <p className="mt-1 text-[0.7rem] text-graphite">Optitex (.mrk .plt .dxf …), PDF o imagen · máx 15MB. El cortador lo recibe en «Mis despachos».</p>
               </div>
 
               {/* Autorizar */}
@@ -611,6 +629,8 @@ export default function DetalleOrdenCortePage() {
                 otros={rollosOtros}
                 telaRef={telaRef}
                 oc={oc}
+                asignando={asignarDirecto.isPending}
+                onAsignar={(rollo, metros) => asignarDirecto.mutate({ barcode: rollo.barcode, metros })}
                 onUsar={(rollo) => {
                   setBarcode(rollo.barcode);
                   setMetros("");
@@ -753,15 +773,24 @@ function Kpi({ label, value }: { label: string; value: string }) {
   );
 }
 
-function RollosTabla({ match, otros, telaRef, oc, onUsar }: {
+function RollosTabla({ match, otros, telaRef, oc, onUsar, onAsignar, asignando }: {
   match: RolloInv[];
   otros: RolloInv[];
   telaRef: string;
   oc: OrdenCorte;
   onUsar: (r: RolloInv) => void;
+  onAsignar: (r: RolloInv, metros: number) => void;
+  asignando: boolean;
 }) {
   const [mostrarOtros, setMostrarOtros] = useState(false);
+  const [metrosFila, setMetrosFila] = useState<Record<string, string>>({});
   const yaAsignado = (rolloId: string) => (oc.rollos || []).some((l) => l.rollo_id === rolloId);
+  const asignarFila = (r: RolloInv) => {
+    const m = parseFloat(metrosFila[r.id] || "0");
+    if (!m || m <= 0) return;
+    onAsignar(r, m);
+    setMetrosFila((prev) => ({ ...prev, [r.id]: "" }));
+  };
 
   const renderFila = (r: RolloInv, esOtro = false) => (
     <tr key={r.id} className={`border-b border-border/40 ${yaAsignado(r.id) ? "bg-teal/5" : "hover:bg-cloud/30"} ${esOtro ? "text-graphite/90" : ""}`}>
@@ -777,10 +806,21 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar }: {
             <CheckCircle className="h-3 w-3" /> Asignado
           </span>
         ) : (
-          <button type="button" onClick={() => onUsar(r)}
-            className="rounded-sm border border-navy-600 bg-white px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-widest text-navy-600 hover:bg-navy-600 hover:text-white">
-            Usar
-          </button>
+          <div className="inline-flex items-center gap-1.5">
+            <input
+              type="number" inputMode="decimal" step="0.01" min="0"
+              max={Number(r.metros_disponible)}
+              value={metrosFila[r.id] || ""}
+              onChange={(e) => setMetrosFila((prev) => ({ ...prev, [r.id]: e.target.value }))}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); asignarFila(r); } }}
+              placeholder="metros"
+              className="w-20 rounded-sm border border-border bg-card px-2 py-1 text-right text-[0.7rem] tabular" />
+            <button type="button" onClick={() => asignarFila(r)} disabled={asignando}
+              title="Asignar estos metros de este rollo al corte"
+              className="rounded-sm border border-navy-600 bg-navy-600 px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
+              Asignar
+            </button>
+          </div>
         )}
       </td>
     </tr>

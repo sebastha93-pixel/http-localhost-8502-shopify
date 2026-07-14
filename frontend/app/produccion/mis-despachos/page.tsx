@@ -13,7 +13,7 @@ import { api } from "@/lib/api";
 import { fmtFecha } from "@/lib/utils";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { CheckCircle, Loader2, Truck } from "lucide-react";
+import { CheckCircle, Loader2, Truck, FileDown } from "lucide-react";
 
 interface Despacho {
   id: string;
@@ -30,9 +30,21 @@ interface Despacho {
     despachada: boolean;
     fecha_recogida?: string;
   } | null;
+  trazo?: { url: string; filename?: string } | null;
 }
 
 interface WaSalida { referencia: string; enviado: boolean; wa_url: string }
+
+function TrazoLink({ trazo }: { trazo?: { url: string; filename?: string } | null }) {
+  if (!trazo?.url) return null;
+  return (
+    <a href={trazo.url} target="_blank" rel="noopener noreferrer" download
+      className="inline-flex items-center gap-1 rounded-sm border border-navy-600 bg-white px-2 py-1 text-[0.7rem] font-semibold text-navy-600 hover:bg-navy-600 hover:text-white"
+      title={trazo.filename || "Trazo / molde del diseñador"}>
+      <FileDown className="h-3 w-3" /> Trazo
+    </a>
+  );
+}
 
 export default function MisDespachosPage() {
   const qc = useQueryClient();
@@ -130,6 +142,7 @@ export default function MisDespachosPage() {
                       <span className="font-display text-sm tabular text-ink-900">{r.total.toLocaleString("es-CO")} und</span>
                     </div>
                     <p className="text-xs text-ink-900"><span className="font-semibold">{r.referencia || "—"}</span>{r.nombre ? ` · ${r.nombre}` : ""}</p>
+                    {r.trazo && <div><TrazoLink trazo={r.trazo} /></div>}
                     <div className="flex flex-wrap gap-1">
                       {tallas.map(([t, v]) => (
                         <span key={t} className="rounded-sm bg-navy-600/[0.07] px-1.5 py-0.5 text-[0.7rem] font-semibold tabular text-navy-600">T{t}: {v}</span>
@@ -186,6 +199,7 @@ export default function MisDespachosPage() {
                         <td className="px-4 py-2.5 text-ink-900">
                           <span className="font-semibold">{r.referencia || "—"}</span>
                           {r.nombre && <span className="block text-[0.7rem] text-graphite">{r.nombre}</span>}
+                          {r.trazo && <div className="mt-1"><TrazoLink trazo={r.trazo} /></div>}
                         </td>
                         <td className="px-4 py-2.5">
                           <div className="flex flex-wrap gap-1">
