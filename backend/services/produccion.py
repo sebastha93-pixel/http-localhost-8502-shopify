@@ -1081,20 +1081,22 @@ def despachos_por_corte(limit: int = 200) -> list[dict]:
                     rem_por_oc[it["orden_corte_id"]] = conf[it["remision_id"]]
     except Exception as e:
         log.warning(f"[despachos] remisiones no disponibles: {e}")
-    # Trazos/moldes por corte (para que el cortador reciba el archivo del diseñador)
-    trazos_por_oc: dict[str, dict] = {}
+    # Trazos/moldes por corte (para que el cortador reciba los archivos del diseñador)
+    trazos_por_oc: dict[str, list] = {}
     try:
         ids = [oc["id"] for oc in ocs]
         if ids:
+            cols = "id,trazos_url,trazos_filename,trazos_archivos"
             try:
-                tr = (sb.table("ordenes_corte")
-                        .select("id,trazos_url,trazos_filename")
-                        .in_("id", ids).execute()).data or []
+                tr = (sb.table("ordenes_corte").select(cols).in_("id", ids).execute()).data or []
             except Exception:
-                tr = (sb.table("ordenes_corte")
-                        .select("id,trazos_url")
-                        .in_("id", ids).execute()).data or []
-            trazos_por_oc = {t["id"]: t for t in tr if t.get("trazos_url")}
+                tr = (sb.table("ordenes_corte").select("id,trazos_url").in_("id", ids).execute()).data or []
+            for t in tr:
+                lista = t.get("trazos_archivos") or []
+                if not lista and t.get("trazos_url"):
+                    lista = [{"url": t["trazos_url"], "filename": t.get("trazos_filename")}]
+                if lista:
+                    trazos_por_oc[t["id"]] = lista
     except Exception as e:
         log.warning(f"[despachos] trazos no disponibles: {e}")
 
@@ -1115,8 +1117,7 @@ def despachos_por_corte(limit: int = 200) -> list[dict]:
             "fecha_entrega": oc.get("fecha_entrega"),
             "unidades":      unidades,
             "total":         total,
-            "trazo":         (lambda t: {"url": t["trazos_url"], "filename": t.get("trazos_filename")}
-                              if t else None)(trazos_por_oc.get(oc["id"])),
+            "trazos":        trazos_por_oc.get(oc["id"]) or [],
             "remision": None if not rem else {
                 "id":             rem["id"],
                 "consecutivo":    rem.get("consecutivo"),
@@ -1508,52 +1509,92 @@ def eliminar_orden_corte(oc_id: str) -> None:
 
 
 # ── Trazos: adjuntar archivo (PDF/imagen) ─────────────────────────────
-def subir_trazos_corte(oc_id: str, *, file_bytes: bytes, filename: str,
-                       content_type: str) -> str:
-    """Sube el archivo de trazos a Storage bucket 'produccion-trazos'
-    y guarda la URL en la orden. Devuelve la URL pública.
-    """
+_TRAZOS_EXT = ("pdf", "png", "jpg", "jpeg", "webp",
+               "mrk", "mark", "plt", "dxf", "dsn", "pds", "rul", "ord",
+               "plx", "hpgl", "cut", "ai", "eps", "dwg", "zip")
+MAX_TRAZOS = 10
+
+
+def _guardar_trazos(oc_id: str, archivos: list[dict]) -> None:
+    """Persiste la lista de trazos + mantiene trazos_url/filename (1er archivo)
+    por compatibilidad. Defensivo si falta alguna columna (migración pendiente)."""
+    sb = _sb()
+    primero = archivos[0] if archivos else {}
+    base = {
+        "trazos_archivos": archivos,
+        "trazos_url": primero.get("url"),
+        "trazos_filename": primero.get("filename"),
+        "updated_at": _now_iso(),
+    }
+    for intento in ("trazos_archivos", "trazos_filename", None):
+        try:
+            sb.table("ordenes_corte").update(base).eq("id", oc_id).execute()
+            return
+        except Exception as e:
+            # quitar la columna que no existe y reintentar
+            if intento and intento in str(e) and intento in base:
+                base.pop(intento, None)
+                continue
+            raise
+
+
+def subir_trazos_corte(oc_id: str, *, archivos: list[dict]) -> list[dict]:
+    """Sube uno o varios archivos de trazo/molde (máx 10 por corte) al bucket
+    'produccion-trazos' y los ANEXA a la lista del corte.
+    `archivos`: [{file_bytes, filename, content_type}]. Devuelve la lista final."""
+    import uuid, re as _re
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
     oc = obtener_orden_corte(oc_id)
     if not oc:
         raise ValueError("orden_no_encontrada")
-    ext = (filename.rsplit(".", 1)[-1] if "." in filename else "pdf").lower()
-    # Formatos de trazo/molde: PDF e imágenes + nativos/exportados de Optitex
-    # (marker, plotter HPGL, DXF de intercambio con la cortadora, etc.).
-    PERMITIDOS = ("pdf", "png", "jpg", "jpeg", "webp",
-                  "mrk", "mark", "plt", "dxf", "dsn", "pds", "rul", "ord",
-                  "plx", "hpgl", "cut", "ai", "eps", "dwg", "zip")
-    if ext not in PERMITIDOS:
-        raise ValueError("formato_no_soportado")
+    actuales = list(oc.get("trazos_archivos") or [])
+    if len(actuales) + len(archivos) > MAX_TRAZOS:
+        raise ValueError(f"max_{MAX_TRAZOS}_archivos: ya hay {len(actuales)}")
     bucket = "produccion-trazos"
-    path = f"{oc_id}/trazos.{ext}"
-    try:
+    for a in archivos:
+        filename = a.get("filename") or "trazo.pdf"
+        ext = (filename.rsplit(".", 1)[-1] if "." in filename else "pdf").lower()
+        if ext not in _TRAZOS_EXT:
+            raise ValueError(f"formato_no_soportado: {ext}")
+        safe = _re.sub(r"[^A-Za-z0-9._-]", "_", filename)[:80]
+        path = f"{oc_id}/trazos/{uuid.uuid4().hex[:8]}_{safe}"
         try:
-            sb.storage.from_(bucket).remove([path])
+            sb.storage.from_(bucket).upload(
+                path, a["file_bytes"],
+                {"content-type": a.get("content_type") or "application/octet-stream", "upsert": "true"},
+            )
+        except Exception as e:
+            raise RuntimeError(f"subir_trazos: {str(e)[:200]}")
+        url = sb.storage.from_(bucket).get_public_url(path)
+        actuales.append({"url": url, "filename": filename[:200], "path": path})
+    _guardar_trazos(oc_id, actuales)
+    return actuales
+
+
+def eliminar_trazo_corte(oc_id: str, url: str) -> list[dict]:
+    """Elimina UN trazo del corte (del storage y de la lista). Devuelve la lista final."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    oc = obtener_orden_corte(oc_id)
+    if not oc:
+        raise ValueError("orden_no_encontrada")
+    actuales = list(oc.get("trazos_archivos") or [])
+    quedan, quitado = [], None
+    for a in actuales:
+        if a.get("url") == url:
+            quitado = a
+        else:
+            quedan.append(a)
+    if quitado and quitado.get("path"):
+        try:
+            sb.storage.from_("produccion-trazos").remove([quitado["path"]])
         except Exception:
             pass
-        sb.storage.from_(bucket).upload(
-            path, file_bytes,
-            {"content-type": content_type or "application/octet-stream", "upsert": "true"},
-        )
-    except Exception as e:
-        raise RuntimeError(f"subir_trazos: {str(e)[:200]}")
-    url = sb.storage.from_(bucket).get_public_url(path)
-    try:
-        sb.table("ordenes_corte").update({
-            "trazos_url": url, "trazos_filename": filename[:200], "updated_at": _now_iso(),
-        }).eq("id", oc_id).execute()
-    except Exception as e:
-        # compat: si la columna trazos_filename no existe aún (migración pendiente)
-        if "trazos_filename" in str(e):
-            sb.table("ordenes_corte").update({
-                "trazos_url": url, "updated_at": _now_iso(),
-            }).eq("id", oc_id).execute()
-        else:
-            raise
-    return url
+    _guardar_trazos(oc_id, quedan)
+    return quedan
 
 
 # ── Autorizar orden de corte y enviar correo ──────────────────────────

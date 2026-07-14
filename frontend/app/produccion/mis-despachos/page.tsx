@@ -30,19 +30,23 @@ interface Despacho {
     despachada: boolean;
     fecha_recogida?: string;
   } | null;
-  trazo?: { url: string; filename?: string } | null;
+  trazos?: { url: string; filename?: string }[];
 }
 
 interface WaSalida { referencia: string; enviado: boolean; wa_url: string }
 
-function TrazoLink({ trazo }: { trazo?: { url: string; filename?: string } | null }) {
-  if (!trazo?.url) return null;
+function TrazosLinks({ trazos }: { trazos?: { url: string; filename?: string }[] }) {
+  if (!trazos || trazos.length === 0) return null;
   return (
-    <a href={trazo.url} target="_blank" rel="noopener noreferrer" download
-      className="inline-flex items-center gap-1 rounded-sm border border-navy-600 bg-white px-2 py-1 text-[0.7rem] font-semibold text-navy-600 hover:bg-navy-600 hover:text-white"
-      title={trazo.filename || "Trazo / molde del diseñador"}>
-      <FileDown className="h-3 w-3" /> Trazo
-    </a>
+    <div className="flex flex-wrap gap-1.5">
+      {trazos.map((t, i) => (
+        <a key={t.url} href={t.url} target="_blank" rel="noopener noreferrer" download
+          className="inline-flex items-center gap-1 rounded-sm border border-navy-600 bg-white px-2 py-1 text-[0.7rem] font-semibold text-navy-600 hover:bg-navy-600 hover:text-white"
+          title={t.filename || "Trazo / molde del diseñador"}>
+          <FileDown className="h-3 w-3" /> {trazos.length > 1 ? `Trazo ${i + 1}` : "Trazo"}
+        </a>
+      ))}
+    </div>
   );
 }
 
@@ -142,7 +146,7 @@ export default function MisDespachosPage() {
                       <span className="font-display text-sm tabular text-ink-900">{r.total.toLocaleString("es-CO")} und</span>
                     </div>
                     <p className="text-xs text-ink-900"><span className="font-semibold">{r.referencia || "—"}</span>{r.nombre ? ` · ${r.nombre}` : ""}</p>
-                    {r.trazo && <div><TrazoLink trazo={r.trazo} /></div>}
+                    {r.trazos && r.trazos.length > 0 && <div><TrazosLinks trazos={r.trazos} /></div>}
                     <div className="flex flex-wrap gap-1">
                       {tallas.map(([t, v]) => (
                         <span key={t} className="rounded-sm bg-navy-600/[0.07] px-1.5 py-0.5 text-[0.7rem] font-semibold tabular text-navy-600">T{t}: {v}</span>
@@ -199,7 +203,7 @@ export default function MisDespachosPage() {
                         <td className="px-4 py-2.5 text-ink-900">
                           <span className="font-semibold">{r.referencia || "—"}</span>
                           {r.nombre && <span className="block text-[0.7rem] text-graphite">{r.nombre}</span>}
-                          {r.trazo && <div className="mt-1"><TrazoLink trazo={r.trazo} /></div>}
+                          {r.trazos && r.trazos.length > 0 && <div className="mt-1"><TrazosLinks trazos={r.trazos} /></div>}
                         </td>
                         <td className="px-4 py-2.5">
                           <div className="flex flex-wrap gap-1">

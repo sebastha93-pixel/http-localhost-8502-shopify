@@ -84,7 +84,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: "Orden corte",   href: "/produccion/corte",           permiso: "produccion_corte|produccion_cortador", desc: "5 · Cortes asignados e informe" },
       { label: "Mis despachos", href: "/produccion/mis-despachos",   permiso: "produccion_cortador", desc: "6 · Unidades despachadas por corte" },
       { label: "Remisiones",    href: "/produccion/remisiones",      permiso: "produccion_remisiones", desc: "6 · Entregas e insumos por lote" },
-      { label: "Lotes",         href: "/produccion/lotes",           permiso: "produccion_corte|produccion_cortador", desc: "7 · Seguimiento del lote en proceso" },
+      { label: "Lotes",         href: "/produccion/lotes",           permiso: "produccion|produccion_remisiones", desc: "7 · Seguimiento del lote en proceso" },
       { label: "Costeo real",   href: "/produccion/costeo",                                         desc: "8 · Cierre con Siigo" },
       { label: "Proveedores",   href: "/produccion/confeccionistas", permiso: "produccion_proveedores", desc: "Directorio: confección, lavandería, terminación" },
     ],

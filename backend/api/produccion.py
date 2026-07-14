@@ -8,7 +8,7 @@ FASE 1 · Bloque 2: Ingreso + Inventario.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, Field
@@ -655,26 +655,46 @@ def autorizar_corte(
 @router.post("/corte/{oc_id}/trazos")
 async def subir_trazos_corte(
     oc_id: str,
-    file: UploadFile = File(...),
+    files: List[UploadFile] = File(...),
     _: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "modificar")),
 ) -> dict:
-    contenido = await file.read()
-    if len(contenido) > 15 * 1024 * 1024:
-        raise HTTPException(413, "archivo_mayor_a_15MB")
-    if not contenido:
-        raise HTTPException(400, "archivo_vacio")
+    """Sube 1..N archivos de trazo/molde (Optitex, PDF, imagen). Máx 10 por corte."""
+    archivos = []
+    for f in files:
+        contenido = await f.read()
+        if len(contenido) > 15 * 1024 * 1024:
+            raise HTTPException(413, f"{f.filename}: archivo_mayor_a_15MB")
+        if not contenido:
+            continue
+        archivos.append({
+            "file_bytes": contenido,
+            "filename": f.filename or "trazo.pdf",
+            "content_type": f.content_type or "application/octet-stream",
+        })
+    if not archivos:
+        raise HTTPException(400, "sin_archivos")
     try:
-        url = svc.subir_trazos_corte(
-            oc_id,
-            file_bytes=contenido,
-            filename=file.filename or "trazos.pdf",
-            content_type=file.content_type or "application/pdf",
-        )
-        return {"ok": True, "trazos_url": url}
+        lista = svc.subir_trazos_corte(oc_id, archivos=archivos)
+        return {"ok": True, "trazos": lista}
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, f"trazos: {str(e)[:200]}")
+
+
+@router.delete("/corte/{oc_id}/trazos")
+def eliminar_trazo_corte(
+    oc_id: str,
+    url: str = Query(..., description="URL del trazo a eliminar"),
+    _: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "modificar")),
+) -> dict:
+    try:
+        lista = svc.eliminar_trazo_corte(oc_id, url)
+        return {"ok": True, "trazos": lista}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"eliminar_trazo: {str(e)[:200]}")
 
 
 def _es_solo_cortador(user: CurrentUser) -> bool:

@@ -19,10 +19,7 @@ import { useAuth } from "@/components/auth-provider";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import {
-  ArrowLeft, ScanLine, Trash2, Lock, Loader2, AlertCircle, CheckCircle,
-  Paperclip, Send,
-} from "lucide-react";
+import { ArrowLeft, ScanLine, Trash2, Lock, Loader2, AlertCircle, CheckCircle, Paperclip, Send, X } from "lucide-react";
 
 interface RolloLink {
   id: string;
@@ -83,6 +80,7 @@ interface OrdenCorte {
   indicaciones?: string;
   trazos_url?: string;
   trazos_filename?: string;
+  trazos_archivos?: { url: string; filename?: string; path?: string }[];
   destinatarios_correo?: string[];
   autorizada_por?: string;
   estado: string;
@@ -306,12 +304,18 @@ export default function DetalleOrdenCortePage() {
   const trazosRef = useRef<HTMLInputElement>(null);
   const [subiendoTrazos, setSubiendoTrazos] = useState(false);
 
-  async function subirTrazos(f: File) {
+  const MAX_TRAZOS = 10;
+  async function subirTrazos(fileList: FileList) {
     setErr(""); setMsg("");
+    const seleccion = Array.from(fileList);
+    const yaHay = q.data?.trazos_archivos?.length || 0;
+    const cupo = MAX_TRAZOS - yaHay;
+    if (cupo <= 0) { setErr(`Máximo ${MAX_TRAZOS} archivos por corte.`); if (trazosRef.current) trazosRef.current.value = ""; return; }
+    const aSubir = seleccion.slice(0, cupo);
     setSubiendoTrazos(true);
     try {
       const fd = new FormData();
-      fd.append("file", f);
+      aSubir.forEach((f) => fd.append("files", f));
       const res = await fetch(`${API_BASE}/api/produccion/corte/${id}/trazos`, {
         method: "POST",
         headers: { Authorization: `Bearer ${getToken()}` },
@@ -319,13 +323,23 @@ export default function DetalleOrdenCortePage() {
       });
       const text = await res.text();
       if (!res.ok) throw new Error(text.slice(0, 200) || `HTTP ${res.status}`);
-      setMsg("Trazos subidos.");
+      const sobran = seleccion.length - aSubir.length;
+      setMsg(`${aSubir.length} archivo(s) subido(s).${sobran > 0 ? ` ${sobran} no cupieron (máx ${MAX_TRAZOS}).` : ""}`);
       qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Error subiendo trazos");
     } finally {
       setSubiendoTrazos(false);
       if (trazosRef.current) trazosRef.current.value = "";
+    }
+  }
+  async function eliminarTrazo(url: string) {
+    setErr(""); setMsg("");
+    try {
+      await api.del(`/api/produccion/corte/${id}/trazos?url=${encodeURIComponent(url)}`);
+      qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Error eliminando trazo");
     }
   }
 
@@ -438,26 +452,43 @@ export default function DetalleOrdenCortePage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Trazos */}
               <div>
-                <p className="section-label mb-2">Trazos / molde (Optitex)</p>
-                <input ref={trazosRef} type="file"
+                {(() => { const n = oc.trazos_archivos?.length || 0; return (
+                <>
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="section-label">Trazos / molde (Optitex)</p>
+                  <span className="text-[0.7rem] text-graphite tabular">{n}/10</span>
+                </div>
+                <input ref={trazosRef} type="file" multiple
                   accept="application/pdf,image/*,.mrk,.mark,.plt,.dxf,.dsn,.pds,.rul,.ord,.plx,.hpgl,.cut,.ai,.eps,.dwg,.zip"
                   className="hidden"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) subirTrazos(f); }} />
-                <div className="flex items-center gap-2">
-                  <button type="button" onClick={() => trazosRef.current?.click()}
-                    disabled={subiendoTrazos}
-                    className="inline-flex items-center gap-2 rounded-sm border border-border bg-card px-3 py-2 text-xs font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud disabled:opacity-40">
-                    {subiendoTrazos ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
-                    {oc.trazos_url ? "Cambiar" : "Subir archivo"}
-                  </button>
-                  {oc.trazos_url && (
-                    <a href={oc.trazos_url} target="_blank" rel="noopener noreferrer" download
-                      className="inline-flex items-center gap-1 text-xs text-teal hover:underline">
-                      <CheckCircle className="h-3.5 w-3.5" /> {oc.trazos_filename || "Ver archivo"}
-                    </a>
-                  )}
-                </div>
-                <p className="mt-1 text-[0.7rem] text-graphite">Optitex (.mrk .plt .dxf …), PDF o imagen · máx 15MB. El cortador lo recibe en «Mis despachos».</p>
+                  onChange={(e) => { const fl = e.target.files; if (fl && fl.length) subirTrazos(fl); }} />
+                <button type="button" onClick={() => trazosRef.current?.click()}
+                  disabled={subiendoTrazos || n >= 10}
+                  className="inline-flex items-center gap-2 rounded-sm border border-border bg-card px-3 py-2 text-xs font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud disabled:opacity-40">
+                  {subiendoTrazos ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+                  {n >= 10 ? "Máx 10 alcanzado" : n > 0 ? "Agregar archivos" : "Subir archivos"}
+                </button>
+                {n > 0 && (
+                  <ul className="mt-2 space-y-1">
+                    {oc.trazos_archivos!.map((t) => (
+                      <li key={t.url} className="flex items-center justify-between gap-2 rounded-sm border border-border bg-card px-2 py-1.5">
+                        <a href={t.url} target="_blank" rel="noopener noreferrer" download
+                          className="inline-flex items-center gap-1.5 truncate text-xs text-teal hover:underline">
+                          <CheckCircle className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">{t.filename || "archivo"}</span>
+                        </a>
+                        <button type="button" onClick={() => eliminarTrazo(t.url)}
+                          title="Eliminar este archivo"
+                          className="shrink-0 text-graphite transition-colors hover:text-terracotta">
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="mt-1 text-[0.7rem] text-graphite">Hasta 10 archivos: Optitex (.mrk .plt .dxf …), PDF o imagen · máx 15MB c/u. El cortador los recibe en «Mis despachos».</p>
+                </>
+                ); })()}
               </div>
 
               {/* Autorizar */}
