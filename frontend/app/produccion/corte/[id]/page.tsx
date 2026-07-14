@@ -6,7 +6,7 @@
  * - Pistola de rollos: input que recibe el barcode + metros a usar → agrega al corte
  * - Botón cerrar → registra consumo real, descuenta inventario, marca 'cortada'
  */
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -131,6 +131,16 @@ export default function DetalleOrdenCortePage() {
   // La búsqueda ilike del backend hace un match parcial (%tela%) que cubre la mayoría
   // de casos. El fallback "Otros rollos" se dispara solo si el usuario lo pide.
   const telaRef = (q.data?.referencia?.tela || "").trim();
+
+  // Pre-llena lo derivable para que el cortador no tenga que digitarlo:
+  // referencia de lote (= consecutivo del corte) y fecha de entrega planeada.
+  useEffect(() => {
+    const d = q.data;
+    if (!d) return;
+    setRefLote((prev) => prev || d.consecutivo || "");
+    const fplan = (d.fecha_envio || d.fecha_limite || "").slice(0, 10);
+    if (fplan) setFechaEntrega((prev) => prev || fplan);
+  }, [q.data]);
   const rollosInvQ = useQuery<{ rollos: RolloInv[] }>({
     queryKey: ["produccion", "rollos", "disponibles-tela", telaRef],
     queryFn: () => {
@@ -205,10 +215,15 @@ export default function DetalleOrdenCortePage() {
   const esAdmin = user?.rol === "admin" || user?.rol === "operador";
   const esCortador = !esAdmin && !!_perms["produccion_cortador"] && !_perms["produccion_corte"];
 
-  const [verifResult, setVerifResult] = useState<{ asignado: boolean; mensaje: string; rollo?: { codigo_interno?: string; descripcion_tela?: string; tono?: string } } | null>(null);
+  const [verifResult, setVerifResult] = useState<{ asignado: boolean; mensaje: string; rollo?: { codigo_interno?: string; descripcion_tela?: string; tono?: string; barcode?: string } } | null>(null);
+  const [verificados, setVerificados] = useState<Set<string>>(new Set());
   const verificar = useMutation({
-    mutationFn: (bc: string) => api.post<{ asignado: boolean; mensaje: string; rollo?: { codigo_interno?: string; descripcion_tela?: string; tono?: string } }>(`/api/produccion/corte/${id}/verificar-rollo`, { barcode: bc }),
-    onSuccess: (r) => { setVerifResult(r); setBarcode(""); setErr(""); setTimeout(() => barcodeRef.current?.focus(), 50); },
+    mutationFn: (bc: string) => api.post<{ asignado: boolean; mensaje: string; rollo?: { codigo_interno?: string; descripcion_tela?: string; tono?: string; barcode?: string } }>(`/api/produccion/corte/${id}/verificar-rollo`, { barcode: bc }),
+    onSuccess: (r) => {
+      setVerifResult(r);
+      if (r.asignado && r.rollo?.barcode) setVerificados((prev) => new Set(prev).add(r.rollo!.barcode!));
+      setBarcode(""); setErr(""); setTimeout(() => barcodeRef.current?.focus(), 50);
+    },
     onError: (e: Error) => { setErr(e.message); setVerifResult(null); },
   });
 
@@ -839,6 +854,15 @@ export default function DetalleOrdenCortePage() {
                           <Trash2 className="h-4 w-4" />
                         </button>
                       )}
+                      {!cerrada && esCortador && (
+                        verificados.has(l.rollo?.barcode || "") ? (
+                          <span className="inline-flex items-center gap-1 text-[0.7rem] font-semibold text-teal">
+                            <CheckCircle className="h-3.5 w-3.5" /> Verificado
+                          </span>
+                        ) : (
+                          <span className="text-[0.7rem] text-graphite/60">Sin verificar</span>
+                        )
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -849,8 +873,13 @@ export default function DetalleOrdenCortePage() {
         </CardContent>
       </Card>
 
-      {/* INFORME DE CORTE */}
-      {!cerrada && (oc.rollos || []).length > 0 && (
+      {/* INFORME DE CORTE — solo el CORTADOR lo llena */}
+      {!cerrada && !esCortador && (oc.rollos || []).length > 0 && (
+        <Card><CardContent className="p-5 text-sm text-graphite">
+          El informe de corte lo diligencia el cortador. Cuando lo cierre, aquí verás el informe con las diferencias (teórico vs real).
+        </CardContent></Card>
+      )}
+      {!cerrada && esCortador && (oc.rollos || []).length > 0 && (
         <InformeCorteCard
           oc={oc}
           refLote={refLote} setRefLote={setRefLote}
@@ -1254,156 +1283,74 @@ function ComparativoBloque({ label, teorico, valueReal, onChangeReal, inputMode,
 function InformeCerradoCard({ oc }: { oc: OrdenCorte }) {
   const promTeo = Number(oc.promedio_tecnico || 0);
   const promReal = Number(oc.promedio_real || 0);
-  const promDelta = promReal > 0 && promTeo > 0 ? promReal - promTeo : null;
-
   const metrosTeo = Number(oc.metros_consumidos || 0);
   const metrosReal = Number(oc.consumo_real_cortador || 0);
-  const metrosDelta = metrosReal > 0 && metrosTeo > 0 ? metrosReal - metrosTeo : null;
-
   const capasTeo = Number(oc.num_capas || 0);
   const capasReal = Number(oc.capas_real || 0);
-  const capasDelta = capasReal > 0 && capasTeo > 0 ? capasReal - capasTeo : null;
-
   const curva = oc.curva_trazo || {};
   const unidades = oc.unidades_cortadas || {};
-  const tallas = Object.keys(curva);
-  const totalProgramado = Object.values(curva).reduce<number>((s, n) => s + (Number(n) || 0), 0);
-  const totalCortado = Object.values(unidades).reduce<number>((s, n) => s + (Number(n) || 0), 0);
+  const totalProgramado = Object.values(curva).reduce<number>((sum, n) => sum + (Number(n) || 0), 0);
+  const totalCortado = Object.values(unidades).reduce<number>((sum, n) => sum + (Number(n) || 0), 0);
+
+  const diffs = [
+    { label: "Unidades", teo: totalProgramado, real: totalCortado, fmt: (n: number) => String(Math.round(n)) },
+    { label: "Capas", teo: capasTeo, real: capasReal, fmt: (n: number) => String(Math.round(n)) },
+    { label: "Promedio m/prenda", teo: promTeo, real: promReal, fmt: (n: number) => n.toFixed(3) },
+    { label: "Consumo (m)", teo: metrosTeo, real: metrosReal, fmt: (n: number) => n.toFixed(2) },
+  ];
 
   return (
     <Card>
       <CardContent className="p-5 space-y-4">
         <div className="flex items-center justify-between">
-          <p className="section-label">Informe del cortador · cerrado</p>
+          <p className="section-label">Informe de corte · cerrado</p>
           <Badge tone="normal"><Lock className="inline h-2.5 w-2.5 mr-1" />Cortada</Badge>
         </div>
 
-        {/* Identificación */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <ReadKV label="Ref. interna"     value={oc.consecutivo} bold />
-          <ReadKV label="Referencia lote"  value={oc.referencia_lote || "—"} />
-          <ReadKV label="Fecha entrega"    value={fmtFecha(oc.fecha_entrega)} />
-          <ReadKV label="Precio del corte" value={oc.precio_corte != null ? `$${Number(oc.precio_corte).toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"} />
-        </div>
-
-        {/* Comparativos teórico vs real con Δ */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <CompRead label="Capas"              teorico={capasTeo}   real={capasReal}   delta={capasDelta}   fmt={(n) => String(n)} />
-          <CompRead label="Promedio (m/prenda)" teorico={promTeo}    real={promReal}    delta={promDelta}    fmt={(n) => n.toFixed(3)} />
-          <CompRead label="Metros"             teorico={metrosTeo}  real={metrosReal}  delta={metrosDelta}  fmt={(n) => `${n.toFixed(2)} m`} />
-        </div>
-
-        {/* Retazos + merma */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <ReadKV label="Cantidad de retazos" value={oc.retazos_cantidad != null ? String(oc.retazos_cantidad) : "—"} />
-          <ReadKV label="Merma tipo"          value={oc.merma_tipo || "—"} />
-          <ReadKV label="Merma valor"         value={oc.merma_valor != null ? String(oc.merma_valor) : "—"} />
-        </div>
-
-        {/* Unidades cortadas por talla */}
-        <div>
-          <p className="section-label mb-2">Unidades cortadas por talla</p>
-          {tallas.length === 0 ? (
-            <p className="text-xs text-graphite">Sin curva registrada.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-cloud/60 border-b border-border">
-                  <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
-                    <th className="px-3 py-2">Talla</th>
-                    {tallas.map((t) => (
-                      <th key={t} className="px-3 py-2 text-center">{t}</th>
-                    ))}
-                    <th className="px-3 py-2 text-right">Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="border-b border-border/40">
-                    <td className="px-3 py-1.5 text-graphite">Programado</td>
-                    {tallas.map((t) => (
-                      <td key={t} className="px-3 py-1.5 text-center tabular text-graphite">
-                        {curva[t] ?? 0}
-                      </td>
-                    ))}
-                    <td className="px-3 py-1.5 text-right tabular font-semibold">{totalProgramado}</td>
-                  </tr>
-                  <tr className="border-b border-border/40">
-                    <td className="px-3 py-1.5 text-ink-900 font-semibold">Cortado real</td>
-                    {tallas.map((t) => (
-                      <td key={t} className="px-3 py-1.5 text-center tabular font-semibold text-ink-900">
-                        {unidades[t] ?? 0}
-                      </td>
-                    ))}
-                    <td className="px-3 py-1.5 text-right tabular font-bold text-navy-600">{totalCortado}</td>
-                  </tr>
-                  <tr>
-                    <td className="px-3 py-1.5 text-graphite">Δ</td>
-                    {tallas.map((t) => {
-                      const d = (Number(unidades[t] || 0) - Number(curva[t] || 0));
-                      const cls = d > 0 ? "text-terracotta" : d < 0 ? "text-terracotta" : "text-graphite";
-                      return (
-                        <td key={t} className={`px-3 py-1.5 text-center tabular ${cls}`}>
-                          {d === 0 ? "0" : (d > 0 ? `+${d}` : `${d}`)}
-                        </td>
-                      );
-                    })}
-                    <td className={`px-3 py-1.5 text-right tabular font-semibold ${(totalCortado - totalProgramado) === 0 ? "text-graphite" : "text-terracotta"}`}>
-                      {(totalCortado - totalProgramado) > 0
-                        ? `+${totalCortado - totalProgramado}`
-                        : `${totalCortado - totalProgramado}`}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+        {/* Identificación en una línea */}
+        <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-graphite">
+          <span>Ref: <span className="font-semibold text-ink-900 tabular">{oc.consecutivo}</span></span>
+          <span>Lote: <span className="font-semibold text-ink-900">{oc.referencia_lote || "—"}</span></span>
+          <span>Entrega: <span className="font-semibold text-ink-900">{fmtFecha(oc.fecha_entrega)}</span></span>
+          <span>Cortador: <span className="font-semibold text-ink-900">{oc.responsable || "—"}</span></span>
+          {oc.precio_corte != null && (
+            <span>Precio: <span className="font-semibold text-ink-900">${Number(oc.precio_corte).toLocaleString("es-CO", { maximumFractionDigits: 0 })}</span></span>
           )}
         </div>
 
-        <div className="border-t border-border pt-3 text-[0.65rem] text-graphite grid grid-cols-1 md:grid-cols-3 gap-2">
-          <p>Autorizada por: <span className="text-ink-900 font-semibold">{oc.autorizada_por || "—"}</span></p>
-          <p>Cortador: <span className="text-ink-900 font-semibold">{oc.responsable || "—"}</span></p>
-          <p>Fecha envío: <span className="text-ink-900 font-semibold">{oc.fecha_envio || oc.fecha_limite || "—"}</span></p>
+        {/* Diferencias teórico → real → Δ (lo importante) */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          {diffs.map((d) => {
+            const delta = d.real > 0 && d.teo > 0 ? d.real - d.teo : null;
+            const tono = delta == null || delta === 0 ? "text-graphite" : (delta > 0 ? "text-terracotta" : "text-teal");
+            return (
+              <div key={d.label} className="rounded-sm border border-border bg-cloud/30 p-2.5">
+                <p className="text-[0.68rem] uppercase tracking-widest text-graphite">{d.label}</p>
+                <p className="mt-1 font-display text-lg tabular text-ink-900">{d.real > 0 ? d.fmt(d.real) : "—"}</p>
+                <p className="text-[0.7rem] text-graphite tabular">
+                  teórico {d.teo > 0 ? d.fmt(d.teo) : "—"}
+                  {delta != null && delta !== 0 && (
+                    <span className={`ml-1 font-semibold ${tono}`}>({delta > 0 ? "+" : ""}{d.fmt(delta)})</span>
+                  )}
+                </p>
+              </div>
+            );
+          })}
         </div>
+
+        {/* Merma / retazos en una línea */}
+        {(oc.merma_tipo || oc.merma_valor != null || oc.retazos_cantidad != null) && (
+          <p className="text-xs text-graphite">
+            Merma: <span className="text-ink-900">{oc.merma_tipo || "—"}{oc.merma_valor != null ? ` · ${oc.merma_valor}` : ""}</span>
+            <span className="mx-2 text-graphite/50">·</span>
+            Retazos: <span className="text-ink-900">{oc.retazos_cantidad != null ? oc.retazos_cantidad : "—"}</span>
+          </p>
+        )}
       </CardContent>
     </Card>
   );
 }
 
-function ReadKV({ label, value, bold = false }: { label: string; value: string; bold?: boolean }) {
-  return (
-    <div>
-      <p className="text-[0.7rem] uppercase tracking-widest text-graphite">{label}</p>
-      <p className={`mt-1 text-sm tabular ${bold ? "font-semibold text-navy-600" : "text-ink-900"}`}>{value}</p>
-    </div>
-  );
-}
-
-function CompRead({ label, teorico, real, delta, fmt }: {
-  label: string; teorico: number; real: number; delta: number | null; fmt: (n: number) => string;
-}) {
-  const tono = delta == null ? "text-graphite" : (delta > 0 ? "text-terracotta" : delta < 0 ? "text-teal" : "text-graphite");
-  return (
-    <div className="rounded-sm border border-border bg-cloud/30 p-3">
-      <p className="text-[0.7rem] uppercase tracking-widest text-graphite mb-2">{label}</p>
-      <div className="grid grid-cols-3 gap-2">
-        <div>
-          <p className="text-[0.68rem] text-graphite">Teórico</p>
-          <div className="tabular text-sm text-graphite">{teorico > 0 ? fmt(teorico) : "—"}</div>
-        </div>
-        <div>
-          <p className="text-[0.68rem] text-graphite">Real</p>
-          <div className="tabular text-sm text-ink-900 font-semibold">{real > 0 ? fmt(real) : "—"}</div>
-        </div>
-        <div>
-          <p className="text-[0.68rem] text-graphite">Δ</p>
-          <div className={`tabular text-sm font-semibold ${tono}`}>
-            {delta == null ? "—" : (delta > 0 ? `+${fmt(delta)}` : fmt(delta))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 interface RutaCorte {
   id: string;
