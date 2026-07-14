@@ -138,7 +138,7 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
           )}
           {q.data?.cantidad_base != null && (
             <p className="text-[0.7rem] text-graphite tabular">
-              Base: {q.data.cantidad_base} prendas{q.data?.margen_pct ? ` · incluye +${q.data.margen_pct}% margen` : ""}
+              Base: {q.data.cantidad_base} prendas{q.data?.margen_pct ? ` · botones, remaches, lavado y pretineras +${q.data.margen_pct}%` : ""}
             </p>
           )}
         </div>

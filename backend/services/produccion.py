@@ -2086,10 +2086,16 @@ def _notificar_remision_whatsapp(rem: dict) -> list[dict]:
 # Qué categorías del precosteo se consideran "insumos que van con el corte"
 CATEGORIAS_INSUMOS_CORTE = ("INSUMO CONFECCION", "INSUMO TERMINACION")
 
-# Margen de error al SEPARAR insumos (botones, remaches, etiquetas de lavado,
-# pretineras, etc.): se separa 1% más para cubrir defectos/pérdidas. Se redondea
-# hacia arriba porque son unidades discretas.
+# Margen de error del 1% al SEPARAR insumos, SOLO para estos (los demás van
+# exactos). Se redondea hacia arriba porque son unidades discretas.
 MARGEN_SEPARACION_INSUMOS = 0.01
+_INSUMOS_CON_MARGEN = ("boton", "remache", "lavado", "pretin")  # botones, remaches, instrucción de lavado, pretineras
+
+
+def _insumo_lleva_margen(nombre: str) -> bool:
+    import unicodedata
+    n = unicodedata.normalize("NFD", (nombre or "").lower()).encode("ascii", "ignore").decode()
+    return any(k in n for k in _INSUMOS_CON_MARGEN)
 
 
 def calcular_insumos_requeridos_corte(
@@ -2160,8 +2166,14 @@ def calcular_insumos_requeridos_corte(
         if base_por_prenda <= 0:
             continue
         total_teorico = round(base_por_prenda * cantidad_base, 3)
-        # +1% de margen de error, redondeado hacia arriba (unidades discretas)
-        total_req = math.ceil(total_teorico * (1 + MARGEN_SEPARACION_INSUMOS))
+        # +1% de margen SOLO para botones, remaches, instrucción de lavado y
+        # pretineras (redondeado hacia arriba). El resto va exacto.
+        if _insumo_lleva_margen(it.get("item") or ""):
+            total_req = math.ceil(total_teorico * (1 + MARGEN_SEPARACION_INSUMOS))
+            margen = round(MARGEN_SEPARACION_INSUMOS * 100, 2)
+        else:
+            total_req = total_teorico
+            margen = 0
         vu = float(it.get("valor_unitario") or 0)
         costo = round(vu * total_req, 2)
         total_costo += costo
@@ -2171,7 +2183,7 @@ def calcular_insumos_requeridos_corte(
             "cantidad_por_prenda": base_por_prenda,
             "total_teorico":       total_teorico,
             "total_requerido":     total_req,
-            "margen_pct":          round(MARGEN_SEPARACION_INSUMOS * 100, 2),
+            "margen_pct":          margen,
             "valor_unitario":      vu,
             "costo_total":         costo,
         })
