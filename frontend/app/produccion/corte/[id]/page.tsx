@@ -378,6 +378,17 @@ export default function DetalleOrdenCortePage() {
   // ── Autorizar + correo ─────────────────────────
   const [destinatariosEdit, setDestinatariosEdit] = useState("");
   const [mensajeExtra, setMensajeExtra] = useState("");
+  const usuariosCorreoQ = useQuery<{ usuarios: { nombre: string; email: string; es_cortador: boolean }[] }>({
+    queryKey: ["produccion", "usuarios-correo"],
+    queryFn: () => api.get("/api/produccion/usuarios-correo"),
+    enabled: !esCortador,
+    staleTime: 5 * 60_000,
+  });
+  const agregarDestinatario = (email: string) => {
+    if (!email) return;
+    const actuales = destinatariosEdit.split(",").map((s) => s.trim()).filter(Boolean);
+    if (!actuales.includes(email)) setDestinatariosEdit([...actuales, email].join(", "));
+  };
 
   const autorizar = useMutation({
     mutationFn: () => {
@@ -555,6 +566,17 @@ export default function DetalleOrdenCortePage() {
                   </div>
                 ) : (
                   <>
+                    {usuariosCorreoQ.data && usuariosCorreoQ.data.usuarios.length > 0 && (
+                      <select value="" onChange={(e) => { agregarDestinatario(e.target.value); e.target.value = ""; }}
+                        className="mb-2 w-full rounded-sm border border-border bg-white px-3 py-2 text-xs">
+                        <option value="">+ Agregar destinatario del equipo…</option>
+                        {usuariosCorreoQ.data.usuarios.map((u) => (
+                          <option key={u.email} value={u.email}>
+                            {u.nombre}{u.es_cortador ? " · CORTADOR" : ""} — {u.email}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                     <input value={destinatariosEdit}
                       onChange={(e) => setDestinatariosEdit(e.target.value)}
                       placeholder={(oc.destinatarios_correo || []).join(", ") || "correos@destinatarios.com"}

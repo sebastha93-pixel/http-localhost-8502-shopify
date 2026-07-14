@@ -730,6 +730,25 @@ def listar_cortes(
     return {"ordenes": ordenes}
 
 
+@router.get("/usuarios-correo")
+def usuarios_correo(
+    _: CurrentUser = Depends(require_permission("produccion_corte", "ver")),
+) -> dict:
+    """Lista liviana de usuarios (nombre + email + es_cortador) para elegir
+    destinatarios del correo de la orden de corte. Solo diseñador/manager."""
+    from backend.services import usuarios as usr
+    out = []
+    for u in usr.listar():
+        email = (u.get("email") or "").strip()
+        if not email or not u.get("activo"):
+            continue
+        perms = u.get("permisos") or {}
+        es_cortador = bool(perms.get("produccion_cortador")) and not perms.get("produccion_corte")
+        out.append({"nombre": u.get("nombre") or email, "email": email, "es_cortador": es_cortador})
+    out.sort(key=lambda x: (not x["es_cortador"], (x["nombre"] or "").upper()))
+    return {"usuarios": out}
+
+
 @router.get("/corte/{oc_id}")
 def detalle_corte(
     oc_id: str,
