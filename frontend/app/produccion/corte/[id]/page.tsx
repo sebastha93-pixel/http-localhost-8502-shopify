@@ -817,10 +817,13 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar, onAsignar, asignando }
   const [metrosFila, setMetrosFila] = useState<Record<string, string>>({});
   const yaAsignado = (rolloId: string) => (oc.rollos || []).some((l) => l.rollo_id === rolloId);
   const asignarFila = (r: RolloInv) => {
-    const m = parseFloat(metrosFila[r.id] || "0");
+    // Por defecto se asigna el ROLLO COMPLETO; el campo viene pre-llenado con
+    // el disponible y es editable por si quieren asignar una parte.
+    const raw = metrosFila[r.id];
+    const m = (raw === undefined || raw === "") ? Number(r.metros_disponible) : parseFloat(raw);
     if (!m || m <= 0) return;
     onAsignar(r, m);
-    setMetrosFila((prev) => ({ ...prev, [r.id]: "" }));
+    setMetrosFila((prev) => { const n = { ...prev }; delete n[r.id]; return n; });
   };
 
   const renderFila = (r: RolloInv, esOtro = false) => (
@@ -841,9 +844,10 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar, onAsignar, asignando }
             <input
               type="number" inputMode="decimal" step="0.01" min="0"
               max={Number(r.metros_disponible)}
-              value={metrosFila[r.id] || ""}
+              value={metrosFila[r.id] !== undefined ? metrosFila[r.id] : String(r.metros_disponible)}
               onChange={(e) => setMetrosFila((prev) => ({ ...prev, [r.id]: e.target.value }))}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); asignarFila(r); } }}
+              title="Rollo completo por defecto — puedes editar a una parte"
               placeholder="metros"
               className="w-20 rounded-sm border border-border bg-card px-2 py-1 text-right text-[0.7rem] tabular" />
             <button type="button" onClick={() => asignarFila(r)} disabled={asignando}

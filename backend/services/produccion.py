@@ -1597,6 +1597,16 @@ def eliminar_trazo_corte(oc_id: str, url: str) -> list[dict]:
     return quedan
 
 
+def _trazos_texto(oc: dict) -> str:
+    """Lista de trazos para el cuerpo del correo (multi-archivo, con fallback al url único)."""
+    lista = oc.get("trazos_archivos") or []
+    if not lista and oc.get("trazos_url"):
+        lista = [{"url": oc.get("trazos_url"), "filename": oc.get("trazos_filename")}]
+    if not lista:
+        return "  (sin archivos)"
+    return "\n".join(f"  · {t.get('filename') or 'archivo'}: {t.get('url')}" for t in lista)
+
+
 # ── Autorizar orden de corte y enviar correo ──────────────────────────
 def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = None,
                            mensaje_extra: Optional[str] = None,
@@ -1647,7 +1657,7 @@ def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = No
         f"Cortador responsable: {oc.get('responsable') or '—'}\n"
         f"Fecha envío: {oc.get('fecha_envio') or oc.get('fecha_limite') or '—'}\n"
         f"\nCurva de tallas:\n{filas_curva or '  (sin curva)'}\n"
-        f"\nTrazos: {oc.get('trazos_url') or '—'}\n"
+        f"\nTrazos / moldes:\n{_trazos_texto(oc)}\n"
     )
     if mensaje_extra:
         body += f"\n{mensaje_extra}\n"
