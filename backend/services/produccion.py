@@ -6,6 +6,8 @@ Toda persistencia va contra Supabase.
 """
 from __future__ import annotations
 
+import math
+
 import logging
 import os
 import time
@@ -2084,6 +2086,11 @@ def _notificar_remision_whatsapp(rem: dict) -> list[dict]:
 # Qué categorías del precosteo se consideran "insumos que van con el corte"
 CATEGORIAS_INSUMOS_CORTE = ("INSUMO CONFECCION", "INSUMO TERMINACION")
 
+# Margen de error al SEPARAR insumos (botones, remaches, etiquetas de lavado,
+# pretineras, etc.): se separa 1% más para cubrir defectos/pérdidas. Se redondea
+# hacia arriba porque son unidades discretas.
+MARGEN_SEPARACION_INSUMOS = 0.01
+
 
 def calcular_insumos_requeridos_corte(
     oc_id: str,
@@ -2152,7 +2159,9 @@ def calcular_insumos_requeridos_corte(
         base_por_prenda = float(it.get("cantidad") or 0)
         if base_por_prenda <= 0:
             continue
-        total_req = round(base_por_prenda * cantidad_base, 3)
+        total_teorico = round(base_por_prenda * cantidad_base, 3)
+        # +1% de margen de error, redondeado hacia arriba (unidades discretas)
+        total_req = math.ceil(total_teorico * (1 + MARGEN_SEPARACION_INSUMOS))
         vu = float(it.get("valor_unitario") or 0)
         costo = round(vu * total_req, 2)
         total_costo += costo
@@ -2160,7 +2169,9 @@ def calcular_insumos_requeridos_corte(
             "categoria":           cat,
             "item":                it.get("item"),
             "cantidad_por_prenda": base_por_prenda,
+            "total_teorico":       total_teorico,
             "total_requerido":     total_req,
+            "margen_pct":          round(MARGEN_SEPARACION_INSUMOS * 100, 2),
             "valor_unitario":      vu,
             "costo_total":         costo,
         })
@@ -2171,6 +2182,7 @@ def calcular_insumos_requeridos_corte(
         "nombre":          ref.get("nombre"),
         "cantidad_base":   cantidad_base,
         "origen_cantidad": origen,
+        "margen_pct":      round(MARGEN_SEPARACION_INSUMOS * 100, 2),
         "items":           items,
         "total_costo":     round(total_costo, 2),
     }

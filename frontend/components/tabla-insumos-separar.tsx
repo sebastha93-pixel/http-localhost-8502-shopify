@@ -24,10 +24,12 @@ const RESPONSABLES = ["BAY", "HENRY HURTADO"];
 interface Item {
   item: string;
   total_requerido: number;
+  total_teorico?: number;
 }
 interface Respuesta {
   items: Item[];
   cantidad_base?: number;
+  margen_pct?: number;
 }
 
 export interface SeparacionEstado {
@@ -136,7 +138,7 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
           )}
           {q.data?.cantidad_base != null && (
             <p className="text-[0.7rem] text-graphite tabular">
-              Base: {q.data.cantidad_base} prendas
+              Base: {q.data.cantidad_base} prendas{q.data?.margen_pct ? ` · incluye +${q.data.margen_pct}% margen` : ""}
             </p>
           )}
         </div>
