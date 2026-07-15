@@ -17,6 +17,7 @@ Estrategia de caché (simple y robusta):
 import hashlib
 import json
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -381,6 +382,27 @@ def _sb_ok() -> bool:
     return _sb() is not None
 
 
+def _parse_iso_naive(value) -> datetime:
+    """Parsea un timestamp ISO tolerando CUALQUIER precisión de fracción de
+    segundo y la zona horaria. Devuelve datetime naive (a nivel de segundo),
+    suficiente para el TTL.
+
+    Necesario porque Postgres (columna timestamptz) recorta los ceros finales
+    de la fracción — p.ej. escribimos '...19.142540' y al leer vuelve
+    '...19.14254+00:00' (5 dígitos). datetime.fromisoformat en Python < 3.11
+    solo acepta 3 o 6 dígitos, así que reventaba y la caché se descartaba
+    entera (logística salía vacía). Extraemos solo hasta el segundo con regex,
+    que funciona en todas las versiones."""
+    s = str(value or "")
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})", s)
+    if m:
+        y, mo, d, h, mi, sec = (int(x) for x in m.groups())
+        return datetime(y, mo, d, h, mi, sec)
+    # Último recurso: intento directo sin zona (puede lanzar, y el caller ya
+    # atrapa la excepción).
+    return datetime.fromisoformat(s.replace("Z", "").split("+")[0].split(".")[0])
+
+
 def _sb_cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:
     """Lee caché desde Supabase. Retorna (pedidos, fetched_at, fresco, fuente) o None."""
     try:
@@ -402,9 +424,9 @@ def _sb_cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:
             log.info(f"Supabase cache: config_hash cambió ({stored_hash} → {_config_hash()}) — invalidando")
             return None
 
-        # fetched_at viene como string ISO desde Supabase
-        fa_raw     = row["fetched_at"]
-        fetched_at = datetime.fromisoformat(fa_raw.replace("Z","+00:00").replace("+00:00",""))
+        # fetched_at viene como string ISO desde Supabase (Postgres puede
+        # recortar la fracción de segundo → parser tolerante).
+        fetched_at = _parse_iso_naive(row["fetched_at"])
         age        = (datetime.now() - fetched_at).total_seconds()
         fresco     = age <= _CACHE_TTL
         if not fresco and not ignorar_ttl:
@@ -487,7 +509,7 @@ def _sq_cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:
         if stored_hash != _config_hash():
             log.info("SQLite cache: config_hash cambió — invalidando")
             return None
-        fetched_at = datetime.fromisoformat(row["fetched_at"])
+        fetched_at = _parse_iso_naive(row["fetched_at"])
         age    = (datetime.now() - fetched_at).total_seconds()
         fresco = age <= _CACHE_TTL
         if not fresco and not ignorar_ttl:
@@ -706,8 +728,7 @@ def cache_info() -> Optional[dict]:
                 envelope   = json.loads(row["pedidos_json"])
                 fuente     = envelope.get("fuente","api_live") if isinstance(envelope, dict) else "api_live"
                 cfg_hash   = envelope.get("config_hash","") if isinstance(envelope, dict) else ""
-                fa_raw     = row["fetched_at"]
-                fetched_at = datetime.fromisoformat(fa_raw.replace("Z","+00:00").replace("+00:00",""))
+                fetched_at = _parse_iso_naive(row["fetched_at"])
                 age        = (datetime.now() - fetched_at).total_seconds()
                 hash_ok    = cfg_hash == _config_hash()
                 return {
@@ -732,7 +753,7 @@ def cache_info() -> Optional[dict]:
             ).fetchone()
         if not row:
             return None
-        fetched_at = datetime.fromisoformat(row["fetched_at"])
+        fetched_at = _parse_iso_naive(row["fetched_at"])
         age        = (datetime.now() - fetched_at).total_seconds()
         fuente     = row["fuente"] or "api_live"
         hash_ok    = (row["config_hash"] or "") == _config_hash()
