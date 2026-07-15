@@ -1014,8 +1014,18 @@ def listar_remisiones(
 @router.post("/remisiones")
 def crear_remision(
     body: RemisionIn,
-    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "modificar")),
 ) -> dict:
+    # El cortador puro solo genera la remisión CONFECCIONISTA de SUS cortes
+    # (después de guardar y confirmar el informe). No puede tocar terminación
+    # ni cortes de otros.
+    if _es_solo_cortador(user):
+        if body.tipo != "confeccion":
+            raise HTTPException(403, "El cortador solo genera remisiones de confección.")
+        for oc_id in body.orden_corte_ids:
+            oc_check = svc.obtener_orden_corte(oc_id)
+            if not oc_check or not _corte_es_del_cortador(oc_check, user):
+                raise HTTPException(403, "Solo puedes generar remisiones de los cortes asignados a ti.")
     try:
         rem = svc.crear_remision(
             confeccionista_id=body.confeccionista_id,
@@ -1046,7 +1056,7 @@ def crear_remision(
 @router.get("/remisiones/{rem_id}")
 def detalle_remision(
     rem_id: str,
-    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ) -> dict:
     rem = svc.obtener_remision(rem_id)
     if not rem:
@@ -1535,7 +1545,7 @@ def enviar_digest_manual(
 @router.get("/remisiones/{rem_id}/pdf")
 def remision_pdf(
     rem_id: str,
-    _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ):
     """PDF imprimible de la remisión: cabecera, órdenes, insumos a separar
     (solo cantidades, sin valores) y firmas. QR con el consecutivo."""

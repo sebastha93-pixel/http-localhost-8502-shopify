@@ -9,6 +9,7 @@ import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, API_BASE } from "@/lib/api";
 import { getToken } from "@/lib/auth";
+import { useAuth } from "@/components/auth-provider";
 import { fmtFecha } from "@/lib/utils";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
@@ -44,6 +45,14 @@ export default function RemisionDetallePage() {
   const params = useParams();
   const id = params?.id as string;
   const qc = useQueryClient();
+
+  // Cortador puro: solo imprime la remisión y la marca recogida. La ficha del
+  // confeccionista (precio, insumos a separar, envío de link) es del encargado
+  // de remisiones, así que se la ocultamos.
+  const { user } = useAuth();
+  const _perms = (user?.permisos || {}) as Record<string, unknown>;
+  const esAdmin = user?.rol === "admin" || user?.rol === "operador";
+  const esCortador = !esAdmin && !!_perms["produccion_cortador"] && !_perms["produccion_corte"];
 
   const q = useQuery<Remision>({
     queryKey: ["produccion", "remision", id],
@@ -216,7 +225,16 @@ export default function RemisionDetallePage() {
         </div>
       )}
 
-      {/* Envío por WhatsApp por cada lote */}
+      {esCortador && !yaRecogida && (
+        <div role="status" className="rounded-sm border border-navy-600/30 bg-navy-600/[0.04] px-3 py-2 text-xs text-ink-900">
+          Imprime la remisión (sale con las unidades cortadas por talla y la medida del retazo),
+          entrégala al confeccionista y aquí márcala como <strong>recogida</strong>.
+        </div>
+      )}
+
+      {/* Envío por WhatsApp por cada lote — es tarea del encargado de remisiones,
+          no del cortador (precio del precosteo, insumos a separar, link al proveedor). */}
+      {!esCortador && (
       <Card>
         <CardContent className="p-5 space-y-3">
           <p className="section-label">
@@ -239,6 +257,7 @@ export default function RemisionDetallePage() {
           </div>
         </CardContent>
       </Card>
+      )}
     </PageShell>
   );
 }

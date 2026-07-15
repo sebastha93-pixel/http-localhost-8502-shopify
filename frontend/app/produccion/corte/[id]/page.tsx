@@ -12,7 +12,6 @@ import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, API_BASE } from "@/lib/api";
 import { fmtFecha, hoyBogotaISO } from "@/lib/utils";
-import { ESPIGAS, PAREJA_TALLA, labelEspiga, capasDeEspiga, SOBRANTE_ESPIGA_M } from "@/lib/espigas";
 import { TimelineNotas } from "@/components/timeline-notas";
 import { getToken, puedeAccionModulo } from "@/lib/auth";
 import { useAuth } from "@/components/auth-provider";
@@ -109,8 +108,6 @@ export default function DetalleOrdenCortePage() {
   const [err, setErr] = useState("");
 
   const [consumoReal, setConsumoReal] = useState("");
-  // Metros EXTENDIDOS por espiga (largo del trazo tendido, por capa)
-  const [espigasMetros, setEspigasMetros] = useState<Record<string, string>>({});
   const [mermaTipo, setMermaTipo] = useState("");
   const [mermaValor, setMermaValor] = useState("");
   // Informe del cortador
@@ -290,35 +287,23 @@ export default function DetalleOrdenCortePage() {
         const n = parseInt(v || "0", 10);
         if (n > 0) unidadesFinal[t] = n;
       }
-      // CONSUMO REAL AUTOMÁTICO por espigas:
-      //   Σ (metros extendidos espiga + 2cm sobrante) × capas de la espiga
-      //   + retazos (en METROS). Capas de espiga = max unidades de su pareja.
+      // CONSUMO Y PROMEDIO REALES: los calcula el cortador manualmente
+      //   (contando capas/espigas en piso) y los digita en el informe.
+      //   El promedio, si no lo escribe, se deriva de metros ÷ unidades.
       const totalUnid = Object.values(unidadesFinal).reduce((s, n) => s + n, 0);
-      const espigasNum: Record<string, number> = {};
-      let consumoEspigas = 0;
-      let capasTotal = 0;
-      for (const esp of ESPIGAS) {
-        const key = esp.join("-");
-        const largo = parseFloat(espigasMetros[key] || "0") || 0;
-        const capas = capasDeEspiga(esp, unidadesFinal);
-        if (largo > 0) espigasNum[key] = largo;
-        if (largo > 0 && capas > 0) consumoEspigas += (largo + SOBRANTE_ESPIGA_M) * capas;
-        capasTotal += capas;
-      }
       const retazosM = parseFloat(retazos || "0") || 0;
-      const consumoAuto = consumoEspigas > 0 ? consumoEspigas + retazosM : 0;
-      // Manual (si lo digitan) gana; si no, el auto por espigas
-      const consumoFinal = parseFloat(consumoReal || "0") || consumoAuto;
-      const promedioAuto = totalUnid > 0 && consumoFinal > 0 ? consumoFinal / totalUnid : 0;
+      const consumoFinal = parseFloat(consumoReal || "0") || 0;
+      const promedioManual = parseFloat(promedioReal || "0") || 0;
+      const promedioDerivado = totalUnid > 0 && consumoFinal > 0 ? consumoFinal / totalUnid : 0;
+      const promedioFinal = promedioManual || promedioDerivado;
       return api.post(`/api/produccion/corte/${id}/cerrar`, {
         consumo_real_cortador: consumoFinal,
         merma_tipo: mermaTipo || null,
         merma_valor: mermaValor ? parseFloat(mermaValor) : null,
         referencia_lote: refLote || null,
-        capas_real: capasReal ? parseInt(capasReal, 10) : (capasTotal || null),
-        promedio_real: promedioReal ? parseFloat(promedioReal) : (promedioAuto ? Number(promedioAuto.toFixed(4)) : null),
+        capas_real: capasReal ? parseInt(capasReal, 10) : null,
+        promedio_real: promedioFinal ? Number(promedioFinal.toFixed(4)) : null,
         unidades_cortadas: unidadesFinal,
-        espigas_metros: Object.keys(espigasNum).length ? espigasNum : null,
         retazos_metros: retazosM || null,
         fecha_entrega: fechaEntrega || null,
         precio_corte: precioCorte ? parseFloat(precioCorte) : null,
@@ -912,7 +897,6 @@ export default function DetalleOrdenCortePage() {
           retazos={retazos} setRetazos={setRetazos}
           fechaEntrega={fechaEntrega} setFechaEntrega={setFechaEntrega}
           precioCorte={precioCorte} setPrecioCorte={setPrecioCorte}
-          espigasMetros={espigasMetros} setEspigasMetros={setEspigasMetros}
           unidadesReal={unidadesReal} setUnidadesReal={setUnidadesReal}
           consumoReal={consumoReal} setConsumoReal={setConsumoReal}
           mermaTipo={mermaTipo} setMermaTipo={setMermaTipo}
@@ -924,7 +908,9 @@ export default function DetalleOrdenCortePage() {
 
       {/* Comparación al cerrar */}
       {cerrada && <InformeCerradoCard oc={oc} />}
-      {cerrada && !esCortador && <GenerarRemisionCard ordenCorteId={oc.id} />}
+      {/* Tras confirmar el informe, el cortador (o el encargado de remisiones)
+          genera la remisión de confección, la imprime y la marca recogida. */}
+      {cerrada && <GenerarRemisionCard ordenCorteId={oc.id} esCortador={esCortador} />}
       {cerrada && !esCortador && <HojaRutaCard ordenCorteId={oc.id} consecutivo={oc.consecutivo} />}
     </PageShell>
   );
@@ -1058,7 +1044,6 @@ interface OrdenCorteForInforme {
 function InformeCorteCard({
   oc, refLote, setRefLote, capasReal, setCapasReal, promedioReal, setPromedioReal,
   retazos, setRetazos, fechaEntrega, setFechaEntrega, precioCorte, setPrecioCorte,
-  espigasMetros, setEspigasMetros,
   unidadesReal, setUnidadesReal, consumoReal, setConsumoReal,
   mermaTipo, setMermaTipo, mermaValor, setMermaValor,
   onCerrar, isPending,
@@ -1072,7 +1057,6 @@ function InformeCorteCard({
   precioCorte: string; setPrecioCorte: (v: string) => void;
   unidadesReal: Record<string, string>; setUnidadesReal: (v: Record<string, string>) => void;
   consumoReal: string; setConsumoReal: (v: string) => void;
-  espigasMetros: Record<string, string>; setEspigasMetros: (v: Record<string, string>) => void;
   mermaTipo: string; setMermaTipo: (v: string) => void;
   mermaValor: string; setMermaValor: (v: string) => void;
   onCerrar: () => void;
@@ -1084,26 +1068,12 @@ function InformeCorteCard({
   const totalUnidades = Object.values(unidadesReal)
     .reduce((s, v) => s + (parseInt(v || "0", 10) || 0), 0);
 
-  // CONSUMO AUTO POR ESPIGAS:
-  //   Σ (metros extendidos + 2cm sobrante) × capas de la espiga + retazos (m)
-  //   Capas de espiga = max unidades cortadas de su pareja de tallas.
-  const unidadesNum: Record<string, number> = {};
-  for (const [t, v] of Object.entries(unidadesReal)) unidadesNum[t] = parseInt(v || "0", 10) || 0;
-  let consumoEspigas = 0;
-  let capasAuto = 0;
-  for (const esp of ESPIGAS) {
-    const largo = parseFloat(espigasMetros[esp.join("-")] || "0") || 0;
-    const capas = capasDeEspiga(esp, unidadesNum);
-    if (largo > 0 && capas > 0) consumoEspigas += (largo + SOBRANTE_ESPIGA_M) * capas;
-    capasAuto += capas;
-  }
-  const retazosM = parseFloat(retazos || "0") || 0;
-  const consumoAuto = consumoEspigas > 0 ? consumoEspigas + retazosM : 0;
-  const consumoAutoStr = consumoAuto > 0 ? consumoAuto.toFixed(2) : "";
-  const consumoBind = consumoReal || consumoAutoStr;
-  const promedioAuto = totalUnidades > 0 && (parseFloat(consumoBind || "0") || 0) > 0
-    ? (parseFloat(consumoBind) / totalUnidades) : 0;
-  const promedioRealN = parseFloat(promedioReal || "0") || promedioAuto;
+  // El cortador calcula el consumo, las capas y el promedio manualmente
+  // (contando en piso) y los digita aquí para cruzarlos contra el teórico.
+  // El promedio, si no lo escribe, se deriva de metros ÷ unidades.
+  const metrosRealN = parseFloat(consumoReal || "0") || 0;
+  const promedioDerivado = totalUnidades > 0 && metrosRealN > 0 ? metrosRealN / totalUnidades : 0;
+  const promedioRealN = parseFloat(promedioReal || "0") || promedioDerivado;
 
   // Deltas contra el teórico
   const promTeo = Number(oc.promedio_tecnico || 0);
@@ -1111,7 +1081,6 @@ function InformeCorteCard({
   const capasTeo = Number(oc.num_capas || 0);
 
   const promDelta = promedioRealN > 0 && promTeo > 0 ? promedioRealN - promTeo : null;
-  const metrosRealN = parseFloat(consumoBind || "0") || 0;
   const metrosDelta = metrosRealN > 0 && metrosTeo > 0 ? metrosRealN - metrosTeo : null;
   const capasRealN = parseInt(capasReal || "0", 10) || 0;
   const capasDelta = capasRealN > 0 && capasTeo > 0 ? capasRealN - capasTeo : null;
@@ -1140,36 +1109,15 @@ function InformeCorteCard({
           <FieldText label="Precio del corte"      value={precioCorte}   onChange={setPrecioCorte} inputMode="decimal" placeholder="Auto del precosteo" />
         </div>
 
-        {/* Metros extendidos por espiga — el consumo real sale de aquí */}
-        <div>
-          <p className="section-label mb-2">Metros extendidos por espiga</p>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            {ESPIGAS.map((esp) => {
-              const key = esp.join("-");
-              const capas = capasDeEspiga(esp, unidadesNum);
-              return (
-                <div key={key}>
-                  <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite text-center">
-                    Espiga {labelEspiga(esp)}
-                    <div className="text-[0.68rem] text-graphite/70 normal-case tracking-normal">
-                      {capas > 0 ? `× ${capas} capas` : "llena unidades abajo"}
-                    </div>
-                  </label>
-                  <input value={espigasMetros[key] || ""}
-                    onChange={(e) => setEspigasMetros({ ...espigasMetros, [key]: e.target.value })}
-                    inputMode="decimal" placeholder="m extendidos"
-                    className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-sm text-center tabular" />
-                </div>
-              );
-            })}
-          </div>
-          <p className="mt-1 text-[0.7rem] text-graphite">
-            Consumo = Σ (metros + 2cm sobrante) × capas de cada espiga + retazos.
-            {consumoAuto > 0 && (
-              <span className="ml-1 font-semibold text-ink-900 tabular">
-                Auto: {consumoAuto.toFixed(2)} m · promedio {promedioAuto > 0 ? promedioAuto.toFixed(3) : "—"} m/prenda
-              </span>
-            )}
+        {/* Promedios reales: cálculo manual del cortador */}
+        <div className="rounded-sm border border-dashed border-border bg-cloud/20 p-3">
+          <p className="text-[0.7rem] leading-relaxed text-graphite">
+            <span className="font-semibold text-ink-900">Promedio real:</span> el cortador lo saca manualmente
+            (metros realmente consumidos ÷ unidades cortadas, contando capas y espigas en piso) y digita
+            <span className="font-semibold text-ink-900"> Capas</span>,
+            <span className="font-semibold text-ink-900"> Promedio</span> y
+            <span className="font-semibold text-ink-900"> Metros</span> abajo para cruzarlos contra el teórico.
+            Si deja el promedio vacío, se calcula solo con metros ÷ unidades.
           </p>
         </div>
 
@@ -1178,32 +1126,30 @@ function InformeCorteCard({
           <ComparativoBloque
             label="Capas"
             teorico={capasTeo}
-            valueReal={capasReal || (capasAuto > 0 ? String(capasAuto) : "")}
+            valueReal={capasReal}
             onChangeReal={setCapasReal}
             inputMode="numeric"
             delta={capasDelta}
             fmt={(n) => n.toString()}
-            hint={!capasReal && capasAuto > 0 ? "Auto desde unidades" : ""}
           />
           <ComparativoBloque
             label="Promedio (m/prenda)"
             teorico={promTeo}
-            valueReal={promedioReal || (promedioAuto > 0 ? promedioAuto.toFixed(3) : "")}
+            valueReal={promedioReal || (promedioDerivado > 0 ? promedioDerivado.toFixed(3) : "")}
             onChangeReal={setPromedioReal}
             inputMode="decimal"
             delta={promDelta}
             fmt={(n) => n.toFixed(3)}
-            hint={!promedioReal && promedioAuto > 0 ? "Auto desde espigas" : ""}
+            hint={!promedioReal && promedioDerivado > 0 ? "Derivado de metros ÷ unidades" : ""}
           />
           <ComparativoBloque
             label="Metros"
             teorico={metrosTeo}
-            valueReal={consumoBind}
+            valueReal={consumoReal}
             onChangeReal={setConsumoReal}
             inputMode="decimal"
             delta={metrosDelta}
             fmt={(n) => n.toFixed(2)}
-            hint={consumoAuto > 0 && !consumoReal ? "Auto desde espigas + retazos" : ""}
           />
         </div>
 
@@ -1240,7 +1186,7 @@ function InformeCorteCard({
         </div>
 
         <div className="flex justify-end">
-          <button onClick={onCerrar} disabled={isPending || !consumoBind}
+          <button onClick={onCerrar} disabled={isPending || !consumoReal}
             className="inline-flex items-center gap-2 rounded-sm bg-teal px-6 py-2.5 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-ink-900 disabled:opacity-40">
             {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
             Guardar informe y cerrar
@@ -1668,7 +1614,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
  * Los insumos salen de las UNIDADES REALES cortadas por talla (el cálculo del
  * backend usa unidades_cortadas cuando la orden ya está cerrada).
  * Solo aparece si el lote aún no tiene hoja de ruta (= no tiene remisión). */
-function GenerarRemisionCard({ ordenCorteId }: { ordenCorteId: string }) {
+function GenerarRemisionCard({ ordenCorteId, esCortador }: { ordenCorteId: string; esCortador?: boolean }) {
   const router = useRouter();
   const { user } = useAuth();
   const [confId, setConfId] = useState("");
@@ -1698,9 +1644,10 @@ function GenerarRemisionCard({ ordenCorteId }: { ordenCorteId: string }) {
     onError: (e: Error) => setErrRem(e.message),
   });
 
-  // Solo el encargado de insumos/remisiones genera — el cortador NO.
-  // Al cortador cerrar el informe, el lote queda "listo" en la cola de Remisiones.
-  if (!puedeAccionModulo(user, "produccion_remisiones", "modificar")) return null;
+  // La genera el cortador (tras confirmar el informe) o el encargado de remisiones.
+  const puedeGenerar = puedeAccionModulo(user, "produccion_remisiones", "modificar")
+    || puedeAccionModulo(user, "produccion_cortador", "modificar");
+  if (!puedeGenerar) return null;
   // Si ya hay ruta (remisión creada), no mostrar nada
   if (rutaQ.isLoading || rutaQ.data) return null;
 
@@ -1711,9 +1658,13 @@ function GenerarRemisionCard({ ordenCorteId }: { ordenCorteId: string }) {
       <CardContent className="p-5 space-y-3">
         <p className="section-label">Generar remisión de confección</p>
         <p className="text-xs text-graphite">
-          El cortador guardó el informe — este lote está <strong>listo para remisión</strong>.
-          Cuenta los insumos de confección y genera la remisión con las
-          <strong> unidades reales cortadas por talla</strong>.
+          {esCortador
+            ? <>Confirmaste el informe — ahora <strong>genera la remisión</strong>, imprímela
+               (sale con las <strong>unidades cortadas por talla</strong> y la
+               <strong> medida del retazo</strong>) y márcala como <strong>recogida</strong> al entregarla.</>
+            : <>El cortador guardó el informe — este lote está <strong>listo para remisión</strong>.
+               Cuenta los insumos de confección y genera la remisión con las
+               <strong> unidades reales cortadas por talla</strong>.</>}
         </p>
         <div className="flex flex-wrap items-end gap-2">
           <div>
