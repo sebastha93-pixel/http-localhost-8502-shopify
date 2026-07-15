@@ -3018,6 +3018,50 @@ def listar_insumos() -> list[dict]:
               .order("categoria").order("nombre").execute()).data or []
 
 
+def actualizar_insumo(insumo_id: str, *, nombre: Optional[str] = None,
+                      categoria: Optional[str] = None, unidad: Optional[str] = None,
+                      cantidad_disponible: Optional[float] = None,
+                      usuario: str = "") -> dict:
+    """Edita un insumo ya registrado. Nombre/categoría/unidad se cambian directo.
+    Si se ajusta el stock, se registra un movimiento 'ajuste' para auditoría."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    r = (sb.table("insumos").select("*").eq("id", insumo_id).limit(1).execute()).data
+    if not r:
+        raise ValueError("insumo_no_encontrado")
+    insumo = r[0]
+    update: dict = {}
+    if nombre and nombre.strip():
+        update["nombre"] = _norm_insumo(nombre)
+    if categoria and categoria.strip():
+        update["categoria"] = categoria.upper().strip()
+    if unidad and unidad.strip():
+        update["unidad"] = unidad.strip()
+    if cantidad_disponible is not None:
+        nueva = round(float(cantidad_disponible), 3)
+        actual = round(float(insumo.get("cantidad_disponible") or 0), 3)
+        delta = round(nueva - actual, 3)
+        if delta != 0:
+            update["cantidad_disponible"] = nueva
+            try:
+                sb.table("insumos_movimientos").insert({
+                    "insumo_id": insumo_id, "tipo": "ajuste", "cantidad": delta,
+                    "nota": f"Ajuste manual: {actual} → {nueva} ({usuario})"[:500],
+                    "usuario": usuario,
+                }).execute()
+            except Exception as e:
+                log.warning(f"[insumos] movimiento de ajuste no registrado: {e}")
+    if not update:
+        raise ValueError("sin_campos")
+    update["updated_at"] = _now_iso()
+    try:
+        sb.table("insumos").update(update).eq("id", insumo_id).execute()
+    except Exception as e:
+        raise ValueError(f"no_actualizado: {str(e)[:140]}")
+    return (sb.table("insumos").select("*").eq("id", insumo_id).limit(1).execute()).data[0]
+
+
 def movimientos_insumos(limit: int = 100) -> list[dict]:
     sb = _sb()
     if sb is None:

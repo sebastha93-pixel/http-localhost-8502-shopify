@@ -13,7 +13,7 @@ import { getToken } from "@/lib/auth";
 import { fmtDateTime } from "@/lib/utils";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { Plus, Loader2, AlertCircle, Save, Trash2, PackagePlus, QrCode, Pencil } from "lucide-react";
+import { Plus, Loader2, AlertCircle, Save, Trash2, PackagePlus, QrCode, Pencil, Check, X } from "lucide-react";
 
 interface Insumo {
   id: string;
@@ -99,6 +99,24 @@ export default function InsumosPage() {
 
   const { user } = useAuth();
   const esAdmin = user?.rol === "admin";
+
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<{ nombre: string; categoria: string; unidad: string; cantidad: string }>({ nombre: "", categoria: "", unidad: "", cantidad: "" });
+  function abrirEdicion(i: Insumo) {
+    setEditForm({ nombre: i.nombre, categoria: i.categoria, unidad: i.unidad || "", cantidad: String(i.cantidad_disponible) });
+    setEditId(i.id);
+    setErr("");
+  }
+  const editar = useMutation({
+    mutationFn: (id: string) => api.patch(`/api/produccion/insumos/${id}`, {
+      nombre: editForm.nombre.trim(),
+      categoria: editForm.categoria,
+      unidad: editForm.unidad.trim() || "und",
+      cantidad_disponible: editForm.cantidad === "" ? undefined : parseFloat(editForm.cantidad),
+    }),
+    onSuccess: () => { setEditId(null); setErr(""); qc.invalidateQueries({ queryKey: ["produccion", "insumos"] }); },
+    onError: (e: Error) => setErr(`No se pudo editar: ${e.message}`),
+  });
 
   const corregirMov = useMutation({
     mutationFn: ({ id, cantidad }: { id: string; cantidad: number }) =>
@@ -279,6 +297,7 @@ export default function InsumosPage() {
                   <th className="px-4 py-2">Categoría</th>
                   <th className="px-4 py-2 text-right">Disponible</th>
                   <th className="px-4 py-2">Unidad</th>
+                  <th className="px-4 py-2 text-right"></th>
                 </tr>
               </thead>
               <tbody>
@@ -289,12 +308,54 @@ export default function InsumosPage() {
                         aria-label={`Seleccionar ${i.nombre}`} className="h-4 w-4 cursor-pointer" />
                     </td>
                     <td className="px-4 py-2 tabular text-navy-600 font-semibold">{i.codigo || "—"}</td>
-                    <td className="px-4 py-2 font-semibold text-ink-900">{i.nombre}</td>
-                    <td className="px-4 py-2 text-graphite">{CAT_LABEL[i.categoria] || i.categoria}</td>
-                    <td className={`px-4 py-2 text-right tabular font-bold ${i.cantidad_disponible < 0 ? "text-terracotta" : i.cantidad_disponible === 0 ? "text-graphite" : "text-ink-900"}`}>
-                      {i.cantidad_disponible.toLocaleString("es-CO")}
-                    </td>
-                    <td className="px-4 py-2 text-graphite">{i.unidad}</td>
+                    {editId === i.id ? (
+                      <>
+                        <td className="px-4 py-2">
+                          <input value={editForm.nombre} onChange={(e) => setEditForm((f) => ({ ...f, nombre: e.target.value }))}
+                            className="w-full rounded-sm border border-navy-600/50 bg-card px-2 py-1 text-xs" />
+                        </td>
+                        <td className="px-4 py-2">
+                          <select value={editForm.categoria} onChange={(e) => setEditForm((f) => ({ ...f, categoria: e.target.value }))}
+                            className="rounded-sm border border-border bg-card px-2 py-1 text-xs">
+                            {CATEGORIAS.map((c) => <option key={c} value={c}>{CAT_LABEL[c] || c}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-4 py-2 text-right">
+                          <input type="number" step="0.001" value={editForm.cantidad} onChange={(e) => setEditForm((f) => ({ ...f, cantidad: e.target.value }))}
+                            className="w-24 rounded-sm border border-border bg-card px-2 py-1 text-right text-xs tabular" />
+                        </td>
+                        <td className="px-4 py-2">
+                          <input value={editForm.unidad} onChange={(e) => setEditForm((f) => ({ ...f, unidad: e.target.value }))}
+                            className="w-16 rounded-sm border border-border bg-card px-2 py-1 text-xs" />
+                        </td>
+                        <td className="px-4 py-2 text-right">
+                          <span className="inline-flex items-center gap-2">
+                            <button onClick={() => editar.mutate(i.id)} disabled={editar.isPending} title="Guardar"
+                              className="text-teal hover:text-teal/70 disabled:opacity-40">
+                              {editar.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                            </button>
+                            <button onClick={() => setEditId(null)} title="Cancelar" className="text-graphite hover:text-terracotta">
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </span>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="px-4 py-2 font-semibold text-ink-900">{i.nombre}</td>
+                        <td className="px-4 py-2 text-graphite">{CAT_LABEL[i.categoria] || i.categoria}</td>
+                        <td className={`px-4 py-2 text-right tabular font-bold ${i.cantidad_disponible < 0 ? "text-terracotta" : i.cantidad_disponible === 0 ? "text-graphite" : "text-ink-900"}`}>
+                          {i.cantidad_disponible.toLocaleString("es-CO")}
+                        </td>
+                        <td className="px-4 py-2 text-graphite">{i.unidad}</td>
+                        <td className="px-4 py-2 text-right">
+                          <button onClick={() => abrirEdicion(i)} title="Editar insumo"
+                            className="text-graphite transition-colors hover:text-navy-600">
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                        </td>
+                      </>
+                    )}
                   </tr>
                 ))}
               </tbody>

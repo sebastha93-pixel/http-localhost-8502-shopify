@@ -1826,6 +1826,28 @@ def insumo_por_codigo(
     return ins
 
 
+@router.patch("/insumos/{insumo_id}")
+def editar_insumo(
+    insumo_id: str,
+    body: dict,
+    user: CurrentUser = Depends(require_permission("produccion_ingreso", "modificar")),
+) -> dict:
+    """Edita un insumo ya registrado (nombre, categoría, unidad y/o stock)."""
+    try:
+        return svc.actualizar_insumo(
+            insumo_id,
+            nombre=body.get("nombre"),
+            categoria=body.get("categoria"),
+            unidad=body.get("unidad"),
+            cantidad_disponible=body.get("cantidad_disponible"),
+            usuario=user.nombre or user.email,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"editar_insumo: {str(e)[:200]}")
+
+
 @router.get("/insumos/movimientos")
 def movimientos_insumos(
     limit: int = Query(100, ge=1, le=500),
