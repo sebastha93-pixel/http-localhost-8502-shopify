@@ -1750,42 +1750,54 @@ def listar_insumos(
 
 
 def _dibujar_etiqueta_insumo(c, W, H, ins: dict) -> None:
-    """Etiqueta 10×10 del insumo — QR con su código INS-YYYY-NNNN."""
-    from reportlab.lib.pagesizes import mm
+    """Etiqueta del insumo (QR + código + nombre). Escala PROPORCIONAL a W×H
+    para que funcione en cualquier medida de adhesivo (chico o grande)."""
     from reportlab.graphics.barcode.qr import QrCodeWidget
     from reportlab.graphics.shapes import Drawing
     from reportlab.graphics import renderPDF
 
     codigo = ins.get("codigo") or ""
-    c.setFont("Helvetica-Bold", 14)
-    c.drawCentredString(W / 2, H - 9 * mm, codigo or "SIN CÓDIGO")
+    menor = min(W, H)
+    pad = menor * 0.06
+    compacto = menor < 40 * 2.834  # < ~40 mm de lado → modo compacto
 
-    qr_size = 42 * mm
+    # Código arriba
+    fs_code = max(5.0, menor * 0.10)
+    c.setFont("Helvetica-Bold", fs_code)
+    c.drawCentredString(W / 2, H - pad - fs_code, codigo or "SIN CÓDIGO")
+
+    # QR centrado — ocupa el ancho disponible o ~50% del alto, lo que sea menor
+    qr_size = min(W - 2 * pad, H * 0.52)
     qr = QrCodeWidget(codigo or ins.get("id") or "")
     b = qr.getBounds()
     escala = qr_size / max(b[2] - b[0], b[3] - b[1])
     d = Drawing(qr_size, qr_size,
                 transform=[escala, 0, 0, escala, -b[0] * escala, -b[1] * escala])
     d.add(qr)
-    renderPDF.draw(d, c, (W - qr_size) / 2, H - 12 * mm - qr_size)
+    qr_y = H - pad - fs_code * 1.5 - qr_size
+    renderPDF.draw(d, c, (W - qr_size) / 2, qr_y)
 
-    c.setFont("Helvetica", 8)
-    c.drawCentredString(W / 2, H - 14 * mm - qr_size, codigo)
+    # Nombre abajo del QR (truncado al ancho)
+    fs_name = max(4.5, menor * 0.065)
+    c.setFont("Helvetica-Bold", fs_name)
+    max_chars = max(6, int((W - 2 * pad) / (fs_name * 0.58)))
+    nombre = (ins.get("nombre") or "—").upper()[:max_chars]
+    y = qr_y - fs_name * 1.4
+    c.drawCentredString(W / 2, y, nombre)
 
-    c.setFont("Helvetica-Bold", 11)
-    y = H - 22 * mm - qr_size
-    nombre = (ins.get("nombre") or "—").upper()
-    c.drawCentredString(W / 2, y, nombre[:32])
-    y -= 6 * mm
-    c.setFont("Helvetica", 9)
-    c.drawCentredString(W / 2, y, f"Categoría: {ins.get('categoria') or '—'}   ·   Unidad: {ins.get('unidad') or 'und'}")
-
-    c.setFont("Helvetica-Oblique", 7)
-    c.drawCentredString(W / 2, 5 * mm, "MALE'DENIM · Insumo")
+    # Categoría/unidad + pie solo si hay espacio (etiquetas no compactas)
+    if not compacto:
+        c.setFont("Helvetica", fs_name * 0.82)
+        c.drawCentredString(W / 2, y - fs_name * 1.5,
+                            f"{ins.get('categoria') or '—'} · {ins.get('unidad') or 'und'}")
+        c.setFont("Helvetica-Oblique", max(5.0, menor * 0.05))
+        c.drawCentredString(W / 2, pad, "MALE'DENIM · Insumo")
 
 
 class EtiquetasInsumosBody(BaseModel):
     insumo_ids: list[str] = Field(min_length=1, max_length=200)
+    ancho_mm: float = Field(100, ge=20, le=210)   # tamaño del adhesivo (default 10x10cm)
+    alto_mm: float = Field(100, ge=20, le=297)
 
 
 @router.post("/insumos/etiquetas")
@@ -1804,7 +1816,7 @@ def etiquetas_insumos(
     if not seleccion:
         raise HTTPException(404, "insumos_no_encontrados")
     buf = BytesIO()
-    W, H = 100 * mm, 100 * mm
+    W, H = body.ancho_mm * mm, body.alto_mm * mm
     c = _canvas.Canvas(buf, pagesize=(W, H))
     for ins in seleccion:
         _dibujar_etiqueta_insumo(c, W, H, ins)

@@ -68,6 +68,15 @@ export default function InsumosPage() {
     });
   }
 
+  const TAMANOS_ETIQUETA: Record<string, { label: string; ancho_mm: number; alto_mm: number }> = {
+    "100x100": { label: "10 × 10 cm", ancho_mm: 100, alto_mm: 100 },
+    "50x50":   { label: "5 × 5 cm",   ancho_mm: 50,  alto_mm: 50 },
+    "50x25":   { label: "5 × 2.5 cm (adhesivo)", ancho_mm: 50, alto_mm: 25 },
+    "38x25":   { label: "3.8 × 2.5 cm (adhesivo)", ancho_mm: 38, alto_mm: 25 },
+    "25x25":   { label: "2.5 × 2.5 cm (adhesivo)", ancho_mm: 25, alto_mm: 25 },
+  };
+  const [tamEtiqueta, setTamEtiqueta] = useState<string>("50x25");
+
   async function imprimirEtiquetas(ids: string[]) {
     if (ids.length === 0) return;
     setImprimiendo(true);
@@ -76,7 +85,11 @@ export default function InsumosPage() {
       const r = await fetch(`${API_BASE}/api/produccion/insumos/etiquetas`, {
         method: "POST",
         headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ insumo_ids: ids }),
+        body: JSON.stringify({
+          insumo_ids: ids,
+          ancho_mm: TAMANOS_ETIQUETA[tamEtiqueta]?.ancho_mm ?? 100,
+          alto_mm: TAMANOS_ETIQUETA[tamEtiqueta]?.alto_mm ?? 100,
+        }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const blob = await r.blob();
@@ -194,6 +207,10 @@ export default function InsumosPage() {
           <div className="flex items-center gap-2">
             <button onClick={() => setSeleccion(new Set())}
               className="text-[0.65rem] uppercase tracking-widest text-graphite hover:text-ink-900">Limpiar</button>
+            <select value={tamEtiqueta} onChange={(e) => setTamEtiqueta(e.target.value)}
+              title="Tamaño del adhesivo" className="rounded-sm border border-border bg-card px-2 py-1.5 text-xs">
+              {Object.entries(TAMANOS_ETIQUETA).map(([k, t]) => <option key={k} value={k}>{t.label}</option>)}
+            </select>
             <button onClick={() => imprimirEtiquetas(Array.from(seleccion))} disabled={imprimiendo}
               className="inline-flex items-center gap-1.5 rounded-sm bg-navy-600 px-3 py-1.5 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
               {imprimiendo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <QrCode className="h-3.5 w-3.5" />}
