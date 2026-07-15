@@ -214,10 +214,10 @@ export default function DetalleOrdenCortePage() {
   const esAdmin = user?.rol === "admin" || user?.rol === "operador";
   const esCortador = !esAdmin && !!_perms["produccion_cortador"] && !_perms["produccion_corte"];
 
-  const [verifResult, setVerifResult] = useState<{ asignado: boolean; mensaje: string; rollo?: { codigo_interno?: string; descripcion_tela?: string; tono?: string; barcode?: string } } | null>(null);
+  const [verifResult, setVerifResult] = useState<{ asignado: boolean; mensaje: string; rollo?: { codigo_interno?: string; descripcion_tela?: string; tono?: string; barcode?: string; numero_rollo?: string } } | null>(null);
   const [verificados, setVerificados] = useState<Set<string>>(new Set());
   const verificar = useMutation({
-    mutationFn: (bc: string) => api.post<{ asignado: boolean; mensaje: string; rollo?: { codigo_interno?: string; descripcion_tela?: string; tono?: string; barcode?: string } }>(`/api/produccion/corte/${id}/verificar-rollo`, { barcode: bc }),
+    mutationFn: (bc: string) => api.post<{ asignado: boolean; mensaje: string; rollo?: { codigo_interno?: string; descripcion_tela?: string; tono?: string; barcode?: string; numero_rollo?: string } }>(`/api/produccion/corte/${id}/verificar-rollo`, { barcode: bc }),
     onSuccess: (r) => {
       setVerifResult(r);
       if (r.asignado && r.rollo?.barcode) setVerificados((prev) => new Set(prev).add(r.rollo!.barcode!));
@@ -746,13 +746,14 @@ export default function DetalleOrdenCortePage() {
             </div>
             <p className="text-xs text-graphite">
               Escanea cada rollo antes de cortar para confirmar que es una tela asignada a este corte.
+              Sirve el código interno (ROLLO-…) o el N° de rollo original del proveedor.
             </p>
             <form
               onSubmit={(e) => { e.preventDefault(); setErr(""); if (barcode.trim()) verificar.mutate(barcode.trim()); }}
               className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-end"
             >
               <div>
-                <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite">Barcode del rollo</label>
+                <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite">Código interno o N° de rollo</label>
                 <input ref={barcodeRef} value={barcode} onChange={(e) => setBarcode(e.target.value)}
                   autoFocus placeholder="Escanea aquí…"
                   className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm tabular" />
@@ -770,7 +771,11 @@ export default function DetalleOrdenCortePage() {
                   {verifResult.mensaje}
                 </div>
                 {verifResult.rollo?.codigo_interno && (
-                  <p className="mt-1 text-xs">{verifResult.rollo.codigo_interno} · {verifResult.rollo.descripcion_tela}{verifResult.rollo.tono ? ` · ${verifResult.rollo.tono}` : ""}</p>
+                  <p className="mt-1 text-xs">
+                    {verifResult.rollo.codigo_interno}
+                    {verifResult.rollo.numero_rollo ? ` · N° ${verifResult.rollo.numero_rollo}` : ""}
+                    {" · "}{verifResult.rollo.descripcion_tela}{verifResult.rollo.tono ? ` · ${verifResult.rollo.tono}` : ""}
+                  </p>
                 )}
               </div>
             )}
@@ -787,7 +792,7 @@ export default function DetalleOrdenCortePage() {
               <p className="section-label">Pistolear rollo</p>
             </div>
             <p className="text-xs text-graphite">
-              Escanea el código de barras del rollo con la pistola, o toca "Usar" en la tabla de arriba. Después escribe cuántos metros vas a usar.
+              Escanea el rollo con la pistola (código interno ROLLO-… o el N° original del proveedor), o toca "Usar" en la tabla de arriba. Después escribe cuántos metros vas a usar.
             </p>
             <form
               onSubmit={(e) => { e.preventDefault(); setErr(""); pistolar.mutate(); }}

@@ -475,6 +475,41 @@ def obtener_rollo_por_barcode(barcode: str) -> Optional[dict]:
     return r[0] if r else None
 
 
+def buscar_rollo_por_codigo(codigo: str, *, unico: bool = False) -> Optional[dict]:
+    """Busca un rollo por CUALQUIER identificador físico que traiga la etiqueta.
+
+    El barcode/codigo_interno son de MALE'DENIM (Code128 impreso); pero los
+    rollos físicos suelen llegar rotulados con el número/serial/lote ORIGINAL
+    del proveedor. Por eso el cortador (o el diseñador) al pistolear puede leer
+    cualquiera de ellos, y aquí los resolvemos todos.
+
+    Prioriza los campos únicos (barcode, codigo_interno). Para los del proveedor
+    (numero_rollo, serial, lote_fabrica), que pueden repetirse entre rollos, si
+    hay más de un match y `unico=True` lanza 'codigo_ambiguo' en vez de adivinar.
+    """
+    sb = _sb()
+    if sb is None:
+        return None
+    c = (codigo or "").strip()
+    if not c:
+        return None
+    # 1) Campos únicos: match exacto directo.
+    for campo in ("barcode", "codigo_interno"):
+        r = (sb.table("rollos_tela").select("*").eq(campo, c).limit(1).execute()).data
+        if r:
+            return r[0]
+    # 2) Campos del proveedor (pueden repetirse entre rollos).
+    for campo in ("numero_rollo", "serial", "lote_fabrica"):
+        r = (sb.table("rollos_tela").select("*").eq(campo, c).limit(2).execute()).data or []
+        if len(r) == 1:
+            return r[0]
+        if len(r) > 1:
+            if unico:
+                raise ValueError("codigo_ambiguo")
+            return r[0]
+    return None
+
+
 def inventario_resumen() -> list[dict]:
     """Agrupa por descripcion_tela + tono con conteo rollos y metros.
 
@@ -1164,7 +1199,7 @@ def obtener_orden_corte(oc_id: str) -> Optional[dict]:
     if not r:
         return None
     rollos = (sb.table("orden_corte_rollos")
-                .select("*,rollo:rollo_id(codigo_interno,barcode,descripcion_tela,tono,metros_disponible,metros_inicial,costo_metro,numero_rollo)")
+                .select("*,rollo:rollo_id(codigo_interno,barcode,descripcion_tela,tono,metros_disponible,metros_inicial,costo_metro,numero_rollo,serial,lote_fabrica)")
                 .eq("orden_corte_id", oc_id).execute()).data or []
     # Precio de corte sugerido desde el precosteo firmado (para pre-llenar el
     # informe; el cortador puede ajustarlo). Mismo origen que el auto al cerrar.
@@ -1176,30 +1211,63 @@ def obtener_orden_corte(oc_id: str) -> Optional[dict]:
     return {**r[0], "rollos": rollos, "precio_corte_sugerido": precio_sug}
 
 
+def _rollo_ids_scan(rr: dict) -> set:
+    """Identificadores por los que un rollo puede ser pistoleado (normalizados).
+    Debe cubrir los MISMOS campos que buscar_rollo_por_codigo, o un rollo
+    asignado escaneado por su serial/lote saldría como 'no asignado'."""
+    vals = {(rr.get("barcode") or "").strip().upper(),
+            (rr.get("codigo_interno") or "").strip().upper(),
+            (rr.get("numero_rollo") or "").strip().upper(),
+            (rr.get("serial") or "").strip().upper(),
+            (rr.get("lote_fabrica") or "").strip().upper()}
+    vals.discard("")
+    return vals
+
+
+def _rollo_scan_out(rr: dict) -> dict:
+    return {
+        "codigo_interno": rr.get("codigo_interno"),
+        "barcode": rr.get("barcode"),
+        "numero_rollo": rr.get("numero_rollo"),
+        "descripcion_tela": rr.get("descripcion_tela"),
+        "tono": rr.get("tono"),
+    }
+
+
 def verificar_rollo_corte(oc_id: str, barcode: str) -> dict:
     """Verificación del CORTADOR: ¿el rollo escaneado está asignado a este corte?
+
+    Acepta el código interno (Code128 de MALE'DENIM) O el número de rollo
+    original del proveedor (lo que trae físicamente la etiqueta del rollo).
     NO modifica nada — solo confirma que está cortando la tela correcta."""
     oc = obtener_orden_corte(oc_id)
     if not oc:
         raise ValueError("orden_no_encontrada")
-    rollo = obtener_rollo_por_barcode((barcode or "").strip())
+    code_raw = (barcode or "").strip()
+    code = code_raw.upper()
+    if not code:
+        return {"asignado": False, "rollo": None,
+                "mensaje": "Escanea o escribe un código de rollo."}
+
+    # 1) ¿Coincide con algún rollo ASIGNADO a este corte? (código interno o
+    #    número del proveedor). Es lo que el cortador necesita confirmar.
+    #    Comparación case-insensitive (ambos lados en mayúsculas).
+    for link in (oc.get("rollos") or []):
+        rr = link.get("rollo") or {}
+        if code in _rollo_ids_scan(rr):
+            return {"asignado": True, "rollo": _rollo_scan_out(rr),
+                    "mensaje": "Correcto: esta tela está asignada a este corte."}
+
+    # 2) No está entre los asignados. ¿Existe en inventario? (para distinguir
+    #    "tela de otro corte" de "código no existe"). Usamos el código tal cual
+    #    (el .eq es case-sensitive). La ambigüedad aquí es inofensiva — no
+    #    mutamos nada, solo cambia el mensaje.
+    rollo = buscar_rollo_por_codigo(code_raw)
     if not rollo:
         return {"asignado": False, "rollo": None,
                 "mensaje": "Rollo no encontrado en el inventario."}
-    asignados_ids = {l.get("rollo_id") for l in (oc.get("rollos") or [])}
-    ok = rollo["id"] in asignados_ids
-    return {
-        "asignado": ok,
-        "rollo": {
-            "codigo_interno": rollo.get("codigo_interno"),
-            "barcode": rollo.get("barcode"),
-            "descripcion_tela": rollo.get("descripcion_tela"),
-            "tono": rollo.get("tono"),
-        },
-        "mensaje": ("Correcto: esta tela está asignada a este corte."
-                    if ok else
-                    "Esta tela NO está asignada a este corte. No la cortes."),
-    }
+    return {"asignado": False, "rollo": _rollo_scan_out(rollo),
+            "mensaje": "Esta tela NO está asignada a este corte. No la cortes."}
 
 
 def asignar_rollo_a_corte(*, oc_id: str, barcode: str,
@@ -1216,7 +1284,10 @@ def asignar_rollo_a_corte(*, oc_id: str, barcode: str,
     if oc.get("estado") == "cortada":
         raise ValueError("orden_ya_cortada")
 
-    rollo = obtener_rollo_por_barcode(barcode.strip())
+    # Acepta el código interno O el número original del proveedor. `unico=True`
+    # evita reservar el rollo equivocado cuando dos rollos comparten número de
+    # proveedor (ahí exige el código interno para desambiguar).
+    rollo = buscar_rollo_por_codigo(barcode.strip(), unico=True)
     if not rollo:
         raise ValueError("rollo_no_encontrado")
     if rollo.get("estado") == "agotado":

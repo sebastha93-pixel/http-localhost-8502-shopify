@@ -776,7 +776,11 @@ def pistolear_rollo(
         )
         return {"ok": True, "orden_corte": oc}
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        msg = {
+            "codigo_ambiguo": "Ese número de rollo lo tienen varios rollos. Escanea el código interno (ROLLO-…) para identificar el correcto.",
+            "rollo_no_encontrado": "Rollo no encontrado. Verifica el código interno o el número del rollo.",
+        }.get(str(e), str(e))
+        raise HTTPException(400, msg)
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(500, f"pistolear: {str(e)[:200]}")
