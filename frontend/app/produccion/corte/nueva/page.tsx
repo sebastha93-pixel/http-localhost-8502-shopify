@@ -1,11 +1,10 @@
 "use client";
 
 /**
- * Nueva orden de corte.
- * 1. Escoge un precosteo FIRMADO como referencia.
- * 2. Define tono, largo trazo, prendas x trazo, capas.
- * 3. Curva de tallas 4-6-8-10-12-14-16 (editable).
- * Al guardar → borrador. La pistola de rollos se hace en el detalle.
+ * Nueva orden de corte — UN tendido, VARIAS referencias.
+ * El tendido comparte tela, rollos, largo de trazo y capas.
+ * Cada referencia lleva su propio precosteo y su curva de tallas.
+ * Al guardar → borrador. La pistola de rollos (compartidos) se hace en el detalle.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -14,7 +13,7 @@ import { api } from "@/lib/api";
 import { PAREJA_TALLA } from "@/lib/espigas";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { Save, Loader2, AlertCircle, Search, ChevronDown } from "lucide-react";
+import { Save, Loader2, AlertCircle, Search, ChevronDown, Plus, X } from "lucide-react";
 
 interface Precosteo {
   id: string;
@@ -28,121 +27,98 @@ interface Precosteo {
 }
 
 const TALLAS_DEFAULT: string[] = ["4", "6", "8", "10", "12", "14", "16"];
+const nuevaCurva = (): Record<string, string> =>
+  Object.fromEntries(TALLAS_DEFAULT.map((t) => [t, ""]));
+
+interface RefState { key: number; referenciaId: string; curva: Record<string, string> }
+
+// Capas por la regla MALE'DENIM: pares (6,12)(8,10)(14,16) aportan max; el resto su cantidad.
+function capasDeCurva(curva: Record<string, number>): number {
+  const PARES: [string, string][] = [["6", "12"], ["8", "10"], ["14", "16"]];
+  let total = 0; const usadas = new Set<string>();
+  for (const [a, b] of PARES) {
+    if (curva[a] !== undefined || curva[b] !== undefined) {
+      total += Math.max(curva[a] || 0, curva[b] || 0); usadas.add(a); usadas.add(b);
+    }
+  }
+  for (const [t, v] of Object.entries(curva)) if (!usadas.has(t)) total += v || 0;
+  return total;
+}
 
 export default function NuevaOrdenCortePage() {
   const router = useRouter();
 
-  // Precosteos disponibles para corte:
-  //   - autorizados (bloqueada=true), o
-  //   - borradores marcados como muestra de diseño.
   const q = useQuery<{ precosteos?: Precosteo[] } | Precosteo[]>({
     queryKey: ["produccion", "precosteos", "disponibles-corte"],
     queryFn: () => api.get("/api/produccion/precosteo?disponibles_para_corte=true"),
   });
   const precosteos = useMemo<Precosteo[]>(() => {
     if (!q.data) return [];
-    const arr = Array.isArray(q.data)
-      ? q.data
-      : ((q.data as { precosteos?: Precosteo[] }).precosteos || []);
+    const arr = Array.isArray(q.data) ? q.data : ((q.data as { precosteos?: Precosteo[] }).precosteos || []);
     return arr.filter((p) => p.bloqueada || p.es_muestra_diseno);
   }, [q.data]);
 
-  const [referenciaId, setReferenciaId] = useState("");
-  const [promedioTecnico, setPromedioTecnico] = useState("");
+  // Tendido (compartido)
   const [largoTrazo, setLargoTrazo] = useState("");
-  const [cantidadProgramada, setCantidadProgramada] = useState("");
+  const [numCapas, setNumCapas] = useState("");
+  const [promedioTecnico, setPromedioTecnico] = useState("");
   const [responsable, setResponsable] = useState("");
   const [fechaEnvio, setFechaEnvio] = useState("");
   const [indicaciones, setIndicaciones] = useState("");
   const [destinatarios, setDestinatarios] = useState("");
-  const [curva, setCurva] = useState<Record<string, string>>(
-    Object.fromEntries(TALLAS_DEFAULT.map((t) => [t, ""]))
-  );
-  const [tallaExtra, setTallaExtra] = useState("");
   const [err, setErr] = useState("");
 
-  // Precosteo seleccionado (para mostrar la tela automáticamente en la cabecera)
-  const precosteoSel = useMemo<Precosteo | undefined>(
-    () => precosteos.find((p) => p.id === referenciaId),
-    [precosteos, referenciaId],
-  );
+  // Referencias
+  const [refs, setRefs] = useState<RefState[]>([{ key: 1, referenciaId: "", curva: nuevaCurva() }]);
+  const nextKey = useRef(2);
 
-  // Combobox precosteo — buscador con lupa
-  const [refBuscar, setRefBuscar] = useState("");
-  const [refOpen, setRefOpen] = useState(false);
-  const refBoxRef = useRef<HTMLDivElement>(null);
-
-  const precosteosFiltrados = useMemo(() => {
-    const q = refBuscar.trim().toUpperCase();
-    if (!q) return precosteos;
-    return precosteos.filter((p) => {
-      const hay = `${p.codigo_referencia} ${p.nombre} ${p.tela || ""}`.toUpperCase();
-      return hay.includes(q);
-    });
-  }, [precosteos, refBuscar]);
-
-  useEffect(() => {
-    function handleClickAfuera(e: MouseEvent) {
-      if (refBoxRef.current && !refBoxRef.current.contains(e.target as Node)) {
-        setRefOpen(false);
-      }
-    }
-    if (refOpen) {
-      document.addEventListener("mousedown", handleClickAfuera);
-      return () => document.removeEventListener("mousedown", handleClickAfuera);
-    }
-  }, [refOpen]);
-
-  function precosteoLabel(p: Precosteo): string {
-    const tag = !p.bloqueada && p.es_muestra_diseno ? " · MUESTRA" : "";
-    return `${p.codigo_referencia} · ${p.nombre}${p.tela ? ` (${p.tela})` : ""}${tag}`;
+  function addRef() { setRefs((r) => [...r, { key: nextKey.current++, referenciaId: "", curva: nuevaCurva() }]); }
+  function removeRef(key: number) { setRefs((r) => (r.length > 1 ? r.filter((x) => x.key !== key) : r)); }
+  function setRefPrecosteo(key: number, id: string) {
+    setRefs((r) => r.map((x) => (x.key === key ? { ...x, referenciaId: id } : x)));
+  }
+  function setRefCurva(key: number, talla: string, val: string) {
+    setRefs((r) => r.map((x) => {
+      if (x.key !== key) return x;
+      const curva = { ...x.curva, [talla]: val };
+      const pareja = PAREJA_TALLA[talla];
+      if (pareja && pareja in curva) curva[pareja] = val;   // la pareja se corta junta
+      return { ...x, curva };
+    }));
   }
 
-  // Auto-calcula # capas desde la curva con la regla MALE'DENIM:
-  //   Pares fijos: (6,12), (8,10), (14,16) — cada par aporta max(par).
-  //   Talla 4 sola (y cualquier talla no mapeada) → aporta su cantidad.
-  const capasAutoCalc = useMemo(() => {
-    const PARES: [string, string][] = [["6", "12"], ["8", "10"], ["14", "16"]];
-    const q = (t: string) => parseInt(curva[t] || "0", 10) || 0;
-    let total = 0;
-    const consumidas = new Set<string>();
-    for (const [a, b] of PARES) {
-      if (curva[a] !== undefined || curva[b] !== undefined) {
-        total += Math.max(q(a), q(b));
-        consumidas.add(a); consumidas.add(b);
-      }
-    }
-    for (const [t, v] of Object.entries(curva)) {
-      if (!consumidas.has(t)) {
-        total += parseInt(v || "0", 10) || 0;
-      }
-    }
-    return total;
-  }, [curva]);
+  const idsUsados = refs.map((r) => r.referenciaId).filter(Boolean);
+  const prendasDe = (rf: RefState) => Object.values(rf.curva).reduce((s, v) => s + (parseInt(v || "0", 10) || 0), 0);
+  const totalPrendas = refs.reduce((s, rf) => s + prendasDe(rf), 0);
 
-  const totalCurva = Object.values(curva).reduce((s, v) => s + (parseInt(v || "0", 10) || 0), 0);
+  const capasSugerida = useMemo(() => {
+    const comb: Record<string, number> = {};
+    for (const rf of refs) for (const [t, v] of Object.entries(rf.curva)) comb[t] = (comb[t] || 0) + (parseInt(v || "0", 10) || 0);
+    return capasDeCurva(comb);
+  }, [refs]);
+  const capasEfectiva = numCapas ? (parseInt(numCapas, 10) || 0) : capasSugerida;
+
+  const prom = parseFloat(promedioTecnico || "0") || 0;
+  const metrosTeo = prom > 0 && totalPrendas > 0 ? prom * totalPrendas : 0;
 
   const mut = useMutation({
     mutationFn: () => {
       const largo = parseFloat(largoTrazo || "0");
-      const cant = parseInt(cantidadProgramada || "0", 10);
-      if (!referenciaId)   throw new Error("Selecciona una referencia");
-      if (!(largo > 0))    throw new Error("Largo de trazo inválido");
-      // Curva: solo tallas con valor > 0
-      const curvaFinal: Record<string, number> = {};
-      for (const [talla, val] of Object.entries(curva)) {
-        const n = parseInt(val || "0", 10);
-        if (n > 0) curvaFinal[talla] = n;
-      }
-      if (Object.keys(curvaFinal).length === 0)
-        throw new Error("Llena al menos una talla en la curva.");
-      const destArr = destinatarios
-        .split(/[,;\s]+/g).map((s) => s.trim()).filter(Boolean);
+      if (!(largo > 0)) throw new Error("Largo de trazo inválido");
+      const referencias = refs.filter((rf) => rf.referenciaId).map((rf) => {
+        const curva: Record<string, number> = {};
+        for (const [t, v] of Object.entries(rf.curva)) { const n = parseInt(v || "0", 10); if (n > 0) curva[t] = n; }
+        return { referencia_id: rf.referenciaId, curva_trazo: curva };
+      });
+      if (referencias.length === 0) throw new Error("Agrega al menos una referencia.");
+      for (const r of referencias)
+        if (Object.keys(r.curva_trazo).length === 0)
+          throw new Error("Cada referencia necesita al menos una talla en la curva.");
+      const destArr = destinatarios.split(/[,;\s]+/g).map((s) => s.trim()).filter(Boolean);
       return api.post<{ ok: boolean; orden_corte: { id: string } }>("/api/produccion/corte", {
-        referencia_id: referenciaId,
+        referencias,
+        num_capas: numCapas ? parseInt(numCapas, 10) : capasSugerida,
         largo_trazo: largo,
-        curva_trazo: curvaFinal,
-        cantidad_programada: cant || totalCurva || null,
         promedio_tecnico: promedioTecnico ? parseFloat(promedioTecnico) : null,
         responsable: responsable || null,
         fecha_envio: fechaEnvio || null,
@@ -155,205 +131,76 @@ export default function NuevaOrdenCortePage() {
     onError: (e: Error) => setErr(e.message),
   });
 
-  function actualizarCurva(t: string, v: string) {
-    setCurva((prev) => {
-      const next = { ...prev, [t]: v };
-      // Espigas: la pareja se corta junta → misma cantidad automática
-      const pareja = PAREJA_TALLA[t];
-      if (pareja && pareja in next) next[pareja] = v;
-      return next;
-    });
-  }
-  function agregarTalla() {
-    const t = tallaExtra.trim();
-    if (!t) return;
-    if (t in curva) { setTallaExtra(""); return; }
-    setCurva((prev) => ({ ...prev, [t]: "" }));
-    setTallaExtra("");
-  }
-  function quitarTalla(t: string) {
-    setCurva((prev) => {
-      const copy = { ...prev };
-      delete copy[t];
-      return copy;
-    });
-  }
-
-  // Totales derivados (para la card de KPIs)
-  //   Metros teóricos = promedio_tecnico × cantidad_programada
-  //   Rendimiento    = metros_teoricos / cantidad_programada (= promedio_tecnico)
-  const prom = parseFloat(promedioTecnico || "0") || 0;
-  const prendasEst = parseInt(cantidadProgramada || "0", 10) || totalCurva || 0;
-  const metrosTeo = prom > 0 && prendasEst > 0 ? prom * prendasEst : 0;
-  const rendimiento = prendasEst > 0 ? metrosTeo / prendasEst : 0;
-
   if (q.isLoading) return <LoadingState label="Cargando referencias…" />;
-  // Error de red ≠ "no hay precosteos" — antes mandaba a firmar precosteos que sí existían.
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
   return (
-    <PageShell title="Nueva orden de corte" subtitle="Trazo + curva de tallas">
+    <PageShell title="Nueva orden de corte" subtitle="Un tendido · varias referencias">
       <form onSubmit={(e) => { e.preventDefault(); setErr(""); mut.mutate(); }} className="space-y-4">
-        {/* Cabecera */}
+        {/* ── Tendido (compartido) ── */}
         <Card>
           <CardContent className="p-5 space-y-4">
-            <p className="section-label">Referencia</p>
-            <div ref={refBoxRef} className="relative">
-              <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
-                Precosteo firmado *
-              </label>
-              <button type="button" onClick={() => setRefOpen((v) => !v)}
-                className="w-full flex items-center justify-between rounded-sm border border-border bg-card px-3 py-2 text-sm text-left hover:bg-cloud/30">
-                <span className={precosteoSel ? "text-ink-900" : "text-graphite/60"}>
-                  {precosteoSel ? precosteoLabel(precosteoSel) : "Selecciona una referencia…"}
-                </span>
-                <ChevronDown className={`h-3.5 w-3.5 text-graphite transition-transform ${refOpen ? "rotate-180" : ""}`} />
-              </button>
-              {refOpen && (
-                <div className="absolute z-20 mt-1 w-full rounded-sm border border-border bg-white shadow-lg">
-                  <div className="p-2 border-b border-border">
-                    <div className="flex items-center gap-2 rounded-sm border border-border bg-cloud/30 px-2 py-1.5">
-                      <Search className="h-3.5 w-3.5 text-graphite flex-none" />
-                      <input autoFocus value={refBuscar} onChange={(e) => setRefBuscar(e.target.value)}
-                        placeholder="Buscar por código, nombre o tela…"
-                        className="w-full bg-transparent text-sm outline-none" />
-                    </div>
-                  </div>
-                  <div className="max-h-64 overflow-y-auto">
-                    {q.isLoading ? (
-                      <div className="px-3 py-3 text-xs text-graphite">Cargando referencias…</div>
-                    ) : precosteosFiltrados.length === 0 ? (
-                      <div className="px-3 py-3 text-xs text-graphite">
-                        {precosteos.length === 0
-                          ? "No hay precosteos disponibles."
-                          : "Ninguna referencia coincide."}
-                      </div>
-                    ) : precosteosFiltrados.map((p) => {
-                      const esMuestra = !p.bloqueada && p.es_muestra_diseno;
-                      return (
-                        <button key={p.id} type="button"
-                          onClick={() => { setReferenciaId(p.id); setRefOpen(false); setRefBuscar(""); }}
-                          className={`w-full flex items-center justify-between px-3 py-2 text-left text-xs hover:bg-cloud/50 ${referenciaId === p.id ? "bg-navy-600/[0.06]" : ""}`}>
-                          <div className="min-w-0 flex-1">
-                            <div className="font-semibold text-ink-900 truncate">
-                              {p.codigo_referencia} · {p.nombre}
-                            </div>
-                            <div className="text-[0.65rem] text-graphite truncate">
-                              {p.tela || "sin tela"}{p.color ? ` · ${p.color}` : ""}
-                            </div>
-                          </div>
-                          {esMuestra && (
-                            <span className="ml-2 shrink-0 rounded-sm bg-navy-600/10 px-1.5 py-0.5 text-[0.68rem] font-bold uppercase tracking-widest text-navy-600">
-                              Muestra
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-              {precosteos.length === 0 && (
-                <p className="mt-1 text-[0.7rem] text-terracotta">
-                  No hay precosteos disponibles. Firma uno o marca uno como muestra de diseño en /produccion/precosteo.
-                </p>
-              )}
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="inline-flex items-center gap-1.5 rounded-sm bg-navy-600/10 px-2.5 py-1 text-[0.62rem] font-bold uppercase tracking-widest text-navy-600">
+                ▦ Tendido (compartido)
+              </span>
+              <span className="text-xs text-graphite">Mismo largo de trazo, capas y rollos para todas las referencias.</span>
             </div>
-
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {/* Nombre de tela — trae automático del precosteo */}
+              <Input label="Largo de trazo (m) *" value={largoTrazo} onChange={setLargoTrazo} inputMode="decimal" required />
               <div>
                 <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
-                  Nombre de tela (auto)
+                  Nº de capas del tendido
                 </label>
-                <input readOnly value={precosteoSel?.tela || ""}
-                  placeholder={referenciaId ? "—" : "Selecciona referencia primero"}
-                  className="w-full rounded-sm border border-border bg-cloud/40 px-3 py-2 text-sm text-graphite" />
+                <input value={numCapas} onChange={(e) => setNumCapas(e.target.value)}
+                  inputMode="numeric" placeholder={`sugerido ${capasSugerida}`}
+                  className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />
+                <p className="mt-1 text-[0.68rem] text-graphite">Manual. Vacío = usa la sugerencia ({capasSugerida}).</p>
               </div>
               <Input label="Promedio técnico (m/prenda)" value={promedioTecnico} onChange={setPromedioTecnico} inputMode="decimal" placeholder="0.850" />
-              <Input label="Largo de trazo (m) *" value={largoTrazo}    onChange={setLargoTrazo}    inputMode="decimal" required />
-              <Input label="Cantidad programada"   value={cantidadProgramada} onChange={setCantidadProgramada} inputMode="numeric" placeholder={totalCurva > 0 ? String(totalCurva) : "0"} />
-              {/* Nº capas — auto desde curva (readonly) */}
-              <div>
-                <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
-                  Nº de capas (auto)
-                </label>
-                <div className="w-full rounded-sm border border-border bg-cloud/40 px-3 py-2 text-sm text-ink-900 tabular font-semibold">
-                  {capasAutoCalc}
-                </div>
-              </div>
-              <Input label="Cortador responsable"  value={responsable}   onChange={setResponsable}   placeholder="Ej. Ivan Rodríguez" />
-              <Input label="Fecha de envío"        type="date" value={fechaEnvio} onChange={setFechaEnvio} />
+              <Input label="Cortador responsable" value={responsable} onChange={setResponsable} placeholder="Ej. Iván Rodríguez" />
+              <Input label="Fecha de envío" type="date" value={fechaEnvio} onChange={setFechaEnvio} />
             </div>
-
             <div>
-              <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
-                Indicaciones (opcional)
-              </label>
-              <textarea value={indicaciones} onChange={(e) => setIndicaciones(e.target.value)}
-                rows={2} className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />
+              <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Indicaciones (opcional)</label>
+              <textarea value={indicaciones} onChange={(e) => setIndicaciones(e.target.value)} rows={2}
+                className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />
             </div>
-
-            {/* Destinatarios correo — se envían al autorizar */}
             <div>
-              <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
-                Destinatarios correo de autorización
-              </label>
+              <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Destinatarios correo de autorización</label>
               <input value={destinatarios} onChange={(e) => setDestinatarios(e.target.value)}
                 placeholder="cortador@maledenim.com, produccion@maledenim.com"
                 className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm" />
-              <p className="mt-1 text-[0.7rem] text-graphite">
-                Emails separados por coma. Al autorizar la orden se enviará el correo con asunto{" "}
-                <span className="font-semibold text-ink-900">
-                  &ldquo;Orden de corte referencia {precosteoSel?.codigo_referencia || "XXXX"}&rdquo;
-                </span>.
-              </p>
             </div>
           </CardContent>
         </Card>
 
-        {/* Curva de tallas */}
-        <Card>
-          <CardContent className="p-5 space-y-3">
-            <div className="flex items-baseline justify-between">
-              <p className="section-label">Curva de tallas</p>
-              <p className="text-xs text-graphite tabular">
-                Total por trazo: <span className="font-semibold text-ink-900">{totalCurva}</span>
-              </p>
-            </div>
+        {/* ── Referencias ── */}
+        {refs.map((rf, i) => (
+          <ReferenciaBloque key={rf.key} indice={i} total={refs.length}
+            precosteos={precosteos} idsUsados={idsUsados}
+            referenciaId={rf.referenciaId} curva={rf.curva}
+            onPrecosteo={(id) => setRefPrecosteo(rf.key, id)}
+            onCurva={(t, v) => setRefCurva(rf.key, t, v)}
+            onQuitar={() => removeRef(rf.key)}
+            prendas={prendasDe(rf)} />
+        ))}
 
-            <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
-              {Object.entries(curva).map(([t, v]) => (
-                <div key={t}>
-                  <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite text-center">
-                    Talla {t}
-                    <button type="button" onClick={() => quitarTalla(t)}
-                      className="ml-1 text-terracotta hover:text-crimson" title="Quitar talla">×</button>
-                  </label>
-                  <input value={v} onChange={(e) => actualizarCurva(t, e.target.value)}
-                    inputMode="numeric" placeholder="0"
-                    className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-sm text-center tabular" />
-                </div>
-              ))}
-              {/* Agregar talla extra */}
-              <div className="flex items-end gap-1">
-                <input value={tallaExtra} onChange={(e) => setTallaExtra(e.target.value)}
-                  placeholder="S, XL…"
-                  className="w-full rounded-sm border border-dashed border-border bg-white px-2 py-1.5 text-xs text-center" />
-                <button type="button" onClick={agregarTalla}
-                  className="rounded-sm border border-border bg-cloud px-2 py-1.5 text-xs hover:bg-cloud/80">+</button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <button type="button" onClick={addRef}
+          className="w-full inline-flex items-center justify-center gap-2 rounded-sm border-[1.5px] border-dashed border-border-strong bg-transparent px-4 py-3 text-sm font-semibold text-navy-600 hover:bg-navy-600/[0.04]">
+          <Plus className="h-4 w-4" /> Agregar otra referencia al tendido
+        </button>
 
-        {/* Cálculos teóricos */}
+        {/* ── Resumen ── */}
         <Card>
-          <CardContent className="p-5 grid grid-cols-2 md:grid-cols-4 gap-4">
-            <Kpi label="Cantidad programada" value={prendasEst.toString()} />
-            <Kpi label="Nº capas (auto)"     value={capasAutoCalc.toString()} />
-            <Kpi label="Metros teóricos"     value={`${metrosTeo.toFixed(2)} m`} />
-            <Kpi label="Rendimiento (m/prenda)" value={prendasEst ? rendimiento.toFixed(3) : "—"} />
+          <CardContent className="p-5 space-y-4">
+            <p className="section-label">Resumen del tendido</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <Kpi label="Total prendas" value={totalPrendas.toString()} />
+              <Kpi label="Capas del tendido" value={capasEfectiva.toString()} />
+              <Kpi label="Metros teóricos" value={`${metrosTeo.toFixed(2)} m`} />
+              <Kpi label="Referencias" value={idsUsados.length.toString()} />
+            </div>
           </CardContent>
         </Card>
 
@@ -365,8 +212,7 @@ export default function NuevaOrdenCortePage() {
 
         <div className="sticky bottom-0 bg-white/95 backdrop-blur border-t border-border py-3 flex items-center justify-between gap-3">
           <p className="text-xs text-graphite">
-            Se guardará como <span className="font-semibold text-ink-900">borrador</span>.
-            Luego pistoleas los rollos en el detalle.
+            Se guardará como <span className="font-semibold text-ink-900">borrador</span>. Luego pistoleas los rollos (compartidos) en el detalle.
           </p>
           <button type="submit" disabled={mut.isPending}
             className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-6 py-2.5 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-navy-700 disabled:opacity-40">
@@ -379,10 +225,129 @@ export default function NuevaOrdenCortePage() {
   );
 }
 
+// ── Bloque de una referencia (selector de precosteo + curva) ──
+function ReferenciaBloque({
+  indice, total, precosteos, idsUsados, referenciaId, curva, onPrecosteo, onCurva, onQuitar, prendas,
+}: {
+  indice: number; total: number; precosteos: Precosteo[]; idsUsados: string[];
+  referenciaId: string; curva: Record<string, string>;
+  onPrecosteo: (id: string) => void; onCurva: (t: string, v: string) => void;
+  onQuitar: () => void; prendas: number;
+}) {
+  const sel = precosteos.find((p) => p.id === referenciaId);
+  return (
+    <Card>
+      <CardContent className="p-5 space-y-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <span className="inline-grid place-items-center w-6 h-6 rounded-full border-[1.5px] border-navy-600 bg-navy-600/10 font-display text-sm text-navy-600">{indice + 1}</span>
+            <p className="section-label">Referencia {indice + 1}{total > 1 ? ` de ${total}` : ""}</p>
+            {sel?.tela && <span className="text-xs text-graphite">· Tela {sel.tela}</span>}
+          </div>
+          {total > 1 && (
+            <button type="button" onClick={onQuitar} aria-label="Quitar referencia"
+              className="p-2 -m-1 text-terracotta hover:text-crimson"><X className="h-4 w-4" /></button>
+          )}
+        </div>
+
+        <PrecosteoSelector precosteos={precosteos} idsUsados={idsUsados} value={referenciaId} onChange={onPrecosteo} />
+
+        <div>
+          <div className="flex items-baseline justify-between mb-1">
+            <label className="text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Curva de tallas</label>
+            <span className="text-xs text-graphite tabular">Prendas: <span className="font-semibold text-ink-900">{prendas}</span></span>
+          </div>
+          <div className="grid grid-cols-4 md:grid-cols-7 gap-2">
+            {TALLAS_DEFAULT.map((t) => (
+              <div key={t}>
+                <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite text-center">Talla {t}</label>
+                <input value={curva[t] || ""} onChange={(e) => onCurva(t, e.target.value)}
+                  inputMode="numeric" placeholder="0"
+                  className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-sm text-center tabular" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Combobox de precosteo (buscable) — cada referencia tiene el suyo ──
+function PrecosteoSelector({ precosteos, idsUsados, value, onChange }: {
+  precosteos: Precosteo[]; idsUsados: string[]; value: string; onChange: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [buscar, setBuscar] = useState("");
+  const boxRef = useRef<HTMLDivElement>(null);
+  const sel = precosteos.find((p) => p.id === value);
+
+  useEffect(() => {
+    function afuera(e: MouseEvent) { if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false); }
+    if (open) { document.addEventListener("mousedown", afuera); return () => document.removeEventListener("mousedown", afuera); }
+  }, [open]);
+
+  const filtrados = useMemo(() => {
+    const s = buscar.trim().toUpperCase();
+    if (!s) return precosteos;
+    return precosteos.filter((p) => `${p.codigo_referencia} ${p.nombre} ${p.tela || ""}`.toUpperCase().includes(s));
+  }, [precosteos, buscar]);
+
+  function label(p: Precosteo) {
+    const tag = !p.bloqueada && p.es_muestra_diseno ? " · MUESTRA" : "";
+    return `${p.codigo_referencia} · ${p.nombre}${p.tela ? ` (${p.tela})` : ""}${tag}`;
+  }
+
+  return (
+    <div ref={boxRef} className="relative">
+      <button type="button" onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between rounded-sm border border-border bg-card px-3 py-2 text-sm text-left hover:bg-cloud/30">
+        <span className={sel ? "text-ink-900" : "text-graphite/60"}>{sel ? label(sel) : "Selecciona un precosteo…"}</span>
+        <ChevronDown className={`h-3.5 w-3.5 text-graphite transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="absolute z-20 mt-1 w-full rounded-sm border border-border bg-white shadow-lg">
+          <div className="p-2 border-b border-border">
+            <div className="flex items-center gap-2 rounded-sm border border-border bg-cloud/30 px-2 py-1.5">
+              <Search className="h-3.5 w-3.5 text-graphite flex-none" />
+              <input autoFocus value={buscar} onChange={(e) => setBuscar(e.target.value)}
+                placeholder="Buscar por código, nombre o tela…" className="w-full bg-transparent text-sm outline-none" />
+            </div>
+          </div>
+          <div className="max-h-64 overflow-y-auto">
+            {filtrados.length === 0 ? (
+              <div className="px-3 py-3 text-xs text-graphite">
+                {precosteos.length === 0 ? "No hay precosteos disponibles." : "Ninguna referencia coincide."}
+              </div>
+            ) : filtrados.map((p) => {
+              const yaEnOtra = idsUsados.includes(p.id) && p.id !== value;
+              const esMuestra = !p.bloqueada && p.es_muestra_diseno;
+              return (
+                <button key={p.id} type="button" disabled={yaEnOtra}
+                  onClick={() => { if (!yaEnOtra) { onChange(p.id); setOpen(false); setBuscar(""); } }}
+                  className={`w-full flex items-center justify-between px-3 py-2 text-left text-xs hover:bg-cloud/50 disabled:opacity-40 disabled:cursor-not-allowed ${value === p.id ? "bg-navy-600/[0.06]" : ""}`}>
+                  <div className="min-w-0 flex-1">
+                    <div className="font-semibold text-ink-900 truncate">{p.codigo_referencia} · {p.nombre}</div>
+                    <div className="text-[0.65rem] text-graphite truncate">
+                      {p.tela || "sin tela"}{p.color ? ` · ${p.color}` : ""}{yaEnOtra ? " · ya en esta orden" : ""}
+                    </div>
+                  </div>
+                  {esMuestra && (
+                    <span className="ml-2 shrink-0 rounded-sm bg-navy-600/10 px-1.5 py-0.5 text-[0.68rem] font-bold uppercase tracking-widest text-navy-600">Muestra</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Input({ label, value, onChange, required = false, placeholder = "", inputMode, type }: {
   label: string; value: string; onChange: (v: string) => void;
-  required?: boolean; placeholder?: string;
-  inputMode?: "decimal" | "numeric"; type?: string;
+  required?: boolean; placeholder?: string; inputMode?: "decimal" | "numeric"; type?: string;
 }) {
   return (
     <div>

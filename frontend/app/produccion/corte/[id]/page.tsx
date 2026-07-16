@@ -92,6 +92,13 @@ interface OrdenCorte {
     color?: string;
     foto_url?: string;
   };
+  referencias?: {
+    referencia_id?: string;
+    curva_trazo?: Record<string, number>;
+    precio_corte?: number | null;
+    cantidad_programada?: number | null;
+    referencia?: { codigo_referencia?: string; nombre?: string; tela?: string; color?: string };
+  }[];
   rollos: RolloLink[];
 }
 
@@ -450,9 +457,51 @@ export default function DetalleOrdenCortePage() {
         </CardContent>
       </Card>
 
+      {/* Referencias del tendido (solo si hay varias) */}
+      {(oc.referencias?.length || 0) > 1 && (
+        <Card>
+          <CardContent className="p-5 space-y-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="inline-flex items-center gap-1.5 rounded-sm bg-navy-600/10 px-2.5 py-1 text-[0.62rem] font-bold uppercase tracking-widest text-navy-600">
+                ▦ Tendido · {oc.referencias!.length} referencias
+              </span>
+              <span className="text-xs text-graphite">Un solo trazo y los mismos rollos; cada referencia con su curva.</span>
+            </div>
+            <div className="space-y-2">
+              {oc.referencias!.map((rf, i) => {
+                const r = rf.referencia || {};
+                const curva = rf.curva_trazo || {};
+                const prendas = Object.values(curva).reduce((s, n) => s + (Number(n) || 0), 0);
+                return (
+                  <div key={rf.referencia_id || i} className="rounded-sm border border-border bg-cloud/30 p-3">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-2">
+                        <span className="inline-grid place-items-center w-5 h-5 rounded-full border border-navy-600 bg-navy-600/10 text-[0.7rem] font-semibold text-navy-600 tabular">{i + 1}</span>
+                        <span className="font-semibold text-ink-900 text-sm">{r.codigo_referencia || "—"}</span>
+                        <span className="text-xs text-graphite">{r.nombre}{r.tela ? ` · ${r.tela}` : ""}</span>
+                      </div>
+                      <div className="text-xs text-graphite tabular">
+                        {prendas} prendas{rf.precio_corte != null ? ` · corte $${Number(rf.precio_corte).toLocaleString("es-CO", { maximumFractionDigits: 0 })}/prenda` : ""}
+                      </div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {Object.entries(curva).map(([t, n]) => (
+                        <span key={t} className="rounded-sm border border-border bg-white px-2 py-0.5 text-[0.7rem] tabular">
+                          <span className="text-graphite">T{t}:</span> <span className="font-semibold text-ink-900">{Number(n)}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardContent className="p-5">
-          <p className="section-label mb-2">Curva</p>
+          <p className="section-label mb-2">Curva{(oc.referencias?.length || 0) > 1 ? " combinada del tendido" : ""}</p>
           <div className="flex flex-wrap gap-2">
             {Object.entries(oc.curva_trazo || {}).map(([t, n]) => (
               <div key={t} className="rounded-sm border border-border bg-cloud/40 px-3 py-1.5 text-xs">
