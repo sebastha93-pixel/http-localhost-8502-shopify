@@ -5,7 +5,7 @@
  * Si está bloqueada, muestra inmutable con badge "Autorizada por X".
  */
 import { useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, API_BASE } from "@/lib/api";
@@ -14,7 +14,7 @@ import { useAuth } from "@/components/auth-provider";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Lock, Camera, CheckCircle, Loader2, AlertCircle, Pencil, X } from "lucide-react";
+import { ArrowLeft, Lock, Camera, CheckCircle, Loader2, AlertCircle, Pencil, X, Copy } from "lucide-react";
 
 interface Item {
   id: string;
@@ -49,6 +49,7 @@ interface Precosteo {
 
 export default function PrecosteoDetallePage() {
   const params = useParams();
+  const router = useRouter();
   const id = params?.id as string;
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -90,6 +91,12 @@ export default function PrecosteoDetallePage() {
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
   });
 
+  const duplicarMut = useMutation({
+    mutationFn: () => api.post<{ id: string }>(`/api/produccion/precosteo/${id}/duplicar`),
+    onSuccess: (nuevo) => { router.push(`/produccion/precosteo/${nuevo.id}`); },
+    onError: (e: Error) => { setErr(e.message); setMsg(""); },
+  });
+
   async function subirFoto(f: File) {
     setErr("");
     try {
@@ -119,6 +126,9 @@ export default function PrecosteoDetallePage() {
   const puedeEditar = p.bloqueada
     ? esAdmin(user)
     : puedeAccionModulo(user, "produccion_costos", "modificar");
+  // Duplicar crea un borrador NUEVO (no toca el original): lo puede hacer
+  // cualquiera que cree precosteos, aunque el original esté autorizado.
+  const puedeCrear = puedeAccionModulo(user, "produccion_costos", "modificar");
 
   function abrirEdicion() {
     setForm({
@@ -144,6 +154,13 @@ export default function PrecosteoDetallePage() {
             <Badge tone="normal"><Lock className="inline h-2.5 w-2.5 mr-1" /> Autorizada · {p.autorizada_por}</Badge>
           ) : (
             <Badge tone="pendiente">Borrador · editable</Badge>
+          )}
+          {puedeCrear && !editando && (
+            <button onClick={() => duplicarMut.mutate()} disabled={duplicarMut.isPending}
+              title="Crear un borrador nuevo a partir de este (para reprogramar o una referencia parecida)"
+              className="inline-flex items-center gap-1 rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud disabled:opacity-40">
+              {duplicarMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Copy className="h-3.5 w-3.5" />} Duplicar
+            </button>
           )}
           {puedeEditar && !editando && (
             <button onClick={abrirEdicion}

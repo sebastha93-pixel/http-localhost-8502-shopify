@@ -508,6 +508,23 @@ def actualizar_precosteo(
         raise HTTPException(500, f"actualizar: {str(e)[:200]}")
 
 
+@router.post("/precosteo/{precosteo_id}/duplicar")
+def duplicar_precosteo(
+    precosteo_id: str,
+    user: CurrentUser = Depends(require_permission_estricto("produccion_costos", "modificar")),
+) -> dict:
+    """Copia un precosteo (borrador o autorizado) a un NUEVO borrador editable.
+    Para reprogramaciones o referencias parecidas. No modifica el original."""
+    try:
+        return svc.duplicar_precosteo(precosteo_id, created_by=user.email)
+    except ValueError as e:
+        if str(e) == "no_encontrado":
+            raise HTTPException(404, "Precosteo no encontrado")
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"duplicar: {str(e)[:200]}")
+
+
 @router.post("/precosteo/{precosteo_id}/firmar")
 def firmar_precosteo(
     precosteo_id: str,

@@ -669,6 +669,35 @@ def crear_precosteo(*, codigo_referencia: str, nombre: str, tela: str, color: st
     return obtener_precosteo(ref_id)
 
 
+def duplicar_precosteo(precosteo_id: str, *, created_by: str) -> dict:
+    """Crea un NUEVO precosteo en BORRADOR copiando datos e ítems de otro.
+    Útil para reprogramaciones o referencias parecidas: el nuevo queda editable
+    con un código provisional ('-COPIA') para ajustarlo. No toca el original."""
+    src = obtener_precosteo(precosteo_id)
+    if not src:
+        raise ValueError("no_encontrado")
+    items = [{
+        "categoria":      it.get("categoria"),
+        "item":           it.get("item"),
+        "valor_unitario": it.get("valor_unitario") or 0,
+        "cantidad":       it.get("cantidad") or 1,
+        "iva":            it.get("iva") or 0,
+        "total_sin_iva":  it.get("total_sin_iva") or 0,
+        "total_con_iva":  it.get("total_con_iva") or 0,
+    } for it in (src.get("items") or [])]
+    return crear_precosteo(
+        codigo_referencia=f"{(src.get('codigo_referencia') or 'REF').strip()}-COPIA",
+        nombre=f"{(src.get('nombre') or '').strip()} (copia)".strip(),
+        tela=src.get("tela") or "",
+        color=src.get("color") or "",
+        iva_pct=float(src.get("iva_pct") or 19),
+        margen=float(src.get("margen") or 0),
+        items=items,
+        created_by=created_by,
+        es_muestra_diseno=bool(src.get("es_muestra_diseno")),
+    )
+
+
 def _puede_editar_precosteo_bloqueado(usuario_id: Optional[str]) -> bool:
     """Un precosteo AUTORIZADO (bloqueado) solo lo pueden editar quienes pueden
     autorizar precosteos (hoy: Sebastián / María Alejandra) o un admin.
