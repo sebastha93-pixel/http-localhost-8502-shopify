@@ -4,7 +4,7 @@
  * Detalle de precosteo. Si es borrador, permite firmar (con permiso) o subir foto.
  * Si está bloqueada, muestra inmutable con badge "Autorizada por X".
  */
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -71,7 +71,7 @@ export default function PrecosteoDetallePage() {
     onSuccess: () => {
       setMsg("Firmado y bloqueado.");
       setErr("");
-      qc.invalidateQueries({ queryKey: ["produccion", "precosteo", id] });
+      qc.invalidateQueries({ queryKey: ["produccion", "precosteo"] });
     },
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
   });
@@ -86,16 +86,34 @@ export default function PrecosteoDetallePage() {
       setMsg("Cambios guardados.");
       setErr("");
       setEditando(false);
-      qc.invalidateQueries({ queryKey: ["produccion", "precosteo", id] });
+      qc.invalidateQueries({ queryKey: ["produccion", "precosteo"] });
     },
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
   });
 
   const duplicarMut = useMutation({
     mutationFn: () => api.post<{ id: string }>(`/api/produccion/precosteo/${id}/duplicar`),
-    onSuccess: (nuevo) => { router.push(`/produccion/precosteo/${nuevo.id}`); },
+    // Abre la copia directo en modo edición para ponerle su nombre/código real
+    // y quitarle el "-COPIA" de una vez.
+    onSuccess: (nuevo) => { router.push(`/produccion/precosteo/${nuevo.id}?editar=1`); },
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
   });
+
+  // Si se llega con ?editar=1 (p. ej. tras duplicar), abrir edición al cargar.
+  const autoEditRef = useRef(false);
+  useEffect(() => {
+    if (autoEditRef.current || !q.data) return;
+    if (typeof window !== "undefined"
+        && new URLSearchParams(window.location.search).get("editar") === "1") {
+      autoEditRef.current = true;
+      setForm({
+        nombre: q.data.nombre || "",
+        codigo_referencia: q.data.codigo_referencia || "",
+        tela: q.data.tela || "",
+      });
+      setEditando(true);
+    }
+  }, [q.data]);
 
   async function subirFoto(f: File) {
     setErr("");
@@ -110,7 +128,7 @@ export default function PrecosteoDetallePage() {
       });
       if (!res.ok) throw new Error((await res.text()).slice(0, 150));
       setMsg("Foto subida.");
-      qc.invalidateQueries({ queryKey: ["produccion", "precosteo", id] });
+      qc.invalidateQueries({ queryKey: ["produccion", "precosteo"] });
     } catch (e: any) {
       setErr(e.message || "Error subiendo foto");
     }

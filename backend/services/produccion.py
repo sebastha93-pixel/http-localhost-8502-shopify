@@ -666,6 +666,7 @@ def crear_precosteo(*, codigo_referencia: str, nombre: str, tela: str, color: st
             })
         sb.table("precosteo_items").insert(rows_items).execute()
 
+    _cache_invalidate_prefix("precosteos")
     return obtener_precosteo(ref_id)
 
 
@@ -770,6 +771,7 @@ def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
         update["updated_at"] = _now_iso()
         sb.table("referencias_precosteo").update(update).eq("id", precosteo_id).execute()
 
+    _cache_invalidate_prefix("precosteos")
     return obtener_precosteo(precosteo_id)
 
 
@@ -801,6 +803,7 @@ def firmar_precosteo(precosteo_id: str, *, usuario_id: str) -> dict:
         "fecha_autorizacion": now,
         "updated_at": now,
     }).eq("id", precosteo_id).execute()
+    _cache_invalidate_prefix("precosteos")
     return obtener_precosteo(precosteo_id)
 
 
@@ -815,6 +818,7 @@ def eliminar_precosteo(precosteo_id: str) -> None:
     if actual.get("bloqueada"):
         raise ValueError("no_se_puede_eliminar_bloqueado")
     sb.table("referencias_precosteo").delete().eq("id", precosteo_id).execute()
+    _cache_invalidate_prefix("precosteos")
 
 
 def listar_precosteos(*, estado: Optional[str] = None, tela: Optional[str] = None,
