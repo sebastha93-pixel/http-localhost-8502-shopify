@@ -995,9 +995,82 @@ def calcular_capas_desde_curva(curva: dict) -> int:
     return total
 
 
-def crear_orden_corte(*, referencia_id: str,
+def _referencia_ya_tiene_corte(referencia_id: str) -> bool:
+    """Un precosteo = un lote: True si ya está en un corte (como primaria o
+    como referencia de un tendido con varias)."""
+    sb = _sb()
+    if sb is None:
+        return False
+    if (sb.table("ordenes_corte").select("id")
+          .eq("referencia_id", referencia_id).limit(1).execute()).data:
+        return True
+    try:
+        if (sb.table("orden_corte_referencias").select("id")
+              .eq("referencia_id", referencia_id).limit(1).execute()).data:
+            return True
+    except Exception:
+        pass  # tabla hija aún sin migrar
+    return False
+
+
+def _guardar_referencias_corte(oc_id: str, specs: list[dict]) -> None:
+    """Guarda una fila por referencia en orden_corte_referencias.
+    Degrada en silencio si la migración aún no corrió (el padre ya lleva la
+    referencia primaria, así el flujo de una sola referencia sigue igual)."""
+    sb = _sb()
+    if sb is None:
+        return
+    rows = [{
+        "orden_corte_id": oc_id,
+        "referencia_id": s["referencia_id"],
+        "curva_trazo": s.get("_curva") or {},
+        "cantidad_programada": s.get("_cant"),
+        "promedio_tecnico": s.get("_prom"),
+        "precio_corte": s.get("_precio"),
+        "orden": i,
+    } for i, s in enumerate(specs)]
+    try:
+        sb.table("orden_corte_referencias").insert(rows).execute()
+    except Exception:
+        pass
+
+
+def _referencias_de_corte(oc_id: str, oc_row: dict) -> list[dict]:
+    """Referencias del tendido (tabla hija) enriquecidas con el precosteo.
+    Si la tabla no existe aún, cae a la referencia primaria del padre."""
+    sb = _sb()
+    if sb is None:
+        return []
+    rows = []
+    try:
+        rows = (sb.table("orden_corte_referencias")
+                  .select("*,referencia:referencia_id(codigo_referencia,nombre,tela,color)")
+                  .eq("orden_corte_id", oc_id).order("orden").execute()).data or []
+    except Exception:
+        rows = []
+    if not rows:
+        return [{
+            "referencia_id":       oc_row.get("referencia_id"),
+            "referencia":          oc_row.get("referencia"),
+            "curva_trazo":         oc_row.get("curva_trazo") or {},
+            "unidades_cortadas":   oc_row.get("unidades_cortadas"),
+            "precio_corte":        oc_row.get("precio_corte"),
+            "cantidad_programada": oc_row.get("cantidad_programada"),
+            "promedio_tecnico":    oc_row.get("promedio_tecnico"),
+            "orden": 0,
+        }]
+    for rr in rows:
+        if rr.get("precio_corte") is None:
+            try:
+                rr["precio_corte"] = _precio_proceso_precosteo(rr.get("referencia_id"), "corte")
+            except Exception:
+                pass
+    return rows
+
+
+def crear_orden_corte(*, referencia_id: Optional[str] = None,
                        largo_trazo: float,
-                       curva_trazo: dict,
+                       curva_trazo: Optional[dict] = None,
                        cantidad_programada: Optional[int] = None,
                        promedio_tecnico: Optional[float] = None,
                        responsable: Optional[str] = None,
@@ -1005,51 +1078,84 @@ def crear_orden_corte(*, referencia_id: str,
                        indicaciones: Optional[str] = None,
                        destinatarios_correo: Optional[list[str]] = None,
                        trazos_url: Optional[str] = None,
+                       num_capas: Optional[int] = None,
+                       referencias: Optional[list[dict]] = None,
                        created_by: str = "") -> dict:
-    """Crea una orden de corte a partir de un precosteo (firmado o muestra).
-    - num_capas se auto-calcula desde la curva de tallas.
-    - prendas_por_trazo = # tallas distintas con cantidad > 0 (aprox).
-    - prendas_estimadas = suma de unidades de la curva.
+    """Crea una orden de corte (UN tendido) con una o VARIAS referencias.
+
+    - `referencias`: lista de {referencia_id, curva_trazo, cantidad_programada?,
+      promedio_tecnico?}. Si no viene, se usa el par legacy (referencia_id,
+      curva_trazo) = una sola referencia.
+    - El tendido comparte rollos, tela, largo de trazo, num_capas y consumo.
+      Cada referencia guarda su curva, cantidad, promedio y precio de corte.
+    - num_capas: manual (del tendido); si no viene, se calcula de la curva combinada.
     """
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
-    p = obtener_precosteo(referencia_id)
-    if not p:
-        raise ValueError("precosteo_no_encontrado")
-    if not p.get("bloqueada") and not p.get("es_muestra_diseno"):
-        raise ValueError("precosteo_no_firmado")
-    # Regla de negocio: un precosteo = un lote. El filtro del selector tiene
-    # cache de 30s — esta validación en servidor evita el doble corte por
-    # doble click / dos pestañas.
-    existente = (sb.table("ordenes_corte").select("id,consecutivo")
-                   .eq("referencia_id", referencia_id).limit(1).execute()).data
-    if existente:
-        raise ValueError(f"precosteo_ya_tiene_corte:{existente[0].get('consecutivo')}")
 
-    curva = curva_trazo or {}
-    prendas_curva = sum(int(n or 0) for n in curva.values())
-    prendas_est = int(cantidad_programada) if cantidad_programada else prendas_curva
-    num_capas = calcular_capas_desde_curva(curva)
-    prendas_por_trazo_est = max(1, sum(1 for v in curva.values() if int(v or 0) > 0))
-    # Metros teóricos = promedio_tecnico × cantidad_programada.
-    # Rendimiento = metros_teoricos / cantidad_programada (equivale al promedio,
-    # se guarda por auditoría por si se editan campos por separado).
-    prom = float(promedio_tecnico or 0)
-    metros_teo = round(prom * prendas_est, 2) if (prom > 0 and prendas_est > 0) else 0
-    rendimiento = round(metros_teo / prendas_est, 4) if prendas_est else 0
+    # 1) Normalizar a una lista de referencias
+    if referencias:
+        specs = []
+        for r in referencias:
+            rid = (r.get("referencia_id") or "").strip()
+            if rid:
+                specs.append({"referencia_id": rid,
+                              "curva_trazo": r.get("curva_trazo") or {},
+                              "cantidad_programada": r.get("cantidad_programada"),
+                              "promedio_tecnico": r.get("promedio_tecnico")})
+    elif referencia_id:
+        specs = [{"referencia_id": referencia_id, "curva_trazo": curva_trazo or {},
+                  "cantidad_programada": cantidad_programada, "promedio_tecnico": promedio_tecnico}]
+    else:
+        specs = []
+    if not specs:
+        raise ValueError("sin_referencias")
 
+    # 2) Validar cada precosteo + regla "un precosteo = un lote" + enriquecer
+    for s in specs:
+        p = obtener_precosteo(s["referencia_id"])
+        if not p:
+            raise ValueError("precosteo_no_encontrado")
+        if not p.get("bloqueada") and not p.get("es_muestra_diseno"):
+            raise ValueError("precosteo_no_firmado")
+        if _referencia_ya_tiene_corte(s["referencia_id"]):
+            raise ValueError(f"precosteo_ya_tiene_corte:{p.get('codigo_referencia') or ''}")
+        curva = s["curva_trazo"] or {}
+        s["_curva"]   = curva
+        s["_prendas"] = sum(int(n or 0) for n in curva.values())
+        s["_cant"]    = int(s["cantidad_programada"]) if s["cantidad_programada"] else s["_prendas"]
+        s["_prom"]    = float(s["promedio_tecnico"]) if s["promedio_tecnico"] is not None else None
+        try:
+            s["_precio"] = _precio_proceso_precosteo(s["referencia_id"], "corte")
+        except Exception:
+            s["_precio"] = None
+
+    # 3) Curva combinada del tendido + totales
+    curva_comb: dict = {}
+    for s in specs:
+        for t, n in (s["_curva"] or {}).items():
+            curva_comb[str(t)] = int(curva_comb.get(str(t), 0)) + int(n or 0)
+    prendas_total = sum(s["_prendas"] for s in specs)
+    cant_total    = sum(s["_cant"] for s in specs)
+    capas = int(num_capas) if num_capas is not None else calcular_capas_desde_curva(curva_comb)
+    prendas_por_trazo_est = max(1, sum(1 for v in curva_comb.values() if int(v or 0) > 0))
+    prom_tendido = specs[0]["_prom"] or 0
+    metros_teo   = round(prom_tendido * cant_total, 2) if (prom_tendido and cant_total) else 0
+    rendimiento  = round(metros_teo / cant_total, 4) if cant_total else 0
+
+    primary = specs[0]
     codigo = next_consecutivo_mensual("OC", width=4)
     row = {
         "consecutivo": codigo,
-        "referencia_id": referencia_id,
+        "referencia_id": primary["referencia_id"],   # primaria (retro-compat de joins)
         "largo_trazo": float(largo_trazo),
         "prendas_por_trazo": prendas_por_trazo_est,
-        "curva_trazo": curva,
-        "num_capas": num_capas,
-        "cantidad_programada": prendas_est,
-        "promedio_tecnico": float(promedio_tecnico) if promedio_tecnico is not None else None,
-        "prendas_estimadas": prendas_est,
+        "curva_trazo": curva_comb,                    # combinada del tendido
+        "num_capas": capas,
+        "cantidad_programada": cant_total,
+        "promedio_tecnico": prom_tendido or None,
+        "prendas_estimadas": prendas_total,
         "metros_consumidos": metros_teo,
         "rendimiento_teorico": rendimiento,
         "responsable": responsable or None,
@@ -1064,7 +1170,6 @@ def crear_orden_corte(*, referencia_id: str,
     try:
         r = sb.table("ordenes_corte").insert(row).execute()
     except Exception as e:
-        # Compat si la migración aún no corrió: quita las columnas nuevas
         msg = str(e)
         cols_nuevas = ("cantidad_programada", "promedio_tecnico", "fecha_envio",
                        "trazos_url", "destinatarios_correo")
@@ -1074,7 +1179,12 @@ def crear_orden_corte(*, referencia_id: str,
             r = sb.table("ordenes_corte").insert(row).execute()
         else:
             raise
-    return r.data[0]
+    oc = r.data[0]
+
+    # 4) Filas hijas: una por referencia (con degradación si la tabla no existe)
+    _guardar_referencias_corte(oc["id"], specs)
+    _cache_invalidate_prefix("ordenes_corte")
+    return oc
 
 
 def listar_ordenes_corte(*, estado: Optional[str] = None,
@@ -1271,7 +1381,9 @@ def obtener_orden_corte(oc_id: str) -> Optional[dict]:
         precio_sug = _precio_proceso_precosteo(r[0].get("referencia_id"), "corte")
     except Exception:
         pass
-    return {**r[0], "rollos": rollos, "precio_corte_sugerido": precio_sug}
+    referencias = _referencias_de_corte(oc_id, r[0])
+    return {**r[0], "rollos": rollos, "precio_corte_sugerido": precio_sug,
+            "referencias": referencias}
 
 
 def _rollo_ids_scan(rr: dict) -> set:

@@ -590,12 +590,23 @@ async def subir_foto(
 # BLOQUE 4 — ORDEN DE CORTE
 # ═══════════════════════════════════════════════════════════════════════
 
+class CorteReferenciaIn(BaseModel):
+    referencia_id:       str
+    curva_trazo:         dict = Field(default_factory=dict)
+    cantidad_programada: Optional[int] = None
+    promedio_tecnico:    Optional[float] = None
+
+
 class CrearCorteBody(BaseModel):
-    referencia_id:         str
-    largo_trazo:           float = Field(gt=0)
+    # Legacy (una sola referencia) — se sigue aceptando:
+    referencia_id:         Optional[str] = None
     curva_trazo:           dict = Field(default_factory=dict)
     cantidad_programada:   Optional[int] = None
     promedio_tecnico:      Optional[float] = None
+    # Nuevo: varias referencias en un mismo tendido.
+    referencias:           Optional[list[CorteReferenciaIn]] = None
+    num_capas:             Optional[int] = None   # capas del tendido (manual)
+    largo_trazo:           float = Field(gt=0)
     responsable:           Optional[str] = None
     fecha_envio:           Optional[str] = None
     indicaciones:          Optional[str] = None
@@ -641,6 +652,8 @@ def crear_corte(
             curva_trazo=body.curva_trazo,
             cantidad_programada=body.cantidad_programada,
             promedio_tecnico=body.promedio_tecnico,
+            num_capas=body.num_capas,
+            referencias=[r.model_dump() for r in body.referencias] if body.referencias else None,
             responsable=body.responsable,
             fecha_envio=body.fecha_envio,
             indicaciones=body.indicaciones,
