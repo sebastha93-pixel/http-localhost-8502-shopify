@@ -669,24 +669,46 @@ def crear_precosteo(*, codigo_referencia: str, nombre: str, tela: str, color: st
     return obtener_precosteo(ref_id)
 
 
+def _puede_editar_precosteo_bloqueado(usuario_id: Optional[str]) -> bool:
+    """Un precosteo AUTORIZADO (bloqueado) solo lo pueden editar quienes pueden
+    autorizar precosteos (hoy: Sebastián / María Alejandra) o un admin.
+    En borrador lo edita el diseñador; una vez autorizado, solo estos."""
+    if not usuario_id:
+        return False
+    from backend.services import usuarios as _usuarios
+    u = _usuarios.obtener_por_id(usuario_id)
+    if not u:
+        return False
+    return bool(u.get("puede_autorizar_precosteo")) or (u.get("rol") == "admin")
+
+
 def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
+                         codigo_referencia: Optional[str] = None,
                          tela: Optional[str] = None, color: Optional[str] = None,
                          iva_pct: Optional[float] = None, margen: Optional[float] = None,
                          items: Optional[list[dict]] = None,
                          foto_url: Optional[str] = None,
-                         es_muestra_diseno: Optional[bool] = None) -> dict:
-    """Actualiza un borrador. Rechaza si el precosteo ya está bloqueado."""
+                         es_muestra_diseno: Optional[bool] = None,
+                         usuario_id: Optional[str] = None) -> dict:
+    """Actualiza un precosteo.
+    - Borrador: lo edita el diseñador (permiso produccion_costos modificar).
+    - Autorizado (bloqueado): SOLO quien puede autorizar precosteos o un admin.
+    """
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
     actual = obtener_precosteo(precosteo_id)
     if not actual:
         raise ValueError("no_encontrado")
-    if actual.get("bloqueada"):
+    if actual.get("bloqueada") and not _puede_editar_precosteo_bloqueado(usuario_id):
         raise ValueError("precosteo_bloqueado")
 
     update: dict = {}
     if nombre is not None:  update["nombre"] = nombre.strip()
+    if codigo_referencia is not None:
+        cod = codigo_referencia.strip()
+        if cod:
+            update["codigo_referencia"] = cod
     if tela is not None:    update["tela"] = tela.strip() or None
     if color is not None:   update["color"] = color.strip() or None
     if iva_pct is not None: update["iva_pct"] = iva_pct
@@ -823,13 +845,21 @@ def obtener_precosteo(precosteo_id: str) -> Optional[dict]:
 
 
 def subir_foto_precosteo(precosteo_id: str, *, file_bytes: bytes, filename: str,
-                         content_type: str) -> str:
+                         content_type: str, usuario_id: Optional[str] = None) -> str:
     """Sube la foto de la referencia a Supabase Storage bucket 'produccion-fotos'
     y devuelve la URL pública. Actualiza foto_url en la tabla.
+
+    Mismo candado que actualizar_precosteo: en borrador la cambia el diseñador;
+    una vez autorizado, solo quien puede autorizar precosteos o un admin.
     """
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
+    actual = obtener_precosteo(precosteo_id)
+    if not actual:
+        raise ValueError("no_encontrado")
+    if actual.get("bloqueada") and not _puede_editar_precosteo_bloqueado(usuario_id):
+        raise ValueError("precosteo_bloqueado")
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
     if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
         raise ValueError("formato_imagen_no_soportado")

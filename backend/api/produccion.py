@@ -418,6 +418,7 @@ class PrecosteoIn(BaseModel):
 
 class PrecosteoUpdate(BaseModel):
     nombre:  Optional[str] = None
+    codigo_referencia: Optional[str] = None
     tela:    Optional[str] = None
     color:   Optional[str] = None
     iva_pct: Optional[float] = None
@@ -484,20 +485,24 @@ def detalle_precosteo(
 def actualizar_precosteo(
     precosteo_id: str,
     body: PrecosteoUpdate,
-    _: CurrentUser = Depends(require_permission_estricto("produccion_costos", "modificar")),
+    user: CurrentUser = Depends(require_permission_estricto("produccion_costos", "modificar")),
 ) -> dict:
     try:
         return svc.actualizar_precosteo(
             precosteo_id,
             nombre=body.nombre,
+            codigo_referencia=body.codigo_referencia,
             tela=body.tela,
             color=body.color,
             iva_pct=body.iva_pct,
             margen=body.margen,
             items=[i.model_dump() for i in body.items] if body.items is not None else None,
             es_muestra_diseno=body.es_muestra_diseno,
+            usuario_id=user.id,
         )
     except ValueError as e:
+        if str(e) == "precosteo_bloqueado":
+            raise HTTPException(403, "Este producto ya está autorizado. Solo quien puede autorizar precosteos (Sebastián o María Alejandra) puede editarlo.")
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, f"actualizar: {str(e)[:200]}")
@@ -548,9 +553,12 @@ async def subir_foto(
             file_bytes=content,
             filename=file.filename or "foto.jpg",
             content_type=file.content_type or "image/jpeg",
+            usuario_id=user.id,
         )
         return {"ok": True, "foto_url": url}
     except ValueError as e:
+        if str(e) == "precosteo_bloqueado":
+            raise HTTPException(403, "Este producto ya está autorizado. Solo Sebastián o María Alejandra pueden cambiar la foto.")
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, f"foto: {str(e)[:200]}")

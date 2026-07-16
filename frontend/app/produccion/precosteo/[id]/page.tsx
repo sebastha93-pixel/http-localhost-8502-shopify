@@ -9,11 +9,12 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, API_BASE } from "@/lib/api";
-import { getToken } from "@/lib/auth";
+import { getToken, esAdmin, puedeAccionModulo } from "@/lib/auth";
+import { useAuth } from "@/components/auth-provider";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Lock, Camera, CheckCircle, Loader2, AlertCircle } from "lucide-react";
+import { ArrowLeft, Lock, Camera, CheckCircle, Loader2, AlertCircle, Pencil, X } from "lucide-react";
 
 interface Item {
   id: string;
@@ -54,6 +55,10 @@ export default function PrecosteoDetallePage() {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
 
+  const { user } = useAuth();
+  const [editando, setEditando] = useState(false);
+  const [form, setForm] = useState({ nombre: "", codigo_referencia: "", tela: "" });
+
   const q = useQuery<Precosteo>({
     queryKey: ["produccion", "precosteo", id],
     queryFn: () => api.get(`/api/produccion/precosteo/${id}`),
@@ -65,6 +70,21 @@ export default function PrecosteoDetallePage() {
     onSuccess: () => {
       setMsg("Firmado y bloqueado.");
       setErr("");
+      qc.invalidateQueries({ queryKey: ["produccion", "precosteo", id] });
+    },
+    onError: (e: Error) => { setErr(e.message); setMsg(""); },
+  });
+
+  const guardarMut = useMutation({
+    mutationFn: () => api.patch(`/api/produccion/precosteo/${id}`, {
+      nombre: form.nombre.trim(),
+      codigo_referencia: form.codigo_referencia.trim(),
+      tela: form.tela.trim(),
+    }),
+    onSuccess: () => {
+      setMsg("Cambios guardados.");
+      setErr("");
+      setEditando(false);
       qc.invalidateQueries({ queryKey: ["produccion", "precosteo", id] });
     },
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
@@ -94,6 +114,22 @@ export default function PrecosteoDetallePage() {
 
   const p = q.data;
 
+  // Borrador → lo edita el diseñador (produccion_costos modificar).
+  // Autorizado (bloqueado) → SOLO admin (hoy = Sebastián / María Alejandra).
+  const puedeEditar = p.bloqueada
+    ? esAdmin(user)
+    : puedeAccionModulo(user, "produccion_costos", "modificar");
+
+  function abrirEdicion() {
+    setForm({
+      nombre: p.nombre || "",
+      codigo_referencia: p.codigo_referencia || "",
+      tela: p.tela || "",
+    });
+    setErr(""); setMsg("");
+    setEditando(true);
+  }
+
   return (
     <PageShell title={`${p.codigo_referencia} · ${p.nombre}`} subtitle={p.tela || "—"}>
       <div className="flex items-center justify-between">
@@ -109,8 +145,49 @@ export default function PrecosteoDetallePage() {
           ) : (
             <Badge tone="pendiente">Borrador · editable</Badge>
           )}
+          {puedeEditar && !editando && (
+            <button onClick={abrirEdicion}
+              className="inline-flex items-center gap-1 rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud">
+              <Pencil className="h-3.5 w-3.5" /> Editar
+            </button>
+          )}
         </div>
       </div>
+
+      {editando && (
+        <Card>
+          <CardContent className="p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="section-label">Editar producto</p>
+              {p.bloqueada && (
+                <span className="text-[0.7rem] text-graphite inline-flex items-center gap-1">
+                  <Lock className="h-3 w-3" /> Autorizado — solo tú o María Alejandra pueden editar
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <FieldEdit label="Referencia (código)" value={form.codigo_referencia}
+                onChange={(v) => setForm({ ...form, codigo_referencia: v })} />
+              <FieldEdit label="Nombre" value={form.nombre}
+                onChange={(v) => setForm({ ...form, nombre: v })} />
+              <FieldEdit label="Tela" value={form.tela}
+                onChange={(v) => setForm({ ...form, tela: v })} />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => { setEditando(false); setErr(""); }}
+                className="inline-flex items-center gap-1 rounded-sm border border-border bg-card px-4 py-2 text-xs font-semibold uppercase tracking-widest text-graphite hover:bg-cloud">
+                <X className="h-3.5 w-3.5" /> Cancelar
+              </button>
+              <button onClick={() => guardarMut.mutate()}
+                disabled={guardarMut.isPending || !form.nombre.trim() || !form.codigo_referencia.trim()}
+                className="inline-flex items-center gap-2 rounded-sm bg-teal px-5 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-ink-900 disabled:opacity-40">
+                {guardarMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />}
+                Guardar
+              </button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {msg && <div className="rounded-sm border border-teal/40 bg-teal/5 px-3 py-2 text-xs text-teal flex items-center gap-2"><CheckCircle className="h-3.5 w-3.5" /> {msg}</div>}
       {err && <div className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta flex items-center gap-2"><AlertCircle className="h-3.5 w-3.5" /> {err}</div>}
@@ -127,7 +204,7 @@ export default function PrecosteoDetallePage() {
                 <Camera className="h-8 w-8" />
               </div>
             )}
-            {!p.bloqueada && (
+            {puedeEditar && (
               <>
                 <input ref={fileRef} type="file" accept="image/*" className="hidden"
                   onChange={(e) => { const f = e.target.files?.[0]; if (f) subirFoto(f); }} />
@@ -203,6 +280,16 @@ function Kpi({ label, value }: { label: string; value: string }) {
     <div>
       <p className="text-[0.7rem] uppercase tracking-widest text-graphite">{label}</p>
       <p className="mt-1 font-display text-xl text-ink-900 tabular">{value}</p>
+    </div>
+  );
+}
+
+function FieldEdit({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <div>
+      <label className="mb-1 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">{label}</label>
+      <input value={value} onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm" />
     </div>
   );
 }
