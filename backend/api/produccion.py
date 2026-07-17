@@ -628,6 +628,7 @@ class CerrarCorteBody(BaseModel):
     capas_real:        Optional[int] = None
     promedio_real:     Optional[float] = None
     unidades_cortadas: Optional[dict] = None
+    unidades_por_referencia: Optional[dict] = None  # {ref_id: {talla: qty}} — cierre por referencia
     retazos_cantidad:  Optional[int] = None
     espigas_metros:    Optional[dict] = None   # {"4": 1.2, "6-12": 2.4, ...} m extendidos
     retazos_metros:    Optional[float] = None  # retazos medidos en METROS
@@ -898,6 +899,7 @@ def cerrar_corte(
             capas_real=body.capas_real,
             promedio_real=body.promedio_real,
             unidades_cortadas=body.unidades_cortadas,
+            unidades_por_referencia=body.unidades_por_referencia,
             retazos_cantidad=body.retazos_cantidad,
             espigas_metros=body.espigas_metros,
             retazos_metros=body.retazos_metros,

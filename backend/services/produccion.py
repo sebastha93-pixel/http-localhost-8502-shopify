@@ -1622,6 +1622,7 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
                         capas_real: Optional[int] = None,
                         promedio_real: Optional[float] = None,
                         unidades_cortadas: Optional[dict] = None,
+                        unidades_por_referencia: Optional[dict] = None,
                         retazos_cantidad: Optional[int] = None,
                         espigas_metros: Optional[dict] = None,
                         retazos_metros: Optional[float] = None,
@@ -1644,6 +1645,25 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
     rollos = oc.get("rollos") or []
     if not rollos:
         raise ValueError("orden_sin_rollos")
+
+    # Cierre POR REFERENCIA: unidades_por_referencia = {ref_id: {talla: qty}}.
+    # Se guarda por referencia en la tabla hija y el PADRE queda con la SUMA
+    # combinada (lo que consumen el tablero, insumos y Siigo).
+    unidades_por_ref_limpio: dict = {}
+    if unidades_por_referencia:
+        combinado: dict = {}
+        for ref_id, unid in unidades_por_referencia.items():
+            limpio_ref: dict = {}
+            for talla, v in (unid or {}).items():
+                try:
+                    n = int(float(v or 0))
+                except (TypeError, ValueError):
+                    raise ValueError(f"unidades_invalidas_talla_{talla}")
+                limpio_ref[str(talla)] = n
+                if n:
+                    combinado[str(talla)] = combinado.get(str(talla), 0) + n
+            unidades_por_ref_limpio[str(ref_id)] = limpio_ref
+        unidades_cortadas = combinado   # el padre lleva la suma
 
     # Sanitizar unidades_cortadas ANTES de tocar nada — un valor no numérico
     # guardado aquí rompería el tablero y el cruce Siigo para siempre.
@@ -1775,6 +1795,15 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
             sb.table("ordenes_corte").update(update).eq("id", oc_id).execute()
         else:
             raise
+
+    # Cierre por referencia: guardar las unidades cortadas de cada una en su fila.
+    if unidades_por_ref_limpio:
+        for ref_id, unid in unidades_por_ref_limpio.items():
+            try:
+                sb.table("orden_corte_referencias").update({"unidades_cortadas": unid}) \
+                  .eq("orden_corte_id", oc_id).eq("referencia_id", ref_id).execute()
+            except Exception:
+                pass  # tabla hija sin migrar → el combinado ya quedó en el padre
     return obtener_orden_corte(oc_id)
 
 
