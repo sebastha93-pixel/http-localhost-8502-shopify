@@ -31,7 +31,9 @@ por el puerto 9100). Es una opción estándar en las RICOH MP/IM.
 import json
 import os
 import socket
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -59,14 +61,19 @@ def cargar_config() -> dict:
         return os.environ.get("AGENTE_" + k.upper(), cfg.get(k, d))
 
     conf = {
-        "backend_url":  (g("backend_url") or "").rstrip("/"),
-        "email":        g("email") or "",
-        "password":     g("password") or "",
-        "printer_ip":   g("printer_ip") or "",
-        "printer_port": int(g("printer_port", 9100) or 9100),
-        "poll_seconds": int(g("poll_seconds", 12) or 12),
+        "backend_url":   (g("backend_url") or "").rstrip("/"),
+        "email":         g("email") or "",
+        "password":      g("password") or "",
+        # Método recomendado (RICOH por AirPrint/IPP en Mac/Linux): cola del sistema.
+        "printer_queue": g("printer_queue") or "",
+        # Alternativa (impresoras con PDF Direct Print): envío RAW a IP:9100.
+        "printer_ip":    g("printer_ip") or "",
+        "printer_port":  int(g("printer_port", 9100) or 9100),
+        "poll_seconds":  int(g("poll_seconds", 12) or 12),
     }
-    faltan = [k for k in ("backend_url", "email", "password", "printer_ip") if not conf[k]]
+    faltan = [k for k in ("backend_url", "email", "password") if not conf[k]]
+    if not conf["printer_queue"] and not conf["printer_ip"]:
+        faltan.append("printer_queue (recomendado) o printer_ip")
     if faltan:
         log("✖ Falta configurar: " + ", ".join(faltan))
         log("  Edita config.json (mira config.example.json) y vuelve a arrancar.")
@@ -116,18 +123,39 @@ class Api:
         self._req("POST", f"/api/produccion/impresion/{rem_id}/impresa")
 
 
-# ─── Envío a la impresora por IP (RAW / puerto 9100) ─────────────────────
-def imprimir(pdf: bytes, ip: str, port: int) -> None:
-    with socket.create_connection((ip, port), timeout=30) as s:
-        s.sendall(pdf)
+# ─── Envío a la impresora ─────────────────────────────────────────────────
+def imprimir(pdf: bytes, conf: dict) -> None:
+    """Imprime el PDF. Método `lp` (cola del sistema — recomendado para RICOH
+    por AirPrint/IPP en Mac/Linux) si hay printer_queue; si no, envío RAW por
+    IP:9100 (impresoras con PDF Direct Print)."""
+    if conf["printer_queue"]:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(pdf)
+            ruta = f.name
+        try:
+            r = subprocess.run(
+                ["lp", "-d", conf["printer_queue"], "-t", "Remision MALE DENIM", ruta],
+                capture_output=True, text=True, timeout=60)
+            if r.returncode != 0:
+                raise RuntimeError(r.stderr.strip() or f"lp devolvió {r.returncode}")
+        finally:
+            try:
+                os.remove(ruta)
+            except OSError:
+                pass
+    else:
+        with socket.create_connection((conf["printer_ip"], conf["printer_port"]), timeout=30) as s:
+            s.sendall(pdf)
 
 
 # ─── Bucle principal ──────────────────────────────────────────────────────
 def main() -> None:
     conf = cargar_config()
+    destino = (f"cola '{conf['printer_queue']}' (lp)" if conf["printer_queue"]
+               else f"{conf['printer_ip']}:{conf['printer_port']} (RAW)")
     log("Agente de impresión MALE'DENIM")
     log(f"  Sistema : {conf['backend_url']}")
-    log(f"  RICOH   : {conf['printer_ip']}:{conf['printer_port']}")
+    log(f"  RICOH   : {destino}")
     log(f"  Chequeo : cada {conf['poll_seconds']}s")
 
     api = Api(conf["backend_url"], conf["email"], conf["password"])
@@ -145,7 +173,7 @@ def main() -> None:
                 etiqueta = rem.get("consecutivo") or rid[:8]
                 try:
                     pdf = api.pdf(rid)
-                    imprimir(pdf, conf["printer_ip"], conf["printer_port"])
+                    imprimir(pdf, conf)
                     api.marcar_impresa(rid)
                     fallidas.pop(rid, None)
                     log(f"  ✓ Impresa {etiqueta} ({len(pdf)//1024} KB) → RICOH")

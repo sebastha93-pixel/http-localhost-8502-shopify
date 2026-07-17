@@ -2,7 +2,6 @@
   "backend_url": "https://backend-production-21f0.up.railway.app",
   "email": "impresion@maledenim.com",
   "password": "LA-CLAVE-DEL-USUARIO",
-  "printer_ip": "192.168.19.1",
-  "printer_port": 9100,
+  "printer_queue": "RICOH_M_320F__88a84d_",
   "poll_seconds": 12
 }
