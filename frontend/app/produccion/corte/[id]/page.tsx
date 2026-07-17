@@ -125,6 +125,8 @@ export default function DetalleOrdenCortePage() {
   const [fechaEntrega, setFechaEntrega] = useState("");
   const [precioCorte, setPrecioCorte] = useState("");
   const [unidadesReal, setUnidadesReal] = useState<Record<string, string>>({});
+  // Multi-referencia: unidades cortadas por referencia → { refId: { talla: "n" } }
+  const [unidadesRealRef, setUnidadesRealRef] = useState<Record<string, Record<string, string>>>({});
 
   const q = useQuery<OrdenCorte>({
     queryKey: ["produccion", "corte", id],
@@ -289,10 +291,29 @@ export default function DetalleOrdenCortePage() {
 
   const cerrar = useMutation({
     mutationFn: () => {
+      const refs = q.data?.referencias || [];
+      const multi = refs.length > 1;
       const unidadesFinal: Record<string, number> = {};
-      for (const [t, v] of Object.entries(unidadesReal)) {
-        const n = parseInt(v || "0", 10);
-        if (n > 0) unidadesFinal[t] = n;
+      let unidadesPorRef: Record<string, Record<string, number>> | null = null;
+      if (multi) {
+        // Una grilla por referencia → sumamos por talla para el combinado.
+        unidadesPorRef = {};
+        for (const rf of refs) {
+          const refId = rf.referencia_id;
+          if (!refId) continue;
+          const grid = unidadesRealRef[refId] || {};
+          const limpio: Record<string, number> = {};
+          for (const [t, v] of Object.entries(grid)) {
+            const n = parseInt(v || "0", 10);
+            if (n > 0) { limpio[t] = n; unidadesFinal[t] = (unidadesFinal[t] || 0) + n; }
+          }
+          unidadesPorRef[refId] = limpio;
+        }
+      } else {
+        for (const [t, v] of Object.entries(unidadesReal)) {
+          const n = parseInt(v || "0", 10);
+          if (n > 0) unidadesFinal[t] = n;
+        }
       }
       // CONSUMO Y PROMEDIO REALES: los calcula el cortador manualmente
       //   (contando capas/espigas en piso) y los digita en el informe.
@@ -311,6 +332,7 @@ export default function DetalleOrdenCortePage() {
         capas_real: capasReal ? parseInt(capasReal, 10) : null,
         promedio_real: promedioFinal ? Number(promedioFinal.toFixed(4)) : null,
         unidades_cortadas: unidadesFinal,
+        unidades_por_referencia: unidadesPorRef,
         retazos_metros: retazosM || null,
         fecha_entrega: fechaEntrega || null,
         precio_corte: precioCorte ? parseFloat(precioCorte) : null,
@@ -952,6 +974,7 @@ export default function DetalleOrdenCortePage() {
           fechaEntrega={fechaEntrega} setFechaEntrega={setFechaEntrega}
           precioCorte={precioCorte} setPrecioCorte={setPrecioCorte}
           unidadesReal={unidadesReal} setUnidadesReal={setUnidadesReal}
+          unidadesRealRef={unidadesRealRef} setUnidadesRealRef={setUnidadesRealRef}
           consumoReal={consumoReal} setConsumoReal={setConsumoReal}
           mermaTipo={mermaTipo} setMermaTipo={setMermaTipo}
           mermaValor={mermaValor} setMermaValor={setMermaValor}
@@ -1093,12 +1116,19 @@ interface OrdenCorteForInforme {
   promedio_tecnico?: number;
   metros_consumidos: number;
   referencia?: { codigo_referencia: string };
+  referencias?: {
+    referencia_id?: string;
+    curva_trazo?: Record<string, number>;
+    cantidad_programada?: number | null;
+    referencia?: { codigo_referencia?: string; nombre?: string };
+  }[];
 }
 
 function InformeCorteCard({
   oc, refLote, setRefLote, capasReal, setCapasReal, promedioReal, setPromedioReal,
   retazos, setRetazos, fechaEntrega, setFechaEntrega, precioCorte, setPrecioCorte,
-  unidadesReal, setUnidadesReal, consumoReal, setConsumoReal,
+  unidadesReal, setUnidadesReal, unidadesRealRef, setUnidadesRealRef,
+  consumoReal, setConsumoReal,
   mermaTipo, setMermaTipo, mermaValor, setMermaValor,
   onCerrar, isPending,
 }: {
@@ -1110,6 +1140,8 @@ function InformeCorteCard({
   fechaEntrega: string; setFechaEntrega: (v: string) => void;
   precioCorte: string; setPrecioCorte: (v: string) => void;
   unidadesReal: Record<string, string>; setUnidadesReal: (v: Record<string, string>) => void;
+  unidadesRealRef: Record<string, Record<string, string>>;
+  setUnidadesRealRef: (v: Record<string, Record<string, string>>) => void;
   consumoReal: string; setConsumoReal: (v: string) => void;
   mermaTipo: string; setMermaTipo: (v: string) => void;
   mermaValor: string; setMermaValor: (v: string) => void;
@@ -1118,9 +1150,15 @@ function InformeCorteCard({
 }) {
   // Tallas de la curva original (para mostrar los inputs de unidades cortadas)
   const tallas = Object.keys(oc.curva_trazo || {});
+  // Multi-referencia: una grilla de unidades por cada referencia del tendido.
+  const refs = oc.referencias || [];
+  const multiRef = refs.length > 1;
 
-  const totalUnidades = Object.values(unidadesReal)
-    .reduce((s, v) => s + (parseInt(v || "0", 10) || 0), 0);
+  const totalUnidades = multiRef
+    ? refs.reduce((s, rf) => s + Object.values(unidadesRealRef[rf.referencia_id || ""] || {})
+        .reduce((a, v) => a + (parseInt(v || "0", 10) || 0), 0), 0)
+    : Object.values(unidadesReal)
+        .reduce((s, v) => s + (parseInt(v || "0", 10) || 0), 0);
 
   // El cortador calcula el consumo, las capas y el promedio manualmente
   // (contando en piso) y los digita aquí para cruzarlos contra el teórico.
@@ -1141,6 +1179,16 @@ function InformeCorteCard({
 
   function setUnidad(t: string, v: string) {
     setUnidadesReal({ ...unidadesReal, [t]: v });
+  }
+  function setUnidadRef(refId: string, t: string, v: string) {
+    setUnidadesRealRef({
+      ...unidadesRealRef,
+      [refId]: { ...(unidadesRealRef[refId] || {}), [t]: v },
+    });
+  }
+  function totalRef(refId: string) {
+    return Object.values(unidadesRealRef[refId] || {})
+      .reduce((s, v) => s + (parseInt(v || "0", 10) || 0), 0);
   }
 
   return (
@@ -1215,29 +1263,75 @@ function InformeCorteCard({
         </div>
 
         {/* Unidades cortadas por talla */}
-        <div>
-          <p className="section-label mb-2">Unidades cortadas por talla</p>
-          <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
-            {tallas.map((t) => (
-              <div key={t}>
-                <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite text-center">
-                  Talla {t}
-                  <div className="text-[0.68rem] text-graphite/70 normal-case tracking-normal">
-                    prog. {oc.curva_trazo?.[t] ?? 0}
+        {multiRef ? (
+          <div className="space-y-3">
+            <p className="section-label">Unidades cortadas por talla · por referencia</p>
+            {refs.map((rf, i) => {
+              const refId = rf.referencia_id || "";
+              const curvaRef = rf.curva_trazo || {};
+              const tallasRef = Object.keys(curvaRef);
+              const cod = rf.referencia?.codigo_referencia || "Referencia";
+              return (
+                <div key={refId || i} className="rounded-sm border border-border bg-cloud/20 p-3">
+                  <div className="mb-2 flex items-center gap-2">
+                    <span className="inline-grid h-6 w-6 place-items-center rounded-full border border-navy-600 bg-navy-50 text-[0.8rem] font-semibold text-navy-600">
+                      {i + 1}
+                    </span>
+                    <span className="text-sm font-semibold text-ink-900">{cod}</span>
+                    {rf.referencia?.nombre && <span className="text-[0.72rem] text-graphite">· {rf.referencia.nombre}</span>}
                   </div>
-                </label>
-                <input value={unidadesReal[t] || ""} onChange={(e) => setUnidad(t, e.target.value)}
-                  inputMode="numeric" placeholder="0"
-                  className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-sm text-center tabular" />
-              </div>
-            ))}
+                  <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
+                    {tallasRef.map((t) => (
+                      <div key={t}>
+                        <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite text-center">
+                          Talla {t}
+                          <div className="text-[0.68rem] text-graphite/70 normal-case tracking-normal">
+                            prog. {curvaRef[t] ?? 0}
+                          </div>
+                        </label>
+                        <input value={unidadesRealRef[refId]?.[t] || ""} onChange={(e) => setUnidadRef(refId, t, e.target.value)}
+                          inputMode="numeric" placeholder="0"
+                          className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-sm text-center tabular" />
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-1 text-[0.7rem] text-graphite">
+                    Cortadas ref: <span className="font-semibold text-ink-900 tabular">{totalRef(refId)}</span>
+                    {rf.cantidad_programada ? ` / programadas ${rf.cantidad_programada}` : ""}
+                  </p>
+                </div>
+              );
+            })}
+            <p className="text-[0.7rem] text-graphite">
+              Total cortadas (todas las referencias): <span className="font-semibold text-ink-900 tabular">{totalUnidades}</span>
+              {oc.cantidad_programada ? ` / programadas ${oc.cantidad_programada}` : ""}
+            </p>
           </div>
-          <p className="mt-1 text-[0.7rem] text-graphite">
-            Total cortadas: <span className="font-semibold text-ink-900 tabular">{totalUnidades}</span>
-            {oc.cantidad_programada
-              ? ` / programadas ${oc.cantidad_programada}` : ""}
-          </p>
-        </div>
+        ) : (
+          <div>
+            <p className="section-label mb-2">Unidades cortadas por talla</p>
+            <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
+              {tallas.map((t) => (
+                <div key={t}>
+                  <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite text-center">
+                    Talla {t}
+                    <div className="text-[0.68rem] text-graphite/70 normal-case tracking-normal">
+                      prog. {oc.curva_trazo?.[t] ?? 0}
+                    </div>
+                  </label>
+                  <input value={unidadesReal[t] || ""} onChange={(e) => setUnidad(t, e.target.value)}
+                    inputMode="numeric" placeholder="0"
+                    className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-sm text-center tabular" />
+                </div>
+              ))}
+            </div>
+            <p className="mt-1 text-[0.7rem] text-graphite">
+              Total cortadas: <span className="font-semibold text-ink-900 tabular">{totalUnidades}</span>
+              {oc.cantidad_programada
+                ? ` / programadas ${oc.cantidad_programada}` : ""}
+            </p>
+          </div>
+        )}
 
         <div className="flex justify-end">
           <button onClick={onCerrar} disabled={isPending || !consumoReal}
