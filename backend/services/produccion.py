@@ -2271,6 +2271,62 @@ def obtener_remision(rem_id: str) -> Optional[dict]:
     return {**r[0], "items": items}
 
 
+# ── Cola de impresión (agente local por IP → RICOH) ──────────────────────
+# Cada remisión nace con impresa_at = NULL. El agente local en la red pide
+# las pendientes, imprime el PDF en la RICOH por su IP y marca impresa_at.
+def remisiones_pendientes_impresion(limite: int = 30) -> list[dict]:
+    """Remisiones aún no impresas, más antigua primero (para el agente local)."""
+    sb = _sb()
+    if sb is None:
+        return []
+    try:
+        rows = (sb.table("remisiones")
+                  .select("id,consecutivo,tipo,created_at,confeccionista:confeccionista_id(nombre)")
+                  .is_("impresa_at", "null")
+                  .order("created_at")
+                  .limit(limite).execute()).data or []
+    except Exception:
+        # Columna aún sin migrar → no hay cola todavía.
+        return []
+    out = []
+    for r in rows:
+        conf = r.get("confeccionista") or {}
+        out.append({
+            "id": r["id"],
+            "consecutivo": r.get("consecutivo"),
+            "tipo": r.get("tipo"),
+            "confeccionista": (conf.get("nombre") if isinstance(conf, dict) else None),
+            "created_at": r.get("created_at"),
+        })
+    return out
+
+
+def marcar_remision_impresa(rem_id: str) -> bool:
+    """El agente confirma que ya imprimió esta remisión."""
+    sb = _sb()
+    if sb is None:
+        return False
+    try:
+        r = (sb.table("remisiones")
+               .update({"impresa_at": _now_iso()})
+               .eq("id", rem_id).is_("impresa_at", "null").execute()).data
+        return bool(r)
+    except Exception:
+        return False
+
+
+def marcar_remision_reimprimir(rem_id: str) -> bool:
+    """Vuelve a poner la remisión en la cola (impresa_at = NULL) para reimprimir."""
+    sb = _sb()
+    if sb is None:
+        return False
+    try:
+        sb.table("remisiones").update({"impresa_at": None}).eq("id", rem_id).execute()
+        return True
+    except Exception:
+        return False
+
+
 def marcar_remision_recogida(rem_id: str, usuario: str = "sistema") -> dict:
     sb = _sb()
     if sb is None:

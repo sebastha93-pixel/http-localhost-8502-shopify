@@ -1,0 +1,8 @@
+{
+  "backend_url": "https://TU-BACKEND.up.railway.app",
+  "email": "impresion@maledenim.com",
+  "password": "LA-CLAVE-DEL-USUARIO",
+  "printer_ip": "192.168.1.50",
+  "printer_port": 9100,
+  "poll_seconds": 12
+}

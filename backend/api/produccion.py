@@ -1079,10 +1079,20 @@ def crear_remision(
             tipo=body.tipo,
         )
         extra: dict = {}
-        if body.tipo == "terminacion":
-            # Al asignar el lote a terminación: se imprime la remisión de
-            # insumos de terminación y se envía el link al proveedor.
+        import os as _os
+        modo_agente = _os.environ.get("IMPRESION_AGENTE", "").strip().lower() in (
+            "1", "true", "si", "sí", "yes", "on")
+        # Impresión de la remisión (corte + insumos):
+        #  · modo agente → la remisión ya está en la cola (impresa_at NULL) y el
+        #    agente local la imprime en la RICOH por IP. El frontend NO abre el
+        #    diálogo del navegador (evita doble impresión).
+        #  · sin agente → flujo anterior: email-to-print en terminación, y en
+        #    confección el frontend abre el diálogo del navegador.
+        if modo_agente:
+            extra["impresion"] = "agente"
+        elif body.tipo == "terminacion":
             extra["impresion"] = _imprimir_remision(rem)
+        if body.tipo == "terminacion":
             try:
                 extra["whatsapp"] = svc._notificar_remision_whatsapp(rem)
             except Exception as e:
@@ -1606,6 +1616,34 @@ def remision_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="remision_{rem.get("consecutivo","")}.pdf"'},
     )
+
+
+# ── Cola de impresión (agente local por IP → RICOH) ──────────────────────
+# El agente local corre en un PC de la red de MALE'DENIM: pide las remisiones
+# pendientes, baja cada PDF de /remisiones/{id}/pdf y lo manda a la RICOH por
+# su IP (puerto 9100). Al terminar marca cada una como impresa.
+@router.get("/impresion/pendientes")
+def impresion_pendientes(
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+):
+    return {"pendientes": svc.remisiones_pendientes_impresion()}
+
+
+@router.post("/impresion/{rem_id}/impresa")
+def impresion_marcar_impresa(
+    rem_id: str,
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+):
+    return {"ok": svc.marcar_remision_impresa(rem_id)}
+
+
+@router.post("/impresion/{rem_id}/reimprimir")
+def impresion_reimprimir(
+    rem_id: str,
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+):
+    """Vuelve a encolar la remisión (para reimprimir manualmente)."""
+    return {"ok": svc.marcar_remision_reimprimir(rem_id)}
 
 
 def _generar_remision_pdf(rem: dict) -> bytes:

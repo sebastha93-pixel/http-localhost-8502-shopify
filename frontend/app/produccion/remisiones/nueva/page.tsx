@@ -95,7 +95,7 @@ export default function NuevaRemisionPage() {
   interface RespuestaCrear {
     ok: boolean;
     remision: { id: string; consecutivo?: string };
-    impresion?: string;          // "auto" | "manual" (solo terminación)
+    impresion?: string;          // "auto" (email) | "agente" (RICOH local) | undefined (diálogo navegador)
     whatsapp?: WaSalida[];       // links al proveedor de terminación
   }
   // Resultado de la creación de una remisión de TERMINACIÓN: en vez de
@@ -129,8 +129,9 @@ export default function NuevaRemisionPage() {
       if (tipo === "terminacion") {
         setCreada(data);
         // Impresión de la remisión de insumos de terminación:
-        // "auto" = ya salió por la RICOH; "manual" = abrimos el diálogo.
-        if (data.impresion !== "auto") imprimirRemision(data.remision.id);
+        // "auto"/"agente" = sale sola por la RICOH; sin valor = abrimos el diálogo.
+        if (data.impresion !== "auto" && data.impresion !== "agente")
+          imprimirRemision(data.remision.id);
       } else {
         router.push(`/produccion/remisiones/${data.remision.id}`);
       }
@@ -155,6 +156,8 @@ export default function NuevaRemisionPage() {
               <Printer className="h-4 w-4 text-navy-600 flex-none" />
               {creada.impresion === "auto" ? (
                 <span className="text-teal font-semibold">Remisión de insumos enviada a la RICOH 🖨</span>
+              ) : creada.impresion === "agente" ? (
+                <span className="text-teal font-semibold">Se imprimirá sola en la RICOH (agente local) 🖨</span>
               ) : (
                 <>
                   <span className="text-graphite">Se abrió el PDF con el diálogo de impresión.</span>
