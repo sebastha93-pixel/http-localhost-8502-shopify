@@ -957,7 +957,7 @@ def calcular_capas_desde_curva(curva: dict) -> int:
     """Regla del cortador MALE'DENIM: pares FIJOS de tallas que van juntas
     en el mismo trazo. Talla 4 se corta sola.
 
-    Pares: (6, 12), (8, 10), (14, 16)
+    Pares (regla vigente 2026-07): (6, 16), (8, 10), (12, 14)
     Solos: 4 (y cualquier talla no mapeada)
 
     Para cada par: capas = max(cantidad_talla_A, cantidad_talla_B).
@@ -968,7 +968,7 @@ def calcular_capas_desde_curva(curva: dict) -> int:
     """
     if not curva:
         return 0
-    PARES = [("6", "12"), ("8", "10"), ("14", "16")]
+    PARES = [("6", "16"), ("8", "10"), ("12", "14")]
 
     # Normalizar claves y valores a int
     curva_n: dict[str, int] = {}
@@ -1680,7 +1680,8 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
     # (no se confía en el cálculo del cliente):
     #   consumo = Σ (metros_espiga + 0.02) × capas_espiga + retazos_metros
     #   capas_espiga = max(unidades cortadas de las tallas de la espiga)
-    ESPIGAS_DEF = (("4",), ("6", "12"), ("8", "10"), ("14", "16"))
+    # Regla vigente (2026-07): T4 sola · T6+T16 · T8+T10 · T12+T14, en ese orden.
+    ESPIGAS_DEF = (("4",), ("6", "16"), ("8", "10"), ("12", "14"))
     if espigas_metros:
         try:
             unid = {str(k): _int0(v) for k, v in (unidades_cortadas or {}).items()}

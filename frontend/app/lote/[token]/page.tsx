@@ -30,7 +30,6 @@ interface LotePublico {
   confeccionista_nombre: string;
   etapa: string;
   aceptado_at?: string;
-  precio_confeccion?: number | null;
   insumos: Insumo[];
 }
 
@@ -157,22 +156,12 @@ export default function LotePublicoPage() {
           </div>
         </div>
 
-        {/* Fecha de entrega + valor acordado */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {l.precio_confeccion != null && (
-          <div className="rounded-sm border border-border bg-white p-4">
-            <p className="text-[0.7rem] uppercase tracking-widest text-graphite">Valor acordado por prenda</p>
-            <p className="mt-1 font-display text-2xl text-ink-900 tabular">
-              ${Number(l.precio_confeccion).toLocaleString("es-CO", { maximumFractionDigits: 0 })}
-            </p>
-          </div>
-        )}
+        {/* Fecha de entrega (sin precios — el link al confeccionista no muestra valores) */}
         <div className="rounded-sm border border-border bg-white p-4">
           <p className="text-[0.7rem] uppercase tracking-widest text-graphite">Fecha de entrega</p>
           <p className="mt-1 font-display text-2xl text-ink-900 tabular">
             {fmtFecha(l.fecha_entrega)}
           </p>
-        </div>
         </div>
 
         {/* Prendas por talla */}

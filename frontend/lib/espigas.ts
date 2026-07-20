@@ -1,21 +1,21 @@
 /**
- * ESPIGAS de corte — regla MALE'DENIM.
- * El trazo se corta por espigas (trazos combinados de tallas):
+ * ESPIGAS de corte — regla MALE'DENIM (vigente 2026-07).
+ * El trazo se corta por espigas (trazos combinados de tallas), en este orden:
  *   · Talla 4 sola
- *   · Tallas 6 y 12 juntas
+ *   · Tallas 6 y 16 juntas
  *   · Tallas 8 y 10 juntas
- *   · Tallas 14 y 16 juntas
+ *   · Tallas 12 y 14 juntas
  * Cada capa de una espiga produce 1 prenda de CADA talla de la espiga,
  * por eso al llenar una talla en la curva su compañera se llena igual.
  */
 
-export const ESPIGAS: string[][] = [["4"], ["6", "12"], ["8", "10"], ["14", "16"]];
+export const ESPIGAS: string[][] = [["4"], ["6", "16"], ["8", "10"], ["12", "14"]];
 
 /** Pareja de cada talla dentro de su espiga (la talla 4 va sola). */
 export const PAREJA_TALLA: Record<string, string> = {
-  "6": "12", "12": "6",
+  "6": "16", "16": "6",
   "8": "10", "10": "8",
-  "14": "16", "16": "14",
+  "12": "14", "14": "12",
 };
 
 /** Etiqueta legible de una espiga. */

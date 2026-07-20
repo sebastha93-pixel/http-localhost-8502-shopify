@@ -630,7 +630,7 @@ class CerrarCorteBody(BaseModel):
     unidades_cortadas: Optional[dict] = None
     unidades_por_referencia: Optional[dict] = None  # {ref_id: {talla: qty}} — cierre por referencia
     retazos_cantidad:  Optional[int] = None
-    espigas_metros:    Optional[dict] = None   # {"4": 1.2, "6-12": 2.4, ...} m extendidos
+    espigas_metros:    Optional[dict] = None   # {"4": 1.2, "6-16": 2.4, ...} m extendidos
     retazos_metros:    Optional[float] = None  # retazos medidos en METROS
     fecha_entrega:     Optional[str] = None
     precio_corte:      Optional[float] = None
@@ -1303,10 +1303,9 @@ publico = APIRouter(prefix="/api/publico", tags=["publico"])
 def lote_publico(token: str) -> dict:
     """Vista pública del lote — sin autenticación.
     Solo lo que el confeccionista debe ver: ficha técnica, curva de tallas,
-    cantidad total, insumos de CONFECCIÓN con cantidades y SU valor acordado
-    (precio_confeccion — regla de Sebastián: "el confeccionista solo ve el
-    valor acordado de confección").
-    NO se envía: precio de corte, valores unitarios de insumos, costos
+    cantidad total e insumos de CONFECCIÓN con cantidades.
+    NO se envía NINGÚN precio (regla de Sebastián 2026-07: el link al
+    confeccionista va sin precio), ni valores unitarios de insumos, costos
     totales, ni datos del informe del cortador.
     """
     r = svc.obtener_ruta_por_token(token)
@@ -1355,8 +1354,6 @@ def lote_publico(token: str) -> dict:
         "etapa":                     r.get("etapa"),
         "aceptado_at":               r.get("aceptado_at"),
         "insumos":                   insumos_publicos,
-        # Valor acordado del SERVICIO de confección — el único precio que ve.
-        "precio_confeccion":         r.get("precio_confeccion"),
     }
 
 

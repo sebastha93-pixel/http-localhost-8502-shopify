@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { PAREJA_TALLA } from "@/lib/espigas";
+import { ESPIGAS, PAREJA_TALLA } from "@/lib/espigas";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Save, Loader2, AlertCircle, Search, ChevronDown, Plus, X } from "lucide-react";
@@ -32,11 +32,12 @@ const nuevaCurva = (): Record<string, string> =>
 
 interface RefState { key: number; referenciaId: string; curva: Record<string, string> }
 
-// Capas por la regla MALE'DENIM: pares (6,12)(8,10)(14,16) aportan max; el resto su cantidad.
+// Capas por la regla MALE'DENIM: cada espiga de 2 tallas aporta max; el resto su cantidad.
+// Las parejas viven en lib/espigas.ts (única fuente: 4 sola · 6+16 · 8+10 · 12+14).
 function capasDeCurva(curva: Record<string, number>): number {
-  const PARES: [string, string][] = [["6", "12"], ["8", "10"], ["14", "16"]];
+  const pares = ESPIGAS.filter((e) => e.length === 2);
   let total = 0; const usadas = new Set<string>();
-  for (const [a, b] of PARES) {
+  for (const [a, b] of pares) {
     if (curva[a] !== undefined || curva[b] !== undefined) {
       total += Math.max(curva[a] || 0, curva[b] || 0); usadas.add(a); usadas.add(b);
     }
