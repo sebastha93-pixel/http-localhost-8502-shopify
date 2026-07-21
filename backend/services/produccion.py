@@ -2379,14 +2379,18 @@ def marcar_remision_reimprimir(rem_id: str) -> bool:
 # Medidas en dots (203 dpi ≈ 8 dots/mm), calcadas de las etiquetas reales
 # de MALE'DENIM (foto 2026-07-21). Ajustables al medio si hace falta.
 #
-# STICKER (Honeywell): rollo de DOS columnas de stickers adhesivos.
-#   Cada fila imprime hasta 2 stickers iguales/consecutivos.
-ZPL_STK_FILA_ANCHO = 536   # ~67 mm ancho total del rollo (2 columnas)
-ZPL_STK_ALTO       = 160   # ~20 mm alto del sticker
-ZPL_STK_COL_ANCHO  = 240   # ~30 mm ancho útil de cada sticker
-ZPL_STK_COL_X      = (10, 286)   # x de cada columna
+# STICKER (Honeywell): rollo de TRES columnas de stickers adhesivos
+#   (verificado en foto 2026-07-21). Cada fila imprime hasta 3.
+#   ZPL_STK_X0 = corrimiento del borde del rollo respecto al cabezal
+#   (calibrar con la etiqueta-regla si la impresión cae corrida).
+ZPL_STK_X0         = 0
+ZPL_STK_COL_ANCHO  = 200   # ~25 mm ancho útil de cada sticker
+ZPL_STK_COL_PASO   = 216   # ~27 mm de centro a centro (sticker + ranura)
+ZPL_STK_COLS       = 3
+ZPL_STK_ALTO       = 160   # ~20 mm alto
+ZPL_STK_FILA_ANCHO = ZPL_STK_X0 + ZPL_STK_COL_PASO * ZPL_STK_COLS
 #
-# LAVADO (SAT): tira vertical de nylon ~30 mm de ancho.
+# LAVADO (SAT): tira vertical de nylon.
 ZPL_LAV_ANCHO = 240   # ~30 mm
 ZPL_LAV_ALTO  = 1040  # ~130 mm de largo
 
@@ -2582,22 +2586,25 @@ def generar_zpl_trabajo(t: dict) -> str:
     def _sticker_col(x: int, dato: str) -> str:
         """Un sticker (diseño real): MALE DENIM subrayado + Code128 + código."""
         return (
-            f"^FO{x},12^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,26,26^FDMALE DENIM^FS"
-            f"^FO{x + 40},40^GB{ZPL_STK_COL_ANCHO - 80},2,2^FS"
-            f"^FO{x + 24},50^BY1,2.4,52^BCN,52,N,N,N^FD{dato}^FS"
-            f"^FO{x},110^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,24,24^FD{dato}^FS")
+            f"^FO{x},10^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
+            f"^FO{x + 30},34^GB{ZPL_STK_COL_ANCHO - 60},2,2^FS"
+            f"^FO{x + 20},44^BY1,2.4,48^BCN,48,N,N,N^FD{dato}^FS"
+            f"^FO{x},100^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,22,22^FD{dato}^FS")
 
     if t.get("tipo") == "sticker_codigo":
         # Dato del código calcado del sticker real: REF + 'T' + talla (26534-1T14).
-        # El rollo trae 2 stickers por fila → una fila ZPL imprime hasta 2.
+        # El rollo trae ZPL_STK_COLS stickers por fila → una fila imprime hasta N.
         stickers: list[str] = []
         for talla, qty in sorted((p.get("tallas") or {}).items(),
                                  key=lambda kv: (len(kv[0]), kv[0])):
             stickers += [f"{codigo}T{_zpl_escape(str(talla))}"] * max(0, int(qty or 0))
         filas = []
-        for i in range(0, len(stickers), 2):
-            par = stickers[i:i + 2]
-            cuerpo = "".join(_sticker_col(ZPL_STK_COL_X[j], d) for j, d in enumerate(par))
+        n = ZPL_STK_COLS
+        for i in range(0, len(stickers), n):
+            grupo = stickers[i:i + n]
+            cuerpo = "".join(
+                _sticker_col(ZPL_STK_X0 + j * ZPL_STK_COL_PASO, d)
+                for j, d in enumerate(grupo))
             filas.append(
                 "^XA^CI28" + modo +
                 f"^PW{ZPL_STK_FILA_ANCHO}^LL{ZPL_STK_ALTO}" + cuerpo + "^PQ1^XZ")
@@ -2607,31 +2614,33 @@ def generar_zpl_trabajo(t: dict) -> str:
         # Tira vertical calcada de la etiqueta real: marca, referencia,
         # composición (varía por referencia — campo instrucciones_lavado),
         # bloque legal fijo y cuidados EN/ES estándar.
+        # CADA línea va con ^FO fijo (nada de bloques multi-línea ^FB: su
+        # auto-ajuste encima el texto cuando una línea no cabe).
         composicion = _zpl_escape(p.get("instrucciones") or "").upper()
         copias = max(1, int(p.get("copias") or 1))
         W = ZPL_LAV_ANCHO
-        centr = f"^FB{W},1,0,C,0"
 
-        def bloque(y: int, lineas: list[str], alto: int = 20, inter: int = 6) -> str:
-            n = len(lineas)
-            txt = "\\&".join(lineas)
-            return (f"^FO0,{y}^FB{W},{n},{inter},C,0^A0N,{alto},{alto}^FD{txt}^FS")
+        def linea(y: int, txt: str, alto: int = 18) -> str:
+            return f"^FO0,{y}^FB{W},1,0,C,0^A0N,{alto},{alto}^FD{txt}^FS"
 
-        z = ("^XA^CI28" + modo + f"^PW{W}^LL{ZPL_LAV_ALTO}"
-             f"^FO0,40{centr}^A0N,40,40^FDMALE^FS"
-             f"^FO0,82{centr}^A0N,26,26^FDDENIM^FS"
-             f"^FO70,114^GB{W - 140},3,3^FS"
-             f"^FO0,150{centr}^A0N,26,26^FD{codigo}^FS"
-             + (bloque(210, [composicion]) if composicion else "")
-             + bloque(280, ["MADE IN", "COLOMBIA", "HECHO POR", "DIRTY JEANS",
-                            "NIT 901680460-1", "SIC 1036644755"], alto=18, inter=6)
-             + bloque(460, ["MACHINE WASH", "WARM WATER", "NO BLEACH",
-                            "TUMBLE DRY LOW", "COOL IRON"], alto=18, inter=6)
-             + bloque(620, ["LAVADORA", "AGUA TIBIA", "NO BLANQUEADOR",
-                            "SECADORA BAJA", "TEMPERATURA", "PLANCHA TIBIA"],
-                      alto=18, inter=6)
-             + f"^PQ{copias}^XZ")
-        return z
+        z = ["^XA^CI28" + modo + f"^PW{W}^LL{ZPL_LAV_ALTO}",
+             linea(36, "MALE", 40), linea(78, "DENIM", 26),
+             f"^FO70,110^GB{W - 140},3,3^FS",
+             linea(146, codigo, 26)]
+        y = 200
+        if composicion:
+            z.append(linea(y, composicion, 20)); y += 60
+        for grupo in (["MADE IN", "COLOMBIA", "HECHO POR", "DIRTY JEANS",
+                       "NIT 901680460-1", "SIC 1036644755"],
+                      ["MACHINE WASH", "WARM WATER", "NO BLEACH",
+                       "TUMBLE DRY LOW", "COOL IRON"],
+                      ["LAVADORA", "AGUA TIBIA", "NO BLANQUEADOR",
+                       "SECADORA BAJA", "TEMPERATURA", "PLANCHA TIBIA"]):
+            for ln in grupo:
+                z.append(linea(y, ln)); y += 24
+            y += 36   # aire entre bloques
+        z.append(f"^PQ{copias}^XZ")
+        return "".join(z)
     return ""
 
 
