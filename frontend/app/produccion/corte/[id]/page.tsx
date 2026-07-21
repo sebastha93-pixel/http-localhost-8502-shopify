@@ -18,7 +18,7 @@ import { useAuth } from "@/components/auth-provider";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, ScanLine, Trash2, Lock, Loader2, AlertCircle, CheckCircle, Paperclip, Send, X } from "lucide-react";
+import { ArrowLeft, ScanLine, Trash2, Lock, Loader2, AlertCircle, CheckCircle, Paperclip, Pencil, Send, X } from "lucide-react";
 
 interface RolloLink {
   id: string;
@@ -222,6 +222,23 @@ export default function DetalleOrdenCortePage() {
   const _perms = (user?.permisos || {}) as Record<string, unknown>;
   const esAdmin = user?.rol === "admin" || user?.rol === "operador";
   const esCortador = !esAdmin && !!_perms["produccion_cortador"] && !_perms["produccion_corte"];
+  // Notas de la orden: las edita el DISEÑADOR (produccion_corte modificar) o
+  // un admin; el cortador solo las lee.
+  const puedeEditarNotas = esAdmin || puedeAccionModulo(user, "produccion_corte", "modificar");
+  const [editandoNotas, setEditandoNotas] = useState(false);
+  const [notasDraft, setNotasDraft] = useState("");
+  const guardarNotas = useMutation({
+    mutationFn: () => api.patch(`/api/produccion/corte/${id}/indicaciones`, {
+      indicaciones: notasDraft.trim() || null,
+    }),
+    onSuccess: () => {
+      setEditandoNotas(false);
+      setMsg("Indicaciones guardadas.");
+      setErr("");
+      qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
+    },
+    onError: (e: Error) => { setErr(e.message); setMsg(""); },
+  });
 
   const [verifResult, setVerifResult] = useState<{ asignado: boolean; mensaje: string; rollo?: { codigo_interno?: string; descripcion_tela?: string; tono?: string; barcode?: string; numero_rollo?: string } } | null>(null);
   const [verificados, setVerificados] = useState<Set<string>>(new Set());
@@ -535,10 +552,41 @@ export default function DetalleOrdenCortePage() {
               <p className="text-xs text-graphite">Sin curva definida.</p>
             )}
           </div>
-          {oc.indicaciones && (
+          {(oc.indicaciones || puedeEditarNotas) && (
             <div className="mt-4">
-              <p className="section-label mb-1">Indicaciones</p>
-              <p className="text-xs text-graphite whitespace-pre-wrap">{oc.indicaciones}</p>
+              <div className="mb-1 flex items-center gap-2">
+                <p className="section-label">Indicaciones</p>
+                {puedeEditarNotas && !editandoNotas && (
+                  <button
+                    onClick={() => { setNotasDraft(oc.indicaciones || ""); setEditandoNotas(true); }}
+                    title="Editar indicaciones (diseño)"
+                    className="inline-flex items-center gap-1 rounded-sm border border-border bg-card px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-widest text-graphite hover:bg-cloud hover:text-ink-900">
+                    <Pencil className="h-3 w-3" /> {oc.indicaciones ? "Editar" : "Agregar"}
+                  </button>
+                )}
+              </div>
+              {editandoNotas ? (
+                <div className="space-y-2">
+                  <textarea value={notasDraft} onChange={(e) => setNotasDraft(e.target.value)}
+                    rows={3} autoFocus
+                    placeholder="Notas del diseñador para esta orden (las ve el cortador)"
+                    className="w-full rounded-sm border border-border bg-white px-3 py-2 text-xs text-ink-900 placeholder:text-graphite/50" />
+                  <div className="flex justify-end gap-2">
+                    <button onClick={() => setEditandoNotas(false)}
+                      className="rounded-sm border border-border bg-card px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-graphite hover:bg-cloud">
+                      Cancelar
+                    </button>
+                    <button onClick={() => guardarNotas.mutate()} disabled={guardarNotas.isPending}
+                      className="inline-flex items-center gap-1.5 rounded-sm bg-teal px-4 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-white hover:bg-ink-900 disabled:opacity-40">
+                      {guardarNotas.isPending && <Loader2 className="h-3 w-3 animate-spin" />} Guardar
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                oc.indicaciones
+                  ? <p className="text-xs text-graphite whitespace-pre-wrap">{oc.indicaciones}</p>
+                  : <p className="text-xs text-graphite/60 italic">Sin indicaciones.</p>
+              )}
             </div>
           )}
         </CardContent>

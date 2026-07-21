@@ -803,6 +803,24 @@ def detalle_corte(
     return oc
 
 
+class IndicacionesCorteBody(BaseModel):
+    indicaciones: Optional[str] = None
+
+
+@router.patch("/corte/{oc_id}/indicaciones")
+def editar_indicaciones_corte(
+    oc_id: str,
+    body: IndicacionesCorteBody,
+    _: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
+) -> dict:
+    """Notas del diseñador sobre la orden de corte. El cortador puro NO puede
+    editarlas (solo produccion_corte modificar = diseño/admin)."""
+    try:
+        return {"ok": True, "orden": svc.actualizar_indicaciones_corte(oc_id, body.indicaciones)}
+    except ValueError:
+        raise HTTPException(404, "Orden de corte no encontrada")
+
+
 @router.post("/corte/{oc_id}/pistolear")
 def pistolear_rollo(
     oc_id: str,

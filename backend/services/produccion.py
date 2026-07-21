@@ -1197,6 +1197,22 @@ def crear_orden_corte(*, referencia_id: Optional[str] = None,
     return oc
 
 
+def actualizar_indicaciones_corte(oc_id: str, indicaciones: Optional[str]) -> dict:
+    """Edita las notas/indicaciones de una orden de corte (las escribe el
+    diseñador; el cortador solo las lee). Editable en cualquier estado."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    r = (sb.table("ordenes_corte")
+           .update({"indicaciones": (indicaciones or "").strip() or None,
+                    "updated_at": _now_iso()})
+           .eq("id", oc_id).execute()).data
+    if not r:
+        raise ValueError("no_encontrado")
+    _cache_invalidate_prefix("ordenes_corte")
+    return obtener_orden_corte(oc_id) or r[0]
+
+
 def listar_ordenes_corte(*, estado: Optional[str] = None,
                           limit: int = 200,
                           sin_remision: Optional[str] = None,
