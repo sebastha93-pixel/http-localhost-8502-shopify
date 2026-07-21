@@ -1696,6 +1696,49 @@ def impresion_trabajo_impreso(
     return {"ok": svc.marcar_trabajo_impreso(trabajo_id)}
 
 
+# ── Módulo de impresión (etiquetas a demanda + cola visible) ─────────────
+class TrabajoImpresionIn(BaseModel):
+    tipo:          str = Field(pattern="^(sticker_codigo|instruccion_lavado)$")
+    referencia_id: str
+    tallas:        Optional[dict] = None   # sticker_codigo: {talla: cantidad}
+    copias:        Optional[int] = None    # instruccion_lavado
+    cortar:        bool = True
+
+
+@router.get("/impresion/trabajos/historial")
+def impresion_trabajos_historial(
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_corte", "produccion_cortador"), "ver")),
+):
+    return {"trabajos": svc.listar_trabajos_impresion()}
+
+
+@router.post("/impresion/trabajos/crear")
+def impresion_trabajo_crear(
+    body: TrabajoImpresionIn,
+    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_corte"), "modificar")),
+):
+    """Encola etiquetas a demanda desde el módulo de impresión."""
+    try:
+        t = svc.crear_trabajo_impresion_manual(
+            tipo=body.tipo, referencia_id=body.referencia_id,
+            tallas=body.tallas, copias=body.copias, cortar=body.cortar,
+            creado_por=user.email)
+        return {"ok": True, "trabajo": t}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"crear_trabajo: {str(e)[:200]}")
+
+
+@router.post("/impresion/trabajos/{trabajo_id}/reimprimir")
+def impresion_trabajo_reimprimir(
+    trabajo_id: str,
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_corte"), "modificar")),
+):
+    return {"ok": svc.marcar_trabajo_reimprimir(trabajo_id)}
+
+
 def _generar_remision_pdf(rem: dict) -> bytes:
     """Remisión formato carta. Confección = el proveedor RECOGE;
     terminación = MALE'DENIM DESPACHA. Sin valores $ — es un documento

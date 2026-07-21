@@ -18,6 +18,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import {
   Package, Boxes, Ruler, Scissors, FileText, Users, BarChart3, Layers,
   Truck, PackageSearch, Coins, Trash2, Loader2, ArrowRight, AlertTriangle,
+  Printer,
 } from "lucide-react";
 
 type IconType = React.ComponentType<{ className?: string }>;
@@ -72,10 +73,15 @@ const FLUJO: Fase[] = [
   },
 ];
 
-// Directorio de apoyo — no es un paso del flujo.
+// Directorio de apoyo — no son pasos del flujo.
 const APOYO: Paso = {
   label: "Proveedores", href: "/produccion/confeccionistas", icon: Users,
   desc: "Confección · terminación · lavandería · otros", permiso: "produccion_proveedores",
+};
+const APOYO_IMPRESION: Paso = {
+  label: "Impresión de etiquetas", href: "/produccion/impresion", icon: Printer,
+  desc: "Stickers de barra y lavado en nylon — imprime y corta sola",
+  permiso: "produccion_remisiones|produccion_corte",
 };
 
 interface Tablero {
@@ -103,6 +109,7 @@ export default function ProduccionHome() {
     .map((f) => ({ ...f, pasos: f.pasos.filter((p) => itemVisible(user, p)) }))
     .filter((f) => f.pasos.length > 0);
   const verApoyo = itemVisible(user, APOYO);
+  const verImpresion = itemVisible(user, APOYO_IMPRESION);
 
   return (
     <PageShell title="Producción" subtitle="El proceso paso a paso — de la tela a bodega">
@@ -138,11 +145,12 @@ export default function ProduccionHome() {
       ))}
 
       {/* Apoyo */}
-      {verApoyo && (
+      {(verApoyo || verImpresion) && (
         <section className="space-y-2">
           <h2 className="section-label">Apoyo</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <PasoCard paso={APOYO} />
+            {verApoyo && <PasoCard paso={APOYO} />}
+            {verImpresion && <PasoCard paso={APOYO_IMPRESION} />}
           </div>
         </section>
       )}

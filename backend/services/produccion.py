@@ -851,6 +851,13 @@ def listar_precosteos(*, estado: Optional[str] = None, tela: Optional[str] = Non
             "costo_total_sin_iva,costo_total_con_iva,precio_sugerido_venta,"
             "estado,bloqueada,es_muestra_diseno,autorizada_por,fecha_autorizacion,"
             "created_at,created_by")
+    # instrucciones_lavado la usa el módulo de impresión; degradar si la
+    # migración de esa columna aún no corrió.
+    try:
+        sb.table("referencias_precosteo").select("instrucciones_lavado").limit(1).execute()
+        cols += ",instrucciones_lavado"
+    except Exception:
+        pass
     q = sb.table("referencias_precosteo").select(cols).order("created_at", desc=True).limit(limit)
     if disponibles_para_corte:
         try:
@@ -2447,6 +2454,74 @@ def _encolar_trabajos_terminacion(rem: dict) -> int:
         return 0
 
 
+def crear_trabajo_impresion_manual(*, tipo: str, referencia_id: str,
+                                   tallas: Optional[dict] = None,
+                                   copias: Optional[int] = None,
+                                   cortar: bool = True,
+                                   creado_por: str = "") -> dict:
+    """Encola un trabajo de etiquetas A DEMANDA desde el módulo de impresión
+    (sin pasar por una remisión). sticker_codigo → Honeywell con {talla: qty};
+    instruccion_lavado → SAT con N copias del texto de la referencia."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    if tipo not in ("sticker_codigo", "instruccion_lavado"):
+        raise ValueError("tipo_invalido")
+    pr = (sb.table("referencias_precosteo")
+            .select("codigo_referencia,tela,instrucciones_lavado")
+            .eq("id", referencia_id).limit(1).execute()).data
+    if not pr:
+        raise ValueError("referencia_no_encontrada")
+    ref = pr[0]
+    codigo = ref.get("codigo_referencia") or ""
+    if tipo == "sticker_codigo":
+        limpio = {str(t): int(v) for t, v in (tallas or {}).items() if int(v or 0) > 0}
+        if not limpio:
+            raise ValueError("sin_tallas")
+        payload = {"codigo_referencia": codigo, "tallas": limpio, "cortar": bool(cortar)}
+        destino = "honeywell"
+    else:
+        n = int(copias or 0)
+        if n <= 0:
+            raise ValueError("sin_copias")
+        payload = {"codigo_referencia": codigo, "tela": ref.get("tela") or "",
+                   "instrucciones": ref.get("instrucciones_lavado") or "",
+                   "copias": n, "cortar": bool(cortar)}
+        destino = "sat"
+    r = sb.table("impresion_trabajos").insert({
+        "tipo": tipo, "destino": destino, "formato": "zpl",
+        "referencia_id": referencia_id, "payload": payload,
+    }).execute()
+    log.info(f"[impresion] trabajo manual {tipo} {codigo} encolado por {creado_por}")
+    return r.data[0]
+
+
+def listar_trabajos_impresion(limite: int = 40) -> list[dict]:
+    """Cola + recientes (pendientes primero, luego impresos) para el módulo."""
+    sb = _sb()
+    if sb is None:
+        return []
+    try:
+        rows = (sb.table("impresion_trabajos")
+                  .select("id,tipo,destino,formato,payload,impresa_at,created_at")
+                  .order("created_at", desc=True).limit(limite).execute()).data or []
+        return sorted(rows, key=lambda r: (r.get("impresa_at") is not None,))
+    except Exception:
+        return []
+
+
+def marcar_trabajo_reimprimir(trabajo_id: str) -> bool:
+    sb = _sb()
+    if sb is None:
+        return False
+    try:
+        sb.table("impresion_trabajos").update({"impresa_at": None}) \
+          .eq("id", trabajo_id).execute()
+        return True
+    except Exception:
+        return False
+
+
 def trabajos_pendientes_impresion(limite: int = 50) -> list[dict]:
     """Trabajos de etiquetas aún no impresos, más antiguo primero."""
     sb = _sb()
@@ -2492,6 +2567,9 @@ def generar_zpl_trabajo(t: dict) -> str:
     etiqueta de texto repetida ^PQ copias."""
     p = t.get("payload") or {}
     codigo = _zpl_escape(p.get("codigo_referencia") or "")
+    # Etiquetas en NYLON → transferencia térmica (^MTT, requiere cinta/ribbon).
+    # ^MMC activa el CORTADOR (ambas impresoras lo tienen): corta cada etiqueta.
+    modo = "^MTT" + ("^MMC" if p.get("cortar", True) else "")
     if t.get("tipo") == "sticker_codigo":
         bloques = []
         for talla, qty in sorted((p.get("tallas") or {}).items(),
@@ -2501,7 +2579,7 @@ def generar_zpl_trabajo(t: dict) -> str:
                 continue
             dato = f"{codigo}-T{_zpl_escape(str(talla))}"
             bloques.append(
-                "^XA^CI28"
+                "^XA^CI28" + modo +
                 f"^PW{ZPL_STICKER_ANCHO}^LL{ZPL_STICKER_ALTO}"
                 f"^FO20,18^A0N,32,32^FD{codigo}  TALLA {_zpl_escape(str(talla))}^FS"
                 f"^FO20,62^BY2,2.5,120^BCN,120,Y,N,N^FD{dato}^FS"
@@ -2517,7 +2595,7 @@ def generar_zpl_trabajo(t: dict) -> str:
         # ^FB envuelve el texto en el ancho de la etiqueta; \& = salto de línea
         instr_fb = instr.replace("\n", "\\&")
         return (
-            "^XA^CI28"
+            "^XA^CI28" + modo +
             f"^PW{ZPL_LAVADO_ANCHO}^LL{ZPL_LAVADO_ALTO}"
             f"^FO20,16^A0N,28,28^FDMALE DENIM - {codigo}^FS"
             + (f"^FO20,52^A0N,22,22^FD{tela}^FS" if tela else "")
