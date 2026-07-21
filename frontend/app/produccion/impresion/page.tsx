@@ -191,7 +191,7 @@ export default function ModuloImpresionPage() {
               </select>
               {tipo === "instruccion_lavado" && refSel && !refSel.instrucciones_lavado && (
                 <p className="mt-1 text-[0.7rem] text-terracotta">
-                  Esta referencia no tiene instrucciones de lavado guardadas — se imprimirá el texto genérico de cuidado. Puedes escribirlas editando el precosteo.
+                  Esta referencia no tiene composición guardada (ej. 100%ALGODON) — la etiqueta saldrá sin esa línea. Se agrega editando el precosteo.
                 </p>
               )}
             </div>

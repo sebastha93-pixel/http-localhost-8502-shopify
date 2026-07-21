@@ -214,12 +214,12 @@ export default function PrecosteoDetallePage() {
             </div>
             <div>
               <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
-                Instrucciones de lavado (las imprime la SAT en terminación)
+                Composición — etiqueta de lavado (la imprime la SAT)
               </label>
               <textarea value={form.instrucciones_lavado}
                 onChange={(e) => setForm({ ...form, instrucciones_lavado: e.target.value })}
-                rows={3}
-                placeholder="Ej: Lavar a máquina ciclo suave, agua fría. No usar blanqueador. Secar a la sombra. Planchar a temperatura media por el revés."
+                rows={2}
+                placeholder="Ej: 100%ALGODON  ·  o  98% ALGODON 2% ELASTANO. Los cuidados (lavadora, agua tibia…) son fijos en la etiqueta."
                 className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm text-ink-900 placeholder:text-graphite/50" />
             </div>
             <div className="flex justify-end gap-2">
