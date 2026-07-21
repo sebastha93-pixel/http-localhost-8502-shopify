@@ -719,6 +719,7 @@ def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
                          items: Optional[list[dict]] = None,
                          foto_url: Optional[str] = None,
                          es_muestra_diseno: Optional[bool] = None,
+                         instrucciones_lavado: Optional[str] = None,
                          usuario_id: Optional[str] = None) -> dict:
     """Actualiza un precosteo.
     - Borrador: lo edita el diseñador (permiso produccion_costos modificar).
@@ -745,6 +746,15 @@ def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
     if margen is not None:  update["margen"] = margen
     if foto_url is not None: update["foto_url"] = foto_url
     if es_muestra_diseno is not None: update["es_muestra_diseno"] = bool(es_muestra_diseno)
+    if instrucciones_lavado is not None:
+        # Columna nueva (migración impresion_terminacion) — se aplica aparte
+        # con tolerancia por si aún no está migrada.
+        try:
+            sb.table("referencias_precosteo").update(
+                {"instrucciones_lavado": instrucciones_lavado.strip() or None}
+            ).eq("id", precosteo_id).execute()
+        except Exception as e:
+            log.warning(f"[precosteo] instrucciones_lavado no guardadas (¿falta migración?): {e}")
 
     if items is not None:
         # Reemplazar líneas: borrar y volver a insertar
@@ -2234,7 +2244,15 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
         except Exception as e:
             log.warning(f"[remision] no se pudo actualizar ruta {oc_id}: {e}")
 
-    return obtener_remision(rem["id"])
+    rem_full = obtener_remision(rem["id"])
+    if tipo == "terminacion":
+        # Etiquetas térmicas automáticas: stickers de barra (Honeywell) +
+        # instrucciones de lavado (SAT). Tolerante a fallos.
+        try:
+            _encolar_trabajos_terminacion(rem_full)
+        except Exception as e:
+            log.warning(f"[impresion] encolado terminación falló: {e}")
+    return rem_full
 
 
 def listar_remisiones(*, estado: Optional[str] = None,
@@ -2326,6 +2344,172 @@ def marcar_remision_reimprimir(rem_id: str) -> bool:
         return True
     except Exception:
         return False
+
+
+# ── Trabajos de impresión de TERMINACIÓN (etiquetas térmicas) ────────────
+# Al crear la remisión de terminación se encolan, por cada referencia del
+# lote: los STICKERS de código de barras (Honeywell — 1 por prenda, va en la
+# bolsa de empaque, código ref+talla) y las INSTRUCCIONES DE LAVADO (SAT —
+# texto por tela/referencia guardado en el precosteo). El agente local de la
+# red de la empresa los imprime en ZPL por IP:9100.
+#
+# Medidas de la etiqueta en dots (203 dpi ≈ 8 dots/mm). Ajustables al medio real.
+ZPL_STICKER_ANCHO = 400   # ~50 mm
+ZPL_STICKER_ALTO  = 240   # ~30 mm
+ZPL_LAVADO_ANCHO  = 400   # ~50 mm
+ZPL_LAVADO_ALTO   = 480   # ~60 mm
+
+
+def _zpl_escape(s: str) -> str:
+    """Limpia caracteres de control ZPL en datos (^ ~ inician comandos)."""
+    return (s or "").replace("^", " ").replace("~", " ").strip()
+
+
+def _unidades_de_referencia(rr: dict) -> dict:
+    """Unidades por talla de una referencia del tendido: cortadas si existen,
+    si no la curva programada."""
+    unid = rr.get("unidades_cortadas") or {}
+    limpio = {str(t): int(v) for t, v in unid.items() if int(v or 0) > 0} if unid else {}
+    if not limpio:
+        limpio = {str(t): int(v) for t, v in (rr.get("curva_trazo") or {}).items()
+                  if int(v or 0) > 0}
+    return limpio
+
+
+def _encolar_trabajos_terminacion(rem: dict) -> int:
+    """Encola stickers (Honeywell) + instrucciones de lavado (SAT) por cada
+    referencia de cada orden de la remisión de terminación. Tolerante: si la
+    tabla no está migrada o falta data, loggea y no rompe la remisión."""
+    sb = _sb()
+    if sb is None or not rem:
+        return 0
+    filas: list[dict] = []
+    for it in (rem.get("items") or []):
+        oc_id = it.get("orden_corte_id")
+        if not oc_id:
+            continue
+        oc = obtener_orden_corte(oc_id) or {}
+        for rr in (oc.get("referencias") or []):
+            ref_id = rr.get("referencia_id")
+            ref = rr.get("referencia") or {}
+            codigo = ref.get("codigo_referencia") or ""
+            unidades = _unidades_de_referencia(rr)
+            total = sum(unidades.values())
+            if not codigo or total <= 0:
+                continue
+            # Instrucciones de lavado + tela del precosteo de ESA referencia
+            instrucciones, tela = "", ref.get("tela") or ""
+            try:
+                pr = (sb.table("referencias_precosteo")
+                        .select("instrucciones_lavado,tela")
+                        .eq("id", ref_id).limit(1).execute()).data
+                if pr:
+                    instrucciones = pr[0].get("instrucciones_lavado") or ""
+                    tela = pr[0].get("tela") or tela
+            except Exception:
+                pass
+            base = {"remision_id": rem.get("id"), "orden_corte_id": oc_id,
+                    "referencia_id": ref_id, "formato": "zpl"}
+            filas.append({**base, "tipo": "sticker_codigo", "destino": "honeywell",
+                          "payload": {"codigo_referencia": codigo, "tallas": unidades}})
+            # Lavado: 1 por prenda +1% (misma regla de margen del insumo)
+            import math as _math
+            filas.append({**base, "tipo": "instruccion_lavado", "destino": "sat",
+                          "payload": {"codigo_referencia": codigo, "tela": tela,
+                                      "instrucciones": instrucciones,
+                                      "copias": int(_math.ceil(total * 1.01))}})
+    if not filas:
+        return 0
+    try:
+        sb.table("impresion_trabajos").insert(filas).execute()
+        log.info(f"[impresion] remisión {rem.get('consecutivo')}: "
+                 f"{len(filas)} trabajo(s) de terminación encolados")
+        return len(filas)
+    except Exception as e:
+        log.warning(f"[impresion] no se pudieron encolar trabajos de terminación "
+                    f"(¿falta migración impresion_trabajos?): {e}")
+        return 0
+
+
+def trabajos_pendientes_impresion(limite: int = 50) -> list[dict]:
+    """Trabajos de etiquetas aún no impresos, más antiguo primero."""
+    sb = _sb()
+    if sb is None:
+        return []
+    try:
+        return (sb.table("impresion_trabajos")
+                  .select("id,tipo,destino,formato,payload,created_at")
+                  .is_("impresa_at", "null")
+                  .order("created_at").limit(limite).execute()).data or []
+    except Exception:
+        return []
+
+
+def obtener_trabajo_impresion(trabajo_id: str) -> Optional[dict]:
+    sb = _sb()
+    if sb is None:
+        return None
+    try:
+        r = (sb.table("impresion_trabajos").select("*")
+               .eq("id", trabajo_id).limit(1).execute()).data
+        return r[0] if r else None
+    except Exception:
+        return None
+
+
+def marcar_trabajo_impreso(trabajo_id: str) -> bool:
+    sb = _sb()
+    if sb is None:
+        return False
+    try:
+        r = (sb.table("impresion_trabajos")
+               .update({"impresa_at": _now_iso()})
+               .eq("id", trabajo_id).is_("impresa_at", "null").execute()).data
+        return bool(r)
+    except Exception:
+        return False
+
+
+def generar_zpl_trabajo(t: dict) -> str:
+    """ZPL del trabajo. sticker_codigo → una etiqueta POR TALLA con ^PQ =
+    unidades de esa talla (Code128 REF-T{talla}). instruccion_lavado → una
+    etiqueta de texto repetida ^PQ copias."""
+    p = t.get("payload") or {}
+    codigo = _zpl_escape(p.get("codigo_referencia") or "")
+    if t.get("tipo") == "sticker_codigo":
+        bloques = []
+        for talla, qty in sorted((p.get("tallas") or {}).items(),
+                                 key=lambda kv: (len(kv[0]), kv[0])):
+            qty = int(qty or 0)
+            if qty <= 0:
+                continue
+            dato = f"{codigo}-T{_zpl_escape(str(talla))}"
+            bloques.append(
+                "^XA^CI28"
+                f"^PW{ZPL_STICKER_ANCHO}^LL{ZPL_STICKER_ALTO}"
+                f"^FO20,18^A0N,32,32^FD{codigo}  TALLA {_zpl_escape(str(talla))}^FS"
+                f"^FO20,62^BY2,2.5,120^BCN,120,Y,N,N^FD{dato}^FS"
+                f"^PQ{qty}"
+                "^XZ")
+        return "\n".join(bloques)
+    if t.get("tipo") == "instruccion_lavado":
+        tela = _zpl_escape(p.get("tela") or "")
+        instr = _zpl_escape(p.get("instrucciones") or "")
+        if not instr:
+            instr = "Lavar a mano o maquina ciclo suave, agua fria. No usar blanqueador. Secar a la sombra. Planchar a temperatura media por el reves."
+        copias = max(1, int(p.get("copias") or 1))
+        # ^FB envuelve el texto en el ancho de la etiqueta; \& = salto de línea
+        instr_fb = instr.replace("\n", "\\&")
+        return (
+            "^XA^CI28"
+            f"^PW{ZPL_LAVADO_ANCHO}^LL{ZPL_LAVADO_ALTO}"
+            f"^FO20,16^A0N,28,28^FDMALE DENIM - {codigo}^FS"
+            + (f"^FO20,52^A0N,22,22^FD{tela}^FS" if tela else "")
+            + f"^FO20,{88 if tela else 52}^A0N,22,22"
+              f"^FB{ZPL_LAVADO_ANCHO - 40},14,4,L,0^FD{instr_fb}^FS"
+            f"^PQ{copias}"
+            "^XZ")
+    return ""
 
 
 def marcar_remision_recogida(rem_id: str, usuario: str = "sistema") -> dict:

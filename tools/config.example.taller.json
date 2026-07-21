@@ -4,6 +4,7 @@
   "password": "LA-CLAVE-DEL-USUARIO",
   "poll_seconds": 12,
   "printers": {
-    "ricoh": { "queue": "RICOH_M_320F__88a84d_" }
+    "honeywell": { "ip": "IP-DE-LA-HONEYWELL", "port": 9100 },
+    "sat":       { "ip": "IP-DE-LA-SAT", "port": 9100 }
   }
 }

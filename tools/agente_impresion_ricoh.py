@@ -1,31 +1,40 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Agente de impresión MALE'DENIM  →  imprime remisiones nuevas en la RICOH por IP.
+Agente de impresión MALE'DENIM — imprime automáticamente lo que el sistema encola.
 
-Corre en un PC de la red local (la misma red donde está la impresora). Cada
-pocos segundos le pregunta al sistema qué remisiones hay pendientes de imprimir,
-baja el PDF y lo manda a la RICOH por su IP (puerto 9100 "RAW"/JetDirect). Al
-terminar marca cada remisión como impresa para no repetirla.
+Atiende una o varias impresoras según su config.json:
+  · "ricoh"     → remisiones PDF (corte + insumos)
+  · "honeywell" → stickers de código de barras de terminación (ZPL)
+  · "sat"       → instrucciones de lavado de terminación (ZPL)
 
-No necesita que la impresora esté instalada en el PC: solo que el PC ALCANCE la
-IP de la impresora (que estén en la misma red). El backend vive en la nube y por
-eso NO puede hablarle directo a la impresora local — este agente es el puente.
+Cada impresora se define por COLA del sistema (Mac/Linux, campo "queue") o por
+IP directa (campo "ip", puerto 9100 RAW — típico de térmicas y Windows).
+
+Corre en un equipo que ALCANCE esas impresoras (misma red). El backend vive en
+la nube y no puede hablarles directo — este agente es el puente. Puede haber
+varios agentes en redes distintas: cada uno imprime SOLO los trabajos de las
+impresoras que tiene en su config; el resto los deja para otro agente.
 
 ────────────────────────────────────────────────────────────────────────────
-CÓMO USARLO
+CONFIG (config.json en la misma carpeta)
 ────────────────────────────────────────────────────────────────────────────
-1) Copia esta carpeta a un PC que esté siempre encendido en la red de la RICOH.
-2) Edita  config.json  (en la misma carpeta) con:
-      - backend_url : la URL del sistema (Railway)
-      - email/password : un usuario del sistema con permiso de remisiones
-      - printer_ip : la IP de la RICOH en tu red (ej. 192.168.1.50)
-3) Arráncalo:   python3 agente_impresion_ricoh.py
-   (Requiere Python 3.8+. No hay que instalar nada.)
+{
+  "backend_url": "https://TU-BACKEND.up.railway.app",
+  "email": "impresion@maledenim.com",
+  "password": "...",
+  "poll_seconds": 12,
+  "printers": {
+    "ricoh":     { "queue": "RICOH_M_320F__88a84d_" },
+    "honeywell": { "ip": "192.168.19.X", "port": 9100 },
+    "sat":       { "ip": "192.168.19.Y", "port": 9100 }
+  }
+}
 
-Requisito en la RICOH: tener activado "PDF Direct Print" (impresión PDF directa
-por el puerto 9100). Es una opción estándar en las RICOH MP/IM.
-────────────────────────────────────────────────────────────────────────────
+Compatibilidad: la config vieja ("printer_queue" o "printer_ip" sueltos) sigue
+funcionando y equivale a printers = { "ricoh": {...} }.
+
+Arranque:  python3 agente_impresion_ricoh.py   (Python 3.8+, sin librerías)
 """
 
 import json
@@ -60,20 +69,25 @@ def cargar_config() -> dict:
     def g(k, d=None):
         return os.environ.get("AGENTE_" + k.upper(), cfg.get(k, d))
 
+    printers = cfg.get("printers") or {}
+    # Config vieja → impresora "ricoh"
+    if not printers:
+        if g("printer_queue"):
+            printers = {"ricoh": {"queue": g("printer_queue")}}
+        elif g("printer_ip"):
+            printers = {"ricoh": {"ip": g("printer_ip"),
+                                  "port": int(g("printer_port", 9100) or 9100)}}
+
     conf = {
-        "backend_url":   (g("backend_url") or "").rstrip("/"),
-        "email":         g("email") or "",
-        "password":      g("password") or "",
-        # Método recomendado (RICOH por AirPrint/IPP en Mac/Linux): cola del sistema.
-        "printer_queue": g("printer_queue") or "",
-        # Alternativa (impresoras con PDF Direct Print): envío RAW a IP:9100.
-        "printer_ip":    g("printer_ip") or "",
-        "printer_port":  int(g("printer_port", 9100) or 9100),
-        "poll_seconds":  int(g("poll_seconds", 12) or 12),
+        "backend_url":  (g("backend_url") or "").rstrip("/"),
+        "email":        g("email") or "",
+        "password":     g("password") or "",
+        "poll_seconds": int(g("poll_seconds", 12) or 12),
+        "printers":     printers,
     }
     faltan = [k for k in ("backend_url", "email", "password") if not conf[k]]
-    if not conf["printer_queue"] and not conf["printer_ip"]:
-        faltan.append("printer_queue (recomendado) o printer_ip")
+    if not printers:
+        faltan.append("printers (o printer_queue / printer_ip)")
     if faltan:
         log("✖ Falta configurar: " + ", ".join(faltan))
         log("  Edita config.json (mira config.example.json) y vuelve a arrancar.")
@@ -113,29 +127,41 @@ class Api:
                 return self._req(method, path, binary=binary, _retry=False)
             raise
 
-    def pendientes(self) -> list:
+    # Remisiones PDF (RICOH)
+    def remisiones_pendientes(self) -> list:
         return self._req("GET", "/api/produccion/impresion/pendientes").get("pendientes", [])
 
-    def pdf(self, rem_id: str) -> bytes:
+    def remision_pdf(self, rem_id: str) -> bytes:
         return self._req("GET", f"/api/produccion/remisiones/{rem_id}/pdf", binary=True)
 
-    def marcar_impresa(self, rem_id: str) -> None:
+    def remision_impresa(self, rem_id: str) -> None:
         self._req("POST", f"/api/produccion/impresion/{rem_id}/impresa")
 
+    # Trabajos de etiquetas (Honeywell / SAT)
+    def trabajos_pendientes(self) -> list:
+        return self._req("GET", "/api/produccion/impresion/trabajos").get("trabajos", [])
 
-# ─── Envío a la impresora ─────────────────────────────────────────────────
-def imprimir(pdf: bytes, conf: dict) -> None:
-    """Imprime el PDF. Método `lp` (cola del sistema — recomendado para RICOH
-    por AirPrint/IPP en Mac/Linux) si hay printer_queue; si no, envío RAW por
-    IP:9100 (impresoras con PDF Direct Print)."""
-    if conf["printer_queue"]:
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
-            f.write(pdf)
+    def trabajo_contenido(self, trabajo_id: str) -> bytes:
+        return self._req("GET", f"/api/produccion/impresion/trabajos/{trabajo_id}/contenido", binary=True)
+
+    def trabajo_impreso(self, trabajo_id: str) -> None:
+        self._req("POST", f"/api/produccion/impresion/trabajos/{trabajo_id}/impreso")
+
+
+# ─── Envío a impresora ────────────────────────────────────────────────────
+def imprimir(data: bytes, printer: dict, *, raw: bool = False, titulo: str = "MALE DENIM") -> None:
+    """Cola del sistema (`lp`, Mac/Linux) si hay "queue"; socket a IP:9100 si
+    hay "ip". `raw=True` para ZPL (pasa los bytes sin interpretar)."""
+    if printer.get("queue"):
+        sufijo = ".zpl" if raw else ".pdf"
+        with tempfile.NamedTemporaryFile(suffix=sufijo, delete=False) as f:
+            f.write(data)
             ruta = f.name
         try:
-            r = subprocess.run(
-                ["lp", "-d", conf["printer_queue"], "-t", "Remision MALE DENIM", ruta],
-                capture_output=True, text=True, timeout=60)
+            cmd = ["lp", "-d", printer["queue"], "-t", titulo]
+            if raw:
+                cmd += ["-o", "raw"]
+            r = subprocess.run(cmd + [ruta], capture_output=True, text=True, timeout=60)
             if r.returncode != 0:
                 raise RuntimeError(r.stderr.strip() or f"lp devolvió {r.returncode}")
         finally:
@@ -143,46 +169,76 @@ def imprimir(pdf: bytes, conf: dict) -> None:
                 os.remove(ruta)
             except OSError:
                 pass
+    elif printer.get("ip"):
+        with socket.create_connection((printer["ip"], int(printer.get("port") or 9100)),
+                                      timeout=30) as s:
+            s.sendall(data)
     else:
-        with socket.create_connection((conf["printer_ip"], conf["printer_port"]), timeout=30) as s:
-            s.sendall(pdf)
+        raise RuntimeError("impresora sin 'queue' ni 'ip' en config")
+
+
+def _destino_str(p: dict) -> str:
+    return p.get("queue") or f"{p.get('ip')}:{p.get('port') or 9100}"
 
 
 # ─── Bucle principal ──────────────────────────────────────────────────────
 def main() -> None:
     conf = cargar_config()
-    destino = (f"cola '{conf['printer_queue']}' (lp)" if conf["printer_queue"]
-               else f"{conf['printer_ip']}:{conf['printer_port']} (RAW)")
+    printers: dict = conf["printers"]
     log("Agente de impresión MALE'DENIM")
     log(f"  Sistema : {conf['backend_url']}")
-    log(f"  RICOH   : {destino}")
+    for nombre, p in printers.items():
+        log(f"  {nombre:<9}: {_destino_str(p)}")
     log(f"  Chequeo : cada {conf['poll_seconds']}s")
 
     api = Api(conf["backend_url"], conf["email"], conf["password"])
     api.login()
 
-    fallidas: dict = {}   # rem_id -> nº de intentos fallidos (para no spamear el log)
+    fallidas: dict = {}   # id -> intentos fallidos (para no spamear el log)
+
+    def intento(clave: str, etiqueta: str, accion) -> None:
+        try:
+            accion()
+            fallidas.pop(clave, None)
+        except Exception as e:
+            n = fallidas.get(clave, 0) + 1
+            fallidas[clave] = n
+            if n <= 3 or n % 10 == 0:
+                log(f"  ✖ {etiqueta} falló (intento {n}): {e}")
 
     while True:
         try:
-            pendientes = api.pendientes()
-            if pendientes:
-                log(f"→ {len(pendientes)} remisión(es) pendiente(s) de imprimir.")
-            for rem in pendientes:
-                rid = rem["id"]
-                etiqueta = rem.get("consecutivo") or rid[:8]
-                try:
-                    pdf = api.pdf(rid)
-                    imprimir(pdf, conf)
-                    api.marcar_impresa(rid)
-                    fallidas.pop(rid, None)
-                    log(f"  ✓ Impresa {etiqueta} ({len(pdf)//1024} KB) → RICOH")
-                except Exception as e:
-                    n = fallidas.get(rid, 0) + 1
-                    fallidas[rid] = n
-                    # No se marca impresa → se reintenta en el próximo ciclo.
-                    if n <= 3 or n % 10 == 0:
-                        log(f"  ✖ {etiqueta} falló (intento {n}): {e}")
+            # 1) Remisiones PDF → impresora "ricoh" (si este agente la atiende)
+            if "ricoh" in printers:
+                for rem in api.remisiones_pendientes():
+                    rid, etiqueta = rem["id"], rem.get("consecutivo") or rem["id"][:8]
+
+                    def _imprimir_rem(rid=rid, etiqueta=etiqueta):
+                        pdf = api.remision_pdf(rid)
+                        imprimir(pdf, printers["ricoh"], titulo=f"Remision {etiqueta}")
+                        api.remision_impresa(rid)
+                        log(f"  ✓ Impresa {etiqueta} ({len(pdf)//1024} KB) → ricoh")
+
+                    intento(rid, f"remisión {etiqueta}", _imprimir_rem)
+
+            # 2) Etiquetas térmicas → honeywell (stickers) / sat (lavado)
+            trabajos = api.trabajos_pendientes()
+            for t in trabajos:
+                destino = t.get("destino") or ""
+                if destino not in printers:
+                    continue   # lo imprime otro agente (otra red)
+                tid = t["id"]
+                cod = (t.get("payload") or {}).get("codigo_referencia") or tid[:8]
+                etiqueta = f"{t.get('tipo')} {cod}"
+
+                def _imprimir_trab(t=t, tid=tid, destino=destino, etiqueta=etiqueta):
+                    contenido = api.trabajo_contenido(tid)
+                    imprimir(contenido, printers[destino],
+                             raw=(t.get("formato") == "zpl"), titulo=etiqueta)
+                    api.trabajo_impreso(tid)
+                    log(f"  ✓ Impreso {etiqueta} → {destino}")
+
+                intento(tid, etiqueta, _imprimir_trab)
         except urllib.error.URLError as e:
             log(f"⚠ Sin conexión con el sistema: {e}. Reintento…")
         except Exception as e:

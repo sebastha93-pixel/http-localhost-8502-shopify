@@ -44,6 +44,7 @@ interface Precosteo {
   autorizada_por?: string;
   fecha_autorizacion?: string;
   es_muestra_diseno?: boolean;
+  instrucciones_lavado?: string;
   items: Item[];
 }
 
@@ -58,7 +59,7 @@ export default function PrecosteoDetallePage() {
 
   const { user } = useAuth();
   const [editando, setEditando] = useState(false);
-  const [form, setForm] = useState({ nombre: "", codigo_referencia: "", tela: "" });
+  const [form, setForm] = useState({ nombre: "", codigo_referencia: "", tela: "", instrucciones_lavado: "" });
 
   const q = useQuery<Precosteo>({
     queryKey: ["produccion", "precosteo", id],
@@ -81,6 +82,7 @@ export default function PrecosteoDetallePage() {
       nombre: form.nombre.trim(),
       codigo_referencia: form.codigo_referencia.trim(),
       tela: form.tela.trim(),
+      instrucciones_lavado: form.instrucciones_lavado.trim(),
     }),
     onSuccess: () => {
       setMsg("Cambios guardados.");
@@ -110,6 +112,7 @@ export default function PrecosteoDetallePage() {
         nombre: q.data.nombre || "",
         codigo_referencia: q.data.codigo_referencia || "",
         tela: q.data.tela || "",
+        instrucciones_lavado: q.data.instrucciones_lavado || "",
       });
       setEditando(true);
     }
@@ -153,6 +156,7 @@ export default function PrecosteoDetallePage() {
       nombre: p.nombre || "",
       codigo_referencia: p.codigo_referencia || "",
       tela: p.tela || "",
+      instrucciones_lavado: p.instrucciones_lavado || "",
     });
     setErr(""); setMsg("");
     setEditando(true);
@@ -207,6 +211,16 @@ export default function PrecosteoDetallePage() {
                 onChange={(v) => setForm({ ...form, nombre: v })} />
               <FieldEdit label="Tela" value={form.tela}
                 onChange={(v) => setForm({ ...form, tela: v })} />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                Instrucciones de lavado (las imprime la SAT en terminación)
+              </label>
+              <textarea value={form.instrucciones_lavado}
+                onChange={(e) => setForm({ ...form, instrucciones_lavado: e.target.value })}
+                rows={3}
+                placeholder="Ej: Lavar a máquina ciclo suave, agua fría. No usar blanqueador. Secar a la sombra. Planchar a temperatura media por el revés."
+                className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm text-ink-900 placeholder:text-graphite/50" />
             </div>
             <div className="flex justify-end gap-2">
               <button onClick={() => { setEditando(false); setErr(""); }}

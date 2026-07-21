@@ -1,64 +1,56 @@
-# Agente de impresión — remisiones → RICOH
+# Agente de impresión MALE'DENIM
 
-Imprime **automáticamente** cada remisión nueva (corte + insumos) en la RICOH,
-apenas se guarda en el sistema.
+Imprime **automáticamente** lo que el sistema encola:
 
-## ¿Por qué un agente?
+| Documento | Cuándo se encola | Impresora | Formato |
+|---|---|---|---|
+| Remisión (corte + insumos) | al guardar cualquier remisión | **RICOH** | PDF |
+| Stickers de código de barras (1 por prenda, ref+talla) | al crear remisión de **terminación** | **Honeywell** | ZPL |
+| Instrucciones de lavado (por tela/referencia) | al crear remisión de **terminación** | **SAT** | ZPL |
 
-El backend del sistema vive en la **nube** (Railway) y no puede hablarle a una
-impresora de la **red local**. Este agente corre en un equipo que SÍ ve la
-impresora (el Mac donde está instalada) y hace de puente: le pregunta a la nube
-qué imprimir y lo manda a la impresora.
+## Arquitectura
+
+El backend vive en la nube y no alcanza impresoras locales. Cada **agente**
+corre en un equipo que sí las ve, y puede haber **varios agentes en redes
+distintas** — cada uno imprime SOLO las impresoras de su `config.json`:
 
 ```
-Sistema (nube)  ──►  Agente (equipo con la impresora)  ──►  RICOH
-   remisión nueva        baja el PDF                        imprime
+                          ┌── Agente Mac (oficina) ──► RICOH        (PDF remisiones)
+Sistema (nube) ── cola ───┤
+                          └── Agente Windows (taller) ─► Honeywell  (stickers ZPL)
+                                                      └► SAT        (lavado ZPL)
 ```
 
-## Dos formas de imprimir
+## Instalación de un agente
 
-1. **Cola del sistema (`lp`) — RECOMENDADO.** Para impresoras instaladas por
-   **AirPrint/IPP** (como la RICOH M 320F de MALE'DENIM). El agente usa la cola
-   que el equipo ya tiene configurada. No necesita IP ni puerto. Config:
-   `"printer_queue": "RICOH_M_320F__88a84d_"`.
-   (El nombre exacto de la cola se ve con `lpstat -p`.)
-2. **RAW por IP:9100.** Para impresoras con "PDF Direct Print". Config:
-   `"printer_ip": "192.168.x.x"`, `"printer_port": 9100`.
+1. Copia esta carpeta al equipo (necesita **Python 3.8+**, sin librerías).
+2. Crea `config.json` desde el ejemplo:
+   - **Mac oficina (RICOH):** `config.example.json` — usa la cola del sistema
+     (`lpstat -p` muestra el nombre).
+   - **PC Windows del taller (térmicas):** `config.example.taller.json` — pon
+     las **IP** de la Honeywell y la SAT (se ven en el menú/config de cada
+     impresora o imprimiendo su página de configuración).
+3. Arranca: doble-clic a `Iniciar_agente_impresion.command` (Mac) o
+   `Iniciar_agente_impresion.bat` (Windows), o `python3 agente_impresion_ricoh.py`.
 
-## Requisitos
+Arranque automático: Mac → LaunchAgent (ya montado en el Mac de la oficina);
+Windows → acceso directo al `.bat` en `shell:startup`.
 
-1. Un equipo **encendido** que tenga acceso a la impresora (idealmente el mismo
-   Mac donde está instalada la RICOH).
-2. **Python 3.8+** (no hace falta instalar librerías).
+## Térmicas (Honeywell / SAT)
 
-## Instalación
-
-1. Copia esta carpeta `tools/` al equipo.
-2. Duplica `config.example.json` como **`config.json`** y llénalo (email/clave de
-   un usuario del sistema con permiso de remisiones; el `printer_queue` ya viene).
-3. Arráncalo: doble-clic en **`Iniciar_agente_impresion.command`** (Mac) o
-   `.bat` (Windows), o en terminal `python3 agente_impresion_ricoh.py`.
-
-Verás:
-```
-[10:32:01] ✓ Sesión iniciada en el sistema.
-[10:32:13] → 1 remisión(es) pendiente(s) de imprimir.
-[10:32:14]   ✓ Impresa REM-2026-000045 (38 KB) → RICOH
-```
+- Se les envía **ZPL crudo al puerto 9100** (RAW). Ambas marcas lo emulan de
+  fábrica en la mayoría de modelos; si algún modelo no habla ZPL, se cambia la
+  plantilla en el backend (una función), no el agente.
+- Medidas de etiqueta: definidas en el backend
+  (`ZPL_STICKER_*` / `ZPL_LAVADO_*` en `backend/services/produccion.py`,
+  203 dpi ≈ 8 dots/mm). Ajustar ahí si el medio real es de otro tamaño.
+- Las **instrucciones de lavado** salen del campo *Instrucciones de lavado* del
+  precosteo de cada referencia (editable en el detalle del precosteo). Si está
+  vacío se imprime un texto genérico de cuidado.
 
 ## Día a día
 
-- Cada **12 s** revisa remisiones nuevas y las imprime.
-- Si la impresora está apagada / sin tóner, **reintenta** (no pierde ni duplica).
-- Las remisiones creadas **antes** de instalar el agente NO se imprimen.
-
-## Arranque automático (opcional)
-
-- **Mac**: un LaunchAgent (`~/Library/LaunchAgents/…plist`) para que arranque al
-  iniciar sesión y se mantenga vivo.
-- **Windows**: acceso directo al `.bat` en la carpeta *Inicio* (`shell:startup`).
-
-## Reimprimir
-
-`POST /api/produccion/impresion/{id}/reimprimir` (permiso de remisiones) vuelve
-a encolar una remisión; el agente la toma en el siguiente ciclo.
+- Poll cada 12 s. Si una impresora está apagada/sin papel, **reintenta** sin
+  perder ni duplicar (cada trabajo se marca impreso solo cuando salió).
+- Un agente ignora los trabajos de impresoras que no atiende (los toma el otro).
+- Reimprimir una remisión: `POST /api/produccion/impresion/{id}/reimprimir`.

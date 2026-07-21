@@ -425,6 +425,7 @@ class PrecosteoUpdate(BaseModel):
     margen:  Optional[float] = None
     items:   Optional[list[PrecosteoItemIn]] = None
     es_muestra_diseno: Optional[bool] = None
+    instrucciones_lavado: Optional[str] = None  # las imprime la SAT en terminación
 
 
 @router.get("/precosteo/categorias")
@@ -498,6 +499,7 @@ def actualizar_precosteo(
             margen=body.margen,
             items=[i.model_dump() for i in body.items] if body.items is not None else None,
             es_muestra_diseno=body.es_muestra_diseno,
+            instrucciones_lavado=body.instrucciones_lavado,
             usuario_id=user.id,
         )
     except ValueError as e:
@@ -1641,6 +1643,39 @@ def impresion_reimprimir(
 ):
     """Vuelve a encolar la remisión (para reimprimir manualmente)."""
     return {"ok": svc.marcar_remision_reimprimir(rem_id)}
+
+
+# ── Trabajos de etiquetas térmicas (terminación: stickers + lavado) ──────
+# Los consume el agente local que atiende la Honeywell (stickers de barra) y
+# la SAT (instrucciones de lavado) en la red de la empresa.
+@router.get("/impresion/trabajos")
+def impresion_trabajos(
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+):
+    return {"trabajos": svc.trabajos_pendientes_impresion()}
+
+
+@router.get("/impresion/trabajos/{trabajo_id}/contenido")
+def impresion_trabajo_contenido(
+    trabajo_id: str,
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+):
+    """Contenido imprimible del trabajo (ZPL en texto plano)."""
+    t = svc.obtener_trabajo_impresion(trabajo_id)
+    if not t:
+        raise HTTPException(404, "trabajo_no_encontrado")
+    zpl = svc.generar_zpl_trabajo(t)
+    if not zpl:
+        raise HTTPException(400, "trabajo_sin_contenido")
+    return Response(content=zpl, media_type="text/plain; charset=utf-8")
+
+
+@router.post("/impresion/trabajos/{trabajo_id}/impreso")
+def impresion_trabajo_impreso(
+    trabajo_id: str,
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+):
+    return {"ok": svc.marcar_trabajo_impreso(trabajo_id)}
 
 
 def _generar_remision_pdf(rem: dict) -> bytes:
