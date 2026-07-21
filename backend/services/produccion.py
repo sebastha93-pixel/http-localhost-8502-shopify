@@ -2385,7 +2385,7 @@ def marcar_remision_reimprimir(rem_id: str) -> bool:
 #   (calibrar con la etiqueta-regla si la impresión cae corrida).
 ZPL_STK_X0         = 0
 ZPL_STK_COL_ANCHO  = 200   # ~25 mm ancho útil de cada sticker
-ZPL_STK_COL_PASO   = 216   # ~27 mm de centro a centro (sticker + ranura)
+ZPL_STK_COL_PASO   = 240   # ~30 mm de centro a centro (calibrado con regla 2026-07-21)
 ZPL_STK_COLS       = 3
 ZPL_STK_ALTO       = 160   # ~20 mm alto
 ZPL_STK_FILA_ANCHO = ZPL_STK_X0 + ZPL_STK_COL_PASO * ZPL_STK_COLS
