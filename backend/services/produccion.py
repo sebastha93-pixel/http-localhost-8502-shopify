@@ -1248,10 +1248,12 @@ def reabrir_orden_corte(oc_id: str, *, usuario: str) -> dict:
 
     # Neto por rollo de este corte (cortes - reaperturas previas) → lo que
     # falta por devolver. Idempotente: reabrir dos veces no duplica metros.
+    # La reapertura se registra como tipo 'ajuste' (el CHECK de la tabla solo
+    # permite ingreso/corte/ajuste); se distingue por el doc_ref del corte.
     movs = (sb.table("movimientos_inventario")
               .select("rollo_id,metros,tipo")
               .eq("doc_ref", doc_ref)
-              .in_("tipo", ["corte", "reapertura"]).execute()).data or []
+              .in_("tipo", ["corte", "ajuste"]).execute()).data or []
     neto: dict[str, float] = {}
     for mv in movs:
         rid = mv.get("rollo_id")
@@ -1273,7 +1275,7 @@ def reabrir_orden_corte(oc_id: str, *, usuario: str) -> dict:
             "updated_at": _now_iso(),
         }).eq("id", rid).execute()
         sb.table("movimientos_inventario").insert({
-            "rollo_id": rid, "tipo": "reapertura", "metros": devolver,
+            "rollo_id": rid, "tipo": "ajuste", "metros": devolver,
             "doc_ref": doc_ref, "usuario": usuario,
             "nota": f"Reapertura corte {doc_ref} (corrección de informe)",
         }).execute()
