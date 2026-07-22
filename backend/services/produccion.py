@@ -2390,9 +2390,11 @@ ZPL_STK_COLS       = 3
 ZPL_STK_ALTO       = 160   # ~20 mm alto
 ZPL_STK_FILA_ANCHO = ZPL_STK_X0 + ZPL_STK_COL_PASO * ZPL_STK_COLS
 #
-# LAVADO (SAT): tira vertical de nylon.
-ZPL_LAV_ANCHO = 240   # ~30 mm
-ZPL_LAV_ALTO  = 1040  # ~130 mm de largo
+# LAVADO (SAT): tira vertical de nylon. Diseño híbrido técnica×editorial
+# aprobado 2026-07-21: zonas de COSTURA en blanco en ambos extremos (la
+# etiqueta se imprime y CORTA lista para coser/pegar en confección).
+ZPL_LAV_ANCHO  = 240   # ~30 mm
+ZPL_LAV_SEAM   = 96    # ~12 mm de zona de costura en cada extremo
 
 
 def _zpl_escape(s: str) -> str:
@@ -2611,34 +2613,72 @@ def generar_zpl_trabajo(t: dict) -> str:
         return "\n".join(filas)
 
     if t.get("tipo") == "instruccion_lavado":
-        # Tira vertical calcada de la etiqueta real: marca, referencia,
-        # composición (varía por referencia — campo instrucciones_lavado),
-        # bloque legal fijo y cuidados EN/ES estándar.
-        # CADA línea va con ^FO fijo (nada de bloques multi-línea ^FB: su
-        # auto-ajuste encima el texto cuando una línea no cabe).
+        # Diseño HÍBRIDO técnica×editorial (aprobado de los previos):
+        # marca espaciada + secciones con filetes + símbolos de cuidado +
+        # zonas de COSTURA en blanco en ambos extremos. Se imprime y CORTA.
+        # Negrita = doble trazo (A0 no tiene bold); ^MD sube la oscuridad.
         composicion = _zpl_escape(p.get("instrucciones") or "").upper()
         copias = max(1, int(p.get("copias") or 1))
-        W = ZPL_LAV_ANCHO
+        W, S = ZPL_LAV_ANCHO, ZPL_LAV_SEAM
 
-        def linea(y: int, txt: str, alto: int = 18) -> str:
-            return f"^FO0,{y}^FB{W},1,0,C,0^A0N,{alto},{alto}^FD{txt}^FS"
+        def negrita(y: int, txt: str, alto: int = 20) -> str:
+            base = f",{y}^FB{W},1,0,C,0^A0N,{alto},{alto}^FD{txt}^FS"
+            return f"^FO0{base}^FO1{base}"
 
-        z = ["^XA^CI28" + modo + f"^PW{W}^LL{ZPL_LAV_ALTO}",
-             linea(36, "MALE", 40), linea(78, "DENIM", 26),
-             f"^FO70,110^GB{W - 140},3,3^FS",
-             linea(146, codigo, 26)]
-        y = 200
+        def filete(y: int, grosor: int = 1, margen: int = 12) -> str:
+            return f"^FO{margen},{y}^GB{W - 2 * margen},{grosor},{grosor}^FS"
+
+        def icono(i: int, x: int, y: int) -> str:
+            if i == 0:   # lavadora 30° (cubeta)
+                return (f"^FO{x},{y+4}^GB36,2,2^FS"
+                        f"^FO{x+2},{y+6}^GD8,26,2,B,L^FS"
+                        f"^FO{x+26},{y+6}^GD8,26,2,B,R^FS"
+                        f"^FO{x+8},{y+30}^GB20,2,2^FS"
+                        f"^FO{x+11},{y+12}^A0N,16,16^FD30^FS")
+            if i == 1:   # no blanqueador (triángulo tachado)
+                return (f"^FO{x+1},{y+2}^GD17,30,2,B,L^FS"
+                        f"^FO{x+18},{y+2}^GD17,30,2,B,R^FS"
+                        f"^FO{x+1},{y+32}^GB34,2,2^FS"
+                        f"^FO{x},{y}^GD36,36,2,B,L^FS")
+            if i == 2:   # secadora baja (cuadro + círculo + punto)
+                return (f"^FO{x},{y}^GB36,36,2^FS"
+                        f"^FO{x+5},{y+5}^GC26,2,B^FS"
+                        f"^FO{x+16},{y+16}^GC5,3,B^FS")
+            if i == 3:   # plancha tibia
+                return (f"^FO{x},{y+30}^GB36,2,2^FS"
+                        f"^FO{x+12},{y+8}^GB18,2,2^FS"
+                        f"^FO{x+2},{y+10}^GD10,20,2,B,L^FS"
+                        f"^FO{x+30},{y+10}^GB2,20,2^FS")
+            # 4: no lavar en seco (círculo tachado)
+            return (f"^FO{x+1},{y+1}^GC34,2,B^FS"
+                    f"^FO{x+5},{y+5}^GD26,26,2,B,L^FS")
+
+        z = ["^XA^CI28^MD10" + modo + f"^PW{W}"]
+        y = S                                     # ── zona de costura superior
+        z.append(negrita(y, "MALE", 44));      y += 48
+        z.append(negrita(y, "DENIM", 24));     y += 34
+        z.append(filete(y, 3));                y += 20
+        z.append(negrita(y, f"REF  {codigo}", 22)); y += 30
         if composicion:
-            z.append(linea(y, composicion, 20)); y += 60
-        for grupo in (["MADE IN", "COLOMBIA", "HECHO POR", "DIRTY JEANS",
-                       "NIT 901680460-1", "SIC 1036644755"],
-                      ["MACHINE WASH", "WARM WATER", "NO BLEACH",
-                       "TUMBLE DRY LOW", "COOL IRON"],
-                      ["LAVADORA", "AGUA TIBIA", "NO BLANQUEADOR",
-                       "SECADORA BAJA", "TEMPERATURA", "PLANCHA TIBIA"]):
-            for ln in grupo:
-                z.append(linea(y, ln)); y += 24
-            y += 36   # aire entre bloques
+            z.append(negrita(y, f"COMP  {composicion}", 22))
+        y += 38
+        z.append(filete(y));                   y += 14
+        for ln in ("MACHINE WASH COLD", "NO BLEACH", "TUMBLE DRY LOW", "COOL IRON"):
+            z.append(negrita(y, ln));          y += 28
+        y += 6
+        z.append(filete(y));                   y += 14
+        for ln in ("LAVADORA AGUA TIBIA", "NO BLANQUEADOR", "SECADORA BAJA", "PLANCHA TIBIA"):
+            z.append(negrita(y, ln));          y += 28
+        y += 6
+        z.append(filete(y));                   y += 12
+        for i in range(5):                        # símbolos de cuidado
+            z.append(icono(i, 10 + i * 46, y))
+        y += 46
+        z.append(filete(y));                   y += 14
+        for ln in ("MADE IN COLOMBIA", "DIRTY JEANS", "NIT 901680460-1", "SIC 1036644755"):
+            z.append(negrita(y, ln, 18));      y += 26
+        y += S                                    # ── zona de costura inferior
+        z.insert(1, f"^LL{y}")
         z.append(f"^PQ{copias}^XZ")
         return "".join(z)
     return ""
