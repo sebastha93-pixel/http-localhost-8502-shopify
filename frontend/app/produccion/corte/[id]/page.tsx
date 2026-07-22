@@ -372,13 +372,15 @@ export default function DetalleOrdenCortePage() {
         precio_corte: precioCorte ? parseFloat(precioCorte) : null,
       });
     },
-    onSuccess: (data: { orden_corte?: { rollos_sobrantes?: { codigo_interno: string; metros: number }[] } }) => {
+    onSuccess: (data: { orden_corte?: { rollos_sobrantes?: { codigo_interno: string; metros: number }[]; retazos_auto_metros?: number } }) => {
       const sobras = data?.orden_corte?.rollos_sobrantes || [];
+      const retAuto = Number(data?.orden_corte?.retazos_auto_metros || 0);
+      const notaRetazo = retAuto > 0 ? ` (${retAuto.toFixed(2)} m menores a 0.5 se llevaron a retazos automáticamente)` : "";
       if (sobras.length > 0) {
         const det = sobras.map((s) => `${s.codigo_interno} (${Number(s.metros).toFixed(1)} m)`).join(" · ");
-        setMsg(`Orden cerrada. ⚠ QUEDÓ SOBRANTE: ${det} — consérvale la etiqueta al rollo para pistolearlo y liquidarlo en el próximo corte.`);
+        setMsg(`Orden cerrada. ⚠ QUEDÓ SOBRANTE: ${det} — consérvale la etiqueta al rollo para pistolearlo y liquidarlo en el próximo corte.${notaRetazo}`);
       } else {
-        setMsg("Informe guardado. Inventario descontado y orden cerrada. Sin sobrantes: tela liquidada completa.");
+        setMsg(`Informe guardado. Inventario descontado y orden cerrada. Sin sobrantes: tela liquidada completa.${notaRetazo}`);
       }
       setErr("");
       qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });

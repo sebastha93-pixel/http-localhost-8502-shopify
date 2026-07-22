@@ -1906,8 +1906,23 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
     if not claim.data:
         raise ValueError("orden_ya_cortada")
 
-    # PASO 3 — Descontar (ya pre-validado; la reserva 'en_corte' se libera aquí)
+    # Restos MENORES A 0.5 m no son sobrante utilizable → van a RETAZOS y el
+    # rollo sale del inventario de telas (agotado). Se suman a los retazos de
+    # la orden y dejan rastro propio en movimientos.
+    UMBRAL_RETAZO = 0.5
+    retazos_auto = 0.0
+    descuentos_fin: list[tuple[str, float, float, float]] = []
     for rollo_id, m, nuevo in descuentos:
+        retazo = 0.0
+        if 0 < nuevo < UMBRAL_RETAZO:
+            retazo = nuevo
+            nuevo = 0.0
+            retazos_auto = round(retazos_auto + retazo, 2)
+        descuentos_fin.append((rollo_id, m, nuevo, retazo))
+    descuentos = [(rid, m, nuevo) for rid, m, nuevo, _ in descuentos_fin]
+
+    # PASO 3 — Descontar (ya pre-validado; la reserva 'en_corte' se libera aquí)
+    for rollo_id, m, nuevo, retazo in descuentos_fin:
         estado_nuevo = "agotado" if nuevo <= 0 else "disponible"
         sb.table("rollos_tela").update({
             "metros_disponible": nuevo,
@@ -1923,6 +1938,15 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
             "usuario": usuario,
             "nota": f"Corte {doc_ref} · consumo real",
         }).execute()
+        if retazo > 0:
+            sb.table("movimientos_inventario").insert({
+                "rollo_id": rollo_id,
+                "tipo": "ajuste",
+                "metros": -retazo,
+                "doc_ref": doc_ref,
+                "usuario": usuario,
+                "nota": f"Retazo {retazo} m (<{UMBRAL_RETAZO} m) → fuera del inventario de telas",
+            }).execute()
 
     # Calcula diferencia teórico vs real
     teorico = float(oc.get("metros_consumidos") or 0)
@@ -1943,7 +1967,9 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
     if unidades_cortadas is not None:update["unidades_cortadas"] = unidades_cortadas or {}
     if retazos_cantidad is not None: update["retazos_cantidad"] = int(retazos_cantidad)
     if espigas_metros is not None:  update["espigas_metros"] = espigas_metros
-    if retazos_metros is not None:  update["retazos_metros"] = float(retazos_metros)
+    # Retazos = lo que reportó el cortador + los restos <0.5 m auto-retazados
+    if retazos_metros is not None or retazos_auto > 0:
+        update["retazos_metros"] = round(float(retazos_metros or 0) + retazos_auto, 2)
     if fecha_entrega is not None:    update["fecha_entrega"] = fecha_entrega or None
     if precio_corte is not None:
         update["precio_corte"] = float(precio_corte)
@@ -1990,6 +2016,7 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
          "metros": nuevo}
         for rid, _m, nuevo in descuentos if nuevo > 0.01
     ]
+    resultado["retazos_auto_metros"] = retazos_auto
     return resultado
 
 
