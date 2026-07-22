@@ -1319,6 +1319,49 @@ def reabrir_orden_corte(oc_id: str, *, usuario: str) -> dict:
     return obtener_orden_corte(oc_id) or {}
 
 
+def actualizar_unidades_cortadas(oc_id: str, unidades: dict) -> dict:
+    """SOLO ADMIN — corrige las unidades cortadas de una orden YA CERRADA
+    sin tocar inventario ni movimientos (para cierres que quedaron con la
+    grilla vacía, como 2607-0001). La tela ya se descontó al cerrar; esto
+    solo repara el dato del que dependen remisiones e insumos."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    oc = obtener_orden_corte(oc_id)
+    if not oc:
+        raise ValueError("no_encontrado")
+    if oc.get("estado") != "cortada":
+        raise ValueError("orden_no_cerrada")
+
+    limpio: dict = {}
+    for t, v in (unidades or {}).items():
+        try:
+            n = int(float(v or 0))
+        except (TypeError, ValueError):
+            raise ValueError(f"unidades_invalidas_talla_{t}")
+        if n > 0:
+            limpio[str(t).strip().upper()] = n
+    if not limpio:
+        raise ValueError("sin_unidades")
+
+    sb.table("ordenes_corte").update({
+        "unidades_cortadas": limpio,
+        "updated_at": _now_iso(),
+    }).eq("id", oc_id).execute()
+    # Si la orden tiene UNA sola referencia, su fila hija lleva las mismas
+    # unidades (en tendidos multi-ref el padre lleva la suma y no adivinamos).
+    try:
+        hijas = (sb.table("orden_corte_referencias").select("id")
+                   .eq("orden_corte_id", oc_id).execute()).data or []
+        if len(hijas) == 1:
+            sb.table("orden_corte_referencias").update(
+                {"unidades_cortadas": limpio}).eq("id", hijas[0]["id"]).execute()
+    except Exception:
+        pass
+    _cache_invalidate_prefix("ordenes_corte")
+    return obtener_orden_corte(oc_id) or {}
+
+
 def actualizar_curva_corte(oc_id: str, *, curva: dict,
                            referencia_id: Optional[str] = None,
                            num_capas: Optional[int] = None) -> dict:
@@ -1949,6 +1992,13 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
             except (TypeError, ValueError):
                 raise ValueError(f"unidades_invalidas_talla_{talla}")
         unidades_cortadas = limpio
+
+    # CANDADO: una orden cerrada sin unidades por talla deja ciegas las
+    # remisiones y los insumos (caso 2607-0001, recerrada con la grilla
+    # vacía tras una reapertura). El informe DEBE traer unidades.
+    if not unidades_cortadas or sum(unidades_cortadas.values()) <= 0:
+        raise ValueError(
+            "sin_unidades: digita las unidades cortadas por talla antes de cerrar")
 
     # Si el informe viene POR ESPIGAS, el consumo real se recalcula acá
     # (no se confía en el cálculo del cliente):
@@ -3180,6 +3230,12 @@ def calcular_insumos_requeridos_corte(
         unidades = oc.get("unidades_cortadas") or {}
         cantidad_base = sum(int(v or 0) for v in unidades.values())
         origen = "unidades_cortadas"
+        if cantidad_base <= 0:
+            # Cierre histórico sin grilla de unidades → caer a lo programado
+            # para no dejar ciegos remisiones e insumos.
+            cantidad_base = int(oc.get("cantidad_programada") or 0) or \
+                sum(int(v or 0) for v in (oc.get("curva_trazo") or {}).values())
+            origen = "programada_fallback"
     else:
         cantidad_base = int(oc.get("cantidad_programada") or 0)
         if cantidad_base <= 0:

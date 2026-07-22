@@ -440,6 +440,27 @@ export default function DetalleOrdenCortePage() {
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
   });
 
+  // SOLO ADMIN: corregir unidades de una orden CERRADA (solo el dato — no
+  // toca inventario). Para cierres que quedaron con la grilla vacía.
+  const [unidEdit, setUnidEdit] = useState<Record<string, string> | null>(null);
+  const corregirUnidades = useMutation({
+    mutationFn: () => {
+      const unidades: Record<string, number> = {};
+      for (const [t, v] of Object.entries(unidEdit || {})) {
+        const n = parseInt(v || "0", 10);
+        if (n > 0) unidades[t] = n;
+      }
+      return api.patch(`/api/produccion/corte/${id}/unidades`, { unidades });
+    },
+    onSuccess: () => {
+      setUnidEdit(null);
+      setMsg("Unidades corregidas. Remisiones e insumos ya las toman en cuenta (el inventario no se tocó).");
+      setErr("");
+      qc.invalidateQueries({ queryKey: ["produccion", "corte"] });
+    },
+    onError: (e: Error) => { setErr(e.message); setMsg(""); },
+  });
+
   // SOLO ADMIN: reabrir una orden cerrada para corregir el informe
   const reabrir = useMutation({
     mutationFn: () => api.post(`/api/produccion/corte/${id}/reabrir`),
@@ -1277,21 +1298,74 @@ export default function DetalleOrdenCortePage() {
       {/* SOLO ADMIN: reabrir para corregir el informe (devuelve la tela
           descontada al inventario y la orden vuelve a 'en corte'). */}
       {cerrada && esAdmin && (
-        <Card><CardContent className="p-4 flex flex-wrap items-center justify-between gap-3">
-          <p className="text-xs text-graphite">
-            ¿Informe con errores? Puedes reabrir la orden: la tela descontada
-            vuelve al inventario y la orden queda de nuevo en corte para cerrarla corregida.
-          </p>
-          <button
-            onClick={() => {
-              if (window.confirm(`¿Reabrir la orden ${oc.consecutivo}? La tela descontada vuelve al inventario y deberás cerrar el informe de nuevo.`))
-                reabrir.mutate();
-            }}
-            disabled={reabrir.isPending}
-            className="inline-flex items-center gap-2 rounded-sm border border-terracotta bg-card px-4 py-2 text-xs font-semibold uppercase tracking-widest text-terracotta hover:bg-terra-soft disabled:opacity-40">
-            {reabrir.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />}
-            Reabrir orden (admin)
-          </button>
+        <Card><CardContent className="p-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-graphite">
+              ¿Informe con errores? Puedes reabrir la orden (la tela vuelve al inventario)
+              o solo <span className="font-semibold">corregir las unidades</span> si el cierre quedó sin la grilla digitada
+              (eso arregla remisiones e insumos sin tocar la tela).
+            </p>
+            <div className="flex items-center gap-2">
+              {!unidEdit && (
+                <button
+                  onClick={() => {
+                    const base = (oc.unidades_cortadas && Object.keys(oc.unidades_cortadas).length > 0)
+                      ? oc.unidades_cortadas : (oc.curva_trazo || {});
+                    const v: Record<string, string> = {};
+                    for (const [t, n] of Object.entries(base)) v[t] = String(n ?? "");
+                    setUnidEdit(v);
+                  }}
+                  className="inline-flex items-center gap-2 rounded-sm border border-navy-600 bg-card px-4 py-2 text-xs font-semibold uppercase tracking-widest text-navy-600 hover:bg-navy-50">
+                  <Pencil className="h-3.5 w-3.5" /> Corregir unidades
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  if (window.confirm(`¿Reabrir la orden ${oc.consecutivo}? La tela descontada vuelve al inventario y deberás cerrar el informe de nuevo.`))
+                    reabrir.mutate();
+                }}
+                disabled={reabrir.isPending}
+                className="inline-flex items-center gap-2 rounded-sm border border-terracotta bg-card px-4 py-2 text-xs font-semibold uppercase tracking-widest text-terracotta hover:bg-terra-soft disabled:opacity-40">
+                {reabrir.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />}
+                Reabrir orden (admin)
+              </button>
+            </div>
+          </div>
+          {unidEdit && (
+            <div className="rounded-sm border border-navy-600/30 bg-navy-600/[0.04] p-3 space-y-3">
+              <p className="text-[0.65rem] font-bold uppercase tracking-widest text-navy-600">
+                Unidades cortadas reales por talla
+              </p>
+              <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+                {ordenarTallas(Object.keys(unidEdit)).map((t) => (
+                  <label key={t} className="block">
+                    <span className="mb-1 block text-center text-[0.65rem] font-semibold text-graphite">T{t}</span>
+                    <input
+                      inputMode="numeric"
+                      value={unidEdit[t] || ""}
+                      onChange={(e) => setUnidEdit({ ...unidEdit, [t]: e.target.value.replace(/[^0-9]/g, "") })}
+                      placeholder="0"
+                      className="w-full rounded-sm border border-border bg-white px-1 py-1.5 text-center text-xs tabular text-ink-900 placeholder:text-graphite/40" />
+                  </label>
+                ))}
+              </div>
+              <div className="flex items-center justify-end gap-3">
+                <span className="text-xs text-graphite">
+                  Total: <span className="font-semibold text-ink-900 tabular">
+                    {Object.values(unidEdit).reduce((s, v) => s + (parseInt(v || "0", 10) || 0), 0)}
+                  </span> prendas
+                </span>
+                <button onClick={() => setUnidEdit(null)}
+                  className="rounded-sm border border-border bg-card px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-graphite hover:bg-cloud">
+                  Cancelar
+                </button>
+                <button onClick={() => corregirUnidades.mutate()} disabled={corregirUnidades.isPending}
+                  className="inline-flex items-center gap-1.5 rounded-sm bg-teal px-4 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-white hover:bg-ink-900 disabled:opacity-40">
+                  {corregirUnidades.isPending && <Loader2 className="h-3 w-3 animate-spin" />} Guardar unidades
+                </button>
+              </div>
+            </div>
+          )}
         </CardContent></Card>
       )}
       {/* Tras confirmar el informe, el cortador (o el encargado de remisiones)

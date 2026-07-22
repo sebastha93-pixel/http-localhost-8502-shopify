@@ -825,6 +825,31 @@ def reabrir_corte(
         raise HTTPException(500, f"reabrir: {str(e)[:200]}")
 
 
+class UnidadesCortadasBody(BaseModel):
+    unidades: dict
+
+
+@router.patch("/corte/{oc_id}/unidades")
+def corregir_unidades_cortadas(
+    oc_id: str,
+    body: UnidadesCortadasBody,
+    _: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """SOLO ADMIN: corrige las unidades cortadas de una orden YA CERRADA.
+    Solo repara el dato (remisiones/insumos) — NO toca inventario."""
+    try:
+        return {"ok": True, "orden": svc.actualizar_unidades_cortadas(oc_id, body.unidades)}
+    except ValueError as e:
+        m = str(e)
+        if m == "no_encontrado":
+            raise HTTPException(404, "Orden de corte no encontrada")
+        if m == "orden_no_cerrada":
+            raise HTTPException(400, "La orden no está cerrada — usa el informe de corte normal.")
+        if m == "sin_unidades":
+            raise HTTPException(400, "Digita al menos una talla con unidades.")
+        raise HTTPException(400, m[:200])
+
+
 class CurvaCorteBody(BaseModel):
     curva: dict
     referencia_id: Optional[str] = None
@@ -1873,11 +1898,21 @@ def _generar_remision_pdf(rem: dict) -> bytes:
     y -= 12 * mm
     c.setFont("Helvetica-Bold", 9)
     c.drawString(20 * mm, y, "CANTIDADES DE CORTE ENTREGADAS")
+    def _unidades_de(oc: dict) -> tuple[dict, bool]:
+        """Unidades reales por talla; si el cierre quedó sin grilla (dato
+        histórico dañado) cae a la curva PROGRAMADA para que la remisión
+        nunca salga en blanco."""
+        m = {t: int(v or 0) for t, v in (oc.get("unidades_cortadas") or {}).items() if int(v or 0) > 0}
+        if m:
+            return m, False
+        prog = {t: int(v or 0) for t, v in (oc.get("curva_trazo") or {}).items() if int(v or 0) > 0}
+        return prog, True
+
     total_unidades = 0
     for it in (rem.get("items") or []):
         oc = it.get("orden_corte") or {}
         ref = oc.get("referencia") or {}
-        unid_map = {t: int(v or 0) for t, v in (oc.get("unidades_cortadas") or {}).items() if int(v or 0) > 0}
+        unid_map, es_programado = _unidades_de(oc)
         unid = sum(unid_map.values()) or int(oc.get("cantidad_programada") or 0)
         total_unidades += unid
 
@@ -1889,9 +1924,13 @@ def _generar_remision_pdf(rem: dict) -> bytes:
         c.drawString(60 * mm, y, (ref.get("nombre") or "")[:34])
         c.drawRightString(W - 20 * mm, y, f"Lote {oc.get('consecutivo') or '—'}")
 
-        # Tallas: fila TALLA / fila CANTIDAD
+        # Tallas: fila TALLA / fila CANTIDAD (orden numérico y luego S-XL)
         if unid_map:
-            tallas_ord = sorted(unid_map.keys(), key=lambda t: (len(t), t))
+            tallas_ord = sorted(unid_map.keys(), key=svc._orden_talla)
+            if es_programado:
+                y -= 5 * mm
+                c.setFont("Helvetica-Oblique", 7)
+                c.drawString(20 * mm, y, "⚠ Cantidades PROGRAMADAS — el informe de corte no registró unidades reales.")
             y -= 7 * mm
             x = 25 * mm
             col = min(16 * mm, (W - 70 * mm) / max(len(tallas_ord), 1))
@@ -1949,17 +1988,36 @@ def _generar_remision_pdf(rem: dict) -> bytes:
     y -= 1.5 * mm
     c.line(20 * mm, y, W - 20 * mm, y)
     c.setFont("Helvetica", 9)
+
+    def _salto():
+        nonlocal y
+        if y < 45 * mm:  # salto de página si se llena
+            c.showPage()
+            y = H - 25 * mm
+            c.setFont("Helvetica", 9)
+
     for it in (rem.get("items") or []):
         try:
             calc = svc.calcular_insumos_requeridos_corte(it["orden_corte_id"], categorias=cats)
+            oc_i = it.get("orden_corte") or {}
+            unid_i, _ = _unidades_de(oc_i)
+            tallas_i = sorted(unid_i.keys(), key=svc._orden_talla)
             for ins in (calc.get("items") or []):
                 y -= 5.5 * mm
-                if y < 45 * mm:  # salto de página si se llena
-                    c.showPage()
-                    y = H - 25 * mm
-                    c.setFont("Helvetica", 9)
+                _salto()
                 c.drawString(20 * mm, y, str(ins.get("item") or "—"))
                 c.drawRightString(W - 20 * mm, y, f"{ins.get('total_requerido') or 0:,.0f}".replace(",", "."))
+                # CIERRES: el confeccionista los separa POR TALLA — se
+                # desglosan con las unidades de cada talla del lote.
+                if "CIERRE" in str(ins.get("item") or "").upper() and unid_i:
+                    cpp = float(ins.get("cantidad_por_prenda") or 0) or 1.0
+                    y -= 4.5 * mm
+                    _salto()
+                    partes = "   ·   ".join(
+                        f"T{t}: {int(round(unid_i[t] * cpp))}" for t in tallas_i)
+                    c.setFont("Helvetica-Oblique", 8)
+                    c.drawString(26 * mm, y, f"por talla → {partes}")
+                    c.setFont("Helvetica", 9)
         except Exception:
             continue
 
