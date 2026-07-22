@@ -10,6 +10,7 @@ import math
 
 import logging
 import os
+import re
 import time
 from datetime import date, datetime, timezone
 from typing import Any, Optional
@@ -493,13 +494,34 @@ def buscar_rollo_por_codigo(codigo: str, *, unico: bool = False) -> Optional[dic
     c = (codigo or "").strip()
     if not c:
         return None
+    # Los QR del proveedor suelen traer cadenas COMPUESTAS
+    # ("6000486388;0371A;HUNTER;150.0") — si el escaneo completo no matchea,
+    # se reintenta con cada token (más largo primero).
+    candidatos = [c] + [t for t in sorted(
+        {t for t in re.split(r"[^A-Za-z0-9\-]+", c) if len(t) >= 4},
+        key=len, reverse=True) if t != c]
+    for i, cand in enumerate(candidatos):
+        # El lote de fábrica se comparte entre rollos → solo se acepta si el
+        # escaneo COMPLETO es el lote, nunca como token de una cadena.
+        r = _buscar_rollo_exacto(cand, unico=unico, incluir_lote=(i == 0))
+        if r:
+            return r
+    return None
+
+
+def _buscar_rollo_exacto(c: str, *, unico: bool = False,
+                         incluir_lote: bool = True) -> Optional[dict]:
+    sb = _sb()
+    if sb is None:
+        return None
     # 1) Campos únicos: match exacto directo.
     for campo in ("barcode", "codigo_interno"):
         r = (sb.table("rollos_tela").select("*").eq(campo, c).limit(1).execute()).data
         if r:
             return r[0]
     # 2) Campos del proveedor (pueden repetirse entre rollos).
-    for campo in ("numero_rollo", "serial", "lote_fabrica"):
+    for campo in (("numero_rollo", "serial", "lote_fabrica") if incluir_lote
+                  else ("numero_rollo", "serial")):
         r = (sb.table("rollos_tela").select("*").eq(campo, c).limit(2).execute()).data or []
         if len(r) == 1:
             return r[0]
@@ -1457,23 +1479,41 @@ def verificar_rollo_corte(oc_id: str, barcode: str) -> dict:
         return {"asignado": False, "rollo": None,
                 "mensaje": "Escanea o escribe un código de rollo."}
 
-    # 1) ¿Coincide con algún rollo ASIGNADO a este corte? (código interno o
-    #    número del proveedor). Es lo que el cortador necesita confirmar.
-    #    Comparación case-insensitive (ambos lados en mayúsculas).
+    # Los QR de las etiquetas del PROVEEDOR suelen traer una cadena compuesta
+    # (ej. "6000486388;0371A;HUNTER;150.0"), no el número limpio. Se tokeniza
+    # lo escaneado y matchea si CUALQUIER pedazo coincide con CUALQUIER
+    # identificador del rollo (o el identificador aparece dentro del escaneo).
+    tokens = {t for t in re.split(r"[^A-Z0-9\-]+", code) if len(t) >= 4}
+
+    def _matchea(rr: dict) -> bool:
+        # El lote de fábrica se COMPARTE entre rollos → solo cuenta si el
+        # escaneo es exactamente el lote (no como token de una cadena, o
+        # cualquier rollo del mismo lote confirmaría por error).
+        if code in _rollo_ids_scan(rr):
+            return True
+        fuertes = {(rr.get(k) or "").strip().upper()
+                   for k in ("barcode", "codigo_interno", "numero_rollo", "serial")}
+        fuertes.discard("")
+        if tokens & fuertes:
+            return True
+        return any(len(i) >= 6 and i in code for i in fuertes)
+
+    # 1) ¿Coincide con algún rollo ASIGNADO a este corte? Es lo que el
+    #    cortador necesita confirmar. Case-insensitive.
     for link in (oc.get("rollos") or []):
         rr = link.get("rollo") or {}
-        if code in _rollo_ids_scan(rr):
+        if _matchea(rr):
             return {"asignado": True, "rollo": _rollo_scan_out(rr),
                     "mensaje": "Correcto: esta tela está asignada a este corte."}
 
     # 2) No está entre los asignados. ¿Existe en inventario? (para distinguir
-    #    "tela de otro corte" de "código no existe"). Usamos el código tal cual
-    #    (el .eq es case-sensitive). La ambigüedad aquí es inofensiva — no
-    #    mutamos nada, solo cambia el mensaje.
+    #    "tela de otro corte" de "código no existe"). buscar_rollo_por_codigo
+    #    ya tokeniza internamente los escaneos compuestos.
     rollo = buscar_rollo_por_codigo(code_raw)
     if not rollo:
+        esc = code_raw[:60] + ("…" if len(code_raw) > 60 else "")
         return {"asignado": False, "rollo": None,
-                "mensaje": "Rollo no encontrado en el inventario."}
+                "mensaje": f"Rollo no encontrado en el inventario. (escaneado: {esc})"}
     return {"asignado": False, "rollo": _rollo_scan_out(rollo),
             "mensaje": "Esta tela NO está asignada a este corte. No la cortes."}
 
