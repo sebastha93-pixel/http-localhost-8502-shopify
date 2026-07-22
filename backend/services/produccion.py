@@ -2384,11 +2384,14 @@ def marcar_remision_reimprimir(rem_id: str) -> bool:
 #   ZPL_STK_X0 = corrimiento del borde del rollo respecto al cabezal
 #   (calibrar con la etiqueta-regla si la impresión cae corrida).
 ZPL_STK_X0         = 0
-ZPL_STK_COL_ANCHO  = 240   # ~30 mm ancho útil de cada sticker
-ZPL_STK_COL_PASO   = 268   # ~33.5 mm centro a centro (CALIBRADO: foto 2026-07-22, 3 centrados)
+# Medidas REALES medidas por Sebastián (boceto 2026-07-22):
+#   sticker 3.2 cm de ancho · separación 0.3 cm · margen 0.5 cm por lado.
+ZPL_STK_COL_ANCHO  = 256   # 32 mm
+ZPL_STK_COL_PASO   = 280   # 35 mm centro a centro (32 + 3 de división)
+ZPL_STK_MARGEN     = 40    # 5 mm de margen lateral dentro del sticker
 ZPL_STK_COLS       = 3
 ZPL_STK_ALTO       = 160   # ~20 mm alto
-ZPL_STK_FILA_ANCHO = ZPL_STK_X0 + ZPL_STK_COL_PASO * ZPL_STK_COLS
+ZPL_STK_FILA_ANCHO = min(ZPL_STK_X0 + ZPL_STK_COL_PASO * ZPL_STK_COLS, 832)  # tope del cabezal 4"
 #
 # LAVADO (SAT): tira vertical de nylon. Diseño híbrido técnica×editorial
 # aprobado 2026-07-21: zonas de COSTURA en blanco en ambos extremos (la
@@ -2589,16 +2592,18 @@ def generar_zpl_trabajo(t: dict) -> str:
     modo = "^MTT" + ("^MMC" if p.get("cortar", True) else "")
 
     def _sticker_col(x: int, dato: str) -> str:
-        """Un sticker: MALE DENIM centrado arriba (bajado un poco), QR más
-        grande CENTRADO en el cuerpo, y ref+talla debajo del QR.
+        """Un sticker según el boceto de Sebastián (2026-07-22):
+        MALE DENIM arriba · QR centrado en el cuerpo · ref+talla debajo.
+        Todo dentro de la franja central (margen 5 mm por lado).
         El ^BQ del PC42E-T rinde ~92 dots a mag 4 (incluye zona quieta)."""
+        bx = x + ZPL_STK_MARGEN
+        banda = ZPL_STK_COL_ANCHO - 2 * ZPL_STK_MARGEN
         qr_render = 92
         qr_x = x + (ZPL_STK_COL_ANCHO - qr_render) // 2
         return (
-            f"^FO{x},12^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
-            f"^FO{x + 50},36^GB{ZPL_STK_COL_ANCHO - 100},2,2^FS"
-            f"^FO{qr_x},42^BQN,2,4^FDQA,{dato}^FS"
-            f"^FO{x},138^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,18,18^FD{dato}^FS")
+            f"^FO{bx},10^FB{banda},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
+            f"^FO{qr_x},34^BQN,2,4^FDQA,{dato}^FS"
+            f"^FO{bx},132^FB{banda},1,0,C,0^A0N,18,18^FD{dato}^FS")
 
     if t.get("tipo") == "sticker_codigo":
         # Dato del código calcado del sticker real: REF + 'T' + talla (26534-1T14).
