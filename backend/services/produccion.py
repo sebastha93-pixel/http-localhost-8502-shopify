@@ -1281,8 +1281,10 @@ def reabrir_orden_corte(oc_id: str, *, usuario: str) -> dict:
         }).execute()
         devueltos += 1
 
+    # La orden vuelve a 'autorizada' (su estado previo al cierre; el CHECK de
+    # ordenes_corte no admite 'en_corte' — ese es estado de ROLLOS).
     sb.table("ordenes_corte").update({
-        "estado": "en_corte", "updated_at": _now_iso(),
+        "estado": "autorizada", "updated_at": _now_iso(),
     }).eq("id", oc_id).execute()
     _cache_invalidate_prefix("ordenes_corte")
     log.info(f"[corte] {doc_ref} reabierta por {usuario} ({devueltos} rollos devueltos)")
