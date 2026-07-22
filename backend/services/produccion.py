@@ -2589,16 +2589,16 @@ def generar_zpl_trabajo(t: dict) -> str:
     modo = "^MTT" + ("^MMC" if p.get("cortar", True) else "")
 
     def _sticker_col(x: int, dato: str) -> str:
-        """Un sticker: MALE DENIM subrayado + QR CENTRADO + código legible.
-        QR magnificación 3 (a 4 se montaba sobre el texto — foto 2026-07-22);
-        el render real del ^BQ trae zona quieta → ~72 dots de lado."""
-        qr_lado = 72
-        qr_x = x + (ZPL_STK_COL_ANCHO - qr_lado) // 2
+        """Un sticker: MALE DENIM centrado arriba (bajado un poco), QR más
+        grande CENTRADO en el cuerpo, y ref+talla debajo del QR.
+        El ^BQ del PC42E-T rinde ~92 dots a mag 4 (incluye zona quieta)."""
+        qr_render = 92
+        qr_x = x + (ZPL_STK_COL_ANCHO - qr_render) // 2
         return (
-            f"^FO{x},6^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
-            f"^FO{x + 50},28^GB{ZPL_STK_COL_ANCHO - 100},2,2^FS"
-            f"^FO{qr_x},36^BQN,2,3^FDQA,{dato}^FS"
-            f"^FO{x},124^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,20,20^FD{dato}^FS")
+            f"^FO{x},12^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
+            f"^FO{x + 50},36^GB{ZPL_STK_COL_ANCHO - 100},2,2^FS"
+            f"^FO{qr_x},42^BQN,2,4^FDQA,{dato}^FS"
+            f"^FO{x},138^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,18,18^FD{dato}^FS")
 
     if t.get("tipo") == "sticker_codigo":
         # Dato del código calcado del sticker real: REF + 'T' + talla (26534-1T14).
@@ -2626,7 +2626,10 @@ def generar_zpl_trabajo(t: dict) -> str:
         # La etiqueta lleva REF + TALLA + COMPOSICIÓN → se imprime POR TALLA,
         # 1 por prenda +1% de margen. Negrita = doble trazo; ^MD sube oscuridad.
         composicion = _zpl_escape(p.get("instrucciones") or "").upper()
-        W, S = ZPL_LAV_ANCHO, ZPL_LAV_SEAM
+        # La tira física queda desplazada ~20 dots a la derecha del origen del
+        # cabezal (foto 2026-07-22: contenido "tirado a la derecha" y la línea
+        # más ancha recortada) → centramos en una banda de 200 y no de 240.
+        W, S = 200, ZPL_LAV_SEAM
         import math as _math
 
         def negrita(y: int, txt: str, alto: int = 20) -> str:
@@ -2668,7 +2671,7 @@ def generar_zpl_trabajo(t: dict) -> str:
                     f"^FO{x+5},{y+5}^GD26,26,2,B,L^FS")
 
         def etiqueta_lavado(talla: Optional[str], copias: int) -> str:
-            z = ["^XA^CI28^MD10" + modo + f"^PW{W}"]
+            z = ["^XA^CI28^MD10" + modo + f"^PW{ZPL_LAV_ANCHO}"]
             y = S                                 # ── zona de costura superior
             z.append(negrita(y, "MALE", 44));      y += 48
             z.append(negrita(y, "DENIM", 24));     y += 34
@@ -2688,8 +2691,8 @@ def generar_zpl_trabajo(t: dict) -> str:
                 z.append(negrita(y, ln));          y += 28
             y += 6
             z.append(filete(y));                   y += 12
-            for i in range(5):                     # símbolos de cuidado
-                z.append(icono(i, 10 + i * 46, y))
+            for i in range(5):                     # símbolos de cuidado (banda 200)
+                z.append(icono(i, 2 + i * 41, y))
             y += 46
             z.append(filete(y));                   y += 14
             for ln in ("MADE IN COLOMBIA", "DIRTY JEANS", "NIT 901680460-1", "SIC 1036644755"):
