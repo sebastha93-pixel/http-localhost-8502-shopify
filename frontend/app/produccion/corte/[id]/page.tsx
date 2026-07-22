@@ -1432,7 +1432,8 @@ function InformeCorteCard({
             </div>
             <p className="mt-2 text-[0.7rem] text-graphite">
               A los rollos marcados se les descuenta <span className="font-semibold text-ink-900">todo el saldo</span> (quedan
-              agotados de verdad) y el resto del consumo se reparte entre los demás.
+              agotados). El resto del consumo se descuenta <span className="font-semibold text-ink-900">rollo a rollo en orden</span> —
+              el restante queda en un solo rollo, no repartido en pedacitos.
             </p>
           </div>
         )}

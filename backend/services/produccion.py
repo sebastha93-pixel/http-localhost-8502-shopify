@@ -1493,7 +1493,8 @@ def obtener_orden_corte(oc_id: str) -> Optional[dict]:
         return None
     rollos = (sb.table("orden_corte_rollos")
                 .select("*,rollo:rollo_id(codigo_interno,barcode,descripcion_tela,tono,metros_disponible,metros_inicial,costo_metro,numero_rollo,serial,lote_fabrica)")
-                .eq("orden_corte_id", oc_id).execute()).data or []
+                .eq("orden_corte_id", oc_id)
+                .order("created_at").execute()).data or []
     # Precio de corte sugerido desde el precosteo firmado (para pre-llenar el
     # informe; el cortador puede ajustarlo). Mismo origen que el auto al cerrar.
     precio_sug = None
@@ -1880,14 +1881,22 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
             consumo_liquidado += disp
         else:
             pendientes.append((rollo_id, m_reservado, disp))
-    reservado_resto = sum(m for _, m, _ in pendientes)
     real_resto = max(0.0, real_total - consumo_liquidado)
-    repartir_real = real_total > 0 and reservado_resto > 0
-    for rollo_id, m_reservado, disp in pendientes:
-        m = round(real_resto * (m_reservado / reservado_resto), 2) if repartir_real else m_reservado
-        m = max(0.0, min(m, disp))  # nunca deja el rollo en negativo
-        nuevo = round(disp - m, 2)
-        descuentos.append((rollo_id, m, nuevo))
+    if real_total > 0:
+        # SECUENCIAL (como se corta en piso): se consume rollo a rollo en el
+        # orden de asignación — cada rollo se agota antes de abrir el
+        # siguiente, y el RESTANTE queda en UN SOLO rollo (el último tocado),
+        # no repartido en pedacitos entre todos.
+        resto = real_resto
+        for rollo_id, m_reservado, disp in pendientes:
+            m = round(min(resto, disp), 2)
+            resto = round(resto - m, 2)
+            descuentos.append((rollo_id, m, round(disp - m, 2)))
+    else:
+        # Sin consumo real en el informe → se descuenta lo reservado (legacy).
+        for rollo_id, m_reservado, disp in pendientes:
+            m = max(0.0, min(m_reservado, disp))
+            descuentos.append((rollo_id, m, round(disp - m, 2)))
 
     # PASO 2 — Claim atómico: marcar 'cortada' condicionado a que NO lo esté ya.
     # Dos cierres concurrentes → solo uno pasa; el otro recibe orden_ya_cortada.
