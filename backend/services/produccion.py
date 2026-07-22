@@ -2589,13 +2589,15 @@ def generar_zpl_trabajo(t: dict) -> str:
     modo = "^MTT" + ("^MMC" if p.get("cortar", True) else "")
 
     def _sticker_col(x: int, dato: str) -> str:
-        """Un sticker (diseño real): MALE DENIM subrayado + Code128 + código.
-        Proporciones de la fila que salió centrada (foto 2026-07-22)."""
+        """Un sticker: MALE DENIM subrayado + QR CENTRADO + código legible.
+        (QR en vez de Code128 — pedido 2026-07-22; escanea igual con pistola 2D.)"""
+        qr_lado = 84   # QR v1 (21 módulos) × magnificación 4 ≈ 10.5 mm
+        qr_x = x + (ZPL_STK_COL_ANCHO - qr_lado) // 2
         return (
-            f"^FO{x},10^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
-            f"^FO{x + 50},34^GB{ZPL_STK_COL_ANCHO - 100},2,2^FS"
-            f"^FO{x + 40},44^BY1,2.4,48^BCN,48,N,N,N^FD{dato}^FS"
-            f"^FO{x},100^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,22,22^FD{dato}^FS")
+            f"^FO{x},8^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
+            f"^FO{x + 50},30^GB{ZPL_STK_COL_ANCHO - 100},2,2^FS"
+            f"^FO{qr_x},38^BQN,2,4^FDQA,{dato}^FS"
+            f"^FO{x},128^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,20,20^FD{dato}^FS")
 
     if t.get("tipo") == "sticker_codigo":
         # Dato del código calcado del sticker real: REF + 'T' + talla (26534-1T14).
@@ -2628,7 +2630,8 @@ def generar_zpl_trabajo(t: dict) -> str:
 
         def negrita(y: int, txt: str, alto: int = 20) -> str:
             # Auto-reduce si la línea no cabe en el ancho (evita truncados).
-            while alto > 16 and len(txt) * alto * 0.55 > W - 8:
+            # Ratio 0.62: el A0 real es más ancho que 0.55 (COMP perdía la N).
+            while alto > 14 and len(txt) * alto * 0.62 > W - 8:
                 alto -= 2
             # Doble trazo con desfase VERTICAL (el horizontal choca con el
             # centrado ^FB y garabatea las líneas largas — visto en prueba).
