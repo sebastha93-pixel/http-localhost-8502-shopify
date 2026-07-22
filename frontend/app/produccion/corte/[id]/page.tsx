@@ -14,12 +14,18 @@ import { api, API_BASE } from "@/lib/api";
 import { fmtFecha, hoyBogotaISO } from "@/lib/utils";
 import { TimelineNotas } from "@/components/timeline-notas";
 import { getToken, puedeAccionModulo } from "@/lib/auth";
-import { ordenarTallas } from "@/lib/espigas";
+import { ordenarTallas, TALLAS_SUPERIOR } from "@/lib/espigas";
 import { useAuth } from "@/components/auth-provider";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, ScanLine, Trash2, Lock, Loader2, AlertCircle, CheckCircle, Paperclip, Pencil, Send, X } from "lucide-react";
+
+// Tallas base del editor de curva según tallaje (inferior = jeans, superior = bodys).
+const TALLAS_EDITOR: Record<"inferior" | "superior", string[]> = {
+  inferior: ["4", "6", "8", "10", "12", "14", "16"],
+  superior: TALLAS_SUPERIOR,
+};
 
 interface RolloLink {
   id: string;
@@ -254,6 +260,36 @@ export default function DetalleOrdenCortePage() {
     onSuccess: () => {
       setEditandoNotas(false);
       setMsg("Indicaciones guardadas.");
+      setErr("");
+      qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
+    },
+    onError: (e: Error) => { setErr(e.message); setMsg(""); },
+  });
+
+  // Corregir la CURVA DE TALLAS de una orden no cortada (diseño/admin):
+  // permite cambiar de tallaje (4-16 ↔ S-XL) y ajustar cantidades sin borrar
+  // la orden. El backend recalcula prendas y metros teóricos.
+  const [curvaEdit, setCurvaEdit] = useState<{ refId: string | null; tallaje: "inferior" | "superior"; valores: Record<string, string> } | null>(null);
+  const abrirCurvaEdit = (refId: string | null, curva: Record<string, number>) => {
+    const esSup = Object.keys(curva || {}).some((t) => !Number.isFinite(parseInt(t, 10)));
+    const valores: Record<string, string> = {};
+    for (const [t, n] of Object.entries(curva || {})) valores[t] = String(n);
+    setCurvaEdit({ refId, tallaje: esSup ? "superior" : "inferior", valores });
+  };
+  const guardarCurva = useMutation({
+    mutationFn: () => {
+      const curva: Record<string, number> = {};
+      for (const [t, v] of Object.entries(curvaEdit?.valores || {})) {
+        const n = parseInt(v || "0", 10);
+        if (n > 0) curva[t] = n;
+      }
+      return api.patch(`/api/produccion/corte/${id}/curva`, {
+        curva, referencia_id: curvaEdit?.refId || null,
+      });
+    },
+    onSuccess: () => {
+      setCurvaEdit(null);
+      setMsg("Curva corregida: prendas y metros teóricos recalculados. Revisa que los rollos asignados alcancen (o sobren).");
       setErr("");
       qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
     },
@@ -572,8 +608,18 @@ export default function DetalleOrdenCortePage() {
                         <span className="font-semibold text-ink-900 text-sm">{r.codigo_referencia || "—"}</span>
                         <span className="text-xs text-graphite">{r.nombre}{r.tela ? ` · ${r.tela}` : ""}</span>
                       </div>
-                      <div className="text-xs text-graphite tabular">
-                        {prendas} prendas{rf.precio_corte != null ? ` · corte $${Number(rf.precio_corte).toLocaleString("es-CO", { maximumFractionDigits: 0 })}/prenda` : ""}
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-graphite tabular">
+                          {prendas} prendas{rf.precio_corte != null ? ` · corte $${Number(rf.precio_corte).toLocaleString("es-CO", { maximumFractionDigits: 0 })}/prenda` : ""}
+                        </span>
+                        {puedeEditarNotas && !cerrada && (
+                          <button
+                            onClick={() => abrirCurvaEdit(rf.referencia_id ?? null, curva)}
+                            title="Corregir tallas y cantidades de esta referencia"
+                            className="inline-flex items-center gap-1 rounded-sm border border-border bg-card px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-widest text-graphite hover:bg-cloud hover:text-ink-900">
+                            <Pencil className="h-3 w-3" /> Corregir
+                          </button>
+                        )}
                       </div>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-1.5">
@@ -593,7 +639,17 @@ export default function DetalleOrdenCortePage() {
 
       <Card>
         <CardContent className="p-5">
-          <p className="section-label mb-2">Curva{(oc.referencias?.length || 0) > 1 ? " combinada del tendido" : ""}</p>
+          <div className="mb-2 flex items-center gap-2">
+            <p className="section-label">Curva{(oc.referencias?.length || 0) > 1 ? " combinada del tendido" : ""}</p>
+            {puedeEditarNotas && !cerrada && !curvaEdit && (oc.referencias?.length || 0) <= 1 && (
+              <button
+                onClick={() => abrirCurvaEdit(oc.referencias?.[0]?.referencia_id ?? null, oc.curva_trazo || {})}
+                title="Corregir tallas y cantidades (recalcula prendas y metros)"
+                className="inline-flex items-center gap-1 rounded-sm border border-border bg-card px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-widest text-graphite hover:bg-cloud hover:text-ink-900">
+                <Pencil className="h-3 w-3" /> Corregir
+              </button>
+            )}
+          </div>
           <div className="flex flex-wrap gap-2">
             {ordenarTallas(Object.keys(oc.curva_trazo || {})).map((t) => { const n = (oc.curva_trazo || {})[t]; return (
               <div key={t} className="rounded-sm border border-border bg-cloud/40 px-3 py-1.5 text-xs">
@@ -605,6 +661,69 @@ export default function DetalleOrdenCortePage() {
               <p className="text-xs text-graphite">Sin curva definida.</p>
             )}
           </div>
+          {curvaEdit && (() => {
+            const tallasGrid = ordenarTallas(Array.from(new Set([
+              ...TALLAS_EDITOR[curvaEdit.tallaje],
+              ...Object.keys(curvaEdit.valores),
+            ])));
+            const totalEdit = Object.values(curvaEdit.valores).reduce((s, v) => s + (parseInt(v || "0", 10) || 0), 0);
+            const refEdit = (oc.referencias?.length || 0) > 1
+              ? oc.referencias?.find((rf) => rf.referencia_id === curvaEdit.refId)?.referencia?.codigo_referencia
+              : null;
+            return (
+              <div className="mt-4 rounded-sm border border-navy-600/30 bg-navy-600/[0.04] p-3 space-y-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <p className="text-[0.65rem] font-bold uppercase tracking-widest text-navy-600">
+                    Corregir curva{refEdit ? ` · ${refEdit}` : ""}
+                  </p>
+                  <div className="flex gap-1">
+                    {(["inferior", "superior"] as const).map((tj) => (
+                      <button key={tj}
+                        onClick={() => { if (tj !== curvaEdit.tallaje) setCurvaEdit({ ...curvaEdit, tallaje: tj, valores: {} }); }}
+                        className={`rounded-sm border px-2.5 py-1 text-[0.65rem] font-semibold uppercase tracking-widest ${
+                          curvaEdit.tallaje === tj
+                            ? "border-navy-600 bg-navy-600 text-white"
+                            : "border-border bg-card text-graphite hover:bg-cloud"
+                        }`}>
+                        {tj === "inferior" ? "4–16" : "S–XL"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+                  {tallasGrid.map((t) => (
+                    <label key={t} className="block">
+                      <span className="mb-1 block text-center text-[0.65rem] font-semibold text-graphite">T{t}</span>
+                      <input
+                        inputMode="numeric"
+                        value={curvaEdit.valores[t] || ""}
+                        onChange={(e) => setCurvaEdit({
+                          ...curvaEdit,
+                          valores: { ...curvaEdit.valores, [t]: e.target.value.replace(/[^0-9]/g, "") },
+                        })}
+                        placeholder="0"
+                        className="w-full rounded-sm border border-border bg-white px-1 py-1.5 text-center text-xs tabular text-ink-900 placeholder:text-graphite/40" />
+                    </label>
+                  ))}
+                </div>
+                <p className="text-[0.65rem] text-graphite">
+                  Aquí no se rellenan parejas de espiga automáticamente: lo que digites es lo que queda.
+                  Al guardar se recalculan prendas y metros teóricos.
+                </p>
+                <div className="flex items-center justify-end gap-3">
+                  <span className="text-xs text-graphite">Total: <span className="font-semibold text-ink-900 tabular">{totalEdit}</span> prendas</span>
+                  <button onClick={() => setCurvaEdit(null)}
+                    className="rounded-sm border border-border bg-card px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-graphite hover:bg-cloud">
+                    Cancelar
+                  </button>
+                  <button onClick={() => guardarCurva.mutate()} disabled={guardarCurva.isPending || totalEdit === 0}
+                    className="inline-flex items-center gap-1.5 rounded-sm bg-teal px-4 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-white hover:bg-ink-900 disabled:opacity-40">
+                    {guardarCurva.isPending && <Loader2 className="h-3 w-3 animate-spin" />} Guardar curva
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
           {(oc.indicaciones || puedeEditarNotas) && (
             <div className="mt-4">
               <div className="mb-1 flex items-center gap-2">

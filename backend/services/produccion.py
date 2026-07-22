@@ -1317,6 +1317,79 @@ def reabrir_orden_corte(oc_id: str, *, usuario: str) -> dict:
     return obtener_orden_corte(oc_id) or {}
 
 
+def actualizar_curva_corte(oc_id: str, *, curva: dict,
+                           referencia_id: Optional[str] = None,
+                           num_capas: Optional[int] = None) -> dict:
+    """Edita la CURVA DE TALLAS de una orden NO cortada (tallas y cantidades,
+    incluido cambiar de tallaje 4-16 → S-XL). Recalcula cantidad programada y
+    metros teóricos. En órdenes multi-referencia edita la curva de la
+    referencia indicada y recompone la combinada del tendido."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    oc = obtener_orden_corte(oc_id)
+    if not oc:
+        raise ValueError("no_encontrado")
+    if oc.get("estado") == "cortada":
+        raise ValueError("orden_ya_cortada")
+
+    limpio = {}
+    for t, v in (curva or {}).items():
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            n = 0
+        if n > 0:
+            limpio[str(t).strip().upper()] = n
+    if not limpio:
+        raise ValueError("curva_vacia")
+
+    # 1) Fila hija de la referencia (si la tabla existe)
+    combinada, cantidad_total = dict(limpio), sum(limpio.values())
+    try:
+        hijas = (sb.table("orden_corte_referencias")
+                   .select("id,referencia_id,curva_trazo")
+                   .eq("orden_corte_id", oc_id).execute()).data or []
+        if hijas:
+            objetivo = None
+            if referencia_id:
+                objetivo = next((h for h in hijas if h.get("referencia_id") == referencia_id), None)
+            elif len(hijas) == 1:
+                objetivo = hijas[0]
+            if objetivo is None:
+                raise ValueError("referencia_no_encontrada")
+            sb.table("orden_corte_referencias").update({
+                "curva_trazo": limpio,
+                "cantidad_programada": sum(limpio.values()),
+            }).eq("id", objetivo["id"]).execute()
+            # Combinada del tendido = suma de las curvas de TODAS las hijas
+            combinada, cantidad_total = {}, 0
+            for h in hijas:
+                cv = limpio if h["id"] == objetivo["id"] else (h.get("curva_trazo") or {})
+                for t, n in cv.items():
+                    combinada[str(t)] = combinada.get(str(t), 0) + int(n or 0)
+                    cantidad_total += int(n or 0)
+    except ValueError:
+        raise
+    except Exception:
+        pass   # tabla hija sin migrar → solo el padre
+
+    # 2) Padre: curva combinada + cantidad + metros teóricos (promedio × prendas)
+    update: dict = {
+        "curva_trazo": combinada,
+        "cantidad_programada": cantidad_total,
+        "updated_at": _now_iso(),
+    }
+    if num_capas is not None:
+        update["num_capas"] = int(num_capas)
+    prom = float(oc.get("promedio_tecnico") or 0)
+    if prom > 0:
+        update["metros_consumidos"] = round(prom * cantidad_total, 2)
+    sb.table("ordenes_corte").update(update).eq("id", oc_id).execute()
+    _cache_invalidate_prefix("ordenes_corte")
+    return obtener_orden_corte(oc_id) or {}
+
+
 def actualizar_indicaciones_corte(oc_id: str, indicaciones: Optional[str]) -> dict:
     """Edita las notas/indicaciones de una orden de corte (las escribe el
     diseñador; el cortador solo las lee). Editable en cualquier estado."""

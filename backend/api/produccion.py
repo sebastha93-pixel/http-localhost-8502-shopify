@@ -825,6 +825,37 @@ def reabrir_corte(
         raise HTTPException(500, f"reabrir: {str(e)[:200]}")
 
 
+class CurvaCorteBody(BaseModel):
+    curva: dict
+    referencia_id: Optional[str] = None
+    num_capas: Optional[int] = None
+
+
+@router.patch("/corte/{oc_id}/curva")
+def editar_curva_corte(
+    oc_id: str,
+    body: CurvaCorteBody,
+    _: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
+) -> dict:
+    """Corrige la curva de tallas de una orden NO cortada (p. ej. cambiar
+    tallas numéricas por S-XL). Recalcula prendas y metros teóricos."""
+    try:
+        return {"ok": True, "orden": svc.actualizar_curva_corte(
+            oc_id, curva=body.curva,
+            referencia_id=body.referencia_id, num_capas=body.num_capas)}
+    except ValueError as e:
+        m = str(e)
+        if m == "no_encontrado":
+            raise HTTPException(404, "Orden de corte no encontrada")
+        if m == "orden_ya_cortada":
+            raise HTTPException(400, "La orden ya está cortada — reábrela primero (solo admin).")
+        if m == "curva_vacia":
+            raise HTTPException(400, "La curva no tiene tallas con cantidad.")
+        if m == "referencia_no_encontrada":
+            raise HTTPException(404, "Esa referencia no está en la orden.")
+        raise HTTPException(400, m[:200])
+
+
 class IndicacionesCorteBody(BaseModel):
     indicaciones: Optional[str] = None
 
