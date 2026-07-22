@@ -3278,6 +3278,16 @@ def calcular_insumos_requeridos_corte(
         }
 
     cats_filtro = tuple(c.upper() for c in categorias) if categorias else CATEGORIAS_INSUMOS_CORTE
+
+    # Unidades POR TALLA (reales; si el cierre no las registró, programadas).
+    # Para insumos que se separan talla por talla: cierres y marquillas.
+    unid_talla = {str(t): int(v or 0)
+                  for t, v in (oc.get("unidades_cortadas") or {}).items() if int(v or 0) > 0}
+    if not unid_talla:
+        unid_talla = {str(t): int(v or 0)
+                      for t, v in (oc.get("curva_trazo") or {}).items() if int(v or 0) > 0}
+    PALABRAS_POR_TALLA = ("CIERRE", "MARQUILLA", "CREMALLERA")
+
     items = []
     total_costo = 0.0
     for it in (p.get("items") or []):
@@ -3299,7 +3309,7 @@ def calcular_insumos_requeridos_corte(
         vu = float(it.get("valor_unitario") or 0)
         costo = round(vu * total_req, 2)
         total_costo += costo
-        items.append({
+        fila = {
             "categoria":           cat,
             "item":                it.get("item"),
             "cantidad_por_prenda": base_por_prenda,
@@ -3308,7 +3318,15 @@ def calcular_insumos_requeridos_corte(
             "margen_pct":          margen,
             "valor_unitario":      vu,
             "costo_total":         costo,
-        })
+        }
+        # Cierres/cremalleras y marquillas se ENTREGAN separados por talla:
+        # cada talla lleva su cierre (largo) y su marquilla (número).
+        nombre_up = str(it.get("item") or "").upper()
+        if unid_talla and any(w in nombre_up for w in PALABRAS_POR_TALLA):
+            fila["por_talla"] = {
+                t: int(math.ceil(base_por_prenda * n))
+                for t, n in unid_talla.items()}
+        items.append(fila)
 
     return {
         "orden_corte":     oc.get("consecutivo"),

@@ -328,6 +328,7 @@ export default function DetalleOrdenCortePage() {
     total_requerido: number;
     valor_unitario: number;
     costo_total: number;
+    por_talla?: Record<string, number>;   // cierres y marquillas: separados por talla
   }
   interface InsumosResp {
     orden_corte?: string;
@@ -954,7 +955,18 @@ export default function DetalleOrdenCortePage() {
                   {insumosQ.data.items.map((it, i) => (
                     <tr key={i} className="border-b border-border/40 hover:bg-cloud/30">
                       <td className="px-4 py-2 text-graphite text-[0.7rem] uppercase tracking-widest">{it.categoria}</td>
-                      <td className="px-4 py-2 text-ink-900 font-medium">{it.item}</td>
+                      <td className="px-4 py-2 text-ink-900 font-medium">
+                        {it.item}
+                        {it.por_talla && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {ordenarTallas(Object.keys(it.por_talla)).map((t) => (
+                              <span key={t} className="rounded-sm border border-border bg-cloud/50 px-1.5 py-0.5 text-[0.62rem] tabular text-graphite">
+                                T{t}: <span className="font-semibold text-ink-900">{it.por_talla![t]}</span>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </td>
                       <td className="px-4 py-2 text-right tabular text-graphite">{it.cantidad_por_prenda}</td>
                       <td className="px-4 py-2 text-right tabular text-graphite">{insumosQ.data?.cantidad_base}</td>
                       <td className="px-4 py-2 text-right tabular font-semibold text-navy-600">

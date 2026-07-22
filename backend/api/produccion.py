@@ -2001,22 +2001,19 @@ def _generar_remision_pdf(rem: dict) -> bytes:
     for it in (rem.get("items") or []):
         try:
             calc = svc.calcular_insumos_requeridos_corte(it["orden_corte_id"], categorias=cats)
-            oc_i = it.get("orden_corte") or {}
-            unid_i, _ = _unidades_de(oc_i)
-            tallas_i = sorted(unid_i.keys(), key=svc._orden_talla)
             for ins in (calc.get("items") or []):
                 y -= 5.5 * mm
                 _salto()
                 c.drawString(20 * mm, y, str(ins.get("item") or "—"))
                 c.drawRightString(W - 20 * mm, y, f"{ins.get('total_requerido') or 0:,.0f}".replace(",", "."))
-                # CIERRES: el confeccionista los separa POR TALLA — se
-                # desglosan con las unidades de cada talla del lote.
-                if "CIERRE" in str(ins.get("item") or "").upper() and unid_i:
-                    cpp = float(ins.get("cantidad_por_prenda") or 0) or 1.0
+                # CIERRES y MARQUILLAS se separan POR TALLA — el servicio ya
+                # trae el desglose (unidades de cada talla × cant/prenda).
+                pt = ins.get("por_talla") or {}
+                if pt:
                     y -= 4.5 * mm
                     _salto()
                     partes = "   ·   ".join(
-                        f"T{t}: {int(round(unid_i[t] * cpp))}" for t in tallas_i)
+                        f"T{t}: {int(pt[t])}" for t in sorted(pt, key=svc._orden_talla))
                     c.setFont("Helvetica-Oblique", 8)
                     c.drawString(26 * mm, y, f"por talla → {partes}")
                     c.setFont("Helvetica", 9)
