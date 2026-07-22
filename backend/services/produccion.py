@@ -446,18 +446,44 @@ def obtener_ingreso(ingreso_id: str) -> Optional[dict]:
 
 
 def listar_rollos(*, tela: Optional[str] = None, estado: Optional[str] = None,
-                  tono: Optional[str] = None, limit: int = 500) -> list[dict]:
+                  tono: Optional[str] = None, limit: int = 500,
+                  asignables: bool = False) -> list[dict]:
+    """Con `asignables=True` devuelve los rollos que se pueden asignar a un
+    corte: los disponibles Y los en_corte que aún tengan METROS LIBRES
+    (total - reservas de órdenes abiertas). Cada fila trae `metros_libres`."""
     sb = _sb()
     if sb is None:
         return []
     q = sb.table("rollos_tela").select("*").order("codigo_interno", desc=True).limit(limit)
     if tela:
         q = q.ilike("descripcion_tela", f"%{tela}%")
-    if estado:
+    if asignables:
+        q = q.in_("estado", ["disponible", "en_corte"])
+    elif estado:
         q = q.eq("estado", estado)
     if tono:
         q = q.eq("tono", tono)
-    return (q.execute().data or [])
+    rollos = (q.execute().data or [])
+    if not asignables or not rollos:
+        return rollos
+    # Reservas abiertas por rollo (en lote, no N+1)
+    ids = [r["id"] for r in rollos]
+    links = (sb.table("orden_corte_rollos")
+               .select("rollo_id,metros_usados,orden_corte:orden_corte_id(estado)")
+               .in_("rollo_id", ids).execute()).data or []
+    reservas: dict[str, float] = {}
+    for l in links:
+        if (l.get("orden_corte") or {}).get("estado") != "cortada":
+            rid = l.get("rollo_id")
+            reservas[rid] = round(reservas.get(rid, 0.0) + float(l.get("metros_usados") or 0), 2)
+    out = []
+    for r in rollos:
+        libres = round(float(r.get("metros_disponible") or 0) - reservas.get(r["id"], 0.0), 2)
+        if libres <= 0:
+            continue
+        r["metros_libres"] = libres
+        out.append(r)
+    return out
 
 
 def obtener_rollo(rollo_id: str) -> Optional[dict]:
@@ -1623,16 +1649,28 @@ def asignar_rollo_a_corte(*, oc_id: str, barcode: str,
                  .eq("orden_corte_id", oc_id).eq("rollo_id", rollo["id"])
                  .limit(1).execute()).data
 
-    # Un rollo reservado en OTRO corte no se puede volver a tomar
-    if rollo.get("estado") == "en_corte" and not existing:
-        raise ValueError("rollo_reservado_en_otro_corte")
+    # Un rollo reservado en otro corte SÍ se puede compartir mientras tenga
+    # METROS LIBRES (caso real: 2 referencias de la misma tela en órdenes
+    # separadas — bodys 2607-0004/0005). Se valida contra lo libre, no contra
+    # el total del rollo.
+    reservas = (sb.table("orden_corte_rollos")
+                  .select("metros_usados,orden_corte_id,orden_corte:orden_corte_id(estado)")
+                  .eq("rollo_id", rollo["id"]).execute()).data or []
+    reservado_otras = sum(
+        float(l.get("metros_usados") or 0) for l in reservas
+        if l.get("orden_corte_id") != oc_id
+        and (l.get("orden_corte") or {}).get("estado") != "cortada")
 
     disp = float(rollo.get("metros_disponible") or 0)
+    libres = round(disp - reservado_otras, 2)
     m = float(metros_reservar or 0)
     if m <= 0:
         raise ValueError("metros_reservar_debe_ser_positivo")
-    if m > disp:
-        raise ValueError(f"metros_insuficientes: rollo tiene {disp}m disponibles")
+    if m > libres:
+        raise ValueError(
+            f"metros_insuficientes: el rollo tiene {libres}m libres "
+            f"({reservado_otras}m reservados por otras órdenes)" if reservado_otras > 0
+            else f"metros_insuficientes: rollo tiene {disp}m disponibles")
 
     if existing:
         sb.table("orden_corte_rollos").update({"metros_usados": m}).eq("id", existing[0]["id"]).execute()

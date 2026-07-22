@@ -200,10 +200,12 @@ def listar_rollos(
     tela: Optional[str] = None,
     estado: Optional[str] = None,
     tono: Optional[str] = None,
+    asignables: bool = False,
     limit: int = Query(500, ge=1, le=2000),
     _: CurrentUser = Depends(require_permission_any(("produccion_ingreso", "produccion_cortador"), "ver")),
 ) -> dict:
-    return {"rollos": svc.listar_rollos(tela=tela, estado=estado, tono=tono, limit=limit)}
+    return {"rollos": svc.listar_rollos(tela=tela, estado=estado, tono=tono,
+                                        limit=limit, asignables=asignables)}
 
 
 @router.get("/rollos/{rollo_id}")

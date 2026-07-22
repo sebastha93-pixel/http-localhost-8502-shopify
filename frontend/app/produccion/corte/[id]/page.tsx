@@ -44,6 +44,7 @@ interface RolloInv {
   tono?: string;
   metros_disponible: number;
   metros_inicial: number;
+  metros_libres?: number;   // disponible - reservas de otras órdenes abiertas
   costo_metro?: number;
   estado: string;
   lote_fabrica?: string;
@@ -153,9 +154,11 @@ export default function DetalleOrdenCortePage() {
     if (d.precio_corte_sugerido != null) setPrecioCorte((prev) => prev || String(d.precio_corte_sugerido));
   }, [q.data]);
   const rollosInvQ = useQuery<{ rollos: RolloInv[] }>({
-    queryKey: ["produccion", "rollos", "disponibles-tela", telaRef],
+    queryKey: ["produccion", "rollos", "asignables-tela", telaRef],
     queryFn: () => {
-      const p = new URLSearchParams({ estado: "disponible", limit: "200" });
+      // asignables = disponibles + en_corte con metros LIBRES (rollos
+      // compartidos entre órdenes de la misma tela)
+      const p = new URLSearchParams({ asignables: "true", limit: "200" });
       if (telaRef) p.set("tela", telaRef);
       return api.get(`/api/produccion/rollos?${p}`);
     },
@@ -914,10 +917,10 @@ export default function DetalleOrdenCortePage() {
                     <div className="text-xs">
                       <span className="font-semibold tabular text-navy-600">{r.codigo_interno}</span>
                       <span className="ml-2 text-graphite">{r.descripcion_tela}{r.tono ? ` · ${r.tono}` : ""}</span>
-                      <span className="ml-2 font-semibold text-ink-900 tabular">{Number(r.metros_disponible).toFixed(1)} m</span>
+                      <span className="ml-2 font-semibold text-ink-900 tabular">{Number(r.metros_libres ?? r.metros_disponible).toFixed(1)} m</span>
                     </div>
                     <button
-                      onClick={() => asignarDirecto.mutate({ barcode: r.barcode, metros: Number(r.metros_disponible) })}
+                      onClick={() => asignarDirecto.mutate({ barcode: r.barcode, metros: Number(r.metros_libres ?? r.metros_disponible) })}
                       disabled={asignarDirecto.isPending}
                       className="rounded-sm border border-teal bg-teal/10 px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-teal hover:bg-teal hover:text-white disabled:opacity-40">
                       Agregar para liquidar
@@ -1171,11 +1174,13 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar, onAsignar, asignando }
   const [mostrarOtros, setMostrarOtros] = useState(false);
   const [metrosFila, setMetrosFila] = useState<Record<string, string>>({});
   const yaAsignado = (rolloId: string) => (oc.rollos || []).some((l) => l.rollo_id === rolloId);
+  // Lo asignable de un rollo son sus metros LIBRES (si otra orden abierta ya
+  // reservó una parte, aquí solo se ofrece el resto).
+  const libresDe = (r: RolloInv) => Number(r.metros_libres ?? r.metros_disponible);
   const asignarFila = (r: RolloInv) => {
-    // Por defecto se asigna el ROLLO COMPLETO; el campo viene pre-llenado con
-    // el disponible y es editable por si quieren asignar una parte.
+    // Por defecto se asigna TODO lo libre; el campo es editable para una parte.
     const raw = metrosFila[r.id];
-    const m = (raw === undefined || raw === "") ? Number(r.metros_disponible) : parseFloat(raw);
+    const m = (raw === undefined || raw === "") ? libresDe(r) : parseFloat(raw);
     if (!m || m <= 0) return;
     onAsignar(r, m);
     setMetrosFila((prev) => { const n = { ...prev }; delete n[r.id]; return n; });
@@ -1196,7 +1201,15 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar, onAsignar, asignando }
       <td className="px-4 py-2 text-ink-900">{r.descripcion_tela}</td>
       <td className="px-4 py-2 text-graphite">{r.tono || "—"}</td>
       <td className="px-4 py-2 text-graphite">{r.lote_fabrica || "—"}</td>
-      <td className="px-4 py-2 text-right tabular text-ink-900">{Number(r.metros_disponible).toFixed(2)} m</td>
+      <td className="px-4 py-2 text-right tabular text-ink-900">
+        {libresDe(r).toFixed(2)} m
+        {libresDe(r) < Number(r.metros_disponible) - 0.01 && (
+          <span title={`El rollo tiene ${Number(r.metros_disponible).toFixed(1)} m pero otra orden abierta reservó una parte — estos son los metros libres`}
+            className="ml-1 inline-block rounded-sm bg-navy-50 px-1.5 py-0.5 text-[0.55rem] font-bold uppercase tracking-widest text-navy-600 align-middle">
+            libres
+          </span>
+        )}
+      </td>
       <td className="px-4 py-2 text-[0.65rem] text-graphite tabular">{r.barcode}</td>
       <td className="px-4 py-2 text-right">
         {yaAsignado(r.id) ? (
@@ -1207,8 +1220,8 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar, onAsignar, asignando }
           <div className="inline-flex items-center gap-1.5">
             <input
               type="number" inputMode="decimal" step="0.01" min="0"
-              max={Number(r.metros_disponible)}
-              value={metrosFila[r.id] !== undefined ? metrosFila[r.id] : String(r.metros_disponible)}
+              max={libresDe(r)}
+              value={metrosFila[r.id] !== undefined ? metrosFila[r.id] : String(libresDe(r))}
               onChange={(e) => setMetrosFila((prev) => ({ ...prev, [r.id]: e.target.value }))}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); asignarFila(r); } }}
               title="Rollo completo por defecto — puedes editar a una parte"
