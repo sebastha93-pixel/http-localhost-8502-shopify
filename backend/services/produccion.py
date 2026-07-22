@@ -2384,8 +2384,8 @@ def marcar_remision_reimprimir(rem_id: str) -> bool:
 #   ZPL_STK_X0 = corrimiento del borde del rollo respecto al cabezal
 #   (calibrar con la etiqueta-regla si la impresión cae corrida).
 ZPL_STK_X0         = 0
-ZPL_STK_COL_ANCHO  = 200   # ~25 mm ancho útil de cada sticker
-ZPL_STK_COL_PASO   = 240   # ~30 mm de centro a centro (calibrado con regla 2026-07-21)
+ZPL_STK_COL_ANCHO  = 240   # ~30 mm ancho útil de cada sticker
+ZPL_STK_COL_PASO   = 268   # ~33.5 mm centro a centro (CALIBRADO: foto 2026-07-22, 3 centrados)
 ZPL_STK_COLS       = 3
 ZPL_STK_ALTO       = 160   # ~20 mm alto
 ZPL_STK_FILA_ANCHO = ZPL_STK_X0 + ZPL_STK_COL_PASO * ZPL_STK_COLS
@@ -2589,11 +2589,12 @@ def generar_zpl_trabajo(t: dict) -> str:
     modo = "^MTT" + ("^MMC" if p.get("cortar", True) else "")
 
     def _sticker_col(x: int, dato: str) -> str:
-        """Un sticker (diseño real): MALE DENIM subrayado + Code128 + código."""
+        """Un sticker (diseño real): MALE DENIM subrayado + Code128 + código.
+        Proporciones de la fila que salió centrada (foto 2026-07-22)."""
         return (
             f"^FO{x},10^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
-            f"^FO{x + 30},34^GB{ZPL_STK_COL_ANCHO - 60},2,2^FS"
-            f"^FO{x + 20},44^BY1,2.4,48^BCN,48,N,N,N^FD{dato}^FS"
+            f"^FO{x + 50},34^GB{ZPL_STK_COL_ANCHO - 100},2,2^FS"
+            f"^FO{x + 40},44^BY1,2.4,48^BCN,48,N,N,N^FD{dato}^FS"
             f"^FO{x},100^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,22,22^FD{dato}^FS")
 
     if t.get("tipo") == "sticker_codigo":
@@ -2626,8 +2627,13 @@ def generar_zpl_trabajo(t: dict) -> str:
         import math as _math
 
         def negrita(y: int, txt: str, alto: int = 20) -> str:
-            base = f",{y}^FB{W},1,0,C,0^A0N,{alto},{alto}^FD{txt}^FS"
-            return f"^FO0{base}^FO1{base}"
+            # Auto-reduce si la línea no cabe en el ancho (evita truncados).
+            while alto > 16 and len(txt) * alto * 0.55 > W - 8:
+                alto -= 2
+            # Doble trazo con desfase VERTICAL (el horizontal choca con el
+            # centrado ^FB y garabatea las líneas largas — visto en prueba).
+            base = f"^FB{W},1,0,C,0^A0N,{alto},{alto}^FD{txt}^FS"
+            return f"^FO0,{y}{base}^FO0,{y+1}{base}"
 
         def filete(y: int, grosor: int = 1, margen: int = 12) -> str:
             return f"^FO{margen},{y}^GB{W - 2 * margen},{grosor},{grosor}^FS"
@@ -2686,8 +2692,11 @@ def generar_zpl_trabajo(t: dict) -> str:
                 z.append(negrita(y, ln, 18));      y += 26
             y += S                                # ── zona de costura inferior
             z.insert(1, f"^LL{y}")
-            z.append(f"^PQ{copias}^XZ")
-            return "".join(z)
+            # UN bloque = UNA etiqueta (^PQ1): así el cortador corta CADA una
+            # (con ^PQn la SAT solo cortaba al final de la tanda).
+            z.append("^PQ1^XZ")
+            bloque = "".join(z)
+            return "\n".join([bloque] * max(1, copias))
 
         tallas_lav = p.get("tallas") or {}
         if tallas_lav:
@@ -2699,7 +2708,7 @@ def generar_zpl_trabajo(t: dict) -> str:
                     continue
                 bloques.append(etiqueta_lavado(str(talla), int(_math.ceil(qty * 1.01))))
             return "\n".join(bloques)
-        # Legacy / módulo con solo "copias": una sola tirada sin talla, +1%.
+        # Legacy / módulo con solo "copias": sin talla, +1%.
         copias = max(1, int(_math.ceil(int(p.get("copias") or 1) * 1.01)))
         return etiqueta_lavado(None, copias)
     return ""
