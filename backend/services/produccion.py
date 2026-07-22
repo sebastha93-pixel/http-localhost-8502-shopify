@@ -2590,14 +2590,15 @@ def generar_zpl_trabajo(t: dict) -> str:
 
     def _sticker_col(x: int, dato: str) -> str:
         """Un sticker: MALE DENIM subrayado + QR CENTRADO + código legible.
-        (QR en vez de Code128 — pedido 2026-07-22; escanea igual con pistola 2D.)"""
-        qr_lado = 84   # QR v1 (21 módulos) × magnificación 4 ≈ 10.5 mm
+        QR magnificación 3 (a 4 se montaba sobre el texto — foto 2026-07-22);
+        el render real del ^BQ trae zona quieta → ~72 dots de lado."""
+        qr_lado = 72
         qr_x = x + (ZPL_STK_COL_ANCHO - qr_lado) // 2
         return (
-            f"^FO{x},8^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
-            f"^FO{x + 50},30^GB{ZPL_STK_COL_ANCHO - 100},2,2^FS"
-            f"^FO{qr_x},38^BQN,2,4^FDQA,{dato}^FS"
-            f"^FO{x},128^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,20,20^FD{dato}^FS")
+            f"^FO{x},6^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
+            f"^FO{x + 50},28^GB{ZPL_STK_COL_ANCHO - 100},2,2^FS"
+            f"^FO{qr_x},36^BQN,2,3^FDQA,{dato}^FS"
+            f"^FO{x},124^FB{ZPL_STK_COL_ANCHO},1,0,C,0^A0N,20,20^FD{dato}^FS")
 
     if t.get("tipo") == "sticker_codigo":
         # Dato del código calcado del sticker real: REF + 'T' + talla (26534-1T14).
@@ -2695,11 +2696,12 @@ def generar_zpl_trabajo(t: dict) -> str:
                 z.append(negrita(y, ln, 18));      y += 26
             y += S                                # ── zona de costura inferior
             z.insert(1, f"^LL{y}")
-            # UN bloque = UNA etiqueta (^PQ1): así el cortador corta CADA una
-            # (con ^PQn la SAT solo cortaba al final de la tanda).
+            # UN bloque = UNA etiqueta (^PQ1) + orden de corte NATIVA "CUT"
+            # tras cada una: la SAT (familia TSC) ignora el ^MMC de ZPL pero
+            # sí obedece CUT (verificado con el experimento CORTE A/B/C).
             z.append("^PQ1^XZ")
-            bloque = "".join(z)
-            return "\n".join([bloque] * max(1, copias))
+            bloque = "".join(z) + "\r\nCUT\r\n"
+            return "".join([bloque] * max(1, copias))
 
         tallas_lav = p.get("tallas") or {}
         if tallas_lav:
