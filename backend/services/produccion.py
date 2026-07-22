@@ -479,9 +479,11 @@ def listar_rollos(*, tela: Optional[str] = None, estado: Optional[str] = None,
     out = []
     for r in rollos:
         libres = round(float(r.get("metros_disponible") or 0) - reservas.get(r["id"], 0.0), 2)
-        if libres <= 0:
+        # Sigue siendo asignable mientras el sobregiro de reservas no pase la
+        # tolerancia (la diferencia se resuelve al cierre con el consumo real).
+        if libres <= -TOLERANCIA_ASIGNACION_M:
             continue
-        r["metros_libres"] = libres
+        r["metros_libres"] = max(libres, 0.0)
         out.append(r)
     return out
 
@@ -1694,6 +1696,12 @@ def verificar_rollo_corte(oc_id: str, barcode: str) -> dict:
             "mensaje": "Esta tela NO está asignada a este corte. No la cortes."}
 
 
+# Tolerancia al asignar tela: se aceptan hasta 10 m por encima de los metros
+# libres del rollo. La reserva es solo un plan de corte — el descuento real
+# ocurre al cerrar el informe y nunca supera el saldo físico del rollo.
+TOLERANCIA_ASIGNACION_M = 10.0
+
+
 def asignar_rollo_a_corte(*, oc_id: str, barcode: str,
                            metros_reservar: float) -> dict:
     """Pistolear un rollo: valida barcode → agrega a la orden con los metros reservados.
@@ -1739,11 +1747,15 @@ def asignar_rollo_a_corte(*, oc_id: str, barcode: str,
     m = float(metros_reservar or 0)
     if m <= 0:
         raise ValueError("metros_reservar_debe_ser_positivo")
-    if m > libres:
+    # La reserva es un plan, no un descuento: se permite pedir hasta
+    # TOLERANCIA_ASIGNACION_M por encima de lo libre — la diferencia real la
+    # resuelve el cierre (consumo real, nunca más del saldo físico del rollo).
+    if m > libres + TOLERANCIA_ASIGNACION_M:
         raise ValueError(
-            f"metros_insuficientes: el rollo tiene {libres}m libres "
-            f"({reservado_otras}m reservados por otras órdenes)" if reservado_otras > 0
-            else f"metros_insuficientes: rollo tiene {disp}m disponibles")
+            (f"metros_insuficientes: el rollo tiene {libres}m libres "
+             f"({reservado_otras}m reservados por otras órdenes)" if reservado_otras > 0
+             else f"metros_insuficientes: rollo tiene {disp}m disponibles")
+            + f" y la diferencia supera la tolerancia de {TOLERANCIA_ASIGNACION_M:.0f} m")
 
     if existing:
         sb.table("orden_corte_rollos").update({"metros_usados": m}).eq("id", existing[0]["id"]).execute()

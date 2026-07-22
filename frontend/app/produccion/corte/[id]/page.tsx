@@ -1369,11 +1369,11 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar, onAsignar, asignando }
           <div className="inline-flex items-center gap-1.5">
             <input
               type="number" inputMode="decimal" step="0.01" min="0"
-              max={libresDe(r)}
+              max={libresDe(r) + 10}
               value={metrosFila[r.id] !== undefined ? metrosFila[r.id] : String(libresDe(r))}
               onChange={(e) => setMetrosFila((prev) => ({ ...prev, [r.id]: e.target.value }))}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); asignarFila(r); } }}
-              title="Rollo completo por defecto — puedes editar a una parte"
+              title="Rollo completo por defecto — editable; se acepta hasta 10 m por encima de lo libre (la diferencia se ajusta al cierre con el consumo real)"
               placeholder="metros"
               className="w-20 rounded-sm border border-border bg-card px-2 py-1 text-right text-[0.7rem] tabular" />
             <button type="button" onClick={() => asignarFila(r)} disabled={asignando}
