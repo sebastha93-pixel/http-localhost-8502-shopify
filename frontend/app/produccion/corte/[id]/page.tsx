@@ -392,6 +392,18 @@ export default function DetalleOrdenCortePage() {
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
   });
 
+  // Eliminar la orden (no cortada): libera los rollos reservados y borra.
+  // Para rehacer órdenes mal creadas (ej. body digitado con tallas numéricas).
+  const routerNav = useRouter();
+  const eliminarOrden = useMutation({
+    mutationFn: () => api.del(`/api/produccion/corte/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["produccion", "corte"] });
+      routerNav.push("/produccion/corte");
+    },
+    onError: (e: Error) => { setErr(e.message); setMsg(""); },
+  });
+
   // SOLO ADMIN: reabrir una orden cerrada para corregir el informe
   const reabrir = useMutation({
     mutationFn: () => api.post(`/api/produccion/corte/${id}/reabrir`),
@@ -1126,6 +1138,23 @@ export default function DetalleOrdenCortePage() {
 
       {/* Comparación al cerrar */}
       {cerrada && <InformeCerradoCard oc={oc} />}
+      {/* Eliminar orden NO cortada (libera los rollos): para rehacerla
+          bien, p. ej. un body creado con tallas numéricas en vez de S–XL. */}
+      {!cerrada && !esCortador && (esAdmin || puedeAccionModulo(user, "produccion_corte", "borrar")) && (
+        <div className="flex justify-end">
+          <button
+            onClick={() => {
+              if (window.confirm(`¿Eliminar la orden ${oc.consecutivo}? Se libera la tela reservada y la orden desaparece. Esto no se puede deshacer.`))
+                eliminarOrden.mutate();
+            }}
+            disabled={eliminarOrden.isPending}
+            className="inline-flex items-center gap-2 rounded-sm border border-terracotta bg-card px-4 py-2 text-xs font-semibold uppercase tracking-widest text-terracotta hover:bg-terra-soft disabled:opacity-40">
+            {eliminarOrden.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            Eliminar orden
+          </button>
+        </div>
+      )}
+
       {/* SOLO ADMIN: reabrir para corregir el informe (devuelve la tela
           descontada al inventario y la orden vuelve a 'en corte'). */}
       {cerrada && esAdmin && (
