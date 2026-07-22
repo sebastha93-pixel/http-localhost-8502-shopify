@@ -2387,7 +2387,7 @@ ZPL_STK_X0         = 0
 # Medidas REALES medidas por Sebastián (boceto 2026-07-22):
 #   sticker 3.2 cm de ancho · separación 0.3 cm · margen 0.5 cm por lado.
 ZPL_STK_COL_ANCHO  = 256   # 32 mm
-ZPL_STK_COL_PASO   = 280   # 35 mm centro a centro (32 + 3 de división)
+ZPL_STK_COL_PASO   = 272   # 34 mm c-a-c (con 280 la col. 3 caía a la derecha; con 268 ajustaba)
 ZPL_STK_MARGEN     = 40    # 5 mm de margen lateral dentro del sticker
 ZPL_STK_COLS       = 3
 ZPL_STK_ALTO       = 160   # ~20 mm alto
@@ -2598,12 +2598,15 @@ def generar_zpl_trabajo(t: dict) -> str:
         El ^BQ del PC42E-T rinde ~92 dots a mag 4 (incluye zona quieta)."""
         bx = x + ZPL_STK_MARGEN
         banda = ZPL_STK_COL_ANCHO - 2 * ZPL_STK_MARGEN
-        qr_render = 92
-        qr_x = x + (ZPL_STK_COL_ANCHO - qr_render) // 2
+        # ^BQ real del PC42E-T = (21 módulos + 8 de zona quieta) × mag.
+        # A mag 3 el campo mide 87 dots (núcleo visible 63 ≈ 8 mm) — el único
+        # tamaño que deja aire para título arriba y código abajo en 160 dots.
+        qr_campo = (21 + 8) * 3   # 87
+        qr_x = x + (ZPL_STK_COL_ANCHO - qr_campo) // 2
         return (
-            f"^FO{bx},10^FB{banda},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
-            f"^FO{qr_x},34^BQN,2,4^FDQA,{dato}^FS"
-            f"^FO{bx},132^FB{banda},1,0,C,0^A0N,18,18^FD{dato}^FS")
+            f"^FO{bx},8^FB{banda},1,0,C,0^A0N,20,20^FDMALE DENIM^FS"
+            f"^FO{qr_x},30^BQN,2,3^FDQA,{dato}^FS"
+            f"^FO{bx},124^FB{banda},1,0,C,0^A0N,18,18^FD{dato}^FS")
 
     if t.get("tipo") == "sticker_codigo":
         # Dato del código calcado del sticker real: REF + 'T' + talla (26534-1T14).
