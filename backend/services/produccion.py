@@ -2753,15 +2753,18 @@ ZPL_STK_COL_ANCHO  = 256   # 32 mm
 ZPL_STK_COL_PASO   = 272   # 34 mm c-a-c (con 280 la col. 3 caía a la derecha; con 268 ajustaba)
 ZPL_STK_MARGEN     = 40    # 5 mm de margen lateral dentro del sticker
 ZPL_STK_COLS       = 3
-ZPL_STK_ALTO       = 160   # ~20 mm alto
+ZPL_STK_ALTO       = 208   # 26 mm alto — TemplateSize oficial del .btw del
+                           # servidor MDS (BarTender: 32 × 26 mm)
 ZPL_STK_FILA_ANCHO = min(ZPL_STK_X0 + ZPL_STK_COL_PASO * ZPL_STK_COLS, 832)  # tope del cabezal 4"
 #
 # LAVADO (SAT): tira vertical de nylon. Diseño híbrido técnica×editorial.
 # PARÁMETROS REALES DE LA MÁQUINA (software del PC del taller, 2026-07-22):
 #   ancho de elemento 27.5 mm · altura de elemento 130 mm.
 ZPL_LAV_ANCHO  = 220   # 27.5 mm (antes 240: por eso se veía corrida/recortada)
-ZPL_LAV_LARGO  = 1040  # 130 mm de largo estándar de la etiqueta
-ZPL_LAV_SEAM   = 96    # ~12 mm de zona de costura en cada extremo
+ZPL_LAV_LARGO  = 800   # 100 mm — TemplateSize oficial del .btw del servidor
+                       # MDS (27,5 × 100 mm); el 130 de la pantalla del taller
+                       # era otro parámetro.
+ZPL_LAV_SEAM   = 80    # 10 mm de zona de costura en cada extremo
 
 
 def _zpl_escape(s: str) -> str:
@@ -2978,14 +2981,14 @@ def generar_zpl_trabajo(t: dict) -> str:
         bx = x + ZPL_STK_MARGEN
         banda = ZPL_STK_COL_ANCHO - 2 * ZPL_STK_MARGEN
         # ^BQ real del PC42E-T = (21 módulos + 8 de zona quieta) × mag.
-        # A mag 3 el campo mide 87 dots (núcleo visible 63 ≈ 8 mm) — el único
-        # tamaño que deja aire para título arriba y código abajo en 160 dots.
-        qr_campo = (21 + 8) * 3   # 87
+        # Con el alto OFICIAL de 26 mm (208 dots, .btw del servidor) cabe
+        # mag 4: campo 116 dots (núcleo ~11.6 mm) — mejor lectura de pistola.
+        qr_campo = (21 + 8) * 4   # 116
         qr_x = x + (ZPL_STK_COL_ANCHO - qr_campo) // 2
         return (
-            f"^FO{bx},8^FB{banda},1,0,C,0^A0N,20,20^FDMALE DENIM^FS"
-            f"^FO{qr_x},30^BQN,2,3^FDQA,{dato}^FS"
-            f"^FO{bx},124^FB{banda},1,0,C,0^A0N,18,18^FD{dato}^FS")
+            f"^FO{bx},6^FB{banda},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
+            f"^FO{qr_x},30^BQN,2,4^FDQA,{dato}^FS"
+            f"^FO{bx},152^FB{banda},1,0,C,0^A0N,20,20^FD{dato}^FS")
 
     if t.get("tipo") == "sticker_codigo":
         # Dato del código calcado del sticker real: REF + 'T' + talla (26534-1T14).
@@ -3070,7 +3073,9 @@ def generar_zpl_trabajo(t: dict) -> str:
                 z.append(negrita(y, f"COMP  {composicion}", 22))
             y += 38
             z.append(filete(y));                   y += 14
-            for ln in ("MACHINE WASH COLD", "NO BLEACH", "TUMBLE DRY LOW", "COOL IRON"):
+            # Texto calcado del arte oficial (BarTender del servidor MDS):
+            # inglés WARM WATER = español AGUA TIBIA (antes decía COLD).
+            for ln in ("MACHINE WASH WARM", "NO BLEACH", "TUMBLE DRY LOW", "COOL IRON"):
                 z.append(negrita(y, ln));          y += 28
             y += 6
             z.append(filete(y));                   y += 14
