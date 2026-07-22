@@ -1977,7 +1977,20 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
                   .eq("orden_corte_id", oc_id).eq("referencia_id", ref_id).execute()
             except Exception:
                 pass  # tabla hija sin migrar → el combinado ya quedó en el padre
-    return obtener_orden_corte(oc_id)
+    resultado = obtener_orden_corte(oc_id) or {}
+    # ALERTA DE SOBRANTE: con el descuento secuencial el restante queda en UN
+    # rollo — se informa cuál para que el cortador le CONSERVE LA ETIQUETA y
+    # pueda pistolearlo/liquidarlo en el próximo corte.
+    codigos = {}
+    for link in (oc.get("rollos") or []):
+        rr = link.get("rollo") or {}
+        codigos[link.get("rollo_id")] = rr.get("codigo_interno") or ""
+    resultado["rollos_sobrantes"] = [
+        {"rollo_id": rid, "codigo_interno": codigos.get(rid) or str(rid)[:8],
+         "metros": nuevo}
+        for rid, _m, nuevo in descuentos if nuevo > 0.01
+    ]
+    return resultado
 
 
 def eliminar_orden_corte(oc_id: str) -> None:

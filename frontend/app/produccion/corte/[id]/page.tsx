@@ -357,7 +357,7 @@ export default function DetalleOrdenCortePage() {
       const promedioManual = parseFloat(promedioReal || "0") || 0;
       const promedioDerivado = totalUnid > 0 && consumoFinal > 0 ? consumoFinal / totalUnid : 0;
       const promedioFinal = promedioManual || promedioDerivado;
-      return api.post(`/api/produccion/corte/${id}/cerrar`, {
+      return api.post<{ orden_corte?: { rollos_sobrantes?: { codigo_interno: string; metros: number }[] } }>(`/api/produccion/corte/${id}/cerrar`, {
         consumo_real_cortador: consumoFinal,
         merma_tipo: mermaTipo || null,
         merma_valor: mermaValor ? parseFloat(mermaValor) : null,
@@ -372,8 +372,14 @@ export default function DetalleOrdenCortePage() {
         precio_corte: precioCorte ? parseFloat(precioCorte) : null,
       });
     },
-    onSuccess: () => {
-      setMsg("Informe guardado. Inventario descontado y orden cerrada.");
+    onSuccess: (data: { orden_corte?: { rollos_sobrantes?: { codigo_interno: string; metros: number }[] } }) => {
+      const sobras = data?.orden_corte?.rollos_sobrantes || [];
+      if (sobras.length > 0) {
+        const det = sobras.map((s) => `${s.codigo_interno} (${Number(s.metros).toFixed(1)} m)`).join(" · ");
+        setMsg(`Orden cerrada. ⚠ QUEDÓ SOBRANTE: ${det} — consérvale la etiqueta al rollo para pistolearlo y liquidarlo en el próximo corte.`);
+      } else {
+        setMsg("Informe guardado. Inventario descontado y orden cerrada. Sin sobrantes: tela liquidada completa.");
+      }
       setErr("");
       qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
     },
@@ -1098,6 +1104,18 @@ export default function DetalleOrdenCortePage() {
           onCerrar={() => cerrar.mutate()}
           isPending={cerrar.isPending}
         />
+      )}
+
+      {/* Recordatorio permanente del SOBRANTE (para conservar la etiqueta) */}
+      {cerrada && (oc.rollos || []).some((l) => Number(l.rollo?.metros_disponible ?? 0) > 0.01) && (
+        <div className="rounded-sm border border-amber-500/40 bg-amber-50 px-4 py-3 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+          <span className="font-semibold uppercase tracking-widest">⚠ Sobrante de este corte:</span>{" "}
+          {(oc.rollos || [])
+            .filter((l) => Number(l.rollo?.metros_disponible ?? 0) > 0.01)
+            .map((l) => `${l.rollo?.codigo_interno} (${Number(l.rollo?.metros_disponible).toFixed(1)} m)`)
+            .join(" · ")}
+          {" — "}consérvale la etiqueta al rollo: se pistolea y liquida en el próximo corte.
+        </div>
       )}
 
       {/* Comparación al cerrar */}
