@@ -1232,6 +1232,61 @@ def crear_orden_corte(*, referencia_id: Optional[str] = None,
     return oc
 
 
+def reabrir_orden_corte(oc_id: str, *, usuario: str) -> dict:
+    """SOLO ADMIN: reabre una orden ya cerrada para corregir el informe.
+    Revierte los descuentos de tela (según movimientos_inventario) y vuelve
+    la orden a 'en_corte'. Deja rastro tipo 'reapertura' por cada rollo."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    oc = obtener_orden_corte(oc_id)
+    if not oc:
+        raise ValueError("no_encontrado")
+    if oc.get("estado") != "cortada":
+        raise ValueError("orden_no_cerrada")
+    doc_ref = oc["consecutivo"]
+
+    # Neto por rollo de este corte (cortes - reaperturas previas) → lo que
+    # falta por devolver. Idempotente: reabrir dos veces no duplica metros.
+    movs = (sb.table("movimientos_inventario")
+              .select("rollo_id,metros,tipo")
+              .eq("doc_ref", doc_ref)
+              .in_("tipo", ["corte", "reapertura"]).execute()).data or []
+    neto: dict[str, float] = {}
+    for mv in movs:
+        rid = mv.get("rollo_id")
+        if rid:
+            neto[rid] = round(neto.get(rid, 0.0) + float(mv.get("metros") or 0), 2)
+
+    devueltos = 0
+    for rid, n in neto.items():
+        if n >= 0:   # nada pendiente por devolver de este rollo
+            continue
+        rollo = obtener_rollo(rid)
+        if not rollo:
+            continue
+        devolver = -n
+        nuevo = round(float(rollo["metros_disponible"]) + devolver, 2)
+        sb.table("rollos_tela").update({
+            "metros_disponible": nuevo,
+            "estado": "en_corte",   # vuelve a quedar reservado para esta orden
+            "updated_at": _now_iso(),
+        }).eq("id", rid).execute()
+        sb.table("movimientos_inventario").insert({
+            "rollo_id": rid, "tipo": "reapertura", "metros": devolver,
+            "doc_ref": doc_ref, "usuario": usuario,
+            "nota": f"Reapertura corte {doc_ref} (corrección de informe)",
+        }).execute()
+        devueltos += 1
+
+    sb.table("ordenes_corte").update({
+        "estado": "en_corte", "updated_at": _now_iso(),
+    }).eq("id", oc_id).execute()
+    _cache_invalidate_prefix("ordenes_corte")
+    log.info(f"[corte] {doc_ref} reabierta por {usuario} ({devueltos} rollos devueltos)")
+    return obtener_orden_corte(oc_id) or {}
+
+
 def actualizar_indicaciones_corte(oc_id: str, indicaciones: Optional[str]) -> dict:
     """Edita las notas/indicaciones de una orden de corte (las escribe el
     diseñador; el cortador solo las lee). Editable en cualquier estado."""
@@ -1717,7 +1772,8 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
                         espigas_metros: Optional[dict] = None,
                         retazos_metros: Optional[float] = None,
                         fecha_entrega: Optional[str] = None,
-                        precio_corte: Optional[float] = None) -> dict:
+                        precio_corte: Optional[float] = None,
+                        rollos_liquidados: Optional[list] = None) -> dict:
     """Cierra la orden con el INFORME DEL CORTADOR:
     - Descuenta metros del inventario según metros_usados por rollo.
     - Guarda promedio_real, capas_real, unidades cortadas por talla, retazos,
@@ -1798,20 +1854,33 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
     # vuelve al inventario. El real se reparte entre los rollos proporcional a
     # lo que se reservó de cada uno. Sin consumo real (no vino en el informe)
     # se cae a lo reservado, como antes.
-    reservado_total = sum(float(l.get("metros_usados") or 0) for l in rollos)
+    # LIQUIDADOS: rollos que el cortador usó COMPLETOS ("liquidar la tela
+    # para no dejar restantes") → se les descuenta TODO su saldo y el resto
+    # del consumo real se reparte proporcional entre los demás rollos.
+    liquidados = {str(r) for r in (rollos_liquidados or [])}
     real_total = float(consumo_real_cortador or 0)
-    repartir_real = real_total > 0 and reservado_total > 0
     descuentos: list[tuple[str, float, float]] = []  # (rollo_id, metros, nuevo_disponible)
+    pendientes: list[tuple[str, float, float]] = []  # (rollo_id, m_reservado, disp)
+    consumo_liquidado = 0.0
     for link in rollos:
         rollo_id = link.get("rollo_id")
         m_reservado = float(link.get("metros_usados") or 0)
-        if not rollo_id or m_reservado <= 0:
+        if not rollo_id or (m_reservado <= 0 and str(rollo_id) not in liquidados):
             continue
         rollo = obtener_rollo(rollo_id)
         if not rollo:
             continue
         disp = float(rollo["metros_disponible"])
-        m = round(real_total * (m_reservado / reservado_total), 2) if repartir_real else m_reservado
+        if str(rollo_id) in liquidados:
+            descuentos.append((rollo_id, disp, 0.0))
+            consumo_liquidado += disp
+        else:
+            pendientes.append((rollo_id, m_reservado, disp))
+    reservado_resto = sum(m for _, m, _ in pendientes)
+    real_resto = max(0.0, real_total - consumo_liquidado)
+    repartir_real = real_total > 0 and reservado_resto > 0
+    for rollo_id, m_reservado, disp in pendientes:
+        m = round(real_resto * (m_reservado / reservado_resto), 2) if repartir_real else m_reservado
         m = max(0.0, min(m, disp))  # nunca deja el rollo en negativo
         nuevo = round(disp - m, 2)
         descuentos.append((rollo_id, m, nuevo))

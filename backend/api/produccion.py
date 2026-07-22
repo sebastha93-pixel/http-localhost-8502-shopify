@@ -636,6 +636,7 @@ class CerrarCorteBody(BaseModel):
     retazos_metros:    Optional[float] = None  # retazos medidos en METROS
     fecha_entrega:     Optional[str] = None
     precio_corte:      Optional[float] = None
+    rollos_liquidados: Optional[list[str]] = None  # rollos usados COMPLETOS (liquidar sobrantes)
 
 
 class AutorizarCorteBody(BaseModel):
@@ -803,6 +804,25 @@ def detalle_corte(
     return oc
 
 
+@router.post("/corte/{oc_id}/reabrir")
+def reabrir_corte(
+    oc_id: str,
+    user: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """SOLO ADMIN: reabre una orden cerrada para corregir el informe.
+    Devuelve la tela descontada al inventario (con rastro 'reapertura')
+    y la orden vuelve a 'en_corte' para cerrar de nuevo corregida."""
+    try:
+        return {"ok": True, "orden": svc.reabrir_orden_corte(oc_id, usuario=user.email)}
+    except ValueError as e:
+        if str(e) == "orden_no_cerrada":
+            raise HTTPException(400, "La orden no está cerrada — no hay nada que reabrir.")
+        raise HTTPException(404, "Orden de corte no encontrada")
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"reabrir: {str(e)[:200]}")
+
+
 class IndicacionesCorteBody(BaseModel):
     indicaciones: Optional[str] = None
 
@@ -925,6 +945,7 @@ def cerrar_corte(
             retazos_metros=body.retazos_metros,
             fecha_entrega=body.fecha_entrega,
             precio_corte=body.precio_corte,
+            rollos_liquidados=body.rollos_liquidados,
         )
         return {"ok": True, "orden_corte": oc}
     except ValueError as e:

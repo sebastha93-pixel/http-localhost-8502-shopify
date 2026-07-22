@@ -127,6 +127,9 @@ export default function DetalleOrdenCortePage() {
   const [unidadesReal, setUnidadesReal] = useState<Record<string, string>>({});
   // Multi-referencia: unidades cortadas por referencia → { refId: { talla: "n" } }
   const [unidadesRealRef, setUnidadesRealRef] = useState<Record<string, Record<string, string>>>({});
+  // Rollos LIQUIDADOS: usados completos para no dejar restantes → al cerrar
+  // se les descuenta todo el saldo (quedan agotados de verdad).
+  const [rollosLiquidados, setRollosLiquidados] = useState<Set<string>>(new Set());
 
   const q = useQuery<OrdenCorte>({
     queryKey: ["produccion", "corte", id],
@@ -181,8 +184,21 @@ export default function DetalleOrdenCortePage() {
   }
 
   const todosRollos = rollosInvQ.data?.rollos || [];
-  const rollosMatch = todosRollos.filter((r) => matcheaTela(r.descripcion_tela));
-  const rollosOtros = todosRollos.filter((r) => !matcheaTela(r.descripcion_tela));
+  // SOBRANTES primero: rollos ya cortados antes (disponible < inicial) van de
+  // primeros y de menor a mayor saldo — la regla de piso es LIQUIDARLOS antes
+  // de abrir rollo nuevo, para no acumular restantes.
+  const esSobrante = (r: RolloInv) =>
+    Number(r.metros_disponible) < Number(r.metros_inicial) - 0.01;
+  const ordenLiquidacion = (a: RolloInv, b: RolloInv) => {
+    const sa = esSobrante(a) ? 0 : 1;
+    const sb = esSobrante(b) ? 0 : 1;
+    if (sa !== sb) return sa - sb;
+    return sa === 0
+      ? Number(a.metros_disponible) - Number(b.metros_disponible)
+      : 0;
+  };
+  const rollosMatch = todosRollos.filter((r) => matcheaTela(r.descripcion_tela)).sort(ordenLiquidacion);
+  const rollosOtros = todosRollos.filter((r) => !matcheaTela(r.descripcion_tela)).sort(ordenLiquidacion);
 
   const pistolar = useMutation({
     mutationFn: () =>
@@ -350,6 +366,7 @@ export default function DetalleOrdenCortePage() {
         promedio_real: promedioFinal ? Number(promedioFinal.toFixed(4)) : null,
         unidades_cortadas: unidadesFinal,
         unidades_por_referencia: unidadesPorRef,
+        rollos_liquidados: rollosLiquidados.size > 0 ? Array.from(rollosLiquidados) : null,
         retazos_metros: retazosM || null,
         fecha_entrega: fechaEntrega || null,
         precio_corte: precioCorte ? parseFloat(precioCorte) : null,
@@ -358,6 +375,18 @@ export default function DetalleOrdenCortePage() {
     onSuccess: () => {
       setMsg("Informe guardado. Inventario descontado y orden cerrada.");
       setErr("");
+      qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
+    },
+    onError: (e: Error) => { setErr(e.message); setMsg(""); },
+  });
+
+  // SOLO ADMIN: reabrir una orden cerrada para corregir el informe
+  const reabrir = useMutation({
+    mutationFn: () => api.post(`/api/produccion/corte/${id}/reabrir`),
+    onSuccess: () => {
+      setMsg("Orden reabierta: la tela volvió al inventario. Corrige el informe y ciérrala de nuevo.");
+      setErr("");
+      setRollosLiquidados(new Set());
       qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
     },
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
@@ -1007,12 +1036,14 @@ export default function DetalleOrdenCortePage() {
       </Card>
 
       {/* INFORME DE CORTE — solo el CORTADOR lo llena */}
-      {!cerrada && !esCortador && (oc.rollos || []).length > 0 && (
+      {!cerrada && !esCortador && !esAdmin && (oc.rollos || []).length > 0 && (
         <Card><CardContent className="p-5 text-sm text-graphite">
           El informe de corte lo diligencia el cortador. Cuando lo cierre, aquí verás el informe con las diferencias (teórico vs real).
         </CardContent></Card>
       )}
-      {!cerrada && esCortador && (oc.rollos || []).length > 0 && (
+      {/* El informe lo llena el cortador; el ADMIN también puede (p. ej. al
+          reabrir una orden cerrada para corregirla). */}
+      {!cerrada && (esCortador || esAdmin) && (oc.rollos || []).length > 0 && (
         <InformeCorteCard
           oc={oc}
           refLote={refLote} setRefLote={setRefLote}
@@ -1026,6 +1057,7 @@ export default function DetalleOrdenCortePage() {
           consumoReal={consumoReal} setConsumoReal={setConsumoReal}
           mermaTipo={mermaTipo} setMermaTipo={setMermaTipo}
           mermaValor={mermaValor} setMermaValor={setMermaValor}
+          rollosLiquidados={rollosLiquidados} setRollosLiquidados={setRollosLiquidados}
           onCerrar={() => cerrar.mutate()}
           isPending={cerrar.isPending}
         />
@@ -1033,6 +1065,26 @@ export default function DetalleOrdenCortePage() {
 
       {/* Comparación al cerrar */}
       {cerrada && <InformeCerradoCard oc={oc} />}
+      {/* SOLO ADMIN: reabrir para corregir el informe (devuelve la tela
+          descontada al inventario y la orden vuelve a 'en corte'). */}
+      {cerrada && esAdmin && (
+        <Card><CardContent className="p-4 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-graphite">
+            ¿Informe con errores? Puedes reabrir la orden: la tela descontada
+            vuelve al inventario y la orden queda de nuevo en corte para cerrarla corregida.
+          </p>
+          <button
+            onClick={() => {
+              if (window.confirm(`¿Reabrir la orden ${oc.consecutivo}? La tela descontada vuelve al inventario y deberás cerrar el informe de nuevo.`))
+                reabrir.mutate();
+            }}
+            disabled={reabrir.isPending}
+            className="inline-flex items-center gap-2 rounded-sm border border-terracotta bg-card px-4 py-2 text-xs font-semibold uppercase tracking-widest text-terracotta hover:bg-terra-soft disabled:opacity-40">
+            {reabrir.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />}
+            Reabrir orden (admin)
+          </button>
+        </CardContent></Card>
+      )}
       {/* Tras confirmar el informe, el cortador (o el encargado de remisiones)
           genera la remisión de confección, la imprime y la marca recogida. */}
       {cerrada && <GenerarRemisionCard ordenCorteId={oc.id} esCortador={esCortador} />}
@@ -1074,7 +1126,15 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar, onAsignar, asignando }
 
   const renderFila = (r: RolloInv, esOtro = false) => (
     <tr key={r.id} className={`border-b border-border/40 ${yaAsignado(r.id) ? "bg-teal/5" : "hover:bg-cloud/30"} ${esOtro ? "text-graphite/90" : ""}`}>
-      <td className="px-4 py-2 font-semibold tabular text-navy-600">{r.codigo_interno}</td>
+      <td className="px-4 py-2 font-semibold tabular text-navy-600">
+        {r.codigo_interno}
+        {Number(r.metros_disponible) < Number(r.metros_inicial) - 0.01 && (
+          <span title="Rollo ya cortado antes — liquidarlo primero para no dejar restantes"
+            className="ml-1.5 inline-block rounded-sm bg-terra-soft px-1.5 py-0.5 text-[0.58rem] font-bold uppercase tracking-widest text-terracotta align-middle">
+            Sobrante
+          </span>
+        )}
+      </td>
       <td className="px-4 py-2 text-graphite tabular">{r.numero_rollo || "—"}</td>
       <td className="px-4 py-2 text-ink-900">{r.descripcion_tela}</td>
       <td className="px-4 py-2 text-graphite">{r.tono || "—"}</td>
@@ -1170,6 +1230,7 @@ interface OrdenCorteForInforme {
     cantidad_programada?: number | null;
     referencia?: { codigo_referencia?: string; nombre?: string };
   }[];
+  rollos?: RolloLink[];
 }
 
 function InformeCorteCard({
@@ -1178,6 +1239,7 @@ function InformeCorteCard({
   unidadesReal, setUnidadesReal, unidadesRealRef, setUnidadesRealRef,
   consumoReal, setConsumoReal,
   mermaTipo, setMermaTipo, mermaValor, setMermaValor,
+  rollosLiquidados, setRollosLiquidados,
   onCerrar, isPending,
 }: {
   oc: OrdenCorteForInforme;
@@ -1193,6 +1255,7 @@ function InformeCorteCard({
   consumoReal: string; setConsumoReal: (v: string) => void;
   mermaTipo: string; setMermaTipo: (v: string) => void;
   mermaValor: string; setMermaValor: (v: string) => void;
+  rollosLiquidados: Set<string>; setRollosLiquidados: (v: Set<string>) => void;
   onCerrar: () => void;
   isPending: boolean;
 }) {
@@ -1309,6 +1372,33 @@ function InformeCorteCard({
           <FieldText label="Merma tipo (opc.)"  value={mermaTipo}   onChange={setMermaTipo}  placeholder="Ej. borde, defecto" />
           <FieldText label="Merma valor (opc.)" value={mermaValor}  onChange={setMermaValor} inputMode="decimal" placeholder="0" />
         </div>
+
+        {/* Rollos liquidados: usados COMPLETOS para no dejar restantes */}
+        {(oc.rollos || []).length > 0 && (
+          <div className="rounded-sm border border-dashed border-border bg-cloud/20 p-3">
+            <p className="section-label mb-2">¿Liquidaste algún rollo? (usado completo, sin dejar restante)</p>
+            <div className="flex flex-wrap gap-x-5 gap-y-2">
+              {(oc.rollos || []).map((l) => (
+                <label key={l.rollo_id} className="inline-flex items-center gap-2 text-xs text-ink-900 cursor-pointer">
+                  <input type="checkbox"
+                    checked={rollosLiquidados.has(l.rollo_id)}
+                    onChange={(e) => {
+                      const n = new Set(rollosLiquidados);
+                      if (e.target.checked) n.add(l.rollo_id); else n.delete(l.rollo_id);
+                      setRollosLiquidados(n);
+                    }}
+                    className="h-3.5 w-3.5 accent-teal" />
+                  <span className="tabular">{l.rollo?.codigo_interno || l.rollo_id.slice(0, 8)}</span>
+                  <span className="text-graphite">({Number(l.rollo?.metros_disponible ?? 0).toFixed(1)} m en sistema)</span>
+                </label>
+              ))}
+            </div>
+            <p className="mt-2 text-[0.7rem] text-graphite">
+              A los rollos marcados se les descuenta <span className="font-semibold text-ink-900">todo el saldo</span> (quedan
+              agotados de verdad) y el resto del consumo se reparte entre los demás.
+            </p>
+          </div>
+        )}
 
         {/* Unidades cortadas por talla */}
         {multiRef ? (
