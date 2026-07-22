@@ -2761,10 +2761,10 @@ ZPL_STK_FILA_ANCHO = min(ZPL_STK_X0 + ZPL_STK_COL_PASO * ZPL_STK_COLS, 832)  # t
 # PARÁMETROS REALES DE LA MÁQUINA (software del PC del taller, 2026-07-22):
 #   ancho de elemento 27.5 mm · altura de elemento 130 mm.
 ZPL_LAV_ANCHO  = 220   # 27.5 mm (antes 240: por eso se veía corrida/recortada)
-ZPL_LAV_LARGO  = 800   # 100 mm — TemplateSize oficial del .btw del servidor
-                       # MDS (27,5 × 100 mm); el 130 de la pantalla del taller
-                       # era otro parámetro.
-ZPL_LAV_SEAM   = 80    # 10 mm de zona de costura en cada extremo
+ZPL_LAV_LARGO  = 1040  # 130 mm — TemplateSize del formato VIGENTE (Etiqueta
+                       # Lavado Male.btw, escritorio del servidor MDS, mod.
+                       # 2026-07-07). El de 100 mm en Documents/Shared es viejo.
+ZPL_LAV_SEAM   = 96    # ~12 mm de zona de costura en cada extremo
 
 
 def _zpl_escape(s: str) -> str:
