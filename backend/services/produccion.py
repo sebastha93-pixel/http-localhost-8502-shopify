@@ -496,10 +496,16 @@ def buscar_rollo_por_codigo(codigo: str, *, unico: bool = False) -> Optional[dic
         return None
     # Los QR del proveedor suelen traer cadenas COMPUESTAS
     # ("6000486388;0371A;HUNTER;150.0") — si el escaneo completo no matchea,
-    # se reintenta con cada token (más largo primero).
-    candidatos = [c] + [t for t in sorted(
-        {t for t in re.split(r"[^A-Za-z0-9\-]+", c) if len(t) >= 4},
-        key=len, reverse=True) if t != c]
+    # se reintenta con cada token (más largo primero). También la variante con
+    # apóstrofes→guiones: la pistola en teclado latino escribe ' en vez de -
+    # ("ROLLO'2026'000073", visto en piso).
+    variantes = [c]
+    con_guion = re.sub(r"[''´`‘’]", "-", c)
+    if con_guion != c:
+        variantes.append(con_guion)
+    candidatos = list(variantes) + [t for t in sorted(
+        {t for v in variantes for t in re.split(r"[^A-Za-z0-9\-]+", v) if len(t) >= 4},
+        key=len, reverse=True) if t not in variantes]
     for i, cand in enumerate(candidatos):
         # El lote de fábrica se comparte entre rollos → solo se acepta si el
         # escaneo COMPLETO es el lote, nunca como token de una cadena.
@@ -1484,6 +1490,10 @@ def verificar_rollo_corte(oc_id: str, barcode: str) -> dict:
     # lo escaneado y matchea si CUALQUIER pedazo coincide con CUALQUIER
     # identificador del rollo (o el identificador aparece dentro del escaneo).
     tokens = {t for t in re.split(r"[^A-Z0-9\-]+", code) if len(t) >= 4}
+    # Normalizado = solo letras y números. Cubre el choque de teclado de la
+    # pistola (layout latino escribe ' donde el lector manda -, visto en piso:
+    # "ROLLO'2026'000073") y cualquier otro separador raro.
+    code_norm = re.sub(r"[^A-Z0-9]+", "", code)
 
     def _matchea(rr: dict) -> bool:
         # El lote de fábrica se COMPARTE entre rollos → solo cuenta si el
@@ -1496,7 +1506,14 @@ def verificar_rollo_corte(oc_id: str, barcode: str) -> dict:
         fuertes.discard("")
         if tokens & fuertes:
             return True
-        return any(len(i) >= 6 and i in code for i in fuertes)
+        if any(len(i) >= 6 and i in code for i in fuertes):
+            return True
+        # Comparación normalizada (ignora - ' etc. en ambos lados)
+        for i in fuertes:
+            i_norm = re.sub(r"[^A-Z0-9]+", "", i)
+            if len(i_norm) >= 6 and (i_norm == code_norm or i_norm in code_norm):
+                return True
+        return False
 
     # 1) ¿Coincide con algún rollo ASIGNADO a este corte? Es lo que el
     #    cortador necesita confirmar. Case-insensitive.
