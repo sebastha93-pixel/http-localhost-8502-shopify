@@ -2572,10 +2572,11 @@ ZPL_STK_COLS       = 3
 ZPL_STK_ALTO       = 160   # ~20 mm alto
 ZPL_STK_FILA_ANCHO = min(ZPL_STK_X0 + ZPL_STK_COL_PASO * ZPL_STK_COLS, 832)  # tope del cabezal 4"
 #
-# LAVADO (SAT): tira vertical de nylon. Diseño híbrido técnica×editorial
-# aprobado 2026-07-21: zonas de COSTURA en blanco en ambos extremos (la
-# etiqueta se imprime y CORTA lista para coser/pegar en confección).
-ZPL_LAV_ANCHO  = 240   # ~30 mm
+# LAVADO (SAT): tira vertical de nylon. Diseño híbrido técnica×editorial.
+# PARÁMETROS REALES DE LA MÁQUINA (software del PC del taller, 2026-07-22):
+#   ancho de elemento 27.5 mm · altura de elemento 130 mm.
+ZPL_LAV_ANCHO  = 220   # 27.5 mm (antes 240: por eso se veía corrida/recortada)
+ZPL_LAV_LARGO  = 1040  # 130 mm de largo estándar de la etiqueta
 ZPL_LAV_SEAM   = 96    # ~12 mm de zona de costura en cada extremo
 
 
@@ -2813,10 +2814,10 @@ def generar_zpl_trabajo(t: dict) -> str:
         # La etiqueta lleva REF + TALLA + COMPOSICIÓN → se imprime POR TALLA,
         # 1 por prenda +1% de margen. Negrita = doble trazo; ^MD sube oscuridad.
         composicion = _zpl_escape(p.get("instrucciones") or "").upper()
-        # La tira física queda desplazada ~20 dots a la derecha del origen del
-        # cabezal (foto 2026-07-22: contenido "tirado a la derecha" y la línea
-        # más ancha recortada) → centramos en una banda de 200 y no de 240.
-        W, S = 200, ZPL_LAV_SEAM
+        # Con el ancho REAL del medio (220 dots = 27.5 mm) se centra sobre
+        # todo el elemento — el "corrimiento a la derecha" era que imprimíamos
+        # para un medio de 30 mm en una tira de 27.5.
+        W, S = ZPL_LAV_ANCHO, ZPL_LAV_SEAM
         import math as _math
 
         def negrita(y: int, txt: str, alto: int = 20) -> str:
@@ -2878,14 +2879,17 @@ def generar_zpl_trabajo(t: dict) -> str:
                 z.append(negrita(y, ln));          y += 28
             y += 6
             z.append(filete(y));                   y += 12
-            for i in range(5):                     # símbolos de cuidado (banda 200)
-                z.append(icono(i, 2 + i * 41, y))
+            ini = (W - (4 * 42 + 36)) // 2         # símbolos centrados en el ancho real
+            for i in range(5):
+                z.append(icono(i, ini + i * 42, y))
             y += 46
             z.append(filete(y));                   y += 14
             for ln in ("MADE IN COLOMBIA", "DIRTY JEANS", "NIT 901680460-1", "SIC 1036644755"):
                 z.append(negrita(y, ln, 18));      y += 26
             y += S                                # ── zona de costura inferior
-            z.insert(1, f"^LL{y}")
+            # Largo estándar de la etiqueta: 130 mm (el aire extra queda como
+            # zona de costura inferior más generosa).
+            z.insert(1, f"^LL{max(y, ZPL_LAV_LARGO)}")
             # UN bloque = UNA etiqueta (^PQ1) + orden de corte NATIVA "CUT"
             # tras cada una: la SAT (familia TSC) ignora el ^MMC de ZPL pero
             # sí obedece CUT (verificado con el experimento CORTE A/B/C).
