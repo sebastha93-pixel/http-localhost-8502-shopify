@@ -854,6 +854,7 @@ class CurvaCorteBody(BaseModel):
     curva: dict
     referencia_id: Optional[str] = None
     num_capas: Optional[int] = None
+    promedio_tecnico: Optional[float] = None
 
 
 @router.patch("/corte/{oc_id}/curva")
@@ -867,7 +868,8 @@ def editar_curva_corte(
     try:
         return {"ok": True, "orden": svc.actualizar_curva_corte(
             oc_id, curva=body.curva,
-            referencia_id=body.referencia_id, num_capas=body.num_capas)}
+            referencia_id=body.referencia_id, num_capas=body.num_capas,
+            promedio_tecnico=body.promedio_tecnico)}
     except ValueError as e:
         m = str(e)
         if m == "no_encontrado":

@@ -269,12 +269,15 @@ export default function DetalleOrdenCortePage() {
   // Corregir la CURVA DE TALLAS de una orden no cortada (diseño/admin):
   // permite cambiar de tallaje (4-16 ↔ S-XL) y ajustar cantidades sin borrar
   // la orden. El backend recalcula prendas y metros teóricos.
-  const [curvaEdit, setCurvaEdit] = useState<{ refId: string | null; tallaje: "inferior" | "superior"; valores: Record<string, string> } | null>(null);
+  const [curvaEdit, setCurvaEdit] = useState<{ refId: string | null; tallaje: "inferior" | "superior"; valores: Record<string, string>; promedio: string } | null>(null);
   const abrirCurvaEdit = (refId: string | null, curva: Record<string, number>) => {
     const esSup = Object.keys(curva || {}).some((t) => !Number.isFinite(parseInt(t, 10)));
     const valores: Record<string, string> = {};
     for (const [t, n] of Object.entries(curva || {})) valores[t] = String(n);
-    setCurvaEdit({ refId, tallaje: esSup ? "superior" : "inferior", valores });
+    setCurvaEdit({
+      refId, tallaje: esSup ? "superior" : "inferior", valores,
+      promedio: q.data?.promedio_tecnico ? String(q.data.promedio_tecnico) : "",
+    });
   };
   const guardarCurva = useMutation({
     mutationFn: () => {
@@ -283,8 +286,10 @@ export default function DetalleOrdenCortePage() {
         const n = parseInt(v || "0", 10);
         if (n > 0) curva[t] = n;
       }
+      const prom = parseFloat(curvaEdit?.promedio || "0") || 0;
       return api.patch(`/api/produccion/corte/${id}/curva`, {
         curva, referencia_id: curvaEdit?.refId || null,
+        promedio_tecnico: prom > 0 ? prom : null,
       });
     },
     onSuccess: () => {
@@ -727,10 +732,20 @@ export default function DetalleOrdenCortePage() {
                     </label>
                   ))}
                 </div>
-                <p className="text-[0.65rem] text-graphite">
-                  Aquí no se rellenan parejas de espiga automáticamente: lo que digites es lo que queda.
-                  Al guardar se recalculan prendas y metros teóricos.
-                </p>
+                <div className="flex flex-wrap items-end gap-3">
+                  <label className="block">
+                    <span className="mb-1 block text-[0.65rem] font-semibold text-graphite">Promedio técnico (m/prenda)</span>
+                    <input
+                      inputMode="decimal" placeholder="0.850"
+                      value={curvaEdit.promedio}
+                      onChange={(e) => setCurvaEdit({ ...curvaEdit, promedio: e.target.value.replace(/[^0-9.]/g, "") })}
+                      className="w-28 rounded-sm border border-border bg-white px-2 py-1.5 text-xs tabular text-ink-900 placeholder:text-graphite/40" />
+                  </label>
+                  <p className="text-[0.65rem] text-graphite pb-1">
+                    Metros teóricos = promedio × prendas. Aquí no se rellenan parejas de espiga:
+                    lo que digites es lo que queda.
+                  </p>
+                </div>
                 <div className="flex items-center justify-end gap-3">
                   <span className="text-xs text-graphite">Total: <span className="font-semibold text-ink-900 tabular">{totalEdit}</span> prendas</span>
                   <button onClick={() => setCurvaEdit(null)}

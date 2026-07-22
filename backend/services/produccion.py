@@ -1176,7 +1176,13 @@ def crear_orden_corte(*, referencia_id: Optional[str] = None,
                 specs.append({"referencia_id": rid,
                               "curva_trazo": r.get("curva_trazo") or {},
                               "cantidad_programada": r.get("cantidad_programada"),
-                              "promedio_tecnico": r.get("promedio_tecnico")})
+                              # BUG FIX: el formulario manda el promedio como campo
+                              # GENERAL del tendido — si la referencia no trae el
+                              # suyo, cae al general (antes se ignoraba → metros
+                              # teóricos 0 → auto-asignar no asignaba nada).
+                              "promedio_tecnico": r.get("promedio_tecnico")
+                                  if r.get("promedio_tecnico") is not None
+                                  else promedio_tecnico})
     elif referencia_id:
         specs = [{"referencia_id": referencia_id, "curva_trazo": curva_trazo or {},
                   "cantidad_programada": cantidad_programada, "promedio_tecnico": promedio_tecnico}]
@@ -1364,7 +1370,8 @@ def actualizar_unidades_cortadas(oc_id: str, unidades: dict) -> dict:
 
 def actualizar_curva_corte(oc_id: str, *, curva: dict,
                            referencia_id: Optional[str] = None,
-                           num_capas: Optional[int] = None) -> dict:
+                           num_capas: Optional[int] = None,
+                           promedio_tecnico: Optional[float] = None) -> dict:
     """Edita la CURVA DE TALLAS de una orden NO cortada (tallas y cantidades,
     incluido cambiar de tallaje 4-16 → S-XL). Recalcula cantidad programada y
     metros teóricos. En órdenes multi-referencia edita la curva de la
@@ -1427,7 +1434,11 @@ def actualizar_curva_corte(oc_id: str, *, curva: dict,
     }
     if num_capas is not None:
         update["num_capas"] = int(num_capas)
-    prom = float(oc.get("promedio_tecnico") or 0)
+    # Promedio: el nuevo si viene (permite reparar órdenes creadas sin él),
+    # si no el que ya tenía la orden.
+    if promedio_tecnico is not None and float(promedio_tecnico) > 0:
+        update["promedio_tecnico"] = float(promedio_tecnico)
+    prom = float(update.get("promedio_tecnico") or oc.get("promedio_tecnico") or 0)
     if prom > 0:
         update["metros_consumidos"] = round(prom * cantidad_total, 2)
     sb.table("ordenes_corte").update(update).eq("id", oc_id).execute()
