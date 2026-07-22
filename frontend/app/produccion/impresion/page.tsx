@@ -49,9 +49,8 @@ function fmtHora(iso?: string | null) {
 }
 
 function cantidadDe(t: Trabajo): number {
-  if (t.tipo === "sticker_codigo")
-    return Object.values(t.payload?.tallas || {}).reduce((s, n) => s + (n || 0), 0);
-  return t.payload?.copias || 0;
+  const porTallas = Object.values(t.payload?.tallas || {}).reduce((s, n) => s + (n || 0), 0);
+  return porTallas || t.payload?.copias || 0;
 }
 
 export default function ModuloImpresionPage() {
@@ -68,7 +67,6 @@ export default function ModuloImpresionPage() {
   const [tipo, setTipo] = useState<"sticker_codigo" | "instruccion_lavado">("sticker_codigo");
   const [refId, setRefId] = useState("");
   const [tallas, setTallas] = useState<Record<string, string>>({});
-  const [copias, setCopias] = useState("");
   const [cortar, setCortar] = useState(true);
 
   const refsQ = useQuery<{ precosteos?: Precosteo[] } | Precosteo[]>({
@@ -102,15 +100,14 @@ export default function ModuloImpresionPage() {
       return api.post("/api/produccion/impresion/trabajos/crear", {
         tipo,
         referencia_id: refId,
-        tallas: tipo === "sticker_codigo" ? tallasLimpias : undefined,
-        copias: tipo === "instruccion_lavado" ? parseInt(copias || "0", 10) : undefined,
+        tallas: tallasLimpias,
         cortar,
       });
     },
     onSuccess: () => {
       setMsg("Encolado — la impresora lo saca en segundos (segundo plano).");
       setErr("");
-      setTallas({}); setCopias("");
+      setTallas({});
       qc.invalidateQueries({ queryKey: ["produccion", "impresion"] });
     },
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
@@ -128,8 +125,7 @@ export default function ModuloImpresionPage() {
   if (refsQ.isLoading) return <LoadingState label="Cargando módulo de impresión…" />;
   if (refsQ.isError) return <ErrorState error={refsQ.error} onRetry={() => refsQ.refetch()} />;
 
-  const listo = tipo === "sticker_codigo" ? (!!refId && totalStickers > 0)
-    : (!!refId && (parseInt(copias || "0", 10) > 0));
+  const listo = !!refId && totalStickers > 0;
 
   return (
     <PageShell title="Impresión de etiquetas" subtitle="Nylon · imprime y corta en segundo plano — Honeywell (stickers) · SAT (lavado)">
@@ -196,36 +192,26 @@ export default function ModuloImpresionPage() {
               )}
             </div>
 
-            {/* Cantidades */}
-            {tipo === "sticker_codigo" ? (
-              <div>
-                <p className="mb-1.5 text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
-                  Cantidad por talla
-                </p>
-                <div className="grid grid-cols-4 md:grid-cols-7 gap-2">
-                  {TALLAS.map((t) => (
-                    <div key={t}>
-                      <label className="mb-1 block text-center text-[0.68rem] uppercase tracking-widest text-graphite">T{t}</label>
-                      <input value={tallas[t] || ""} onChange={(e) => setTallas({ ...tallas, [t]: e.target.value })}
-                        inputMode="numeric" placeholder="0"
-                        className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-center text-sm tabular" />
-                    </div>
-                  ))}
-                </div>
-                <p className="mt-1 text-[0.7rem] text-graphite">
-                  Total: <span className="font-semibold text-ink-900 tabular">{totalStickers}</span> sticker(s)
-                </p>
+            {/* Cantidades por talla (los dos tipos llevan talla en la etiqueta) */}
+            <div>
+              <p className="mb-1.5 text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                Cantidad por talla
+              </p>
+              <div className="grid grid-cols-4 md:grid-cols-7 gap-2">
+                {TALLAS.map((t) => (
+                  <div key={t}>
+                    <label className="mb-1 block text-center text-[0.68rem] uppercase tracking-widest text-graphite">T{t}</label>
+                    <input value={tallas[t] || ""} onChange={(e) => setTallas({ ...tallas, [t]: e.target.value })}
+                      inputMode="numeric" placeholder="0"
+                      className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-center text-sm tabular" />
+                  </div>
+                ))}
               </div>
-            ) : (
-              <div className="max-w-[180px]">
-                <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
-                  Copias
-                </label>
-                <input value={copias} onChange={(e) => setCopias(e.target.value)}
-                  inputMode="numeric" placeholder="0"
-                  className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm tabular" />
-              </div>
-            )}
+              <p className="mt-1 text-[0.7rem] text-graphite">
+                Total: <span className="font-semibold text-ink-900 tabular">{totalStickers}</span> etiqueta(s)
+                {tipo === "instruccion_lavado" && " · el lavado imprime +1% de margen"}
+              </p>
+            </div>
 
             <div className="flex justify-end">
               <button onClick={() => imprimirMut.mutate()} disabled={!listo || imprimirMut.isPending}

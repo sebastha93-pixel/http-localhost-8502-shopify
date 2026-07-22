@@ -2449,11 +2449,11 @@ def _encolar_trabajos_terminacion(rem: dict) -> int:
                     "referencia_id": ref_id, "formato": "zpl"}
             filas.append({**base, "tipo": "sticker_codigo", "destino": "honeywell",
                           "payload": {"codigo_referencia": codigo, "tallas": unidades}})
-            # Lavado: exactamente 1 por prenda (regla de Sebastián 2026-07-21)
+            # Lavado: POR TALLA (la etiqueta lleva la talla) — 1 por prenda +1%.
             filas.append({**base, "tipo": "instruccion_lavado", "destino": "sat",
                           "payload": {"codigo_referencia": codigo, "tela": tela,
                                       "instrucciones": instrucciones,
-                                      "copias": total}})
+                                      "tallas": unidades}})
     if not filas:
         return 0
     try:
@@ -2487,19 +2487,23 @@ def crear_trabajo_impresion_manual(*, tipo: str, referencia_id: str,
         raise ValueError("referencia_no_encontrada")
     ref = pr[0]
     codigo = ref.get("codigo_referencia") or ""
+    limpio = {str(t): int(v) for t, v in (tallas or {}).items() if int(v or 0) > 0}
     if tipo == "sticker_codigo":
-        limpio = {str(t): int(v) for t, v in (tallas or {}).items() if int(v or 0) > 0}
         if not limpio:
             raise ValueError("sin_tallas")
         payload = {"codigo_referencia": codigo, "tallas": limpio, "cortar": bool(cortar)}
         destino = "honeywell"
     else:
-        n = int(copias or 0)
-        if n <= 0:
-            raise ValueError("sin_copias")
+        # Lavado: lleva TALLA en la etiqueta → por tallas (copias = legacy sin talla)
         payload = {"codigo_referencia": codigo, "tela": ref.get("tela") or "",
                    "instrucciones": ref.get("instrucciones_lavado") or "",
-                   "copias": n, "cortar": bool(cortar)}
+                   "cortar": bool(cortar)}
+        if limpio:
+            payload["tallas"] = limpio
+        elif int(copias or 0) > 0:
+            payload["copias"] = int(copias)
+        else:
+            raise ValueError("sin_tallas")
         destino = "sat"
     r = sb.table("impresion_trabajos").insert({
         "tipo": tipo, "destino": destino, "formato": "zpl",
@@ -2615,10 +2619,11 @@ def generar_zpl_trabajo(t: dict) -> str:
         # Diseño HÍBRIDO técnica×editorial (aprobado de los previos):
         # marca espaciada + secciones con filetes + símbolos de cuidado +
         # zonas de COSTURA en blanco en ambos extremos. Se imprime y CORTA.
-        # Negrita = doble trazo (A0 no tiene bold); ^MD sube la oscuridad.
+        # La etiqueta lleva REF + TALLA + COMPOSICIÓN → se imprime POR TALLA,
+        # 1 por prenda +1% de margen. Negrita = doble trazo; ^MD sube oscuridad.
         composicion = _zpl_escape(p.get("instrucciones") or "").upper()
-        copias = max(1, int(p.get("copias") or 1))
         W, S = ZPL_LAV_ANCHO, ZPL_LAV_SEAM
+        import math as _math
 
         def negrita(y: int, txt: str, alto: int = 20) -> str:
             base = f",{y}^FB{W},1,0,C,0^A0N,{alto},{alto}^FD{txt}^FS"
@@ -2652,34 +2657,51 @@ def generar_zpl_trabajo(t: dict) -> str:
             return (f"^FO{x+1},{y+1}^GC34,2,B^FS"
                     f"^FO{x+5},{y+5}^GD26,26,2,B,L^FS")
 
-        z = ["^XA^CI28^MD10" + modo + f"^PW{W}"]
-        y = S                                     # ── zona de costura superior
-        z.append(negrita(y, "MALE", 44));      y += 48
-        z.append(negrita(y, "DENIM", 24));     y += 34
-        z.append(filete(y, 3));                y += 20
-        z.append(negrita(y, f"REF  {codigo}", 22)); y += 30
-        if composicion:
-            z.append(negrita(y, f"COMP  {composicion}", 22))
-        y += 38
-        z.append(filete(y));                   y += 14
-        for ln in ("MACHINE WASH COLD", "NO BLEACH", "TUMBLE DRY LOW", "COOL IRON"):
-            z.append(negrita(y, ln));          y += 28
-        y += 6
-        z.append(filete(y));                   y += 14
-        for ln in ("LAVADORA AGUA TIBIA", "NO BLANQUEADOR", "SECADORA BAJA", "PLANCHA TIBIA"):
-            z.append(negrita(y, ln));          y += 28
-        y += 6
-        z.append(filete(y));                   y += 12
-        for i in range(5):                        # símbolos de cuidado
-            z.append(icono(i, 10 + i * 46, y))
-        y += 46
-        z.append(filete(y));                   y += 14
-        for ln in ("MADE IN COLOMBIA", "DIRTY JEANS", "NIT 901680460-1", "SIC 1036644755"):
-            z.append(negrita(y, ln, 18));      y += 26
-        y += S                                    # ── zona de costura inferior
-        z.insert(1, f"^LL{y}")
-        z.append(f"^PQ{copias}^XZ")
-        return "".join(z)
+        def etiqueta_lavado(talla: Optional[str], copias: int) -> str:
+            z = ["^XA^CI28^MD10" + modo + f"^PW{W}"]
+            y = S                                 # ── zona de costura superior
+            z.append(negrita(y, "MALE", 44));      y += 48
+            z.append(negrita(y, "DENIM", 24));     y += 34
+            z.append(filete(y, 3));                y += 20
+            z.append(negrita(y, f"REF  {codigo}", 22)); y += 30
+            if talla:
+                z.append(negrita(y, f"TALLA  {_zpl_escape(str(talla))}", 22)); y += 30
+            if composicion:
+                z.append(negrita(y, f"COMP  {composicion}", 22))
+            y += 38
+            z.append(filete(y));                   y += 14
+            for ln in ("MACHINE WASH COLD", "NO BLEACH", "TUMBLE DRY LOW", "COOL IRON"):
+                z.append(negrita(y, ln));          y += 28
+            y += 6
+            z.append(filete(y));                   y += 14
+            for ln in ("LAVADORA AGUA TIBIA", "NO BLANQUEADOR", "SECADORA BAJA", "PLANCHA TIBIA"):
+                z.append(negrita(y, ln));          y += 28
+            y += 6
+            z.append(filete(y));                   y += 12
+            for i in range(5):                     # símbolos de cuidado
+                z.append(icono(i, 10 + i * 46, y))
+            y += 46
+            z.append(filete(y));                   y += 14
+            for ln in ("MADE IN COLOMBIA", "DIRTY JEANS", "NIT 901680460-1", "SIC 1036644755"):
+                z.append(negrita(y, ln, 18));      y += 26
+            y += S                                # ── zona de costura inferior
+            z.insert(1, f"^LL{y}")
+            z.append(f"^PQ{copias}^XZ")
+            return "".join(z)
+
+        tallas_lav = p.get("tallas") or {}
+        if tallas_lav:
+            bloques = []
+            for talla, qty in sorted(tallas_lav.items(),
+                                     key=lambda kv: (len(kv[0]), kv[0])):
+                qty = int(qty or 0)
+                if qty <= 0:
+                    continue
+                bloques.append(etiqueta_lavado(str(talla), int(_math.ceil(qty * 1.01))))
+            return "\n".join(bloques)
+        # Legacy / módulo con solo "copias": una sola tirada sin talla, +1%.
+        copias = max(1, int(_math.ceil(int(p.get("copias") or 1) * 1.01)))
+        return etiqueta_lavado(None, copias)
     return ""
 
 
