@@ -2449,12 +2449,11 @@ def _encolar_trabajos_terminacion(rem: dict) -> int:
                     "referencia_id": ref_id, "formato": "zpl"}
             filas.append({**base, "tipo": "sticker_codigo", "destino": "honeywell",
                           "payload": {"codigo_referencia": codigo, "tallas": unidades}})
-            # Lavado: 1 por prenda +1% (misma regla de margen del insumo)
-            import math as _math
+            # Lavado: exactamente 1 por prenda (regla de Sebastián 2026-07-21)
             filas.append({**base, "tipo": "instruccion_lavado", "destino": "sat",
                           "payload": {"codigo_referencia": codigo, "tela": tela,
                                       "instrucciones": instrucciones,
-                                      "copias": int(_math.ceil(total * 1.01))}})
+                                      "copias": total}})
     if not filas:
         return 0
     try:
