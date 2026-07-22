@@ -30,3 +30,20 @@ export function capasDeEspiga(espiga: string[], unidades: Record<string, number>
 
 /** Sobrante fijo por espiga al extender el trazo (2 cm). */
 export const SOBRANTE_ESPIGA_M = 0.02;
+
+/** Tallaje de PRENDAS SUPERIORES (bodys, camisetas): sin espigas, cada
+ *  talla se corta por su cuenta. */
+export const TALLAS_SUPERIOR: string[] = ["S", "M", "L", "XL"];
+
+const ORDEN_LETRAS: Record<string, number> = { XS: 0, S: 1, M: 2, L: 3, XL: 4, XXL: 5 };
+
+/** Ordena tallas mezclando numéricas (4,6,8…) y de letra (S,M,L,XL). */
+export function ordenarTallas(tallas: string[]): string[] {
+  const peso = (t: string) => {
+    const u = t.trim().toUpperCase();
+    if (u in ORDEN_LETRAS) return 100 + ORDEN_LETRAS[u];
+    const n = parseInt(u, 10);
+    return Number.isFinite(n) ? n : 999;
+  };
+  return [...tallas].sort((a, b) => peso(a) - peso(b));
+}

@@ -39,7 +39,8 @@ interface Trabajo {
   created_at: string;
 }
 
-const TALLAS = ["4", "6", "8", "10", "12", "14", "16"];
+const TALLAS_INFERIOR = ["4", "6", "8", "10", "12", "14", "16"];
+const TALLAS_SUPERIOR = ["S", "M", "L", "XL"];
 
 function fmtHora(iso?: string | null) {
   if (!iso) return "";
@@ -68,6 +69,9 @@ export default function ModuloImpresionPage() {
   const [refId, setRefId] = useState("");
   const [tallas, setTallas] = useState<Record<string, string>>({});
   const [cortar, setCortar] = useState(true);
+  // Tallaje: inferiores 4–16 · superiores (bodys/camisetas) S–XL
+  const [tallaje, setTallaje] = useState<"inferior" | "superior">("inferior");
+  const TALLAS = tallaje === "superior" ? TALLAS_SUPERIOR : TALLAS_INFERIOR;
 
   const refsQ = useQuery<{ precosteos?: Precosteo[] } | Precosteo[]>({
     queryKey: ["produccion", "precosteos", "modulo-impresion"],
@@ -194,9 +198,21 @@ export default function ModuloImpresionPage() {
 
             {/* Cantidades por talla (los dos tipos llevan talla en la etiqueta) */}
             <div>
-              <p className="mb-1.5 text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
-                Cantidad por talla
-              </p>
+              <div className="mb-1.5 flex items-center gap-3">
+                <p className="text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                  Cantidad por talla
+                </p>
+                <div className="inline-flex rounded-sm border border-border overflow-hidden">
+                  {([["inferior", "4–16"], ["superior", "S–XL"]] as ["inferior" | "superior", string][]).map(([tj, label]) => (
+                    <button key={tj} type="button"
+                      onClick={() => { setTallaje(tj); setTallas({}); }}
+                      className={`px-2.5 py-1 text-[0.65rem] font-semibold uppercase tracking-widest ${tallaje === tj
+                        ? "bg-navy-600 text-white" : "bg-card text-graphite hover:bg-cloud"}`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="grid grid-cols-4 md:grid-cols-7 gap-2">
                 {TALLAS.map((t) => (
                   <div key={t}>

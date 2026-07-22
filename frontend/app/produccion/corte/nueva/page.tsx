@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { ESPIGAS, PAREJA_TALLA } from "@/lib/espigas";
+import { ESPIGAS, PAREJA_TALLA, TALLAS_SUPERIOR } from "@/lib/espigas";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Save, Loader2, AlertCircle, Search, ChevronDown, Plus, X } from "lucide-react";
@@ -27,10 +27,15 @@ interface Precosteo {
 }
 
 const TALLAS_DEFAULT: string[] = ["4", "6", "8", "10", "12", "14", "16"];
-const nuevaCurva = (): Record<string, string> =>
-  Object.fromEntries(TALLAS_DEFAULT.map((t) => [t, ""]));
 
-interface RefState { key: number; referenciaId: string; curva: Record<string, string> }
+// Tallaje por tipo de prenda: inferiores = numérico (con espigas);
+// superiores (bodys, camisetas) = S M L XL, cada talla por su cuenta.
+type Tallaje = "inferior" | "superior";
+const tallasDe = (tj: Tallaje) => (tj === "superior" ? TALLAS_SUPERIOR : TALLAS_DEFAULT);
+const nuevaCurva = (tj: Tallaje = "inferior"): Record<string, string> =>
+  Object.fromEntries(tallasDe(tj).map((t) => [t, ""]));
+
+interface RefState { key: number; referenciaId: string; curva: Record<string, string>; tallaje: Tallaje }
 
 // Capas por la regla MALE'DENIM: cada espiga de 2 tallas aporta max; el resto su cantidad.
 // Las parejas viven en lib/espigas.ts (única fuente: 4 sola · 6+16 · 8+10 · 12+14).
@@ -70,10 +75,14 @@ export default function NuevaOrdenCortePage() {
   const [err, setErr] = useState("");
 
   // Referencias
-  const [refs, setRefs] = useState<RefState[]>([{ key: 1, referenciaId: "", curva: nuevaCurva() }]);
+  const [refs, setRefs] = useState<RefState[]>([{ key: 1, referenciaId: "", curva: nuevaCurva(), tallaje: "inferior" }]);
   const nextKey = useRef(2);
 
-  function addRef() { setRefs((r) => [...r, { key: nextKey.current++, referenciaId: "", curva: nuevaCurva() }]); }
+  function addRef() { setRefs((r) => [...r, { key: nextKey.current++, referenciaId: "", curva: nuevaCurva(), tallaje: "inferior" }]); }
+  function setRefTallaje(key: number, tj: Tallaje) {
+    // Cambiar el tallaje reinicia la curva de esa referencia
+    setRefs((r) => r.map((x) => (x.key === key ? { ...x, tallaje: tj, curva: nuevaCurva(tj) } : x)));
+  }
   function removeRef(key: number) { setRefs((r) => (r.length > 1 ? r.filter((x) => x.key !== key) : r)); }
   function setRefPrecosteo(key: number, id: string) {
     setRefs((r) => r.map((x) => (x.key === key ? { ...x, referenciaId: id } : x)));
@@ -181,6 +190,7 @@ export default function NuevaOrdenCortePage() {
           <ReferenciaBloque key={rf.key} indice={i} total={refs.length}
             precosteos={precosteos} idsUsados={idsUsados}
             referenciaId={rf.referenciaId} curva={rf.curva}
+            tallaje={rf.tallaje} onTallaje={(tj) => setRefTallaje(rf.key, tj)}
             onPrecosteo={(id) => setRefPrecosteo(rf.key, id)}
             onCurva={(t, v) => setRefCurva(rf.key, t, v)}
             onQuitar={() => removeRef(rf.key)}
@@ -228,10 +238,11 @@ export default function NuevaOrdenCortePage() {
 
 // ── Bloque de una referencia (selector de precosteo + curva) ──
 function ReferenciaBloque({
-  indice, total, precosteos, idsUsados, referenciaId, curva, onPrecosteo, onCurva, onQuitar, prendas,
+  indice, total, precosteos, idsUsados, referenciaId, curva, tallaje, onTallaje, onPrecosteo, onCurva, onQuitar, prendas,
 }: {
   indice: number; total: number; precosteos: Precosteo[]; idsUsados: string[];
   referenciaId: string; curva: Record<string, string>;
+  tallaje: Tallaje; onTallaje: (tj: Tallaje) => void;
   onPrecosteo: (id: string) => void; onCurva: (t: string, v: string) => void;
   onQuitar: () => void; prendas: number;
 }) {
@@ -254,12 +265,25 @@ function ReferenciaBloque({
         <PrecosteoSelector precosteos={precosteos} idsUsados={idsUsados} value={referenciaId} onChange={onPrecosteo} />
 
         <div>
-          <div className="flex items-baseline justify-between mb-1">
-            <label className="text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Curva de tallas</label>
+          <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
+            <div className="flex items-center gap-3">
+              <label className="text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">Curva de tallas</label>
+              {/* Tallaje: inferiores = 4–16 con espigas · superiores = S–XL */}
+              <div className="inline-flex rounded-sm border border-border overflow-hidden">
+                {([["inferior", "4–16"], ["superior", "S–XL"]] as [Tallaje, string][]).map(([tj, label]) => (
+                  <button key={tj} type="button" onClick={() => onTallaje(tj)}
+                    title={tj === "superior" ? "Prendas superiores (bodys, camisetas)" : "Prendas inferiores (jeans) — con espigas"}
+                    className={`px-2.5 py-1 text-[0.65rem] font-semibold uppercase tracking-widest ${tallaje === tj
+                      ? "bg-navy-600 text-white" : "bg-card text-graphite hover:bg-cloud"}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <span className="text-xs text-graphite tabular">Prendas: <span className="font-semibold text-ink-900">{prendas}</span></span>
           </div>
           <div className="grid grid-cols-4 md:grid-cols-7 gap-2">
-            {TALLAS_DEFAULT.map((t) => (
+            {tallasDe(tallaje).map((t) => (
               <div key={t}>
                 <label className="mb-1 block text-[0.7rem] uppercase tracking-widest text-graphite text-center">Talla {t}</label>
                 <input value={curva[t] || ""} onChange={(e) => onCurva(t, e.target.value)}

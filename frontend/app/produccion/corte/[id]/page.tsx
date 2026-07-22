@@ -14,6 +14,7 @@ import { api, API_BASE } from "@/lib/api";
 import { fmtFecha, hoyBogotaISO } from "@/lib/utils";
 import { TimelineNotas } from "@/components/timeline-notas";
 import { getToken, puedeAccionModulo } from "@/lib/auth";
+import { ordenarTallas } from "@/lib/espigas";
 import { useAuth } from "@/components/auth-provider";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
@@ -564,11 +565,11 @@ export default function DetalleOrdenCortePage() {
                       </div>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-1.5">
-                      {Object.entries(curva).map(([t, n]) => (
+                      {ordenarTallas(Object.keys(curva)).map((t) => { const n = curva[t]; return (
                         <span key={t} className="rounded-sm border border-border bg-white px-2 py-0.5 text-[0.7rem] tabular">
                           <span className="text-graphite">T{t}:</span> <span className="font-semibold text-ink-900">{Number(n)}</span>
                         </span>
-                      ))}
+                      ); })}
                     </div>
                   </div>
                 );
@@ -582,12 +583,12 @@ export default function DetalleOrdenCortePage() {
         <CardContent className="p-5">
           <p className="section-label mb-2">Curva{(oc.referencias?.length || 0) > 1 ? " combinada del tendido" : ""}</p>
           <div className="flex flex-wrap gap-2">
-            {Object.entries(oc.curva_trazo || {}).map(([t, n]) => (
+            {ordenarTallas(Object.keys(oc.curva_trazo || {})).map((t) => { const n = (oc.curva_trazo || {})[t]; return (
               <div key={t} className="rounded-sm border border-border bg-cloud/40 px-3 py-1.5 text-xs">
                 <span className="text-graphite">Talla {t}: </span>
                 <span className="font-semibold text-ink-900 tabular">{n}</span>
               </div>
-            ))}
+            ); })}
             {Object.keys(oc.curva_trazo || {}).length === 0 && (
               <p className="text-xs text-graphite">Sin curva definida.</p>
             )}
@@ -1330,7 +1331,7 @@ function InformeCorteCard({
   isPending: boolean;
 }) {
   // Tallas de la curva original (para mostrar los inputs de unidades cortadas)
-  const tallas = Object.keys(oc.curva_trazo || {});
+  const tallas = ordenarTallas(Object.keys(oc.curva_trazo || {}));
   // Multi-referencia: una grilla de unidades por cada referencia del tendido.
   const refs = oc.referencias || [];
   const multiRef = refs.length > 1;
@@ -1478,7 +1479,7 @@ function InformeCorteCard({
             {refs.map((rf, i) => {
               const refId = rf.referencia_id || "";
               const curvaRef = rf.curva_trazo || {};
-              const tallasRef = Object.keys(curvaRef);
+              const tallasRef = ordenarTallas(Object.keys(curvaRef));
               const cod = rf.referencia?.codigo_referencia || "Referencia";
               return (
                 <div key={refId || i} className="rounded-sm border border-border bg-cloud/20 p-3">

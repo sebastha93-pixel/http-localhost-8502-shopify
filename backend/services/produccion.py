@@ -2623,6 +2623,21 @@ def _zpl_escape(s: str) -> str:
     return (s or "").replace("^", " ").replace("~", " ").strip()
 
 
+_ORDEN_TALLAS_LETRA = {"XS": 0, "S": 1, "M": 2, "L": 3, "XL": 4, "XXL": 5}
+
+
+def _orden_talla(t: str) -> int:
+    """Peso de orden mezclando tallas numéricas (4-16, inferiores) y de
+    letra (S-XL, prendas superiores)."""
+    u = str(t).strip().upper()
+    if u in _ORDEN_TALLAS_LETRA:
+        return 100 + _ORDEN_TALLAS_LETRA[u]
+    try:
+        return int(u)
+    except ValueError:
+        return 999
+
+
 def _unidades_de_referencia(rr: dict) -> dict:
     """Unidades por talla de una referencia del tendido: cortadas si existen,
     si no la curva programada."""
@@ -2831,7 +2846,7 @@ def generar_zpl_trabajo(t: dict) -> str:
         # El rollo trae ZPL_STK_COLS stickers por fila → una fila imprime hasta N.
         stickers: list[str] = []
         for talla, qty in sorted((p.get("tallas") or {}).items(),
-                                 key=lambda kv: (len(kv[0]), kv[0])):
+                                 key=lambda kv: _orden_talla(kv[0])):
             stickers += [f"{codigo}T{_zpl_escape(str(talla))}"] * max(0, int(qty or 0))
         filas = []
         n = ZPL_STK_COLS
@@ -2939,7 +2954,7 @@ def generar_zpl_trabajo(t: dict) -> str:
         if tallas_lav:
             bloques = []
             for talla, qty in sorted(tallas_lav.items(),
-                                     key=lambda kv: (len(kv[0]), kv[0])):
+                                     key=lambda kv: _orden_talla(kv[0])):
                 qty = int(qty or 0)
                 if qty <= 0:
                     continue
