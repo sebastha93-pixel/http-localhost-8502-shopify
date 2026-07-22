@@ -845,8 +845,27 @@ def editar_indicaciones_corte(
 def pistolear_rollo(
     oc_id: str,
     body: PistolearRolloBody,
-    _: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "modificar")),
 ) -> dict:
+    # El CORTADOR PURO solo puede agregar SOBRANTES (rollos ya cortados con
+    # saldo) de la MISMA tela de su corte — para liquidarlos sin dejar
+    # restantes. Los rollos nuevos los asigna diseño.
+    if _es_solo_cortador(user):
+        oc_chk = svc.obtener_orden_corte(oc_id)
+        if not oc_chk or not _corte_es_del_cortador(oc_chk, user):
+            raise HTTPException(403, "Este corte no está asignado a ti.")
+        rollo = svc.buscar_rollo_por_codigo(body.barcode)
+        if not rollo:
+            raise HTTPException(404, "Rollo no encontrado en el inventario.")
+        es_sobrante = float(rollo.get("metros_disponible") or 0) < float(rollo.get("metros_inicial") or 0) - 0.01
+        tela_oc = ((oc_chk.get("referencia") or {}).get("tela") or "").upper()
+        desc = (rollo.get("descripcion_tela") or "").upper()
+        tokens_oc = [t for t in tela_oc.replace("-", " ").split() if len(t) >= 3]
+        misma_tela = bool(tokens_oc) and any(t in desc for t in tokens_oc)
+        if not es_sobrante or not misma_tela:
+            raise HTTPException(
+                403, "Como cortador solo puedes agregar SOBRANTES de la misma tela "
+                     "(para liquidar). Los rollos nuevos los asigna diseño.")
     try:
         oc = svc.asignar_rollo_a_corte(
             oc_id=oc_id,

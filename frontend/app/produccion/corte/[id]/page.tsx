@@ -884,6 +884,43 @@ export default function DetalleOrdenCortePage() {
         </Card>
       )}
 
+      {/* Cortador: SOBRANTES de esta tela para LIQUIDAR (única asignación
+          que puede hacer — el backend valida que sea sobrante y misma tela) */}
+      {!cerrada && esCortador && rollosMatch.some((r) =>
+        Number(r.metros_disponible) < Number(r.metros_inicial) - 0.01 &&
+        !(oc.rollos || []).some((l) => l.rollo_id === r.id)) && (
+        <Card>
+          <CardContent className="p-5 space-y-3">
+            <p className="section-label">Sobrantes de esta tela — para liquidar</p>
+            <p className="text-xs text-graphite">
+              Restantes de rollos ya cortados, de la misma tela. Agrégalos al corte
+              para liquidarlos y no dejar retazos acumulados; al cerrar, márcalos
+              como liquidados.
+            </p>
+            <div className="space-y-2">
+              {rollosMatch
+                .filter((r) => Number(r.metros_disponible) < Number(r.metros_inicial) - 0.01
+                  && !(oc.rollos || []).some((l) => l.rollo_id === r.id))
+                .map((r) => (
+                  <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded-sm border border-border bg-cloud/20 px-3 py-2">
+                    <div className="text-xs">
+                      <span className="font-semibold tabular text-navy-600">{r.codigo_interno}</span>
+                      <span className="ml-2 text-graphite">{r.descripcion_tela}{r.tono ? ` · ${r.tono}` : ""}</span>
+                      <span className="ml-2 font-semibold text-ink-900 tabular">{Number(r.metros_disponible).toFixed(1)} m</span>
+                    </div>
+                    <button
+                      onClick={() => asignarDirecto.mutate({ barcode: r.barcode, metros: Number(r.metros_disponible) })}
+                      disabled={asignarDirecto.isPending}
+                      className="rounded-sm border border-teal bg-teal/10 px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-teal hover:bg-teal hover:text-white disabled:opacity-40">
+                      Agregar para liquidar
+                    </button>
+                  </div>
+                ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Cortador: verificar tela asignada (NO asigna) */}
       {!cerrada && esCortador && (
         <Card>
