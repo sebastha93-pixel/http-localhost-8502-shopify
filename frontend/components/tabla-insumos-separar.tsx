@@ -87,7 +87,7 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
 
   const guardar = useMutation({
     mutationFn: (payload: { items: Record<string, boolean>; ok: boolean; responsable?: string }) => {
-      if (!rutaId) return Promise.reject<{ impresion?: string; ficha_enviada?: unknown }>(new Error("sin hoja de ruta"));
+      if (!rutaId) return Promise.reject<{ impresion?: string; ficha_enviada?: { enviado?: boolean }[] }>(new Error("sin hoja de ruta"));
       return api.post(`/api/produccion/rutas/${rutaId}/separacion`, { tipo, ...payload }) as Promise<{ impresion?: string; ficha_enviada?: { enviado?: boolean }[] }>;
     },
     onSuccess: (d: { impresion?: string; ficha_enviada?: { enviado?: boolean }[] }, vars) => {
