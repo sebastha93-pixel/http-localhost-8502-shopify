@@ -7,7 +7,7 @@
  * imprime. El layout se guarda en `plantillas_etiqueta` y el backend lo
  * rasteriza a BITMAP para la SAT. "Ver como imprime" trae el PNG exacto.
  */
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, API_BASE } from "@/lib/api";
 import { getToken } from "@/lib/auth";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
@@ -78,9 +78,25 @@ export default function EditorLavadoPage() {
     return () => { vivo = false; };
   }, []);
 
-  const assetUrl = useCallback((kind: string, name = "") => {
-    const token = getToken();
-    return `${API_BASE}/api/produccion/impresion/lavado/asset?kind=${kind}&name=${encodeURIComponent(name)}&t=${token || ""}`;
+  // Logo y símbolos: se descargan AUTENTICADOS (el endpoint exige token en
+  // cabecera; un <img src> con ?t= daría 401). Se guardan como object URLs.
+  const [assets, setAssets] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let vivo = true;
+    const urls: string[] = [];
+    (async () => {
+      const map: Record<string, string> = {};
+      const pares: [string, string][] = [
+        ["logo", "/api/produccion/impresion/lavado/asset?kind=logo"],
+      ];
+      for (const n of ["lavadora.png", "no_bleach.png", "secadora.png", "plancha.png", "no_secadora.png"])
+        pares.push([`sym:${n}`, `/api/produccion/impresion/lavado/asset?kind=symbol&name=${encodeURIComponent(n)}`]);
+      for (const [k, path] of pares) {
+        try { const u = await api.blobUrl(path); map[k] = u; urls.push(u); } catch { /* ignore */ }
+      }
+      if (vivo) setAssets(map); else urls.forEach((u) => URL.revokeObjectURL(u));
+    })();
+    return () => { vivo = false; urls.forEach((u) => URL.revokeObjectURL(u)); };
   }, []);
 
   // ── Arrastre ──
@@ -218,18 +234,25 @@ export default function EditorLavadoPage() {
                 );
               }
               if (el.tipo === "logo") {
-                return (
-                  <img key={el.id} src={assetUrl("logo")} alt="logo" draggable={false}
+                return assets["logo"] ? (
+                  <img key={el.id} src={assets["logo"]} alt="logo" draggable={false}
                     style={{ ...box, height: (el.alto || 82) * ESCALA, width: "auto" }}
                     onPointerDown={(e) => onDown(e, el)} />
+                ) : (
+                  <div key={el.id} style={{ ...box }} onPointerDown={(e) => onDown(e, el)}>
+                    <span className="text-[0.6rem] text-graphite">logo…</span>
+                  </div>
                 );
               }
               return (
                 <div key={el.id} style={{ ...box, display: "flex", gap: 8 * ESCALA }}
                   onPointerDown={(e) => onDown(e, el)}>
                   {(el.items || []).map((n, i) => (
-                    <img key={i} src={assetUrl("symbol", n)} alt={n} draggable={false}
-                      style={{ height: (el.alto || 40) * ESCALA, width: "auto" }} />
+                    assets[`sym:${n}`]
+                      ? <img key={i} src={assets[`sym:${n}`]} alt={n} draggable={false}
+                          style={{ height: (el.alto || 40) * ESCALA, width: "auto" }} />
+                      : <span key={i} style={{ width: (el.alto || 40) * ESCALA, height: (el.alto || 40) * ESCALA }}
+                          className="border border-dashed border-border" />
                   ))}
                 </div>
               );

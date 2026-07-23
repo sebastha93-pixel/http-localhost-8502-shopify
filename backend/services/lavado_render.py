@@ -49,27 +49,30 @@ def _font(fuente: str, px: int):
 # x = centro cuando align="center"; y = borde superior del elemento.
 def layout_por_defecto() -> dict:
     cx = ANCHO // 2
-    return {
-        "ancho": ANCHO, "alto": LARGO_DOTS,
-        "elementos": [
-            {"id": "logo", "tipo": "logo", "x": cx, "y": 96, "alto": 82, "align": "center"},
-            {"id": "ref", "tipo": "texto", "x": cx, "y": 250, "texto": "REF {{REF}}",
-             "fuente": "TimesNewRoman", "tam": 28, "align": "center"},
-            {"id": "composicion", "tipo": "texto", "x": cx, "y": 292, "texto": "{{COMPOSICION}}",
-             "fuente": "Arial", "tam": 17, "align": "center", "max_w": 208},
-            {"id": "legal", "tipo": "texto", "x": cx, "y": 410,
-             "texto": "MADE IN COLOMBIA\nHECHO POR DIRTY JEANS\nNIT 901680460-1\nSIC 1036844755",
-             "fuente": "ArialBold", "tam": 17, "align": "center"},
-            {"id": "cuidados_en", "tipo": "texto", "x": cx, "y": 560,
-             "texto": "MACHINE WASH WARM\nNO BLEACH\nTUMBLE DRY LOW\nCOOL IRON",
-             "fuente": "Arial", "tam": 17, "align": "center"},
-            {"id": "cuidados_es", "tipo": "texto", "x": cx, "y": 710,
-             "texto": "LAVADORA AGUA TIBIA\nNO BLANQUEADOR\nSECADORA BAJA TEMP\nPLANCHA TIBIA",
-             "fuente": "Arial", "tam": 17, "align": "center"},
-            {"id": "simbolos", "tipo": "simbolos", "x": cx, "y": 900, "alto": 40, "align": "center",
-             "items": ["lavadora.png", "no_bleach.png", "secadora.png", "plancha.png", "no_secadora.png"]},
-        ],
-    }
+    els: list[dict] = [
+        {"id": "logo", "tipo": "logo", "x": cx, "y": 92, "alto": 82, "align": "center"},
+        {"id": "ref", "tipo": "texto", "x": cx, "y": 232, "texto": "REF {{REF}}",
+         "fuente": "TimesNewRoman", "tam": 28, "align": "center"},
+        {"id": "composicion", "tipo": "texto", "x": cx, "y": 278, "texto": "{{COMPOSICION}}",
+         "fuente": "Arial", "tam": 17, "align": "center", "max_w": 208},
+    ]
+    # Un elemento por LÍNEA (se arrastran uno a uno en el editor).
+    def apilar(prefijo: str, lineas: list[str], y0: int, fuente: str, paso: int = 26):
+        y = y0
+        for i, ln in enumerate(lineas):
+            els.append({"id": f"{prefijo}{i + 1}", "tipo": "texto", "x": cx, "y": y,
+                        "texto": ln, "fuente": fuente, "tam": 17, "align": "center"})
+            y += paso
+
+    apilar("legal", ["MADE IN COLOMBIA", "HECHO POR DIRTY JEANS",
+                     "NIT 901680460-1", "SIC 1036844755"], 380, "ArialBold")
+    apilar("care_en", ["MACHINE WASH WARM", "NO BLEACH",
+                       "TUMBLE DRY LOW", "COOL IRON"], 520, "Arial")
+    apilar("care_es", ["LAVADORA AGUA TIBIA", "NO BLANQUEADOR",
+                       "SECADORA BAJA TEMP", "PLANCHA TIBIA"], 660, "Arial")
+    els.append({"id": "simbolos", "tipo": "simbolos", "x": cx, "y": 810, "alto": 40, "align": "center",
+                "items": ["lavadora.png", "no_bleach.png", "secadora.png", "plancha.png", "no_secadora.png"]})
+    return {"ancho": ANCHO, "alto": LARGO_DOTS, "elementos": els}
 
 
 def _sustituir(txt: str, codigo: str, composicion: str) -> str:
