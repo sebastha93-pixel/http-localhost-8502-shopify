@@ -84,6 +84,8 @@ export default function EditorLavadoPage() {
   // cabecera; un <img src> con ?t= daría 401). Se guardan como object URLs.
   const [assets, setAssets] = useState<Record<string, string>>({});
   const [ratioLogo, setRatioLogo] = useState(0);   // ancho/alto real del logo
+  const ratioRef = useRef(0);                       // el mismo, para closures del arrastre
+  const maxAltoLogo = ratioLogo ? Math.floor(ANCHO / ratioLogo) : 0;  // tope físico (dots)
   useEffect(() => {
     let vivo = true;
     const urls: string[] = [];
@@ -112,7 +114,10 @@ export default function EditorLavadoPage() {
           if (el.tipo === "texto") {
             return { ...el, tam: Math.max(8, Math.round(resize.current!.base + dy)) };
           }
-          return { ...el, alto: Math.max(10, Math.round(resize.current!.base + dy)) };
+          let na = Math.round(resize.current!.base + dy);
+          // El logo no puede exceder el ancho de la etiqueta (tope físico).
+          if (el.id === "logo" && ratioRef.current) na = Math.min(na, Math.floor(ANCHO / ratioRef.current));
+          return { ...el, alto: Math.max(10, na) };
         }) }));
         return;
       }
@@ -171,9 +176,9 @@ export default function EditorLavadoPage() {
     setLayout(r.layout);
   };
 
-  const verImpreso = async () => {
+  const generarPng = async (silencioso: boolean) => {
     if (!layout) return;
-    setPngUrl("cargando");
+    if (!silencioso) setPngUrl("cargando");
     try {
       const token = getToken();
       const res = await fetch(`${API_BASE}/api/produccion/impresion/lavado/preview`, {
@@ -181,9 +186,19 @@ export default function EditorLavadoPage() {
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ codigo: prevRef, composicion: prevComp, layout }),
       });
-      setPngUrl(URL.createObjectURL(await res.blob()));
-    } catch { setPngUrl(""); }
+      const url = URL.createObjectURL(await res.blob());
+      setPngUrl((prev) => { if (prev && prev !== "cargando") URL.revokeObjectURL(prev); return url; });
+    } catch { if (!silencioso) setPngUrl(""); }
   };
+  const verImpreso = () => generarPng(false);
+
+  // El "Cómo imprime" se refresca solo al cambiar el diseño (una vez abierto).
+  useEffect(() => {
+    if (!pngUrl) return;   // solo si el usuario ya lo abrió al menos una vez
+    const t = setTimeout(() => generarPng(true), 500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout, prevRef, prevComp]);
 
   if (cargaErr) return <ErrorState error={new Error(cargaErr)} onRetry={() => location.reload()} />;
   if (!layout) return <LoadingState label="Cargando editor…" />;
@@ -266,7 +281,7 @@ export default function EditorLavadoPage() {
                   if (ratioLogo && hDot * ratioLogo > ANCHO) hDot = ANCHO / ratioLogo;
                   contenido = assets["logo"]
                     ? <img src={assets["logo"]} alt="logo" draggable={false}
-                        onLoad={(ev) => { const im = ev.currentTarget; if (im.naturalHeight) setRatioLogo(im.naturalWidth / im.naturalHeight); }}
+                        onLoad={(ev) => { const im = ev.currentTarget; if (im.naturalHeight) { const r = im.naturalWidth / im.naturalHeight; ratioRef.current = r; setRatioLogo(r); } }}
                         style={{ height: hDot * ESCALA, width: "auto", maxWidth: "none", display: "block" }} />
                     : <span className="text-[0.6rem] text-graphite">logo…</span>;
                 }
@@ -350,22 +365,29 @@ export default function EditorLavadoPage() {
                     </div>
                   </>
                 )}
-                {(elSel.tipo === "logo" || elSel.tipo === "simbolos") && (
+                {(elSel.tipo === "logo" || elSel.tipo === "simbolos") && (() => {
+                  const tope = elSel.id === "logo" && maxAltoLogo ? maxAltoLogo : 9999;
+                  const setAlto = (a: number) => actualizar(elSel.id, { alto: Math.max(10, Math.min(tope, Math.round(a))) });
+                  return (
                   <div>
                     <span className="mb-1 block text-[0.65rem] uppercase tracking-widest text-graphite">Tamaño (alto)</span>
                     <div className="flex items-center gap-2">
-                      <button onClick={() => actualizar(elSel.id, { alto: Math.max(10, (elSel.alto || 40) - 4) })}
+                      <button onClick={() => setAlto((elSel.alto || 40) - 4)}
                         className="h-8 w-8 rounded-sm border border-border bg-card text-lg leading-none text-ink-900 hover:bg-cloud">−</button>
                       <input type="number" step="0.5" value={Math.round((elSel.alto || 40) / 8 * 10) / 10}
-                        onChange={(e) => actualizar(elSel.id, { alto: Math.round((parseFloat(e.target.value) || 5) * 8) })}
+                        onChange={(e) => setAlto((parseFloat(e.target.value) || 5) * 8)}
                         className="w-20 rounded-sm border border-border bg-white px-2 py-1.5 text-center text-xs tabular" />
                       <span className="text-[0.65rem] text-graphite">mm</span>
-                      <button onClick={() => actualizar(elSel.id, { alto: (elSel.alto || 40) + 4 })}
+                      <button onClick={() => setAlto((elSel.alto || 40) + 4)}
                         className="h-8 w-8 rounded-sm border border-border bg-card text-lg leading-none text-ink-900 hover:bg-cloud">+</button>
                     </div>
-                    <p className="mt-1 text-[0.62rem] text-graphite">También puedes arrastrar el punto verde de la esquina.</p>
+                    <p className="mt-1 text-[0.62rem] text-graphite">
+                      También puedes arrastrar el punto verde de la esquina.
+                      {elSel.id === "logo" && maxAltoLogo ? ` Máximo ${Math.round(maxAltoLogo / 8 * 10) / 10} mm (ancho de la etiqueta).` : ""}
+                    </p>
                   </div>
-                )}
+                  );
+                })()}
                 <div className="grid grid-cols-2 gap-2">
                   <label className="block">
                     <span className="mb-1 block text-[0.65rem] uppercase tracking-widest text-graphite">X (centro)</span>
