@@ -52,7 +52,8 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
   const [responsable, setResponsable] = useState("");
   const [confirmado, setConfirmado] = useState<SeparacionEstado | null>(null);
   const [errSep, setErrSep] = useState("");
-  const [impresion, setImpresion] = useState<"auto" | "manual" | "">("");
+  const [impresion, setImpresion] = useState<"auto" | "agente" | "manual" | "">("");
+  const [fichaEnviada, setFichaEnviada] = useState<boolean | null>(null);
 
   async function imprimirRemision() {
     if (!remisionId) return;
@@ -86,19 +87,26 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
 
   const guardar = useMutation({
     mutationFn: (payload: { items: Record<string, boolean>; ok: boolean; responsable?: string }) => {
-      if (!rutaId) return Promise.reject<{ impresion?: string }>(new Error("sin hoja de ruta"));
-      return api.post(`/api/produccion/rutas/${rutaId}/separacion`, { tipo, ...payload }) as Promise<{ impresion?: string }>;
+      if (!rutaId) return Promise.reject<{ impresion?: string; ficha_enviada?: unknown }>(new Error("sin hoja de ruta"));
+      return api.post(`/api/produccion/rutas/${rutaId}/separacion`, { tipo, ...payload }) as Promise<{ impresion?: string; ficha_enviada?: { enviado?: boolean }[] }>;
     },
-    onSuccess: (d: { impresion?: string }, vars) => {
+    onSuccess: (d: { impresion?: string; ficha_enviada?: { enviado?: boolean }[] }, vars) => {
       setErrSep("");
       if (vars.ok) {
         setConfirmado({ ok: true, responsable: vars.responsable, completado_at: new Date().toISOString() });
         qc.invalidateQueries({ queryKey: ["ruta", ordenCorteId] });
         qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] });
+        // ¿Se avisó al confeccionista con la ficha "Aceptar lote"? (flujo nuevo)
+        const ficha = d?.ficha_enviada;
+        if (Array.isArray(ficha)) setFichaEnviada(ficha.some((f) => f?.enviado));
         // Impresión de la remisión en la RICOH:
+        //  - "agente": el agente local la toma de la cola e imprime en la RICOH
+        //    (flujo nuevo con impresión liberada). NO abrir diálogo del navegador.
         //  - "auto": el backend ya la mandó a la impresora (email-to-print)
         //  - "manual": abrimos el PDF con el diálogo de impresión listo
-        if (d?.impresion === "auto") {
+        if (d?.impresion === "agente") {
+          setImpresion("agente");
+        } else if (d?.impresion === "auto") {
           setImpresion("auto");
         } else if (remisionId) {
           setImpresion("manual");
@@ -150,8 +158,10 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
           <span className="font-semibold">Separación completa</span>
           · Responsable: <span className="font-bold">{confirmado.responsable}</span>
           {confirmado.completado_at && <span className="text-teal/70">· {fmtDateTime(confirmado.completado_at)}</span>}
-          {impresion === "auto" && <span className="font-semibold">· 🖨 Enviada a la RICOH</span>}
+          {(impresion === "auto" || impresion === "agente") && <span className="font-semibold">· 🖨 Enviada a la RICOH</span>}
           {impresion === "manual" && <span>· Se abrió la remisión para imprimir</span>}
+          {fichaEnviada === true && <span>· 📲 Ficha enviada al confeccionista (Aceptar lote)</span>}
+          {fichaEnviada === false && <span className="text-amber-700">· ⚠ No se pudo avisar por WhatsApp — avísale manual</span>}
         </div>
       )}
 

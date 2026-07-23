@@ -2646,10 +2646,14 @@ def actualizar_confeccionista(cid: str, **campos) -> dict:
 
 def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
                     orden_corte_ids: list[str], created_by: str,
-                    tipo: str = "confeccion") -> dict:
+                    tipo: str = "confeccion",
+                    liberar_impresion: bool = True) -> dict:
     """Crea una remisión: entrega de N órdenes de corte cortadas a un proveedor.
     - `tipo`: 'confeccion' o 'terminacion' — define a qué proveedor va y
        qué campo de la hoja de ruta se actualiza (confeccionista_id vs terminacion_id).
+    - `liberar_impresion`: True = entra a la cola de la RICOH de una (flujo
+       viejo/terminación). False = se retiene hasta separar los insumos
+       (flujo nuevo de confección: imprime al completar la separación).
     - Genera consecutivo `REM-YYYY-NNNN`.
     """
     sb = _sb()
@@ -2695,16 +2699,23 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
         "estado":            "generada",
         "tipo":              tipo,
         "created_by":        created_by,
+        "impresion_liberada": bool(liberar_impresion),
     }
-    try:
-        r = sb.table("remisiones").insert(row).execute()
-    except Exception as e:
-        # Compat si la columna tipo aún no existe
-        if "tipo" in str(e):
-            row.pop("tipo", None)
-            r = sb.table("remisiones").insert(row).execute()
-        else:
-            raise
+
+    def _insert(rw):
+        # Reintenta quitando columnas que la DB aún no tenga (compat migraciones).
+        for _ in range(3):
+            try:
+                return sb.table("remisiones").insert(rw).execute()
+            except Exception as e:
+                quitada = False
+                for col in ("impresion_liberada", "tipo"):
+                    if col in str(e) and col in rw:
+                        rw.pop(col, None); quitada = True; break
+                if not quitada:
+                    raise
+        return sb.table("remisiones").insert(rw).execute()
+    r = _insert(row)
     if not r.data:
         raise RuntimeError("no_se_pudo_crear_remision")
     rem = r.data[0]
@@ -2852,11 +2863,23 @@ def remisiones_pendientes_impresion(limite: int = 30) -> list[dict]:
     if sb is None:
         return []
     try:
-        rows = (sb.table("remisiones")
-                  .select("id,consecutivo,tipo,created_at,confeccionista:confeccionista_id(nombre)")
-                  .is_("impresa_at", "null")
-                  .order("created_at")
-                  .limit(limite).execute()).data or []
+        # Solo remisiones con impresión LIBERADA (confección: tras separar
+        # insumos). Si la columna no existe aún, cae al filtro sin ella.
+        try:
+            rows = (sb.table("remisiones")
+                      .select("id,consecutivo,tipo,created_at,confeccionista:confeccionista_id(nombre)")
+                      .is_("impresa_at", "null")
+                      .eq("impresion_liberada", True)
+                      .order("created_at")
+                      .limit(limite).execute()).data or []
+        except Exception as e:
+            if "impresion_liberada" not in str(e):
+                raise
+            rows = (sb.table("remisiones")
+                      .select("id,consecutivo,tipo,created_at,confeccionista:confeccionista_id(nombre)")
+                      .is_("impresa_at", "null")
+                      .order("created_at")
+                      .limit(limite).execute()).data or []
     except Exception:
         # Columna aún sin migrar → no hay cola todavía.
         return []
@@ -2897,6 +2920,51 @@ def marcar_remision_reimprimir(rem_id: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def liberar_impresion_de_remision(rem_id: str) -> bool:
+    """Libera la impresión de una remisión retenida (flujo nuevo de confección).
+    Se llama al COMPLETAR la separación de insumos: recién ahí la remisión
+    entra a la cola de la RICOH. Idempotente: si ya estaba liberada, no falla.
+    Si la columna aún no existe (migración pendiente) devuelve False silencioso."""
+    sb = _sb()
+    if sb is None:
+        return False
+    try:
+        r = (sb.table("remisiones")
+               .update({"impresion_liberada": True})
+               .eq("id", rem_id).execute()).data
+        return bool(r)
+    except Exception as e:
+        if "impresion_liberada" not in str(e):
+            log.warning(f"[impresion] liberar remisión {rem_id} falló: {e}")
+        return False
+
+
+def remision_de_orden_corte(oc_id: str, tipo: str = "confeccion") -> Optional[dict]:
+    """Remisión (del tipo dado) que contiene una orden de corte. Para liberar
+    la impresión cuando se separan los insumos de ese lote."""
+    sb = _sb()
+    if sb is None:
+        return None
+    try:
+        it = (sb.table("remision_items").select("remision_id")
+                .eq("orden_corte_id", oc_id).execute()).data or []
+    except Exception:
+        return None
+    for row in it:
+        rid = row.get("remision_id")
+        if not rid:
+            continue
+        try:
+            rem = (sb.table("remisiones").select("id,tipo,impresa_at,impresion_liberada")
+                     .eq("id", rid).limit(1).execute()).data
+        except Exception:
+            rem = (sb.table("remisiones").select("id,tipo,impresa_at")
+                     .eq("id", rid).limit(1).execute()).data
+        if rem and (rem[0].get("tipo") or "confeccion") == tipo:
+            return rem[0]
+    return None
 
 
 # ── Trabajos de impresión de TERMINACIÓN (etiquetas térmicas) ────────────
@@ -3323,6 +3391,54 @@ def _notificar_remision_whatsapp(rem: dict, solo_oc_id: Optional[str] = None) ->
             "wa_url": (f"https://wa.me/{tel_norm}?text={quote(mensaje)}"
                        if tel_norm else f"https://wa.me/?text={quote(mensaje)}"),
         })
+    return salidas
+
+
+def _notificar_lote_por_recoger(rem: dict) -> list[dict]:
+    """Avisa al confeccionista, al CERRAR el informe de corte, que tiene un
+    lote por recoger (la remisión aún NO se imprime; se imprime cuando se
+    separan los insumos). Sin botón de aceptar todavía: solo el aviso.
+    Tolerante a fallos — nunca tumba el cierre del informe."""
+    from urllib.parse import quote
+    try:
+        from backend.services import whatsapp_cloud as wa
+    except Exception:
+        return []
+    prov = rem.get("confeccionista") or {}
+    tel = (prov.get("telefono") or "").strip()
+    nombre = prov.get("nombre") or "equipo"
+    # Referencias del lote (para que sepa qué va a recoger).
+    refs = []
+    for it in (rem.get("items") or []):
+        oc = it.get("orden_corte") or {}
+        ref = (oc.get("referencia") or {}).get("codigo_referencia") or oc.get("consecutivo")
+        if ref:
+            refs.append(str(ref))
+    refs_txt = ", ".join(refs) if refs else "—"
+    fecha = rem.get("fecha_recogida") or ""
+    mensaje = (f"Hola {nombre}, MALE'DENIM tiene un lote listo para que lo recojas: "
+               f"referencia *{refs_txt}*"
+               + (f" (recoger el {fecha})" if fecha else "")
+               + ". Te avisamos apenas los insumos estén separados y la remisión "
+                 "impresa. 🧵")
+    salidas = []
+    # 1) Plantilla dedicada (inicia conversación aunque nunca haya escrito).
+    # 2) Si falla (plantilla en revisión), texto libre (ventana 24h).
+    envio = wa.enviar_plantilla(tel, "lote_por_recoger",
+                                variables=[nombre, refs_txt])
+    if not envio.get("enviado"):
+        log.info(f"[wa] plantilla lote_por_recoger no salió "
+                 f"({envio.get('detalle') or envio.get('motivo')}); intento texto libre")
+        envio = wa.enviar_texto(tel, mensaje)
+    tel_norm = "".join(c for c in tel if c.isdigit())
+    tel_norm = tel_norm if tel_norm.startswith("57") else (f"57{tel_norm}" if tel_norm else "")
+    salidas.append({
+        "referencia": refs_txt,
+        "telefono": tel_norm,
+        "enviado": bool(envio.get("enviado")),
+        "wa_url": (f"https://wa.me/{tel_norm}?text={quote(mensaje)}"
+                   if tel_norm else f"https://wa.me/?text={quote(mensaje)}"),
+    })
     return salidas
 
 
@@ -4500,10 +4616,11 @@ def guardar_separacion(ruta_id: str, *, tipo: str, items: dict,
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
-    r = (sb.table("hoja_ruta_lote").select("id,separacion_insumos")
+    r = (sb.table("hoja_ruta_lote").select("id,orden_corte_id,separacion_insumos")
            .eq("id", ruta_id).limit(1).execute()).data
     if not r:
         raise ValueError("ruta_no_encontrada")
+    oc_id = r[0].get("orden_corte_id")
     actual = r[0].get("separacion_insumos") or {}
     entrada = {
         "items":        {str(k): bool(v) for k, v in (items or {}).items()},
@@ -4521,4 +4638,24 @@ def guardar_separacion(ruta_id: str, *, tipo: str, items: dict,
         if "separacion_insumos" in str(e):
             raise ValueError("migracion_separacion_pendiente")
         raise
+
+    # FLUJO NUEVO (confección): al COMPLETAR la separación se libera la
+    # impresión de la remisión retenida → entra a la cola de la RICOH → y se
+    # envía la ficha al confeccionista con el botón "Aceptar lote". Tolerante
+    # a fallos: la separación ya quedó guardada aunque esto falle.
+    if ok and tipo == "confeccion" and oc_id:
+        try:
+            rem = remision_de_orden_corte(oc_id, tipo="confeccion")
+            # Solo la primera vez (evita reimprimir/reavisar si re-guardan).
+            if rem and not rem.get("impresa_at") and not rem.get("impresion_liberada"):
+                liberar_impresion_de_remision(rem["id"])
+                entrada["impresion_liberada"] = True
+                try:
+                    rem_full = obtener_remision(rem["id"])
+                    entrada["ficha_enviada"] = _notificar_remision_whatsapp(
+                        rem_full, solo_oc_id=oc_id)
+                except Exception as e:
+                    log.warning(f"[separacion] ficha WhatsApp falló OC {oc_id}: {e}")
+        except Exception as e:
+            log.warning(f"[separacion] liberar impresión falló OC {oc_id}: {e}")
     return entrada

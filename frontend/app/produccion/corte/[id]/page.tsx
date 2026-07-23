@@ -138,10 +138,21 @@ export default function DetalleOrdenCortePage() {
   // Rollos LIQUIDADOS: usados completos para no dejar restantes → al cerrar
   // se les descuenta todo el saldo (quedan agotados de verdad).
   const [rollosLiquidados, setRollosLiquidados] = useState<Set<string>>(new Set());
+  // Flujo nuevo: al cerrar el informe se AUTO-GENERA la remisión de confección
+  // (sin imprimir) para el confeccionista elegido aquí, y se le avisa que tiene
+  // un lote por recoger. La impresión se libera al separar los insumos.
+  const [cierreConfId, setCierreConfId] = useState("");
 
   const q = useQuery<OrdenCorte>({
     queryKey: ["produccion", "corte", id],
     queryFn: () => api.get(`/api/produccion/corte/${id}`),
+    enabled: !!id,
+  });
+
+  // Confeccionistas activos (para el selector del cierre de informe).
+  const confeccionistasQ = useQuery<{ confeccionistas: { id: string; nombre: string }[] }>({
+    queryKey: ["confeccionistas", "confeccion"],
+    queryFn: () => api.get("/api/produccion/confeccionistas?tipo=confeccion&incluir_inactivos=false"),
     enabled: !!id,
   });
 
@@ -403,7 +414,12 @@ export default function DetalleOrdenCortePage() {
       const promedioManual = parseFloat(promedioReal || "0") || 0;
       const promedioDerivado = totalUnid > 0 && consumoFinal > 0 ? consumoFinal / totalUnid : 0;
       const promedioFinal = promedioManual || promedioDerivado;
-      return api.post<{ orden_corte?: { rollos_sobrantes?: { codigo_interno: string; metros: number }[] } }>(`/api/produccion/corte/${id}/cerrar`, {
+      return api.post<{
+        orden_corte?: { rollos_sobrantes?: { codigo_interno: string; metros: number }[] };
+        remision?: { consecutivo?: string };
+        remision_error?: string;
+        aviso_recoger?: { enviado?: boolean; telefono?: string }[];
+      }>(`/api/produccion/corte/${id}/cerrar`, {
         consumo_real_cortador: consumoFinal,
         merma_tipo: mermaTipo || null,
         merma_valor: mermaValor ? parseFloat(mermaValor) : null,
@@ -416,17 +432,38 @@ export default function DetalleOrdenCortePage() {
         retazos_metros: retazosM || null,
         fecha_entrega: fechaEntrega || null,
         precio_corte: precioCorte ? parseFloat(precioCorte) : null,
+        // Flujo nuevo: si eligió confeccionista, se auto-genera la remisión
+        // (retenida) y se le avisa el lote por recoger.
+        confeccionista_id: cierreConfId || null,
+        fecha_recogida: fechaEntrega || null,
       });
     },
-    onSuccess: (data: { orden_corte?: { rollos_sobrantes?: { codigo_interno: string; metros: number }[]; retazos_auto_metros?: number } }) => {
+    onSuccess: (data: {
+      orden_corte?: { rollos_sobrantes?: { codigo_interno: string; metros: number }[]; retazos_auto_metros?: number };
+      remision?: { consecutivo?: string };
+      remision_error?: string;
+      aviso_recoger?: { enviado?: boolean; telefono?: string }[];
+    }) => {
       const sobras = data?.orden_corte?.rollos_sobrantes || [];
       const retAuto = Number(data?.orden_corte?.retazos_auto_metros || 0);
       const notaRetazo = retAuto > 0 ? ` (${retAuto.toFixed(2)} m menores a 0.5 se llevaron a retazos automáticamente)` : "";
+      // Mensaje de la remisión auto-generada (flujo nuevo).
+      let notaRem = "";
+      if (data?.remision?.consecutivo) {
+        const aviso = data?.aviso_recoger || [];
+        const avisado = aviso.some((a) => a?.enviado);
+        notaRem = ` Se generó la remisión ${data.remision.consecutivo} (aún NO se imprime: sale a la RICOH cuando se separen los insumos).`
+          + (avisado
+              ? " Ya se avisó al confeccionista por WhatsApp que tiene un lote por recoger."
+              : " ⚠ No se pudo avisar al confeccionista por WhatsApp — avísale manual.");
+      } else if (data?.remision_error) {
+        notaRem = ` ⚠ No se pudo auto-generar la remisión (${data.remision_error}); créala manualmente abajo.`;
+      }
       if (sobras.length > 0) {
         const det = sobras.map((s) => `${s.codigo_interno} (${Number(s.metros).toFixed(1)} m)`).join(" · ");
-        setMsg(`Orden cerrada. ⚠ QUEDÓ SOBRANTE: ${det} — consérvale la etiqueta al rollo para pistolearlo y liquidarlo en el próximo corte.${notaRetazo}`);
+        setMsg(`Orden cerrada. ⚠ QUEDÓ SOBRANTE: ${det} — consérvale la etiqueta al rollo para pistolearlo y liquidarlo en el próximo corte.${notaRetazo}${notaRem}`);
       } else {
-        setMsg(`Informe guardado. Inventario descontado y orden cerrada. Sin sobrantes: tela liquidada completa.${notaRetazo}`);
+        setMsg(`Informe guardado. Inventario descontado y orden cerrada. Sin sobrantes: tela liquidada completa.${notaRetazo}${notaRem}`);
       }
       setErr("");
       qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
@@ -1286,6 +1323,8 @@ export default function DetalleOrdenCortePage() {
           mermaTipo={mermaTipo} setMermaTipo={setMermaTipo}
           mermaValor={mermaValor} setMermaValor={setMermaValor}
           rollosLiquidados={rollosLiquidados} setRollosLiquidados={setRollosLiquidados}
+          confs={confeccionistasQ.data?.confeccionistas || []}
+          confId={cierreConfId} setConfId={setCierreConfId}
           onCerrar={() => cerrar.mutate()}
           isPending={cerrar.isPending}
         />
@@ -1560,6 +1599,7 @@ function InformeCorteCard({
   consumoReal, setConsumoReal,
   mermaTipo, setMermaTipo, mermaValor, setMermaValor,
   rollosLiquidados, setRollosLiquidados,
+  confs, confId, setConfId,
   onCerrar, isPending,
 }: {
   oc: OrdenCorteForInforme;
@@ -1576,6 +1616,8 @@ function InformeCorteCard({
   mermaTipo: string; setMermaTipo: (v: string) => void;
   mermaValor: string; setMermaValor: (v: string) => void;
   rollosLiquidados: Set<string>; setRollosLiquidados: (v: Set<string>) => void;
+  confs: { id: string; nombre: string }[];
+  confId: string; setConfId: (v: string) => void;
   onCerrar: () => void;
   isPending: boolean;
 }) {
@@ -1791,6 +1833,30 @@ function InformeCorteCard({
             </p>
           </div>
         )}
+
+        {/* Confeccionista destino — al cerrar se AUTO-GENERA la remisión (sin
+            imprimir) y se le avisa que tiene un lote por recoger. La impresión
+            sale a la RICOH cuando se separan los insumos. Opcional: si se deja
+            vacío, el informe se cierra y la remisión se crea a mano después. */}
+        <div className="rounded-sm border border-navy-600/30 bg-navy-50/40 p-3 dark:bg-navy-950/20">
+          <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+            Confeccionista que recoge el lote
+          </label>
+          <select value={confId} onChange={(e) => setConfId(e.target.value)}
+            className="w-full max-w-sm rounded-sm border border-border bg-white px-3 py-2 text-sm text-ink-900">
+            <option value="">— Elegir después (no genera remisión ahora) —</option>
+            {confs.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+          </select>
+          <p className="mt-1.5 text-[0.7rem] leading-relaxed text-graphite">
+            {confId
+              ? <>Al cerrar se genera la <strong>remisión de confección</strong> y se le avisa por
+                 WhatsApp al confeccionista que tiene un <strong>lote por recoger</strong>. La
+                 remisión <strong>NO se imprime todavía</strong>: sale a la RICOH cuando se
+                 separen los insumos.</>
+              : <>Sin confeccionista, el informe se cierra igual y la remisión se genera a mano
+                 en la tarjeta de abajo.</>}
+          </p>
+        </div>
 
         <div className="flex justify-end">
           <button onClick={onCerrar} disabled={isPending || !consumoReal}
@@ -2266,12 +2332,13 @@ function GenerarRemisionCard({ ordenCorteId, esCortador }: { ordenCorteId: strin
         <p className="section-label">Generar remisión de confección</p>
         <p className="text-xs text-graphite">
           {esCortador
-            ? <>Confirmaste el informe — ahora <strong>genera la remisión</strong>, imprímela
-               (sale con las <strong>unidades cortadas por talla</strong> y la
-               <strong> medida del retazo</strong>) y márcala como <strong>recogida</strong> al entregarla.</>
+            ? <>Confirmaste el informe — <strong>genera la remisión</strong> para el confeccionista.
+               Se le avisa que tiene un <strong>lote por recoger</strong>; la remisión
+               <strong> NO se imprime todavía</strong>: sale a la RICOH cuando se
+               <strong> separen los insumos</strong>.</>
             : <>El cortador guardó el informe — este lote está <strong>listo para remisión</strong>.
-               Cuenta los insumos de confección y genera la remisión con las
-               <strong> unidades reales cortadas por talla</strong>.</>}
+               Genera la remisión (avisa al confeccionista del lote por recoger); se
+               <strong> imprime al separar los insumos</strong>.</>}
         </p>
         <div className="flex flex-wrap items-end gap-2">
           <div>

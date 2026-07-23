@@ -672,6 +672,11 @@ class CerrarCorteBody(BaseModel):
     fecha_entrega:     Optional[str] = None
     precio_corte:      Optional[float] = None
     rollos_liquidados: Optional[list[str]] = None  # rollos usados COMPLETOS (liquidar sobrantes)
+    # Flujo nuevo: al cerrar el informe se AUTO-GENERA la remisión de confección
+    # (sin imprimir) y se avisa al confeccionista que tiene un lote por recoger.
+    # La impresión se libera cuando se separan los insumos.
+    confeccionista_id: Optional[str] = None  # a quién va el lote (auto-remisión)
+    fecha_recogida:    Optional[str] = None  # cuándo recoge el confeccionista
 
 
 class AutorizarCorteBody(BaseModel):
@@ -1059,7 +1064,40 @@ def cerrar_corte(
             precio_corte=body.precio_corte,
             rollos_liquidados=body.rollos_liquidados,
         )
-        return {"ok": True, "orden_corte": oc}
+        resp: dict = {"ok": True, "orden_corte": oc}
+        # FLUJO NUEVO: si el cortador eligió confeccionista al cerrar, se
+        # AUTO-GENERA la remisión de confección SIN imprimirla (impresion_liberada
+        # = False) y se avisa al confeccionista que tiene un lote por recoger.
+        # La impresión se libera cuando se separan los insumos.
+        if body.confeccionista_id:
+            try:
+                fecha_rec = (body.fecha_recogida or body.fecha_entrega or "").strip()
+                if not fecha_rec:
+                    from datetime import datetime as _dt
+                    from zoneinfo import ZoneInfo as _ZI
+                    fecha_rec = _dt.now(_ZI("America/Bogota")).date().isoformat()
+                rem = svc.crear_remision(
+                    confeccionista_id=body.confeccionista_id,
+                    fecha_recogida=fecha_rec,
+                    orden_corte_ids=[oc_id],
+                    created_by=user.email,
+                    tipo="confeccion",
+                    liberar_impresion=False,   # NO imprime hasta separar insumos
+                )
+                resp["remision"] = rem
+                try:
+                    resp["aviso_recoger"] = svc._notificar_lote_por_recoger(rem)
+                except Exception as e:
+                    import traceback; traceback.print_exc()
+                    resp["aviso_recoger_error"] = str(e)[:200]
+            except ValueError as e:
+                # La remisión no debe tumbar el cierre: el informe ya quedó
+                # guardado. Se reporta para que el cortador la cree a mano.
+                resp["remision_error"] = str(e)
+            except Exception as e:
+                import traceback; traceback.print_exc()
+                resp["remision_error"] = str(e)[:200]
+        return resp
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
@@ -1224,28 +1262,42 @@ def crear_remision(
             if not oc_check or not _corte_es_del_cortador(oc_check, user):
                 raise HTTPException(403, "Solo puedes generar remisiones de los cortes asignados a ti.")
     try:
+        # FLUJO NUEVO (confección): la remisión NO se imprime al crearse; se
+        # retiene hasta que se separan los insumos. Terminación sí imprime al
+        # crear (flujo original).
+        es_confeccion = (body.tipo != "terminacion")
         rem = svc.crear_remision(
             confeccionista_id=body.confeccionista_id,
             fecha_recogida=body.fecha_recogida,
             orden_corte_ids=body.orden_corte_ids,
             created_by=user.email,
             tipo=body.tipo,
+            liberar_impresion=(not es_confeccion),
         )
         extra: dict = {}
         import os as _os
         modo_agente = _os.environ.get("IMPRESION_AGENTE", "").strip().lower() in (
             "1", "true", "si", "sí", "yes", "on")
-        # Impresión de la remisión (corte + insumos):
-        #  · modo agente → la remisión ya está en la cola (impresa_at NULL) y el
-        #    agente local la imprime en la RICOH por IP. El frontend NO abre el
-        #    diálogo del navegador (evita doble impresión).
-        #  · sin agente → flujo anterior: email-to-print en terminación, y en
-        #    confección el frontend abre el diálogo del navegador.
-        if modo_agente:
-            extra["impresion"] = "agente"
-        elif body.tipo == "terminacion":
-            extra["impresion"] = _imprimir_remision(rem)
-        if body.tipo == "terminacion":
+        if es_confeccion:
+            # Retenida: aún no entra a la cola de la RICOH. Se imprime cuando se
+            # separan los insumos (ver guardar_separacion). Al crearla solo se
+            # avisa al confeccionista que tiene un lote por recoger.
+            extra["impresion"] = "retenida"
+            try:
+                extra["aviso_recoger"] = svc._notificar_lote_por_recoger(rem)
+            except Exception as e:
+                import logging as _lg
+                _lg.getLogger(__name__).warning(f"[wa] aviso lote por recoger fallo: {e}")
+                extra["aviso_recoger"] = []
+        else:
+            # Terminación: imprime de una.
+            #  · modo agente → ya está en cola (impresa_at NULL); el agente local
+            #    la imprime en la RICOH por IP. El frontend NO abre el diálogo.
+            #  · sin agente → email-to-print (flujo anterior).
+            if modo_agente:
+                extra["impresion"] = "agente"
+            else:
+                extra["impresion"] = _imprimir_remision(rem)
             try:
                 extra["whatsapp"] = svc._notificar_remision_whatsapp(rem)
             except Exception as e:
@@ -2443,11 +2495,24 @@ def guardar_separacion(
         )
         impresion = "manual"
         if body.ok:
-            # Al confirmar el conteo, mandar la remisión a la impresora RICOH.
-            # Auto-total si PRINTER_EMAIL está configurado (email-to-print);
-            # si no, el frontend abre el PDF con el diálogo de impresión.
-            impresion = _imprimir_remision_de_ruta(ruta_id, body.tipo)
-        return {"ok": True, "separacion": sep, "impresion": impresion}
+            # Al confirmar el conteo, la remisión sale a la impresora RICOH.
+            #  · modo agente → svc.guardar_separacion ya LIBERÓ la impresión de
+            #    la remisión de confección (impresion_liberada=True) y envió la
+            #    ficha "Aceptar lote"; el agente local la toma de la cola. NO se
+            #    dispara email-to-print (evita doble impresión) ni diálogo del
+            #    navegador.
+            #  · sin agente → email-to-print (PRINTER_EMAIL) o, si no, el
+            #    frontend abre el PDF con el diálogo de impresión.
+            import os as _os
+            modo_agente = _os.environ.get("IMPRESION_AGENTE", "").strip().lower() in (
+                "1", "true", "si", "sí", "yes", "on")
+            if modo_agente:
+                impresion = "agente"
+            else:
+                impresion = _imprimir_remision_de_ruta(ruta_id, body.tipo)
+        return {"ok": True, "separacion": sep, "impresion": impresion,
+                "impresion_liberada": bool(sep.get("impresion_liberada")),
+                "ficha_enviada": sep.get("ficha_enviada")}
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
