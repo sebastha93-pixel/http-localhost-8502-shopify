@@ -28,6 +28,7 @@ interface Elemento {
   tam?: number;
   align?: "left" | "center" | "right";
   max_w?: number;
+  por_material?: boolean;
   alto?: number;
   items?: string[];
 }
@@ -187,7 +188,14 @@ export default function EditorLavadoPage() {
   if (!layout) return <LoadingState label="Cargando editor…" />;
 
   const elSel = layout.elementos.find((e) => e.id === sel) || null;
-  const muestra = (t: string) => t.replace("{{REF}}", prevRef).replace("{{COMPOSICION}}", prevComp);
+  const muestra = (el: Elemento) => {
+    let t = (el.texto || "").replace("{{REF}}", prevRef).replace("{{COMPOSICION}}", prevComp);
+    if (el.por_material) {
+      const partes = t.match(/\d+\s*%\s*[^%\d]+/g);
+      if (partes && partes.length) t = partes.map((p) => p.trim()).join("\n");
+    }
+    return t;
+  };
 
   return (
     <PageShell title="Editor · etiqueta de lavado" subtitle="Arrastra los elementos y edita su texto — lo que ves es lo que se imprime">
@@ -245,7 +253,7 @@ export default function EditorLavadoPage() {
                     fontSize: (el.tam || 17) * ESCALA,
                     lineHeight: 1.25, textAlign: el.align || "center",
                     whiteSpace: "pre", color: "#000", display: "inline-block",
-                  }}>{muestra(el.texto || "")}</span>
+                  }}>{muestra(el)}</span>
                 );
               } else if (el.tipo === "logo") {
                 contenido = assets["logo"]

@@ -15,8 +15,17 @@ Variables en los textos: {{REF}} y {{COMPOSICION}} se sustituyen al imprimir.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Optional
+
+
+def dividir_composicion(txt: str) -> list[str]:
+    """'98% ALGODON 2% ELASTANO' → ['98% ALGODON', '2% ELASTANO'] (un
+    material por línea). Si no reconoce el patrón, devuelve la línea entera."""
+    partes = re.findall(r"\d+\s*%\s*[^%\d]+", txt or "")
+    limpio = [p.strip() for p in partes if p.strip()]
+    return limpio or ([txt.strip()] if txt.strip() else [])
 
 DPMM = 8
 ANCHO = 224                 # 27.5 mm
@@ -54,7 +63,7 @@ def layout_por_defecto() -> dict:
         {"id": "ref", "tipo": "texto", "x": cx, "y": 232, "texto": "REF {{REF}}",
          "fuente": "TimesNewRoman", "tam": 28, "align": "center"},
         {"id": "composicion", "tipo": "texto", "x": cx, "y": 278, "texto": "{{COMPOSICION}}",
-         "fuente": "Arial", "tam": 17, "align": "center", "max_w": 208},
+         "fuente": "Arial", "tam": 17, "align": "center", "por_material": True},
     ]
     # Un elemento por LÍNEA (se arrastran uno a uno en el editor).
     def apilar(prefijo: str, lineas: list[str], y0: int, fuente: str, paso: int = 26):
@@ -122,6 +131,9 @@ def render_layout(layout: dict, codigo: str, composicion: str):
         if tipo == "texto":
             txt = _sustituir(el.get("texto", ""), codigo, composicion)
             font = _font(el.get("fuente", "Arial"), int(el.get("tam", 17)))
+            # Composición: un material por línea (98% ALGODON / 2% ELASTANO).
+            if el.get("por_material"):
+                txt = "\n".join(dividir_composicion(txt))
             max_w = int(el.get("max_w") or 0)
             # Envolver por palabra si se definió un ancho máximo (composición).
             lineas_txt: list[str] = []
