@@ -71,6 +71,29 @@ def composicion_de_tela_api(
     return {"tela": tela, "composicion": svc.composicion_de_tela(tela)}
 
 
+class ComposicionTelaBody(BaseModel):
+    tela: str = Field(min_length=1)
+    composicion: Optional[str] = None
+
+
+@router.patch("/telas/composicion")
+def fijar_composicion_tela(
+    body: ComposicionTelaBody,
+    _: CurrentUser = Depends(require_permission("produccion_ingreso", "modificar")),
+) -> dict:
+    """Fija la composición A NIVEL DE TELA desde el Inventario — aplica a
+    todos los rollos de esa descripción, presentes y futuros."""
+    try:
+        n = svc.asignar_composicion_tela(body.tela, body.composicion)
+        return {"ok": True, "rollos_actualizados": n}
+    except ValueError as e:
+        raise HTTPException(400, str(e)[:120])
+    except Exception as e:
+        if "composicion" in str(e):
+            raise HTTPException(400, "Falta la migración: corre SUPABASE_MIGRATION_COMPOSICION_TELA.sql en Supabase.")
+        raise HTTPException(500, str(e)[:200])
+
+
 class IngresoIn(BaseModel):
     textilera:        str = Field(min_length=1)
     nit_textilera:    Optional[str] = None

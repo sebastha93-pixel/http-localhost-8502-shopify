@@ -508,6 +508,22 @@ def listar_rollos(*, tela: Optional[str] = None, estado: Optional[str] = None,
     return out
 
 
+def asignar_composicion_tela(tela: str, composicion: Optional[str]) -> int:
+    """Fija la COMPOSICIÓN a nivel de TELA (vista Inventario): aplica a TODOS
+    los rollos con esa descripción — presentes y, por herencia, futuros."""
+    t = (tela or "").strip()
+    if not t:
+        raise ValueError("tela_vacia")
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    valor = (composicion or "").strip().upper() or None
+    r = (sb.table("rollos_tela").update({"composicion": valor})
+           .ilike("descripcion_tela", t).execute()).data or []
+    _cache_invalidate_prefix("inventario_resumen")
+    return len(r)
+
+
 def composicion_de_tela(tela: Optional[str]) -> str:
     """Composición registrada en el INVENTARIO para esa tela (la del rollo
     más reciente que la tenga). Es la fuente de la etiqueta de lavado."""
@@ -620,11 +636,19 @@ def inventario_resumen() -> list[dict]:
         return []
     # Traer solo columnas necesarias, no cargar rollos agotados.
     # 5000 es holgado para MALE'DENIM (~cientos activos).
-    rollos = (sb.table("rollos_tela")
-                .select("descripcion_tela,tono,metros_inicial,metros_disponible,costo_metro")
-                .neq("estado", "agotado")
-                .limit(5000)
-                .execute()).data or []
+    try:
+        rollos = (sb.table("rollos_tela")
+                    .select("descripcion_tela,tono,metros_inicial,metros_disponible,costo_metro,composicion")
+                    .neq("estado", "agotado")
+                    .limit(5000)
+                    .execute()).data or []
+    except Exception:
+        # Columna composicion sin migrar → select sin ella.
+        rollos = (sb.table("rollos_tela")
+                    .select("descripcion_tela,tono,metros_inicial,metros_disponible,costo_metro")
+                    .neq("estado", "agotado")
+                    .limit(5000)
+                    .execute()).data or []
 
     agrupado: dict[tuple[str, str], dict] = {}
     for r in rollos:
@@ -634,11 +658,14 @@ def inventario_resumen() -> list[dict]:
         row = agrupado.setdefault(key, {
             "descripcion_tela": desc,
             "tono": tono,
+            "composicion": "",
             "num_rollos": 0,
             "metros_disponible": 0.0,
             "metros_inicial": 0.0,
             "valor_estimado": 0.0,
         })
+        if not row["composicion"] and (r.get("composicion") or "").strip():
+            row["composicion"] = (r.get("composicion") or "").strip()
         row["num_rollos"] += 1
         md = float(r.get("metros_disponible") or 0)
         mi = float(r.get("metros_inicial") or 0)
@@ -3158,115 +3185,103 @@ def generar_zpl_trabajo(t: dict) -> str:
         return "\n".join(filas)
 
     if t.get("tipo") == "instruccion_lavado":
-        # Diseño HÍBRIDO técnica×editorial (aprobado de los previos):
-        # marca espaciada + secciones con filetes + símbolos de cuidado +
-        # zonas de COSTURA en blanco en ambos extremos. Se imprime y CORTA.
-        # La etiqueta lleva REF + TALLA + COMPOSICIÓN → se imprime POR TALLA,
-        # 1 por prenda +1% de margen. Negrita = doble trazo; ^MD sube oscuridad.
-        composicion = _zpl_escape(p.get("instrucciones") or "").upper()
-        # Con el ancho REAL del medio (220 dots = 27.5 mm) se centra sobre
-        # todo el elemento — el "corrimiento a la derecha" era que imprimíamos
-        # para un medio de 30 mm en una tira de 27.5.
+        # LENGUAJE NATIVO TSPL — la SAT solo acciona su CORTADORA desde TSPL
+        # (verificado 2026-07-23: PRUEBA 4 TSPL cortó; ZPL/^MMC/CUT jamás).
+        # Diseño híbrido portado 1:1: marca + filetes + REF + COMPOSICIÓN
+        # (sin talla) + cuidados EN/ES + símbolos + legal, con zonas de
+        # costura. SET CUTTER 1 → corta DESPUÉS DE CADA etiqueta.
+        # Fuentes TSPL monoespaciadas (ancho dots): "1"=8 "2"=12 "3"=16 "5"=32.
+        composicion = (p.get("instrucciones") or "").strip().upper().replace('"', "'")
+        cortar = bool(p.get("cortar", True))
         W, S = ZPL_LAV_ANCHO, ZPL_LAV_SEAM
         import math as _math
 
-        def negrita(y: int, txt: str, alto: int = 20) -> str:
-            # Auto-reduce si la línea no cabe en el ancho (evita truncados).
-            # Ratio 0.62: el A0 real es más ancho que 0.55 (COMP perdía la N).
-            while alto > 14 and len(txt) * alto * 0.62 > W - 8:
-                alto -= 2
-            # Doble trazo con desfase VERTICAL (el horizontal choca con el
-            # centrado ^FB y garabatea las líneas largas — visto en prueba).
-            base = f"^FB{W},1,0,C,0^A0N,{alto},{alto}^FD{txt}^FS"
-            return f"^FO0,{y}{base}^FO0,{y+1}{base}"
+        _ANCHOS = {"1": 8, "2": 12, "3": 16, "4": 24, "5": 32}
+
+        def texto(y: int, s: str, fuente: str = "2", negrilla: bool = True) -> str:
+            x = max(0, (W - len(s) * _ANCHOS[fuente]) // 2)
+            linea = f'TEXT {x},{y},"{fuente}",0,1,1,"{s}"\r\n'
+            # Negrilla = doble trazo con desfase vertical de 1 dot.
+            return linea + (f'TEXT {x},{y+1},"{fuente}",0,1,1,"{s}"\r\n' if negrilla else "")
 
         def filete(y: int, grosor: int = 1, margen: int = 12) -> str:
-            return f"^FO{margen},{y}^GB{W - 2 * margen},{grosor},{grosor}^FS"
+            return f"BAR {margen},{y},{W - 2 * margen},{grosor}\r\n"
 
         def icono(i: int, x: int, y: int) -> str:
             if i == 0:   # lavadora 30° (cubeta)
-                return (f"^FO{x},{y+4}^GB36,2,2^FS"
-                        f"^FO{x+2},{y+6}^GD8,26,2,B,L^FS"
-                        f"^FO{x+26},{y+6}^GD8,26,2,B,R^FS"
-                        f"^FO{x+8},{y+30}^GB20,2,2^FS"
-                        f"^FO{x+11},{y+12}^A0N,16,16^FD30^FS")
+                return (f"BAR {x},{y+4},36,2\r\n"
+                        f"DIAGONAL {x+2},{y+6},{x+9},{y+30},2\r\n"
+                        f"DIAGONAL {x+34},{y+6},{x+27},{y+30},2\r\n"
+                        f"BAR {x+9},{y+30},18,2\r\n"
+                        f'TEXT {x+10},{y+12},"1",0,1,1,"30"\r\n')
             if i == 1:   # no blanqueador (triángulo tachado)
-                return (f"^FO{x+1},{y+2}^GD17,30,2,B,L^FS"
-                        f"^FO{x+18},{y+2}^GD17,30,2,B,R^FS"
-                        f"^FO{x+1},{y+32}^GB34,2,2^FS"
-                        f"^FO{x},{y}^GD36,36,2,B,L^FS")
+                return (f"DIAGONAL {x+1},{y+32},{x+17},{y+2},2\r\n"
+                        f"DIAGONAL {x+18},{y+2},{x+34},{y+32},2\r\n"
+                        f"BAR {x+1},{y+32},34,2\r\n"
+                        f"DIAGONAL {x},{y},{x+35},{y+35},2\r\n")
             if i == 2:   # secadora baja (cuadro + círculo + punto)
-                return (f"^FO{x},{y}^GB36,36,2^FS"
-                        f"^FO{x+5},{y+5}^GC26,2,B^FS"
-                        f"^FO{x+16},{y+16}^GC5,3,B^FS")
+                return (f"BOX {x},{y},{x+36},{y+36},2\r\n"
+                        f"CIRCLE {x+5},{y+5},26,2\r\n"
+                        f"CIRCLE {x+15},{y+15},6,4\r\n")
             if i == 3:   # plancha tibia
-                return (f"^FO{x},{y+30}^GB36,2,2^FS"
-                        f"^FO{x+12},{y+8}^GB18,2,2^FS"
-                        f"^FO{x+2},{y+10}^GD10,20,2,B,L^FS"
-                        f"^FO{x+30},{y+10}^GB2,20,2^FS")
+                return (f"BAR {x+2},{y+30},32,2\r\n"
+                        f"DIAGONAL {x+2},{y+30},{x+11},{y+8},2\r\n"
+                        f"BAR {x+11},{y+8},20,2\r\n"
+                        f"DIAGONAL {x+31},{y+8},{x+34},{y+30},2\r\n"
+                        f"CIRCLE {x+15},{y+17},5,4\r\n")
             # 4: no lavar en seco (círculo tachado)
-            return (f"^FO{x+1},{y+1}^GC34,2,B^FS"
-                    f"^FO{x+5},{y+5}^GD26,26,2,B,L^FS")
+            return (f"CIRCLE {x+1},{y+1},34,2\r\n"
+                    f"DIAGONAL {x+4},{y+4},{x+32},{y+32},2\r\n")
 
-        def etiqueta_lavado(talla: Optional[str], copias: int) -> str:
-            z = ["^XA^CI28^MD10" + modo + f"^PW{ZPL_LAV_ANCHO}"]
-            y = S                                 # ── zona de costura superior
-            z.append(negrita(y, "MALE", 44));      y += 48
-            z.append(negrita(y, "DENIM", 24));     y += 34
-            z.append(filete(y, 3));                y += 20
-            z.append(negrita(y, f"REF  {codigo}", 22)); y += 30
-            # SIN talla (la talla va solo en el sticker). La COMPOSICIÓN va en
-            # líneas cortas a tamaño fijo — el auto-encogido de una sola línea
-            # larga la volvía ilegible (foto 2026-07-23).
-            if composicion:
-                y += 4
-                lineas: list[str] = []
-                linea = ""
-                for w in composicion.split():
-                    cand = (linea + " " + w).strip()
-                    if linea and len(cand) * 20 * 0.62 > W - 8:
-                        lineas.append(linea); linea = w
-                    else:
-                        linea = cand
-                if linea:
-                    lineas.append(linea)
-                for ln in lineas[:4]:
-                    z.append(negrita(y, ln, 20)); y += 26
-            y += 12
-            z.append(filete(y));                   y += 14
-            # Texto calcado del arte oficial (BarTender del servidor MDS):
-            # inglés WARM WATER = español AGUA TIBIA (antes decía COLD).
-            for ln in ("MACHINE WASH WARM", "NO BLEACH", "TUMBLE DRY LOW", "COOL IRON"):
-                z.append(negrita(y, ln));          y += 28
-            y += 6
-            z.append(filete(y));                   y += 14
-            for ln in ("LAVADORA AGUA TIBIA", "NO BLANQUEADOR", "SECADORA BAJA", "PLANCHA TIBIA"):
-                z.append(negrita(y, ln));          y += 28
-            y += 6
-            z.append(filete(y));                   y += 12
-            ini = (W - (4 * 42 + 36)) // 2         # símbolos centrados en el ancho real
-            for i in range(5):
-                z.append(icono(i, ini + i * 42, y))
-            y += 46
-            z.append(filete(y));                   y += 14
-            for ln in ("MADE IN COLOMBIA", "DIRTY JEANS", "NIT 901680460-1", "SIC 1036644755"):
-                z.append(negrita(y, ln, 18));      y += 26
-            y += S                                # ── zona de costura inferior
-            # Largo estándar de la etiqueta: 130 mm (el aire extra queda como
-            # zona de costura inferior más generosa).
-            z.insert(1, f"^LL{max(y, ZPL_LAV_LARGO)}")
-            # UN bloque = UNA etiqueta (^PQ1) + orden de corte NATIVA "CUT"
-            # tras cada una: la SAT (familia TSC) ignora el ^MMC de ZPL pero
-            # sí obedece CUT (verificado con el experimento CORTE A/B/C).
-            z.append("^PQ1^XZ")
-            bloque = "".join(z) + "\r\nCUT\r\n"
-            return "".join([bloque] * max(1, copias))
+        z: list[str] = []
+        y = S                                     # ── zona de costura superior
+        z.append(texto(y, "MALE", "5"));  y += 52
+        z.append(texto(y, "DENIM", "3")); y += 30
+        z.append(filete(y, 3));           y += 20
+        ref_txt = f"REF {codigo}"
+        z.append(texto(y, ref_txt, "3" if len(ref_txt) <= 13 else "2")); y += 30
+        if composicion:
+            # Líneas de máx 17 caracteres (fuente "2" = 12 dots por carácter).
+            y += 4
+            lineas: list[str] = []
+            linea = ""
+            for w_ in composicion.split():
+                cand = (linea + " " + w_).strip()
+                if linea and len(cand) > 17:
+                    lineas.append(linea); linea = w_
+                else:
+                    linea = cand
+            if linea:
+                lineas.append(linea)
+            for ln in lineas[:4]:
+                z.append(texto(y, ln[:17], "2")); y += 26
+        y += 12
+        z.append(filete(y)); y += 14
+        for ln in ("MACHINE WASH WARM", "NO BLEACH", "TUMBLE DRY LOW", "COOL IRON"):
+            z.append(texto(y, ln, "2")); y += 28
+        y += 6
+        z.append(filete(y)); y += 14
+        # "LAVAR AGUA TIBIA": máx 17 caracteres de la fuente monoespaciada.
+        for ln in ("LAVAR AGUA TIBIA", "NO BLANQUEADOR", "SECADORA BAJA", "PLANCHA TIBIA"):
+            z.append(texto(y, ln, "2")); y += 28
+        y += 6
+        z.append(filete(y)); y += 12
+        ini = (W - (4 * 42 + 36)) // 2
+        for i in range(5):
+            z.append(icono(i, ini + i * 42, y))
+        y += 46
+        z.append(filete(y)); y += 14
+        for ln in ("MADE IN COLOMBIA", "DIRTY JEANS", "NIT 901680460-1", "SIC 1036844755"):
+            z.append(texto(y, ln, "2")); y += 26
 
-        # La etiqueta ya NO lleva talla → un solo lote: total de prendas +1%.
+        # Un solo lote (sin talla): total de prendas +1%.
         tallas_lav = p.get("tallas") or {}
         total = sum(int(v or 0) for v in tallas_lav.values()) or int(p.get("copias") or 1)
         copias = max(1, int(_math.ceil(total * 1.01)))
-        return etiqueta_lavado(None, copias)
+        return ("SIZE 27.5 mm,130 mm\r\nGAP 0,0\r\nDENSITY 12\r\n"
+                f"SET CUTTER {1 if cortar else 0}\r\nCLS\r\n"
+                + "".join(z)
+                + f"PRINT {copias},1\r\n")
     return ""
 
 

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, API_BASE } from "@/lib/api";
 import { getToken } from "@/lib/auth";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
@@ -13,6 +13,7 @@ import { ChevronDown, ChevronRight, Loader2, Printer } from "lucide-react";
 interface ResumenLinea {
   descripcion_tela: string;
   tono: string;
+  composicion?: string;
   num_rollos: number;
   metros_disponible: number;
   metros_inicial: number;
@@ -32,6 +33,7 @@ interface Rollo {
 }
 
 export default function InventarioPage() {
+  const qc = useQueryClient();
   const resumenQ = useQuery<{ resumen: ResumenLinea[] }>({
     queryKey: ["produccion", "inventario", "resumen"],
     queryFn: () => api.get("/api/produccion/inventario/resumen"),
@@ -39,6 +41,21 @@ export default function InventarioPage() {
   });
 
   const [expandido, setExpandido] = useState<string | null>(null);
+  // COMPOSICIÓN a nivel de TELA (etiqueta de lavado): se digita UNA vez aquí
+  // y aplica a todos los rollos de esa tela, presentes y futuros.
+  const [compEdit, setCompEdit] = useState<{ tela: string; valor: string } | null>(null);
+  const [compMsg, setCompMsg] = useState("");
+  const guardarComp = useMutation({
+    mutationFn: (p: { tela: string; composicion: string }) =>
+      api.patch("/api/produccion/telas/composicion", { tela: p.tela, composicion: p.composicion || null }),
+    onSuccess: (_d, p) => {
+      setCompEdit(null);
+      setCompMsg(`Composición guardada para ${p.tela} — la usan todas las etiquetas de lavado de esa tela.`);
+      qc.invalidateQueries({ queryKey: ["produccion", "inventario", "resumen"] });
+      setTimeout(() => setCompMsg(""), 6000);
+    },
+    onError: (e: Error) => { setCompMsg(e.message); setTimeout(() => setCompMsg(""), 8000); },
+  });
   // Selección GLOBAL de rollos (cruza telas) para imprimir etiquetas
   const [seleccion, setSeleccion] = useState<Set<string>>(new Set());
   const [imprimiendo, setImprimiendo] = useState(false);
@@ -134,21 +151,57 @@ export default function InventarioPage() {
               <Link href="/produccion/ingreso/nuevo" className="text-navy-600 hover:underline">ingreso nuevo</Link>.
             </p>
           ) : (
+            <>
+            {compMsg && (
+              <p className="px-4 py-2 text-[0.7rem] text-teal border-b border-border">{compMsg}</p>
+            )}
             <div className="divide-y divide-border">
               {resumen.map((r) => {
                 const key = `${r.descripcion_tela}||${r.tono}`;
                 const isOpen = expandido === key;
                 return (
                   <div key={key}>
-                    <button
+                    <div
+                      role="button"
+                      tabIndex={0}
                       onClick={() => setExpandido(isOpen ? null : key)}
-                      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-cloud/50 text-left"
+                      onKeyDown={(e) => { if (e.key === "Enter" && !compEdit) setExpandido(isOpen ? null : key); }}
+                      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-cloud/50 text-left cursor-pointer"
                     >
                       {isOpen ? <ChevronDown className="h-4 w-4 text-graphite" /> : <ChevronRight className="h-4 w-4 text-graphite" />}
                       <div className="flex-1 min-w-0">
                         <p className="font-medium text-ink-900">{r.descripcion_tela}</p>
                         <p className="text-[0.65rem] text-graphite">
                           Tono: {r.tono} · {r.num_rollos} rollos
+                          {" · "}
+                          {compEdit?.tela === r.descripcion_tela ? (
+                            <span className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                autoFocus
+                                value={compEdit.valor}
+                                onChange={(e) => setCompEdit({ tela: r.descripcion_tela, valor: e.target.value })}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") { e.preventDefault(); guardarComp.mutate({ tela: r.descripcion_tela, composicion: compEdit.valor.trim() }); }
+                                  if (e.key === "Escape") setCompEdit(null);
+                                }}
+                                placeholder="98% ALGODON 2% ELASTANO"
+                                className="w-56 rounded-sm border border-border bg-white px-1.5 py-0.5 text-[0.68rem] text-ink-900" />
+                              <span
+                                role="button"
+                                onClick={() => guardarComp.mutate({ tela: r.descripcion_tela, composicion: compEdit.valor.trim() })}
+                                className="cursor-pointer rounded-sm bg-teal px-1.5 py-0.5 text-[0.6rem] font-bold uppercase text-white">
+                                {guardarComp.isPending ? "…" : "OK"}
+                              </span>
+                            </span>
+                          ) : (
+                            <span
+                              role="button"
+                              onClick={(e) => { e.stopPropagation(); setCompEdit({ tela: r.descripcion_tela, valor: r.composicion || "" }); }}
+                              title="Composición de la tela — la usa la etiqueta de lavado"
+                              className={`cursor-pointer underline decoration-dotted ${r.composicion ? "text-ink-900" : "text-terracotta"}`}>
+                              {r.composicion || "sin composición — clic para digitarla"}
+                            </span>
+                          )}
                         </p>
                       </div>
                       <div className="text-right">
@@ -159,7 +212,7 @@ export default function InventarioPage() {
                           de {r.metros_inicial.toLocaleString("es-CO", { maximumFractionDigits: 0 })}
                         </p>
                       </div>
-                    </button>
+                    </div>
                     {isOpen && (
                       <RollosDeTela tela={r.descripcion_tela} tono={r.tono}
                         seleccion={seleccion} onToggle={toggleRollo}
@@ -175,6 +228,7 @@ export default function InventarioPage() {
                 );
               })}
             </div>
+            </>
           )}
         </CardContent>
       </Card>
