@@ -83,6 +83,7 @@ export default function EditorLavadoPage() {
   // Logo y símbolos: se descargan AUTENTICADOS (el endpoint exige token en
   // cabecera; un <img src> con ?t= daría 401). Se guardan como object URLs.
   const [assets, setAssets] = useState<Record<string, string>>({});
+  const [ratioLogo, setRatioLogo] = useState(0);   // ancho/alto real del logo
   useEffect(() => {
     let vivo = true;
     const urls: string[] = [];
@@ -258,10 +259,17 @@ export default function EditorLavadoPage() {
                   }}>{muestra(el)}</span>
                 );
               } else if (el.tipo === "logo") {
-                contenido = assets["logo"]
-                  ? <img src={assets["logo"]} alt="logo" draggable={false}
-                      style={{ height: (el.alto || 82) * ESCALA, width: "auto", maxWidth: "none", display: "block" }} />
-                  : <span className="text-[0.6rem] text-graphite">logo…</span>;
+                {
+                  // Mismo tope que la impresión: el ancho no puede pasar del
+                  // ancho de la etiqueta (ANCHO); si topa, manda el ancho.
+                  let hDot = el.alto || 82;
+                  if (ratioLogo && hDot * ratioLogo > ANCHO) hDot = ANCHO / ratioLogo;
+                  contenido = assets["logo"]
+                    ? <img src={assets["logo"]} alt="logo" draggable={false}
+                        onLoad={(ev) => { const im = ev.currentTarget; if (im.naturalHeight) setRatioLogo(im.naturalWidth / im.naturalHeight); }}
+                        style={{ height: hDot * ESCALA, width: "auto", maxWidth: "none", display: "block" }} />
+                    : <span className="text-[0.6rem] text-graphite">logo…</span>;
+                }
               } else {
                 contenido = (
                   <div style={{ display: "flex", gap: 8 * ESCALA }}>
