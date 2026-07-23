@@ -23,6 +23,7 @@ interface Remision {
   tipo?: string; // 'confeccion' | 'terminacion'
   created_at: string;
   confeccionista?: { nombre: string };
+  items?: { orden_corte?: { consecutivo?: string; referencia?: { codigo_referencia?: string } } }[];
 }
 
 function etiquetaEstado(r: Remision): string {
@@ -102,6 +103,7 @@ export default function RemisionesPage() {
               <thead className="bg-cloud/60 border-b border-border">
                 <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                   <th className="px-4 py-2">Consecutivo</th>
+                  <th className="px-4 py-2">Lotes · Referencia</th>
                   <th className="px-4 py-2">Tipo</th>
                   <th className="px-4 py-2">Proveedor</th>
                   <th className="px-4 py-2">Fecha</th>
@@ -118,6 +120,19 @@ export default function RemisionesPage() {
                         <Link href={`/produccion/remisiones/${r.id}`} className="hover:underline">
                           {r.consecutivo}
                         </Link>
+                      </td>
+                      <td className="px-4 py-2">
+                        <div className="flex flex-wrap gap-1">
+                          {(r.items || []).map((it, i) => (
+                            <span key={i} className="rounded-sm border border-border bg-cloud/40 px-1.5 py-0.5 text-[0.68rem]">
+                              <span className="font-semibold text-ink-900">
+                                {it.orden_corte?.referencia?.codigo_referencia || "—"}
+                              </span>
+                              <span className="ml-1 tabular text-graphite">{it.orden_corte?.consecutivo || ""}</span>
+                            </span>
+                          ))}
+                          {(r.items || []).length === 0 && <span className="text-graphite">—</span>}
+                        </div>
                       </td>
                       <td className="px-4 py-2">
                         <span className={`rounded-sm px-1.5 py-0.5 text-[0.68rem] font-bold uppercase tracking-widest ${esTerm ? "bg-teal/10 text-teal" : "bg-navy-600/10 text-navy-600"}`}>

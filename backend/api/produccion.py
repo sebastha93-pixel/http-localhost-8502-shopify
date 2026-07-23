@@ -1238,6 +1238,28 @@ def detalle_remision(
     return rem
 
 
+class WhatsAppRemisionBody(BaseModel):
+    orden_corte_id: Optional[str] = None   # enviar solo este lote (botón por lote)
+
+
+@router.post("/remisiones/{rem_id}/whatsapp")
+def remision_whatsapp(
+    rem_id: str,
+    body: WhatsAppRemisionBody,
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+) -> dict:
+    """ENVÍO AUTOMÁTICO por la Cloud API: plantilla → texto libre (ventana
+    24h) → y si nada sale, el frontend cae al wa.me manual con el wa_url."""
+    rem = svc.obtener_remision(rem_id)
+    if not rem:
+        raise HTTPException(404, "no_encontrada")
+    try:
+        envios = svc._notificar_remision_whatsapp(rem, solo_oc_id=body.orden_corte_id)
+    except Exception as e:
+        raise HTTPException(500, f"whatsapp: {str(e)[:200]}")
+    return {"ok": True, "envios": envios}
+
+
 @router.post("/remisiones/{rem_id}/recogida")
 def marcar_recogida(
     rem_id: str,

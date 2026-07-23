@@ -295,6 +295,26 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
   const [fecha, setFecha] = useState("");
   const [copiado, setCopiado] = useState<"ok" | "error" | "">("");
   const [errCard, setErrCard] = useState("");
+  const [waEstado, setWaEstado] = useState<"" | "enviado" | "fallback">("");
+
+  // ENVÍO AUTOMÁTICO por la Cloud API al presionar el botón. Si la API no
+  // puede entregar (plantilla en revisión, ventana 24h cerrada), se abre
+  // wa.me con el mensaje listo como respaldo — nunca se queda sin salida.
+  const enviarWA = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; envios: { enviado: boolean; wa_url?: string }[] }>(
+      `/api/produccion/remisiones/${remisionId}/whatsapp`, { orden_corte_id: ordenCorteId }),
+    onSuccess: (data) => {
+      const e = (data.envios || [])[0];
+      if (e?.enviado) {
+        setWaEstado("enviado");
+      } else {
+        setWaEstado("fallback");
+        if (e?.wa_url) window.open(e.wa_url, "_blank", "noopener");
+      }
+      setTimeout(() => setWaEstado(""), 6000);
+    },
+    onError: (e: Error) => setErrCard(e.message),
+  });
 
   const q = useQuery<Ruta>({
     queryKey: ["ruta", ordenCorteId],
@@ -370,7 +390,10 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
   return (
     <div className="rounded-sm border border-border bg-white p-3 space-y-3">
       <div className="flex items-center justify-between">
-        <p className="font-semibold text-ink-900 tabular text-sm">{consecutivo}</p>
+        <p className="font-semibold text-ink-900 text-sm">
+          {referencia || consecutivo}
+          {referencia && <span className="ml-2 text-[0.68rem] font-normal tabular text-graphite">Lote {consecutivo}</span>}
+        </p>
         <Badge tone={r.etapa === "asignado" ? "pendiente" : "normal"}>
           {({ asignado: "Asignado", aceptado: "Aceptado", en_confeccion: "En confección",
               lavanderia: "En lavandería", terminacion_recibida: "En terminación",
@@ -428,10 +451,25 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
           </p>
         ) : (
           <>
-            <a href={waUrl} target="_blank" rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-sm bg-[#25D366] px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-white hover:opacity-90">
-              <MessageCircle className="h-3 w-3" /> Enviar por WhatsApp
-            </a>
+            {remisionId ? (
+              <button type="button" onClick={() => enviarWA.mutate()} disabled={enviarWA.isPending}
+                className="inline-flex items-center gap-1.5 rounded-sm bg-[#25D366] px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-white hover:opacity-90 disabled:opacity-50">
+                {enviarWA.isPending
+                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                  : <MessageCircle className="h-3 w-3" />}
+                {waEstado === "enviado" ? "Enviado ✓" : "Enviar por WhatsApp"}
+              </button>
+            ) : (
+              <a href={waUrl} target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-sm bg-[#25D366] px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-white hover:opacity-90">
+                <MessageCircle className="h-3 w-3" /> Enviar por WhatsApp
+              </a>
+            )}
+            {waEstado === "fallback" && (
+              <span className="text-[0.65rem] text-graphite">
+                La API no pudo entregar — se abrió WhatsApp con el mensaje listo.
+              </span>
+            )}
             <button type="button" onClick={copiarLink}
               className="inline-flex items-center gap-1 rounded-sm border border-border bg-white px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-graphite hover:bg-cloud">
               <Copy className="h-3 w-3" /> {copiado === "ok" ? "Copiado ✓" : copiado === "error" ? "No se pudo copiar" : "Copiar link"}

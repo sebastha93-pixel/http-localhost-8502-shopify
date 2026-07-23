@@ -2699,14 +2699,24 @@ def listar_remisiones(*, estado: Optional[str] = None,
     sb = _sb()
     if sb is None:
         return []
-    q = (sb.table("remisiones")
-           .select("*,confeccionista:confeccionista_id(nombre)")
-           .order("created_at", desc=True).limit(limit))
-    if estado:
-        q = q.eq("estado", estado)
-    if confeccionista_id:
-        q = q.eq("confeccionista_id", confeccionista_id)
-    return q.execute().data or []
+    # La lista muestra los LOTES con su referencia (al proveedor y al equipo
+    # se les habla por la referencia de la prenda, no por el código interno).
+    sel = ("*,confeccionista:confeccionista_id(nombre),"
+           "items:remision_items(orden_corte:orden_corte_id(consecutivo,"
+           "referencia:referencia_id(codigo_referencia)))")
+    def _consulta(s: str):
+        q = (sb.table("remisiones").select(s)
+               .order("created_at", desc=True).limit(limit))
+        if estado:
+            q = q.eq("estado", estado)
+        if confeccionista_id:
+            q = q.eq("confeccionista_id", confeccionista_id)
+        return q.execute().data or []
+    try:
+        return _consulta(sel)
+    except Exception:
+        # Relación anidada no disponible → degradar al select simple.
+        return _consulta("*,confeccionista:confeccionista_id(nombre)")
 
 
 def obtener_remision(rem_id: str) -> Optional[dict]:
@@ -3248,8 +3258,9 @@ def marcar_remision_recogida(rem_id: str, usuario: str = "sistema") -> dict:
     return rem
 
 
-def _notificar_remision_whatsapp(rem: dict) -> list[dict]:
-    """Arma (y si se puede, ENVÍA) el WhatsApp por cada lote de la remisión."""
+def _notificar_remision_whatsapp(rem: dict, solo_oc_id: Optional[str] = None) -> list[dict]:
+    """Arma (y si se puede, ENVÍA) el WhatsApp por cada lote de la remisión.
+    Con `solo_oc_id` envía únicamente el lote indicado (botón por lote)."""
     from urllib.parse import quote
     from backend.services import whatsapp_cloud as wa
 
@@ -3259,6 +3270,8 @@ def _notificar_remision_whatsapp(rem: dict) -> list[dict]:
     base = os.environ.get("APP_PUBLIC_URL", "https://app.maledenim.com").rstrip("/")
     salidas = []
     for it in (rem.get("items") or []):
+        if solo_oc_id and it.get("orden_corte_id") != solo_oc_id:
+            continue
         ruta = obtener_ruta_por_corte(it["orden_corte_id"])
         if not ruta:
             continue
