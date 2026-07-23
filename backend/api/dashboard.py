@@ -165,6 +165,14 @@ def _acciones_recientes(sb: Client, limit: int = 8) -> list[AccionReciente]:
 
 # ── Endpoint ─────────────────────────────────────────────────────────
 
+@router.get("/salud")
+def salud_sistema(_: CurrentUser = Depends(get_current_user)) -> dict:
+    """CENTRO DE SALUD: un semáforo por circuito (webhooks, crons,
+    integraciones, impresión, lotes estancados, integridad de datos)."""
+    from services import salud as _salud
+    return _salud.resumen()
+
+
 @router.get("/overview", response_model=DashboardOverview)
 def overview(_: CurrentUser = Depends(get_current_user)) -> DashboardOverview:
     """Payload completo para el Centro de Control."""

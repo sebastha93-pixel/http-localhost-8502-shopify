@@ -204,6 +204,15 @@ export default function CentroControlPage() {
     retry: 1,
   });
 
+  // Centro de Salud: un semáforo por circuito del sistema
+  interface ChequeoSalud { clave: string; nombre: string; estado: "ok" | "alerta" | "critico"; detalle: string }
+  const saludQ = useQuery<{ estado_general: string; criticos: number; alertas: number; checks: ChequeoSalud[] }>({
+    queryKey: ["dashboard", "salud"],
+    queryFn: () => api.get("/api/dashboard/salud"),
+    refetchInterval: 60_000,
+    retry: 1,
+  });
+
   if (opsQ.isLoading) return <LoadingState label="Cargando Centro de Control…" />;
   if (opsQ.error || !opsQ.data) return <ErrorState error={opsQ.error} onRetry={() => opsQ.refetch()} />;
 
@@ -241,6 +250,45 @@ export default function CentroControlPage() {
             {data.quick_actions.map((q) => (
               <QuickActionCard key={q.label} q={q} />
             ))}
+          </div>
+        </section>
+      )}
+
+      {/* ────────── CENTRO DE SALUD (semáforos de los circuitos) ─────────── */}
+      {saludQ.data && (
+        <section>
+          <p className="section-label mb-3 flex items-center gap-2">
+            <span className={`h-2 w-2 rounded-full ${
+              saludQ.data.estado_general === "ok" ? "bg-teal"
+                : saludQ.data.estado_general === "alerta" ? "bg-amber-500" : "bg-terracotta"
+            }`} />
+            Salud del sistema
+            {saludQ.data.criticos + saludQ.data.alertas > 0 && (
+              <span className="text-graphite normal-case tracking-normal font-normal">
+                · {saludQ.data.criticos > 0 ? `${saludQ.data.criticos} crítico(s)` : ""}
+                {saludQ.data.criticos > 0 && saludQ.data.alertas > 0 ? " · " : ""}
+                {saludQ.data.alertas > 0 ? `${saludQ.data.alertas} alerta(s)` : ""}
+              </span>
+            )}
+          </p>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
+            {saludQ.data.checks
+              .filter((c) => c.estado !== "ok" || saludQ.data!.criticos + saludQ.data!.alertas === 0)
+              .map((c) => (
+                <div key={c.clave} className={`rounded-sm border px-3 py-2 text-xs ${
+                  c.estado === "ok" ? "border-border bg-card"
+                    : c.estado === "alerta" ? "border-amber-400/50 bg-amber-50"
+                      : "border-terracotta/50 bg-terra-soft"
+                }`}>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`h-1.5 w-1.5 flex-none rounded-full ${
+                      c.estado === "ok" ? "bg-teal" : c.estado === "alerta" ? "bg-amber-500" : "bg-terracotta"
+                    }`} />
+                    <span className="font-semibold text-ink-900">{c.nombre}</span>
+                  </div>
+                  <p className={`mt-0.5 ${c.estado === "critico" ? "text-terracotta" : "text-graphite"}`}>{c.detalle}</p>
+                </div>
+              ))}
           </div>
         </section>
       )}
