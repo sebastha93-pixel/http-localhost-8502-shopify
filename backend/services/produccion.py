@@ -2712,7 +2712,9 @@ def estado_impresion() -> dict:
             continue
     return {
         "agente_hace_s": hace_s,
-        "agente_en_linea": hace_s is not None and hace_s < 60,
+        # Umbral holgado: con varios workers Uvicorn los polls del agente se
+        # reparten — ESTE worker puede llevar un par de minutos sin ver uno.
+        "agente_en_linea": hace_s is not None and hace_s < 180,
         "pendientes": len(pendientes),
         "mas_viejo_min": mas_viejo_min,
     }

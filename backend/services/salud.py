@@ -73,74 +73,81 @@ def _cacheado(clave: str, fn) -> dict:
 
 # ── chequeos ─────────────────────────────────────────────────────────────
 
-def _check_webhook_kommo() -> dict:
-    from backend.api import revenue as _rev
-    seg = _hace_seg(_rev._webhook_stats.get("ultimo_en"))
-    if seg is None:
-        # El contador vive en memoria (se borra al redesplegar) → mirar la
-        # base: el último mensaje guardado sobrevive reinicios.
-        try:
-            from backend.services import revenue_db as _rdb
-            sb = _rdb._sb()
-            r = (sb.table("messages").select("created_at")
-                   .order("created_at", desc=True).limit(1).execute()).data
-            seg = _hace_seg(r[0]["created_at"]) if r else None
-        except Exception:
-            seg = None
-    if seg is None:
-        return _chk("webhook_kommo", "Webhook Kommo", "alerta",
-                    "Sin eventos registrados aún (¿reinicio reciente?)")
-    if seg < 1800:
-        return _chk("webhook_kommo", "Webhook Kommo", "ok", f"Último evento {_fmt_hace(seg)}")
-    if _horario_comercial() and seg > 7200:
-        return _chk("webhook_kommo", "Webhook Kommo", "critico",
-                    f"SIN eventos {_fmt_hace(seg)} en horario comercial — ¿webhook apagado en Kommo?")
-    return _chk("webhook_kommo", "Webhook Kommo", "alerta", f"Último evento {_fmt_hace(seg)}")
+# OJO ARQUITECTURA: el backend corre con VARIOS workers Uvicorn y solo el
+# LÍDER ejecuta los schedulers; además los contadores en memoria son POR
+# WORKER. Por eso los chequeos se basan en HUELLAS EN LA BASE (sent_at de
+# messages, calculated_at de advisor_rankings) — verdad compartida entre
+# workers — y la memoria solo complementa.
 
-
-def _check_webhook_meta() -> dict:
-    from backend.api import meta as _meta
-    seg = _hace_seg(_meta._stats.get("ultimo_en"))
+def _check_mensajeria() -> dict:
+    """Kommo + Meta escriben en `messages` — el sent_at más reciente es la
+    prueba worker-agnóstica de que los webhooks están vivos."""
+    candidatos = []
+    try:
+        from backend.services.produccion import _sb
+        sb = _sb()
+        r = (sb.table("messages").select("sent_at")
+               .order("sent_at", desc=True).limit(1).execute()).data
+        if r:
+            candidatos.append(_hace_seg(r[0].get("sent_at")))
+    except Exception:
+        pass
+    try:
+        from backend.api import revenue as _rev
+        candidatos.append(_hace_seg(_rev._webhook_stats.get("ultimo_en")))
+    except Exception:
+        pass
+    try:
+        from backend.api import meta as _meta
+        candidatos.append(_hace_seg(_meta._stats.get("ultimo_en")))
+    except Exception:
+        pass
+    validos = [c for c in candidatos if c is not None]
+    seg = min(validos) if validos else None
     if seg is None:
-        return _chk("webhook_meta", "Webhook Meta (WA/IG/FB)", "alerta",
-                    "Sin eventos registrados aún (¿reinicio reciente?)")
+        return _chk("mensajeria", "Mensajería (Kommo + Meta)", "alerta",
+                    "Sin mensajes registrados — ¿webhooks configurados?")
     if seg < 3600:
-        return _chk("webhook_meta", "Webhook Meta (WA/IG/FB)", "ok", f"Último evento {_fmt_hace(seg)}")
-    if _horario_comercial() and seg > 14400:
-        return _chk("webhook_meta", "Webhook Meta (WA/IG/FB)", "critico",
-                    f"SIN eventos {_fmt_hace(seg)} — revisar suscripción del webhook en Meta")
-    return _chk("webhook_meta", "Webhook Meta (WA/IG/FB)", "alerta", f"Último evento {_fmt_hace(seg)}")
+        return _chk("mensajeria", "Mensajería (Kommo + Meta)", "ok", f"Último mensaje {_fmt_hace(seg)}")
+    if _horario_comercial() and seg > 10800:
+        return _chk("mensajeria", "Mensajería (Kommo + Meta)", "critico",
+                    f"SIN mensajes {_fmt_hace(seg)} en horario comercial — revisar webhooks en Kommo y Meta")
+    return _chk("mensajeria", "Mensajería (Kommo + Meta)", "alerta", f"Último mensaje {_fmt_hace(seg)}")
 
 
 def _check_cron_nocturno() -> dict:
-    from backend.core import revenue_scheduler as _sch
-    st = _sch.get_state()
-    if not st.get("running"):
-        return _chk("cron_nocturno", "Cron nocturno (rankings 3 AM)", "critico",
-                    "El hilo del scheduler está CAÍDO — reiniciar el backend")
-    seg = _hace_seg(st.get("last_run_at"))
+    """La huella real del cron de las 3 AM: calculated_at en advisor_rankings
+    (el estado del hilo solo lo conoce el worker líder — no sirve aquí)."""
+    try:
+        from backend.services.produccion import _sb
+        sb = _sb()
+        r = (sb.table("advisor_rankings").select("calculated_at")
+               .order("calculated_at", desc=True).limit(1).execute()).data
+        seg = _hace_seg(r[0].get("calculated_at")) if r else None
+    except Exception as e:
+        return _chk("cron_nocturno", "Cron nocturno (rankings 3 AM)", "alerta",
+                    f"No se pudo leer rankings: {str(e)[:100]}")
     if seg is None:
-        return _chk("cron_nocturno", "Cron nocturno (rankings 3 AM)", "ok",
-                    "Aún no corre desde el último reinicio (programado 3 AM Bogotá)")
-    if seg > 26 * 3600:
+        return _chk("cron_nocturno", "Cron nocturno (rankings 3 AM)", "alerta",
+                    "Sin corridas registradas aún")
+    if seg > 30 * 3600:
         return _chk("cron_nocturno", "Cron nocturno (rankings 3 AM)", "critico",
-                    f"No corre {_fmt_hace(seg)} — los rankings están viejos")
+                    f"No corre {_fmt_hace(seg)} — rankings viejos; revisar backend/Railway")
     return _chk("cron_nocturno", "Cron nocturno (rankings 3 AM)", "ok", f"Corrió {_fmt_hace(seg)}")
 
 
 def _check_poll_notas() -> dict:
+    habilitado = os.environ.get("NOTES_POLL_ENABLED", "false").lower() in ("true", "1", "yes")
+    if not habilitado:
+        return _chk("poll_notas", "Sondeo de notas Kommo", "ok",
+                    "Apagado a propósito (los mensajes llegan por Meta directo)")
     from backend.core import revenue_scheduler as _sch
     st = _sch.get_notes_poll_state()
     seg = _hace_seg(st.get("last_run_at"))
-    if seg is None:
-        return _chk("poll_notas", "Sondeo de notas Kommo", "alerta",
-                    "Sin corridas registradas (¿reinicio reciente?)")
-    if seg < 300:
+    if seg is not None and seg < 600:
         return _chk("poll_notas", "Sondeo de notas Kommo", "ok", f"Última pasada {_fmt_hace(seg)}")
-    if seg > 1800:
-        return _chk("poll_notas", "Sondeo de notas Kommo", "critico",
-                    f"Detenido {_fmt_hace(seg)} — mensajes salientes sin capturar")
-    return _chk("poll_notas", "Sondeo de notas Kommo", "alerta", f"Última pasada {_fmt_hace(seg)}")
+    return _chk("poll_notas", "Sondeo de notas Kommo", "alerta",
+                f"Última pasada {_fmt_hace(seg)} (dato del worker líder — puede ser visión parcial)")
 
 
 def _check_impresion() -> dict:
@@ -150,7 +157,9 @@ def _check_impresion() -> dict:
     if hace_s is None:
         return _chk("impresion", "Agente de impresión", "alerta",
                     "Sin reportes desde el último reinicio del backend")
-    if hace_s > 300:
+    # Umbral holgado: los polls del agente se reparten entre los workers,
+    # así que ESTE worker puede llevar varios minutos sin ver uno.
+    if hace_s > 900:
         return _chk("impresion", "Agente de impresión", "critico",
                     f"SIN CONEXIÓN {_fmt_hace(hace_s)} — ¿el Mac del agente está dormido/apagado?")
     if e.get("pendientes", 0) > 0 and e.get("mas_viejo_min", 0) >= 10:
@@ -197,9 +206,12 @@ def _check_whatsapp() -> dict:
 def _check_shopify() -> dict:
     def _run():
         try:
-            from backend.services.clientes import _shopify_get
-            _shopify_get("shop.json")
-            return _chk("shopify", "Shopify Admin", "ok", "API respondiendo")
+            from backend.services.clientes import _shopify_graphql
+            r = _shopify_graphql("query { shop { name } }")
+            if (r or {}).get("data", {}).get("shop", {}).get("name"):
+                return _chk("shopify", "Shopify Admin", "ok", "API respondiendo")
+            return _chk("shopify", "Shopify Admin", "alerta",
+                        f"Respuesta inesperada: {str(r)[:100]}")
         except Exception as e:
             # Alerta (no crítico): el fallo puede ser del propio chequeo.
             return _chk("shopify", "Shopify Admin", "alerta", f"No respondió: {str(e)[:120]}")
@@ -248,8 +260,7 @@ def _check_datos_corte() -> dict:
 # ── panel ────────────────────────────────────────────────────────────────
 
 _CHEQUEOS = (
-    _check_webhook_kommo,
-    _check_webhook_meta,
+    _check_mensajeria,
     _check_cron_nocturno,
     _check_poll_notas,
     _check_impresion,
