@@ -1851,14 +1851,19 @@ def impresion_trabajo_contenido(
     trabajo_id: str,
     _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ):
-    """Contenido imprimible del trabajo (ZPL en texto plano)."""
+    """Contenido imprimible del trabajo. Sticker → ZPL texto; lavado →
+    BITMAP TSPL binario (imagen con fuentes de marca). El agente lo baja
+    como bytes y lo manda RAW a la impresora."""
     t = svc.obtener_trabajo_impresion(trabajo_id)
     if not t:
         raise HTTPException(404, "trabajo_no_encontrado")
-    zpl = svc.generar_zpl_trabajo(t)
-    if not zpl:
+    try:
+        contenido = svc.generar_contenido_trabajo(t)
+    except Exception as e:
+        raise HTTPException(500, f"contenido: {str(e)[:200]}")
+    if not contenido:
         raise HTTPException(400, "trabajo_sin_contenido")
-    return Response(content=zpl, media_type="text/plain; charset=utf-8")
+    return Response(content=contenido, media_type="application/octet-stream")
 
 
 @router.post("/impresion/trabajos/{trabajo_id}/impreso")
