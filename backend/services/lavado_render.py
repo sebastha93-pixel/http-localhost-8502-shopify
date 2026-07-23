@@ -21,10 +21,12 @@ from typing import Optional
 
 
 def dividir_composicion(txt: str) -> list[str]:
-    """'98% ALGODON 2% ELASTANO' → ['98% ALGODON', '2% ELASTANO'] (un
-    material por línea). Si no reconoce el patrón, devuelve la línea entera."""
+    """'87% ALGODON, 8% POLYESTER 5% ELASTANO' → un material por línea.
+    Si no reconoce el patrón, devuelve la línea entera."""
     partes = re.findall(r"\d+\s*%\s*[^%\d]+", txt or "")
-    limpio = [p.strip() for p in partes if p.strip()]
+    # Quita separadores colgantes (coma/;/·/guion) al final de cada material.
+    limpio = [p.strip().strip(",;·-").strip() for p in partes]
+    limpio = [p for p in limpio if p]
     return limpio or ([txt.strip()] if txt.strip() else [])
 
 DPMM = 8
@@ -134,7 +136,8 @@ def render_layout(layout: dict, codigo: str, composicion: str):
             txt = _sustituir(el.get("texto", ""), codigo, composicion)
             font = _font(el.get("fuente", "Arial"), int(el.get("tam", 17)))
             # Composición: un material por línea (98% ALGODON / 2% ELASTANO).
-            if el.get("por_material"):
+            # Por id "composicion" también, para layouts guardados sin el flag.
+            if el.get("por_material") or el.get("id") == "composicion":
                 txt = "\n".join(dividir_composicion(txt))
             max_w = int(el.get("max_w") or 0)
             # Envolver por palabra si se definió un ancho máximo (composición).

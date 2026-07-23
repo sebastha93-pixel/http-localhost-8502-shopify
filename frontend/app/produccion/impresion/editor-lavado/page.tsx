@@ -190,9 +190,9 @@ export default function EditorLavadoPage() {
   const elSel = layout.elementos.find((e) => e.id === sel) || null;
   const muestra = (el: Elemento) => {
     let t = (el.texto || "").replace("{{REF}}", prevRef).replace("{{COMPOSICION}}", prevComp);
-    if (el.por_material) {
+    if (el.por_material || el.id === "composicion") {
       const partes = t.match(/\d+\s*%\s*[^%\d]+/g);
-      if (partes && partes.length) t = partes.map((p) => p.trim()).join("\n");
+      if (partes && partes.length) t = partes.map((p) => p.trim().replace(/[,;·-]+$/, "").trim()).join("\n");
     }
     return t;
   };
