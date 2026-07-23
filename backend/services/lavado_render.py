@@ -81,21 +81,28 @@ def _envolver(draw, txt: str, font, max_w: int) -> list[str]:
     return lineas
 
 
-def _cargar_logo(max_w: int):
-    from PIL import Image
+def _cargar_logo(max_w: int, alto_objetivo: int = 0):
+    from PIL import Image, ImageOps
     p = _BASE / "logo.png"
     if not p.exists():
         return None
     logo = Image.open(p).convert("L")
     # Recortar bordes blancos para maximizar el logo en el ancho disponible.
-    from PIL import ImageOps
     inv = ImageOps.invert(logo)
     caja = inv.getbbox()
     if caja:
         logo = logo.crop(caja)
     w, h = logo.size
-    nueva_w = min(max_w, ANCHO - 20)
-    nueva_h = max(1, int(h * nueva_w / w))
+    if alto_objetivo:
+        # Escala por ALTO (la marca a 18 pt ≈ 51 px de alto de mancha)
+        nueva_h = alto_objetivo
+        nueva_w = max(1, int(w * nueva_h / h))
+        if nueva_w > max_w:                    # no exceder el ancho útil
+            nueva_w = max_w
+            nueva_h = max(1, int(h * nueva_w / w))
+    else:
+        nueva_w = min(max_w, ANCHO - 20)
+        nueva_h = max(1, int(h * nueva_w / w))
     return logo.resize((nueva_w, nueva_h), Image.LANCZOS)
 
 
@@ -119,11 +126,14 @@ def render_etiqueta(codigo: str, composicion: str) -> bytes:
     """Devuelve la imagen 1-bit (PIL mode '1') de la etiqueta completa."""
     from PIL import Image, ImageDraw
 
-    f_logo_alt = 44
-    f_ref = _font("TimesNewRoman.ttf", 30)
-    f_comp = _font("Arial.ttf", 22)
-    f_care = _font("Arial.ttf", 20)
-    f_legal = _font("ArialBold.ttf", 17)   # ≈ Segoe UI Semibold
+    # Tamaños EXACTOS pedidos por Sebastián (2026-07-23), en PUNTOS → px a
+    # 203 dpi (1 pt = 203/72 = 2.82 px): marca 18pt=51 · REF 10pt=28 · resto 6pt=17.
+    PT = 203 / 72
+    px_marca = round(18 * PT)   # 51
+    f_ref = _font("TimesNewRoman.ttf", round(10 * PT))   # 28
+    f_comp = _font("Arial.ttf", round(6 * PT))           # 17
+    f_care = _font("Arial.ttf", round(6 * PT))           # 17
+    f_legal = _font("ArialBold.ttf", round(6 * PT))      # 17 (≈ Segoe UI Semibold)
 
     # Lienzo alto provisional; se recorta al final.
     img = Image.new("L", (ANCHO, 1600), 255)
@@ -131,14 +141,15 @@ def render_etiqueta(codigo: str, composicion: str) -> bytes:
     y = MARGEN_COSTURA
 
     # ── Logo (imagen real) o respaldo de texto ──
-    logo = _cargar_logo(ANCHO - 24)
+    logo = _cargar_logo(ANCHO - 16, alto_objetivo=round(px_marca * 1.6))
     if logo is not None:
         lx = (ANCHO - logo.size[0]) // 2
         img.paste(logo, (lx, y))
         y += logo.size[1] + 22
     else:
-        y += _centrado(draw, y, "MALE", _font("Arial.ttf", 40)); y += 6
-        y += _centrado(draw, y, "D E N I M", _font("Arial.ttf", 18)); y += 22
+        # Marca a 18 pt (respaldo hasta montar el logo real).
+        y += _centrado(draw, y, "MALE", _font("Arial.ttf", px_marca)); y += 4
+        y += _centrado(draw, y, "D E N I M", _font("Arial.ttf", round(px_marca * 0.42))); y += 22
 
     # ── Referencia (Times New Roman) ──
     y += _centrado(draw, y, f"REF {codigo}", f_ref) + 12
@@ -191,8 +202,9 @@ def tspl_etiqueta(codigo: str, composicion: str, copias: int = 1,
     ancho_bytes = (w + 7) // 8
     # PIL '1': bit 1 = blanco, 0 = negro → coincide con TSPL BITMAP mode 0.
     datos = img.tobytes()
-    largo_mm = round(h / DPMM) + 4
-    cab = (f"SIZE 27.5 mm,{largo_mm} mm\r\nGAP 0,0\r\nDIRECTION 0\r\n"
+    # Largo FÍSICO fijo de la etiqueta = 130 mm (Sebastián 2026-07-23): el
+    # corte cae siempre en el borde de la etiqueta, no ajustado al contenido.
+    cab = (f"SIZE 27.5 mm,130 mm\r\nGAP 0,0\r\nDIRECTION 0\r\n"
            f"DENSITY 12\r\nSET CUTTER {1 if cortar else 0}\r\nCLS\r\n").encode()
     bitmap = f"BITMAP 0,0,{ancho_bytes},{h},0,".encode() + datos + b"\r\n"
     pie = f"PRINT {max(1, copias)},1\r\n".encode()
