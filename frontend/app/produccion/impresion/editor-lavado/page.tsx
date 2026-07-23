@@ -49,6 +49,7 @@ export default function EditorLavadoPage() {
   const [pngUrl, setPngUrl] = useState("");
   const lienzoRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ id: string; dx: number; dy: number } | null>(null);
+  const resize = useRef<{ id: string; startY: number; base: number } | null>(null);
 
   // Cargar plantilla
   useEffect(() => {
@@ -99,9 +100,20 @@ export default function EditorLavadoPage() {
     return () => { vivo = false; urls.forEach((u) => URL.revokeObjectURL(u)); };
   }, []);
 
-  // ── Arrastre ──
+  // ── Arrastre (mover) y redimensión (tamaño) ──
   useEffect(() => {
     function move(e: PointerEvent) {
+      if (resize.current) {
+        const dy = (e.clientY - resize.current.startY) / ESCALA;
+        setLayout((L) => L && ({ ...L, elementos: L.elementos.map((el) => {
+          if (el.id !== resize.current!.id) return el;
+          if (el.tipo === "texto") {
+            return { ...el, tam: Math.max(8, Math.round(resize.current!.base + dy)) };
+          }
+          return { ...el, alto: Math.max(10, Math.round(resize.current!.base + dy)) };
+        }) }));
+        return;
+      }
       if (!drag.current || !lienzoRef.current) return;
       const r = lienzoRef.current.getBoundingClientRect();
       const x = Math.round((e.clientX - r.left) / ESCALA - drag.current.dx);
@@ -111,7 +123,7 @@ export default function EditorLavadoPage() {
           ? { ...el, x: Math.max(0, Math.min(ANCHO, x)), y: Math.max(0, Math.min(ALTO - 4, y)) }
           : el) }));
     }
-    function up() { drag.current = null; }
+    function up() { drag.current = null; resize.current = null; }
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     return () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
@@ -126,6 +138,12 @@ export default function EditorLavadoPage() {
       dx: (e.clientX - r.left) / ESCALA - el.x,
       dy: (e.clientY - r.top) / ESCALA - el.y,
     };
+  }
+
+  function onResizeDown(e: React.PointerEvent, el: Elemento) {
+    e.stopPropagation();
+    setSel(el.id);
+    resize.current = { id: el.id, startY: e.clientY, base: el.tipo === "texto" ? (el.tam || 17) : (el.alto || 40) };
   }
 
   function actualizar(id: string, campos: Partial<Elemento>) {
@@ -208,7 +226,7 @@ export default function EditorLavadoPage() {
             {!fontsReady && <div className="absolute inset-0 grid place-items-center text-[0.65rem] text-graphite">Cargando fuentes…</div>}
             {layout.elementos.map((el) => {
               const seleccionado = el.id === sel;
-              const box: React.CSSProperties = {
+              const wrap: React.CSSProperties = {
                 position: "absolute",
                 left: el.x * ESCALA,
                 top: el.y * ESCALA,
@@ -217,43 +235,50 @@ export default function EditorLavadoPage() {
                 cursor: "move",
                 outline: seleccionado ? "1.5px solid #2f6f6a" : "none",
                 outlineOffset: 2,
+                display: "inline-block",
               };
+              let contenido: React.ReactNode = null;
               if (el.tipo === "texto") {
-                return (
-                  <div key={el.id} style={{
-                    ...box,
+                contenido = (
+                  <span style={{
                     fontFamily: FAM[el.fuente || "Arial"] + ", sans-serif",
                     fontSize: (el.tam || 17) * ESCALA,
-                    lineHeight: 1.25,
-                    textAlign: el.align || "center",
-                    whiteSpace: "pre",
-                    color: "#000",
-                  }} onPointerDown={(e) => onDown(e, el)}>
-                    {muestra(el.texto || "")}
-                  </div>
+                    lineHeight: 1.25, textAlign: el.align || "center",
+                    whiteSpace: "pre", color: "#000", display: "inline-block",
+                  }}>{muestra(el.texto || "")}</span>
                 );
-              }
-              if (el.tipo === "logo") {
-                return assets["logo"] ? (
-                  <img key={el.id} src={assets["logo"]} alt="logo" draggable={false}
-                    style={{ ...box, height: (el.alto || 82) * ESCALA, width: "auto" }}
-                    onPointerDown={(e) => onDown(e, el)} />
-                ) : (
-                  <div key={el.id} style={{ ...box }} onPointerDown={(e) => onDown(e, el)}>
-                    <span className="text-[0.6rem] text-graphite">logo…</span>
+              } else if (el.tipo === "logo") {
+                contenido = assets["logo"]
+                  ? <img src={assets["logo"]} alt="logo" draggable={false}
+                      style={{ height: (el.alto || 82) * ESCALA, width: "auto", display: "block" }} />
+                  : <span className="text-[0.6rem] text-graphite">logo…</span>;
+              } else {
+                contenido = (
+                  <div style={{ display: "flex", gap: 8 * ESCALA }}>
+                    {(el.items || []).map((n, i) => (
+                      assets[`sym:${n}`]
+                        ? <img key={i} src={assets[`sym:${n}`]} alt={n} draggable={false}
+                            style={{ height: (el.alto || 40) * ESCALA, width: "auto", display: "block" }} />
+                        : <span key={i} style={{ width: (el.alto || 40) * ESCALA, height: (el.alto || 40) * ESCALA }}
+                            className="border border-dashed border-border" />
+                    ))}
                   </div>
                 );
               }
               return (
-                <div key={el.id} style={{ ...box, display: "flex", gap: 8 * ESCALA }}
-                  onPointerDown={(e) => onDown(e, el)}>
-                  {(el.items || []).map((n, i) => (
-                    assets[`sym:${n}`]
-                      ? <img key={i} src={assets[`sym:${n}`]} alt={n} draggable={false}
-                          style={{ height: (el.alto || 40) * ESCALA, width: "auto" }} />
-                      : <span key={i} style={{ width: (el.alto || 40) * ESCALA, height: (el.alto || 40) * ESCALA }}
-                          className="border border-dashed border-border" />
-                  ))}
+                <div key={el.id} style={wrap} onPointerDown={(e) => onDown(e, el)}>
+                  {contenido}
+                  {seleccionado && (
+                    <span
+                      onPointerDown={(e) => onResizeDown(e, el)}
+                      title="Arrastra para cambiar el tamaño"
+                      style={{
+                        position: "absolute", right: -6, bottom: -6,
+                        width: 14, height: 14, borderRadius: 3,
+                        background: "#2f6f6a", border: "2px solid #fff",
+                        cursor: "nwse-resize", touchAction: "none",
+                      }} />
+                  )}
                 </div>
               );
             })}
@@ -308,12 +333,20 @@ export default function EditorLavadoPage() {
                   </>
                 )}
                 {(elSel.tipo === "logo" || elSel.tipo === "simbolos") && (
-                  <label className="block">
-                    <span className="mb-1 block text-[0.65rem] uppercase tracking-widest text-graphite">Alto (mm)</span>
-                    <input type="number" step="0.5" value={Math.round((elSel.alto || 40) / 8 * 10) / 10}
-                      onChange={(e) => actualizar(elSel.id, { alto: Math.round((parseFloat(e.target.value) || 5) * 8) })}
-                      className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-xs tabular" />
-                  </label>
+                  <div>
+                    <span className="mb-1 block text-[0.65rem] uppercase tracking-widest text-graphite">Tamaño (alto)</span>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => actualizar(elSel.id, { alto: Math.max(10, (elSel.alto || 40) - 4) })}
+                        className="h-8 w-8 rounded-sm border border-border bg-card text-lg leading-none text-ink-900 hover:bg-cloud">−</button>
+                      <input type="number" step="0.5" value={Math.round((elSel.alto || 40) / 8 * 10) / 10}
+                        onChange={(e) => actualizar(elSel.id, { alto: Math.round((parseFloat(e.target.value) || 5) * 8) })}
+                        className="w-20 rounded-sm border border-border bg-white px-2 py-1.5 text-center text-xs tabular" />
+                      <span className="text-[0.65rem] text-graphite">mm</span>
+                      <button onClick={() => actualizar(elSel.id, { alto: (elSel.alto || 40) + 4 })}
+                        className="h-8 w-8 rounded-sm border border-border bg-card text-lg leading-none text-ink-900 hover:bg-cloud">+</button>
+                    </div>
+                    <p className="mt-1 text-[0.62rem] text-graphite">También puedes arrastrar el punto verde de la esquina.</p>
+                  </div>
                 )}
                 <div className="grid grid-cols-2 gap-2">
                   <label className="block">
