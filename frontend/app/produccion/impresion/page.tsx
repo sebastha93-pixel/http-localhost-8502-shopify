@@ -107,6 +107,16 @@ export default function ModuloImpresionPage() {
   }, [refsQ.data]);
   const refSel = referencias.find((r) => r.id === refId);
 
+  // La composición VIVE en el INVENTARIO (por tela), no en el precosteo. Se
+  // consulta por la tela de la referencia para saber qué saldrá en la etiqueta.
+  const compTelaQ = useQuery<{ tela: string; composicion: string }>({
+    queryKey: ["produccion", "composicion-tela", refSel?.tela],
+    queryFn: () => api.get(`/api/produccion/telas/composicion?tela=${encodeURIComponent(refSel!.tela!)}`),
+    enabled: tipo === "instruccion_lavado" && !!refSel?.tela,
+    staleTime: 30_000,
+  });
+  const compEfectiva = compTelaQ.data?.composicion || "";
+
   // Cola en vivo: refresca sola cada 8 s (el agente imprime en segundo plano)
   const colaQ = useQuery<{ trabajos: Trabajo[] }>({
     queryKey: ["produccion", "impresion", "historial"],
@@ -289,10 +299,18 @@ export default function ModuloImpresionPage() {
                   <option key={r.id} value={r.id}>{r.codigo_referencia} · {r.nombre}</option>
                 ))}
               </select>
-              {tipo === "instruccion_lavado" && refSel && !refSel.instrucciones_lavado && (
-                <p className="mt-1 text-[0.7rem] text-terracotta">
-                  Esta referencia no tiene composición guardada (ej. 100%ALGODON) — la etiqueta saldrá sin esa línea. Se agrega editando el precosteo.
-                </p>
+              {tipo === "instruccion_lavado" && refSel && !compTelaQ.isLoading && (
+                compEfectiva ? (
+                  <p className="mt-1 text-[0.7rem] text-teal">
+                    Composición: <span className="font-semibold">{compEfectiva}</span>
+                    {refSel.tela ? <span className="text-graphite"> · tela {refSel.tela}</span> : null}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[0.7rem] text-terracotta">
+                    La tela{refSel.tela ? ` “${refSel.tela}”` : ""} no tiene composición registrada — la etiqueta saldrá sin esa línea.
+                    Se agrega en <span className="font-semibold">Producción → Inventario</span> (clic en la tela).
+                  </p>
+                )
               )}
             </div>
 
