@@ -121,9 +121,11 @@ def _check_cron_nocturno() -> dict:
     try:
         from backend.services.produccion import _sb
         sb = _sb()
-        r = (sb.table("advisor_rankings").select("calculated_at")
-               .order("calculated_at", desc=True).limit(1).execute()).data
-        seg = _hace_seg(r[0].get("calculated_at")) if r else None
+        # La tabla no tiene calculated_at (se filtra en el upsert) — la huella
+        # que sí existe es updated_at/created_at de la última fila tocada.
+        r = (sb.table("advisor_rankings").select("updated_at,created_at")
+               .order("updated_at", desc=True).limit(1).execute()).data
+        seg = _hace_seg((r[0].get("updated_at") or r[0].get("created_at"))) if r else None
     except Exception as e:
         return _chk("cron_nocturno", "Cron nocturno (rankings 3 AM)", "alerta",
                     f"No se pudo leer rankings: {str(e)[:100]}")

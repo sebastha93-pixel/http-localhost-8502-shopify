@@ -937,6 +937,32 @@ def listar_precosteos(*, estado: Optional[str] = None, tela: Optional[str] = Non
     return out
 
 
+def _promedio_desde_precosteo(ref_id: Optional[str]) -> Optional[float]:
+    """Consumo de TELA por prenda (m) derivado del precosteo: entre los items
+    de MATERIA PRIMA, la fila cuyo nombre contiene TELA (o la de mayor
+    cantidad). Rango sano 0.1–10 m/prenda — fuera de eso se ignora."""
+    if not ref_id:
+        return None
+    try:
+        p = obtener_precosteo(ref_id) or {}
+        candidatos: list[tuple[str, float]] = []
+        for it in (p.get("items") or []):
+            if (it.get("categoria") or "").upper().strip() != "MATERIA PRIMA":
+                continue
+            try:
+                c = float(it.get("cantidad") or 0)
+            except (TypeError, ValueError):
+                continue
+            if 0.1 <= c <= 10:
+                candidatos.append(((it.get("item") or "").upper(), c))
+        if not candidatos:
+            return None
+        con_tela = [c for (n, c) in candidatos if "TELA" in n]
+        return round(max(con_tela) if con_tela else max(c for _, c in candidatos), 4)
+    except Exception:
+        return None
+
+
 def obtener_precosteo(precosteo_id: str) -> Optional[dict]:
     sb = _sb()
     if sb is None:
@@ -1205,6 +1231,11 @@ def crear_orden_corte(*, referencia_id: Optional[str] = None,
         s["_prendas"] = sum(int(n or 0) for n in curva.values())
         s["_cant"]    = int(s["cantidad_programada"]) if s["cantidad_programada"] else s["_prendas"]
         s["_prom"]    = float(s["promedio_tecnico"]) if s["promedio_tecnico"] is not None else None
+        # RED DE SEGURIDAD: si nadie digitó el promedio, se toma el consumo
+        # de TELA por prenda del propio precosteo (MATERIA PRIMA). Sin esto,
+        # metros teóricos nace en 0 y el auto-asignar queda muerto.
+        if s["_prom"] is None:
+            s["_prom"] = _promedio_desde_precosteo(s["referencia_id"])
         try:
             s["_precio"] = _precio_proceso_precosteo(s["referencia_id"], "corte")
         except Exception:
@@ -1859,7 +1890,28 @@ def auto_asignar_rollos_por_tono(*, oc_id: str,
     # Metros teóricos + colchón del 5% (evita quedarse corto por variaciones)
     m_teoricos = float(oc.get("metros_consumidos") or 0)
     if m_teoricos <= 0:
-        raise ValueError("orden_sin_metros_teoricos")
+        # AUTO-REPARACIÓN: órdenes creadas sin promedio técnico (el campo era
+        # opcional) → derivarlo del precosteo (consumo de TELA por prenda),
+        # persistirlo en la orden y seguir. Solo falla si tampoco está allí.
+        prom = float(oc.get("promedio_tecnico") or 0) or \
+            (_promedio_desde_precosteo(oc.get("referencia_id")) or 0)
+        cant = int(oc.get("cantidad_programada") or 0) or \
+            sum(int(v or 0) for v in (oc.get("curva_trazo") or {}).values())
+        if prom > 0 and cant > 0:
+            m_teoricos = round(prom * cant, 2)
+            try:
+                sb.table("ordenes_corte").update({
+                    "promedio_tecnico": prom,
+                    "metros_consumidos": m_teoricos,
+                    "updated_at": _now_iso(),
+                }).eq("id", oc_id).execute()
+                _cache_invalidate_prefix("ordenes_corte")
+            except Exception:
+                pass
+        else:
+            raise ValueError(
+                "orden_sin_metros_teoricos: digita el promedio técnico con el botón "
+                "Corregir de la curva, o agrega la TELA (m/prenda) en MATERIA PRIMA del precosteo")
     m_necesarios = round(m_teoricos * BUFFER_ASIGNACION_AUTO, 2)
 
     # Rollos ya asignados → no repetir
