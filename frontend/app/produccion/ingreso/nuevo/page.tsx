@@ -25,6 +25,7 @@ interface RolloForm {
   tono: string;
   referencia_tela: string;
   descripcion_tela: string;
+  composicion: string;     // etiqueta de lavado — se hereda por tela
   costo_metro: string;
   metros_inicial: string;
 }
@@ -32,7 +33,7 @@ interface RolloForm {
 function rolloVacio(): RolloForm {
   return {
     numero_rollo: "", lote_fabrica: "", tono: "",
-    referencia_tela: "", descripcion_tela: "",
+    referencia_tela: "", descripcion_tela: "", composicion: "",
     costo_metro: "", metros_inicial: "",
   };
 }
@@ -118,6 +119,7 @@ export default function NuevoIngresoPage() {
         tono:            r.tono             != null ? String(r.tono)            : "",
         referencia_tela: r.referencia_tela  != null ? String(r.referencia_tela) : "",
         descripcion_tela:r.descripcion_tela != null ? String(r.descripcion_tela): "",
+        composicion:     r.composicion      != null ? String(r.composicion)     : "",
         costo_metro:     r.costo_metro      != null ? String(r.costo_metro)     : "",
         metros_inicial:  r.metros_inicial   != null ? String(r.metros_inicial)  : "",
       }));
@@ -144,6 +146,7 @@ export default function NuevoIngresoPage() {
           tono: r.tono || null,
           referencia_tela: r.referencia_tela || null,
           descripcion_tela: r.descripcion_tela.trim().toUpperCase(),
+          composicion: r.composicion.trim().toUpperCase() || null,
           costo_metro: r.costo_metro ? parseFloat(r.costo_metro) : null,
           metros_inicial: parseFloat(r.metros_inicial),
         }));
@@ -179,10 +182,26 @@ export default function NuevoIngresoPage() {
       ...rollos,
       { ...rolloVacio(),
         descripcion_tela: last?.descripcion_tela || "",
+        composicion: last?.composicion || "",
         costo_metro: last?.costo_metro || "",
         referencia_tela: last?.referencia_tela || "",
       },
     ]);
+  }
+  // COMPOSICIÓN: si esa tela ya llegó antes, se hereda sola al salir del
+  // campo Descripción (el diseñador solo la digita la primera vez).
+  async function autoComposicion(idx: number) {
+    const r = rollos[idx];
+    const tela = r?.descripcion_tela?.trim();
+    if (!tela || r.composicion) return;
+    try {
+      const res = await api.get<{ composicion: string }>(
+        `/api/produccion/telas/composicion?tela=${encodeURIComponent(tela)}`);
+      if (res.composicion) {
+        setRollos((prev) => prev.map((x, i) =>
+          i === idx && !x.composicion ? { ...x, composicion: res.composicion } : x));
+      }
+    } catch { /* sin autollenado */ }
   }
   function quitarRollo(idx: number) {
     setRollos((prev) => prev.filter((_, i) => i !== idx));
@@ -310,12 +329,13 @@ export default function NuevoIngresoPage() {
                       </button>
                     )}
                   </div>
-                  <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
+                  <div className="grid grid-cols-2 md:grid-cols-7 gap-2">
                     <Cell label="Nº rollo"  value={r.numero_rollo} onChange={(v) => actualizarRollo(idx, "numero_rollo", v)} />
                     <Cell label="Lote"      value={r.lote_fabrica} onChange={(v) => actualizarRollo(idx, "lote_fabrica", v)} />
                     <Cell label="Tono"      value={r.tono}         onChange={(v) => actualizarRollo(idx, "tono", v)} />
                     <Cell label="Ref. tela" value={r.referencia_tela} onChange={(v) => actualizarRollo(idx, "referencia_tela", v)} />
-                    <Cell label="Descripción *" value={r.descripcion_tela} onChange={(v) => actualizarRollo(idx, "descripcion_tela", v)} required />
+                    <Cell label="Descripción *" value={r.descripcion_tela} onChange={(v) => actualizarRollo(idx, "descripcion_tela", v)} onBlur={() => autoComposicion(idx)} required />
+                    <Cell label="Composición (lavado)" value={r.composicion} onChange={(v) => actualizarRollo(idx, "composicion", v)} />
                     <Cell label="Costo/m (COP)" value={r.costo_metro}  onChange={(v) => actualizarRollo(idx, "costo_metro", v)}  inputMode="decimal" />
                     <Cell label="Metros *"      value={r.metros_inicial} onChange={(v) => actualizarRollo(idx, "metros_inicial", v)} inputMode="decimal" required />
                   </div>
@@ -365,13 +385,14 @@ function Input({ label, value, onChange, type = "text", required = false, placeh
   );
 }
 
-function Cell({ label, value, onChange, inputMode, required = false }: {
-  label: string; value: string; onChange: (v: string) => void; inputMode?: "decimal" | "numeric"; required?: boolean;
+function Cell({ label, value, onChange, onBlur, inputMode, required = false }: {
+  label: string; value: string; onChange: (v: string) => void; onBlur?: () => void; inputMode?: "decimal" | "numeric"; required?: boolean;
 }) {
   return (
     <div>
       <label className="mb-1 block text-[0.68rem] uppercase tracking-widest text-graphite">{label}</label>
       <input value={value} onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
         inputMode={inputMode}
         required={required}
         className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-sm" />

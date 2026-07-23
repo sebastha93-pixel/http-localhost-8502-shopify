@@ -56,9 +56,19 @@ class RolloIn(BaseModel):
     tono:             Optional[str] = None
     referencia_tela:  Optional[str] = None
     descripcion_tela: str = Field(min_length=1)
+    composicion:      Optional[str] = None   # etiqueta de lavado (se hereda por tela)
     ancho:            Optional[float] = None
     costo_metro:      Optional[float] = None
     metros_inicial:   float = Field(gt=0)
+
+
+@router.get("/telas/composicion")
+def composicion_de_tela_api(
+    tela: str,
+    _: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
+) -> dict:
+    """Composición registrada para esa tela (para autollenar en el ingreso)."""
+    return {"tela": tela, "composicion": svc.composicion_de_tela(tela)}
 
 
 class IngresoIn(BaseModel):

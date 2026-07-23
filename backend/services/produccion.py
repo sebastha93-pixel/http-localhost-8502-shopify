@@ -224,6 +224,7 @@ def crear_ingreso(*, textilera: str, nit_textilera: Optional[str], numero_docume
 
     # 2. Rollos + movimientos
     rollos_creados: list[dict] = []
+    comp_cache: dict[str, str] = {}   # composición heredada por tela (1 lookup c/u)
     for r in rollos:
         try:
             metros_inicial = float(r.get("metros_inicial") or 0)
@@ -253,7 +254,26 @@ def crear_ingreso(*, textilera: str, nit_textilera: Optional[str], numero_docume
         if not rollo_row["descripcion_tela"]:
             continue  # skip rollos sin descripción
 
-        r_res = sb.table("rollos_tela").insert(rollo_row).execute()
+        # COMPOSICIÓN de la tela (fuente de la etiqueta de lavado): si no la
+        # digitan y la MISMA tela ya llegó antes con composición, se hereda.
+        comp = (r.get("composicion") or "").strip()
+        if not comp:
+            clave = rollo_row["descripcion_tela"].upper()
+            if clave not in comp_cache:
+                comp_cache[clave] = composicion_de_tela(rollo_row["descripcion_tela"])
+            comp = comp_cache[clave]
+        if comp:
+            rollo_row["composicion"] = comp
+
+        try:
+            r_res = sb.table("rollos_tela").insert(rollo_row).execute()
+        except Exception as e:
+            # Columna composicion sin migrar → insertar sin ella.
+            if "composicion" in str(e):
+                rollo_row.pop("composicion", None)
+                r_res = sb.table("rollos_tela").insert(rollo_row).execute()
+            else:
+                raise
         if not r_res.data:
             continue
         rollo = r_res.data[0]
@@ -307,7 +327,7 @@ def actualizar_rollo_ingreso(rollo_id: str, **campos) -> dict:
         raise ValueError("rollo_no_encontrado")
     rollo = r[0]
 
-    descriptivos = {"descripcion_tela", "referencia_tela", "tono", "ancho",
+    descriptivos = {"composicion", "descripcion_tela", "referencia_tela", "tono", "ancho",
                     "numero_rollo", "serial", "lote_fabrica", "costo_metro"}
     update = {k: v for k, v in campos.items() if k in descriptivos and v is not None}
 
@@ -486,6 +506,23 @@ def listar_rollos(*, tela: Optional[str] = None, estado: Optional[str] = None,
         r["metros_libres"] = max(libres, 0.0)
         out.append(r)
     return out
+
+
+def composicion_de_tela(tela: Optional[str]) -> str:
+    """Composición registrada en el INVENTARIO para esa tela (la del rollo
+    más reciente que la tenga). Es la fuente de la etiqueta de lavado."""
+    t = (tela or "").strip()
+    sb = _sb()
+    if not t or sb is None:
+        return ""
+    try:
+        r = (sb.table("rollos_tela").select("composicion,created_at")
+               .ilike("descripcion_tela", t)
+               .not_.is_("composicion", "null")
+               .order("created_at", desc=True).limit(1).execute()).data
+        return (r[0].get("composicion") or "").strip() if r else ""
+    except Exception:
+        return ""
 
 
 def obtener_rollo(rollo_id: str) -> Optional[dict]:
@@ -2933,6 +2970,12 @@ def _encolar_trabajos_terminacion(rem: dict) -> int:
                     tela = pr[0].get("tela") or tela
             except Exception:
                 pass
+            # La COMPOSICIÓN oficial vive en el INVENTARIO de telas (el
+            # diseñador la digita al ingresar la tela y se hereda entre
+            # llegadas). El campo del precosteo queda de respaldo.
+            comp_inv = composicion_de_tela(tela)
+            if comp_inv:
+                instrucciones = comp_inv
             base = {"remision_id": rem.get("id"), "orden_corte_id": oc_id,
                     "referencia_id": ref_id, "formato": "zpl"}
             filas.append({**base, "tipo": "sticker_codigo", "destino": "honeywell",
@@ -2982,9 +3025,11 @@ def crear_trabajo_impresion_manual(*, tipo: str, referencia_id: str,
         payload = {"codigo_referencia": codigo, "tallas": limpio, "cortar": bool(cortar)}
         destino = "honeywell"
     else:
-        # Lavado: lleva TALLA en la etiqueta → por tallas (copias = legacy sin talla)
+        # Lavado: SIN talla (solo referencia + composición). La composición
+        # sale del inventario de telas; el campo del precosteo es respaldo.
+        comp_inv = composicion_de_tela(ref.get("tela") or "")
         payload = {"codigo_referencia": codigo, "tela": ref.get("tela") or "",
-                   "instrucciones": ref.get("instrucciones_lavado") or "",
+                   "instrucciones": comp_inv or (ref.get("instrucciones_lavado") or ""),
                    "cortar": bool(cortar)}
         if limpio:
             payload["tallas"] = limpio
@@ -3170,11 +3215,24 @@ def generar_zpl_trabajo(t: dict) -> str:
             z.append(negrita(y, "DENIM", 24));     y += 34
             z.append(filete(y, 3));                y += 20
             z.append(negrita(y, f"REF  {codigo}", 22)); y += 30
-            if talla:
-                z.append(negrita(y, f"TALLA  {_zpl_escape(str(talla))}", 22)); y += 30
+            # SIN talla (la talla va solo en el sticker). La COMPOSICIÓN va en
+            # líneas cortas a tamaño fijo — el auto-encogido de una sola línea
+            # larga la volvía ilegible (foto 2026-07-23).
             if composicion:
-                z.append(negrita(y, f"COMP  {composicion}", 22))
-            y += 38
+                y += 4
+                lineas: list[str] = []
+                linea = ""
+                for w in composicion.split():
+                    cand = (linea + " " + w).strip()
+                    if linea and len(cand) * 20 * 0.62 > W - 8:
+                        lineas.append(linea); linea = w
+                    else:
+                        linea = cand
+                if linea:
+                    lineas.append(linea)
+                for ln in lineas[:4]:
+                    z.append(negrita(y, ln, 20)); y += 26
+            y += 12
             z.append(filete(y));                   y += 14
             # Texto calcado del arte oficial (BarTender del servidor MDS):
             # inglés WARM WATER = español AGUA TIBIA (antes decía COLD).
@@ -3204,18 +3262,10 @@ def generar_zpl_trabajo(t: dict) -> str:
             bloque = "".join(z) + "\r\nCUT\r\n"
             return "".join([bloque] * max(1, copias))
 
+        # La etiqueta ya NO lleva talla → un solo lote: total de prendas +1%.
         tallas_lav = p.get("tallas") or {}
-        if tallas_lav:
-            bloques = []
-            for talla, qty in sorted(tallas_lav.items(),
-                                     key=lambda kv: _orden_talla(kv[0])):
-                qty = int(qty or 0)
-                if qty <= 0:
-                    continue
-                bloques.append(etiqueta_lavado(str(talla), int(_math.ceil(qty * 1.01))))
-            return "\n".join(bloques)
-        # Legacy / módulo con solo "copias": sin talla, +1%.
-        copias = max(1, int(_math.ceil(int(p.get("copias") or 1) * 1.01)))
+        total = sum(int(v or 0) for v in tallas_lav.values()) or int(p.get("copias") or 1)
+        copias = max(1, int(_math.ceil(total * 1.01)))
         return etiqueta_lavado(None, copias)
     return ""
 
