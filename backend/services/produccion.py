@@ -2679,6 +2679,45 @@ def obtener_remision(rem_id: str) -> Optional[dict]:
 # ── Cola de impresión (agente local por IP → RICOH) ──────────────────────
 # Cada remisión nace con impresa_at = NULL. El agente local en la red pide
 # las pendientes, imprime el PDF en la RICOH por su IP y marca impresa_at.
+
+# LATIDO del agente de impresión: cada poll del agente (cada ~12 s) toca
+# este timestamp. En memoria a propósito — si el backend se reinicia, el
+# siguiente poll lo repuebla en segundos. Da visibilidad de "agente caído"
+# sin migraciones ni tablas nuevas.
+_AGENTE_VISTO: dict = {"ts": 0.0}
+
+
+def _latido_agente() -> None:
+    _AGENTE_VISTO["ts"] = time.time()
+
+
+def estado_impresion() -> dict:
+    """Signos vitales del circuito de impresión, para el chip de estado del
+    módulo Impresión: ¿el agente está reportándose? ¿hay cola represada
+    (impresora apagada / agente caído)?"""
+    visto = float(_AGENTE_VISTO.get("ts") or 0)
+    hace_s = int(time.time() - visto) if visto else None
+    pendientes = remisiones_pendientes_impresion(limite=50) + \
+        trabajos_pendientes_impresion(limite=50)
+    mas_viejo_min = 0
+    for r in pendientes:
+        crudo = str(r.get("created_at") or "")
+        try:
+            # Py 3.10: fromisoformat revienta con fracciones recortadas → limpiar
+            limpio = re.sub(r"\.\d+", "", crudo).replace("Z", "+00:00")
+            t = datetime.fromisoformat(limpio)
+            edad = (datetime.now(timezone.utc) - t).total_seconds() / 60
+            mas_viejo_min = max(mas_viejo_min, int(edad))
+        except Exception:
+            continue
+    return {
+        "agente_hace_s": hace_s,
+        "agente_en_linea": hace_s is not None and hace_s < 60,
+        "pendientes": len(pendientes),
+        "mas_viejo_min": mas_viejo_min,
+    }
+
+
 def remisiones_pendientes_impresion(limite: int = 30) -> list[dict]:
     """Remisiones aún no impresas, más antigua primero (para el agente local)."""
     sb = _sb()

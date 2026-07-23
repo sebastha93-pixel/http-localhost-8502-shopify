@@ -212,6 +212,13 @@ export default function NuevaOrdenCortePage() {
               <Kpi label="Metros teóricos" value={`${metrosTeo.toFixed(2)} m`} />
               <Kpi label="Referencias" value={idsUsados.length.toString()} />
             </div>
+            {totalPrendas > 0 && metrosTeo <= 0 && (
+              <div className="rounded-sm border border-amber-400/50 bg-amber-50 px-3 py-2 text-xs text-amber-700 flex items-center gap-2">
+                <AlertCircle className="h-3.5 w-3.5 flex-none" />
+                Sin <span className="font-semibold">promedio técnico</span> los metros teóricos quedan en 0 y el
+                auto-asignar de rollos no funciona. Digítalo arriba (m/prenda) antes de crear la orden.
+              </div>
+            )}
           </CardContent>
         </Card>
 

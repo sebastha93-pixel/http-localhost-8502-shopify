@@ -92,6 +92,14 @@ export default function ModuloImpresionPage() {
   const trabajos = colaQ.data?.trabajos || [];
   const pendientes = trabajos.filter((t) => !t.impresa_at).length;
 
+  // Signos vitales: ¿el agente local está reportándose? ¿hay cola represada?
+  const estadoQ = useQuery<{ agente_en_linea: boolean; agente_hace_s: number | null; pendientes: number; mas_viejo_min: number }>({
+    queryKey: ["produccion", "impresion", "estado"],
+    queryFn: () => api.get("/api/produccion/impresion/estado"),
+    refetchInterval: 15000,
+  });
+  const salud = estadoQ.data;
+
   const totalStickers = TALLAS.reduce((s, t) => s + (parseInt(tallas[t] || "0", 10) || 0), 0);
 
   const imprimirMut = useMutation({
@@ -133,6 +141,29 @@ export default function ModuloImpresionPage() {
 
   return (
     <PageShell title="Impresión de etiquetas" subtitle="Nylon · imprime y corta en segundo plano — Honeywell (stickers) · SAT (lavado)">
+      {/* Signos vitales del circuito: agente + cola. Verde = todo fluye. */}
+      {salud && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-[0.65rem] font-semibold uppercase tracking-widest ${
+            salud.agente_en_linea
+              ? "border-teal/40 bg-teal/5 text-teal"
+              : "border-terracotta/40 bg-terra-soft text-terracotta"
+          }`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${salud.agente_en_linea ? "bg-teal" : "bg-terracotta"}`} />
+            {salud.agente_en_linea
+              ? `Agente de impresión en línea · hace ${salud.agente_hace_s}s`
+              : salud.agente_hace_s == null
+                ? "Agente de impresión sin reportarse desde el último reinicio"
+                : `Agente de impresión SIN CONEXIÓN · hace ${Math.round(salud.agente_hace_s / 60)} min — revisa que el Mac del agente esté prendido`}
+          </span>
+          {salud.pendientes > 0 && salud.mas_viejo_min >= 5 && (
+            <span className="inline-flex items-center gap-1.5 rounded-sm border border-amber-400/50 bg-amber-50 px-2.5 py-1 text-[0.65rem] font-semibold uppercase tracking-widest text-amber-700">
+              <AlertCircle className="h-3 w-3" />
+              {salud.pendientes} trabajo(s) esperando hace {salud.mas_viejo_min} min — ¿impresora apagada o sin cinta?
+            </span>
+          )}
+        </div>
+      )}
       {msg && (
         <div className="rounded-sm border border-teal/30 bg-teal-soft px-4 py-2.5 text-xs text-teal flex items-center gap-2">
           <CheckCircle className="h-4 w-4 flex-none" /> {msg}

@@ -1739,11 +1739,27 @@ def remision_pdf(
 # El agente local corre en un PC de la red de MALE'DENIM: pide las remisiones
 # pendientes, baja cada PDF de /remisiones/{id}/pdf y lo manda a la RICOH por
 # su IP (puerto 9100). Al terminar marca cada una como impresa.
+# El LATIDO del agente se registra solo cuando quien consulta es el usuario
+# de servicio del agente local — así el panel de estado (que usan humanos)
+# no lo toca y "agente caído" se detecta de verdad.
+_EMAIL_AGENTE = "impresion@maledenim.com"
+
+
 @router.get("/impresion/pendientes")
 def impresion_pendientes(
-    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ):
+    if (user.email or "").lower() == _EMAIL_AGENTE:
+        svc._latido_agente()
     return {"pendientes": svc.remisiones_pendientes_impresion()}
+
+
+@router.get("/impresion/estado")
+def impresion_estado(
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_corte", "produccion_cortador"), "ver")),
+):
+    """Signos vitales del circuito de impresión (chip del módulo Impresión)."""
+    return svc.estado_impresion()
 
 
 @router.post("/impresion/{rem_id}/impresa")
@@ -1768,8 +1784,10 @@ def impresion_reimprimir(
 # la SAT (instrucciones de lavado) en la red de la empresa.
 @router.get("/impresion/trabajos")
 def impresion_trabajos(
-    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ):
+    if (user.email or "").lower() == _EMAIL_AGENTE:
+        svc._latido_agente()
     return {"trabajos": svc.trabajos_pendientes_impresion()}
 
 
