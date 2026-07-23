@@ -8,7 +8,7 @@
  * También muestra la cola en vivo (lo que encolan las remisiones de
  * terminación aparece aquí) y permite reimprimir.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { puedeAccionModulo } from "@/lib/auth";
@@ -71,6 +71,30 @@ export default function ModuloImpresionPage() {
   const [cortar, setCortar] = useState(true);
   // Tallaje: inferiores 4–16 · superiores (bodys/camisetas) S–XL
   const [tallaje, setTallaje] = useState<"inferior" | "superior">("inferior");
+
+  // ── Vista previa de la etiqueta de lavado (iterar sin gastar etiqueta) ──
+  const [prevRef, setPrevRef] = useState("96613-1");
+  const [prevComp, setPrevComp] = useState("98% ALGODON 2% ELASTANO");
+  const [prevUrl, setPrevUrl] = useState("");
+  const [prevCargando, setPrevCargando] = useState(false);
+  const prevUrlRef = useRef("");
+  useEffect(() => {
+    let vivo = true;
+    setPrevCargando(true);
+    const t = setTimeout(async () => {
+      try {
+        const url = await api.blobUrl(
+          `/api/produccion/impresion/lavado/preview?codigo=${encodeURIComponent(prevRef)}&composicion=${encodeURIComponent(prevComp)}`);
+        if (!vivo) { URL.revokeObjectURL(url); return; }
+        if (prevUrlRef.current) URL.revokeObjectURL(prevUrlRef.current);
+        prevUrlRef.current = url;
+        setPrevUrl(url);
+      } catch { /* silencioso */ } finally {
+        if (vivo) setPrevCargando(false);
+      }
+    }, 450);   // debounce: espera a que dejes de escribir
+    return () => { vivo = false; clearTimeout(t); };
+  }, [prevRef, prevComp]);
   const TALLAS = tallaje === "superior" ? TALLAS_SUPERIOR : TALLAS_INFERIOR;
 
   const refsQ = useQuery<{ precosteos?: Precosteo[] } | Precosteo[]>({
@@ -174,6 +198,47 @@ export default function ModuloImpresionPage() {
           <AlertCircle className="h-4 w-4 flex-none" /> {err}
         </div>
       )}
+
+      {/* Vista previa de la etiqueta de lavado — editar y ver sin imprimir */}
+      <Card>
+        <CardContent className="p-5">
+          <p className="section-label mb-3 flex items-center gap-2">
+            <Droplets className="h-3.5 w-3.5" /> Vista previa · etiqueta de lavado
+          </p>
+          <div className="grid gap-5 md:grid-cols-[1fr_auto]">
+            <div className="space-y-3">
+              <label className="block">
+                <span className="mb-1 block text-[0.68rem] uppercase tracking-widest text-graphite">Referencia</span>
+                <input value={prevRef} onChange={(e) => setPrevRef(e.target.value)}
+                  className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-sm" />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[0.68rem] uppercase tracking-widest text-graphite">Composición de la tela</span>
+                <input value={prevComp} onChange={(e) => setPrevComp(e.target.value)}
+                  placeholder="98% ALGODON 2% ELASTANO"
+                  className="w-full rounded-sm border border-border bg-white px-2 py-1.5 text-sm" />
+              </label>
+              <p className="text-[0.7rem] text-graphite leading-relaxed">
+                Esta es exactamente la imagen que se imprime en la SAT (a escala).
+                Edita y la vista se actualiza sola. Dime qué ajustar aquí antes de imprimir.
+              </p>
+            </div>
+            <div className="flex flex-col items-center gap-2">
+              <div className="relative rounded-sm border border-border bg-white p-2"
+                style={{ width: 150 }}>
+                {prevCargando && (
+                  <span className="absolute right-3 top-3 text-graphite"><Loader2 className="h-3.5 w-3.5 animate-spin" /></span>
+                )}
+                {prevUrl
+                  ? <img src={prevUrl} alt="Vista previa etiqueta de lavado"
+                      className="w-full h-auto" style={{ imageRendering: "pixelated" }} />
+                  : <div className="h-[600px] grid place-items-center text-[0.65rem] text-graphite">Cargando…</div>}
+              </div>
+              <span className="text-[0.6rem] text-graphite">27.5 × 130 mm</span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Imprimir ahora */}
       {puedeImprimir && (

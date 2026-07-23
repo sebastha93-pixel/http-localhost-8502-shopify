@@ -1809,6 +1809,26 @@ def impresion_pendientes(
     return {"pendientes": svc.remisiones_pendientes_impresion()}
 
 
+@router.get("/impresion/lavado/preview")
+def preview_lavado(
+    codigo: str = "",
+    composicion: str = "",
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_corte", "produccion_cortador"), "ver")),
+):
+    """PNG de la etiqueta de lavado tal como sale impresa — para la vista
+    previa en pantalla (iterar el diseño sin gastar etiqueta)."""
+    from io import BytesIO
+    from backend.services import lavado_render as _lr
+    from PIL import Image
+    img = _lr.render_etiqueta(codigo.strip() or "REF 00000", composicion.strip())
+    # x2 con vecino-más-cercano: se ven los píxeles reales, nítidos.
+    grande = img.convert("L").resize((img.size[0] * 2, img.size[1] * 2), Image.NEAREST)
+    buf = BytesIO()
+    grande.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
+
+
 @router.get("/impresion/estado")
 def impresion_estado(
     _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_corte", "produccion_cortador"), "ver")),

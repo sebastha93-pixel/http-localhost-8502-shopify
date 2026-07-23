@@ -79,9 +79,22 @@ async function download(path: string, fallbackName: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
+/** Descarga un recurso binario autenticado (Bearer) y devuelve un object
+ *  URL para usarlo en <img>/<embed>. Recuerda revokeObjectURL al reemplazar. */
+async function blobUrl(path: string): Promise<string> {
+  const token = getToken();
+  const res = await fetch(`${BASE}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    cache: "no-store",
+  });
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status} on ${path}`);
+  return URL.createObjectURL(await res.blob());
+}
+
 export const api = {
   get:  <T>(path: string) => request<T>(path),
   download,
+  blobUrl,
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
   patch: <T>(path: string, body?: unknown) =>
