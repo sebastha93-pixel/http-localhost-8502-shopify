@@ -2849,7 +2849,7 @@ def marcar_remision_reimprimir(rem_id: str) -> bool:
 #   (verificado en foto 2026-07-21). Cada fila imprime hasta 3.
 #   ZPL_STK_X0 = corrimiento del borde del rollo respecto al cabezal
 #   (calibrar con la etiqueta-regla si la impresión cae corrida).
-ZPL_STK_X0         = 0
+ZPL_STK_X0         = 16   # +2 mm: foto 2026-07-23 — todo caía ~2 mm a la izq.
 # Medidas REALES medidas por Sebastián (boceto 2026-07-22):
 #   sticker 3.2 cm de ancho · separación 0.3 cm · margen 0.5 cm por lado.
 ZPL_STK_COL_ANCHO  = 256   # 32 mm
@@ -3083,11 +3083,11 @@ def generar_zpl_trabajo(t: dict) -> str:
         El ^BQ del PC42E-T rinde ~92 dots a mag 4 (incluye zona quieta)."""
         bx = x + ZPL_STK_MARGEN
         banda = ZPL_STK_COL_ANCHO - 2 * ZPL_STK_MARGEN
-        # ^BQ real del PC42E-T = (21 módulos + 8 de zona quieta) × mag.
-        # Con el alto OFICIAL de 26 mm (208 dots, .btw del servidor) cabe
-        # mag 4: campo 116 dots (núcleo ~11.6 mm) — mejor lectura de pistola.
-        qr_campo = (21 + 8) * 4   # 116
-        qr_x = x + (ZPL_STK_COL_ANCHO - qr_campo) // 2
+        # ^BQ real del PC42E-T: el NÚCLEO (21 módulos × mag) se pinta desde el
+        # origen del campo y la zona quieta queda a la DERECHA — centrar sobre
+        # el núcleo, no sobre el campo (foto 2026-07-23: el QR caía a la izq.).
+        qr_nucleo = 21 * 4   # 84 dots ≈ 10.5 mm — mag 4 con el alto de 26 mm
+        qr_x = x + (ZPL_STK_COL_ANCHO - qr_nucleo) // 2
         return (
             f"^FO{bx},6^FB{banda},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
             f"^FO{qr_x},30^BQN,2,4^FDQA,{dato}^FS"
