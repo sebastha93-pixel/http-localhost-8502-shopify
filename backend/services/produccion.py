@@ -3196,7 +3196,9 @@ def generar_zpl_trabajo(t: dict) -> str:
         W, S = ZPL_LAV_ANCHO, ZPL_LAV_SEAM
         import math as _math
 
-        _ANCHOS = {"1": 8, "2": 12, "3": 16, "4": 24, "5": 32}
+        # Anchos REALES por carácter medidos con la etiqueta-regla en la
+        # máquina (foto 2026-07-23): F1=10 F2=14 F3=16 F4=24 F5=32 dots.
+        _ANCHOS = {"1": 10, "2": 14, "3": 16, "4": 24, "5": 32}
 
         def texto(y: int, s: str, fuente: str = "2", negrilla: bool = True) -> str:
             x = max(0, (W - len(s) * _ANCHOS[fuente]) // 2)
@@ -3207,31 +3209,42 @@ def generar_zpl_trabajo(t: dict) -> str:
         def filete(y: int, grosor: int = 1, margen: int = 12) -> str:
             return f"BAR {margen},{y},{W - 2 * margen},{grosor}\r\n"
 
+        def diag(x1: int, y1: int, x2: int, y2: int) -> str:
+            # El firmware IGNORA el comando DIAGONAL (verificado en foto):
+            # se dibuja con escalones de bloques 3×3 — pinta en cualquier clon.
+            pasos = max(abs(x2 - x1), abs(y2 - y1), 1) // 3 + 1
+            out = []
+            for i in range(pasos + 1):
+                xi = x1 + (x2 - x1) * i // pasos
+                yi = y1 + (y2 - y1) * i // pasos
+                out.append(f"BAR {xi},{yi},3,3\r\n")
+            return "".join(out)
+
         def icono(i: int, x: int, y: int) -> str:
             if i == 0:   # lavadora 30° (cubeta)
                 return (f"BAR {x},{y+4},36,2\r\n"
-                        f"DIAGONAL {x+2},{y+6},{x+9},{y+30},2\r\n"
-                        f"DIAGONAL {x+34},{y+6},{x+27},{y+30},2\r\n"
-                        f"BAR {x+9},{y+30},18,2\r\n"
-                        f'TEXT {x+10},{y+12},"1",0,1,1,"30"\r\n')
+                        + diag(x + 2, y + 6, x + 9, y + 30)
+                        + diag(x + 33, y + 6, x + 26, y + 30)
+                        + f"BAR {x+9},{y+30},18,2\r\n"
+                        + f'TEXT {x+9},{y+11},"1",0,1,1,"30"\r\n')
             if i == 1:   # no blanqueador (triángulo tachado)
-                return (f"DIAGONAL {x+1},{y+32},{x+17},{y+2},2\r\n"
-                        f"DIAGONAL {x+18},{y+2},{x+34},{y+32},2\r\n"
-                        f"BAR {x+1},{y+32},34,2\r\n"
-                        f"DIAGONAL {x},{y},{x+35},{y+35},2\r\n")
+                return (diag(x + 1, y + 32, x + 17, y + 2)
+                        + diag(x + 18, y + 2, x + 34, y + 32)
+                        + f"BAR {x+1},{y+32},34,2\r\n"
+                        + diag(x, y, x + 33, y + 33))
             if i == 2:   # secadora baja (cuadro + círculo + punto)
                 return (f"BOX {x},{y},{x+36},{y+36},2\r\n"
                         f"CIRCLE {x+5},{y+5},26,2\r\n"
                         f"CIRCLE {x+15},{y+15},6,4\r\n")
             if i == 3:   # plancha tibia
                 return (f"BAR {x+2},{y+30},32,2\r\n"
-                        f"DIAGONAL {x+2},{y+30},{x+11},{y+8},2\r\n"
-                        f"BAR {x+11},{y+8},20,2\r\n"
-                        f"DIAGONAL {x+31},{y+8},{x+34},{y+30},2\r\n"
-                        f"CIRCLE {x+15},{y+17},5,4\r\n")
+                        + diag(x + 2, y + 30, x + 11, y + 8)
+                        + f"BAR {x+11},{y+8},20,2\r\n"
+                        + diag(x + 31, y + 8, x + 33, y + 30)
+                        + f"CIRCLE {x+15},{y+17},5,4\r\n")
             # 4: no lavar en seco (círculo tachado)
             return (f"CIRCLE {x+1},{y+1},34,2\r\n"
-                    f"DIAGONAL {x+4},{y+4},{x+32},{y+32},2\r\n")
+                    + diag(x + 5, y + 5, x + 30, y + 30))
 
         z: list[str] = []
         y = S                                     # ── zona de costura superior
@@ -3239,7 +3252,7 @@ def generar_zpl_trabajo(t: dict) -> str:
         z.append(texto(y, "DENIM", "3")); y += 30
         z.append(filete(y, 3));           y += 20
         ref_txt = f"REF {codigo}"
-        z.append(texto(y, ref_txt, "3" if len(ref_txt) <= 13 else "2")); y += 30
+        z.append(texto(y, ref_txt, "3" if len(ref_txt) <= 13 else ("2" if len(ref_txt) <= 15 else "1"))); y += 30
         if composicion:
             # Líneas de máx 17 caracteres (fuente "2" = 12 dots por carácter).
             y += 4
@@ -3247,22 +3260,22 @@ def generar_zpl_trabajo(t: dict) -> str:
             linea = ""
             for w_ in composicion.split():
                 cand = (linea + " " + w_).strip()
-                if linea and len(cand) > 17:
+                if linea and len(cand) > 15:
                     lineas.append(linea); linea = w_
                 else:
                     linea = cand
             if linea:
                 lineas.append(linea)
             for ln in lineas[:4]:
-                z.append(texto(y, ln[:17], "2")); y += 26
+                z.append(texto(y, ln[:15], "2")); y += 28
         y += 12
         z.append(filete(y)); y += 14
-        for ln in ("MACHINE WASH WARM", "NO BLEACH", "TUMBLE DRY LOW", "COOL IRON"):
+        # Partición del arte oficial: líneas de máx 15 caracteres (F2=14 dots)
+        for ln in ("MACHINE WASH", "WARM WATER", "NO BLEACH", "TUMBLE DRY LOW", "COOL IRON"):
             z.append(texto(y, ln, "2")); y += 28
         y += 6
         z.append(filete(y)); y += 14
-        # "LAVAR AGUA TIBIA": máx 17 caracteres de la fuente monoespaciada.
-        for ln in ("LAVAR AGUA TIBIA", "NO BLANQUEADOR", "SECADORA BAJA", "PLANCHA TIBIA"):
+        for ln in ("LAVADORA", "AGUA TIBIA", "NO BLANQUEADOR", "SECADORA BAJA", "PLANCHA TIBIA"):
             z.append(texto(y, ln, "2")); y += 28
         y += 6
         z.append(filete(y)); y += 12
@@ -3271,8 +3284,9 @@ def generar_zpl_trabajo(t: dict) -> str:
             z.append(icono(i, ini + i * 42, y))
         y += 46
         z.append(filete(y)); y += 14
+        # Legal en F1 (letra pequeña de 10 dots — 21 caracteres por línea)
         for ln in ("MADE IN COLOMBIA", "DIRTY JEANS", "NIT 901680460-1", "SIC 1036844755"):
-            z.append(texto(y, ln, "2")); y += 26
+            z.append(texto(y, ln, "1")); y += 24
 
         # Un solo lote (sin talla): total de prendas +1%.
         tallas_lav = p.get("tallas") or {}
