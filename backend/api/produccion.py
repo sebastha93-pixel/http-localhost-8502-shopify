@@ -1815,18 +1815,105 @@ def preview_lavado(
     composicion: str = "",
     _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_corte", "produccion_cortador"), "ver")),
 ):
-    """PNG de la etiqueta de lavado tal como sale impresa — para la vista
-    previa en pantalla (iterar el diseño sin gastar etiqueta)."""
+    """PNG de la etiqueta de lavado tal como sale impresa (usa la plantilla
+    guardada). Para la vista previa fiel sin gastar etiqueta."""
     from io import BytesIO
     from backend.services import lavado_render as _lr
     from PIL import Image
-    img = _lr.render_etiqueta(codigo.strip() or "REF 00000", composicion.strip())
-    # x2 con vecino-más-cercano: se ven los píxeles reales, nítidos.
+    layout = svc.obtener_plantilla_etiqueta("lavado")
+    img = _lr.render_etiqueta(codigo.strip() or "REF 00000", composicion.strip(), layout=layout)
     grande = img.convert("L").resize((img.size[0] * 2, img.size[1] * 2), Image.NEAREST)
     buf = BytesIO()
     grande.save(buf, format="PNG")
     return Response(content=buf.getvalue(), media_type="image/png",
                     headers={"Cache-Control": "no-store"})
+
+
+class PreviewLayoutBody(BaseModel):
+    codigo: str = ""
+    composicion: str = ""
+    layout: dict
+
+
+@router.post("/impresion/lavado/preview")
+def preview_lavado_layout(
+    body: PreviewLayoutBody,
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_corte"), "ver")),
+):
+    """PNG fiel de un layout PROPUESTO (verificación exacta del editor)."""
+    from io import BytesIO
+    from backend.services import lavado_render as _lr
+    from PIL import Image
+    img = _lr.render_etiqueta(body.codigo.strip() or "REF 00000", body.composicion.strip(), layout=body.layout)
+    grande = img.convert("L").resize((img.size[0] * 2, img.size[1] * 2), Image.NEAREST)
+    buf = BytesIO()
+    grande.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
+
+
+@router.get("/impresion/lavado/plantilla")
+def obtener_plantilla_lavado(
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_corte"), "ver")),
+) -> dict:
+    return {"layout": svc.obtener_plantilla_etiqueta("lavado")}
+
+
+class PlantillaBody(BaseModel):
+    layout: dict
+
+
+@router.patch("/impresion/lavado/plantilla")
+def guardar_plantilla_lavado(
+    body: PlantillaBody,
+    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_corte"), "modificar")),
+) -> dict:
+    try:
+        return {"ok": True, "layout": svc.guardar_plantilla_etiqueta("lavado", body.layout, user.email)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        if "plantillas_etiqueta" in str(e):
+            raise HTTPException(400, "Falta la migración: corre SUPABASE_MIGRATION_PLANTILLAS_ETIQUETA.sql en Supabase.")
+        raise HTTPException(500, str(e)[:200])
+
+
+@router.get("/impresion/lavado/asset")
+def asset_lavado(
+    kind: str,
+    name: str = "",
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_corte"), "ver")),
+):
+    """Logo o símbolo de cuidado (PNG) para pintarlos fieles en el editor."""
+    from pathlib import Path
+    base = Path(__file__).resolve().parent.parent / "assets" / "lavado"
+    if kind == "logo":
+        ruta = base / "logo.png"
+    elif kind == "symbol" and name and "/" not in name and ".." not in name:
+        ruta = base / "symbols" / name
+    else:
+        raise HTTPException(404, "asset_invalido")
+    if not ruta.exists():
+        raise HTTPException(404, "no_encontrado")
+    return Response(content=ruta.read_bytes(), media_type="image/png",
+                    headers={"Cache-Control": "max-age=86400"})
+
+
+@router.get("/impresion/fonts/{arch}")
+def servir_fuente(
+    arch: str,
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_corte"), "ver")),
+):
+    """Sirve las TTF de marca para que el editor dibuje con las MISMAS fuentes
+    que el render (fidelidad editor = impresión)."""
+    from pathlib import Path
+    if arch not in {"TimesNewRoman.ttf", "Arial.ttf", "ArialBold.ttf"}:
+        raise HTTPException(404, "fuente_no_permitida")
+    ruta = Path(__file__).resolve().parent.parent / "assets" / "lavado" / "fonts" / arch
+    if not ruta.exists():
+        raise HTTPException(404, "no_encontrada")
+    return Response(content=ruta.read_bytes(), media_type="font/ttf",
+                    headers={"Cache-Control": "max-age=86400"})
 
 
 @router.get("/impresion/estado")

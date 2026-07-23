@@ -235,6 +235,10 @@ export default function ModuloImpresionPage() {
                   : <div className="h-[600px] grid place-items-center text-[0.65rem] text-graphite">Cargando…</div>}
               </div>
               <span className="text-[0.6rem] text-graphite">27.5 × 130 mm</span>
+              <a href="/produccion/impresion/editor-lavado"
+                className="mt-1 inline-flex items-center gap-1.5 rounded-sm border border-navy-600 bg-navy-600 px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-white hover:bg-navy-700">
+                <Tag className="h-3 w-3" /> Editar diseño
+              </a>
             </div>
           </div>
         </CardContent>

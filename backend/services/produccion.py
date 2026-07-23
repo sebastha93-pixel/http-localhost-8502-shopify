@@ -3192,6 +3192,54 @@ def generar_zpl_trabajo(t: dict) -> str:
     return ""
 
 
+def obtener_plantilla_etiqueta(clave: str = "lavado") -> dict:
+    """Layout guardado de la etiqueta (editor visual). Si no hay, el default."""
+    from backend.services import lavado_render as _lr
+    sb = _sb()
+    if sb is not None:
+        try:
+            r = (sb.table("plantillas_etiqueta").select("layout")
+                   .eq("clave", clave).limit(1).execute()).data
+            if r and r[0].get("layout"):
+                return r[0]["layout"]
+        except Exception:
+            pass
+    return _lr.layout_por_defecto()
+
+
+def guardar_plantilla_etiqueta(clave: str, layout: dict, usuario: str = "") -> dict:
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    if not isinstance(layout, dict) or not layout.get("elementos"):
+        raise ValueError("layout_invalido")
+    sb.table("plantillas_etiqueta").upsert({
+        "clave": clave, "layout": layout,
+        "updated_at": _now_iso(), "updated_by": usuario or None,
+    }, on_conflict="clave").execute()
+    return layout
+
+
+def generar_contenido_trabajo(t: dict) -> bytes:
+    """Bytes imprimibles del trabajo (los baja el agente y los manda RAW a
+    la impresora). Sticker → ZPL en texto; lavado → BITMAP TSPL binario
+    (imagen compuesta desde la plantilla guardada, editable en la app)."""
+    tipo = t.get("tipo")
+    if tipo == "instruccion_lavado":
+        p = t.get("payload") or {}
+        codigo = (p.get("codigo_referencia") or "").strip()
+        composicion = (p.get("instrucciones") or "").strip()
+        tallas_lav = p.get("tallas") or {}
+        total = sum(int(v or 0) for v in tallas_lav.values()) or int(p.get("copias") or 1)
+        copias = max(1, int(math.ceil(total * 1.01)))
+        from backend.services import lavado_render as _lr
+        layout = obtener_plantilla_etiqueta("lavado")
+        return _lr.tspl_etiqueta(codigo, composicion, copias=copias,
+                                 cortar=bool(p.get("cortar", True)), layout=layout)
+    zpl = generar_zpl_trabajo(t)
+    return (zpl or "").encode("utf-8")
+
+
 def marcar_remision_recogida(rem_id: str, usuario: str = "sistema") -> dict:
     sb = _sb()
     if sb is None:
