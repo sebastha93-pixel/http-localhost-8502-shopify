@@ -74,13 +74,13 @@ def _cacheado(clave: str, fn) -> dict:
 # ── chequeos ─────────────────────────────────────────────────────────────
 
 def _check_webhook_kommo() -> dict:
-    from api import revenue as _rev
+    from backend.api import revenue as _rev
     seg = _hace_seg(_rev._webhook_stats.get("ultimo_en"))
     if seg is None:
         # El contador vive en memoria (se borra al redesplegar) → mirar la
         # base: el último mensaje guardado sobrevive reinicios.
         try:
-            from services import revenue_db as _rdb
+            from backend.services import revenue_db as _rdb
             sb = _rdb._sb()
             r = (sb.table("messages").select("created_at")
                    .order("created_at", desc=True).limit(1).execute()).data
@@ -99,7 +99,7 @@ def _check_webhook_kommo() -> dict:
 
 
 def _check_webhook_meta() -> dict:
-    from api import meta as _meta
+    from backend.api import meta as _meta
     seg = _hace_seg(_meta._stats.get("ultimo_en"))
     if seg is None:
         return _chk("webhook_meta", "Webhook Meta (WA/IG/FB)", "alerta",
@@ -113,7 +113,7 @@ def _check_webhook_meta() -> dict:
 
 
 def _check_cron_nocturno() -> dict:
-    from core import revenue_scheduler as _sch
+    from backend.core import revenue_scheduler as _sch
     st = _sch.get_state()
     if not st.get("running"):
         return _chk("cron_nocturno", "Cron nocturno (rankings 3 AM)", "critico",
@@ -129,7 +129,7 @@ def _check_cron_nocturno() -> dict:
 
 
 def _check_poll_notas() -> dict:
-    from core import revenue_scheduler as _sch
+    from backend.core import revenue_scheduler as _sch
     st = _sch.get_notes_poll_state()
     seg = _hace_seg(st.get("last_run_at"))
     if seg is None:
@@ -144,7 +144,7 @@ def _check_poll_notas() -> dict:
 
 
 def _check_impresion() -> dict:
-    from services import produccion as _prod
+    from backend.services import produccion as _prod
     e = _prod.estado_impresion()
     hace_s = e.get("agente_hace_s")
     if hace_s is None:
@@ -162,7 +162,7 @@ def _check_impresion() -> dict:
 def _check_siigo() -> dict:
     def _run():
         try:
-            from services import siigo as _sii
+            from backend.services import siigo as _sii
             if not _sii.siigo_configurado():
                 return _chk("siigo", "Siigo (facturación)", "alerta", "Sin credenciales configuradas")
             _sii._get_token()
@@ -197,7 +197,7 @@ def _check_whatsapp() -> dict:
 def _check_shopify() -> dict:
     def _run():
         try:
-            from services.clientes import _shopify_get
+            from backend.services.clientes import _shopify_get
             _shopify_get("shop.json")
             return _chk("shopify", "Shopify Admin", "ok", "API respondiendo")
         except Exception as e:
@@ -207,7 +207,7 @@ def _check_shopify() -> dict:
 
 
 def _check_lotes_estancados() -> dict:
-    from services.produccion import _sb
+    from backend.services.produccion import _sb
     sb = _sb()
     if sb is None:
         return _chk("lotes", "Lotes en ruta", "alerta", "Sin conexión a la base")
@@ -228,7 +228,7 @@ def _check_lotes_estancados() -> dict:
 
 
 def _check_datos_corte() -> dict:
-    from services.produccion import _sb
+    from backend.services.produccion import _sb
     sb = _sb()
     if sb is None:
         return _chk("datos_corte", "Integridad de corte", "alerta", "Sin conexión a la base")
