@@ -192,13 +192,28 @@ export default function EditorLavadoPage() {
   };
   const verImpreso = () => generarPng(false);
 
-  // El "Cómo imprime" se refresca solo al cambiar el diseño (una vez abierto).
+  // El "Cómo imprime" (render exacto) SIEMPRE visible y en vivo: se regenera
+  // solo (debounce 500ms) al cambiar cualquier cosa del diseño.
   useEffect(() => {
-    if (!pngUrl) return;   // solo si el usuario ya lo abrió al menos una vez
+    if (!layout) return;
     const t = setTimeout(() => generarPng(true), 500);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout, prevRef, prevComp]);
+
+  // Al conocer el ratio real del logo, si el alto guardado excede el tope
+  // físico (ancho de la etiqueta) se normaliza — así el control arranca en el
+  // tamaño real y no hay "zona muerta" al bajarlo.
+  useEffect(() => {
+    if (!ratioLogo || !layout) return;
+    const tope = Math.floor(ANCHO / ratioLogo);
+    const lg = layout.elementos.find((e) => e.id === "logo");
+    if (lg && (lg.alto || 82) > tope) {
+      setLayout((L) => L && ({ ...L, elementos: L.elementos.map((e) =>
+        e.id === "logo" ? { ...e, alto: tope } : e) }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ratioLogo]);
 
   if (cargaErr) return <ErrorState error={new Error(cargaErr)} onRetry={() => location.reload()} />;
   if (!layout) return <LoadingState label="Cargando editor…" />;
