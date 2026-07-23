@@ -122,8 +122,12 @@ def _paleta_1bit(img):
     return img.convert("L").point(lambda v: 0 if v < 160 else 255, mode="1")
 
 
+LARGO_DOTS = 130 * DPMM   # 1040 dots = 130 mm de largo físico
+
+
 def render_etiqueta(codigo: str, composicion: str) -> bytes:
-    """Devuelve la imagen 1-bit (PIL mode '1') de la etiqueta completa."""
+    """Devuelve la imagen 1-bit (PIL mode '1') de la etiqueta completa,
+    con los bloques repartidos y centrados en los 130 mm físicos."""
     from PIL import Image, ImageDraw
 
     # Tamaños EXACTOS pedidos por Sebastián (2026-07-23), en PUNTOS → px a
@@ -136,68 +140,91 @@ def render_etiqueta(codigo: str, composicion: str) -> bytes:
     f_legal = _font("ArialBold.ttf", round(6 * PT))      # 17 (≈ Segoe UI Semibold)
 
     # Lienzo alto provisional; se recorta al final.
-    img = Image.new("L", (ANCHO, 1600), 255)
+    img = Image.new("L", (ANCHO, LARGO_DOTS), 255)
     draw = ImageDraw.Draw(img)
-    y = MARGEN_COSTURA
+    ESP_LINEA = 8    # aire entre líneas de un mismo bloque
 
-    # ── Logo (imagen real) o respaldo de texto ──
+    # ── Los BLOQUES como líneas medibles (texto o imágenes) ──
+    #   ("texto", contenido, font)  |  ("logo", img)  |  ("simbolos", [imgs])
+    bloques: list[list[tuple]] = []
+
     logo = _cargar_logo(ANCHO - 16, alto_objetivo=round(px_marca * 1.6))
     if logo is not None:
-        lx = (ANCHO - logo.size[0]) // 2
-        img.paste(logo, (lx, y))
-        y += logo.size[1] + 22
+        bloques.append([("logo", logo)])
     else:
-        # Marca a 18 pt (respaldo hasta montar el logo real).
-        y += _centrado(draw, y, "MALE", _font("Arial.ttf", px_marca)); y += 4
-        y += _centrado(draw, y, "D E N I M", _font("Arial.ttf", round(px_marca * 0.42))); y += 22
+        bloques.append([("texto", "MALE", _font("Arial.ttf", px_marca)),
+                        ("texto", "D E N I M", _font("Arial.ttf", round(px_marca * 0.42)))])
 
-    # ── Referencia (Times New Roman) ──
-    y += _centrado(draw, y, f"REF {codigo}", f_ref) + 12
-
-    # ── Composición (Arial) ──
+    ref_block = [("texto", f"REF {codigo}", f_ref)]
     if composicion:
         for ln in _envolver(draw, composicion.upper(), f_comp, ANCHO - 16):
-            y += _centrado(draw, y, ln, f_comp) + 6
-    y += 26   # aire (sin filetes)
+            ref_block.append(("texto", ln, f_comp))
+    bloques.append(ref_block)
 
-    # ── Bloque legal (Arial Bold ≈ Segoe Semibold) ──
-    for ln in ("MADE IN COLOMBIA", "HECHO POR DIRTY JEANS",
-               "NIT 901680460-1", "SIC 1036844755"):
-        y += _centrado(draw, y, ln, f_legal) + 5
-    y += 26
+    bloques.append([("texto", ln, f_legal) for ln in
+                    ("MADE IN COLOMBIA", "HECHO POR DIRTY JEANS",
+                     "NIT 901680460-1", "SIC 1036844755")])
 
-    # ── Cuidados EN / ES (Arial) ──
-    for ln in ("MACHINE WASH WARM", "NO BLEACH", "TUMBLE DRY LOW", "COOL IRON"):
-        y += _centrado(draw, y, ln, f_care) + 6
-    y += 16
-    for ln in ("LAVADORA AGUA TIBIA", "NO BLANQUEADOR",
-               "SECADORA BAJA TEMP", "PLANCHA TIBIA"):
-        y += _centrado(draw, y, ln, f_care) + 6
-    y += 24
+    bloques.append([("texto", ln, f_care) for ln in
+                    ("MACHINE WASH WARM", "NO BLEACH", "TUMBLE DRY LOW", "COOL IRON")])
+    bloques.append([("texto", ln, f_care) for ln in
+                    ("LAVADORA AGUA TIBIA", "NO BLANQUEADOR",
+                     "SECADORA BAJA TEMP", "PLANCHA TIBIA")])
 
-    # ── Símbolos de cuidado (PNG oficiales) en fila ──
-    nombres = ["lavadora.png", "no_bleach.png", "secadora.png",
-               "plancha.png", "no_secadora.png"]
-    simbolos = [s for s in (_cargar_simbolo(n, 40) for n in nombres) if s]
+    simbolos = [s for s in (_cargar_simbolo(n, 40) for n in
+                ["lavadora.png", "no_bleach.png", "secadora.png",
+                 "plancha.png", "no_secadora.png"]) if s]
     if simbolos:
-        sep = 8
-        total = sum(s.size[0] for s in simbolos) + sep * (len(simbolos) - 1)
-        x = max(4, (ANCHO - total) // 2)
-        alto_max = max(s.size[1] for s in simbolos)
-        for s in simbolos:
-            img.paste(s, (x, y + (alto_max - s.size[1]) // 2))
-            x += s.size[0] + sep
-        y += alto_max
+        bloques.append([("simbolos", simbolos)])
 
-    y += MARGEN_COSTURA
-    recorte = img.crop((0, 0, ANCHO, y))
-    return _paleta_1bit(recorte)
+    def alto_item(it) -> int:
+        if it[0] == "texto":
+            x0, y0, x1, y1 = draw.textbbox((0, 0), it[1], font=it[2])
+            return y1 - y0
+        if it[0] == "logo":
+            return it[1].size[1]
+        return max(s.size[1] for s in it[1])   # simbolos
+
+    def alto_bloque(b) -> int:
+        return sum(alto_item(it) for it in b) + ESP_LINEA * (len(b) - 1)
+
+    altos = [alto_bloque(b) for b in bloques]
+    contenido = sum(altos)
+    # Aire disponible tras costuras, repartido en los HUECOS entre bloques.
+    disponible = LARGO_DOTS - 2 * MARGEN_COSTURA - contenido
+    huecos = max(1, len(bloques) - 1)
+    sep = max(24, disponible // huecos)   # ≥ 3 mm entre bloques
+    # Centrar verticalmente el conjunto (si sobra menos aire del previsto).
+    usado = contenido + sep * huecos
+    y = max(MARGEN_COSTURA, (LARGO_DOTS - usado) // 2)
+
+    for bi, b in enumerate(bloques):
+        for it in b:
+            if it[0] == "texto":
+                y += _centrado(draw, y, it[1], it[2]) + ESP_LINEA
+            elif it[0] == "logo":
+                lg = it[1]
+                img.paste(lg, ((ANCHO - lg.size[0]) // 2, y))
+                y += lg.size[1] + ESP_LINEA
+            else:
+                syms = it[1]
+                s_sep = 8
+                total = sum(s.size[0] for s in syms) + s_sep * (len(syms) - 1)
+                x = max(4, (ANCHO - total) // 2)
+                am = max(s.size[1] for s in syms)
+                for s in syms:
+                    img.paste(s, (x, y + (am - s.size[1]) // 2))
+                    x += s.size[0] + s_sep
+                y += am + ESP_LINEA
+        y = y - ESP_LINEA + sep   # cambiar el aire de línea por el de bloque
+
+    return _paleta_1bit(img)
 
 
 def tspl_etiqueta(codigo: str, composicion: str, copias: int = 1,
                   cortar: bool = True) -> bytes:
     """Trabajo TSPL completo con la etiqueta como BITMAP + corte por etiqueta."""
-    img = render_etiqueta(codigo, composicion)
+    img = render_etiqueta(codigo, composicion)   # ya mide 224 × 1040 (130 mm)
     w, h = img.size
     ancho_bytes = (w + 7) // 8
     # PIL '1': bit 1 = blanco, 0 = negro → coincide con TSPL BITMAP mode 0.
