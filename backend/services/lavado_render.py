@@ -100,8 +100,10 @@ def _cargar_logo(alto: int):
         logo = logo.crop(caja)
     w, h = logo.size
     nw = max(1, int(w * alto / h))
-    if nw > ANCHO - 8:
-        nw = ANCHO - 8
+    # Tope físico: el logo no puede ser más ancho que la etiqueta (27.5 mm).
+    # Se limita MANTENIENDO proporción (recalcula alto) → nunca se deforma.
+    if nw > ANCHO:
+        nw = ANCHO
         alto = max(1, int(h * nw / w))
     return logo.resize((nw, alto), Image.LANCZOS)
 

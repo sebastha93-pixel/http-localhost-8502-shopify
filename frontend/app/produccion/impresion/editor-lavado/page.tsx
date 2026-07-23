@@ -242,8 +242,10 @@ export default function EditorLavadoPage() {
                   : el.align === "right" ? "translateX(-100%)" : "none",
                 cursor: "move",
                 outline: seleccionado ? "1.5px solid #2f6f6a" : "none",
-                outlineOffset: 2,
+                outlineOffset: 0,
                 display: "inline-block",
+                lineHeight: 0,   // ciñe el recuadro a la imagen (sin hueco de línea)
+                fontSize: 0,
               };
               let contenido: React.ReactNode = null;
               if (el.tipo === "texto") {
@@ -258,7 +260,7 @@ export default function EditorLavadoPage() {
               } else if (el.tipo === "logo") {
                 contenido = assets["logo"]
                   ? <img src={assets["logo"]} alt="logo" draggable={false}
-                      style={{ height: (el.alto || 82) * ESCALA, width: "auto", display: "block" }} />
+                      style={{ height: (el.alto || 82) * ESCALA, width: "auto", maxWidth: "none", display: "block" }} />
                   : <span className="text-[0.6rem] text-graphite">logo…</span>;
               } else {
                 contenido = (
@@ -266,7 +268,7 @@ export default function EditorLavadoPage() {
                     {(el.items || []).map((n, i) => (
                       assets[`sym:${n}`]
                         ? <img key={i} src={assets[`sym:${n}`]} alt={n} draggable={false}
-                            style={{ height: (el.alto || 40) * ESCALA, width: "auto", display: "block" }} />
+                            style={{ height: (el.alto || 40) * ESCALA, width: "auto", maxWidth: "none", display: "block" }} />
                         : <span key={i} style={{ width: (el.alto || 40) * ESCALA, height: (el.alto || 40) * ESCALA }}
                             className="border border-dashed border-border" />
                     ))}
