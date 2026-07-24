@@ -117,13 +117,37 @@ def construir_payload_nota_credito(*, factura: dict, skus_a_acreditar: list[str]
             "branch_office": cliente.get("branch_office", 0),
         },
         "seller": factura.get("seller") or VENDEDOR_ONLINE_ID,
-        "items": [{
-            "code": it.get("code"),
-            "description": it.get("description") or "",
-            "quantity": it.get("quantity") or 1,
-            "price": it.get("price"),
-            "taxes": it.get("taxes") or [{"id": IVA_19_ID}],
-        } for it in lineas],
+        "items": [_linea_nc(it) for it in lineas],
         "payments": [{"id": ANTICIPO_CLIENTES_ID, "value": total}],
         "observations": f"Postventa — anula ítems de {factura.get('name', '')}",
     }
+
+
+def _linea_nc(it: dict) -> dict:
+    """Convierte un ítem de la factura Siigo en un ítem de nota crédito.
+
+    Copia lo que el POST necesita: code, cantidad, precio base y —crítico para
+    que Siigo no rechace— el vendedor, la bodega y los impuestos SOLO por id
+    (en el GET vienen expandidos con name/percentage/value; el POST espera {id}).
+    """
+    taxes = it.get("taxes") or []
+    linea = {
+        "code": it.get("code"),
+        "description": it.get("description") or "",
+        "quantity": it.get("quantity") or 1,
+        "price": it.get("price"),
+        "taxes": ([{"id": t.get("id")} for t in taxes if t.get("id")]
+                  or [{"id": IVA_19_ID}]),
+    }
+    if it.get("seller"):
+        linea["seller"] = it["seller"]
+    # Bodega: el producto es de inventario (ej. MELONN). Se copia para que la
+    # NC devuelva el stock a la misma bodega de la factura.
+    wh = it.get("warehouse")
+    if isinstance(wh, dict) and wh.get("id") is not None:
+        linea["warehouse"] = {"id": wh["id"]}
+    elif isinstance(wh, (int, str)) and wh not in ("", None):
+        linea["warehouse"] = {"id": wh}
+    if it.get("discount"):
+        linea["discount"] = it["discount"]
+    return linea
