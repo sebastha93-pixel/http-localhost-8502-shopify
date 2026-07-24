@@ -15,13 +15,28 @@ interface Ref {
   nombre: string;
   tela?: string;
   color?: string;
+  costo_total_sin_iva?: number;
   costo_total_con_iva: number;
+  iva_pct?: number;
   precio_sugerido_venta?: number;
+  precio_venta_final?: number | null;
   estado: string;
   bloqueada: boolean;
   autorizada_por?: string;
   fecha_autorizacion?: string;
   created_at?: string;
+}
+
+// Margen % = (precio_sin_iva − costo_sin_iva) / precio_sin_iva. El precio_venta_final
+// es PVP con IVA → se le quita el IVA antes de comparar. Devuelve null si no hay precio.
+function margenDe(r: Ref): number | null {
+  const pvp = Number(r.precio_venta_final || 0);
+  if (pvp <= 0) return null;
+  const iva = Number(r.iva_pct || 19);
+  const precioSin = pvp / (1 + iva / 100);
+  const costoSin = Number(r.costo_total_sin_iva || 0);
+  if (precioSin <= 0) return null;
+  return ((precioSin - costoSin) / precioSin) * 100;
 }
 
 export default function PrecosteoListPage() {
@@ -79,7 +94,8 @@ export default function PrecosteoListPage() {
                   <th className="px-4 py-3">Nombre</th>
                   <th className="px-4 py-3">Tela</th>
                   <th className="px-4 py-3 text-right">Costo c/IVA</th>
-                  <th className="px-4 py-3 text-right">Precio sug.</th>
+                  <th className="px-4 py-3 text-right">Precio venta</th>
+                  <th className="px-4 py-3 text-right">Margen</th>
                   <th className="px-4 py-3">Estado</th>
                 </tr>
               </thead>
@@ -95,7 +111,15 @@ export default function PrecosteoListPage() {
                     <td className="px-4 py-3 text-graphite">{r.tela || "—"}</td>
                     <td className="px-4 py-3 text-right tabular">${r.costo_total_con_iva?.toLocaleString("es-CO", { maximumFractionDigits: 0 }) || "—"}</td>
                     <td className="px-4 py-3 text-right tabular">
-                      {r.precio_sugerido_venta ? `$${r.precio_sugerido_venta.toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"}
+                      {r.precio_venta_final ? `$${Number(r.precio_venta_final).toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular">
+                      {(() => {
+                        const m = margenDe(r);
+                        if (m === null) return <span className="text-graphite">—</span>;
+                        const cls = m < 0 ? "text-terracotta" : m < 50 ? "text-amber-600" : "text-teal";
+                        return <span className={`font-semibold ${cls}`}>{m.toFixed(1)}%</span>;
+                      })()}
                     </td>
                     <td className="px-4 py-3">
                       {r.bloqueada ? (
