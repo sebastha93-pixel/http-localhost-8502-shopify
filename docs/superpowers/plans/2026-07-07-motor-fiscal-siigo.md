@@ -315,6 +315,7 @@ NC_PROFORMA_ID = 27141        # Nota Crédito Proforma (NoElectronic, modo prueb
 FV_ONLINE_ID = 11810          # Factura de venta online ("Domicilios")
 IVA_19_ID = 6352
 VENDEDOR_ONLINE_ID = 658
+ANTICIPO_CLIENTES_ID = 8316   # Forma de pago de la NC (no toca banco, deja saldo)
 
 IVA_PORCENTAJE = Decimal("19")
 
@@ -450,104 +451,124 @@ git commit -m "feat(fiscal): calculo de IVA y totales con Decimal"
 
 ## Task 5: Lógica pura — armar payload de la nota crédito
 
-> ⚠️ Ajustar los nombres de campo según la salida real de `muestra_notas_credito` (Task 1, Step 6) antes de implementar.
+> **Correcciones tras ver una NC real (PDF del fundador):**
+> 1. **Los montos NO salen del panel.** Salen de los **ítems de la factura
+>    original** en Siigo (copiar `code`, `quantity`, `price`, `taxes` exactos),
+>    filtrados a los SKU del caso. Así el documento cuadra al centavo con la
+>    factura y la DIAN no lo rechaza. (Ej. real: total 159.900 = base
+>    134.369,75 + IVA 25.530,25; nadie digita 134.369,75.)
+> 2. **Forma de pago = ANTICIPO CLIENTES (`8316`) siempre**, no la pasarela.
+>    La NC deja saldo a favor; la factura del reemplazo lo consume.
+> ⚠️ Confirmar nombres de campo JSON con `muestra_notas_credito` (Task 1) antes de emitir.
 
 **Files:**
 - Modify: `backend/services/fiscal_logic.py`
 - Modify: `tests/test_fiscal_logic.py`
 
 **Interfaces:**
-- Produces: `construir_payload_nota_credito(*, factura: dict, items: list[dict], modo: str, fecha: str) -> dict`
+- Produces: `items_factura_por_sku(factura: dict, skus: list[str]) -> list[dict]`, `construir_payload_nota_credito(*, factura: dict, skus_a_acreditar: list[str], modo: str, fecha: str) -> dict`
 
 - [ ] **Step 1: Test que falla**
 
 Agrega a `tests/test_fiscal_logic.py`:
 ```python
+# Factura original tal como la devuelve Siigo (ítems con code/quantity/price/taxes)
 FACTURA = {
     "id": "3ed6b96c-38bc-4334-87fa-e33e60298637",
     "name": "FV-1-63043",
     "customer": {"identification": "30384838", "branch_office": 0},
     "seller": 658,
-    "payments": [{"id": 8276, "value": 119000}],
+    "items": [
+        {"code": "REF-10-M", "description": "Jean flare - 10", "quantity": 1,
+         "price": 134369.75, "taxes": [{"id": 6352}]},
+        {"code": "REF-99-S", "description": "Blusa - 8", "quantity": 1,
+         "price": 50000.0, "taxes": [{"id": 6352}]},
+    ],
 }
 
 
-def test_payload_nc_modo_prueba_usa_proforma():
-    items = [{"codigo": "REF-1", "descripcion": "Jean", "cantidad": 1,
-              "precio_sin_iva": 100000.0}]
-    p = F.construir_payload_nota_credito(factura=FACTURA, items=items,
-                                         modo="prueba", fecha="2026-07-07")
-    assert p["document"]["id"] == 27141          # Proforma, NO DIAN
-    assert p["invoice"] == FACTURA["id"]         # referencia la factura original
+def test_items_factura_por_sku_filtra_por_code():
+    r = F.items_factura_por_sku(FACTURA, ["REF-10-M"])
+    assert len(r) == 1
+    assert r[0]["code"] == "REF-10-M"
+    assert r[0]["price"] == 134369.75   # valor EXACTO de la factura, no del panel
+
+
+def test_payload_nc_copia_montos_de_la_factura_y_usa_anticipo():
+    p = F.construir_payload_nota_credito(
+        factura=FACTURA, skus_a_acreditar=["REF-10-M"],
+        modo="prueba", fecha="2026-07-07")
+    assert p["document"]["id"] == 27141              # Proforma, NO DIAN
+    assert p["invoice"] == FACTURA["id"]
     assert p["customer"]["identification"] == "30384838"
-    assert p["seller"] == 658
-    assert p["date"] == "2026-07-07"
-    assert p["items"][0]["code"] == "REF-1"
-    assert p["items"][0]["price"] == 100000.0
+    assert p["items"][0]["code"] == "REF-10-M"
+    assert p["items"][0]["price"] == 134369.75       # copiado de la factura
     assert p["items"][0]["taxes"] == [{"id": 6352}]
-    # el pago de la NC cuadra con el total CON iva del ítem acreditado
-    assert p["payments"][0]["value"] == 119000.0
+    # pago = ANTICIPO CLIENTES, valor = base + IVA del ítem acreditado
+    assert p["payments"][0]["id"] == 8316
+    assert p["payments"][0]["value"] == 159900.0     # 134369.75 * 1.19, redondeado
 
 
 def test_payload_nc_modo_produccion_usa_electronica():
-    items = [{"codigo": "REF-1", "descripcion": "Jean", "cantidad": 1,
-              "precio_sin_iva": 100000.0}]
-    p = F.construir_payload_nota_credito(factura=FACTURA, items=items,
-                                         modo="produccion", fecha="2026-07-07")
+    p = F.construir_payload_nota_credito(
+        factura=FACTURA, skus_a_acreditar=["REF-10-M"],
+        modo="produccion", fecha="2026-07-07")
     assert p["document"]["id"] == 11817
 
 
-def test_payload_nc_sin_items_falla():
+def test_payload_nc_sku_inexistente_falla():
     import pytest
-    with pytest.raises(ValueError, match="sin_items"):
-        F.construir_payload_nota_credito(factura=FACTURA, items=[],
-                                         modo="prueba", fecha="2026-07-07")
+    with pytest.raises(ValueError, match="items_no_encontrados"):
+        F.construir_payload_nota_credito(
+            factura=FACTURA, skus_a_acreditar=["NO-EXISTE"],
+            modo="prueba", fecha="2026-07-07")
 ```
 
 - [ ] **Step 2: Correr y ver que falla**
 
 Run: `python3 -m pytest tests/test_fiscal_logic.py -v`
-Expected: FAIL `AttributeError: ... 'construir_payload_nota_credito'`
+Expected: FAIL `AttributeError: ... 'items_factura_por_sku'`
 
 - [ ] **Step 3: Implementar**
 
 Agrega a `backend/services/fiscal_logic.py`:
 ```python
-def construir_payload_nota_credito(*, factura: dict, items: list[dict],
+def items_factura_por_sku(factura: dict, skus: list[str]) -> list[dict]:
+    """Ítems de la factura original cuyo `code` está en `skus`.
+
+    Copia el ítem TAL CUAL viene de Siigo (price base, taxes) para que la
+    nota crédito cuadre al centavo con la factura. NO recalcula precios.
+    """
+    objetivo = {s for s in skus if s}
+    return [it for it in (factura.get("items") or [])
+            if it.get("code") in objetivo]
+
+
+def _total_con_iva_de_lineas(lineas: list[dict]) -> float:
+    """Total CON IVA de líneas de factura Siigo (price es base, sin IVA)."""
+    subtotal = Decimal("0")
+    for it in lineas:
+        subtotal += Decimal(str(it.get("price") or 0)) * Decimal(str(it.get("quantity") or 1))
+    iva = subtotal * IVA_PORCENTAJE / Decimal("100")
+    return float((subtotal + iva).quantize(Decimal("0.01")))
+
+
+def construir_payload_nota_credito(*, factura: dict, skus_a_acreditar: list[str],
                                    modo: str, fecha: str) -> dict:
     """Arma el cuerpo del POST de la nota crédito. NO emite nada.
 
-    `items` son los ítems del CASO (los que se devuelven), con precios
-    SIN IVA. La NC acredita solo esos, no la factura completa.
+    Los montos se COPIAN de la factura original (ítems por SKU), no del panel.
+    Forma de pago: ANTICIPO CLIENTES (deja saldo a favor de la clienta).
     """
-    if not items:
-        raise ValueError("sin_items")
     if not factura or not factura.get("id"):
         raise ValueError("sin_factura_original")
+    lineas = items_factura_por_sku(factura, skus_a_acreditar)
+    if not lineas:
+        raise ValueError("items_no_encontrados")
 
     cfg = config_documentos(modo)
     cliente = factura.get("customer") or {}
-
-    lineas = []
-    for it in items:
-        lineas.append({
-            "code": it.get("codigo"),
-            "description": it.get("descripcion") or "",
-            "quantity": it.get("cantidad") or 1,
-            "price": float(it.get("precio_sin_iva") or 0),
-            "taxes": [{"id": IVA_19_ID}],
-        })
-
-    totales = total_items(
-        [{"original_price": it.get("precio_sin_iva"),
-          "cantidad": it.get("cantidad") or 1} for it in items],
-        campo_precio="original_price",
-    )
-
-    # Se refleja la forma de pago de la factura original para que la
-    # devolución quede en la misma cuenta contable.
-    pagos_orig = factura.get("payments") or []
-    pago_id = (pagos_orig[0].get("id") if pagos_orig else None)
+    total = _total_con_iva_de_lineas(lineas)
 
     return {
         "document": {"id": cfg["nota_credito_id"]},
@@ -558,9 +579,15 @@ def construir_payload_nota_credito(*, factura: dict, items: list[dict],
             "branch_office": cliente.get("branch_office", 0),
         },
         "seller": factura.get("seller") or VENDEDOR_ONLINE_ID,
-        "items": lineas,
-        "payments": ([{"id": pago_id, "value": totales["total"]}]
-                     if pago_id else []),
+        # Se copian los ítems de la factura tal cual (código, precio base, IVA).
+        "items": [{
+            "code": it.get("code"),
+            "description": it.get("description") or "",
+            "quantity": it.get("quantity") or 1,
+            "price": it.get("price"),
+            "taxes": it.get("taxes") or [{"id": IVA_19_ID}],
+        } for it in lineas],
+        "payments": [{"id": ANTICIPO_CLIENTES_ID, "value": total}],
         "observations": f"Postventa — anula ítems de {factura.get('name', '')}",
     }
 ```
@@ -568,13 +595,13 @@ def construir_payload_nota_credito(*, factura: dict, items: list[dict],
 - [ ] **Step 4: Correr y ver que pasa**
 
 Run: `python3 -m pytest tests/test_fiscal_logic.py -v`
-Expected: PASS (12 passed)
+Expected: PASS (13 passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add backend/services/fiscal_logic.py tests/test_fiscal_logic.py
-git commit -m "feat(fiscal): payload de nota credito (puro, sin emitir)"
+git commit -m "feat(fiscal): payload NC copia montos de la factura original + anticipo"
 ```
 
 ---
@@ -803,7 +830,9 @@ CASO = {"id": "c1", "case_number": "PV-2026-0001", "type": "cambio_talla",
 
 FACTURA = {"id": "f2", "name": "FV-1-63043",
            "customer": {"identification": "30384838", "branch_office": 0},
-           "seller": 658, "payments": [{"id": 8276, "value": 119000}]}
+           "seller": 658,
+           "items": [{"code": "REF-1", "description": "Jean", "quantity": 1,
+                      "price": 100000.0, "taxes": [{"id": 6352}]}]}
 
 ITEMS = [{"original_sku": "REF-1", "original_variant": "M",
           "original_price": 100000.0}]
@@ -918,18 +947,16 @@ def _guardar_fiscal(**campos) -> dict:
     return (r.data or [campos])[0]
 
 
-def _items_para_fiscal(items: list[dict]) -> list[dict]:
-    """postventa_items → forma que espera fiscal_logic."""
-    return [{
-        "codigo": it.get("original_sku"),
-        "descripcion": f"{it.get('original_sku') or ''} {it.get('original_variant') or ''}".strip(),
-        "cantidad": 1,
-        "precio_sin_iva": float(it.get("original_price") or 0),
-    } for it in items]
+def _skus_del_caso(items: list[dict]) -> list[str]:
+    """SKU originales del caso, para casar contra los ítems de la factura."""
+    return [it.get("original_sku") for it in items if it.get("original_sku")]
 
 
 def preview_nota_credito(case_id: str) -> dict:
-    """Arma la nota crédito y la guarda como 'pendiente'. NO emite nada."""
+    """Arma la nota crédito y la guarda como 'pendiente'. NO emite nada.
+
+    Los montos se toman de la factura original (no del panel), casando por SKU.
+    """
     if _fiscal_existente(case_id, "nota_credito"):
         raise ValueError("nota_credito_ya_emitida")
 
@@ -947,17 +974,20 @@ def preview_nota_credito(case_id: str) -> dict:
     if factura is None:
         raise ValueError("factura_original_no_encontrada")
 
-    items_fiscal = _items_para_fiscal(items)
+    skus = _skus_del_caso(items)
     modo = fiscal_siigo.modo_actual()
     payload = F.construir_payload_nota_credito(
-        factura=factura, items=items_fiscal, modo=modo, fecha=_hoy())
-    totales = F.total_items(
-        [{"p": i["precio_sin_iva"], "cantidad": i["cantidad"]} for i in items_fiscal],
-        campo_precio="p")
+        factura=factura, skus_a_acreditar=skus, modo=modo, fecha=_hoy())
+
+    # Totales para mostrar (el valor exacto ya está en payload.payments).
+    total = payload["payments"][0]["value"]
+    subtotal = round(sum(
+        (l.get("price") or 0) * (l.get("quantity") or 1) for l in payload["items"]), 2)
+    totales = {"subtotal": subtotal, "iva": round(total - subtotal, 2), "total": total}
 
     _guardar_fiscal(case_id=case_id, doc_kind="nota_credito",
                     siigo_invoice_ref=factura.get("id"),
-                    amount=totales["total"], status="pendiente",
+                    amount=total, status="pendiente",
                     payload_snapshot=payload)
 
     return {"factura_original": factura, "payload": payload,
