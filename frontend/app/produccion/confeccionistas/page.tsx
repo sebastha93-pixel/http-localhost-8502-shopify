@@ -19,6 +19,7 @@ interface Confeccionista {
   documento?: string;
   tipo?: string;
   activo: boolean;
+  contacto_bienvenida_at?: string | null;
 }
 
 export default function ConfeccionistasPage() {
@@ -218,6 +219,13 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
     onError: (e: Error) => setErrEdit(e.message || "Error al guardar"),
   });
 
+  // Marcar/desmarcar que a este proveedor ya se le envió la bienvenida.
+  const bienv = !!c.contacto_bienvenida_at;
+  const marcarBienv = useMutation({
+    mutationFn: () => api.post(`/api/produccion/confeccionistas/${c.id}/marcar-bienvenida?enviada=${!bienv}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["produccion", "confeccionistas"] }),
+  });
+
   if (editando) {
     return (
       <tr className="border-b border-border bg-cloud/30">
@@ -278,7 +286,16 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
       <td className="px-4 py-2 tabular text-graphite">
         {c.documento || <span className="text-terracotta font-semibold" title="Sin documento el cruce con Siigo depende solo de la REF">falta ⚠</span>}
       </td>
-      <td className="px-4 py-2 text-graphite">{c.telefono || "—"}</td>
+      <td className="px-4 py-2 text-graphite">
+        {c.telefono || "—"}
+        {(c.tipo === "confeccion" || c.tipo === "terminacion" || !c.tipo) && (
+          <button onClick={() => marcarBienv.mutate()} disabled={marcarBienv.isPending}
+            title={bienv ? "Bienvenida ya enviada — clic para desmarcar" : "Marcar que ya se le envió la bienvenida (para excluir del envío masivo)"}
+            className={`ml-2 rounded-sm border px-1.5 py-0.5 text-[0.58rem] font-semibold uppercase tracking-wide ${bienv ? "border-teal/40 bg-teal/10 text-teal" : "border-border bg-card text-graphite hover:bg-cloud"}`}>
+            {bienv ? "✓ bienvenida" : "bienvenida"}
+          </button>
+        )}
+      </td>
       <td className="px-4 py-2 text-graphite">{c.direccion || "—"}</td>
       <td className="px-4 py-2"><Badge tone={c.activo ? "normal" : "neutral"}>{c.activo ? "Activo" : "Inactivo"}</Badge></td>
       <td className="px-4 py-2 text-right">
