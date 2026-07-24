@@ -168,3 +168,103 @@ def emitir_nota_credito(case_id: str, *, actor: str = "sistema") -> dict:
                         created_by=actor)
     pv.cambiar_estado(case_id, "nota_credito_emitida", actor=actor)
     return res
+
+
+# ── Factura del reemplazo ────────────────────────────────────────────
+from backend.services import fiscal_shopify  # noqa: E402
+
+TIPOS_SIN_FACTURA = {"reembolso", "bono"}
+
+
+def _item_reemplazo(caso: dict, item: dict, factura: dict) -> dict:
+    """Determina el ítem a facturar y su precio base.
+
+    Misma ref (o sin requested_sku) → precio del ítem original (exacto de la
+    factura). Otra ref → precio desde Shopify (convertido a base).
+    """
+    requested = (item.get("requested_sku") or "").strip()
+    original_sku = item.get("original_sku")
+    if not requested or requested == original_sku:
+        origs = F.items_factura_por_sku(factura, [original_sku])
+        if not origs:
+            raise ValueError("item_original_no_encontrado")
+        o = origs[0]
+        return {"code": requested or original_sku,
+                "description": o.get("description"),
+                "price_base": o.get("price"),
+                "seller": o.get("seller"),
+                "warehouse": o.get("warehouse")}
+    base = fiscal_shopify.precio_base_variante(requested)
+    if base is None:
+        raise ValueError("precio_shopify_no_encontrado")
+    return {"code": requested,
+            "description": item.get("requested_variant") or requested,
+            "price_base": base}
+
+
+def preview_factura_reemplazo(case_id: str) -> dict:
+    """Arma la factura del reemplazo (consume el anticipo de la NC). NO emite."""
+    if _fiscal_existente(case_id, "factura"):
+        raise ValueError("factura_ya_emitida")
+    nc = _fiscal_existente(case_id, "nota_credito")
+    if nc is None:
+        raise ValueError("nota_credito_no_emitida")
+
+    caso = _caso(case_id)
+    if caso is None:
+        raise ValueError("caso_no_encontrado")
+    if caso.get("type") in TIPOS_SIN_FACTURA:
+        raise ValueError("tipo_sin_factura")
+
+    items = _items_caso(case_id)
+    if not items:
+        raise ValueError("caso_sin_items")
+
+    emisor = obtener_emisor()
+    factura = emisor.buscar_factura_original(
+        numero_pedido=caso.get("shopify_order_name") or "")
+    if factura is None:
+        raise ValueError("factura_original_no_encontrada")
+
+    item_reemplazo = _item_reemplazo(caso, items[0], factura)
+    modo = fiscal_siigo.modo_actual()
+    payload = F.construir_payload_factura_reemplazo(
+        factura_original=factura, item_reemplazo=item_reemplazo,
+        credito_con_iva=float(nc.get("amount") or 0), modo=modo, fecha=_hoy())
+    resumen = payload.pop("_resumen")
+
+    _guardar_fiscal(case_id=case_id, doc_kind="factura",
+                    siigo_invoice_ref=factura.get("id"),
+                    amount=resumen["total"], status="pendiente",
+                    payload_snapshot=payload)
+
+    return {"payload": payload, "resumen": resumen, "modo": modo, "emitido": False}
+
+
+def emitir_factura_reemplazo(case_id: str, *, actor: str = "sistema") -> dict:
+    """Emite en Siigo la factura del reemplazo previamente previsualizada."""
+    if _fiscal_existente(case_id, "factura"):
+        raise ValueError("factura_ya_emitida")
+    fila = _pendiente(case_id, "factura")
+    if fila is None:
+        raise ValueError("sin_preview")
+
+    emisor = obtener_emisor()
+    try:
+        res = emisor.emitir(payload=fila["payload_snapshot"], doc_kind="factura")
+    except Exception as e:
+        _marcar_error(fiscal_id=fila["id"], detalle=str(e))
+        pv.registrar_evento(case_id, "fiscal_error",
+                            f"Factura de reemplazo rechazada: {str(e)[:200]}",
+                            created_by=actor)
+        raise
+
+    _marcar_emitido(fiscal_id=fila["id"],
+                    siigo_document_id=res["siigo_document_id"],
+                    siigo_document_number=res["siigo_document_number"])
+    pv.registrar_evento(case_id, "factura_emitida",
+                        f"Factura {res['siigo_document_number']} emitida "
+                        f"(modo {fiscal_siigo.modo_actual()})",
+                        created_by=actor)
+    pv.cambiar_estado(case_id, "factura_emitida", actor=actor)
+    return res

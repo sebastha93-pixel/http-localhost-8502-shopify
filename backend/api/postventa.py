@@ -142,3 +142,25 @@ def fiscal_emitir(case_id: str,
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(502, f"siigo: {str(e)[:300]}")
+
+
+@router.post("/casos/{case_id}/fiscal/factura/preview")
+def fiscal_factura_preview(case_id: str,
+                           _: CurrentUser = Depends(require_permission("postventa", "modificar"))):
+    """Arma la factura del reemplazo (consume el anticipo). NO emite."""
+    try:
+        return fiscal_svc.preview_factura_reemplazo(case_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/casos/{case_id}/fiscal/factura/emitir")
+def fiscal_factura_emitir(case_id: str,
+                          user: CurrentUser = Depends(require_permission("postventa", "modificar"))):
+    """Emite en Siigo la factura del reemplazo. Requiere confirmacion."""
+    try:
+        return fiscal_svc.emitir_factura_reemplazo(case_id, actor=user.id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"siigo: {str(e)[:300]}")
