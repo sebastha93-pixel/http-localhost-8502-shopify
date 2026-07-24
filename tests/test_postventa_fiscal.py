@@ -102,3 +102,57 @@ def test_emitir_error_siigo_marca_error_y_relanza(monkeypatch):
     with pytest.raises(RuntimeError, match="400"):
         PF.emitir_nota_credito("c1", actor="u1")
     assert marcado["fiscal_id"] == "fx"  # quedó registrado el error, no se pierde
+
+
+# ── factura del reemplazo ────────────────────────────────────────────
+FACTURA_CON_ITEM = {**FACTURA, "seller": 658,
+    "items": [{"code": "REF-1", "description": "Jean - 10", "quantity": 1,
+               "price": 100000.0, "seller": 658, "warehouse": {"id": 32},
+               "taxes": [{"id": 6352}]}]}
+
+
+def _mock_factura(monkeypatch, *, nc=None, factura_ya=None, tipo="cambio_talla",
+                  requested_sku=""):
+    monkeypatch.setattr(PF, "_caso", lambda cid: {**CASO, "type": tipo})
+    monkeypatch.setattr(PF, "_items_caso", lambda cid: [
+        {"original_sku": "REF-1", "requested_sku": requested_sku,
+         "original_price": 100000.0}])
+    def fx(cid, dk):
+        return nc if dk == "nota_credito" else factura_ya
+    monkeypatch.setattr(PF, "_fiscal_existente", fx)
+    monkeypatch.setattr(PF, "_guardar_fiscal", lambda **k: {"id": "fx", **k})
+
+    class E:
+        def buscar_factura_original(self, **k):
+            return FACTURA_CON_ITEM
+    monkeypatch.setattr(PF, "obtener_emisor", lambda: E())
+
+
+def test_factura_reemplazo_misma_ref_usa_precio_original(monkeypatch):
+    _mock_factura(monkeypatch, nc={"amount": 119000.0})
+    r = PF.preview_factura_reemplazo("c1")
+    assert r["payload"]["items"][0]["price"] == 100000.0     # de la factura original
+    assert r["resumen"]["excedente"] == 0                    # mismo precio
+    assert r["payload"]["payments"][0]["id"] == 8316
+
+
+def test_factura_reemplazo_requiere_nc_primero(monkeypatch):
+    _mock_factura(monkeypatch, nc=None)
+    with pytest.raises(ValueError, match="nota_credito_no_emitida"):
+        PF.preview_factura_reemplazo("c1")
+
+
+def test_factura_reemplazo_reembolso_no_lleva_factura(monkeypatch):
+    _mock_factura(monkeypatch, nc={"amount": 119000.0}, tipo="reembolso")
+    with pytest.raises(ValueError, match="tipo_sin_factura"):
+        PF.preview_factura_reemplazo("c1")
+
+
+def test_factura_reemplazo_otra_ref_usa_shopify(monkeypatch):
+    _mock_factura(monkeypatch, nc={"amount": 119000.0}, requested_sku="REF-NUEVA")
+    monkeypatch.setattr(PF.fiscal_shopify, "precio_base_variante",
+                        lambda sku: 168067.23)
+    r = PF.preview_factura_reemplazo("c1")
+    assert r["payload"]["items"][0]["code"] == "REF-NUEVA"
+    assert r["payload"]["items"][0]["price"] == 168067.23
+    assert r["payload"]["payments"][1]["id"] == 8857        # excedente

@@ -151,3 +151,76 @@ def _linea_nc(it: dict) -> dict:
     if it.get("discount"):
         linea["discount"] = it["discount"]
     return linea
+
+
+# ── Factura del reemplazo ────────────────────────────────────────────
+EXCEDENTE_PAYMENT_ID = 8857   # CUENTAS POR COBRAR — excedente que paga la clienta
+
+
+def base_desde_precio_con_iva(precio_con_iva: float) -> float:
+    """Precio Shopify (CON IVA) → base sin IVA. base = precio / 1.19."""
+    v = Decimal(str(precio_con_iva))
+    factor = Decimal("1") + IVA_PORCENTAJE / Decimal("100")
+    return float((v / factor).quantize(Decimal("0.01")))
+
+
+def construir_payload_factura_reemplazo(*, factura_original: dict,
+                                        item_reemplazo: dict,
+                                        credito_con_iva: float,
+                                        modo: str, fecha: str) -> dict:
+    """Arma el POST de la factura del reemplazo. NO emite.
+
+    Regla del fundador:
+      - El anticipo (saldo de la NC) cubre hasta el valor de la prenda nueva.
+      - Si la nueva vale MÁS, la clienta paga el excedente (cuentas por cobrar).
+      - Si vale igual o menos, el anticipo cubre todo (el saldo restante queda
+        a favor y se maneja aparte).
+    `item_reemplazo.price_base` es SIN IVA (misma ref = precio original exacto;
+    otra ref = precio Shopify / 1.19).
+    """
+    if not item_reemplazo or item_reemplazo.get("price_base") is None:
+        raise ValueError("sin_item_reemplazo")
+
+    cfg = config_documentos(modo)
+    cliente = factura_original.get("customer") or {}
+    price_base = Decimal(str(item_reemplazo["price_base"]))
+    qty = Decimal(str(item_reemplazo.get("quantity") or 1))
+    total = float((price_base * qty * (Decimal("1") + IVA_PORCENTAJE / Decimal("100")))
+                  .quantize(Decimal("0.01")))
+    credito = float(Decimal(str(credito_con_iva)).quantize(Decimal("0.01")))
+
+    anticipo_aplicado = round(min(credito, total), 2)
+    excedente = round(total - anticipo_aplicado, 2)
+    payments = [{"id": ANTICIPO_CLIENTES_ID, "value": anticipo_aplicado}]
+    if excedente > 0:
+        payments.append({"id": EXCEDENTE_PAYMENT_ID, "value": excedente})
+
+    linea = {
+        "code": item_reemplazo.get("code"),
+        "description": item_reemplazo.get("description") or "",
+        "quantity": int(qty),
+        "price": float(price_base),
+        "taxes": [{"id": IVA_19_ID}],
+    }
+    if item_reemplazo.get("seller"):
+        linea["seller"] = item_reemplazo["seller"]
+    wh = item_reemplazo.get("warehouse")
+    if isinstance(wh, dict) and wh.get("id") is not None:
+        linea["warehouse"] = {"id": wh["id"]}
+
+    return {
+        "document": {"id": cfg["factura_id"]},
+        "date": fecha,
+        "customer": {
+            "identification": cliente.get("identification"),
+            "branch_office": cliente.get("branch_office", 0),
+        },
+        "seller": factura_original.get("seller") or VENDEDOR_ONLINE_ID,
+        "items": [linea],
+        "payments": payments,
+        "observations": (f"Postventa — reemplazo de {factura_original.get('name', '')} "
+                         f"(anticipo {anticipo_aplicado}"
+                         + (f" + excedente {excedente}" if excedente > 0 else "") + ")"),
+        "_resumen": {"total": total, "anticipo": anticipo_aplicado,
+                     "excedente": excedente},
+    }

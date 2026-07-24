@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { formatMoney } from "@/lib/utils";
 import {
   obtenerCaso, cambiarEstado, previewFiscal, emitirFiscal,
+  previewFactura, emitirFactura, type PreviewFactura,
   ESTADOS_LABEL, type EstadoPostventa, type PreviewFiscal,
 } from "@/lib/postventa";
 
@@ -60,6 +61,10 @@ export default function CasoDetallePage() {
 
       {/* Panel fiscal: nota crédito */}
       <PanelFiscal caseId={caseId} status={c.status} onEmitido={() =>
+        qc.invalidateQueries({ queryKey: ["postventa-caso", caseId] })} />
+
+      {/* Panel fiscal: factura del reemplazo (tras la nota crédito) */}
+      <PanelFactura caseId={caseId} status={c.status} tipo={c.type} onEmitido={() =>
         qc.invalidateQueries({ queryKey: ["postventa-caso", caseId] })} />
 
       <div className="flex gap-2 flex-wrap mt-4">
@@ -146,6 +151,69 @@ function PanelFiscal({ caseId, status, onEmitido }:
             {emitMut.isError && (
               <p className="text-sm text-destructive">
                 Siigo rechazó la emisión. El caso quedó registrado con el error; revisa e intenta de nuevo.
+              </p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PanelFactura({ caseId, status, tipo, onEmitido }:
+  { caseId: string; status: string; tipo: string; onEmitido: () => void }) {
+  const [preview, setPreview] = useState<PreviewFactura | null>(null);
+  const prevMut = useMutation({
+    mutationFn: () => previewFactura(caseId), onSuccess: setPreview });
+  const emitMut = useMutation({
+    mutationFn: () => emitirFactura(caseId),
+    onSuccess: () => { setPreview(null); onEmitido(); } });
+
+  // Solo tras emitir la NC, y solo para cambios (reembolso/bono no llevan factura).
+  if (status !== "nota_credito_emitida") return null;
+  if (tipo === "reembolso" || tipo === "bono") return null;
+
+  return (
+    <Card className="mb-4 border-navy-600/30">
+      <CardContent className="py-4 space-y-3">
+        <div className="font-medium text-sm">Factura del reemplazo (Siigo)</div>
+        {!preview && (
+          <button disabled={prevMut.isPending} onClick={() => prevMut.mutate()}
+            className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-navy-700 disabled:opacity-50">
+            {prevMut.isPending ? "Calculando…" : "Previsualizar factura del reemplazo"}
+          </button>
+        )}
+        {prevMut.isError && (
+          <p className="text-sm text-destructive">
+            No se pudo armar la factura (¿el precio de la referencia nueva está en Shopify?).
+          </p>
+        )}
+        {preview && (
+          <div className="space-y-2">
+            <div className="rounded-sm border border-border bg-cloud/30 p-3 text-sm space-y-1">
+              <Fila k="Total factura" v={formatMoney(preview.resumen.total)} />
+              <Fila k="Cubierto por anticipo (NC)" v={formatMoney(preview.resumen.anticipo)} />
+              <Fila k="Paga la clienta (excedente)"
+                    v={formatMoney(preview.resumen.excedente)} bold />
+            </div>
+            {preview.resumen.excedente > 0 && (
+              <p className="text-xs text-amber-600">
+                La prenda nueva vale más: la clienta debe pagar el excedente.
+              </p>
+            )}
+            <div className="flex gap-2">
+              <button disabled={emitMut.isPending} onClick={() => emitMut.mutate()}
+                className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-navy-700 disabled:opacity-50">
+                {emitMut.isPending ? "Emitiendo…" : "Emitir factura"}
+              </button>
+              <button onClick={() => setPreview(null)}
+                className="rounded-sm border border-border bg-card px-4 py-2 text-sm font-medium text-graphite hover:bg-cloud">
+                Cancelar
+              </button>
+            </div>
+            {emitMut.isError && (
+              <p className="text-sm text-destructive">
+                Siigo rechazó la factura. El caso quedó con el error; revisa e intenta de nuevo.
               </p>
             )}
           </div>

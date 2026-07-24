@@ -101,3 +101,14 @@ export const previewFiscal = (id: string) =>
 
 export const emitirFiscal = (id: string) =>
   api.post<{ siigo_document_number: string }>(`/api/postventa/casos/${id}/fiscal/emitir`);
+
+// Factura del reemplazo
+export interface PreviewFactura {
+  resumen: { total: number; anticipo: number; excedente: number };
+  modo: string;
+  emitido: boolean;
+}
+export const previewFactura = (id: string) =>
+  api.post<PreviewFactura>(`/api/postventa/casos/${id}/fiscal/factura/preview`);
+export const emitirFactura = (id: string) =>
+  api.post<{ siigo_document_number: string }>(`/api/postventa/casos/${id}/fiscal/factura/emitir`);
