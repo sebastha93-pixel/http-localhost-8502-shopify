@@ -20,6 +20,7 @@ interface Confeccionista {
   tipo?: string;
   activo: boolean;
   contacto_bienvenida_at?: string | null;
+  contacto_respondio_at?: string | null;
 }
 
 export default function ConfeccionistasPage() {
@@ -294,6 +295,12 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
             className={`ml-2 rounded-sm border px-1.5 py-0.5 text-[0.58rem] font-semibold uppercase tracking-wide ${bienv ? "border-teal/40 bg-teal/10 text-teal" : "border-border bg-card text-graphite hover:bg-cloud"}`}>
             {bienv ? "✓ bienvenida" : "bienvenida"}
           </button>
+        )}
+        {c.contacto_respondio_at && (
+          <span title="El proveedor ya escribió a la línea"
+            className="ml-1 rounded-sm border border-teal/40 bg-teal/10 px-1.5 py-0.5 text-[0.58rem] font-semibold uppercase tracking-wide text-teal">
+            ✓ respondió
+          </span>
         )}
       </td>
       <td className="px-4 py-2 text-graphite">{c.direccion || "—"}</td>

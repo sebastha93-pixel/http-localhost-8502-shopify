@@ -2763,6 +2763,56 @@ def enviar_bienvenida_proveedores(*, tipos: tuple[str, ...] = ("confeccion", "te
     }
 
 
+_PROV_RESP_CACHE: dict = {"ts": 0.0, "rows": []}
+
+
+def _telefono_local(p) -> str:
+    """Últimos 10 dígitos del teléfono (ignora indicativo 57, +, espacios)."""
+    d = "".join(c for c in str(p or "") if c.isdigit())
+    return d[-10:] if len(d) >= 10 else d
+
+
+def marcar_proveedor_respondio(wa_id: str) -> bool:
+    """Al recibir un mensaje entrante, si el número que escribe coincide con el
+    teléfono de un confeccionista, marca contacto_respondio_at (solo la 1a vez).
+    Match por últimos 10 dígitos (tolera indicativo). Cacheo 5 min de la lista de
+    proveedores para no pegarle a la DB en cada mensaje entrante."""
+    import time
+    objetivo = _telefono_local(wa_id)
+    if not objetivo:
+        return False
+    sb = _sb()
+    if sb is None:
+        return False
+    if time.time() - _PROV_RESP_CACHE["ts"] > 300 or not _PROV_RESP_CACHE["rows"]:
+        try:
+            rows = (sb.table("confeccionistas")
+                      .select("id,telefono,contacto_respondio_at")
+                      .limit(1000).execute()).data or []
+        except Exception:
+            try:
+                rows = (sb.table("confeccionistas").select("id,telefono").limit(1000).execute()).data or []
+            except Exception:
+                return False
+        _PROV_RESP_CACHE["rows"] = rows
+        _PROV_RESP_CACHE["ts"] = time.time()
+    for r in _PROV_RESP_CACHE["rows"]:
+        if _telefono_local(r.get("telefono")) == objetivo:
+            if r.get("contacto_respondio_at"):
+                return False  # ya estaba marcado
+            try:
+                upd = (sb.table("confeccionistas")
+                         .update({"contacto_respondio_at": _now_iso()})
+                         .eq("id", r["id"]).is_("contacto_respondio_at", "null").execute())
+                _PROV_RESP_CACHE["ts"] = 0.0  # refrescar cache al próximo
+                return bool(upd.data)
+            except Exception as e:
+                if "contacto_respondio_at" not in str(e):
+                    log.warning(f"[bienvenida] marcar respondió {r.get('id')} falló: {e}")
+                return False
+    return False
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # BLOQUE 6A — REMISIONES A CONFECCIONISTA
 # ═══════════════════════════════════════════════════════════════════════

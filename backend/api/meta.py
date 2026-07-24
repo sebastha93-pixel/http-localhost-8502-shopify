@@ -208,6 +208,13 @@ def _procesar_whatsapp(payload: dict) -> dict:
                         "raw": m,
                     },
                 )
+                # Si quien escribe es un PROVEEDOR (confección/terminación), marcarlo
+                # como "respondió" para el estado de bienvenida. Best-effort.
+                try:
+                    from backend.services import produccion as _prod
+                    _prod.marcar_proveedor_respondio(wa_id_from)
+                except Exception:
+                    pass
                 if _upsert_message(sb, row):
                     msgs_saved += 1
                     # Transcripción inmediata si es audio (en background, no
