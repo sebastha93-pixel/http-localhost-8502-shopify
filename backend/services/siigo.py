@@ -81,6 +81,38 @@ def siigo_get(path: str, params: Optional[dict] = None) -> dict:
     raise RuntimeError(f"siigo_get {path} rate-limited tras reintentos ({last})")
 
 
+def siigo_post(path: str, body: dict) -> dict:
+    """POST con retry/backoff para el rate limit de Siigo.
+
+    OJO: crea documentos. Solo lo usa el motor fiscal de postventa, y solo
+    tras confirmación humana. Un 4xx NO se reintenta (es error de payload).
+    """
+    token = _get_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Partner-Id": os.getenv("SIIGO_PARTNER_ID", ""),
+        "Content-Type": "application/json",
+    }
+    last = ""
+    for intento in range(3):
+        r = httpx.post(SIIGO_BASE + path, json=body, headers=headers, timeout=60)
+        if r.status_code in (200, 201):
+            return r.json()
+        # 4xx = payload inválido: no tiene sentido reintentar.
+        if 400 <= r.status_code < 500 and r.status_code != 429:
+            raise RuntimeError(f"siigo_post {path} HTTP {r.status_code}: {r.text[:300]}")
+        if r.status_code in (429, 502, 503, 504):
+            espera = min(2 ** intento, 8)
+            retry_after = r.headers.get("Retry-After")
+            if retry_after and str(retry_after).isdigit():
+                espera = int(retry_after)
+            time.sleep(espera)
+            last = f"{r.status_code} intento {intento + 1}"
+            continue
+        raise RuntimeError(f"siigo_post {path} HTTP {r.status_code}: {r.text[:300]}")
+    raise RuntimeError(f"siigo_post {path} rate-limited tras reintentos ({last})")
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # DOCUMENTOS SOPORTE (DS) — pagos a confeccionistas/terminación
 # ═══════════════════════════════════════════════════════════════════════

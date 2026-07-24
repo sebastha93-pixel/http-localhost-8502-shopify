@@ -87,3 +87,17 @@ export const agregarItem = (id: string, body: Record<string, unknown>) =>
 
 export const dashboardPostventa = () =>
   api.get<DashboardPostventa>(`/api/postventa/dashboard`);
+
+// ── Motor fiscal (nota crédito) ──────────────────────────────────────
+export interface PreviewFiscal {
+  factura_original: { id: string; name: string };
+  totales: { subtotal: number; iva: number; total: number };
+  modo: string;
+  emitido: boolean;
+}
+
+export const previewFiscal = (id: string) =>
+  api.post<PreviewFiscal>(`/api/postventa/casos/${id}/fiscal/preview`);
+
+export const emitirFiscal = (id: string) =>
+  api.post<{ siigo_document_number: string }>(`/api/postventa/casos/${id}/fiscal/emitir`);

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from backend.core.security import CurrentUser, require_permission
 from backend.services import postventa as svc
 from backend.services import postventa_siigo as siigo_svc
+from backend.services import postventa_fiscal as fiscal_svc
 
 router = APIRouter(prefix="/api/postventa", tags=["postventa"])
 
@@ -119,3 +120,25 @@ def siigo_discovery(
     (tipos de doc NC/FV, impuestos, formas de pago, vendedores) + muestra de
     facturas para ubicar el enlace con el pedido Shopify. No emite nada."""
     return siigo_svc.diagnostico()
+
+
+@router.post("/casos/{case_id}/fiscal/preview")
+def fiscal_preview(case_id: str,
+                   _: CurrentUser = Depends(require_permission("postventa", "modificar"))):
+    """Arma la nota credito y la muestra. NO emite nada en Siigo."""
+    try:
+        return fiscal_svc.preview_nota_credito(case_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/casos/{case_id}/fiscal/emitir")
+def fiscal_emitir(case_id: str,
+                  user: CurrentUser = Depends(require_permission("postventa", "modificar"))):
+    """Emite en Siigo la NC previsualizada. Requiere confirmacion del equipo."""
+    try:
+        return fiscal_svc.emitir_nota_credito(case_id, actor=user.id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"siigo: {str(e)[:300]}")

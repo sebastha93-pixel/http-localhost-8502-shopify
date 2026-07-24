@@ -1,11 +1,16 @@
 "use client";
 
+import { useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { obtenerCaso, cambiarEstado, ESTADOS_LABEL, type EstadoPostventa } from "@/lib/postventa";
+import { formatMoney } from "@/lib/utils";
+import {
+  obtenerCaso, cambiarEstado, previewFiscal, emitirFiscal,
+  ESTADOS_LABEL, type EstadoPostventa, type PreviewFiscal,
+} from "@/lib/postventa";
 
 // Transiciones ofrecidas en UI (espejo del backend postventa_logic.TRANSICIONES).
 const ACCIONES: Record<string, EstadoPostventa[]> = {
@@ -53,7 +58,11 @@ export default function CasoDetallePage() {
         <div className="text-sm">Pedido Shopify: {c.shopify_order_name || "—"}</div>
       </CardContent></Card>
 
-      <div className="flex gap-2 flex-wrap">
+      {/* Panel fiscal: nota crédito */}
+      <PanelFiscal caseId={caseId} status={c.status} onEmitido={() =>
+        qc.invalidateQueries({ queryKey: ["postventa-caso", caseId] })} />
+
+      <div className="flex gap-2 flex-wrap mt-4">
         {acciones.map((a) => (
           <button key={a} disabled={mut.isPending}
                   onClick={() => mut.mutate(a)}
@@ -71,5 +80,85 @@ export default function CasoDetallePage() {
         </p>
       )}
     </PageShell>
+  );
+}
+
+function PanelFiscal({ caseId, status, onEmitido }:
+  { caseId: string; status: string; onEmitido: () => void }) {
+  const [preview, setPreview] = useState<PreviewFiscal | null>(null);
+
+  const prevMut = useMutation({
+    mutationFn: () => previewFiscal(caseId),
+    onSuccess: setPreview,
+  });
+  const emitMut = useMutation({
+    mutationFn: () => emitirFiscal(caseId),
+    onSuccess: () => { setPreview(null); onEmitido(); },
+  });
+
+  // Solo tiene sentido desde 'aprobado' (antes de emitir la NC).
+  if (status !== "aprobado") return null;
+
+  return (
+    <Card className="mb-4 border-navy-600/30">
+      <CardContent className="py-4 space-y-3">
+        <div className="font-medium text-sm">Nota crédito (Siigo)</div>
+
+        {!preview && (
+          <button disabled={prevMut.isPending} onClick={() => prevMut.mutate()}
+            className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-navy-700 disabled:opacity-50">
+            {prevMut.isPending ? "Calculando…" : "Previsualizar nota crédito"}
+          </button>
+        )}
+        {prevMut.isError && (
+          <p className="text-sm text-destructive">
+            No se pudo armar la nota crédito (¿se encontró la factura del pedido en Siigo?).
+          </p>
+        )}
+
+        {preview && (
+          <div className="space-y-2">
+            <div className="text-sm">Factura original: <b>{preview.factura_original.name}</b></div>
+            <div className="rounded-sm border border-border bg-cloud/30 p-3 text-sm space-y-1">
+              <Fila k="Subtotal" v={formatMoney(preview.totales.subtotal)} />
+              <Fila k="IVA 19%" v={formatMoney(preview.totales.iva)} />
+              <Fila k="Total" v={formatMoney(preview.totales.total)} bold />
+            </div>
+            {preview.modo !== "produccion" ? (
+              <p className="text-xs text-amber-600">
+                Modo prueba — se emite una nota crédito Proforma que <b>NO</b> llega a la DIAN.
+              </p>
+            ) : (
+              <p className="text-xs text-destructive">
+                Modo producción — esta nota crédito es <b>electrónica y va a la DIAN</b>.
+              </p>
+            )}
+            <div className="flex gap-2">
+              <button disabled={emitMut.isPending} onClick={() => emitMut.mutate()}
+                className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-navy-700 disabled:opacity-50">
+                {emitMut.isPending ? "Emitiendo…" : "Emitir nota crédito"}
+              </button>
+              <button onClick={() => setPreview(null)}
+                className="rounded-sm border border-border bg-card px-4 py-2 text-sm font-medium text-graphite hover:bg-cloud">
+                Cancelar
+              </button>
+            </div>
+            {emitMut.isError && (
+              <p className="text-sm text-destructive">
+                Siigo rechazó la emisión. El caso quedó registrado con el error; revisa e intenta de nuevo.
+              </p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function Fila({ k, v, bold }: { k: string; v: string; bold?: boolean }) {
+  return (
+    <div className={`flex justify-between ${bold ? "font-semibold" : ""}`}>
+      <span>{k}</span><span>{v}</span>
+    </div>
   );
 }

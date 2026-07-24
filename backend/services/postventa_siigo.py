@@ -94,6 +94,41 @@ def inspeccionar_facturas(limite: int = 3) -> dict:
     return {"total_en_muestra": len(muestras), "facturas": muestras}
 
 
+
+def inspeccionar_notas_credito(limite: int = 2) -> dict:
+    """Trae notas credito ya emitidas para copiar su estructura EXACTA (que
+    campos manda Siigo, como referencia la factura original). Solo lectura."""
+    if not siigo.siigo_configurado():
+        return {"_error": "siigo_no_configurado"}
+
+    limite = max(1, min(limite, 10))
+    data = _get_seguro("/credit-notes", {"page_size": limite, "page": 1})
+    if isinstance(data, dict) and data.get("_error"):
+        return data
+
+    resultados = data.get("results", data) if isinstance(data, dict) else data
+    if not isinstance(resultados, list):
+        return {"_error": "formato_inesperado", "crudo": str(resultados)[:500]}
+
+    notas = []
+    for nc in resultados[:limite]:
+        if not isinstance(nc, dict):
+            continue
+        notas.append({
+            "id": nc.get("id"),
+            "name": nc.get("name"),
+            "number": nc.get("number"),
+            "date": nc.get("date"),
+            "document_id": (nc.get("document") or {}).get("id"),
+            "customer_identification": (nc.get("customer") or {}).get("identification"),
+            "invoice_ref": nc.get("invoice"),
+            "items": nc.get("items"),
+            "payments": nc.get("payments"),
+            "llaves_disponibles": sorted(nc.keys()),
+        })
+    return {"total_en_muestra": len(notas), "notas": notas}
+
+
 def diagnostico() -> dict:
     """Corrida completa de descubrimiento: config + muestra de facturas.
     Es lo que expone el endpoint para copiar/pegar y aterrizar la Fase 1.
@@ -102,4 +137,5 @@ def diagnostico() -> dict:
         "configurado": siigo.siigo_configurado(),
         "config": descubrir_config(),
         "muestra_facturas": inspeccionar_facturas(3),
+        "muestra_notas_credito": inspeccionar_notas_credito(2),
     }
