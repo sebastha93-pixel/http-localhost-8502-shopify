@@ -34,6 +34,7 @@ interface Respuesta {
 
 export interface SeparacionEstado {
   items?: Record<string, boolean>;
+  no_aplica?: string[];  // insumos que esta prenda NO lleva (ej. body sin cierre)
   ok?: boolean;
   responsable?: string | null;
   completado_at?: string | null;
@@ -49,6 +50,8 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
 }) {
   const qc = useQueryClient();
   const [marcados, setMarcados] = useState<Record<string, boolean>>({});
+  // Insumos marcados "No aplica" (la prenda no los lleva; ej. body sin cierre).
+  const [noAplica, setNoAplica] = useState<Record<string, boolean>>({});
   const [responsable, setResponsable] = useState("");
   const [confirmado, setConfirmado] = useState<SeparacionEstado | null>(null);
   const [errSep, setErrSep] = useState("");
@@ -75,6 +78,9 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
   useEffect(() => {
     if (separacionInicial) {
       setMarcados(separacionInicial.items || {});
+      const na: Record<string, boolean> = {};
+      (separacionInicial.no_aplica || []).forEach((n) => { na[n] = true; });
+      setNoAplica(na);
       setResponsable(separacionInicial.responsable || "");
       setConfirmado(separacionInicial.ok ? separacionInicial : null);
     }
@@ -87,7 +93,7 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
   });
 
   const guardar = useMutation({
-    mutationFn: (payload: { items: Record<string, boolean>; ok: boolean; responsable?: string }) => {
+    mutationFn: (payload: { items: Record<string, boolean>; no_aplica?: string[]; ok: boolean; responsable?: string }) => {
       if (!rutaId) return Promise.reject<{ impresion?: string; ficha_enviada?: { enviado?: boolean }[]; etiquetas_encoladas?: number }>(new Error("sin hoja de ruta"));
       return api.post(`/api/produccion/rutas/${rutaId}/separacion`, { tipo, ...payload }) as Promise<{ impresion?: string; ficha_enviada?: { enviado?: boolean }[]; etiquetas_encoladas?: number }>;
     },
@@ -122,16 +128,31 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
         : `No se pudo guardar: ${e.message}`),
   });
 
+  const naArray = (na: Record<string, boolean>) => Object.keys(na).filter((k) => na[k]);
+
   function toggleItem(nombre: string) {
     if (confirmado?.ok) return; // ya cerrado
     const next = { ...marcados, [nombre]: !marcados[nombre] };
+    // Contar y "no aplica" son excluyentes.
+    const na = { ...noAplica };
+    if (next[nombre] && na[nombre]) { delete na[nombre]; setNoAplica(na); }
     setMarcados(next);
-    if (rutaId) guardar.mutate({ items: next, ok: false });
+    if (rutaId) guardar.mutate({ items: next, no_aplica: naArray(na), ok: false });
+  }
+
+  function toggleNoAplica(nombre: string) {
+    if (confirmado?.ok) return;
+    const na = { ...noAplica, [nombre]: !noAplica[nombre] };
+    const next = { ...marcados };
+    if (na[nombre] && next[nombre]) { next[nombre] = false; setMarcados(next); }
+    setNoAplica(na);
+    if (rutaId) guardar.mutate({ items: next, no_aplica: naArray(na), ok: false });
   }
 
   const items = q.data?.items || [];
   const total = items.length;
-  const contados = items.filter((it) => marcados[it.item]).length;
+  // Un insumo queda "resuelto" si se contó O si se marcó que no aplica.
+  const contados = items.filter((it) => marcados[it.item] || noAplica[it.item]).length;
   const todoContado = total > 0 && contados === total;
   const label = tipo === "confeccion" ? "confección" : "terminación";
 
@@ -192,22 +213,31 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
           </thead>
           <tbody>
             {items.map((it, i) => {
-              const done = !!marcados[it.item];
+              const na = !!noAplica[it.item];
+              const done = !!marcados[it.item] && !na;
               return (
                 <tr key={i}
-                  onClick={() => toggleItem(it.item)}
-                  className={`border-b border-border/40 cursor-pointer ${done ? "bg-teal/[0.05]" : "hover:bg-cloud/40"} ${confirmado?.ok ? "cursor-default" : ""}`}>
+                  className={`border-b border-border/40 ${na ? "bg-graphite/[0.04]" : done ? "bg-teal/[0.05]" : ""}`}>
                   <td className="px-3 py-1.5">
                     <input type="checkbox" checked={done} readOnly
-                      disabled={!!confirmado?.ok}
+                      onClick={() => toggleItem(it.item)}
+                      disabled={!!confirmado?.ok || na}
                       aria-label={`Marcar ${it.item} como contado`}
-                      className="h-4 w-4 cursor-pointer rounded border-graphite/40 accent-teal" />
+                      className="h-4 w-4 cursor-pointer rounded border-graphite/40 accent-teal disabled:opacity-40" />
                   </td>
-                  <td className={`px-3 py-1.5 ${done ? "text-teal font-semibold" : "text-ink-900"}`}>
+                  <td className={`px-3 py-1.5 ${na ? "text-graphite line-through" : done ? "text-teal font-semibold" : "text-ink-900"}`}>
                     {it.item}
                   </td>
-                  <td className={`px-3 py-1.5 text-right tabular font-bold ${done ? "text-teal" : "text-navy-600"}`}>
-                    {it.total_requerido.toLocaleString("es-CO")}
+                  <td className={`px-3 py-1.5 text-right tabular font-bold ${na ? "text-graphite/50" : done ? "text-teal" : "text-navy-600"}`}>
+                    {na ? "—" : it.total_requerido.toLocaleString("es-CO")}
+                    {!confirmado?.ok && (
+                      <button
+                        onClick={() => toggleNoAplica(it.item)}
+                        title="Esta prenda no lleva este insumo (ej. body sin cierre)"
+                        className={`ml-2 rounded-sm border px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-wide ${na ? "border-navy-600 bg-navy-600 text-white" : "border-border bg-card text-graphite hover:bg-cloud"}`}>
+                        No aplica
+                      </button>
+                    )}
                   </td>
                 </tr>
               );
@@ -225,7 +255,7 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
             {RESPONSABLES.map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
           <button
-            onClick={() => guardar.mutate({ items: marcados, ok: true, responsable })}
+            onClick={() => guardar.mutate({ items: marcados, no_aplica: naArray(noAplica), ok: true, responsable })}
             disabled={!todoContado || !responsable || guardar.isPending}
             title={!todoContado ? "Marca todos los insumos primero" : !responsable ? "Elige el responsable" : ""}
             className="inline-flex items-center gap-1.5 rounded-sm bg-teal px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-white hover:bg-ink-900 disabled:opacity-40">

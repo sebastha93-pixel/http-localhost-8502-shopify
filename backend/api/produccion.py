@@ -2487,6 +2487,7 @@ def ingreso_insumos(
 class SeparacionBody(BaseModel):
     tipo:        str = Field(pattern="^(confeccion|terminacion)$")
     items:       dict = {}
+    no_aplica:   list[str] = []          # insumos que la prenda NO lleva (ej. body sin cierre)
     responsable: Optional[str] = None   # BAY | HENRY HURTADO
     ok:          bool = False
 
@@ -2501,7 +2502,7 @@ def guardar_separacion(
     'todo OK' final con responsable (BAY / HENRY HURTADO)."""
     try:
         sep = svc.guardar_separacion(
-            ruta_id, tipo=body.tipo, items=body.items,
+            ruta_id, tipo=body.tipo, items=body.items, no_aplica=body.no_aplica,
             responsable=body.responsable, ok=body.ok, usuario=user.email,
         )
         impresion = "manual"

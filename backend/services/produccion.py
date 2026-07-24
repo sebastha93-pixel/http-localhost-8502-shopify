@@ -4714,13 +4714,17 @@ RESPONSABLES_SEPARACION = ("BAY", "HENRY HURTADO")
 
 
 def guardar_separacion(ruta_id: str, *, tipo: str, items: dict,
+                       no_aplica: Optional[list] = None,
                        responsable: Optional[str] = None,
                        ok: bool = False, usuario: str = "") -> dict:
     """Guarda el checklist de separación de insumos del lote.
     Estructura en hoja_ruta_lote.separacion_insumos:
-      { "confeccion": {"items": {"CIERRE": true, ...}, "ok": true,
-                        "responsable": "BAY", "completado_at": "...",
+      { "confeccion": {"items": {"CIERRE": true, ...},
+                        "no_aplica": ["CIERRE"],   # insumos que la prenda NO lleva
+                        "ok": true, "responsable": "BAY", "completado_at": "...",
                         "guardado_por": "email"} , "terminacion": {...} }
+    `no_aplica` = insumos que esta prenda no lleva (ej. body sin cierre): cuentan
+    como resueltos, no bloquean la separación.
     """
     if tipo not in ("confeccion", "terminacion"):
         raise ValueError("tipo_invalido")
@@ -4737,6 +4741,7 @@ def guardar_separacion(ruta_id: str, *, tipo: str, items: dict,
     actual = r[0].get("separacion_insumos") or {}
     entrada = {
         "items":        {str(k): bool(v) for k, v in (items or {}).items()},
+        "no_aplica":    sorted({str(n) for n in (no_aplica or []) if str(n).strip()}),
         "ok":           bool(ok),
         "responsable":  (responsable or "").strip().upper() or None,
         "guardado_por": usuario,
