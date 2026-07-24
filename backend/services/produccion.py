@@ -1039,6 +1039,28 @@ def listar_precosteos(*, estado: Optional[str] = None, tela: Optional[str] = Non
                        .limit(2000).execute()).data or []
         usados = {r["referencia_id"] for r in con_corte if r.get("referencia_id")}
         out = [p for p in out if p["id"] not in usados]
+
+    # Insumos de CONFECCIÓN por referencia (para revisar de un vistazo cuáles
+    # llevan cierres nylon, elástico, botones de pasta, hombreras, etc.).
+    ids = [p["id"] for p in out if p.get("id")]
+    if ids:
+        try:
+            its = (sb.table("precosteo_items")
+                     .select("referencia_id,categoria,item")
+                     .in_("referencia_id", ids).execute()).data or []
+            por_ref: dict[str, list] = {}
+            for it in its:
+                if "CONFECCION" in (it.get("categoria") or "").upper().replace("Ó", "O"):
+                    nombre = (it.get("item") or "").strip()
+                    if nombre:
+                        por_ref.setdefault(it["referencia_id"], [])
+                        if nombre not in por_ref[it["referencia_id"]]:
+                            por_ref[it["referencia_id"]].append(nombre)
+            for p in out:
+                p["insumos_confeccion"] = por_ref.get(p["id"], [])
+        except Exception as e:
+            log.warning(f"[precosteo] no se pudieron cargar insumos de la lista: {e}")
+
     _cache_set(cache_key, out, ttl_seg=30)
     return out
 

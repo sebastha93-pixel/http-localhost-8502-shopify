@@ -20,6 +20,7 @@ interface Ref {
   iva_pct?: number;
   precio_sugerido_venta?: number;
   precio_venta_final?: number | null;
+  insumos_confeccion?: string[];
   estado: string;
   bloqueada: boolean;
   autorizada_por?: string;
@@ -129,6 +130,7 @@ export default function PrecosteoListPage() {
                   <th className="px-4 py-3 text-right">Costo c/IVA</th>
                   <th className="px-4 py-3 text-right">Precio venta</th>
                   <th className="px-4 py-3 text-right">Margen</th>
+                  <th className="px-4 py-3">Insumos confección</th>
                   <th className="px-4 py-3">Estado</th>
                 </tr>
               </thead>
@@ -153,6 +155,17 @@ export default function PrecosteoListPage() {
                         const cls = m < 0 ? "text-terracotta" : m < 50 ? "text-amber-600" : "text-teal";
                         return <span className={`font-semibold ${cls}`}>{m.toFixed(1)}%</span>;
                       })()}
+                    </td>
+                    <td className="px-4 py-3">
+                      {(r.insumos_confeccion && r.insumos_confeccion.length > 0) ? (
+                        <div className="flex flex-wrap gap-1 max-w-[280px]">
+                          {r.insumos_confeccion.map((ins, k) => (
+                            <span key={k} className="rounded-sm bg-cloud px-1.5 py-0.5 text-[0.66rem] text-ink-900">{ins}</span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-[0.7rem] text-terracotta">Sin insumos cargados</span>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       {r.bloqueada ? (
