@@ -59,3 +59,21 @@ def test_inspeccionar_facturas_extrae_llaves(monkeypatch):
     assert "observations" in m["llaves_disponibles"]
     # El nº de pedido Shopify aparece en observations → candidato de enlace
     assert "#1052" in (m["campos_ref_candidatos"].get("observations") or "")
+
+
+def test_inspeccionar_notas_credito_extrae_estructura(monkeypatch):
+    nc = {
+        "id": "nc-1", "name": "NC-1-7049", "number": 7049, "date": "2026-07-24",
+        "document": {"id": 11817}, "customer": {"identification": "1020409206"},
+        "invoice": "abc-factura", "items": [{"code": "REF-10", "quantity": 1}],
+        "payments": [{"id": 8316, "value": 159900}],
+    }
+    monkeypatch.setattr(pv.siigo, "siigo_configurado", lambda: True)
+    monkeypatch.setattr(pv.siigo, "siigo_get",
+                        lambda path, params=None: {"results": [nc]})
+    r = pv.inspeccionar_notas_credito(2)
+    assert r["total_en_muestra"] == 1
+    m = r["notas"][0]
+    assert m["document_id"] == 11817
+    assert m["invoice_ref"] == "abc-factura"
+    assert "items" in m["llaves_disponibles"]
