@@ -852,7 +852,15 @@ def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
     actual = obtener_precosteo(precosteo_id)
     if not actual:
         raise ValueError("no_encontrado")
-    if actual.get("bloqueada") and not _puede_editar_precosteo_bloqueado(usuario_id):
+    # El candado protege el COSTO firmado, no el precio de venta. El PVP es una
+    # decisión comercial que se puede reajustar aunque el precosteo esté
+    # autorizado (para recalcular el margen). Solo se bloquea si se intenta
+    # cambiar algo del costo/ficha sin privilegio.
+    solo_precio = (precio_venta_final is not None and all(x is None for x in (
+        nombre, codigo_referencia, tela, color, iva_pct, margen, items,
+        foto_url, es_muestra_diseno, instrucciones_lavado)))
+    if (actual.get("bloqueada") and not _puede_editar_precosteo_bloqueado(usuario_id)
+            and not solo_precio):
         raise ValueError("precosteo_bloqueado")
 
     update: dict = {}

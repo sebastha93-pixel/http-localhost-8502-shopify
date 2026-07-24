@@ -209,6 +209,9 @@ export default function PrecosteoDetallePage() {
   // Duplicar crea un borrador NUEVO (no toca el original): lo puede hacer
   // cualquiera que cree precosteos, aunque el original esté autorizado.
   const puedeCrear = puedeAccionModulo(user, "produccion_costos", "modificar");
+  // El PRECIO DE VENTA es comercial (no el costo firmado): se puede reajustar
+  // aunque el precosteo ya esté autorizado, sin desbloquear el costo.
+  const puedeEditarPrecio = puedeAccionModulo(user, "produccion_costos", "modificar") || esAdmin(user);
 
   function abrirEdicion() {
     setForm({
@@ -346,7 +349,7 @@ export default function PrecosteoDetallePage() {
         p={p}
         pvp={pvp}
         setPvp={setPvp}
-        puedeEditar={puedeEditar}
+        puedeEditar={puedeEditarPrecio}
         onGuardar={(val) => pvpMut.mutate(val)}
         guardando={pvpMut.isPending}
       />
@@ -534,6 +537,11 @@ function MargenCard({ p, pvp, setPvp, puedeEditar, onGuardar, guardando }: {
               {puedeEditar ? "Se guarda al salir del campo." : "Solo lectura."}
               {" "}IVA {iva}% · precio sin IVA: <span className="tabular">{hay ? fmt(precioSinIva) : "—"}</span>
             </p>
+            {p.bloqueada && puedeEditar && (
+              <p className="mt-1 text-[0.66rem] text-graphite/70">
+                El costo está autorizado (bloqueado), pero el precio de venta lo puedes reajustar cuando quieras.
+              </p>
+            )}
           </div>
 
           {/* Métricas */}
