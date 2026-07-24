@@ -34,3 +34,22 @@ def test_crear_caso_endpoint(monkeypatch):
                           "customer_email": "a@b.com"})
     assert r.status_code == 200
     assert r.json()["case_number"] == "PV-2026-0009"
+
+
+def test_preview_fiscal_endpoint(monkeypatch):
+    monkeypatch.setattr(api_postventa.fiscal_svc, "preview_nota_credito",
+                        lambda cid: {"emitido": False, "totales": {"total": 119000.0}})
+    client = TestClient(_app(monkeypatch))
+    r = client.post("/api/postventa/casos/c1/fiscal/preview")
+    assert r.status_code == 200
+    assert r.json()["totales"]["total"] == 119000.0
+
+
+def test_emitir_fiscal_endpoint_error_400(monkeypatch):
+    def _raise(cid, actor=""):
+        raise ValueError("sin_preview")
+    monkeypatch.setattr(api_postventa.fiscal_svc, "emitir_nota_credito", _raise)
+    client = TestClient(_app(monkeypatch))
+    r = client.post("/api/postventa/casos/c1/fiscal/emitir")
+    assert r.status_code == 400
+    assert "sin_preview" in r.json()["detail"]
