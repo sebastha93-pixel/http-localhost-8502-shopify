@@ -44,6 +44,7 @@ def test_total_con_iva():
 
 
 # ── nota crédito ─────────────────────────────────────────────────────
+# Factura tal como la devuelve Siigo: taxes EXPANDIDOS, seller y warehouse por ítem.
 FACTURA = {
     "id": "3ed6b96c-38bc-4334-87fa-e33e60298637",
     "name": "FV-1-63043",
@@ -51,9 +52,14 @@ FACTURA = {
     "seller": 658,
     "items": [
         {"code": "REF-10-M", "description": "Jean flare - 10", "quantity": 1,
-         "price": 134369.75, "taxes": [{"id": 6352}]},
+         "price": 134369.75, "seller": 658,
+         "warehouse": {"id": 32, "name": "MELONN"},
+         "taxes": [{"id": 6352, "name": "IVA 19%", "type": "IVA",
+                    "percentage": 19, "value": 25530.25}]},
         {"code": "REF-99-S", "description": "Blusa - 8", "quantity": 1,
-         "price": 50000.0, "taxes": [{"id": 6352}]},
+         "price": 50000.0, "seller": 658,
+         "warehouse": {"id": 32, "name": "MELONN"},
+         "taxes": [{"id": 6352}]},
     ],
 }
 
@@ -72,9 +78,14 @@ def test_payload_nc_copia_montos_de_la_factura_y_usa_anticipo():
     assert p["document"]["id"] == 27141
     assert p["invoice"] == FACTURA["id"]
     assert p["customer"]["identification"] == "30384838"
-    assert p["items"][0]["code"] == "REF-10-M"
-    assert p["items"][0]["price"] == 134369.75
-    assert p["items"][0]["taxes"] == [{"id": 6352}]
+    item = p["items"][0]
+    assert item["code"] == "REF-10-M"
+    assert item["price"] == 134369.75
+    # taxes se mapean a SOLO id (Siigo rechaza el objeto expandido en el POST)
+    assert item["taxes"] == [{"id": 6352}]
+    # seller y warehouse copiados de la factura (producto de inventario)
+    assert item["seller"] == 658
+    assert item["warehouse"] == {"id": 32}
     assert p["payments"][0]["id"] == 8316
     assert p["payments"][0]["value"] == 159900.0
 
