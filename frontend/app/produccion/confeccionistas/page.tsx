@@ -9,7 +9,7 @@ import { api } from "@/lib/api";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Loader2, AlertCircle, Save, X, Pencil, Check } from "lucide-react";
+import { Plus, Loader2, AlertCircle, Save, X, Pencil, Check, MessageCircle } from "lucide-react";
 
 interface Confeccionista {
   id: string;
@@ -54,6 +54,21 @@ export default function ConfeccionistasPage() {
     onError: (e: Error) => setErr(e.message),
   });
 
+  // Envío del mensaje de bienvenida (contacto_proveedores) a confección + terminación
+  // que aún no lo tienen. No reenvía a los ya contactados.
+  const [bienvMsg, setBienvMsg] = useState("");
+  const bienvenida = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; total_enviados: number; total_fallidos: number; total_sin_telefono: number; total_ya_enviados: number; fallidos?: { nombre: string; motivo: string }[] }>(
+      "/api/produccion/confeccionistas/bienvenida", { tipos: ["confeccion", "terminacion"] }),
+    onSuccess: (d) => {
+      setBienvMsg(
+        `Enviados: ${d.total_enviados} · Ya tenían: ${d.total_ya_enviados} · Sin teléfono: ${d.total_sin_telefono} · Fallidos: ${d.total_fallidos}`
+        + (d.fallidos && d.fallidos.length ? ` (${d.fallidos.map((f) => f.nombre).join(", ")})` : ""));
+      qc.invalidateQueries({ queryKey: ["produccion", "confeccionistas"] });
+    },
+    onError: (e: Error) => setBienvMsg(`Error: ${e.message}`),
+  });
+
   if (q.isLoading) return <LoadingState label="Cargando proveedores…" />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
@@ -66,11 +81,30 @@ export default function ConfeccionistasPage() {
           <input type="checkbox" checked={incluirInactivos} onChange={(e) => setIncluirInactivos(e.target.checked)} />
           Incluir inactivos
         </label>
-        <button onClick={() => setMostrarNuevo(true)}
-          className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white hover:bg-navy-700">
-          <Plus className="h-3.5 w-3.5" /> Nuevo proveedor
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              if (window.confirm("¿Enviar el mensaje de bienvenida por WhatsApp a los proveedores de confección y terminación que aún NO lo tienen? (No reenvía a los ya contactados.)")) {
+                setBienvMsg(""); bienvenida.mutate();
+              }
+            }}
+            disabled={bienvenida.isPending}
+            title="Envía la plantilla contacto_proveedores a los que faltan (no reenvía a los ya contactados)"
+            className="inline-flex items-center gap-2 rounded-sm border border-border bg-card px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-ink-900 hover:bg-cloud disabled:opacity-40">
+            {bienvenida.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageCircle className="h-3.5 w-3.5" />}
+            Enviar bienvenida
+          </button>
+          <button onClick={() => setMostrarNuevo(true)}
+            className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white hover:bg-navy-700">
+            <Plus className="h-3.5 w-3.5" /> Nuevo proveedor
+          </button>
+        </div>
       </div>
+      {bienvMsg && (
+        <div className="rounded-sm border border-teal/40 bg-teal/5 px-3 py-2 text-xs text-teal">
+          {bienvMsg}
+        </div>
+      )}
 
       {mostrarNuevo && (
         <Card>

@@ -2704,6 +2704,65 @@ def actualizar_confeccionista(cid: str, **campos) -> dict:
     return r.data[0]
 
 
+def marcar_bienvenida_proveedor(cid: str, enviada: bool = True) -> bool:
+    """Marca (o desmarca) que a un proveedor YA se le envió la bienvenida.
+    Útil para excluir del envío masivo a los que ya se contactaron a mano."""
+    sb = _sb()
+    if sb is None:
+        return False
+    try:
+        sb.table("confeccionistas").update(
+            {"contacto_bienvenida_at": _now_iso() if enviada else None}
+        ).eq("id", cid).execute()
+        return True
+    except Exception as e:
+        if "contacto_bienvenida_at" not in str(e):
+            log.warning(f"[bienvenida] marcar {cid} falló: {e}")
+        return False
+
+
+def enviar_bienvenida_proveedores(*, tipos: tuple[str, ...] = ("confeccion", "terminacion"),
+                                  reenviar: bool = False) -> dict:
+    """Envía el mensaje de bienvenida (plantilla contacto_proveedores) a los
+    proveedores ACTIVOS de los tipos dados. Por defecto SOLO a los que aún no lo
+    tienen (contacto_bienvenida_at vacío) — no reenvía a los ya contactados.
+    Marca la fecha en los que salió OK. Devuelve el resumen del lote."""
+    from backend.services import whatsapp_cloud as wa
+    provs = []
+    for t in tipos:
+        provs += listar_confeccionistas(tipo=t, incluir_inactivos=False, limit=500)
+    # Dedup por id (por si un tipo trae repetidos).
+    vistos, unicos = set(), []
+    for p in provs:
+        if p["id"] not in vistos:
+            vistos.add(p["id"]); unicos.append(p)
+
+    enviados, fallidos, sin_telefono, ya_enviados = [], [], [], []
+    for p in unicos:
+        if not reenviar and p.get("contacto_bienvenida_at"):
+            ya_enviados.append(p.get("nombre")); continue
+        tel = (p.get("telefono") or "").strip()
+        if not tel:
+            sin_telefono.append(p.get("nombre")); continue
+        nombre = (p.get("nombre") or "equipo").strip()
+        try:
+            envio = wa.enviar_plantilla(tel, "contacto_proveedores", variables=[nombre])
+        except Exception as e:
+            fallidos.append({"nombre": nombre, "motivo": str(e)[:120]}); continue
+        if envio.get("enviado"):
+            marcar_bienvenida_proveedor(p["id"], True)
+            enviados.append(nombre)
+        else:
+            fallidos.append({"nombre": nombre,
+                             "motivo": envio.get("detalle") or envio.get("motivo") or "no_enviado"})
+    return {
+        "enviados": enviados, "fallidos": fallidos,
+        "sin_telefono": sin_telefono, "ya_enviados": ya_enviados,
+        "total_enviados": len(enviados), "total_fallidos": len(fallidos),
+        "total_sin_telefono": len(sin_telefono), "total_ya_enviados": len(ya_enviados),
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # BLOQUE 6A — REMISIONES A CONFECCIONISTA
 # ═══════════════════════════════════════════════════════════════════════

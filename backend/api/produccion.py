@@ -1215,6 +1215,39 @@ def actualizar_confeccionista(
         raise HTTPException(500, f"actualizar_conf: {str(e)[:200]}")
 
 
+class BienvenidaBody(BaseModel):
+    tipos:    list[str] = ["confeccion", "terminacion"]
+    reenviar: bool = False   # True = reenviar también a los ya contactados
+
+
+@router.post("/confeccionistas/bienvenida")
+def enviar_bienvenida(
+    body: BienvenidaBody,
+    _: CurrentUser = Depends(require_permission("produccion_proveedores", "modificar")),
+) -> dict:
+    """Envía el mensaje de bienvenida (contacto_proveedores) a los proveedores
+    activos de los tipos dados. Por defecto NO reenvía a los ya contactados."""
+    tipos = tuple(t for t in body.tipos if t in ("confeccion", "terminacion", "lavanderia", "otros", "textilera")) \
+        or ("confeccion", "terminacion")
+    try:
+        return {"ok": True, **svc.enviar_bienvenida_proveedores(tipos=tipos, reenviar=body.reenviar)}
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"bienvenida: {str(e)[:200]}")
+
+
+@router.post("/confeccionistas/{cid}/marcar-bienvenida")
+def marcar_bienvenida(
+    cid: str,
+    enviada: bool = True,
+    _: CurrentUser = Depends(require_permission("produccion_proveedores", "modificar")),
+) -> dict:
+    """Marca/desmarca a mano que a un proveedor ya se le mandó la bienvenida
+    (para excluir del envío masivo a los 5 que ya se contactaron antes)."""
+    ok = svc.marcar_bienvenida_proveedor(cid, enviada)
+    return {"ok": ok}
+
+
 class ResetProduccionBody(BaseModel):
     confirmacion: str  # debe ser exactamente "RESET"
 
