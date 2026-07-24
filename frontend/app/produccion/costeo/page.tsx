@@ -35,6 +35,12 @@ interface Lote {
   ds?: DsInfo | null;
   estado: string; // ok | sin_ds | sin_asignar | precio_distinto | cantidad_distinta
   desviacion?: number;
+  // Margen planeado vs real (llega del backend cuando el precosteo tiene precio de venta).
+  precio_venta_final?: number;
+  costo_planeado_prenda?: number;
+  costo_real_prenda?: number | null;
+  margen_planeado?: number | null;
+  margen_real?: number | null;
 }
 
 interface Respuesta {
@@ -62,6 +68,8 @@ const money = (n?: number) =>
   n != null
     ? `${n < 0 ? "-" : ""}$${Math.abs(n).toLocaleString("es-CO", { maximumFractionDigits: 0 })}`
     : "—";
+
+const pct = (n?: number | null) => (n == null ? "—" : `${n.toFixed(1)}%`);
 
 export default function CosteoRealPage() {
   const q = useQuery<Respuesta>({
@@ -173,6 +181,8 @@ export default function CosteoRealPage() {
                     <th className="px-4 py-2 text-right">$ Pagado</th>
                     <th className="px-4 py-2 text-right">Total real</th>
                     <th className="px-4 py-2 text-right">Desviación</th>
+                    <th className="px-4 py-2 text-right">Margen plan.</th>
+                    <th className="px-4 py-2 text-right">Margen real</th>
                     <th className="px-4 py-2">Estado</th>
                   </tr>
                 </thead>
@@ -196,6 +206,14 @@ export default function CosteoRealPage() {
                         <td className="px-4 py-2 text-right tabular font-semibold">{l.ds ? money(l.ds.total_real) : "—"}</td>
                         <td className={`px-4 py-2 text-right tabular font-bold ${(l.desviacion || 0) > 0 ? "text-terracotta" : (l.desviacion || 0) < 0 ? "text-sage" : "text-graphite"}`}>
                           {l.desviacion != null ? money(l.desviacion) : "—"}
+                        </td>
+                        <td className="px-4 py-2 text-right tabular">{pct(l.margen_planeado)}</td>
+                        <td className="px-4 py-2 text-right tabular font-semibold">
+                          {l.margen_real == null ? <span className="text-graphite">—</span> : (
+                            <span className={l.margen_real < 0 ? "text-terracotta" : l.margen_real < 50 ? "text-amber-600" : "text-sage"}>
+                              {l.margen_real.toFixed(1)}%
+                            </span>
+                          )}
                         </td>
                         <td className="px-4 py-2">
                           <span className={`rounded-sm px-2 py-0.5 text-[0.68rem] font-bold uppercase tracking-widest ${ui.tone}`}>

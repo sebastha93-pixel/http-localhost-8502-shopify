@@ -4343,6 +4343,52 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                        f"por ${d['total']:,.0f} no corresponde a ningún lote del OS.",
         })
 
+    # ── Margen PLANEADO vs REAL por lote ─────────────────────────
+    # El margen usa el precio de venta del precosteo (precio_venta_final, PVP con
+    # IVA → sin IVA) contra el costo. El costo REAL parte del planeado (precosteo)
+    # y le aplica la DESVIACIÓN de confección hallada aquí en el cruce (real −
+    # plan por prenda). El resto de costos queda en lo planeado (aún sin real).
+    precosteo_por_ref: dict[str, dict] = {}
+    try:
+        try:
+            _pcs = (sb.table("referencias_precosteo")
+                      .select("codigo_referencia,costo_total_sin_iva,iva_pct,precio_venta_final")
+                      .limit(1000).execute()).data or []
+        except Exception:
+            _pcs = (sb.table("referencias_precosteo")
+                      .select("codigo_referencia,costo_total_sin_iva,iva_pct")
+                      .limit(1000).execute()).data or []
+        for _pc in _pcs:
+            precosteo_por_ref[_norm_ref(_pc.get("codigo_referencia"))] = _pc
+    except Exception as e:
+        log.warning(f"[cruce] no se pudieron cargar precosteos para el margen: {e}")
+
+    for l in lotes:
+        pc = precosteo_por_ref.get(_norm_ref(l.get("referencia")))
+        if not pc:
+            continue
+        pvf = float(pc.get("precio_venta_final") or 0)
+        costo_plan = float(pc.get("costo_total_sin_iva") or 0)
+        if pvf <= 0 or costo_plan <= 0:
+            continue
+        iva = float(pc.get("iva_pct") or 19)
+        precio_sin = pvf / (1 + iva / 100)
+        if precio_sin <= 0:
+            continue
+        l["precio_venta_final"] = round(pvf, 0)
+        l["costo_planeado_prenda"] = round(costo_plan, 2)
+        l["margen_planeado"] = round((precio_sin - costo_plan) / precio_sin * 100, 1)
+        ds = l.get("ds")
+        if ds and float(ds.get("valor_unitario") or 0) > 0:
+            # desviación de confección por prenda (real − plan) aplicada al costo.
+            ajuste = float(ds["valor_unitario"]) - float(l.get("precio_teorico") or 0)
+            costo_real = round(costo_plan + ajuste, 2)
+            l["costo_real_prenda"] = costo_real
+            l["margen_real"] = round((precio_sin - costo_real) / precio_sin * 100, 1)
+        else:
+            l["costo_real_prenda"] = None
+            l["margen_real"] = None
+
     total_teorico = round(sum(l["total_teorico"] for l in lotes), 2)
     total_real = round(sum((l.get("ds") or {}).get("total_real", 0) for l in lotes), 2)
 
