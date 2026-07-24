@@ -787,7 +787,21 @@ def crear_precosteo(*, codigo_referencia: str, nombre: str, tela: str, color: st
         sb.table("precosteo_items").insert(rows_items).execute()
 
     _cache_invalidate_prefix("precosteos")
-    return obtener_precosteo(ref_id)
+    creado = obtener_precosteo(ref_id)
+    _sync_precosteo_drive(creado)
+    return creado
+
+
+def _sync_precosteo_drive(p: Optional[dict]) -> None:
+    """Vuelca (async, best-effort) la fila del precosteo a la Google Sheet.
+    No-op si Drive no está configurado; nunca interrumpe el flujo."""
+    if not p:
+        return
+    try:
+        from backend.services import drive_sheet
+        drive_sheet.upsert_async(p)
+    except Exception as e:
+        log.warning(f"[drive] sync precosteo falló: {e}")
 
 
 def duplicar_precosteo(precosteo_id: str, *, created_by: str) -> dict:
@@ -922,7 +936,9 @@ def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
         sb.table("referencias_precosteo").update(update).eq("id", precosteo_id).execute()
 
     _cache_invalidate_prefix("precosteos")
-    return obtener_precosteo(precosteo_id)
+    actualizado = obtener_precosteo(precosteo_id)
+    _sync_precosteo_drive(actualizado)
+    return actualizado
 
 
 def firmar_precosteo(precosteo_id: str, *, usuario_id: str) -> dict:

@@ -582,6 +582,31 @@ def firmar_precosteo(
         raise HTTPException(400, msg)
 
 
+@router.get("/precosteo-drive/estado")
+def estado_drive(
+    _: CurrentUser = Depends(require_permission_estricto("produccion_costos", "ver")),
+) -> dict:
+    """¿Está configurada la sincronización a Google Sheet?"""
+    from backend.services import drive_sheet
+    return {"configurado": drive_sheet.configurado()}
+
+
+@router.post("/precosteo-drive/sync")
+def sync_drive(
+    _: CurrentUser = Depends(require_permission_estricto("produccion_costos", "modificar")),
+) -> dict:
+    """Reescribe la Google Sheet con TODOS los precosteos (llenado inicial /
+    refresco manual). El día a día se sincroniza solo al guardar cada precosteo."""
+    from backend.services import drive_sheet
+    if not drive_sheet.configurado():
+        raise HTTPException(400, "Drive no configurado: falta GOOGLE_SERVICE_ACCOUNT_JSON y/o PRECOSTEO_SHEET_ID en Railway.")
+    try:
+        return drive_sheet.sync_todos(svc.listar_precosteos(limit=1000))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"sync_drive: {str(e)[:200]}")
+
+
 @router.delete("/precosteo/{precosteo_id}")
 def eliminar_precosteo(
     precosteo_id: str,

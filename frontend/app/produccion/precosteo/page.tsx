@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Lock } from "lucide-react";
+import { Plus, Lock, Sheet, Loader2, CheckCircle } from "lucide-react";
 
 interface Ref {
   id: string;
@@ -42,9 +42,24 @@ function margenDe(r: Ref): number | null {
 export default function PrecosteoListPage() {
   const [estado, setEstado] = useState<string>("");
 
+  const [syncMsg, setSyncMsg] = useState("");
+
   const q = useQuery<{ precosteos: Ref[] }>({
     queryKey: ["produccion", "precosteo", "list", estado],
     queryFn: () => api.get(`/api/produccion/precosteo${estado ? `?estado=${estado}` : ""}`),
+  });
+
+  // ¿Está configurada la sincronización a Google Sheet? (muestra el botón)
+  const driveQ = useQuery<{ configurado: boolean }>({
+    queryKey: ["produccion", "precosteo", "drive-estado"],
+    queryFn: () => api.get("/api/produccion/precosteo-drive/estado"),
+    staleTime: 5 * 60_000,
+  });
+
+  const syncMut = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; sincronizados?: number; motivo?: string }>("/api/produccion/precosteo-drive/sync"),
+    onSuccess: (d) => setSyncMsg(d.ok ? `✓ ${d.sincronizados} referencias sincronizadas a la Sheet.` : `No se pudo: ${d.motivo}`),
+    onError: (e: Error) => setSyncMsg(`Error: ${e.message}`),
   });
 
   if (q.isLoading) return <LoadingState label="Cargando precosteos…" />;
@@ -72,13 +87,31 @@ export default function PrecosteoListPage() {
             </button>
           ))}
         </div>
-        <Link
-          href="/produccion/precosteo/nuevo"
-          className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-4 py-2 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-navy-700"
-        >
-          <Plus className="h-4 w-4" /> Nueva referencia
-        </Link>
+        <div className="flex items-center gap-2">
+          {driveQ.data?.configurado && (
+            <button
+              onClick={() => { setSyncMsg(""); syncMut.mutate(); }}
+              disabled={syncMut.isPending}
+              title="Reescribe la Google Sheet con todas las referencias (el día a día se sincroniza solo al guardar)"
+              className="inline-flex items-center gap-2 rounded-sm border border-border bg-card px-4 py-2 text-sm font-semibold uppercase tracking-[0.12em] text-ink-900 hover:bg-cloud disabled:opacity-40"
+            >
+              {syncMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sheet className="h-4 w-4" />}
+              Sincronizar a Drive
+            </button>
+          )}
+          <Link
+            href="/produccion/precosteo/nuevo"
+            className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-4 py-2 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-navy-700"
+          >
+            <Plus className="h-4 w-4" /> Nueva referencia
+          </Link>
+        </div>
       </div>
+      {syncMsg && (
+        <div className="rounded-sm border border-teal/40 bg-teal/5 px-3 py-2 text-xs text-teal flex items-center gap-2">
+          <CheckCircle className="h-3.5 w-3.5" /> {syncMsg}
+        </div>
+      )}
 
       <Card>
         <CardContent className="p-0">
