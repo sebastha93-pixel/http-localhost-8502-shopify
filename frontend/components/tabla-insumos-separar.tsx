@@ -41,6 +41,19 @@ export interface SeparacionEstado {
   completado_at?: string | null;
 }
 
+// Desglose por talla ordenado (numérico si aplica), solo tallas con cantidad.
+function ordenarPorTalla(pt?: Record<string, number>): { t: string; n: number }[] {
+  if (!pt) return [];
+  return Object.entries(pt)
+    .map(([t, n]) => ({ t, n: Number(n) || 0 }))
+    .filter((x) => x.n > 0)
+    .sort((a, b) => {
+      const na = parseFloat(a.t), nb = parseFloat(b.t);
+      if (!isNaN(na) && !isNaN(nb)) return na - nb;
+      return a.t.localeCompare(b.t);
+    });
+}
+
 export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, separacionInicial, className = "" }: {
   ordenCorteId: string;
   tipo: "confeccion" | "terminacion";
@@ -228,6 +241,15 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
                   </td>
                   <td className={`px-3 py-1.5 ${na ? "text-graphite line-through" : done ? "text-teal font-semibold" : "text-ink-900"}`}>
                     {it.item}
+                    {!na && ordenarPorTalla(it.por_talla).length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {ordenarPorTalla(it.por_talla).map(({ t, n }) => (
+                          <span key={t} className="rounded-sm bg-navy-600/[0.08] px-1.5 py-0.5 text-[0.6rem] font-semibold text-navy-600 tabular">
+                            T{t}: {n}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </td>
                   <td className={`px-3 py-1.5 text-right tabular font-bold ${na ? "text-graphite/50" : done ? "text-teal" : "text-navy-600"}`}>
                     {na ? "—" : it.total_requerido.toLocaleString("es-CO")}
@@ -273,42 +295,27 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
         <p role="alert" className="px-3 py-1.5 text-[0.65rem] text-terracotta border-t border-terracotta/30">{errSep}</p>
       )}
 
-      {/* Regla MALE'DENIM: medidas de cierres por talla + CANTIDAD por talla */}
+      {/* Medidas (cm) del cierre por talla según el tiro — referencia.
+          La CANTIDAD por talla ya va inline en la fila del insumo. Solo si la
+          prenda lleva cierre (no en body sin cierre ni si se marcó "No aplica"). */}
       {tipo === "confeccion" && (() => {
-        // Cantidad de cierres por talla (del insumo Cierre/Cremallera del lote).
-        // Solo si la prenda REALMENTE lleva cierre (está en el precosteo y no se
-        // marcó "No aplica") — un body sin cierre no ve esta tabla.
         const cierreItem = items.find((it) => /CIERRE|CREMALLERA/i.test(it.item));
         if (!cierreItem || noAplica[cierreItem.item]) return null;
-        const cant = cierreItem.por_talla || {};
-        const totalCierres = Object.values(cant).reduce((s, n) => s + (Number(n) || 0), 0);
         return (
         <div className="border-t border-navy-600/20">
           <p className="px-3 pt-2 text-[0.68rem] uppercase tracking-widest text-graphite font-bold">
-            Cierres por talla {totalCierres > 0 && <span className="text-navy-600">· {totalCierres} en total</span>}
+            Medidas cierres por talla (cm)
           </p>
           <table className="w-full text-[0.65rem] mt-1">
             <thead>
               <tr className="text-left text-[0.5rem] uppercase tracking-widest text-graphite border-b border-border/60">
-                <th className="px-3 py-1">Tiro (medida cm)</th>
+                <th className="px-3 py-1">Tiro</th>
                 {TALLAS_CIERRES.map((t) => (
                   <th key={t} className="px-1 py-1 text-center">T{t}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {/* Fila destacada: CUÁNTOS cierres se necesitan por talla */}
-              <tr className="border-b border-navy-600/30 bg-navy-600/[0.05]">
-                <td className="px-3 py-1 font-bold text-navy-600 whitespace-nowrap">Cantidad a separar</td>
-                {TALLAS_CIERRES.map((t) => {
-                  const n = Number(cant[String(t)] || 0);
-                  return (
-                    <td key={t} className={`px-1 py-1 text-center tabular font-bold ${n > 0 ? "text-navy-600" : "text-graphite/40"}`}>
-                      {n > 0 ? n : "—"}
-                    </td>
-                  );
-                })}
-              </tr>
               {Object.entries(MEDIDAS_CIERRES).map(([tiro, medidas]) => (
                 <tr key={tiro} className="border-b border-border/30 last:border-0">
                   <td className="px-3 py-1 font-semibold text-ink-900 whitespace-nowrap">{tiro}</td>
@@ -321,9 +328,6 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
               ))}
             </tbody>
           </table>
-          <p className="px-3 py-1.5 text-[0.62rem] text-graphite">
-            Fila azul = cuántos cierres separar de cada talla. Debajo, la medida (cm) del cierre según el tiro.
-          </p>
         </div>
         );
       })()}
