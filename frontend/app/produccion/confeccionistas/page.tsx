@@ -71,6 +71,18 @@ export default function ConfeccionistasPage() {
     onError: (e: Error) => setBienvMsg(`Error: ${e.message}`),
   });
 
+  // Backfill: marca "respondió" a los que ya escribieron (desde el histórico).
+  const recalcular = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; total_marcados: number; ya_estaban: number; marcados?: string[] }>(
+      "/api/produccion/confeccionistas/respondio/recalcular"),
+    onSuccess: (d) => {
+      setBienvMsg(`Respondió actualizado: ${d.total_marcados} nuevos · ${d.ya_estaban} ya estaban`
+        + (d.marcados && d.marcados.length ? ` (${d.marcados.join(", ")})` : ""));
+      qc.invalidateQueries({ queryKey: ["produccion", "confeccionistas"] });
+    },
+    onError: (e: Error) => setBienvMsg(`Error: ${e.message}`),
+  });
+
   if (q.isLoading) return <LoadingState label="Cargando proveedores…" />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
@@ -95,6 +107,14 @@ export default function ConfeccionistasPage() {
             className="inline-flex items-center gap-2 rounded-sm border border-border bg-card px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-ink-900 hover:bg-cloud disabled:opacity-40">
             {bienvenida.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageCircle className="h-3.5 w-3.5" />}
             Enviar bienvenida
+          </button>
+          <button
+            onClick={() => { setBienvMsg(""); recalcular.mutate(); }}
+            disabled={recalcular.isPending}
+            title="Revisa el historial de WhatsApp y marca 'respondió' a los proveedores que ya escribieron a la línea"
+            className="inline-flex items-center gap-2 rounded-sm border border-border bg-card px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-ink-900 hover:bg-cloud disabled:opacity-40">
+            {recalcular.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            Recalcular respondió
           </button>
           <button onClick={() => setMostrarNuevo(true)}
             className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-white hover:bg-navy-700">

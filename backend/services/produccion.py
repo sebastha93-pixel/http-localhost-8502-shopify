@@ -2813,6 +2813,55 @@ def marcar_proveedor_respondio(wa_id: str) -> bool:
     return False
 
 
+def backfill_respondio_proveedores() -> dict:
+    """Marca 'respondió' (retroactivo) a los proveedores que YA escribieron a la
+    línea, buscando en las conversaciones guardadas (mensajes de cliente cuyo
+    wa_id coincide con el teléfono del proveedor). Para poblar el estado con el
+    histórico, no solo de aquí en adelante."""
+    sb = _sb()
+    if sb is None:
+        return {"ok": False, "motivo": "sin_db"}
+    try:
+        provs = (sb.table("confeccionistas")
+                   .select("id,nombre,telefono,tipo,contacto_respondio_at")
+                   .limit(1000).execute()).data or []
+    except Exception:
+        provs = (sb.table("confeccionistas").select("id,nombre,telefono,tipo").limit(1000).execute()).data or []
+    marcados, ya = [], 0
+    for p in provs:
+        if p.get("contacto_respondio_at"):
+            ya += 1; continue
+        local = _telefono_local(p.get("telefono"))
+        if not local:
+            continue
+        # wa_id de Meta llega internacional (57 + 10 dígitos). Probar variantes.
+        variantes = {f"57{local}", local}
+        encontrado = False
+        for waid in variantes:
+            try:
+                r = (sb.table("conversations").select("message_id")
+                       .eq("sender_type", "customer")
+                       .filter("payload->>wa_id", "eq", waid)
+                       .limit(1).execute()).data
+            except Exception:
+                r = None
+            if r:
+                encontrado = True
+                break
+        if encontrado:
+            try:
+                sb.table("confeccionistas").update(
+                    {"contacto_respondio_at": _now_iso()}
+                ).eq("id", p["id"]).is_("contacto_respondio_at", "null").execute()
+                marcados.append(p.get("nombre"))
+            except Exception as e:
+                if "contacto_respondio_at" not in str(e):
+                    log.warning(f"[bienvenida] backfill {p.get('id')} falló: {e}")
+    _PROV_RESP_CACHE["ts"] = 0.0
+    return {"ok": True, "marcados": marcados, "total_marcados": len(marcados),
+            "ya_estaban": ya, "revisados": len(provs)}
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # BLOQUE 6A — REMISIONES A CONFECCIONISTA
 # ═══════════════════════════════════════════════════════════════════════

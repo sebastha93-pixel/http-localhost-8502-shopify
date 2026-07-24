@@ -1236,6 +1236,19 @@ def enviar_bienvenida(
         raise HTTPException(500, f"bienvenida: {str(e)[:200]}")
 
 
+@router.post("/confeccionistas/respondio/recalcular")
+def recalcular_respondio(
+    _: CurrentUser = Depends(require_permission("produccion_proveedores", "modificar")),
+) -> dict:
+    """Backfill: marca 'respondió' a los proveedores que ya escribieron a la
+    línea (busca en las conversaciones guardadas). Para poblar con el histórico."""
+    try:
+        return {"ok": True, **svc.backfill_respondio_proveedores()}
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"recalcular_respondio: {str(e)[:200]}")
+
+
 @router.post("/confeccionistas/{cid}/marcar-bienvenida")
 def marcar_bienvenida(
     cid: str,
