@@ -73,12 +73,12 @@ export default function ConfeccionistasPage() {
 
   // Backfill: marca "respondió" a los que ya escribieron (desde el histórico).
   const recalcular = useMutation({
-    mutationFn: () => api.post<{ ok: boolean; total_marcados: number; ya_estaban: number; marcados?: string[]; mensajes_entrantes_wa?: number; telefonos_que_escribieron?: number }>(
+    mutationFn: () => api.post<{ ok: boolean; total_marcados: number; ya_estaban: number; marcados?: string[]; mensajes_entrantes_wa?: number; telefonos_que_escribieron?: number; proveedores_con_lote_aceptado?: number }>(
       "/api/produccion/confeccionistas/respondio/recalcular"),
     onSuccess: (d) => {
-      setBienvMsg(`Respondió: ${d.total_marcados} nuevos · ${d.ya_estaban} ya estaban`
+      setBienvMsg(`Interactuó: ${d.total_marcados} nuevos · ${d.ya_estaban} ya estaban`
         + (d.marcados && d.marcados.length ? ` (${d.marcados.join(", ")})` : "")
-        + ` · [diag: ${d.mensajes_entrantes_wa ?? "?"} mensajes entrantes WA, ${d.telefonos_que_escribieron ?? "?"} números distintos]`);
+        + ` · [diag: ${d.mensajes_entrantes_wa ?? "?"} msgs WA · ${d.proveedores_con_lote_aceptado ?? "?"} con lote aceptado]`);
       qc.invalidateQueries({ queryKey: ["produccion", "confeccionistas"] });
     },
     onError: (e: Error) => setBienvMsg(`Error: ${e.message}`),
@@ -318,9 +318,9 @@ function FilaConfeccionista({ c }: { c: Confeccionista }) {
           </button>
         )}
         {c.contacto_respondio_at && (
-          <span title="El proveedor ya escribió a la línea"
+          <span title="El proveedor ya interactuó (escribió a la línea o aceptó un lote)"
             className="ml-1 rounded-sm border border-teal/40 bg-teal/10 px-1.5 py-0.5 text-[0.58rem] font-semibold uppercase tracking-wide text-teal">
-            ✓ respondió
+            ✓ interactuó
           </span>
         )}
       </td>

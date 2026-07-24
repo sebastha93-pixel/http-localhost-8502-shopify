@@ -2847,12 +2847,32 @@ def backfill_respondio_proveedores() -> dict:
     except Exception as e:
         log.warning(f"[bienvenida] backfill: no se pudo leer conversations: {e}")
 
+    # También cuenta como interacción HABER ACEPTADO un lote (por el link de la
+    # ficha, que no es un mensaje de WhatsApp). Proveedores con una hoja de ruta
+    # avanzada más allá de 'asignado' → ya aceptaron/interactuaron.
+    proveedores_activos: set[str] = set()
+    aceptaron = 0
+    try:
+        rutas = (sb.table("hoja_ruta_lote")
+                   .select("confeccionista_id,terminacion_id,etapa,aceptado_at")
+                   .limit(2000).execute()).data or []
+        for rt in rutas:
+            avanzo = (rt.get("etapa") and rt.get("etapa") != "asignado") or rt.get("aceptado_at")
+            if avanzo:
+                for k in ("confeccionista_id", "terminacion_id"):
+                    if rt.get(k):
+                        proveedores_activos.add(rt[k])
+        aceptaron = len(proveedores_activos)
+    except Exception as e:
+        log.warning(f"[bienvenida] backfill rutas falló: {e}")
+
     marcados, ya = [], 0
     for p in provs:
         if p.get("contacto_respondio_at"):
             ya += 1; continue
         local = _telefono_local(p.get("telefono"))
-        if local and local in escribieron:
+        interactuo = (local and local in escribieron) or (p["id"] in proveedores_activos)
+        if interactuo:
             try:
                 sb.table("confeccionistas").update(
                     {"contacto_respondio_at": _now_iso()}
@@ -2865,7 +2885,8 @@ def backfill_respondio_proveedores() -> dict:
     return {"ok": True, "marcados": marcados, "total_marcados": len(marcados),
             "ya_estaban": ya, "revisados": len(provs),
             "mensajes_entrantes_wa": mensajes,
-            "telefonos_que_escribieron": len(escribieron)}
+            "telefonos_que_escribieron": len(escribieron),
+            "proveedores_con_lote_aceptado": aceptaron}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -4028,7 +4049,21 @@ def cambiar_etapa_ruta(ruta_id: str, etapa_nueva: str) -> dict:
         update[ts_col] = now
     sb.table("hoja_ruta_lote").update(update).eq("id", ruta_id).execute()
     r = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
-    return r[0] if r else {}
+    ruta_full = r[0] if r else {}
+    # Aceptar un lote (o avanzar) ES una interacción del proveedor → marcarlo
+    # como "respondió/interactuó" (aunque no haya escrito por WhatsApp).
+    if etapa_nueva != "asignado":
+        for k in ("confeccionista_id", "terminacion_id"):
+            cid = ruta_full.get(k)
+            if cid:
+                try:
+                    sb.table("confeccionistas").update(
+                        {"contacto_respondio_at": now}
+                    ).eq("id", cid).is_("contacto_respondio_at", "null").execute()
+                except Exception:
+                    pass
+        _PROV_RESP_CACHE["ts"] = 0.0
+    return ruta_full
 
 
 def avanzar_etapa_si_antes(ruta_id: str, etapa_objetivo: str) -> Optional[dict]:
