@@ -201,6 +201,17 @@ export default function PrecosteoDetallePage() {
 
   const p = q.data;
 
+  // Margen REAL a partir del precio de venta que se está digitando (PVP con IVA):
+  //   precio_sin_iva = PVP / (1 + iva/100)
+  //   margen = (precio_sin_iva − costo_sin_iva) / precio_sin_iva
+  // Se usa tanto en el KPI de arriba como en la tarjeta, para que sean el mismo número.
+  const _ivaTop = Number(p.iva_pct || 19);
+  const _pvpTop = parseFloat((pvp || "").replace(/[^\d.]/g, "")) || 0;
+  const _precioSinIvaTop = _pvpTop > 0 ? _pvpTop / (1 + _ivaTop / 100) : 0;
+  const margenReal = _precioSinIvaTop > 0
+    ? ((_precioSinIvaTop - Number(p.costo_total_sin_iva || 0)) / _precioSinIvaTop) * 100
+    : null;
+
   // Borrador → lo edita el diseñador (produccion_costos modificar).
   // Autorizado (bloqueado) → SOLO admin (hoy = Sebastián / María Alejandra).
   const puedeEditar = p.bloqueada
@@ -338,7 +349,7 @@ export default function PrecosteoDetallePage() {
           <CardContent className="p-5 grid grid-cols-2 md:grid-cols-4 gap-4">
             <Kpi label="Costo sin IVA"     value={`$${p.costo_total_sin_iva.toLocaleString("es-CO", { maximumFractionDigits: 0 })}`} />
             <Kpi label="Costo con IVA"     value={`$${p.costo_total_con_iva.toLocaleString("es-CO", { maximumFractionDigits: 0 })}`} />
-            <Kpi label={`Margen ${p.margen}%`} value={p.precio_sugerido_venta ? `$${p.precio_sugerido_venta.toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"} />
+            <Kpi label="Margen (venta)"    value={margenReal !== null ? `${margenReal.toFixed(1)}%` : "—"} />
             <Kpi label="Estado"            value={p.estado.toUpperCase()} />
           </CardContent>
         </Card>
