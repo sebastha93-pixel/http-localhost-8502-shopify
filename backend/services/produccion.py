@@ -4361,23 +4361,41 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
 
     # ── Margen PLANEADO vs REAL por lote ─────────────────────────
     # El margen usa el precio de venta del precosteo (precio_venta_final, PVP con
-    # IVA → sin IVA) contra el costo. El costo REAL parte del planeado (precosteo)
-    # y le aplica la DESVIACIÓN de confección hallada aquí en el cruce (real −
-    # plan por prenda). El resto de costos queda en lo planeado (aún sin real).
+    # IVA → sin IVA) contra el costo. El costo REAL cambia TODO el bloque de
+    # PROCESOS planeados (corte, confección, terminación, lavado… = items de
+    # categoría "PROCESO EN MATERIA PRIMA" del precosteo) por el total REAL de
+    # los Documentos Soporte de Siigo de esa referencia. Materia prima e insumos
+    # quedan en lo planeado. Así el margen real refleja los procesos ya facturados.
     precosteo_por_ref: dict[str, dict] = {}
     try:
         try:
             _pcs = (sb.table("referencias_precosteo")
-                      .select("codigo_referencia,costo_total_sin_iva,iva_pct,precio_venta_final")
+                      .select("id,codigo_referencia,costo_total_sin_iva,iva_pct,precio_venta_final")
                       .limit(1000).execute()).data or []
         except Exception:
             _pcs = (sb.table("referencias_precosteo")
-                      .select("codigo_referencia,costo_total_sin_iva,iva_pct")
+                      .select("id,codigo_referencia,costo_total_sin_iva,iva_pct")
                       .limit(1000).execute()).data or []
         for _pc in _pcs:
             precosteo_por_ref[_norm_ref(_pc.get("codigo_referencia"))] = _pc
     except Exception as e:
         log.warning(f"[cruce] no se pudieron cargar precosteos para el margen: {e}")
+
+    # Total PLANEADO de procesos por precosteo (items categoría PROCESO*), por prenda.
+    procesos_plan_por_id: dict[str, float] = {}
+    _ids_ref = [pc.get("id") for pc in precosteo_por_ref.values() if pc.get("id")]
+    if _ids_ref:
+        try:
+            _its = (sb.table("precosteo_items")
+                      .select("referencia_id,categoria,total_sin_iva")
+                      .in_("referencia_id", _ids_ref).execute()).data or []
+            for _it in _its:
+                if "PROCESO" in (_it.get("categoria") or "").upper():
+                    rid = _it.get("referencia_id")
+                    procesos_plan_por_id[rid] = round(
+                        procesos_plan_por_id.get(rid, 0.0) + float(_it.get("total_sin_iva") or 0), 2)
+        except Exception as e:
+            log.warning(f"[cruce] no se pudieron sumar procesos planeados: {e}")
 
     for l in lotes:
         pc = precosteo_por_ref.get(_norm_ref(l.get("referencia")))
@@ -4395,10 +4413,15 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
         l["costo_planeado_prenda"] = round(costo_plan, 2)
         l["margen_planeado"] = round((precio_sin - costo_plan) / precio_sin * 100, 1)
         ds = l.get("ds")
-        if ds and float(ds.get("valor_unitario") or 0) > 0:
-            # desviación de confección por prenda (real − plan) aplicada al costo.
-            ajuste = float(ds["valor_unitario"]) - float(l.get("precio_teorico") or 0)
-            costo_real = round(costo_plan + ajuste, 2)
+        unidades = int(l.get("unidades") or 0)
+        total_real_ds = float((ds or {}).get("total_real") or 0)
+        if ds and total_real_ds > 0 and unidades > 0:
+            # Procesos: se cambia TODO el bloque planeado por el real de Siigo.
+            procesos_plan = float(procesos_plan_por_id.get(pc.get("id"), 0.0))
+            procesos_real_prenda = total_real_ds / unidades
+            costo_real = round(costo_plan - procesos_plan + procesos_real_prenda, 2)
+            l["procesos_plan_prenda"] = round(procesos_plan, 2)
+            l["procesos_real_prenda"] = round(procesos_real_prenda, 2)
             l["costo_real_prenda"] = costo_real
             l["margen_real"] = round((precio_sin - costo_real) / precio_sin * 100, 1)
         else:
