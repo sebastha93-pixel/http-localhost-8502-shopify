@@ -73,11 +73,12 @@ export default function ConfeccionistasPage() {
 
   // Backfill: marca "respondió" a los que ya escribieron (desde el histórico).
   const recalcular = useMutation({
-    mutationFn: () => api.post<{ ok: boolean; total_marcados: number; ya_estaban: number; marcados?: string[] }>(
+    mutationFn: () => api.post<{ ok: boolean; total_marcados: number; ya_estaban: number; marcados?: string[]; mensajes_entrantes_wa?: number; telefonos_que_escribieron?: number }>(
       "/api/produccion/confeccionistas/respondio/recalcular"),
     onSuccess: (d) => {
-      setBienvMsg(`Respondió actualizado: ${d.total_marcados} nuevos · ${d.ya_estaban} ya estaban`
-        + (d.marcados && d.marcados.length ? ` (${d.marcados.join(", ")})` : ""));
+      setBienvMsg(`Respondió: ${d.total_marcados} nuevos · ${d.ya_estaban} ya estaban`
+        + (d.marcados && d.marcados.length ? ` (${d.marcados.join(", ")})` : "")
+        + ` · [diag: ${d.mensajes_entrantes_wa ?? "?"} mensajes entrantes WA, ${d.telefonos_que_escribieron ?? "?"} números distintos]`);
       qc.invalidateQueries({ queryKey: ["produccion", "confeccionistas"] });
     },
     onError: (e: Error) => setBienvMsg(`Error: ${e.message}`),

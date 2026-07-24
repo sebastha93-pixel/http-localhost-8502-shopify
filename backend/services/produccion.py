@@ -2827,28 +2827,32 @@ def backfill_respondio_proveedores() -> dict:
                    .limit(1000).execute()).data or []
     except Exception:
         provs = (sb.table("confeccionistas").select("id,nombre,telefono,tipo").limit(1000).execute()).data or []
+    # Junta los números que ESCRIBIERON a la línea (mensajes entrantes de
+    # WhatsApp = message_id 'meta-wa-*', sender_type customer). Se hace en Python
+    # (sin filtro JSON) para robustez + diagnóstico.
+    escribieron: set[str] = set()
+    mensajes = 0
+    try:
+        rows = (sb.table("conversations").select("payload")
+                  .eq("sender_type", "customer")
+                  .like("message_id", "meta-wa-%")
+                  .order("sent_at", desc=True)
+                  .limit(8000).execute()).data or []
+        mensajes = len(rows)
+        for m in rows:
+            wa = ((m.get("payload") or {}).get("wa_id")) or ""
+            loc = _telefono_local(wa)
+            if loc:
+                escribieron.add(loc)
+    except Exception as e:
+        log.warning(f"[bienvenida] backfill: no se pudo leer conversations: {e}")
+
     marcados, ya = [], 0
     for p in provs:
         if p.get("contacto_respondio_at"):
             ya += 1; continue
         local = _telefono_local(p.get("telefono"))
-        if not local:
-            continue
-        # wa_id de Meta llega internacional (57 + 10 dígitos). Probar variantes.
-        variantes = {f"57{local}", local}
-        encontrado = False
-        for waid in variantes:
-            try:
-                r = (sb.table("conversations").select("message_id")
-                       .eq("sender_type", "customer")
-                       .filter("payload->>wa_id", "eq", waid)
-                       .limit(1).execute()).data
-            except Exception:
-                r = None
-            if r:
-                encontrado = True
-                break
-        if encontrado:
+        if local and local in escribieron:
             try:
                 sb.table("confeccionistas").update(
                     {"contacto_respondio_at": _now_iso()}
@@ -2859,7 +2863,9 @@ def backfill_respondio_proveedores() -> dict:
                     log.warning(f"[bienvenida] backfill {p.get('id')} falló: {e}")
     _PROV_RESP_CACHE["ts"] = 0.0
     return {"ok": True, "marcados": marcados, "total_marcados": len(marcados),
-            "ya_estaban": ya, "revisados": len(provs)}
+            "ya_estaban": ya, "revisados": len(provs),
+            "mensajes_entrantes_wa": mensajes,
+            "telefonos_que_escribieron": len(escribieron)}
 
 
 # ═══════════════════════════════════════════════════════════════════════
