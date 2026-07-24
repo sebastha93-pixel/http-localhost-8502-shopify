@@ -1262,9 +1262,14 @@ def crear_remision(
             if not oc_check or not _corte_es_del_cortador(oc_check, user):
                 raise HTTPException(403, "Solo puedes generar remisiones de los cortes asignados a ti.")
     try:
-        # FLUJO NUEVO (confección): la remisión NO se imprime al crearse; se
-        # retiene hasta que se separan los insumos. Terminación sí imprime al
-        # crear (flujo original).
+        # FLUJO NUEVO: la remisión NO se imprime al crearse; se RETIENE hasta
+        # que se separan los insumos. Aplica a AMBOS tipos:
+        #   · confección → al crear solo se avisa "lote por recoger"; al separar
+        #     insumos se imprime la remisión (RICOH) + ficha "Aceptar lote".
+        #   · terminación → al crear no se imprime nada; al separar insumos se
+        #     imprime la remisión (RICOH) + STICKERS (Honeywell) + LAVADO (SAT)
+        #     + ficha "Aceptar lote". Las etiquetas térmicas salen al SEPARAR,
+        #     no al crear la remisión.
         es_confeccion = (body.tipo != "terminacion")
         rem = svc.crear_remision(
             confeccionista_id=body.confeccionista_id,
@@ -1272,38 +1277,17 @@ def crear_remision(
             orden_corte_ids=body.orden_corte_ids,
             created_by=user.email,
             tipo=body.tipo,
-            liberar_impresion=(not es_confeccion),
+            liberar_impresion=False,   # retenida hasta separar insumos (ambos tipos)
         )
-        extra: dict = {}
-        import os as _os
-        modo_agente = _os.environ.get("IMPRESION_AGENTE", "").strip().lower() in (
-            "1", "true", "si", "sí", "yes", "on")
+        extra: dict = {"impresion": "retenida"}
         if es_confeccion:
-            # Retenida: aún no entra a la cola de la RICOH. Se imprime cuando se
-            # separan los insumos (ver guardar_separacion). Al crearla solo se
-            # avisa al confeccionista que tiene un lote por recoger.
-            extra["impresion"] = "retenida"
+            # Aviso al confeccionista de que tiene un lote por recoger.
             try:
                 extra["aviso_recoger"] = svc._notificar_lote_por_recoger(rem)
             except Exception as e:
                 import logging as _lg
                 _lg.getLogger(__name__).warning(f"[wa] aviso lote por recoger fallo: {e}")
                 extra["aviso_recoger"] = []
-        else:
-            # Terminación: imprime de una.
-            #  · modo agente → ya está en cola (impresa_at NULL); el agente local
-            #    la imprime en la RICOH por IP. El frontend NO abre el diálogo.
-            #  · sin agente → email-to-print (flujo anterior).
-            if modo_agente:
-                extra["impresion"] = "agente"
-            else:
-                extra["impresion"] = _imprimir_remision(rem)
-            try:
-                extra["whatsapp"] = svc._notificar_remision_whatsapp(rem)
-            except Exception as e:
-                import logging as _lg
-                _lg.getLogger(__name__).warning(f"[wa] notif terminacion fallo: {e}")
-                extra["whatsapp"] = []
         return {"ok": True, "remision": rem, **extra}
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -2512,7 +2496,8 @@ def guardar_separacion(
                 impresion = _imprimir_remision_de_ruta(ruta_id, body.tipo)
         return {"ok": True, "separacion": sep, "impresion": impresion,
                 "impresion_liberada": bool(sep.get("impresion_liberada")),
-                "ficha_enviada": sep.get("ficha_enviada")}
+                "ficha_enviada": sep.get("ficha_enviada"),
+                "etiquetas_encoladas": sep.get("etiquetas_encoladas")}
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:

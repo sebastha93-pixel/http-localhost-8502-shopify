@@ -2758,9 +2758,11 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
             log.warning(f"[remision] no se pudo actualizar ruta {oc_id}: {e}")
 
     rem_full = obtener_remision(rem["id"])
-    if tipo == "terminacion":
-        # Etiquetas térmicas automáticas: stickers de barra (Honeywell) +
-        # instrucciones de lavado (SAT). Tolerante a fallos.
+    if tipo == "terminacion" and liberar_impresion:
+        # Solo el flujo VIEJO (liberar_impresion=True) encola las etiquetas
+        # térmicas al crear la remisión. En el flujo nuevo (retenida) los
+        # stickers (Honeywell) + lavado (SAT) se encolan al SEPARAR los insumos
+        # de terminación (ver guardar_separacion). Tolerante a fallos.
         try:
             _encolar_trabajos_terminacion(rem_full)
         except Exception as e:
@@ -4639,23 +4641,33 @@ def guardar_separacion(ruta_id: str, *, tipo: str, items: dict,
             raise ValueError("migracion_separacion_pendiente")
         raise
 
-    # FLUJO NUEVO (confección): al COMPLETAR la separación se libera la
-    # impresión de la remisión retenida → entra a la cola de la RICOH → y se
-    # envía la ficha al confeccionista con el botón "Aceptar lote". Tolerante
-    # a fallos: la separación ya quedó guardada aunque esto falle.
-    if ok and tipo == "confeccion" and oc_id:
+    # FLUJO NUEVO: al COMPLETAR la separación de insumos se dispara la impresión
+    # del lote (que estaba RETENIDA) y se avisa al proveedor con la ficha
+    # "Aceptar lote". Aplica a AMBOS tipos:
+    #   · confección → libera la remisión (PDF a la RICOH) + ficha.
+    #   · terminación → libera la remisión (PDF a la RICOH) + encola las
+    #     ETIQUETAS TÉRMICAS (stickers Honeywell + instrucciones de lavado SAT)
+    #     + ficha. Las etiquetas se imprimen aquí, NO al crear la remisión.
+    # Tolerante a fallos: la separación ya quedó guardada aunque esto falle.
+    # Solo la PRIMERA vez (gate por impresion_liberada) → no re-imprime si re-guardan.
+    if ok and oc_id and tipo in ("confeccion", "terminacion"):
         try:
-            rem = remision_de_orden_corte(oc_id, tipo="confeccion")
-            # Solo la primera vez (evita reimprimir/reavisar si re-guardan).
+            rem = remision_de_orden_corte(oc_id, tipo=tipo)
             if rem and not rem.get("impresa_at") and not rem.get("impresion_liberada"):
                 liberar_impresion_de_remision(rem["id"])
                 entrada["impresion_liberada"] = True
+                rem_full = obtener_remision(rem["id"])
+                if tipo == "terminacion":
+                    # Stickers (Honeywell) + lavado (SAT) al separar terminación.
+                    try:
+                        entrada["etiquetas_encoladas"] = _encolar_trabajos_terminacion(rem_full)
+                    except Exception as e:
+                        log.warning(f"[separacion] encolar etiquetas terminación falló OC {oc_id}: {e}")
                 try:
-                    rem_full = obtener_remision(rem["id"])
                     entrada["ficha_enviada"] = _notificar_remision_whatsapp(
                         rem_full, solo_oc_id=oc_id)
                 except Exception as e:
                     log.warning(f"[separacion] ficha WhatsApp falló OC {oc_id}: {e}")
         except Exception as e:
-            log.warning(f"[separacion] liberar impresión falló OC {oc_id}: {e}")
+            log.warning(f"[separacion] liberar impresión falló OC {oc_id} ({tipo}): {e}")
     return entrada
