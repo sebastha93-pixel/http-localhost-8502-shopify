@@ -840,6 +840,7 @@ def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
                          foto_url: Optional[str] = None,
                          es_muestra_diseno: Optional[bool] = None,
                          instrucciones_lavado: Optional[str] = None,
+                         precio_venta_final: Optional[float] = None,
                          usuario_id: Optional[str] = None) -> dict:
     """Actualiza un precosteo.
     - Borrador: lo edita el diseñador (permiso produccion_costos modificar).
@@ -875,6 +876,17 @@ def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
             ).eq("id", precosteo_id).execute()
         except Exception as e:
             log.warning(f"[precosteo] instrucciones_lavado no guardadas (¿falta migración?): {e}")
+
+    if precio_venta_final is not None:
+        # PVP con IVA que el autorizador digita para ver el margen. Columna nueva
+        # (migración precio_venta_final) — aparte y tolerante por si falta migrar.
+        try:
+            pvf = float(precio_venta_final)
+            sb.table("referencias_precosteo").update(
+                {"precio_venta_final": pvf if pvf > 0 else None}
+            ).eq("id", precosteo_id).execute()
+        except Exception as e:
+            log.warning(f"[precosteo] precio_venta_final no guardado (¿falta migración?): {e}")
 
     if items is not None:
         # Reemplazar líneas: borrar y volver a insertar
@@ -976,6 +988,12 @@ def listar_precosteos(*, estado: Optional[str] = None, tela: Optional[str] = Non
     try:
         sb.table("referencias_precosteo").select("instrucciones_lavado").limit(1).execute()
         cols += ",instrucciones_lavado"
+    except Exception:
+        pass
+    # precio_venta_final (para mostrar el margen en la lista) — degradar si falta migrar.
+    try:
+        sb.table("referencias_precosteo").select("precio_venta_final").limit(1).execute()
+        cols += ",precio_venta_final"
     except Exception:
         pass
     q = sb.table("referencias_precosteo").select(cols).order("created_at", desc=True).limit(limit)

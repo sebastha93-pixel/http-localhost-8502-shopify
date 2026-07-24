@@ -461,6 +461,7 @@ class PrecosteoUpdate(BaseModel):
     items:   Optional[list[PrecosteoItemIn]] = None
     es_muestra_diseno: Optional[bool] = None
     instrucciones_lavado: Optional[str] = None  # las imprime la SAT en terminación
+    precio_venta_final: Optional[float] = None  # PVP con IVA → para calcular el margen y autorizar
 
 
 @router.get("/precosteo/categorias")
@@ -535,6 +536,7 @@ def actualizar_precosteo(
             items=[i.model_dump() for i in body.items] if body.items is not None else None,
             es_muestra_diseno=body.es_muestra_diseno,
             instrucciones_lavado=body.instrucciones_lavado,
+            precio_venta_final=body.precio_venta_final,
             usuario_id=user.id,
         )
     except ValueError as e:

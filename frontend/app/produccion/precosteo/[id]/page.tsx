@@ -51,6 +51,7 @@ interface Precosteo {
   costo_total_sin_iva: number;
   costo_total_con_iva: number;
   precio_sugerido_venta?: number;
+  precio_venta_final?: number | null;
   estado: string;
   bloqueada: boolean;
   autorizada_por?: string;
@@ -71,6 +72,9 @@ export default function PrecosteoDetallePage() {
 
   const { user } = useAuth();
   const [editando, setEditando] = useState(false);
+  // Precio de venta final (PVP con IVA) para calcular el margen y decidir autorización.
+  const [pvp, setPvp] = useState("");
+  const pvpInitRef = useRef(false);
   const [form, setForm] = useState({ nombre: "", codigo_referencia: "", tela: "", instrucciones_lavado: "" });
   // Líneas del costeo editables (al duplicar una referencia los valores
   // cambian aunque la tela sea la misma — por eso el duplicado se edita).
@@ -132,6 +136,14 @@ export default function PrecosteoDetallePage() {
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
   });
 
+  // Guarda solo el PVP (sin tocar líneas ni el resto). Se dispara al salir del campo.
+  const pvpMut = useMutation({
+    mutationFn: (val: number | null) =>
+      api.patch(`/api/produccion/precosteo/${id}`, { precio_venta_final: val }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["produccion", "precosteo"] }); },
+    onError: (e: Error) => { setErr(e.message); },
+  });
+
   const duplicarMut = useMutation({
     mutationFn: () => api.post<{ id: string }>(`/api/produccion/precosteo/${id}/duplicar`),
     // Abre la copia directo en modo edición para ponerle su nombre/código real
@@ -139,6 +151,13 @@ export default function PrecosteoDetallePage() {
     onSuccess: (nuevo) => { router.push(`/produccion/precosteo/${nuevo.id}?editar=1`); },
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
   });
+
+  // Inicializa el campo PVP con lo guardado (una vez, al cargar).
+  useEffect(() => {
+    if (pvpInitRef.current || !q.data) return;
+    pvpInitRef.current = true;
+    if (q.data.precio_venta_final) setPvp(String(q.data.precio_venta_final));
+  }, [q.data]);
 
   // Si se llega con ?editar=1 (p. ej. tras duplicar), abrir edición al cargar.
   const autoEditRef = useRef(false);
@@ -322,6 +341,16 @@ export default function PrecosteoDetallePage() {
         </Card>
       </div>
 
+      {/* Precio de venta final → margen (para autorizar) */}
+      <MargenCard
+        p={p}
+        pvp={pvp}
+        setPvp={setPvp}
+        puedeEditar={puedeEditar}
+        onGuardar={(val) => pvpMut.mutate(val)}
+        guardando={pvpMut.isPending}
+      />
+
       <Card>
         <CardContent className="p-0">
           <div className="px-4 py-3 border-b border-border">
@@ -445,6 +474,100 @@ export default function PrecosteoDetallePage() {
         </div>
       )}
     </PageShell>
+  );
+}
+
+function MargenCard({ p, pvp, setPvp, puedeEditar, onGuardar, guardando }: {
+  p: Precosteo;
+  pvp: string;
+  setPvp: (v: string) => void;
+  puedeEditar: boolean;
+  onGuardar: (val: number | null) => void;
+  guardando: boolean;
+}) {
+  const iva = Number(p.iva_pct || 19);
+  const costoSinIva = Number(p.costo_total_sin_iva || 0);
+  // El precio que se digita es PVP CON IVA → se le quita el IVA para el margen.
+  const pvpNum = parseFloat(pvp.replace(/[^\d.]/g, "")) || 0;
+  const precioSinIva = pvpNum > 0 ? pvpNum / (1 + iva / 100) : 0;
+  const utilidad = precioSinIva - costoSinIva;
+  const margen = precioSinIva > 0 ? (utilidad / precioSinIva) * 100 : 0;
+  const markup = costoSinIva > 0 ? (utilidad / costoSinIva) * 100 : 0;
+  const hay = pvpNum > 0;
+
+  // Guía de color (solo pista visual; la decisión es tuya): rojo = pierde,
+  // ámbar = margen bajo (<50%), verde = sano (>=50%).
+  const tono = !hay ? "neutro" : utilidad < 0 ? "rojo" : margen < 50 ? "ambar" : "verde";
+  const colorMargen =
+    tono === "rojo" ? "text-terracotta"
+    : tono === "ambar" ? "text-amber-600"
+    : tono === "verde" ? "text-teal"
+    : "text-graphite";
+  const etiqueta =
+    tono === "rojo" ? "Pierde plata"
+    : tono === "ambar" ? "Margen bajo"
+    : tono === "verde" ? "Margen sano"
+    : "";
+
+  const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
+
+  return (
+    <Card>
+      <CardContent className="p-5">
+        <p className="section-label mb-3">Precio de venta y margen</p>
+        <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] gap-5 items-start">
+          {/* Input PVP */}
+          <div>
+            <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+              Precio de venta final (PVP con IVA)
+            </label>
+            <input
+              value={pvp}
+              onChange={(e) => setPvp(e.target.value)}
+              onBlur={() => { if (puedeEditar) onGuardar(pvpNum > 0 ? pvpNum : null); }}
+              inputMode="numeric"
+              disabled={!puedeEditar}
+              placeholder="Ej: 189900"
+              className="w-full rounded-sm border border-border bg-white px-3 py-2 text-lg text-ink-900 tabular disabled:bg-cloud/40 disabled:text-graphite"
+            />
+            <p className="mt-1 text-[0.68rem] text-graphite">
+              {puedeEditar ? "Se guarda al salir del campo." : "Solo lectura."}
+              {" "}IVA {iva}% · precio sin IVA: <span className="tabular">{hay ? fmt(precioSinIva) : "—"}</span>
+            </p>
+          </div>
+
+          {/* Métricas */}
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <p className="text-[0.7rem] uppercase tracking-widest text-graphite">Margen</p>
+              <p className={`mt-1 font-display text-3xl tabular ${colorMargen}`}>
+                {hay ? `${margen.toFixed(1)}%` : "—"}
+              </p>
+              {etiqueta && <p className={`text-[0.68rem] font-semibold ${colorMargen}`}>{etiqueta}</p>}
+              <p className="text-[0.62rem] text-graphite/70">(precio − costo) / precio, sin IVA</p>
+            </div>
+            <div>
+              <p className="text-[0.7rem] uppercase tracking-widest text-graphite">Utilidad / prenda</p>
+              <p className={`mt-1 font-display text-2xl tabular ${hay ? (utilidad < 0 ? "text-terracotta" : "text-ink-900") : "text-graphite"}`}>
+                {hay ? fmt(utilidad) : "—"}
+              </p>
+              <p className="text-[0.62rem] text-graphite/70">sin IVA</p>
+            </div>
+            <div>
+              <p className="text-[0.7rem] uppercase tracking-widest text-graphite">Markup</p>
+              <p className="mt-1 font-display text-2xl tabular text-ink-900">
+                {hay ? `${markup.toFixed(0)}%` : "—"}
+              </p>
+              <p className="text-[0.62rem] text-graphite/70">sobre el costo</p>
+            </div>
+          </div>
+        </div>
+        <p className="mt-3 text-[0.66rem] text-graphite/70">
+          Costo sin IVA de la prenda: <span className="tabular">{fmt(costoSinIva)}</span>. Guía de color: verde ≥ 50%, ámbar &lt; 50%, rojo si pierde. Ajusta la meta a tu criterio para autorizar.
+          {guardando && <span className="ml-2 inline-flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> guardando…</span>}
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
