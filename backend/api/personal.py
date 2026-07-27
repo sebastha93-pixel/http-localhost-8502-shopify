@@ -1,8 +1,8 @@
 """
 backend.api.personal — Módulo Personal: Tiempo, Asistencia y Permisos.
 
-Fase 2: cimientos. Empleados, organización, reglas y autoservicio base.
-Los eventos, el motor de asistencia y los permisos llegan en Fases 3 y 4.
+Cubre empleados, organización, reglas, asistencia, permisos, compensaciones,
+incidencias y autoservicio. El frontend llega en la Fase 5.
 
 Todo el router vive detrás de TIME_MANAGEMENT_ENABLED — si el flag está
 apagado, main.py ni siquiera lo registra.
@@ -18,7 +18,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query,
+                     Request, UploadFile)
 from pydantic import BaseModel, Field
 
 from backend.core.flags import FLAGS_PERSONAL, flags_activos
@@ -28,6 +29,7 @@ from backend.core.security import (
 from backend.services import personal_asistencia as asis_svc
 from backend.services import personal_auditoria as aud
 from backend.services import personal_empleados as emp_svc
+from backend.services import personal_importador as importador
 from backend.services import personal_libro as libro_svc
 from backend.services import personal_organizacion as org_svc
 from backend.services import personal_permisos as perm_svc
@@ -105,7 +107,7 @@ def health(_: CurrentUser = Depends(require_role("admin"))) -> dict:
 
     return {
         "modulo": "personal",
-        "fase": 2,
+        "backend_completo": True,      # Fases 0-4; el frontend llega en la 5
         "flags": flags_activos(*FLAGS_PERSONAL),
         "migracion_aplicada": migracion_ok,
         "sedes": len(sedes),
@@ -278,6 +280,70 @@ def vincular_usuario(
                     empleado_id, body.usuario_id, actor=user.email)}
     except Exception as e:
         raise _error("vincular_usuario", e)
+
+
+@router.post("/empleados/importar/previsualizar")
+async def previsualizar_importacion(
+    archivo: UploadFile = File(...),
+    _: CurrentUser = Depends(require_permission("personal", "modificar")),
+) -> dict:
+    """Paso 1 de la carga masiva: lee el archivo y muestra qué haría.
+
+    No escribe nada. Devuelve qué se crearía, qué se actualizaría, qué filas
+    tienen error y por qué, y avisos de fechas ambiguas.
+
+    Nunca se importa a ciegas: 21 cédulas mal cargadas son fáciles de meter y
+    molestas de deshacer.
+    """
+    try:
+        contenido = await archivo.read()
+        if not contenido:
+            raise HTTPException(400, "archivo_vacio")
+        if len(contenido) > 5 * 1024 * 1024:
+            raise HTTPException(413, "archivo_demasiado_grande:max_5mb")
+        return {"ok": True, "plan": importador.previsualizar(
+            contenido, archivo.filename or "")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _error("previsualizar_importacion", e)
+
+
+@router.post("/empleados/importar")
+async def importar_empleados(
+    archivo: UploadFile = File(...),
+    confirmar: bool = Form(False),
+    actualizar_existentes: bool = Form(True),
+    user: CurrentUser = Depends(require_permission("personal", "modificar")),
+) -> dict:
+    """Paso 2: ejecuta la carga. Exige `confirmar=true` explícito.
+
+    Idempotente por (tipo_documento, numero_documento): volver a subir el
+    mismo archivo actualiza en vez de duplicar.
+    """
+    try:
+        if not confirmar:
+            raise HTTPException(
+                400, "debes_confirmar:revisa_primero_con_/importar/previsualizar")
+        contenido = await archivo.read()
+        if not contenido:
+            raise HTTPException(400, "archivo_vacio")
+        if len(contenido) > 5 * 1024 * 1024:
+            raise HTTPException(413, "archivo_demasiado_grande:max_5mb")
+
+        plan = importador.previsualizar(contenido, archivo.filename or "")
+        resultado = importador.aplicar(plan, actor=user.email,
+                                       actualizar_existentes=actualizar_existentes)
+        aud.registrar(actor=user.email, accion="importar_empleados",
+                      entidad="empleado",
+                      valores_despues={"archivo": archivo.filename, **resultado})
+        return {"ok": True, **resultado,
+                "errores_del_archivo": plan.get("errores", []),
+                "avisos": plan.get("avisos", [])}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _error("importar_empleados", e)
 
 
 @router.get("/empleados/{empleado_id}/equipo")
