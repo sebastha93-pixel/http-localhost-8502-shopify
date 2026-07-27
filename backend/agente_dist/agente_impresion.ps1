@@ -8,7 +8,7 @@
 #   3) Paginas PDF de PRUEBA      -> cualquier impresora (destino=ricoh, etc.)
 #  Lee config.json en la MISMA carpeta (backend, credenciales, impresoras).
 #
-#  v2.1 BLINDADO (2026-07-27): nunca se apaga por un error.
+#  v2.2 BLINDADO (2026-07-27): nunca se apaga por un error.
 #   - Login inicial con reintento infinito (aguanta que la red no este lista).
 #   - El bucle atrapa CUALQUIER error, lo loggea y sigue (backoff).
 #   - Pensado para correr como tarea ONSTART sin limite de tiempo.
@@ -86,8 +86,34 @@ function Imprimir([byte[]]$datos, $impresora) {
     } finally { $cliente.Close() }
 }
 
+# --- CANDADO DE INSTANCIA UNICA -----------------------------------------
+# Dos agentes vivos a la vez pueden bajar el MISMO trabajo de la cola e
+# imprimir DOBLE (papel/etiquetas reales, no se puede deshacer). Este mutex
+# global garantiza que solo uno corra, sin importar como se lance (tarea
+# programada, Iniciar_agente.bat, doble clic, otra sesion de Windows).
+$script:Candado = $null
+try {
+    $script:Candado = New-Object System.Threading.Mutex($false, 'Global\MaleDenimAgenteImpresion')
+    if (-not $script:Candado.WaitOne(0)) {
+        Log "[!] Ya hay OTRO agente corriendo. Me cierro para no imprimir doble."
+        exit
+    }
+} catch {
+    # OJO: New-Object envuelve el error en MethodInvocationException, por eso
+    # hay que bajar por InnerException en vez de usar 'catch [Tipo]'.
+    $err = $_.Exception
+    while ($err.InnerException) { $err = $err.InnerException }
+    if ($err -is [System.UnauthorizedAccessException]) {
+        # El mutex ya existe pero lo creo otra cuenta (ej. la tarea como SYSTEM).
+        Log "[!] Ya hay otro agente corriendo (de otra cuenta). Me cierro para no imprimir doble."
+        exit
+    }
+    # Cualquier otra cosa: seguimos. Es mejor imprimir que no imprimir.
+    Log ("[!] No pude crear el candado de instancia unica: " + $err.Message)
+}
+
 # --- Arranque ------------------------------------------------------------
-Log "Agente de impresion MALE'DENIM (MDS / PowerShell) v2.1 blindado"
+Log "Agente de impresion MALE'DENIM (MDS / PowerShell) v2.2 blindado"
 Log ("  Sistema : " + $Base)
 foreach ($p in $Conf.printers.PSObject.Properties) {
     Log ("  {0,-9}: {1}:{2}" -f $p.Name, $p.Value.ip, $p.Value.port)

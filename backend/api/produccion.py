@@ -2134,6 +2134,9 @@ _AGENTE_DIST = os.path.join(os.path.dirname(os.path.dirname(__file__)), "agente_
 _AGENTE_ARCHIVOS = {
     "agente_impresion.ps1": "text/plain; charset=utf-8",
     "INSTALAR_ARRANQUE_AUTOMATICO.bat": "text/plain; charset=utf-8",
+    # Instalador de una linea: se eleva solo y deja la tarea siempre viva.
+    #   irm <BASE>/api/produccion/agente/instalar.ps1 | iex
+    "instalar.ps1": "text/plain; charset=utf-8",
 }
 
 

@@ -1,0 +1,212 @@
+# =========================================================================
+#  INSTALADOR DEL AGENTE DE IMPRESION MALE'DENIM   (una sola linea)
+#
+#  Uso en el PC del servidor MDS (PowerShell NORMAL, sin elevar):
+#     irm https://backend-production-21f0.up.railway.app/api/produccion/agente/instalar.ps1 | iex
+#
+#  Que hace:
+#   1. Si no es administrador -> se ELEVA solo (sale el aviso de Windows).
+#      Si el usuario lo rechaza / no puede -> instala en MODO SIN ADMIN
+#      (tarea del usuario que arranca al iniciar sesion).
+#   2. Encuentra la carpeta del agente (busca en los escritorios).
+#   3. Baja la ultima version de agente_impresion.ps1.
+#   4. MATA el agente viejo (evita que dos agentes impriman doble).
+#   5. Registra la tarea: arranca al prender el PC, oculta, SIN limite de
+#      tiempo y con auto-reinicio si el proceso se cae.
+#   6. La arranca y VERIFICA que quedo corriendo.
+# =========================================================================
+
+$ErrorActionPreference = "Stop"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+$Base   = 'https://backend-production-21f0.up.railway.app'
+$UrlYo  = "$Base/api/produccion/agente/instalar.ps1"
+$UrlPs1 = "$Base/api/produccion/agente/agente_impresion.ps1"
+$Tarea  = 'AgenteImpresionMaleDenim'
+
+function Di([string]$m) { Write-Host $m }
+
+# ── 1. ¿Somos administrador? ─────────────────────────────────────────────
+$esAdmin = $false
+try {
+    $esAdmin = ([Security.Principal.WindowsPrincipal] `
+        [Security.Principal.WindowsIdentity]::GetCurrent()
+        ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+} catch { $esAdmin = $false }
+
+$seguir     = $true
+$modoUsuario = $false
+
+if (-not $esAdmin) {
+    Di ""
+    Di "  Necesito permiso de administrador."
+    Di "  >>> Va a salir un aviso de Windows: dale  Si  <<<"
+    Di ""
+    try {
+        Start-Process -FilePath 'powershell.exe' -Verb RunAs -ErrorAction Stop `
+            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit',
+                            '-Command', "irm '$UrlYo' | iex")
+        Di "  [OK] Se abrio una ventana de ADMINISTRADOR."
+        Di "       Mira ESA ventana: ahi termina la instalacion."
+        $seguir = $false
+    } catch {
+        Di "  [!] No se pudo elevar ($($_.Exception.Message))."
+        Di "      Instalo en MODO SIN ADMIN (arranca al iniciar sesion)."
+        $modoUsuario = $true
+    }
+}
+
+if ($seguir) {
+
+    # ── 2. Buscar la carpeta del agente ─────────────────────────────────
+    Di "  Buscando la carpeta del agente..."
+    $cands = @()
+    try {
+        foreach ($u in (Get-ChildItem 'C:\Users' -Directory -ErrorAction SilentlyContinue)) {
+            foreach ($sub in @('Desktop', 'Escritorio', 'OneDrive\Desktop', 'OneDrive\Escritorio')) {
+                $p = Join-Path $u.FullName $sub
+                if (Test-Path $p) { $cands += $p }
+            }
+        }
+    } catch {}
+    if ($env:PUBLIC) { $cands += (Join-Path $env:PUBLIC 'Desktop') }
+
+    $dir = $null
+    foreach ($c in $cands) {
+        $f = Get-ChildItem -Path $c -Recurse -Filter 'agente_impresion.ps1' `
+                -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($f) { $dir = $f.DirectoryName; break }
+    }
+    if (-not $dir) {
+        # Ultimo recurso: barrer todo C:\Users
+        $f = Get-ChildItem -Path 'C:\Users' -Recurse -Filter 'agente_impresion.ps1' `
+                -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($f) { $dir = $f.DirectoryName }
+    }
+    if (-not $dir) {
+        Di ""
+        Di "  [X] No encontre la carpeta del agente (agente_impresion.ps1)."
+        Di "      Copia la carpeta AGENTE_IMPRESION_MALEDENIM al Escritorio y repite."
+        Di ""
+    }
+    else {
+        $ps1 = Join-Path $dir 'agente_impresion.ps1'
+        $cfg = Join-Path $dir 'config.json'
+        Di "  Carpeta: $dir"
+        if (-not (Test-Path $cfg)) {
+            Di "  [X] Falta config.json en esa carpeta (trae las impresoras y la clave)."
+            Di "      Sin ese archivo el agente no puede arrancar."
+        }
+        else {
+            # ── 3. Bajar la ultima version del agente ───────────────────
+            try {
+                $tmp = "$ps1.nuevo"
+                Invoke-WebRequest -UseBasicParsing -Uri $UrlPs1 -OutFile $tmp -TimeoutSec 60
+                if ((Get-Item $tmp).Length -gt 1000) {
+                    Move-Item -Force $tmp $ps1
+                    Di "  [OK] Agente actualizado a la ultima version."
+                } else {
+                    Remove-Item $tmp -ErrorAction SilentlyContinue
+                    Di "  [!] La descarga vino vacia: sigo con la version que ya tenias."
+                }
+            } catch {
+                Di "  [!] No pude bajar la ultima version ($($_.Exception.Message))."
+                Di "      Sigo con la version que ya esta en el PC."
+            }
+
+            # ── 4. Quitar tarea vieja y MATAR agentes que ya corran ──────
+            # (primero la tarea, si no el auto-reinicio lo revive al matarlo)
+            try {
+                if (Get-ScheduledTask -TaskName $Tarea -ErrorAction SilentlyContinue) {
+                    Unregister-ScheduledTask -TaskName $Tarea -Confirm:$false -ErrorAction SilentlyContinue
+                    Di "  [OK] Tarea anterior eliminada."
+                }
+            } catch {}
+
+            $muertos = 0
+            try {
+                $mios = @($PID)
+                Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+                  Where-Object { $_.CommandLine -and $_.CommandLine -like '*agente_impresion.ps1*' -and $mios -notcontains $_.ProcessId } |
+                  ForEach-Object {
+                      try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop; $muertos++ } catch {}
+                  }
+            } catch {}
+            if ($muertos -gt 0) { Di "  [OK] Cerre $muertos agente(s) viejo(s) (evita imprimir doble)." }
+
+            # ── 5. Registrar la tarea ───────────────────────────────────
+            $act = New-ScheduledTaskAction -Execute 'powershell.exe' `
+                     -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $ps1 + '"')
+
+            $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+                     -DontStopIfGoingOnBatteries -StartWhenAvailable `
+                     -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
+                     -MultipleInstances IgnoreNew
+            # Sin limite de tiempo: por defecto Windows mata la tarea a los 3 dias.
+            $set.ExecutionTimeLimit = 'PT0S'
+
+            $modo = ""
+            try {
+                if ($modoUsuario) {
+                    $trg = New-ScheduledTaskTrigger -AtLogOn
+                    Register-ScheduledTask -TaskName $Tarea -Action $act -Trigger $trg `
+                        -Settings $set -Force | Out-Null
+                    $modo = "SIN ADMIN (arranca al iniciar sesion)"
+                } else {
+                    $trg = New-ScheduledTaskTrigger -AtStartup
+                    $prn = New-ScheduledTaskPrincipal -UserId 'SYSTEM' `
+                             -LogonType ServiceAccount -RunLevel Highest
+                    Register-ScheduledTask -TaskName $Tarea -Action $act -Trigger $trg `
+                        -Principal $prn -Settings $set -Force | Out-Null
+                    $modo = "SYSTEM (arranca al prender el PC, aunque nadie inicie sesion)"
+                }
+                Di "  [OK] Tarea registrada: $modo"
+            } catch {
+                Di "  [X] No pude registrar la tarea: $($_.Exception.Message)"
+                $modo = ""
+            }
+
+            # ── 6. Arrancar y verificar DE VERDAD ───────────────────────
+            # No basta con "existe un proceso": eso puede ser un agente viejo.
+            # La prueba real es que el LOG crezca con la sesion iniciada.
+            if ($modo) {
+                $log = Join-Path $dir 'agente.log'
+                $antes = 0
+                try { if (Test-Path $log) { $antes = (Get-Item $log).Length } } catch {}
+
+                try { Start-ScheduledTask -TaskName $Tarea } catch {}
+                Di "  Arrancando y verificando (hasta 40s)..."
+                $vivo = $false
+                for ($i = 0; $i -lt 20; $i++) {
+                    Start-Sleep -Seconds 2
+                    try {
+                        if ((Test-Path $log) -and ((Get-Item $log).Length -gt $antes)) {
+                            $nuevo = Get-Content $log -Tail 25 -ErrorAction SilentlyContinue
+                            if ($nuevo -match 'Sesion iniciada' -or $nuevo -match 'blindado') {
+                                $vivo = $true; break
+                            }
+                        }
+                    } catch {}
+                }
+                Di ""
+                if ($vivo) {
+                    Di "  ============================================="
+                    Di "   [OK] AGENTE INSTALADO Y CORRIENDO"
+                    Di "        Modo: $modo"
+                    Di "        Log : $dir\agente.log"
+                    Di "        En la app: Produccion -> Impresion"
+                    Di "                   debe decir 'Agente en linea'."
+                    Di "  ============================================="
+                } else {
+                    Di "  [!] La tarea quedo registrada pero no veo el proceso."
+                    Di "      Revisa el log: $dir\agente.log"
+                    try {
+                        $inf = Get-ScheduledTaskInfo -TaskName $Tarea -ErrorAction SilentlyContinue
+                        if ($inf) { Di "      Ultimo resultado de la tarea: $($inf.LastTaskResult)" }
+                    } catch {}
+                }
+                Di ""
+            }
+        }
+    }
+}
