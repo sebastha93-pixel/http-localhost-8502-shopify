@@ -19,6 +19,7 @@ from typing import Optional
 from collections import defaultdict
 
 from shopify_client import _get
+from backend.core.timeutils import parse_iso
 
 
 # ── Cache simple en memoria ────────────────────────────────────────────────────
@@ -448,7 +449,7 @@ def analisis_clientes(dias: int = 90) -> dict:
                 continue
             fecha_str = (o.get("created_at") or "")[:10]
             try:
-                fecha = datetime.fromisoformat(fecha_str).date()
+                fecha = parse_iso(fecha_str).date()
             except Exception:
                 continue
             if ventana_vieja_ini <= fecha < ventana_vieja_fin:
@@ -1181,7 +1182,7 @@ def listar_productos(status: str = "active", limit: int = 250) -> list:
                     dias_pub = None
                     if pub_at:
                         try:
-                            pub_d = datetime.fromisoformat(pub_at.replace("Z", "+00:00")).date()
+                            pub_d = datetime.fromisoformat(pub_at).date()
                             dias_pub = (hoy_bogota() - pub_d).days
                         except Exception:
                             pass

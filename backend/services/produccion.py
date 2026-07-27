@@ -16,6 +16,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from supabase import Client, create_client
+from backend.core.timeutils import parse_iso
 
 log = logging.getLogger(__name__)
 
@@ -3093,7 +3094,7 @@ def estado_impresion() -> dict:
         try:
             # Py 3.10: fromisoformat revienta con fracciones recortadas → limpiar
             limpio = re.sub(r"\.\d+", "", crudo).replace("Z", "+00:00")
-            t = datetime.fromisoformat(limpio)
+            t = parse_iso(limpio)
             edad = (datetime.now(timezone.utc) - t).total_seconds() / 60
             mas_viejo_min = max(mas_viejo_min, int(edad))
         except Exception:
@@ -4321,7 +4322,7 @@ def tablero_produccion() -> dict:
     ultimos = []
     for oc in cortes:
         try:
-            created = datetime.fromisoformat(str(oc.get("created_at", "")).replace("Z", "+00:00"))
+            created = datetime.fromisoformat(str(oc.get("created_at", "")))
         except Exception:
             created = None
         unidades = sum(_int0(v) for v in (oc.get("unidades_cortadas") or {}).values())
@@ -4363,7 +4364,7 @@ def tablero_produccion() -> dict:
         por_etapa[etapa] = por_etapa.get(etapa, 0) + 1
         if etapa != "despachado" and r.get("asignado_at"):
             try:
-                asignado = datetime.fromisoformat(str(r["asignado_at"]).replace("Z", "+00:00"))
+                asignado = parse_iso(str(r["asignado_at"]))
                 dias = (hoy - asignado).days
                 if dias > 7:
                     estancados.append({
@@ -4610,7 +4611,7 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             if not entregado:
                 continue  # el confeccionista aún trabaja — no es exigible
             try:
-                ent_dt = datetime.fromisoformat(str(entregado).replace("Z", "+00:00"))
+                ent_dt = parse_iso(str(entregado))
             except (TypeError, ValueError):
                 continue
             if (ahora - ent_dt).total_seconds() < 86400:

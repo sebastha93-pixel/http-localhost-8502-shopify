@@ -12,6 +12,7 @@ import logging
 import os
 import threading
 from datetime import datetime, timedelta, timezone
+from backend.core.timeutils import parse_iso
 
 log = logging.getLogger(__name__)
 
@@ -416,7 +417,7 @@ def _detectar_alertas_y_notificar() -> dict:
         if not m or m[0].get("sender_type") != "customer":
             continue
         try:
-            last_dt = _dt.fromisoformat(m[0]["sent_at"].replace("Z", "+00:00"))
+            last_dt = parse_iso(m[0]["sent_at"])
             mins = int((ahora - last_dt).total_seconds() / 60)
         except Exception:
             mins = None

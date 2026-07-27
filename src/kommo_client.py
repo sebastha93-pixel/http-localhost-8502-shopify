@@ -18,6 +18,7 @@ import time
 from typing import Any, Iterator, Optional
 
 import requests
+from backend.core.timeutils import parse_iso
 
 
 log = logging.getLogger(__name__)
@@ -107,7 +108,7 @@ def _leer_oauth_token_vigente() -> Optional[str]:
     row = r.data[0]
     expires_at_str = row.get("expires_at") or ""
     try:
-        expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+        expires_at = parse_iso(expires_at_str)
     except Exception:
         return None
 

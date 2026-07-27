@@ -17,7 +17,6 @@ Estrategia de caché (simple y robusta):
 import hashlib
 import json
 import logging
-import re
 import sqlite3
 import threading
 import time
@@ -382,25 +381,11 @@ def _sb_ok() -> bool:
     return _sb() is not None
 
 
-def _parse_iso_naive(value) -> datetime:
-    """Parsea un timestamp ISO tolerando CUALQUIER precisión de fracción de
-    segundo y la zona horaria. Devuelve datetime naive (a nivel de segundo),
-    suficiente para el TTL.
-
-    Necesario porque Postgres (columna timestamptz) recorta los ceros finales
-    de la fracción — p.ej. escribimos '...19.142540' y al leer vuelve
-    '...19.14254+00:00' (5 dígitos). datetime.fromisoformat en Python < 3.11
-    solo acepta 3 o 6 dígitos, así que reventaba y la caché se descartaba
-    entera (logística salía vacía). Extraemos solo hasta el segundo con regex,
-    que funciona en todas las versiones."""
-    s = str(value or "")
-    m = re.search(r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})", s)
-    if m:
-        y, mo, d, h, mi, sec = (int(x) for x in m.groups())
-        return datetime(y, mo, d, h, mi, sec)
-    # Último recurso: intento directo sin zona (puede lanzar, y el caller ya
-    # atrapa la excepción).
-    return datetime.fromisoformat(s.replace("Z", "").split("+")[0].split(".")[0])
+# _parse_iso_naive se movió al util compartido backend/core/timeutils.py para
+# que todo el repo use el mismo parser tolerante (el patrón frágil de
+# fromisoformat sobre timestamps de Postgres estaba repetido en ~20 sitios).
+# Se mantiene el nombre local como alias para no tocar los call sites.
+from backend.core.timeutils import parse_iso_naive as _parse_iso_naive
 
 
 def _sb_cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:

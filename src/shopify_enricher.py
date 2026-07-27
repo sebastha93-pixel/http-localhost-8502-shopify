@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Optional
 
 import requests
+from backend.core.timeutils import parse_iso
 
 log = logging.getLogger(__name__)
 
@@ -292,9 +293,7 @@ def enriquecer(pedidos: list) -> list:
                 raw_dt = f0.get("created_at") or ""
                 if raw_dt:
                     try:
-                        p["fecha_despacho"] = datetime.fromisoformat(
-                            raw_dt.replace("Z", "+00:00")
-                        ).date().isoformat()
+                        p["fecha_despacho"] = parse_iso(raw_dt).date().isoformat()
                     except Exception:
                         pass
 

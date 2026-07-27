@@ -22,6 +22,10 @@ from typing import Optional, Dict, List
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent))
+# Raíz del repo en path para importar backend.core.* también en modo standalone
+# (python src/shopify_sync.py), no solo dentro del proceso uvicorn.
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from backend.core.timeutils import parse_iso
 from shopify_client import (
     paginar, _get, verificar_conexion,
     ShopifyError, contar_pedidos,
@@ -38,7 +42,7 @@ def _iso(dt_str: Optional[str]) -> Optional[str]:
     if not dt_str:
         return None
     try:
-        return datetime.fromisoformat(dt_str.replace("Z", "+00:00")).strftime("%Y-%m-%d")
+        return parse_iso(dt_str).strftime("%Y-%m-%d")
     except Exception:
         return dt_str[:10] if dt_str else None
 

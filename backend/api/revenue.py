@@ -19,6 +19,7 @@ from backend.services import kommo as kommo_svc
 from backend.services import revenue_db as db
 from backend.services import audit_ia
 from backend.services import informe_consultor as informe_svc
+from backend.core.timeutils import parse_iso
 
 
 log = logging.getLogger(__name__)
@@ -809,7 +810,7 @@ def oauth_status(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     row = r.data[0]
     # Calcular si está vigente
     try:
-        exp = datetime.fromisoformat((row["expires_at"] or "").replace("Z", "+00:00"))
+        exp = parse_iso((row["expires_at"] or ""))
         vigente = datetime.now(timezone.utc) < exp
         minutos_restantes = int((exp - datetime.now(timezone.utc)).total_seconds() / 60)
     except Exception:
@@ -1319,7 +1320,7 @@ def list_conversations(
                     if not sa:
                         continue
                     try:
-                        ts = datetime.fromisoformat(sa.replace("Z", "+00:00"))
+                        ts = parse_iso(sa)
                     except Exception:
                         continue
                     st = m.get("sender_type")
@@ -1503,8 +1504,8 @@ def advisors_ranking(
             # Antigüedad lead al cerrar (días)
             try:
                 if lead.get("created_at") and lead.get("closed_at"):
-                    c_dt = datetime.fromisoformat(lead["created_at"].replace("Z", "+00:00"))
-                    f_dt = datetime.fromisoformat(lead["closed_at"].replace("Z", "+00:00"))
+                    c_dt = parse_iso(lead["created_at"])
+                    f_dt = parse_iso(lead["closed_at"])
                     edad_dias = (f_dt - c_dt).total_seconds() / 86400
                     if 0 < edad_dias < 365:
                         r["edades_cierre_dias"].append(edad_dias)
@@ -1541,7 +1542,7 @@ def advisors_ranking(
             if not sa:
                 continue
             try:
-                ts = datetime.fromisoformat(sa.replace("Z", "+00:00"))
+                ts = parse_iso(sa)
             except Exception:
                 continue
             if m.get("sender_type") == "customer":
@@ -2040,7 +2041,7 @@ def alertas_activas(
         if not last or last.get("sender_type") != "customer":
             continue
         try:
-            last_dt = datetime.fromisoformat(last["sent_at"].replace("Z", "+00:00"))
+            last_dt = parse_iso(last["sent_at"])
             mins = int((ahora - last_dt).total_seconds() / 60)
         except Exception:
             mins = None
@@ -2170,7 +2171,7 @@ def tendencias(
         started = c.get("started_at") or c.get("last_message_at")
         if started:
             try:
-                d = datetime.fromisoformat(started.replace("Z", "+00:00"))
+                d = parse_iso(started)
                 # Hora local Bogotá UTC-5
                 d_local = d.astimezone(timezone(timedelta(hours=-5)))
                 h = d_local.hour
@@ -2297,7 +2298,7 @@ def messages_stats(
     TZ_BOG = ZoneInfo("America/Bogota")
     if desde and hasta:
         try:
-            d_des = datetime.fromisoformat(desde).replace(tzinfo=TZ_BOG)
+            d_des = parse_iso(desde).replace(tzinfo=TZ_BOG)
             d_has = datetime.fromisoformat(hasta).replace(hour=23, minute=59, second=59, tzinfo=TZ_BOG)
             dt_desde = d_des.astimezone(timezone.utc)
             dt_hasta = d_has.astimezone(timezone.utc)
@@ -2600,8 +2601,8 @@ def briefing_hoy(_: CurrentUser = Depends(require_permission("comercial", "modif
         fa = r.get("first_advisor_at")
         if fc and fa and fa > fc:
             try:
-                tc = datetime.fromisoformat(fc.replace("Z", "+00:00"))
-                ta = datetime.fromisoformat(fa.replace("Z", "+00:00"))
+                tc = datetime.fromisoformat(fc)
+                ta = parse_iso(fa)
                 response_times.append((ta - tc).total_seconds() / 60.0)
             except Exception:
                 pass
@@ -3917,7 +3918,7 @@ def diagnostico_data_quality(
         if not lm:
             continue
         try:
-            t = datetime.fromisoformat(lm.replace("Z", "+00:00"))
+            t = parse_iso(lm)
             hours = (now_utc - t).total_seconds() / 3600
             if hours < 24:
                 rangos["0-24h"] += 1

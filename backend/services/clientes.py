@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from supabase import create_client, Client
+from backend.core.timeutils import parse_iso
 
 
 log = logging.getLogger(__name__)
@@ -293,7 +294,7 @@ def _leer_cache(email: str) -> Optional[dict]:
         row = rows[0]
         ts_str = row.get("actualizado_en") or ""
         try:
-            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            ts = parse_iso(ts_str)
         except Exception:
             return None
         if datetime.now(timezone.utc) - ts > timedelta(hours=_TTL_HORAS):
@@ -342,7 +343,7 @@ def _leer_cache_por_tel(telefono: str) -> Optional[dict]:
         row = rows[0]
         ts_str = row.get("actualizado_en") or ""
         try:
-            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            ts = parse_iso(ts_str)
         except Exception:
             return None
         if datetime.now(timezone.utc) - ts > timedelta(hours=_TTL_HORAS):
