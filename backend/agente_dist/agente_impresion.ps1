@@ -8,7 +8,7 @@
 #   3) Paginas PDF de PRUEBA      -> cualquier impresora (destino=ricoh, etc.)
 #  Lee config.json en la MISMA carpeta (backend, credenciales, impresoras).
 #
-#  v2.2 BLINDADO (2026-07-27): nunca se apaga por un error.
+#  v2.3 BLINDADO (2026-07-27): nunca se apaga por un error.
 #   - Login inicial con reintento infinito (aguanta que la red no este lista).
 #   - El bucle atrapa CUALQUIER error, lo loggea y sigue (backoff).
 #   - Pensado para correr como tarea ONSTART sin limite de tiempo.
@@ -113,7 +113,7 @@ try {
 }
 
 # --- Arranque ------------------------------------------------------------
-Log "Agente de impresion MALE'DENIM (MDS / PowerShell) v2.2 blindado"
+Log "Agente de impresion MALE'DENIM (MDS / PowerShell) v2.3 blindado"
 Log ("  Sistema : " + $Base)
 foreach ($p in $Conf.printers.PSObject.Properties) {
     Log ("  {0,-9}: {1}:{2}" -f $p.Name, $p.Value.ip, $p.Value.port)
@@ -144,6 +144,46 @@ function Intento([string]$clave, [string]$etiqueta, [scriptblock]$accion) {
     }
 }
 
+# --- MEMORIA "YA SALIO PAPEL" (anti impresion doble) --------------------
+# Mandar el archivo a la impresora y confirmarle al sistema son DOS pasos.
+# Si el papel YA salio y la confirmacion falla (corte de red, backend
+# reiniciando), el trabajo sigue "pendiente" y en la vuelta siguiente se
+# imprimiria OTRA VEZ. Esta marca en disco recuerda lo que ya salio
+# fisicamente, para reintentar SOLO la confirmacion. Sobrevive reinicios.
+$ArchivoImpresos = Join-Path $Carpeta "ya_impresos.txt"
+$script:Impresos = New-Object 'System.Collections.Generic.HashSet[string]'
+try {
+    if (Test-Path $ArchivoImpresos) {
+        foreach ($l in (Get-Content $ArchivoImpresos -ErrorAction SilentlyContinue)) {
+            $t = ("" + $l).Trim()
+            if ($t) { [void]$script:Impresos.Add($t) }
+        }
+    }
+} catch {}
+
+function YaSalio([string]$id) {
+    if (-not $id) { return $false }
+    return $script:Impresos.Contains($id)
+}
+
+function MarcarSalio([string]$id) {
+    if (-not $id) { return }
+    [void]$script:Impresos.Add($id)
+    try { Add-Content -Path $ArchivoImpresos -Value $id -Encoding UTF8 } catch {}
+    # Poda: que el archivo no crezca para siempre.
+    try {
+        if ($script:Impresos.Count -gt 3000) {
+            $ultimos = @(Get-Content $ArchivoImpresos -Tail 1000 -ErrorAction SilentlyContinue)
+            Set-Content -Path $ArchivoImpresos -Value $ultimos -Encoding UTF8
+            $script:Impresos.Clear()
+            foreach ($l in $ultimos) {
+                $t = ("" + $l).Trim()
+                if ($t) { [void]$script:Impresos.Add($t) }
+            }
+        }
+    } catch {}
+}
+
 # --- Bucle principal (nunca sale por un error) ---------------------------
 while ($true) {
     try {
@@ -155,10 +195,17 @@ while ($true) {
                 $rid = $rem.id
                 $etq = $rem.consecutivo; if (-not $etq) { $etq = $rid.Substring(0, 8) }
                 Intento $rid ("remision " + $etq) {
-                    $pdf = ApiBytes ("/api/produccion/remisiones/" + $rid + "/pdf")
-                    Imprimir $pdf $Conf.printers.ricoh
-                    ApiJson "POST" ("/api/produccion/impresion/" + $rid + "/impresa") | Out-Null
-                    Log ("  [OK] Impresa {0} ({1} KB) -> ricoh" -f $etq, [int]($pdf.Length / 1024))
+                    if (YaSalio $rid) {
+                        # El papel YA salio antes; solo faltaba confirmarlo.
+                        ApiJson "POST" ("/api/produccion/impresion/" + $rid + "/impresa") | Out-Null
+                        Log ("  [OK] Confirmada {0} (ya habia salido impresa)" -f $etq)
+                    } else {
+                        $pdf = ApiBytes ("/api/produccion/remisiones/" + $rid + "/pdf")
+                        Imprimir $pdf $Conf.printers.ricoh
+                        MarcarSalio $rid          # <- ANTES de confirmar
+                        ApiJson "POST" ("/api/produccion/impresion/" + $rid + "/impresa") | Out-Null
+                        Log ("  [OK] Impresa {0} ({1} KB) -> ricoh" -f $etq, [int]($pdf.Length / 1024))
+                    }
                 }.GetNewClosure()
             }
         }
@@ -176,10 +223,17 @@ while ($true) {
             if (-not $cod) { $cod = $tid.Substring(0, 8) }
             $etq = "{0} {1}" -f $t.tipo, $cod
             Intento $tid $etq {
-                $contenido = ApiBytes ("/api/produccion/impresion/trabajos/" + $tid + "/contenido")
-                Imprimir $contenido $imp.Value
-                ApiJson "POST" ("/api/produccion/impresion/trabajos/" + $tid + "/impreso") | Out-Null
-                Log ("  [OK] Impreso {0} -> {1}" -f $etq, $destino)
+                if (YaSalio $tid) {
+                    # Las etiquetas YA salieron antes; solo faltaba confirmar.
+                    ApiJson "POST" ("/api/produccion/impresion/trabajos/" + $tid + "/impreso") | Out-Null
+                    Log ("  [OK] Confirmado {0} (ya habia salido impreso)" -f $etq)
+                } else {
+                    $contenido = ApiBytes ("/api/produccion/impresion/trabajos/" + $tid + "/contenido")
+                    Imprimir $contenido $imp.Value
+                    MarcarSalio $tid              # <- ANTES de confirmar
+                    ApiJson "POST" ("/api/produccion/impresion/trabajos/" + $tid + "/impreso") | Out-Null
+                    Log ("  [OK] Impreso {0} -> {1}" -f $etq, $destino)
+                }
             }.GetNewClosure()
         }
     } catch {
