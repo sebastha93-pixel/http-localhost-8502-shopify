@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Optional
 
 from backend.services import siigo
@@ -17,6 +18,17 @@ from backend.services import fiscal_logic as F
 log = logging.getLogger("fiscal_siigo")
 
 _MAX_PAGINAS = 20
+
+# Cache de facturas por nº de pedido. Siigo va a ~1 req/s y paginar /invoices
+# por cada caso es lentísimo cuando se procesan varios seguidos (banco de
+# pruebas, lotes). La factura de un pedido no cambia, así que cachearla es
+# seguro. TTL corto para no servir datos rancios en operación normal.
+_cache_facturas: dict[str, tuple[float, Optional[dict]]] = {}
+_TTL_FACTURA = 600.0
+
+
+def limpiar_cache_facturas() -> None:
+    _cache_facturas.clear()
 
 
 def modo_actual() -> str:
@@ -39,6 +51,11 @@ class EmisorSiigo:
         if not objetivo:
             return None
 
+        import time
+        hit = _cache_facturas.get(objetivo)
+        if hit and (time.time() - hit[0]) < _TTL_FACTURA:
+            return hit[1]
+
         params = {"page_size": 100, "document_id": F.FV_ONLINE_ID}
         if desde:
             params["date_start"] = desde
@@ -53,8 +70,14 @@ class EmisorSiigo:
                 return None
             for inv in resultados:
                 encontrado = F.extraer_numero_pedido(inv.get("observations") or "")
+                # Cachear TODO lo que se pagina, no solo el objetivo: la
+                # siguiente búsqueda de otro pedido de la misma página ya no
+                # vuelve a llamar a Siigo.
+                if encontrado:
+                    _cache_facturas[encontrado] = (time.time(), inv)
                 if encontrado == objetivo:
                     return inv
+        _cache_facturas[objetivo] = (time.time(), None)
         return None
 
     def emitir(self, *, payload: dict, doc_kind: str) -> dict:
