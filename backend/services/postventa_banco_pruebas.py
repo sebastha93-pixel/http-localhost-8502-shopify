@@ -70,17 +70,17 @@ def _preview_factura_simulado(case_id: str, r: dict) -> Optional[dict]:
 
     items = pv.items_caso(case_id)
     if not items:
-        return None
+        return {"_motivo": "el caso no tiene items en la DB"}
     it = items[0]
     credito = r.get("totales", {}).get("total")
     if not credito:
-        return None
+        return {"_motivo": "no hay total de la nota credito para usar de credito"}
 
     requested = (it.get("requested_sku") or "").strip()
     if requested:
         base = FS.precio_base_variante(requested)
         if base is None:
-            return None
+            return {"_motivo": f"Shopify no dio precio para el SKU {requested}"}
         item_reemplazo = {"code": requested, "description": requested,
                           "price_base": base}
     else:
@@ -182,15 +182,20 @@ def _correr_uno(pedido: dict, tipo: str, motivo: str, *, dry_run: bool,
     if tipo not in fiscal.TIPOS_SIN_FACTURA:
         try:
             prevf = _preview_factura_simulado(cid, r)
-            if prevf is not None:
-                res = prevf["resumen"]
-                suma_ok = abs((res["anticipo"] + res["excedente"]) - res["total"]) < 1.0
-                r["resumen_factura"] = res
-                paso("preview_factura_reemplazo", suma_ok,
-                     f"total {res['total']} = anticipo {res['anticipo']} + "
-                     f"excedente {res['excedente']}")
-                if not suma_ok:
-                    return r
+            if prevf is None or prevf.get("_motivo"):
+                # No pasa callado: si no se pudo validar la factura, el caso
+                # FALLA y dice por qué.
+                paso("preview_factura_reemplazo", False,
+                     (prevf or {}).get("_motivo", "no se pudo simular"))
+                return r
+            res = prevf["resumen"]
+            suma_ok = abs((res["anticipo"] + res["excedente"]) - res["total"]) < 1.0
+            r["resumen_factura"] = res
+            paso("preview_factura_reemplazo", suma_ok,
+                 f"total {res['total']} = anticipo {res['anticipo']} + "
+                 f"excedente {res['excedente']}")
+            if not suma_ok:
+                return r
         except Exception as e:  # noqa: BLE001
             paso("preview_factura_reemplazo", False, str(e))
             return r
