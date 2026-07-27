@@ -67,6 +67,9 @@ class EmisorSiigo:
             data = siigo.siigo_get("/invoices", params)
             resultados = data.get("results", []) if isinstance(data, dict) else []
             if not resultados:
+                # Se acabaron las páginas sin encontrarlo: cachear el "no está"
+                # para no volver a paginar todo en la siguiente búsqueda.
+                _cache_facturas[objetivo] = (time.time(), None)
                 return None
             for inv in resultados:
                 encontrado = F.extraer_numero_pedido(inv.get("observations") or "")
