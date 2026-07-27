@@ -10,6 +10,7 @@ import { formatMoney } from "@/lib/utils";
 import {
   obtenerCaso, cambiarEstado, previewFiscal, emitirFiscal,
   previewFactura, emitirFactura, type PreviewFactura,
+  itemsFacturaCaso, agregarItem, type ItemFactura,
   ESTADOS_LABEL, type EstadoPostventa, type PreviewFiscal,
 } from "@/lib/postventa";
 
@@ -59,6 +60,10 @@ export default function CasoDetallePage() {
         <div className="text-sm">Pedido Shopify: {c.shopify_order_name || "—"}</div>
       </CardContent></Card>
 
+      {/* Selección del ítem a devolver (desde la factura de Siigo) */}
+      <PanelItems caseId={caseId} status={c.status} tipo={c.type} onAgregado={() =>
+        qc.invalidateQueries({ queryKey: ["postventa-caso", caseId] })} />
+
       {/* Panel fiscal: nota crédito */}
       <PanelFiscal caseId={caseId} status={c.status} onEmitido={() =>
         qc.invalidateQueries({ queryKey: ["postventa-caso", caseId] })} />
@@ -85,6 +90,73 @@ export default function CasoDetallePage() {
         </p>
       )}
     </PageShell>
+  );
+}
+
+function PanelItems({ caseId, status, tipo, onAgregado }:
+  { caseId: string; status: string; tipo: string; onAgregado: () => void }) {
+  const [nuevoSku, setNuevoSku] = useState("");
+  const [agregado, setAgregado] = useState<string | null>(null);
+  const items = useQuery({
+    queryKey: ["postventa-items-factura", caseId],
+    queryFn: () => itemsFacturaCaso(caseId),
+    enabled: status === "aprobado",
+    retry: false,
+  });
+  const addMut = useMutation({
+    mutationFn: (it: ItemFactura) => agregarItem(caseId, {
+      original_sku: it.code, original_variant: it.description,
+      original_price: it.price, requested_sku: nuevoSku.trim(),
+    }),
+    onSuccess: (_r, it) => { setAgregado(it.code); onAgregado(); },
+  });
+
+  if (status !== "aprobado") return null;
+
+  return (
+    <Card className="mb-4">
+      <CardContent className="py-4 space-y-3">
+        <div className="font-medium text-sm">Ítem a devolver (de la factura del pedido)</div>
+        {items.isLoading && <p className="text-sm text-muted-foreground">Buscando la factura en Siigo…</p>}
+        {items.isError && (
+          <p className="text-sm text-destructive">
+            No se encontró la factura del pedido en Siigo. Revisa el nº de pedido.
+          </p>
+        )}
+        {items.data && (
+          <>
+            <div className="text-xs text-muted-foreground">Factura: {items.data.factura.name}</div>
+            <label className="block space-y-1">
+              <span className="block text-xs text-graphite">
+                SKU de la referencia nueva (solo si es cambio por otra referencia; vacío si es cambio de talla)
+              </span>
+              <input value={nuevoSku} onChange={(e) => setNuevoSku(e.target.value)}
+                placeholder="ej. 94625-1T12"
+                className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30" />
+            </label>
+            <div className="space-y-2">
+              {items.data.items.map((it) => (
+                <div key={it.code} className="flex items-center justify-between rounded-sm border border-border p-2">
+                  <div className="text-sm">
+                    <div className="font-medium">{it.description}</div>
+                    <div className="text-xs text-muted-foreground">{it.code} · {formatMoney(it.price)}</div>
+                  </div>
+                  <button disabled={addMut.isPending} onClick={() => addMut.mutate(it)}
+                    className="rounded-sm border border-border bg-card px-3 py-1 text-xs font-medium text-graphite hover:bg-cloud disabled:opacity-50">
+                    {agregado === it.code ? "✓ Agregado" : "Agregar al caso"}
+                  </button>
+                </div>
+              ))}
+            </div>
+            {agregado && (
+              <p className="text-xs text-teal-600">
+                Ítem agregado. Ya puedes previsualizar la nota crédito abajo.
+              </p>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
