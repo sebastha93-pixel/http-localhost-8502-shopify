@@ -52,9 +52,12 @@ def precio_base_variante(sku: str) -> Optional[float]:
     return F.base_desde_precio_con_iva(con_iva)
 
 
-_Q_VARIANTE_MAS_CARA = """
-query($q: String!) {
-  productVariants(first: 20, query: $q) {
+# Sin filtro de precio en el query: la sintaxis `price:>N` de Shopify resultó
+# frágil (devolvía vacío). Se traen variantes disponibles y se filtra en
+# Python, que es predecible y no depende de la gramática de búsqueda.
+_Q_VARIANTES = """
+query($n: Int!) {
+  productVariants(first: $n, query: "inventory_quantity:>0") {
     edges { node { sku price displayName availableForSale } }
   }
 }
@@ -69,11 +72,13 @@ def variante_mas_cara_que(precio_base_min: float, *, excluir_sku: str = "") -> O
     Devuelve {'sku', 'precio_con_iva', 'precio_base'} o None.
     """
     umbral_con_iva = F.total_con_iva(precio_base_min)
-    data = clientes._shopify_graphql(_Q_VARIANTE_MAS_CARA,
-                                     {"q": f"price:>{umbral_con_iva:.0f}"})
+    data = clientes._shopify_graphql(_Q_VARIANTES, {"n": 100})
     if not isinstance(data, dict) or data.get("errors"):
+        log.warning(f"[fiscal_shopify] variantes: {str(data)[:200]}")
         return None
     edges = (((data.get("data") or {}).get("productVariants") or {}).get("edges") or [])
+
+    candidatas = []
     for e in edges:
         n = e.get("node") or {}
         sku = (n.get("sku") or "").strip()
@@ -83,8 +88,12 @@ def variante_mas_cara_que(precio_base_min: float, *, excluir_sku: str = "") -> O
             con_iva = float(n.get("price"))
         except (TypeError, ValueError):
             continue
-        if con_iva <= umbral_con_iva:
-            continue
-        return {"sku": sku, "precio_con_iva": con_iva,
-                "precio_base": F.base_desde_precio_con_iva(con_iva)}
-    return None
+        if con_iva > umbral_con_iva:
+            candidatas.append((con_iva, sku))
+    if not candidatas:
+        return None
+    # La más barata que aun así supera el umbral: diferencia realista, no
+    # un salto absurdo de precio.
+    con_iva, sku = min(candidatas)
+    return {"sku": sku, "precio_con_iva": con_iva,
+            "precio_base": F.base_desde_precio_con_iva(con_iva)}

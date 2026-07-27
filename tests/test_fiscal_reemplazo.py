@@ -66,3 +66,38 @@ def test_precio_base_variante_no_existe(monkeypatch):
     monkeypatch.setattr(FSH.clientes, "_shopify_graphql", lambda q, v=None: {
         "data": {"productVariants": {"edges": []}}})
     assert FSH.precio_base_variante("NADA") is None
+
+
+# ── Búsqueda de una prenda más cara (para probar el excedente) ────────
+_VARIANTES = {"data": {"productVariants": {"edges": [
+    {"node": {"sku": "BARATA", "price": "99900.00"}},
+    {"node": {"sku": "IGUAL",  "price": "149900.00"}},
+    {"node": {"sku": "CARA-1", "price": "169900.00"}},
+    {"node": {"sku": "CARA-2", "price": "259900.00"}},
+]}}}
+
+
+def test_encuentra_la_mas_barata_que_supera_el_umbral(monkeypatch):
+    monkeypatch.setattr(FSH.clientes, "_shopify_graphql", lambda q, v=None: _VARIANTES)
+    # base 125966.39 -> con IVA 149900. La siguiente por encima es 169900.
+    r = FSH.variante_mas_cara_que(125966.39)
+    assert r["sku"] == "CARA-1"          # no salta a la de 259900
+    assert r["precio_con_iva"] == 169900.0
+    assert r["precio_base"] == 142773.11
+
+
+def test_excluye_el_sku_devuelto(monkeypatch):
+    monkeypatch.setattr(FSH.clientes, "_shopify_graphql", lambda q, v=None: _VARIANTES)
+    r = FSH.variante_mas_cara_que(125966.39, excluir_sku="CARA-1")
+    assert r["sku"] == "CARA-2"
+
+
+def test_sin_ninguna_mas_cara(monkeypatch):
+    monkeypatch.setattr(FSH.clientes, "_shopify_graphql", lambda q, v=None: _VARIANTES)
+    assert FSH.variante_mas_cara_que(500000.0) is None
+
+
+def test_error_de_shopify_no_lanza(monkeypatch):
+    monkeypatch.setattr(FSH.clientes, "_shopify_graphql",
+                        lambda q, v=None: {"errors": [{"message": "boom"}]})
+    assert FSH.variante_mas_cara_que(100000.0) is None
