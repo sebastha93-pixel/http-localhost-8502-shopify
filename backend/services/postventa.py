@@ -377,6 +377,12 @@ def confirmar_recepcion(case_id: str, *, actor: str = "sistema",
     caso = obtener_caso(case_id)
     if caso and caso.get("status") == "en_transito_bodega":
         cambiar_estado(case_id, "recibido_bodega", actor=actor)
+    # La prenda volvió de verdad: dejar constancia en Shopify. Secundario —
+    # si falla, el caso sigue su curso (solo queda en el timeline).
+    try:
+        sincronizar_retorno_shopify(case_id, actor=actor)
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"[postventa] sync retorno shopify: {e}")
     return log_row
 
 
@@ -437,3 +443,73 @@ def impacto_ventas(desde: str = "", hasta: str = "") -> dict:
         "neto": round(devuelto - refacturado, 2),
         "casos": len({f.get("case_id") for f in filas}),
     }
+
+
+# ── Sincronización con Shopify (secundaria: nunca rompe el caso) ─────
+def sincronizar_retorno_shopify(case_id: str, *, actor: str = "sistema") -> dict:
+    """Registra en Shopify que la prenda volvió. No mueve dinero.
+
+    Se llama al confirmar recepción en bodega. Un fallo aquí NO afecta el
+    caso ni lo fiscal — solo queda en el timeline.
+    """
+    from backend.services import postventa_shopify_write as W
+
+    caso = obtener_caso(case_id)
+    if caso is None:
+        return {"ok": False, "motivo": "caso_no_encontrado"}
+    items = items_caso(case_id)
+    if not items:
+        return {"ok": False, "motivo": "caso_sin_items"}
+
+    sku = items[0].get("original_sku") or ""
+    res = W.registrar_retorno(
+        shopify_order_id=caso.get("shopify_order_id") or "",
+        sku=sku, motivo=caso.get("reason") or "",
+        nota=f"Postventa {caso.get('case_number', '')}")
+
+    try:
+        if res.get("ok"):
+            registrar_evento(case_id, "shopify_retorno",
+                             f"Retorno registrado en Shopify"
+                             f"{' · ' + res['return_name'] if res.get('return_name') else ''}",
+                             created_by=actor)
+        else:
+            registrar_evento(case_id, "shopify_retorno",
+                             f"No se registró el retorno en Shopify: {res.get('motivo', '')}",
+                             created_by=actor)
+    except Exception:
+        pass
+    return res
+
+
+def reservar_reemplazo_shopify(case_id: str, *, actor: str = "sistema") -> dict:
+    """Aparta la prenda de reemplazo para que la tienda no la venda.
+
+    Se llama al agregar el ítem del caso. Secundaria: un fallo solo queda
+    registrado en el timeline.
+    """
+    from backend.services import postventa_shopify_write as W
+
+    items = items_caso(case_id)
+    if not items:
+        return {"ok": False, "motivo": "caso_sin_items"}
+    it = items[0]
+    # El SKU a apartar: el de reemplazo si es cambio de referencia, si no el
+    # mismo original (cambio de talla usa otra variante del mismo producto).
+    sku = (it.get("requested_sku") or "").strip() or (it.get("original_sku") or "")
+    if not sku:
+        return {"ok": False, "motivo": "sin_sku"}
+
+    res = W.reservar_item(sku=sku, cantidad=1)
+    try:
+        if res.get("ok"):
+            registrar_evento(case_id, "shopify_reserva",
+                             f"Reservada 1 unidad de {sku} en Shopify",
+                             created_by=actor)
+        else:
+            registrar_evento(case_id, "shopify_reserva",
+                             f"No se pudo reservar {sku}: {res.get('motivo', '')}",
+                             created_by=actor)
+    except Exception:
+        pass
+    return res

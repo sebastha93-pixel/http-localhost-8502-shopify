@@ -243,3 +243,20 @@ def test_impacto_ventas_resta_lo_devuelto(monkeypatch):
     assert r["refacturado"] == 159900.0
     assert r["neto"] == 20000.0   # lo que de verdad se pierde
     assert r["casos"] == 1
+
+
+def test_recepcion_sigue_aunque_shopify_falle(monkeypatch):
+    # REGLA DE ORO: un fallo de Shopify no puede romper el caso.
+    monkeypatch.setattr(svc, "guardar_logistica", lambda cid, **k: {"id": "l1", **k})
+    monkeypatch.setattr(svc, "registrar_evento", lambda *a, **k: {})
+    monkeypatch.setattr(svc, "obtener_caso",
+                        lambda cid: {"id": cid, "status": "en_transito_bodega"})
+    estados = []
+    monkeypatch.setattr(svc, "cambiar_estado", lambda cid, e, **k: estados.append(e))
+    def explota(case_id, **k):
+        raise RuntimeError("shopify caido")
+    monkeypatch.setattr(svc, "sincronizar_retorno_shopify", explota)
+
+    r = svc.confirmar_recepcion("c1")          # NO debe lanzar
+    assert r["estado_retorno"] == "recibido"
+    assert estados == ["recibido_bodega"]      # el caso avanzó igual
