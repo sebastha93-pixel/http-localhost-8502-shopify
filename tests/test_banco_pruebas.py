@@ -24,6 +24,14 @@ def _mock_base(monkeypatch, *, preview_total=119000.0):
         "factura_original": {"name": "FV-1-63043"},
         "totales": {"subtotal": 100000.0, "iva": 19000.0, "total": preview_total}})
     monkeypatch.setattr(B.fiscal_siigo, "modo_actual", lambda: "prueba")
+    # El banco valida la factura del reemplazo: necesita los items en DB.
+    monkeypatch.setattr(B.pv, "items_caso", lambda cid: [{
+        "original_sku": "A-10", "original_variant": "Jean",
+        "original_price": 100000.0, "requested_sku": ""}])
+    from backend.services import fiscal_shopify as _FS
+    monkeypatch.setattr(_FS, "variante_mas_cara_que",
+                        lambda base, excluir_sku="": None)
+    monkeypatch.setattr(_FS, "precio_base_variante", lambda sku: 100000.0)
 
 
 def test_dry_run_no_emite(monkeypatch):
