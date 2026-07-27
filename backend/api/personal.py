@@ -893,6 +893,101 @@ def mis_permisos(yo: dict = Depends(empleado_actual)) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# DASHBOARD
+# ═══════════════════════════════════════════════════════════════════════
+
+@router.get("/dashboard")
+def dashboard(
+    fecha: Optional[str] = None,
+    user: CurrentUser = Depends(require_permission("personal", "ver")),
+) -> dict:
+    """Foto del día: quién está, quién falta, qué hay pendiente.
+
+    Respeta el alcance del rol: un jefe ve su equipo, TH ve todo.
+    """
+    from backend.services.personal_base import _sb, hoy_bogota, quincena_de
+
+    try:
+        hoy = _fecha(fecha) if fecha else hoy_bogota()
+        alcance = emp_svc.alcance_empleados(user)
+
+        empleados = emp_svc.listar(solo_vigentes=True, limit=500)
+        if alcance is not None:
+            permitidos = set(alcance)
+            empleados = [e for e in empleados if e["id"] in permitidos]
+        ids = {e["id"] for e in empleados}
+
+        jornadas = [j for j in asis_svc.listar(desde=hoy.isoformat(),
+                                               hasta=hoy.isoformat(), limit=500)
+                    if j.get("empleado_id") in ids]
+
+        def cuenta(*estados):
+            return sum(1 for j in jornadas if j.get("estado_asistencia") in estados)
+
+        # Un empleado sin jornada calculada hoy no es "ausente": puede que el
+        # motor aún no haya corrido. Se cuenta aparte para no alarmar.
+        sin_calcular = len(ids) - len(jornadas)
+
+        permisos = perm_svc.listar(limit=500,
+                                   empleados_permitidos=alcance)
+        pendientes = [p for p in permisos
+                      if p.get("estado") in ("pendiente_jefe", "pendiente_th")]
+
+        sb = _sb()
+        incidencias_abiertas = 0
+        if sb is not None:
+            try:
+                r = (sb.table("personal_incidencias").select("id", count="exact")
+                     .in_("estado", ["abierta", "en_revision"]).execute())
+                incidencias_abiertas = r.count or 0
+            except Exception:
+                pass
+
+        planes = perm_svc.listar_planes(estado="activo", limit=200)
+        if alcance is not None:
+            planes = [p for p in planes if p.get("empleado_id") in ids]
+        por_compensar = sum(int(p.get("minutos_pendientes") or 0) for p in planes)
+
+        ini_q, fin_q = quincena_de(hoy)
+        return {
+            "fecha": hoy.isoformat(),
+            "quincena": {"desde": ini_q.isoformat(), "hasta": fin_q.isoformat()},
+            "programados": len(ids),
+            "presentes": cuenta("completa", "tarde", "salida_anticipada", "incompleta"),
+            "ausentes": cuenta("ausente"),
+            "tarde": cuenta("tarde"),
+            "en_permiso": cuenta("permiso", "vacaciones", "incapacidad"),
+            "descanso": cuenta("descanso", "festivo"),
+            "sin_calcular": max(0, sin_calcular),
+            "solicitudes_pendientes": len(pendientes),
+            "incidencias_abiertas": incidencias_abiertas,
+            "minutos_por_compensar": por_compensar,
+            "posible_extra_hoy": sum(int(j.get("minutos_posible_extra") or 0)
+                                     for j in jornadas),
+            "extra_aprobada_hoy": sum(int(j.get("minutos_extra_aprobada") or 0)
+                                      for j in jornadas),
+            "puntualidad_pct": _puntualidad(jornadas),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _error("dashboard", e)
+
+
+def _puntualidad(jornadas: list[dict]) -> Optional[float]:
+    """% de quienes llegaron a tiempo, sobre los que efectivamente vinieron.
+
+    Devuelve None si nadie tenía jornada: 100% sobre cero personas es una
+    cifra engañosa en un tablero.
+    """
+    con_entrada = [j for j in jornadas if j.get("primera_entrada_at")]
+    if not con_entrada:
+        return None
+    a_tiempo = sum(1 for j in con_entrada if not int(j.get("minutos_tarde") or 0))
+    return round(a_tiempo * 100 / len(con_entrada), 1)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # INCIDENCIAS
 # ═══════════════════════════════════════════════════════════════════════
 

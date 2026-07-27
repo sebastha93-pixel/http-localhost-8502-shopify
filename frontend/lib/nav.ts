@@ -93,21 +93,19 @@ export const NAV_GROUPS: NavGroup[] = [
     // Módulo Personal. "Mi tiempo" va primero y SIN permiso: es el
     // autoservicio, lo ve todo empleado con login. Si alguien no tiene
     // ningún permiso del módulo, este es el único item que verá.
+    // Solo se listan páginas que EXISTEN. El repo ya arrastra tres links
+    // muertos (/facturacion, /inteligencia, /reportes) que devuelven 404; no
+    // vale la pena agregar más. Los items que faltan del módulo —empleados,
+    // horas extras, horarios, calendario, novedades, dispositivos, reportes—
+    // se agregan aquí a medida que se construyan.
     title: "Personal",
     items: [
       { label: "Mi tiempo",      href: "/personal/mi-tiempo",                                    desc: "Tu jornada, permisos y saldo" },
       { label: "Dashboard",      href: "/personal",              permiso: "personal",            desc: "Asistencia del día y tendencias" },
-      { label: "Empleados",      href: "/personal/empleados",    permiso: "personal",            desc: "Fichas, áreas y jerarquía" },
       { label: "Asistencia",     href: "/personal/asistencia",   permiso: "personal_asistencia", desc: "Jornadas calculadas por día" },
       { label: "Permisos",       href: "/personal/permisos",     permiso: "personal_permisos",   desc: "Solicitudes y aprobaciones" },
       { label: "Compensaciones", href: "/personal/compensaciones", permiso: "personal_permisos", desc: "Tiempo por reponer" },
-      { label: "Horas extras",   href: "/personal/extras",       permiso: "personal_permisos",   desc: "Autorización y seguimiento" },
       { label: "Incidencias",    href: "/personal/incidencias",  permiso: "personal_asistencia", desc: "Marcaciones incompletas" },
-      { label: "Horarios",       href: "/personal/horarios",     permiso: "personal_config",     desc: "Jornadas y turnos" },
-      { label: "Calendario",     href: "/personal/calendario",   permiso: "personal|personal_permisos", desc: "Vista mensual del equipo" },
-      { label: "Novedades",      href: "/personal/nomina",       permiso: "personal_nomina",     desc: "Para nómina, con revisión" },
-      { label: "Dispositivos",   href: "/personal/dispositivos", permiso: "personal_dispositivos", desc: "Dahua y estado del conector" },
-      { label: "Reportes",       href: "/personal/reportes",     permiso: "personal",            desc: "Puntualidad, ausentismo, permisos" },
     ],
   },
   {
