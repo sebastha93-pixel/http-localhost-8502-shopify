@@ -264,3 +264,16 @@ def shopify_auth_estado(
     24h) o legacy. No expone secretos."""
     from backend.services import shopify_auth
     return shopify_auth.diagnostico()
+
+
+@router.post("/shopify/auth/refrescar")
+def shopify_auth_refrescar(
+    _: CurrentUser = Depends(require_permission("postventa", "modificar")),
+):
+    """Descarta el token cacheado y pide uno nuevo.
+
+    Util tras reinstalar la app o cambiar scopes: el token de 24h guardado
+    conserva los permisos con los que se emitio."""
+    from backend.services import shopify_auth
+    shopify_auth.invalidar()
+    return {"refrescado": True, **shopify_auth.diagnostico()}
