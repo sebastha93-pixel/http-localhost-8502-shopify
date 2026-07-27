@@ -91,6 +91,8 @@ def test_payload_nc_copia_montos_de_la_factura_y_usa_anticipo():
     assert item["warehouse"] == {"id": 32}
     assert p["payments"][0]["id"] == 8316
     assert p["payments"][0]["value"] == 159900.0
+    # ANTICIPO maneja vencimiento -> Siigo exige due_date
+    assert p["payments"][0]["due_date"] == "2026-07-07"
 
 
 def test_payload_nc_prueba_no_lleva_stamp():

@@ -132,7 +132,10 @@ def construir_payload_nota_credito(*, factura: dict, skus_a_acreditar: list[str]
         },
         "seller": factura.get("seller") or VENDEDOR_ONLINE_ID,
         "items": [_linea_nc(it) for it in lineas],
-        "payments": [{"id": ANTICIPO_CLIENTES_ID, "value": total}],
+        # ANTICIPO CLIENTES maneja vencimiento (due_date: true en /payment-types),
+        # así que Siigo exige due_date. Se usa la fecha del documento.
+        "payments": [{"id": ANTICIPO_CLIENTES_ID, "value": total,
+                      "due_date": fecha}],
         # Motivo DIAN: obligatorio en notas crédito electrónicas.
         "reason": REASON_DEVOLUCION_PARCIAL,
         "observations": f"Postventa — anula ítems de {factura.get('name', '')}",
@@ -211,9 +214,12 @@ def construir_payload_factura_reemplazo(*, factura_original: dict,
 
     anticipo_aplicado = round(min(credito, total), 2)
     excedente = round(total - anticipo_aplicado, 2)
-    payments = [{"id": ANTICIPO_CLIENTES_ID, "value": anticipo_aplicado}]
+    # Ambas formas de pago manejan vencimiento → due_date obligatorio.
+    payments = [{"id": ANTICIPO_CLIENTES_ID, "value": anticipo_aplicado,
+                 "due_date": fecha}]
     if excedente > 0:
-        payments.append({"id": EXCEDENTE_PAYMENT_ID, "value": excedente})
+        payments.append({"id": EXCEDENTE_PAYMENT_ID, "value": excedente,
+                         "due_date": fecha})
 
     linea = {
         "code": item_reemplazo.get("code"),
