@@ -309,3 +309,131 @@ def items_caso(case_id: str) -> list[dict]:
     r = (sb.table("postventa_items").select("*")
            .eq("case_id", case_id).eq("brand_id", _brand_id()).execute())
     return r.data or []
+
+
+# ── Logística inversa ────────────────────────────────────────────────
+def obtener_logistica(case_id: str) -> Optional[dict]:
+    """Datos logísticos del caso (guías, fechas, costos). None si no hay."""
+    sb = _sb()
+    if sb is None:
+        return None
+    r = (sb.table("postventa_logistica").select("*")
+           .eq("case_id", case_id).eq("brand_id", _brand_id())
+           .limit(1).execute())
+    filas = r.data or []
+    return filas[0] if filas else None
+
+
+def guardar_logistica(case_id: str, **campos) -> dict:
+    """Crea o actualiza la logística del caso (upsert por case_id)."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("supabase_no_configurado")
+    campos = {k: v for k, v in campos.items() if v is not None}
+    existente = obtener_logistica(case_id)
+    if existente:
+        campos["updated_at"] = _ahora()
+        sb.table("postventa_logistica").update(campos).eq("id", existente["id"]).execute()
+        return {**existente, **campos}
+    data = {"case_id": case_id, "brand_id": _brand_id(), **campos}
+    r = sb.table("postventa_logistica").insert(data).execute()
+    return (r.data or [data])[0]
+
+
+def registrar_guia_retorno(case_id: str, *, guia: str, transportadora: str = "",
+                           actor: str = "sistema") -> dict:
+    """Asigna la guía de la devolución y mueve el caso a 'en tránsito'.
+
+    Es el gate: hasta que esta prenda no llegue a bodega, el reemplazo no
+    se despacha.
+    """
+    if not (guia or "").strip():
+        raise ValueError("guia_vacia")
+    log_row = guardar_logistica(case_id, guia_retorno=guia.strip(),
+                                transportadora_retorno=transportadora.strip() or None,
+                                fecha_envio_cliente=_ahora(),
+                                estado_retorno="en_transito")
+    registrar_evento(case_id, "guia_retorno",
+                     f"Guía de devolución {guia.strip()}"
+                     + (f" · {transportadora}" if transportadora else ""),
+                     created_by=actor)
+    caso = obtener_caso(case_id)
+    if caso and caso.get("status") in ("aprobado", "esperando_envio_cliente"):
+        if caso["status"] == "aprobado":
+            cambiar_estado(case_id, "esperando_envio_cliente", actor=actor)
+        cambiar_estado(case_id, "en_transito_bodega", actor=actor)
+    return log_row
+
+
+def confirmar_recepcion(case_id: str, *, actor: str = "sistema",
+                        notas: str = "") -> dict:
+    """Confirma que la prenda devuelta llegó a bodega. Desbloquea el despacho."""
+    log_row = guardar_logistica(case_id, fecha_recibido_bodega=_ahora(),
+                                estado_retorno="recibido",
+                                notas=notas.strip() or None)
+    registrar_evento(case_id, "recibido_bodega",
+                     "Prenda recibida en bodega" + (f" · {notas}" if notas else ""),
+                     created_by=actor)
+    caso = obtener_caso(case_id)
+    if caso and caso.get("status") == "en_transito_bodega":
+        cambiar_estado(case_id, "recibido_bodega", actor=actor)
+    return log_row
+
+
+def registrar_despacho(case_id: str, *, guia: str, transportadora: str = "",
+                       actor: str = "sistema") -> dict:
+    """Registra el despacho del reemplazo. Exige que el retorno ya llegó."""
+    if not (guia or "").strip():
+        raise ValueError("guia_vacia")
+    caso = obtener_caso(case_id)
+    if caso is None:
+        raise ValueError("caso_no_encontrado")
+    # El gate: si el caso está esperando la devolución, no se despacha.
+    if L.requiere_recepcion(caso.get("status", "")):
+        raise ValueError("falta_recibir_devolucion")
+
+    log_row = guardar_logistica(case_id, guia_despacho=guia.strip(),
+                                transportadora_despacho=transportadora.strip() or None,
+                                fecha_despacho=_ahora())
+    registrar_evento(case_id, "cambio_enviado",
+                     f"Reemplazo despachado · guía {guia.strip()}",
+                     created_by=actor)
+    if caso.get("status") == "factura_emitida":
+        cambiar_estado(case_id, "cambio_enviado", actor=actor)
+    return log_row
+
+
+# ── Impacto en ventas (para que las métricas del OS no queden infladas) ──
+def impacto_ventas(desde: str = "", hasta: str = "") -> dict:
+    """Valor que la postventa le RESTA a las ventas del período.
+
+    Shopify sigue contando la venta completa aunque se haya emitido la nota
+    crédito; con esto el OS puede mostrar la venta NETA real.
+
+    - devuelto: notas crédito emitidas (plata que ya no es venta).
+    - refacturado: facturas de reemplazo (plata que vuelve a entrar).
+    - neto: lo que hay que restarle a la venta bruta de Shopify.
+    """
+    sb = _sb()
+    if sb is None:
+        return {"devuelto": 0.0, "refacturado": 0.0, "neto": 0.0, "casos": 0}
+
+    q = (sb.table("postventa_fiscal").select("doc_kind,amount,case_id")
+           .eq("brand_id", _brand_id()).eq("status", "emitido"))
+    if desde:
+        q = q.gte("created_at", desde)
+    if hasta:
+        q = q.lte("created_at", hasta)
+    filas = q.execute().data or []
+
+    devuelto = sum(float(f.get("amount") or 0)
+                   for f in filas if f.get("doc_kind") == "nota_credito")
+    refacturado = sum(float(f.get("amount") or 0)
+                      for f in filas if f.get("doc_kind") == "factura")
+    return {
+        "devuelto": round(devuelto, 2),
+        "refacturado": round(refacturado, 2),
+        # Lo que realmente se pierde: lo devuelto menos lo que se refacturó.
+        "neto": round(devuelto - refacturado, 2),
+        "casos": len({f.get("case_id") for f in filas}),
+    }

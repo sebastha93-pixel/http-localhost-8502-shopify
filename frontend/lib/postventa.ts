@@ -2,7 +2,9 @@ import { api } from "@/lib/api";
 
 export type EstadoPostventa =
   | "creado" | "pendiente_validacion" | "aprobado" | "rechazado"
-  | "nota_credito_emitida" | "factura_emitida" | "cerrado" | "escalado";
+  | "esperando_envio_cliente" | "en_transito_bodega" | "recibido_bodega"
+  | "nota_credito_emitida" | "factura_emitida" | "cambio_enviado"
+  | "cerrado" | "escalado";
 
 export interface CasoPostventa {
   id: string;
@@ -31,8 +33,12 @@ export const ESTADOS_LABEL: Record<EstadoPostventa, string> = {
   pendiente_validacion: "Pendiente validación",
   aprobado: "Aprobado",
   rechazado: "Rechazado",
+  esperando_envio_cliente: "Esperando envío",
+  en_transito_bodega: "En tránsito",
+  recibido_bodega: "Recibido en bodega",
   nota_credito_emitida: "Nota crédito emitida",
   factura_emitida: "Factura emitida",
+  cambio_enviado: "Cambio despachado",
   cerrado: "Cerrado",
   escalado: "Escalado",
 };
@@ -140,9 +146,13 @@ import type { StatusKind } from "@/components/status-badge";
 /** Mapea el estado del caso al lenguaje de estados del OS:
  *  terracotta = esperando algo, sage = resuelto, ochre = riesgo/atención. */
 export const ESTADO_KIND: Record<EstadoPostventa, StatusKind> = {
-  creado:               "wait",
-  pendiente_validacion: "wait",
-  aprobado:             "wait",
+  creado:                  "wait",
+  pendiente_validacion:    "wait",
+  aprobado:                "wait",
+  esperando_envio_cliente: "wait",
+  en_transito_bodega:      "wait",
+  recibido_bodega:         "wait",
+  cambio_enviado:          "done",
   nota_credito_emitida: "wait",
   factura_emitida:      "wait",
   cerrado:              "done",
@@ -153,5 +163,28 @@ export const ESTADO_KIND: Record<EstadoPostventa, StatusKind> = {
 /** Orden del ciclo de vida, para el riel de progreso. */
 export const CICLO: EstadoPostventa[] = [
   "creado", "pendiente_validacion", "aprobado",
-  "nota_credito_emitida", "factura_emitida", "cerrado",
+  "esperando_envio_cliente", "en_transito_bodega", "recibido_bodega",
+  "nota_credito_emitida", "factura_emitida", "cambio_enviado", "cerrado",
 ];
+
+// ── Logística inversa ────────────────────────────────────────────────
+export interface Logistica {
+  guia_retorno?: string | null; transportadora_retorno?: string | null;
+  fecha_envio_cliente?: string | null; fecha_recibido_bodega?: string | null;
+  estado_retorno?: string; guia_despacho?: string | null;
+  transportadora_despacho?: string | null; fecha_despacho?: string | null;
+}
+export const obtenerLogistica = (id: string) =>
+  api.get<Logistica>(`/api/postventa/casos/${id}/logistica`);
+export const registrarGuiaRetorno = (id: string, guia: string, transportadora = "") =>
+  api.post(`/api/postventa/casos/${id}/logistica/guia-retorno`, { guia, transportadora });
+export const confirmarRecepcion = (id: string, notas = "") =>
+  api.post(`/api/postventa/casos/${id}/logistica/recibir`, { notas });
+export const registrarDespacho = (id: string, guia: string, transportadora = "") =>
+  api.post(`/api/postventa/casos/${id}/logistica/despachar`, { guia, transportadora });
+
+export interface ImpactoVentas {
+  devuelto: number; refacturado: number; neto: number; casos: number;
+}
+export const impactoVentas = () =>
+  api.get<ImpactoVentas>(`/api/postventa/impacto-ventas`);

@@ -7,9 +7,9 @@ import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { KpiStrip } from "@/components/kpi-card";
 import { StatusBadge } from "@/components/status-badge";
-import { fmtDateTime } from "@/lib/utils";
+import { fmtDateTime, formatMoney } from "@/lib/utils";
 import {
-  listarCasos, dashboardPostventa, ESTADOS_LABEL, ESTADO_KIND,
+  listarCasos, dashboardPostventa, impactoVentas, ESTADOS_LABEL, ESTADO_KIND,
   type EstadoPostventa,
 } from "@/lib/postventa";
 
@@ -25,6 +25,7 @@ export default function PostventaPage() {
     queryFn: () => listarCasos(filtro || undefined),
   });
   const dash = useQuery({ queryKey: ["postventa-dash"], queryFn: dashboardPostventa });
+  const impacto = useQuery({ queryKey: ["postventa-impacto"], queryFn: impactoVentas });
 
   return (
     <PageShell title="Postventa" subtitle="Cambios, devoluciones y garantías">
@@ -35,6 +36,14 @@ export default function PostventaPage() {
               { label: "Abiertos", value: dash.data.abiertos },
               { label: "Cerrados", value: dash.data.cerrados, tone: "success" },
               { label: "Total", value: dash.data.total },
+              ...(impacto.data ? [
+                { label: "Devuelto", value: formatMoney(impacto.data.devuelto),
+                  tone: "danger" as const },
+                { label: "Refacturado", value: formatMoney(impacto.data.refacturado),
+                  tone: "success" as const },
+                { label: "Impacto neto", value: formatMoney(impacto.data.neto),
+                  tone: "danger" as const },
+              ] : []),
             ]} />
           </div>
         ) : <div className="flex-1" />}
