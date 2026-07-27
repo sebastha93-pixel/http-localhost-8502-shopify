@@ -8,6 +8,7 @@ FASE 1 · Bloque 2: Ingreso + Inventario.
 """
 from __future__ import annotations
 
+import os
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
@@ -2123,6 +2124,31 @@ def impresion_trabajo_crear(
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(500, f"crear_trabajo: {str(e)[:200]}")
+
+
+# ── Distribución del agente local (para actualizarlo con 1 comando) ──────
+# Sirve los archivos del agente (script + instalador) que viven en el repo,
+# así el PC del servidor MDS se actualiza con un solo comando de PowerShell.
+# Sin secretos (las credenciales/IPs viven en config.json, en el PC).
+_AGENTE_DIST = os.path.join(os.path.dirname(os.path.dirname(__file__)), "agente_dist")
+_AGENTE_ARCHIVOS = {
+    "agente_impresion.ps1": "text/plain; charset=utf-8",
+    "INSTALAR_ARRANQUE_AUTOMATICO.bat": "text/plain; charset=utf-8",
+}
+
+
+@router.get("/agente/{archivo}")
+def descargar_agente(archivo: str):
+    """Descarga pública de un archivo del agente (script no sensible)."""
+    ctype = _AGENTE_ARCHIVOS.get(archivo)
+    if not ctype:
+        raise HTTPException(404, "archivo_no_disponible")
+    ruta = os.path.join(_AGENTE_DIST, archivo)
+    if not os.path.isfile(ruta):
+        raise HTTPException(404, "archivo_no_encontrado")
+    with open(ruta, "rb") as f:
+        data = f.read()
+    return Response(content=data, media_type=ctype)
 
 
 class PruebaImpresionIn(BaseModel):
