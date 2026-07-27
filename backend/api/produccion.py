@@ -2125,6 +2125,29 @@ def impresion_trabajo_crear(
         raise HTTPException(500, f"crear_trabajo: {str(e)[:200]}")
 
 
+class PruebaImpresionIn(BaseModel):
+    sat:       int = 1
+    honeywell: int = 3
+    ricoh:     int = 1
+
+
+@router.post("/impresion/prueba")
+def impresion_prueba(
+    body: PruebaImpresionIn = PruebaImpresionIn(),
+    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+):
+    """Encola trabajos de PRUEBA para verificar las tres impresoras físicas
+    (SAT/Honeywell/RICOH) sin tocar datos reales. El agente local los imprime."""
+    try:
+        trabajos = svc.encolar_prueba_impresion(
+            sat=body.sat, honeywell=body.honeywell, ricoh=body.ricoh,
+            creado_por=user.email)
+        return {"ok": True, "encolados": len(trabajos), "trabajos": trabajos}
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"prueba_impresion: {str(e)[:200]}")
+
+
 @router.post("/impresion/trabajos/{trabajo_id}/reimprimir")
 def impresion_trabajo_reimprimir(
     trabajo_id: str,

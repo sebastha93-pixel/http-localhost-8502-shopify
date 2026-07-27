@@ -3392,6 +3392,81 @@ def crear_trabajo_impresion_manual(*, tipo: str, referencia_id: str,
     return r.data[0]
 
 
+def encolar_prueba_impresion(*, sat: int = 1, honeywell: int = 3, ricoh: int = 1,
+                             creado_por: str = "") -> list[dict]:
+    """Encola trabajos de PRUEBA (una sola vez) para verificar las tres
+    impresoras físicas SIN tocar datos reales (no crea remisión ni referencia).
+    Todo va por la cola compartida `impresion_trabajos`, así el agente local lo
+    imprime en cada impresora por su IP:9100 y se marca solo como impreso:
+      · honeywell → N stickers de barra (ZPL) con código 'PRUEBA'
+      · sat       → N etiquetas de lavado (TSPL bitmap) que dicen PRUEBA
+      · ricoh     → N páginas PDF de PRUEBA (PDF Direct Print)
+    Cantidades acotadas a [0, 20] por seguridad."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    def _cap(n):
+        try:
+            return max(0, min(20, int(n)))
+        except Exception:
+            return 0
+    sat, honeywell, ricoh = _cap(sat), _cap(honeywell), _cap(ricoh)
+    filas: list[dict] = []
+    if honeywell > 0:
+        filas.append({
+            "tipo": "sticker_codigo", "destino": "honeywell", "formato": "zpl",
+            "payload": {"codigo_referencia": "PRUEBA", "tallas": {"38": honeywell},
+                        "cortar": True, "prueba": True},
+        })
+    if sat > 0:
+        filas.append({
+            "tipo": "instruccion_lavado", "destino": "sat", "formato": "zpl",
+            "payload": {"codigo_referencia": "PRUEBA", "tela": "PRUEBA",
+                        "instrucciones": "PRUEBA DE IMPRESION", "copias": sat,
+                        "cortar": True, "prueba": True},
+        })
+    for i in range(ricoh):
+        filas.append({
+            "tipo": "prueba_ricoh", "destino": "ricoh", "formato": "pdf",
+            "payload": {"prueba": True, "n": i + 1, "total": ricoh},
+        })
+    if not filas:
+        return []
+    r = sb.table("impresion_trabajos").insert(filas).execute()
+    log.info(f"[impresion] PRUEBA encolada por {creado_por}: "
+             f"honeywell={honeywell} sat={sat} ricoh={ricoh}")
+    return r.data or []
+
+
+def _pdf_prueba_ricoh(n: int = 1, total: int = 1) -> bytes:
+    """Página carta de PRUEBA para la RICOH (borde completo para ver el encuadre)."""
+    from io import BytesIO
+    from datetime import timedelta
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas
+
+    bog = (datetime.now(timezone.utc) - timedelta(hours=5)).strftime("%Y-%m-%d %H:%M")
+    buf = BytesIO()
+    W, H = letter
+    c = canvas.Canvas(buf, pagesize=letter)
+    # Marco de página (para verificar que la RICOH no recorta el borde)
+    c.setLineWidth(2)
+    c.rect(12 * mm, 12 * mm, W - 24 * mm, H - 24 * mm)
+    c.setFont("Helvetica-Bold", 30)
+    c.drawCentredString(W / 2, H - 55 * mm, "PRUEBA DE IMPRESIÓN")
+    c.setFont("Helvetica", 16)
+    c.drawCentredString(W / 2, H - 70 * mm, "RICOH · PDF Direct Print (IP:9100)")
+    c.setFont("Helvetica-Bold", 20)
+    c.drawCentredString(W / 2, H / 2, "MALE'DENIM · Producción")
+    c.setFont("Helvetica", 12)
+    c.drawCentredString(W / 2, 30 * mm, f"Página {n} de {total} · {bog}")
+    c.drawCentredString(W / 2, 22 * mm, "Documento de prueba — no es una remisión")
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
 def listar_trabajos_impresion(limite: int = 40) -> list[dict]:
     """Cola + recientes (pendientes primero, luego impresos) para el módulo."""
     sb = _sb()
@@ -3544,13 +3619,21 @@ def generar_contenido_trabajo(t: dict) -> bytes:
     la impresora). Sticker → ZPL en texto; lavado → BITMAP TSPL binario
     (imagen compuesta desde la plantilla guardada, editable en la app)."""
     tipo = t.get("tipo")
+    if tipo == "prueba_ricoh":
+        # Página PDF de PRUEBA → la RICOH la imprime tal cual (PDF Direct Print).
+        p = t.get("payload") or {}
+        return _pdf_prueba_ricoh(int(p.get("n") or 1), int(p.get("total") or 1))
     if tipo == "instruccion_lavado":
         p = t.get("payload") or {}
         codigo = (p.get("codigo_referencia") or "").strip()
         composicion = (p.get("instrucciones") or "").strip()
         tallas_lav = p.get("tallas") or {}
         total = sum(int(v or 0) for v in tallas_lav.values()) or int(p.get("copias") or 1)
-        copias = max(1, int(math.ceil(total * 1.01)))
+        if p.get("prueba"):
+            # En una PRUEBA imprimimos EXACTO lo pedido (sin el +1% de merma).
+            copias = max(1, int(p.get("copias") or total or 1))
+        else:
+            copias = max(1, int(math.ceil(total * 1.01)))
         from backend.services import lavado_render as _lr
         layout = obtener_plantilla_etiqueta("lavado")
         return _lr.tspl_etiqueta(codigo, composicion, copias=copias,
