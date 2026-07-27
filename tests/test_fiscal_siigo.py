@@ -59,3 +59,39 @@ def test_modo_actual_default_prueba(monkeypatch):
     assert FS.modo_actual() == "prueba"
     monkeypatch.setenv("SIIGO_POSTVENTA_MODO", "produccion")
     assert FS.modo_actual() == "produccion"
+
+
+def test_cache_evita_repetir_llamadas_a_siigo(monkeypatch):
+    FS.limpiar_cache_facturas()
+    llamadas = []
+    monkeypatch.setattr(FS.siigo, "siigo_get",
+                        lambda p, params=None: llamadas.append(1) or FACTURAS)
+    e = FS.EmisorSiigo()
+    assert e.buscar_factura_original(numero_pedido="#60112")["id"] == "f2"
+    assert e.buscar_factura_original(numero_pedido="#60112")["id"] == "f2"
+    assert e.buscar_factura_original(numero_pedido="#60112")["id"] == "f2"
+    assert len(llamadas) == 1        # una sola vez contra Siigo
+
+
+def test_cache_guarda_todas_las_de_la_pagina(monkeypatch):
+    # Buscar un pedido cachea también los otros de la misma página: el
+    # siguiente caso del banco no vuelve a llamar a Siigo.
+    FS.limpiar_cache_facturas()
+    llamadas = []
+    monkeypatch.setattr(FS.siigo, "siigo_get",
+                        lambda p, params=None: llamadas.append(1) or FACTURAS)
+    e = FS.EmisorSiigo()
+    e.buscar_factura_original(numero_pedido="#60112")
+    e.buscar_factura_original(numero_pedido="#60110")   # otro pedido, misma página
+    assert len(llamadas) == 1
+
+
+def test_cache_no_repite_el_no_encontrado(monkeypatch):
+    FS.limpiar_cache_facturas()
+    llamadas = []
+    monkeypatch.setattr(FS.siigo, "siigo_get",
+                        lambda p, params=None: llamadas.append(1) or {"results": []})
+    e = FS.EmisorSiigo()
+    assert e.buscar_factura_original(numero_pedido="#99999") is None
+    assert e.buscar_factura_original(numero_pedido="#99999") is None
+    assert len(llamadas) == 1
