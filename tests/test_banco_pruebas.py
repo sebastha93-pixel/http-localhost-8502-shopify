@@ -85,3 +85,59 @@ def test_sin_facturas_lo_dice(monkeypatch):
 def test_limpiar_exige_confirmacion():
     r = B.limpiar()
     assert r["_error"] == "requiere_confirmacion"
+
+
+def _mock_con_shopify(monkeypatch, *, hay_mas_cara=True):
+    _mock_base(monkeypatch)
+    monkeypatch.setattr(B.pv, "items_caso", lambda cid: [{
+        "original_sku": "A-10", "original_variant": "Jean",
+        "original_price": 100000.0,
+        "requested_sku": "CARA-1" if hay_mas_cara else ""}])
+    from backend.services import fiscal_shopify as FS
+    if hay_mas_cara:
+        monkeypatch.setattr(FS, "variante_mas_cara_que",
+                            lambda base, excluir_sku="": {
+                                "sku": "CARA-1", "precio_con_iva": 200000.0,
+                                "precio_base": 168067.23})
+        monkeypatch.setattr(FS, "precio_base_variante", lambda sku: 168067.23)
+    else:
+        monkeypatch.setattr(FS, "variante_mas_cara_que",
+                            lambda base, excluir_sku="": None)
+        monkeypatch.setattr(FS, "precio_base_variante", lambda sku: None)
+
+
+def test_cambio_ref_busca_prenda_mas_cara(monkeypatch):
+    _mock_con_shopify(monkeypatch)
+    r = B.correr(total=8, dry_run=True)   # llega a los cambio_ref
+    ref = [x for x in r["resultados"] if x["tipo"] == "cambio_ref"]
+    if ref:
+        pasos = [p["paso"] for p in ref[0]["pasos"]]
+        assert "buscar_reemplazo_mas_caro" in pasos
+
+
+def test_valida_reparto_anticipo_excedente(monkeypatch):
+    _mock_con_shopify(monkeypatch)
+    r = B.correr(total=20, dry_run=True)
+    con_factura = [x for x in r["resultados"]
+                   if x.get("resumen_factura")]
+    assert con_factura, "ningún caso validó la factura de reemplazo"
+    res = con_factura[0]["resumen_factura"]
+    # El total debe repartirse exactamente entre anticipo y excedente
+    assert abs((res["anticipo"] + res["excedente"]) - res["total"]) < 1.0
+
+
+def test_prenda_mas_cara_genera_excedente(monkeypatch):
+    _mock_con_shopify(monkeypatch)
+    r = B.correr(total=20, dry_run=True)
+    refs = [x for x in r["resultados"]
+            if x["tipo"] == "cambio_ref" and x.get("resumen_factura")]
+    assert refs, "cambio_ref no validó factura"
+    # 168067.23 * 1.19 = 199_999.x  vs crédito 119000 → excedente > 0
+    assert refs[0]["resumen_factura"]["excedente"] > 0
+
+
+def test_reembolso_no_valida_factura(monkeypatch):
+    _mock_con_shopify(monkeypatch)
+    r = B.correr(total=20, dry_run=True)
+    reemb = [x for x in r["resultados"] if x["tipo"] == "reembolso"]
+    assert all("resumen_factura" not in x for x in reemb)
