@@ -303,3 +303,14 @@ def banco_pruebas_limpiar(
     """Borra los casos creados por el banco de pruebas."""
     from backend.services import postventa_banco_pruebas as banco
     return banco.limpiar(confirmar=confirmar)
+
+
+@router.get("/shopify/variantes")
+def shopify_variantes_dx(
+    precio_base: float = 125966.39,
+    _: CurrentUser = Depends(require_permission("postventa", "modificar")),
+):
+    """Diagnostico: que devuelve Shopify al pedir variantes y por que
+    variante_mas_cara_que no encuentra nada. Solo lectura."""
+    from backend.services import fiscal_shopify as FS
+    return FS.diagnostico_variantes(precio_base)

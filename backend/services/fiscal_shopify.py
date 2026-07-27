@@ -97,3 +97,41 @@ def variante_mas_cara_que(precio_base_min: float, *, excluir_sku: str = "") -> O
     con_iva, sku = min(candidatas)
     return {"sku": sku, "precio_con_iva": con_iva,
             "precio_base": F.base_desde_precio_con_iva(con_iva)}
+
+
+_Q_DX_SIMPLE = """
+query { productVariants(first: 5) { edges { node { sku price displayName } } } }
+"""
+
+_Q_DX_STOCK = """
+query { productVariants(first: 5, query: "inventory_quantity:>0") {
+  edges { node { sku price displayName } } } }
+"""
+
+
+def diagnostico_variantes(precio_base_ref: float = 125966.39) -> dict:
+    """Qué devuelve Shopify al pedir variantes. Para dejar de adivinar por qué
+    `variante_mas_cara_que` no encuentra nada. Solo lectura."""
+    umbral = F.total_con_iva(precio_base_ref)
+
+    sin_filtro = clientes._shopify_graphql(_Q_DX_SIMPLE)
+    con_filtro = clientes._shopify_graphql(_Q_DX_STOCK)
+
+    def resumir(data):
+        if not isinstance(data, dict):
+            return {"_error": "respuesta_no_dict", "crudo": str(data)[:300]}
+        if data.get("errors"):
+            return {"_error": str(data["errors"])[:400]}
+        edges = (((data.get("data") or {}).get("productVariants") or {})
+                 .get("edges") or [])
+        return {"cantidad": len(edges),
+                "muestra": [{"sku": (e.get("node") or {}).get("sku"),
+                             "price": (e.get("node") or {}).get("price")}
+                            for e in edges[:5]]}
+
+    return {
+        "umbral_con_iva_buscado": umbral,
+        "sin_filtro": resumir(sin_filtro),
+        "con_filtro_inventory": resumir(con_filtro),
+        "resultado_funcion": variante_mas_cara_que(precio_base_ref),
+    }
