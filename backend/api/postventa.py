@@ -164,3 +164,15 @@ def fiscal_factura_emitir(case_id: str,
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(502, f"siigo: {str(e)[:300]}")
+
+
+@router.get("/casos/{case_id}/fiscal/items-factura")
+def fiscal_items_factura(case_id: str,
+                         _: CurrentUser = Depends(require_permission("postventa", "ver"))):
+    """Items de la factura original del pedido, para elegir cual se devuelve."""
+    try:
+        return fiscal_svc.items_factura_del_caso(case_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"siigo: {str(e)[:300]}")

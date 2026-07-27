@@ -156,3 +156,26 @@ def test_factura_reemplazo_otra_ref_usa_shopify(monkeypatch):
     assert r["payload"]["items"][0]["code"] == "REF-NUEVA"
     assert r["payload"]["items"][0]["price"] == 168067.23
     assert r["payload"]["payments"][1]["id"] == 8857        # excedente
+
+
+def test_items_factura_del_caso_lista_items(monkeypatch):
+    monkeypatch.setattr(PF, "_caso", lambda cid: CASO)
+
+    class E:
+        def buscar_factura_original(self, **k):
+            return FACTURA_CON_ITEM
+    monkeypatch.setattr(PF, "obtener_emisor", lambda: E())
+    r = PF.items_factura_del_caso("c1")
+    assert r["factura"]["name"] == "FV-1-63043"
+    assert r["items"][0]["code"] == "REF-1"
+
+
+def test_items_factura_del_caso_sin_factura(monkeypatch):
+    monkeypatch.setattr(PF, "_caso", lambda cid: CASO)
+
+    class E:
+        def buscar_factura_original(self, **k):
+            return None
+    monkeypatch.setattr(PF, "obtener_emisor", lambda: E())
+    with pytest.raises(ValueError, match="factura_original_no_encontrada"):
+        PF.items_factura_del_caso("c1")

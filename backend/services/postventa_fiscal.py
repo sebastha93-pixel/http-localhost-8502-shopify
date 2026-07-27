@@ -268,3 +268,27 @@ def emitir_factura_reemplazo(case_id: str, *, actor: str = "sistema") -> dict:
                         created_by=actor)
     pv.cambiar_estado(case_id, "factura_emitida", actor=actor)
     return res
+
+
+def items_factura_del_caso(case_id: str) -> dict:
+    """Trae los ítems de la factura original del pedido del caso, para que el
+    equipo elija cuál se devuelve (garantiza que el SKU coincida con Siigo).
+    Solo lectura. También sirve para verificar que la búsqueda de la factura
+    funciona."""
+    caso = _caso(case_id)
+    if caso is None:
+        raise ValueError("caso_no_encontrado")
+    emisor = obtener_emisor()
+    factura = emisor.buscar_factura_original(
+        numero_pedido=caso.get("shopify_order_name") or "")
+    if factura is None:
+        raise ValueError("factura_original_no_encontrada")
+    return {
+        "factura": {"id": factura.get("id"), "name": factura.get("name")},
+        "items": [{
+            "code": it.get("code"),
+            "description": it.get("description"),
+            "price": it.get("price"),
+            "variant": it.get("description"),
+        } for it in (factura.get("items") or [])],
+    }

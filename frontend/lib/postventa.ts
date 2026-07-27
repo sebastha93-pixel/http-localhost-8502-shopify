@@ -112,3 +112,9 @@ export const previewFactura = (id: string) =>
   api.post<PreviewFactura>(`/api/postventa/casos/${id}/fiscal/factura/preview`);
 export const emitirFactura = (id: string) =>
   api.post<{ siigo_document_number: string }>(`/api/postventa/casos/${id}/fiscal/factura/emitir`);
+
+// Ítems de la factura original (para elegir cuál se devuelve)
+export interface ItemFactura { code: string; description: string; price: number; variant: string; }
+export interface ItemsFactura { factura: { id: string; name: string }; items: ItemFactura[]; }
+export const itemsFacturaCaso = (id: string) =>
+  api.get<ItemsFactura>(`/api/postventa/casos/${id}/fiscal/items-factura`);
