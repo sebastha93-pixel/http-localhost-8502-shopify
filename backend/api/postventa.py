@@ -254,3 +254,13 @@ def impacto_ventas(desde: str = "", hasta: str = "",
                    _: CurrentUser = Depends(require_permission("postventa", "ver"))):
     """Lo que la postventa le resta a las ventas del periodo (venta neta real)."""
     return svc.impacto_ventas(desde=desde, hasta=hasta)
+
+
+@router.get("/shopify/auth")
+def shopify_auth_estado(
+    _: CurrentUser = Depends(require_permission("postventa", "modificar")),
+):
+    """Que token de Shopify se esta usando: modelo nuevo (client_credentials,
+    24h) o legacy. No expone secretos."""
+    from backend.services import shopify_auth
+    return shopify_auth.diagnostico()
