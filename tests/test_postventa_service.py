@@ -200,3 +200,46 @@ def test_timeline_caso_sin_supabase_no_rompe(monkeypatch):
     monkeypatch.setattr(svc, "_sb", lambda: None)
     assert svc.timeline_caso("c1") == []
     assert svc.items_caso("c1") == []
+
+
+def test_despacho_bloqueado_si_no_llego_la_devolucion(monkeypatch):
+    monkeypatch.setattr(svc, "obtener_caso",
+                        lambda cid: {"id": cid, "status": "en_transito_bodega"})
+    with pytest.raises(ValueError, match="falta_recibir_devolucion"):
+        svc.registrar_despacho("c1", guia="ABC123")
+
+
+def test_despacho_permitido_tras_recepcion(monkeypatch):
+    monkeypatch.setattr(svc, "obtener_caso",
+                        lambda cid: {"id": cid, "status": "factura_emitida"})
+    monkeypatch.setattr(svc, "guardar_logistica", lambda cid, **k: {"id": "l1", **k})
+    monkeypatch.setattr(svc, "registrar_evento", lambda *a, **k: {})
+    estados = []
+    monkeypatch.setattr(svc, "cambiar_estado", lambda cid, e, **k: estados.append(e))
+    r = svc.registrar_despacho("c1", guia="ABC123", transportadora="Coordinadora")
+    assert r["guia_despacho"] == "ABC123"
+    assert estados == ["cambio_enviado"]
+
+
+def test_guia_vacia_no_pasa(monkeypatch):
+    with pytest.raises(ValueError, match="guia_vacia"):
+        svc.registrar_guia_retorno("c1", guia="  ")
+
+
+def test_impacto_ventas_resta_lo_devuelto(monkeypatch):
+    class FakeF(FakeSupabase):
+        def gte(self, *a, **k): return self
+        def lte(self, *a, **k): return self
+        def execute(self):
+            resp = MagicMock()
+            resp.data = [
+                {"doc_kind": "nota_credito", "amount": 179900.0, "case_id": "c1"},
+                {"doc_kind": "factura", "amount": 159900.0, "case_id": "c1"},
+            ]
+            return resp
+    monkeypatch.setattr(svc, "_sb", lambda: FakeF())
+    r = svc.impacto_ventas()
+    assert r["devuelto"] == 179900.0
+    assert r["refacturado"] == 159900.0
+    assert r["neto"] == 20000.0   # lo que de verdad se pierde
+    assert r["casos"] == 1

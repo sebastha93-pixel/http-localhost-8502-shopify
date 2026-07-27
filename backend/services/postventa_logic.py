@@ -15,8 +15,14 @@ ESTADOS: set[str] = {
     "pendiente_validacion",
     "aprobado",
     "rechazado",
+    # ── Logística inversa: la prenda viaja de vuelta ──
+    "esperando_envio_cliente",
+    "en_transito_bodega",
+    "recibido_bodega",
+    # ── Cierre fiscal y despacho del reemplazo ──
     "nota_credito_emitida",
     "factura_emitida",
+    "cambio_enviado",
     "cerrado",
     "escalado",
 }
@@ -27,13 +33,31 @@ ESTADOS_TERMINALES: set[str] = {"rechazado", "cerrado"}
 TRANSICIONES: dict[str, set[str]] = {
     "creado":                {"pendiente_validacion"},
     "pendiente_validacion":  {"aprobado", "rechazado", "escalado"},
-    "aprobado":              {"nota_credito_emitida"},
+    # Tras aprobar: o se pide la devolución física, o se salta directo a la NC
+    # (cuando la prenda ya está en bodega o el caso no requiere retorno).
+    "aprobado":              {"esperando_envio_cliente", "nota_credito_emitida"},
+    "esperando_envio_cliente": {"en_transito_bodega"},
+    "en_transito_bodega":    {"recibido_bodega"},
+    "recibido_bodega":       {"nota_credito_emitida"},
     "nota_credito_emitida":  {"factura_emitida"},
-    "factura_emitida":       set(),
+    "factura_emitida":       {"cambio_enviado"},
+    "cambio_enviado":        set(),
     "escalado":              {"aprobado", "rechazado"},
     "rechazado":             set(),
     "cerrado":               set(),
 }
+
+
+# El reemplazo NO se despacha hasta que la prenda devuelta llegó a bodega.
+# Si el caso pasó por logística inversa, debe haber tocado 'recibido_bodega'.
+ESTADOS_LOGISTICA_INVERSA: set[str] = {
+    "esperando_envio_cliente", "en_transito_bodega",
+}
+
+
+def requiere_recepcion(estado_actual: str) -> bool:
+    """True si el caso está esperando que la prenda llegue a bodega."""
+    return estado_actual in ESTADOS_LOGISTICA_INVERSA
 
 
 def transicion_valida(actual: str, nuevo: str) -> bool:

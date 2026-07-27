@@ -12,6 +12,7 @@ import {
   previewFactura, emitirFactura, type PreviewFactura,
   itemsFacturaCaso, agregarItem, type ItemFactura,
   timelineCaso, itemsCaso, ESTADO_KIND, CICLO,
+  obtenerLogistica, registrarGuiaRetorno, confirmarRecepcion, registrarDespacho,
   ESTADOS_LABEL, type EstadoPostventa, type PreviewFiscal,
 } from "@/lib/postventa";
 
@@ -64,6 +65,7 @@ export default function CasoDetallePage() {
         {/* Columna de trabajo */}
         <div className="lg:col-span-2 space-y-4">
           <PanelItems caseId={caseId} status={c.status} onAgregado={refrescar} />
+          <PanelLogistica caseId={caseId} status={c.status} onCambio={refrescar} />
           <PanelFiscal caseId={caseId} status={c.status} onEmitido={refrescar} />
           <PanelFactura caseId={caseId} status={c.status} tipo={c.type} onEmitido={refrescar} />
 
@@ -288,6 +290,135 @@ function PanelItems({ caseId, status, onAgregado }:
           )}
         </>
       )}
+    </CardContent></Card>
+  );
+}
+
+
+/* ── Logística inversa: guía, recepción y despacho ──────────────────── */
+const ESTADOS_CON_LOGISTICA = new Set([
+  "aprobado", "esperando_envio_cliente", "en_transito_bodega",
+  "recibido_bodega", "nota_credito_emitida", "factura_emitida", "cambio_enviado",
+]);
+
+function PanelLogistica({ caseId, status, onCambio }:
+  { caseId: string; status: string; onCambio: () => void }) {
+  const [guiaRet, setGuiaRet] = useState("");
+  const [transRet, setTransRet] = useState("");
+  const [guiaDesp, setGuiaDesp] = useState("");
+  const [transDesp, setTransDesp] = useState("");
+
+  const log = useQuery({ queryKey: ["postventa-logistica", caseId],
+                         queryFn: () => obtenerLogistica(caseId) });
+  const refrescar = () => { onCambio(); log.refetch(); };
+
+  const guiaMut = useMutation({
+    mutationFn: () => registrarGuiaRetorno(caseId, guiaRet, transRet),
+    onSuccess: () => { setGuiaRet(""); setTransRet(""); refrescar(); } });
+  const recibirMut = useMutation({
+    mutationFn: () => confirmarRecepcion(caseId), onSuccess: refrescar });
+  const despMut = useMutation({
+    mutationFn: () => registrarDespacho(caseId, guiaDesp, transDesp),
+    onSuccess: () => { setGuiaDesp(""); setTransDesp(""); refrescar(); } });
+
+  if (!ESTADOS_CON_LOGISTICA.has(status)) return null;
+
+  const l = log.data ?? {};
+  const enTransito = status === "en_transito_bodega";
+  const yaRecibido = !!l.fecha_recibido_bodega;
+  const puedeDespachar = status === "factura_emitida" && !l.guia_despacho;
+
+  return (
+    <Card><CardContent className="py-4 space-y-3">
+      <p className="section-label">Logística de la devolución</p>
+
+      {/* Estado del retorno */}
+      {l.guia_retorno ? (
+        <div className="rounded-sm border border-border bg-cloud/40 p-3 space-y-1">
+          <div className="flex justify-between gap-3 text-sm">
+            <span className="text-graphite">Guía de retorno</span>
+            <span className="font-display tabular-nums text-ink-900">{l.guia_retorno}</span>
+          </div>
+          {l.transportadora_retorno && (
+            <div className="flex justify-between gap-3 text-sm">
+              <span className="text-graphite">Transportadora</span>
+              <span className="text-ink-900">{l.transportadora_retorno}</span>
+            </div>
+          )}
+          <div className="flex justify-between gap-3 text-sm">
+            <span className="text-graphite">Estado</span>
+            <span className={yaRecibido ? "text-sage" : "text-ochre"}>
+              {yaRecibido ? "Recibido en bodega" : "En tránsito"}
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <p className="text-xs text-graphite">
+            Registra la guía con la que la clienta devuelve la prenda.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <input value={guiaRet} onChange={(e) => setGuiaRet(e.target.value)}
+              placeholder="Nº de guía"
+              className="rounded-sm border border-border bg-card px-3 py-2 text-sm
+                         text-ink-900 font-display tabular-nums
+                         focus:outline-none focus:ring-2 focus:ring-navy-600/30" />
+            <input value={transRet} onChange={(e) => setTransRet(e.target.value)}
+              placeholder="Transportadora"
+              className="rounded-sm border border-border bg-card px-3 py-2 text-sm
+                         text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30" />
+          </div>
+          <button disabled={!guiaRet.trim() || guiaMut.isPending}
+            onClick={() => guiaMut.mutate()}
+            className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white
+                       transition-colors hover:bg-navy-700 disabled:opacity-50">
+            {guiaMut.isPending ? "Guardando…" : "Registrar guía de devolución"}
+          </button>
+        </div>
+      )}
+
+      {/* Confirmar recepción: el gate */}
+      {enTransito && !yaRecibido && (
+        <button disabled={recibirMut.isPending} onClick={() => recibirMut.mutate()}
+          className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white
+                     transition-colors hover:bg-navy-700 disabled:opacity-50">
+          {recibirMut.isPending ? "Confirmando…" : "Confirmar recepción en bodega"}
+        </button>
+      )}
+
+      {/* Despacho del reemplazo */}
+      {l.guia_despacho ? (
+        <div className="rounded-sm border border-sage/25 bg-sage/5 p-3 flex justify-between gap-3 text-sm">
+          <span className="text-graphite">Reemplazo despachado</span>
+          <span className="font-display tabular-nums text-ink-900">{l.guia_despacho}</span>
+        </div>
+      ) : puedeDespachar ? (
+        <div className="space-y-2 border-t border-concrete pt-3">
+          <p className="text-xs text-graphite">Despacho del reemplazo</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <input value={guiaDesp} onChange={(e) => setGuiaDesp(e.target.value)}
+              placeholder="Nº de guía"
+              className="rounded-sm border border-border bg-card px-3 py-2 text-sm
+                         text-ink-900 font-display tabular-nums
+                         focus:outline-none focus:ring-2 focus:ring-navy-600/30" />
+            <input value={transDesp} onChange={(e) => setTransDesp(e.target.value)}
+              placeholder="Transportadora"
+              className="rounded-sm border border-border bg-card px-3 py-2 text-sm
+                         text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30" />
+          </div>
+          <button disabled={!guiaDesp.trim() || despMut.isPending}
+            onClick={() => despMut.mutate()}
+            className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white
+                       transition-colors hover:bg-navy-700 disabled:opacity-50">
+            {despMut.isPending ? "Registrando…" : "Registrar despacho"}
+          </button>
+          {despMut.isError && (
+            <p className="text-sm text-terracotta">
+              No se pudo despachar. La prenda devuelta debe estar recibida en bodega.
+            </p>
+          )}
+        </div>
+      ) : null}
     </CardContent></Card>
   );
 }

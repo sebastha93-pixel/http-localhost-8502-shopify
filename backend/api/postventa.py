@@ -200,3 +200,57 @@ def shopify_discovery(
     """Que permisos tiene el token de Shopify: si puede descontar ventas,
     registrar retornos o reservar inventario. Solo lectura."""
     return shopify_svc.diagnostico()
+
+
+class GuiaIn(BaseModel):
+    guia: str
+    transportadora: str = ""
+
+
+class RecepcionIn(BaseModel):
+    notas: str = ""
+
+
+@router.get("/casos/{case_id}/logistica")
+def logistica(case_id: str,
+              _: CurrentUser = Depends(require_permission("postventa", "ver"))):
+    """Guias, fechas y costos del caso."""
+    return svc.obtener_logistica(case_id) or {}
+
+
+@router.post("/casos/{case_id}/logistica/guia-retorno")
+def guia_retorno(case_id: str, body: GuiaIn,
+                 user: CurrentUser = Depends(require_permission("postventa", "modificar"))):
+    """Asigna la guia de la devolucion y pone el caso en transito."""
+    try:
+        return svc.registrar_guia_retorno(case_id, guia=body.guia,
+                                          transportadora=body.transportadora,
+                                          actor=user.id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/casos/{case_id}/logistica/recibir")
+def recibir(case_id: str, body: RecepcionIn,
+            user: CurrentUser = Depends(require_permission("postventa", "modificar"))):
+    """Confirma que la prenda llego a bodega. Desbloquea el despacho."""
+    return svc.confirmar_recepcion(case_id, actor=user.id, notas=body.notas)
+
+
+@router.post("/casos/{case_id}/logistica/despachar")
+def despachar(case_id: str, body: GuiaIn,
+              user: CurrentUser = Depends(require_permission("postventa", "modificar"))):
+    """Registra el despacho del reemplazo. Exige que el retorno ya llego."""
+    try:
+        return svc.registrar_despacho(case_id, guia=body.guia,
+                                      transportadora=body.transportadora,
+                                      actor=user.id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/impacto-ventas")
+def impacto_ventas(desde: str = "", hasta: str = "",
+                   _: CurrentUser = Depends(require_permission("postventa", "ver"))):
+    """Lo que la postventa le resta a las ventas del periodo (venta neta real)."""
+    return svc.impacto_ventas(desde=desde, hasta=hasta)
