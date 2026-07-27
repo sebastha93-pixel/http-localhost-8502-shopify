@@ -114,27 +114,22 @@ if ($seguir) {
                 Di "      Sigo con la version que ya esta en el PC."
             }
 
-            # ── 4. Quitar tarea vieja y MATAR agentes que ya corran ──────
-            # (primero la tarea, si no el auto-reinicio lo revive al matarlo)
-            try {
-                if (Get-ScheduledTask -TaskName $Tarea -ErrorAction SilentlyContinue) {
-                    Unregister-ScheduledTask -TaskName $Tarea -Confirm:$false -ErrorAction SilentlyContinue
-                    Di "  [OK] Tarea anterior eliminada."
-                }
-            } catch {}
+            # Cuenta los agentes vivos (excluye este instalador).
+            function Agentes {
+                try {
+                    return @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+                             Where-Object { $_.CommandLine -and
+                                            $_.CommandLine -like '*agente_impresion.ps1*' -and
+                                            $_.ProcessId -ne $PID })
+                } catch { return @() }
+            }
 
-            $muertos = 0
-            try {
-                $mios = @($PID)
-                Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-                  Where-Object { $_.CommandLine -and $_.CommandLine -like '*agente_impresion.ps1*' -and $mios -notcontains $_.ProcessId } |
-                  ForEach-Object {
-                      try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop; $muertos++ } catch {}
-                  }
-            } catch {}
-            if ($muertos -gt 0) { Di "  [OK] Cerre $muertos agente(s) viejo(s) (evita imprimir doble)." }
-
-            # ── 5. Registrar la tarea ───────────────────────────────────
+            # ── 4. REGISTRAR la tarea PRIMERO (paso NO destructivo) ──────
+            # ORDEN IMPORTANTE: si primero matamos al agente y despues falla
+            # el registro (ej. 0x80070005 por no estar elevado), el PC queda
+            # SIN agente y SIN tarea, y nadie se entera hasta que no sale una
+            # remision. Registrando primero, si algo falla el agente que ya
+            # estaba imprimiendo sigue intacto.
             $act = New-ScheduledTaskAction -Execute 'powershell.exe' `
                      -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $ps1 + '"')
 
@@ -150,31 +145,57 @@ if ($seguir) {
                 if ($modoUsuario) {
                     $trg = New-ScheduledTaskTrigger -AtLogOn
                     Register-ScheduledTask -TaskName $Tarea -Action $act -Trigger $trg `
-                        -Settings $set -Force | Out-Null
+                        -Settings $set -Force -ErrorAction Stop | Out-Null
                     $modo = "SIN ADMIN (arranca al iniciar sesion)"
                 } else {
                     $trg = New-ScheduledTaskTrigger -AtStartup
                     $prn = New-ScheduledTaskPrincipal -UserId 'SYSTEM' `
                              -LogonType ServiceAccount -RunLevel Highest
                     Register-ScheduledTask -TaskName $Tarea -Action $act -Trigger $trg `
-                        -Principal $prn -Settings $set -Force | Out-Null
+                        -Principal $prn -Settings $set -Force -ErrorAction Stop | Out-Null
                     $modo = "SYSTEM (arranca al prender el PC, aunque nadie inicie sesion)"
                 }
                 Di "  [OK] Tarea registrada: $modo"
             } catch {
-                Di "  [X] No pude registrar la tarea: $($_.Exception.Message)"
                 $modo = ""
+                $sobreviven = @(Agentes).Count
+                Di ""
+                Di "  [X] No pude registrar la tarea: $($_.Exception.Message)"
+                if ($sobreviven -gt 0) {
+                    Di "      TRANQUILO: no toque el agente que ya estaba corriendo."
+                    Di "      La impresion SIGUE viva ($sobreviven agente(s))."
+                } else {
+                    Di "      OJO: no hay ningun agente corriendo en este momento."
+                }
+                Di "      Para dejarlo automatico, abre PowerShell COMO ADMINISTRADOR"
+                Di "      (clic derecho en el boton de Inicio -> 'Windows PowerShell"
+                Di "      (Administrador)') y pega otra vez:"
+                Di "         irm $UrlYo | iex"
+                Di ""
             }
 
-            # ── 6. Arrancar y verificar DE VERDAD ───────────────────────
-            # No basta con "existe un proceso": eso puede ser un agente viejo.
-            # La prueba real es que el LOG crezca con la sesion iniciada.
+            # ── 5. Ya hay tarea: AHORA si retiro los agentes viejos ──────
             if ($modo) {
+                # Paro por el MOTOR de tareas: asi el auto-reinicio no revive
+                # al que voy a matar.
+                try { Stop-ScheduledTask -TaskName $Tarea -ErrorAction SilentlyContinue } catch {}
+
+                $muertos = 0
+                foreach ($p in (Agentes)) {
+                    try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; $muertos++ } catch {}
+                }
+                if ($muertos -gt 0) { Di "  [OK] Cerre $muertos agente(s) viejo(s) (evita imprimir doble)." }
+
+                # ── 6. Arrancar y verificar DE VERDAD ────────────────────
+                # No basta con "existe un proceso": eso puede ser un agente
+                # viejo que no murio. La prueba real es que el LOG crezca.
                 $log = Join-Path $dir 'agente.log'
                 $antes = 0
                 try { if (Test-Path $log) { $antes = (Get-Item $log).Length } } catch {}
 
-                try { Start-ScheduledTask -TaskName $Tarea } catch {}
+                try { Start-ScheduledTask -TaskName $Tarea -ErrorAction Stop } catch {
+                    Di "  [!] No pude lanzar la tarea ahora: $($_.Exception.Message)"
+                }
                 Di "  Arrancando y verificando (hasta 40s)..."
                 $vivo = $false
                 for ($i = 0; $i -lt 20; $i++) {
@@ -198,7 +219,24 @@ if ($seguir) {
                     Di "                   debe decir 'Agente en linea'."
                     Di "  ============================================="
                 } else {
-                    Di "  [!] La tarea quedo registrada pero no veo el proceso."
+                    # PLAN B: no dejar el PC sin imprimir. Solo si NO quedo
+                    # ningun agente vivo (si hay uno, arrancar otro imprimiria
+                    # DOBLE — y el candado del agente lo cerraria de todos modos).
+                    $procs = @(Agentes)
+                    if ($procs.Count -gt 0) {
+                        Di "  [!] La tarea quedo registrada y veo $($procs.Count) proceso(s) del agente,"
+                        Di "      pero el log no crecio en 40s. NO arranco otro (evito doble impresion)."
+                    } else {
+                        Di "  [!] La tarea no arranco. Lanzo el agente a mano como respaldo..."
+                        try {
+                            Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ErrorAction Stop `
+                                -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ps1)
+                            Di "      [OK] Agente lanzado a mano: la impresion queda funcionando YA."
+                            Di "           (al reiniciar el PC arranca la tarea)"
+                        } catch {
+                            Di "      [X] Tampoco pude lanzarlo a mano: $($_.Exception.Message)"
+                        }
+                    }
                     Di "      Revisa el log: $dir\agente.log"
                     try {
                         $inf = Get-ScheduledTaskInfo -TaskName $Tarea -ErrorAction SilentlyContinue
