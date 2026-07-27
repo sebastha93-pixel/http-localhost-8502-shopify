@@ -102,7 +102,7 @@ export default function NuevoCasoPage() {
             </button>
           </div>
           {mut.isError && (
-            <p className="text-sm text-destructive">
+            <p className="text-sm text-terracotta">
               No se pudo crear el caso. Revisa que tipo y motivo sean válidos.
             </p>
           )}
@@ -115,7 +115,7 @@ export default function NuevoCasoPage() {
 function Seccion({ titulo, children }: { titulo: string; children: React.ReactNode }) {
   return (
     <div className="space-y-3">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-graphite">{titulo}</h3>
+      <h3 className="section-label">{titulo}</h3>
       {children}
     </div>
   );

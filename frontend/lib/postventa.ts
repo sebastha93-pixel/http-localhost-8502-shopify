@@ -118,3 +118,40 @@ export interface ItemFactura { code: string; description: string; price: number;
 export interface ItemsFactura { factura: { id: string; name: string }; items: ItemFactura[]; }
 export const itemsFacturaCaso = (id: string) =>
   api.get<ItemsFactura>(`/api/postventa/casos/${id}/fiscal/items-factura`);
+
+// ── Historial e ítems del caso ───────────────────────────────────────
+export interface EventoTimeline {
+  id: string; event_type: string; description: string;
+  created_by: string; created_at: string;
+}
+export interface ItemCaso {
+  id: string; original_sku: string | null; original_variant: string | null;
+  original_price: number | null; requested_sku: string | null;
+  price_difference: number | null; item_status: string;
+}
+export const timelineCaso = (id: string) =>
+  api.get<EventoTimeline[]>(`/api/postventa/casos/${id}/timeline`);
+export const itemsCaso = (id: string) =>
+  api.get<ItemCaso[]>(`/api/postventa/casos/${id}/items`);
+
+// ── Semántica visual de los estados (paleta Selvedge del OS) ─────────
+import type { StatusKind } from "@/components/status-badge";
+
+/** Mapea el estado del caso al lenguaje de estados del OS:
+ *  terracotta = esperando algo, sage = resuelto, ochre = riesgo/atención. */
+export const ESTADO_KIND: Record<EstadoPostventa, StatusKind> = {
+  creado:               "wait",
+  pendiente_validacion: "wait",
+  aprobado:             "wait",
+  nota_credito_emitida: "wait",
+  factura_emitida:      "wait",
+  cerrado:              "done",
+  rechazado:            "unassigned",
+  escalado:             "risk",
+};
+
+/** Orden del ciclo de vida, para el riel de progreso. */
+export const CICLO: EstadoPostventa[] = [
+  "creado", "pendiente_validacion", "aprobado",
+  "nota_credito_emitida", "factura_emitida", "cerrado",
+];

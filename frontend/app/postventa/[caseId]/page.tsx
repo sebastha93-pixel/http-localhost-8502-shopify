@@ -5,12 +5,13 @@ import { useParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { formatMoney } from "@/lib/utils";
+import { StatusBadge } from "@/components/status-badge";
+import { formatMoney, fmtDateTime } from "@/lib/utils";
 import {
   obtenerCaso, cambiarEstado, previewFiscal, emitirFiscal,
   previewFactura, emitirFactura, type PreviewFactura,
   itemsFacturaCaso, agregarItem, type ItemFactura,
+  timelineCaso, itemsCaso, ESTADO_KIND, CICLO,
   ESTADOS_LABEL, type EstadoPostventa, type PreviewFiscal,
 } from "@/lib/postventa";
 
@@ -24,19 +25,26 @@ const ACCIONES: Record<string, EstadoPostventa[]> = {
   factura_emitida: ["cerrado"],
 };
 
+const TIPO_LABEL: Record<string, string> = {
+  cambio_talla: "Cambio de talla", cambio_ref: "Cambio de referencia",
+  reembolso: "Reembolso", bono: "Bono", garantia: "Garantía",
+};
+
 export default function CasoDetallePage() {
   const params = useParams();
   const caseId = params?.caseId as string;
   const qc = useQueryClient();
   const caso = useQuery({ queryKey: ["postventa-caso", caseId],
                           queryFn: () => obtenerCaso(caseId) });
+  const refrescar = () => {
+    qc.invalidateQueries({ queryKey: ["postventa-caso", caseId] });
+    qc.invalidateQueries({ queryKey: ["postventa-timeline", caseId] });
+    qc.invalidateQueries({ queryKey: ["postventa-items", caseId] });
+  };
 
   const mut = useMutation({
     mutationFn: (estado: string) => cambiarEstado(caseId, estado),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["postventa-caso", caseId] });
-      qc.invalidateQueries({ queryKey: ["postventa-casos"] });
-    },
+    onSuccess: () => { refrescar(); qc.invalidateQueries({ queryKey: ["postventa-casos"] }); },
   });
 
   if (caso.isLoading) return <PageShell title="Caso"><LoadingState /></PageShell>;
@@ -47,60 +55,153 @@ export default function CasoDetallePage() {
   const acciones = ACCIONES[c.status] ?? [];
 
   return (
-    <PageShell title={c.case_number} subtitle={`${c.type} · ${c.reason}`}>
-      <Card className="mb-4"><CardContent className="py-4 space-y-1">
-        <div className="flex items-center gap-2">
-          <Badge>{ESTADOS_LABEL[c.status] ?? c.status}</Badge>
-          <span className="text-sm text-muted-foreground">
-            Prioridad: {c.priority}
-          </span>
+    <PageShell title={c.case_number}
+               subtitle={`${TIPO_LABEL[c.type] ?? c.type} · ${c.reason.replace(/_/g, " ")}`}>
+      {/* Riel de progreso: dónde está el caso y qué sigue */}
+      <RielCiclo actual={c.status} />
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Columna de trabajo */}
+        <div className="lg:col-span-2 space-y-4">
+          <PanelItems caseId={caseId} status={c.status} onAgregado={refrescar} />
+          <PanelFiscal caseId={caseId} status={c.status} onEmitido={refrescar} />
+          <PanelFactura caseId={caseId} status={c.status} tipo={c.type} onEmitido={refrescar} />
+
+          {acciones.length > 0 && (
+            <section>
+              <p className="section-label mb-2">Avanzar el caso</p>
+              <div className="flex gap-2 flex-wrap">
+                {acciones.map((a) => (
+                  <button key={a} disabled={mut.isPending} onClick={() => mut.mutate(a)}
+                    className="rounded-sm border border-border bg-card px-3 py-2 text-xs font-medium
+                               text-ink-900 transition-colors hover:bg-cloud disabled:opacity-50">
+                    {ESTADOS_LABEL[a] ?? a}
+                  </button>
+                ))}
+              </div>
+              {mut.isError && (
+                <p className="text-sm text-terracotta mt-2">
+                  No se pudo cambiar el estado (transición inválida).
+                </p>
+              )}
+            </section>
+          )}
         </div>
-        <div className="text-sm">Cliente: {c.customer_name || c.customer_email || "—"}</div>
-        <div className="text-sm">Teléfono: {c.customer_phone || "—"}</div>
-        <div className="text-sm">Pedido Shopify: {c.shopify_order_name || "—"}</div>
-      </CardContent></Card>
 
-      {/* Selección del ítem a devolver (desde la factura de Siigo) */}
-      <PanelItems caseId={caseId} status={c.status} tipo={c.type} onAgregado={() =>
-        qc.invalidateQueries({ queryKey: ["postventa-caso", caseId] })} />
-
-      {/* Panel fiscal: nota crédito */}
-      <PanelFiscal caseId={caseId} status={c.status} onEmitido={() =>
-        qc.invalidateQueries({ queryKey: ["postventa-caso", caseId] })} />
-
-      {/* Panel fiscal: factura del reemplazo (tras la nota crédito) */}
-      <PanelFactura caseId={caseId} status={c.status} tipo={c.type} onEmitido={() =>
-        qc.invalidateQueries({ queryKey: ["postventa-caso", caseId] })} />
-
-      <div className="flex gap-2 flex-wrap mt-4">
-        {acciones.map((a) => (
-          <button key={a} disabled={mut.isPending}
-                  onClick={() => mut.mutate(a)}
-                  className="rounded-sm border border-border bg-card px-3 py-2 text-xs font-medium text-graphite transition-colors hover:bg-cloud disabled:opacity-50">
-            {ESTADOS_LABEL[a] ?? a}
-          </button>
-        ))}
-        {acciones.length === 0 && (
-          <p className="text-sm text-muted-foreground">Caso en estado final.</p>
-        )}
+        {/* Columna de contexto */}
+        <div className="space-y-4">
+          <FichaCliente caso={c} />
+          <PanelTimeline caseId={caseId} />
+        </div>
       </div>
-      {mut.isError && (
-        <p className="text-sm text-destructive mt-2">
-          No se pudo cambiar el estado (transición inválida).
-        </p>
-      )}
     </PageShell>
   );
 }
 
-function PanelItems({ caseId, status, tipo, onAgregado }:
-  { caseId: string; status: string; tipo: string; onAgregado: () => void }) {
+/* ── Riel del ciclo de vida ─────────────────────────────────────────── */
+function RielCiclo({ actual }: { actual: EstadoPostventa }) {
+  const idx = CICLO.indexOf(actual);
+  const fuera = idx === -1;   // rechazado / escalado
+  return (
+    <div className="mb-4 flex items-center gap-2 overflow-x-auto pb-1">
+      <StatusBadge status={ESTADO_KIND[actual] ?? "wait"}
+                   label={ESTADOS_LABEL[actual] ?? actual} />
+      {!fuera && (
+        <div className="flex items-center gap-1.5">
+          {CICLO.map((e, i) => (
+            <span key={e} title={ESTADOS_LABEL[e]}
+              className={`h-1 rounded-full transition-colors ${
+                i < idx ? "w-6 bg-sage"
+                : i === idx ? "w-10 bg-navy-600"
+                : "w-6 bg-concrete"}`} />
+          ))}
+          <span className="ml-1 text-[0.68rem] text-graphite whitespace-nowrap">
+            paso {idx + 1} de {CICLO.length}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Ficha del cliente y pedido ─────────────────────────────────────── */
+function FichaCliente({ caso }: { caso: { customer_name?: string | null;
+  customer_email?: string | null; customer_phone?: string | null;
+  shopify_order_name?: string | null; priority: string; created_at: string } }) {
+  return (
+    <Card><CardContent className="py-4">
+      <p className="section-label mb-3">Cliente y pedido</p>
+      <dl className="space-y-2.5 text-sm">
+        <Dato k="Nombre" v={caso.customer_name} />
+        <Dato k="Email" v={caso.customer_email} />
+        <Dato k="Teléfono" v={caso.customer_phone} />
+        <Dato k="Pedido" v={caso.shopify_order_name} mono />
+        <Dato k="Prioridad" v={caso.priority} />
+        <Dato k="Creado" v={fmtDateTime(caso.created_at)} />
+      </dl>
+    </CardContent></Card>
+  );
+}
+
+function Dato({ k, v, mono }: { k: string; v?: string | null; mono?: boolean }) {
+  return (
+    <div className="flex justify-between gap-3">
+      <dt className="text-graphite shrink-0">{k}</dt>
+      <dd className={`text-ink-900 text-right break-words ${mono ? "font-display tabular-nums" : ""}`}>
+        {v || "—"}
+      </dd>
+    </div>
+  );
+}
+
+/* ── Timeline del caso ──────────────────────────────────────────────── */
+const EVENTO_TONO: Record<string, string> = {
+  fiscal_error: "bg-terracotta",
+  nota_credito_emitida: "bg-sage",
+  factura_emitida: "bg-sage",
+  cambio_estado: "bg-navy-600",
+  notificacion_wa: "bg-steel-400",
+  creado: "bg-graphite",
+};
+
+function PanelTimeline({ caseId }: { caseId: string }) {
+  const q = useQuery({ queryKey: ["postventa-timeline", caseId],
+                       queryFn: () => timelineCaso(caseId) });
+  return (
+    <Card><CardContent className="py-4">
+      <p className="section-label mb-3">Historial</p>
+      {q.isLoading && <p className="text-sm text-graphite">Cargando…</p>}
+      {q.data && q.data.length === 0 && (
+        <p className="text-sm text-graphite">Sin eventos todavía.</p>
+      )}
+      {q.data && q.data.length > 0 && (
+        <ol className="relative space-y-3 border-l border-concrete pl-4">
+          {q.data.map((e) => (
+            <li key={e.id} className="relative">
+              <span className={`absolute -left-[1.32rem] top-1.5 h-1.5 w-1.5 rounded-full
+                                ${EVENTO_TONO[e.event_type] ?? "bg-concrete"}`} />
+              <p className="text-sm text-ink-900 leading-snug">{e.description}</p>
+              <p className="text-[0.68rem] text-graphite tabular-nums">
+                {fmtDateTime(e.created_at)}
+              </p>
+            </li>
+          ))}
+        </ol>
+      )}
+    </CardContent></Card>
+  );
+}
+
+/* ── Ítems del caso + selector desde la factura ─────────────────────── */
+function PanelItems({ caseId, status, onAgregado }:
+  { caseId: string; status: string; onAgregado: () => void }) {
   const [nuevoSku, setNuevoSku] = useState("");
-  const [agregado, setAgregado] = useState<string | null>(null);
-  const items = useQuery({
+  const yaEnCaso = useQuery({ queryKey: ["postventa-items", caseId],
+                              queryFn: () => itemsCaso(caseId) });
+  const deFactura = useQuery({
     queryKey: ["postventa-items-factura", caseId],
     queryFn: () => itemsFacturaCaso(caseId),
-    enabled: status === "aprobado",
+    enabled: status === "aprobado" && (yaEnCaso.data?.length ?? 0) === 0,
     retry: false,
   });
   const addMut = useMutation({
@@ -108,121 +209,142 @@ function PanelItems({ caseId, status, tipo, onAgregado }:
       original_sku: it.code, original_variant: it.description,
       original_price: it.price, requested_sku: nuevoSku.trim(),
     }),
-    onSuccess: (_r, it) => { setAgregado(it.code); onAgregado(); },
+    onSuccess: onAgregado,
   });
 
-  if (status !== "aprobado") return null;
+  const items = yaEnCaso.data ?? [];
 
   return (
-    <Card className="mb-4">
-      <CardContent className="py-4 space-y-3">
-        <div className="font-medium text-sm">Ítem a devolver (de la factura del pedido)</div>
-        {items.isLoading && <p className="text-sm text-muted-foreground">Buscando la factura en Siigo…</p>}
-        {items.isError && (
-          <p className="text-sm text-destructive">
-            No se encontró la factura del pedido en Siigo. Revisa el nº de pedido.
-          </p>
-        )}
-        {items.data && (
-          <>
-            <div className="text-xs text-muted-foreground">Factura: {items.data.factura.name}</div>
-            <label className="block space-y-1">
-              <span className="block text-xs text-graphite">
-                SKU de la referencia nueva (solo si es cambio por otra referencia; vacío si es cambio de talla)
-              </span>
-              <input value={nuevoSku} onChange={(e) => setNuevoSku(e.target.value)}
-                placeholder="ej. 94625-1T12"
-                className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-navy-600/30" />
-            </label>
-            <div className="space-y-2">
-              {items.data.items.map((it) => (
-                <div key={it.code} className="flex items-center justify-between rounded-sm border border-border p-2">
-                  <div className="text-sm">
-                    <div className="font-medium">{it.description}</div>
-                    <div className="text-xs text-muted-foreground">{it.code} · {formatMoney(it.price)}</div>
+    <Card><CardContent className="py-4 space-y-3">
+      <p className="section-label">Prenda del caso</p>
+
+      {items.length > 0 && items.map((it) => (
+        <div key={it.id} className="rounded-sm border border-border bg-cloud/40 p-3">
+          <div className="flex justify-between gap-3">
+            <div>
+              <p className="text-sm text-ink-900">{it.original_variant || it.original_sku}</p>
+              <p className="text-[0.68rem] text-graphite font-display tabular-nums">
+                {it.original_sku}
+              </p>
+            </div>
+            <p className="font-display tabular-nums text-sm text-ink-900">
+              {formatMoney(it.original_price ?? 0)}
+            </p>
+          </div>
+          {it.requested_sku && (
+            <p className="mt-2 border-t border-concrete pt-2 text-xs text-graphite">
+              Cambia por <span className="font-display tabular-nums text-ink-900">{it.requested_sku}</span>
+            </p>
+          )}
+        </div>
+      ))}
+
+      {items.length === 0 && status !== "aprobado" && (
+        <p className="text-sm text-graphite">
+          Aprueba el caso para elegir la prenda desde la factura.
+        </p>
+      )}
+
+      {items.length === 0 && status === "aprobado" && (
+        <>
+          {deFactura.isLoading && <p className="text-sm text-graphite">Buscando la factura en Siigo…</p>}
+          {deFactura.isError && (
+            <p className="text-sm text-terracotta">
+              No se encontró la factura del pedido en Siigo. Revisa el nº de pedido.
+            </p>
+          )}
+          {deFactura.data && (
+            <>
+              <p className="text-[0.68rem] text-graphite">
+                Factura <span className="font-display tabular-nums">{deFactura.data.factura.name}</span>
+              </p>
+              <label className="block space-y-1">
+                <span className="block text-xs text-graphite">
+                  SKU de la referencia nueva (vacío si es cambio de talla)
+                </span>
+                <input value={nuevoSku} onChange={(e) => setNuevoSku(e.target.value)}
+                  placeholder="94625-1T12"
+                  className="w-full rounded-sm border border-border bg-card px-3 py-2 text-sm
+                             text-ink-900 font-display tabular-nums
+                             focus:outline-none focus:ring-2 focus:ring-navy-600/30" />
+              </label>
+              {deFactura.data.items.map((it) => (
+                <div key={it.code}
+                  className="flex items-center justify-between gap-3 rounded-sm border border-border p-2.5">
+                  <div className="min-w-0">
+                    <p className="text-sm text-ink-900 truncate">{it.description}</p>
+                    <p className="text-[0.68rem] text-graphite font-display tabular-nums">
+                      {it.code} · {formatMoney(it.price)}
+                    </p>
                   </div>
                   <button disabled={addMut.isPending} onClick={() => addMut.mutate(it)}
-                    className="rounded-sm border border-border bg-card px-3 py-1 text-xs font-medium text-graphite hover:bg-cloud disabled:opacity-50">
-                    {agregado === it.code ? "✓ Agregado" : "Agregar al caso"}
+                    className="shrink-0 rounded-sm border border-border bg-card px-3 py-1 text-xs
+                               font-medium text-ink-900 hover:bg-cloud disabled:opacity-50">
+                    Agregar
                   </button>
                 </div>
               ))}
-            </div>
-            {agregado && (
-              <p className="text-xs text-teal-600">
-                Ítem agregado. Ya puedes previsualizar la nota crédito abajo.
-              </p>
-            )}
-          </>
-        )}
-      </CardContent>
-    </Card>
+            </>
+          )}
+        </>
+      )}
+    </CardContent></Card>
   );
 }
 
+/* ── Nota crédito ───────────────────────────────────────────────────── */
 function PanelFiscal({ caseId, status, onEmitido }:
   { caseId: string; status: string; onEmitido: () => void }) {
   const [preview, setPreview] = useState<PreviewFiscal | null>(null);
-
-  const prevMut = useMutation({
-    mutationFn: () => previewFiscal(caseId),
-    onSuccess: setPreview,
-  });
+  const prevMut = useMutation({ mutationFn: () => previewFiscal(caseId), onSuccess: setPreview });
   const emitMut = useMutation({
     mutationFn: () => emitirFiscal(caseId),
-    onSuccess: () => { setPreview(null); onEmitido(); },
-  });
+    onSuccess: () => { setPreview(null); onEmitido(); } });
 
-  // Solo tiene sentido desde 'aprobado' (antes de emitir la NC).
   if (status !== "aprobado") return null;
 
   return (
-    <Card className="mb-4 border-navy-600/30">
+    <Card className="stitch-rail border-navy-600/25">
       <CardContent className="py-4 space-y-3">
-        <div className="font-medium text-sm">Nota crédito (Siigo)</div>
-
+        <p className="section-label">Nota crédito · Siigo</p>
         {!preview && (
           <button disabled={prevMut.isPending} onClick={() => prevMut.mutate()}
-            className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-navy-700 disabled:opacity-50">
+            className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white
+                       transition-colors hover:bg-navy-700 disabled:opacity-50">
             {prevMut.isPending ? "Calculando…" : "Previsualizar nota crédito"}
           </button>
         )}
         {prevMut.isError && (
-          <p className="text-sm text-destructive">
-            No se pudo armar la nota crédito (¿se encontró la factura del pedido en Siigo?).
+          <p className="text-sm text-terracotta">
+            No se pudo armar la nota crédito. Revisa que la prenda esté agregada.
           </p>
         )}
-
         {preview && (
-          <div className="space-y-2">
-            <div className="text-sm">Factura original: <b>{preview.factura_original.name}</b></div>
-            <div className="rounded-sm border border-border bg-cloud/30 p-3 text-sm space-y-1">
-              <Fila k="Subtotal" v={formatMoney(preview.totales.subtotal)} />
-              <Fila k="IVA 19%" v={formatMoney(preview.totales.iva)} />
-              <Fila k="Total" v={formatMoney(preview.totales.total)} bold />
-            </div>
-            {preview.modo !== "produccion" ? (
-              <p className="text-xs text-amber-600">
-                Modo prueba — la nota crédito se crea en Siigo pero <b>NO</b> se envía a la DIAN (sin sello). Es revisable y borrable.
-              </p>
-            ) : (
-              <p className="text-xs text-destructive">
-                Modo producción — esta nota crédito es <b>electrónica y va a la DIAN</b>.
-              </p>
-            )}
+          <div className="space-y-3">
+            <p className="text-xs text-graphite">
+              Factura original{" "}
+              <span className="font-display tabular-nums text-ink-900">
+                {preview.factura_original.name}
+              </span>
+            </p>
+            <Totales subtotal={preview.totales.subtotal} iva={preview.totales.iva}
+                     total={preview.totales.total} />
+            <AvisoModo modo={preview.modo} />
             <div className="flex gap-2">
               <button disabled={emitMut.isPending} onClick={() => emitMut.mutate()}
-                className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-navy-700 disabled:opacity-50">
+                className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white
+                           transition-colors hover:bg-navy-700 disabled:opacity-50">
                 {emitMut.isPending ? "Emitiendo…" : "Emitir nota crédito"}
               </button>
               <button onClick={() => setPreview(null)}
-                className="rounded-sm border border-border bg-card px-4 py-2 text-sm font-medium text-graphite hover:bg-cloud">
+                className="rounded-sm border border-border bg-card px-4 py-2 text-sm
+                           font-medium text-graphite hover:bg-cloud">
                 Cancelar
               </button>
             </div>
             {emitMut.isError && (
-              <p className="text-sm text-destructive">
-                Siigo rechazó la emisión. El caso quedó registrado con el error; revisa e intenta de nuevo.
+              <p className="text-sm text-terracotta">
+                Siigo rechazó la emisión. El motivo quedó en el historial.
               </p>
             )}
           </div>
@@ -232,60 +354,62 @@ function PanelFiscal({ caseId, status, onEmitido }:
   );
 }
 
+/* ── Factura del reemplazo ──────────────────────────────────────────── */
 function PanelFactura({ caseId, status, tipo, onEmitido }:
   { caseId: string; status: string; tipo: string; onEmitido: () => void }) {
   const [preview, setPreview] = useState<PreviewFactura | null>(null);
-  const prevMut = useMutation({
-    mutationFn: () => previewFactura(caseId), onSuccess: setPreview });
+  const prevMut = useMutation({ mutationFn: () => previewFactura(caseId), onSuccess: setPreview });
   const emitMut = useMutation({
     mutationFn: () => emitirFactura(caseId),
     onSuccess: () => { setPreview(null); onEmitido(); } });
 
-  // Solo tras emitir la NC, y solo para cambios (reembolso/bono no llevan factura).
   if (status !== "nota_credito_emitida") return null;
   if (tipo === "reembolso" || tipo === "bono") return null;
 
   return (
-    <Card className="mb-4 border-navy-600/30">
+    <Card className="stitch-rail border-navy-600/25">
       <CardContent className="py-4 space-y-3">
-        <div className="font-medium text-sm">Factura del reemplazo (Siigo)</div>
+        <p className="section-label">Factura del reemplazo · Siigo</p>
         {!preview && (
           <button disabled={prevMut.isPending} onClick={() => prevMut.mutate()}
-            className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-navy-700 disabled:opacity-50">
-            {prevMut.isPending ? "Calculando…" : "Previsualizar factura del reemplazo"}
+            className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white
+                       transition-colors hover:bg-navy-700 disabled:opacity-50">
+            {prevMut.isPending ? "Calculando…" : "Previsualizar factura"}
           </button>
         )}
         {prevMut.isError && (
-          <p className="text-sm text-destructive">
-            No se pudo armar la factura (¿el precio de la referencia nueva está en Shopify?).
+          <p className="text-sm text-terracotta">
+            No se pudo armar la factura. ¿El precio de la referencia nueva está en Shopify?
           </p>
         )}
         {preview && (
-          <div className="space-y-2">
-            <div className="rounded-sm border border-border bg-cloud/30 p-3 text-sm space-y-1">
+          <div className="space-y-3">
+            <dl className="rounded-sm border border-border bg-cloud/40 p-3 text-sm space-y-1.5">
               <Fila k="Total factura" v={formatMoney(preview.resumen.total)} />
-              <Fila k="Cubierto por anticipo (NC)" v={formatMoney(preview.resumen.anticipo)} />
-              <Fila k="Paga la clienta (excedente)"
-                    v={formatMoney(preview.resumen.excedente)} bold />
-            </div>
+              <Fila k="Cubierto por anticipo" v={formatMoney(preview.resumen.anticipo)} />
+              <Fila k="Paga la clienta" v={formatMoney(preview.resumen.excedente)} destacado />
+            </dl>
             {preview.resumen.excedente > 0 && (
-              <p className="text-xs text-amber-600">
-                La prenda nueva vale más: la clienta debe pagar el excedente.
+              <p className="text-xs text-ochre">
+                La prenda nueva vale más: la clienta paga el excedente.
               </p>
             )}
+            <AvisoModo modo={preview.modo} />
             <div className="flex gap-2">
               <button disabled={emitMut.isPending} onClick={() => emitMut.mutate()}
-                className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-navy-700 disabled:opacity-50">
+                className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white
+                           transition-colors hover:bg-navy-700 disabled:opacity-50">
                 {emitMut.isPending ? "Emitiendo…" : "Emitir factura"}
               </button>
               <button onClick={() => setPreview(null)}
-                className="rounded-sm border border-border bg-card px-4 py-2 text-sm font-medium text-graphite hover:bg-cloud">
+                className="rounded-sm border border-border bg-card px-4 py-2 text-sm
+                           font-medium text-graphite hover:bg-cloud">
                 Cancelar
               </button>
             </div>
             {emitMut.isError && (
-              <p className="text-sm text-destructive">
-                Siigo rechazó la factura. El caso quedó con el error; revisa e intenta de nuevo.
+              <p className="text-sm text-terracotta">
+                Siigo rechazó la factura. El motivo quedó en el historial.
               </p>
             )}
           </div>
@@ -295,10 +419,37 @@ function PanelFactura({ caseId, status, tipo, onEmitido }:
   );
 }
 
-function Fila({ k, v, bold }: { k: string; v: string; bold?: boolean }) {
+/* ── Piezas compartidas ─────────────────────────────────────────────── */
+function Totales({ subtotal, iva, total }:
+  { subtotal: number; iva: number; total: number }) {
   return (
-    <div className={`flex justify-between ${bold ? "font-semibold" : ""}`}>
-      <span>{k}</span><span>{v}</span>
+    <dl className="rounded-sm border border-border bg-cloud/40 p-3 text-sm space-y-1.5">
+      <Fila k="Subtotal" v={formatMoney(subtotal)} />
+      <Fila k="IVA 19%" v={formatMoney(iva)} />
+      <Fila k="Total" v={formatMoney(total)} destacado />
+    </dl>
+  );
+}
+
+function Fila({ k, v, destacado }: { k: string; v: string; destacado?: boolean }) {
+  return (
+    <div className={`flex justify-between ${destacado ? "border-t border-concrete pt-1.5" : ""}`}>
+      <dt className="text-graphite">{k}</dt>
+      <dd className={`font-display tabular-nums text-ink-900 ${destacado ? "font-medium" : ""}`}>
+        {v}
+      </dd>
     </div>
+  );
+}
+
+function AvisoModo({ modo }: { modo: string }) {
+  return modo !== "produccion" ? (
+    <p className="text-xs text-ochre">
+      Modo prueba — se crea en Siigo pero <b>no</b> se envía a la DIAN. Revisable y borrable.
+    </p>
+  ) : (
+    <p className="text-xs text-terracotta">
+      Modo producción — el documento es <b>electrónico y va a la DIAN</b>.
+    </p>
   );
 }
