@@ -25,7 +25,8 @@ def test_reemplazo_mismo_precio_solo_anticipo():
     assert p["items"][0]["price"] == 134369.75
     assert p["items"][0]["warehouse"] == {"id": 32}
     # anticipo cubre todo, sin excedente
-    assert p["payments"] == [{"id": 8316, "value": 159900.0}]
+    assert p["payments"] == [{"id": 8316, "value": 159900.0,
+                              "due_date": "2026-07-07"}]
     assert p["_resumen"]["excedente"] == 0
 
 
@@ -37,7 +38,8 @@ def test_reemplazo_mas_caro_cobra_excedente():
         factura_original=FACTURA, item_reemplazo=item,
         credito_con_iva=159900.0, modo="prueba", fecha="2026-07-07")
     total = p["_resumen"]["total"]
-    assert p["payments"][0] == {"id": 8316, "value": 159900.0}   # anticipo
+    assert p["payments"][0] == {"id": 8316, "value": 159900.0,
+                                "due_date": "2026-07-07"}   # anticipo
     assert p["payments"][1]["id"] == 8857                        # cuentas por cobrar
     assert round(p["payments"][1]["value"], 2) == round(total - 159900.0, 2)
     # los pagos suman el total de la factura
