@@ -277,3 +277,29 @@ def shopify_auth_refrescar(
     from backend.services import shopify_auth
     shopify_auth.invalidar()
     return {"refrescado": True, **shopify_auth.diagnostico()}
+
+
+@router.post("/banco-pruebas")
+def banco_pruebas(
+    total: int = 20,
+    dry_run: bool = True,
+    user: CurrentUser = Depends(require_permission("postventa", "modificar")),
+):
+    """Gate de N casos contra pedidos reales.
+
+    dry_run=true (default): llega al PREVIEW y NO emite nada en Siigo.
+    dry_run=false: emite (solo permitido con SIIGO_POSTVENTA_MODO=prueba).
+    """
+    from backend.services import postventa_banco_pruebas as banco
+    return banco.correr(total=max(1, min(total, 40)), dry_run=dry_run,
+                        actor=user.id)
+
+
+@router.delete("/banco-pruebas")
+def banco_pruebas_limpiar(
+    confirmar: bool = False,
+    _: CurrentUser = Depends(require_permission("postventa", "modificar")),
+):
+    """Borra los casos creados por el banco de pruebas."""
+    from backend.services import postventa_banco_pruebas as banco
+    return banco.limpiar(confirmar=confirmar)
