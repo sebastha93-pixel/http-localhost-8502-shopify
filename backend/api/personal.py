@@ -66,11 +66,11 @@ def empleado_actual(user: CurrentUser = Depends(get_current_user)) -> dict:
     """
     e = emp_svc.obtener_por_usuario(user.id)
     if not e:
-        raise HTTPException(
-            404,
-            "usuario_sin_empleado_vinculado: pide a Talento Humano que "
-            "enlace tu usuario con tu ficha de empleado",
-        )
+        # Neutro a propósito. No todo usuario del sistema es empleado de
+        # nómina: hay cuentas de servicio (Agente Impresión) y terceros con
+        # acceso (cortador, financiero externo). Decirles "pide que te
+        # enlacen" sería incorrecto — no deben tener ficha.
+        raise HTTPException(404, "el modulo de asistencia no aplica para esta cuenta")
     return e
 
 
@@ -114,12 +114,26 @@ def health(_: CurrentUser = Depends(require_role("admin"))) -> dict:
 # ═══════════════════════════════════════════════════════════════════════
 
 @router.get("/mi-tiempo/perfil")
-def mi_perfil(yo: dict = Depends(empleado_actual)) -> dict:
-    """Ficha propia del empleado autenticado."""
+def mi_perfil(user: CurrentUser = Depends(get_current_user)) -> dict:
+    """Ficha propia del empleado autenticado.
+
+    Devuelve 200 con `aplica: false` en vez de 404 cuando la cuenta no
+    corresponde a un empleado. Es la sonda que usa el frontend para decidir
+    si mostrar "Mi tiempo": como ese link no exige permiso, lo alcanzan
+    también cuentas de servicio y terceros, y para ellos NO es un error —
+    simplemente no les aplica. Un 404 los mandaría a una pantalla roja por
+    una situación perfectamente normal.
+    """
+    yo = emp_svc.obtener_por_usuario(user.id)
+    if not yo:
+        return {"aplica": False, "empleado": None,
+                "motivo": "esta cuenta no corresponde a un empleado de nomina"}
+
     sede = org_svc.obtener_sede(yo.get("sede_id")) if yo.get("sede_id") else None
     area = org_svc.obtener_area(yo.get("area_id")) if yo.get("area_id") else None
     jefe = emp_svc.obtener(yo["supervisor_id"]) if yo.get("supervisor_id") else None
     return {
+        "aplica": True,
         "empleado": yo,
         "sede": sede,
         "area": area,
