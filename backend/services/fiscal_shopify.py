@@ -50,3 +50,41 @@ def precio_base_variante(sku: str) -> Optional[float]:
     if con_iva is None:
         return None
     return F.base_desde_precio_con_iva(con_iva)
+
+
+_Q_VARIANTE_MAS_CARA = """
+query($q: String!) {
+  productVariants(first: 20, query: $q) {
+    edges { node { sku price displayName availableForSale } }
+  }
+}
+"""
+
+
+def variante_mas_cara_que(precio_base_min: float, *, excluir_sku: str = "") -> Optional[dict]:
+    """Una variante cuyo precio (CON IVA) supere el equivalente de
+    `precio_base_min` (SIN IVA). Sirve para probar el excedente: la clienta
+    cambia por una prenda más cara y debe pagar la diferencia.
+
+    Devuelve {'sku', 'precio_con_iva', 'precio_base'} o None.
+    """
+    umbral_con_iva = F.total_con_iva(precio_base_min)
+    data = clientes._shopify_graphql(_Q_VARIANTE_MAS_CARA,
+                                     {"q": f"price:>{umbral_con_iva:.0f}"})
+    if not isinstance(data, dict) or data.get("errors"):
+        return None
+    edges = (((data.get("data") or {}).get("productVariants") or {}).get("edges") or [])
+    for e in edges:
+        n = e.get("node") or {}
+        sku = (n.get("sku") or "").strip()
+        if not sku or sku == excluir_sku:
+            continue
+        try:
+            con_iva = float(n.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if con_iva <= umbral_con_iva:
+            continue
+        return {"sku": sku, "precio_con_iva": con_iva,
+                "precio_base": F.base_desde_precio_con_iva(con_iva)}
+    return None

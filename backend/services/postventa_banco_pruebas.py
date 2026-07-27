@@ -58,6 +58,44 @@ def _pedidos_con_factura(cantidad: int) -> list[dict]:
     return pedidos
 
 
+def _preview_factura_simulado(case_id: str, r: dict) -> Optional[dict]:
+    """Arma la factura del reemplazo SIN exigir que la NC esté emitida.
+
+    En dry-run la NC no se emite, así que `preview_factura_reemplazo` (que
+    exige NC emitida) no aplica. Se reconstruye el cálculo con el crédito que
+    la NC habría dejado, para validar el reparto anticipo/excedente.
+    """
+    from backend.services import fiscal_logic as FL
+    from backend.services import fiscal_shopify as FS
+
+    items = pv.items_caso(case_id)
+    if not items:
+        return None
+    it = items[0]
+    credito = r.get("totales", {}).get("total")
+    if not credito:
+        return None
+
+    requested = (it.get("requested_sku") or "").strip()
+    if requested:
+        base = FS.precio_base_variante(requested)
+        if base is None:
+            return None
+        item_reemplazo = {"code": requested, "description": requested,
+                          "price_base": base}
+    else:
+        item_reemplazo = {"code": it.get("original_sku"),
+                          "description": it.get("original_variant") or "",
+                          "price_base": float(it.get("original_price") or 0)}
+
+    payload = FL.construir_payload_factura_reemplazo(
+        factura_original={"id": "sim", "name": "sim", "customer": {},
+                          "seller": FL.VENDEDOR_ONLINE_ID},
+        item_reemplazo=item_reemplazo, credito_con_iva=float(credito),
+        modo="prueba", fecha="2026-01-01")
+    return {"resumen": payload["_resumen"]}
+
+
 def _correr_uno(pedido: dict, tipo: str, motivo: str, *, dry_run: bool,
                 actor: str) -> dict:
     """Un caso completo: crear → aprobar → ítem → preview [→ emitir]."""
@@ -99,10 +137,21 @@ def _correr_uno(pedido: dict, tipo: str, motivo: str, *, dry_run: bool,
         # la factura lo tiene; si no, se marca y el caso corre como cambio simple.
         requested = ""
         if tipo == "cambio_ref":
-            requested = (items[1]["code"] if len(items) > 1 else "")
-            if not requested:
-                paso("cambio_ref_sin_segunda_ref", True,
-                     "la factura solo trae un item; se prueba sin referencia nueva")
+            # Buscar en Shopify una prenda MÁS CARA: así el caso ejercita el
+            # excedente (la clienta paga la diferencia), que es el camino que
+            # importa validar y que la factura del pedido no siempre permite.
+            from backend.services import fiscal_shopify as FS
+            cara = FS.variante_mas_cara_que(it.get("price") or 0,
+                                            excluir_sku=it["code"])
+            if cara:
+                requested = cara["sku"]
+                r["reemplazo_mas_caro"] = cara
+                paso("buscar_reemplazo_mas_caro", True,
+                     f"{cara['sku']} · {cara['precio_con_iva']}")
+            else:
+                requested = (items[1]["code"] if len(items) > 1 else "")
+                paso("buscar_reemplazo_mas_caro", False,
+                     "no se halló una variante más cara en Shopify")
         pv.agregar_item(cid, original_sku=it["code"],
                         original_variant=it.get("description") or "",
                         original_price=it.get("price") or 0,
@@ -127,6 +176,24 @@ def _correr_uno(pedido: dict, tipo: str, motivo: str, *, dry_run: bool,
             return r
     except Exception as e:  # noqa: BLE001
         return r if not paso("preview_nota_credito", False, str(e)) else r
+
+    # Preview de la FACTURA del reemplazo: aquí se valida el reparto
+    # anticipo / excedente, que es lo que el gate anterior no cubría.
+    if tipo not in fiscal.TIPOS_SIN_FACTURA:
+        try:
+            prevf = _preview_factura_simulado(cid, r)
+            if prevf is not None:
+                res = prevf["resumen"]
+                suma_ok = abs((res["anticipo"] + res["excedente"]) - res["total"]) < 1.0
+                r["resumen_factura"] = res
+                paso("preview_factura_reemplazo", suma_ok,
+                     f"total {res['total']} = anticipo {res['anticipo']} + "
+                     f"excedente {res['excedente']}")
+                if not suma_ok:
+                    return r
+        except Exception as e:  # noqa: BLE001
+            paso("preview_factura_reemplazo", False, str(e))
+            return r
 
     if dry_run:
         r["ok"] = True
