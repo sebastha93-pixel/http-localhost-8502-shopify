@@ -58,10 +58,16 @@ def _shopify_graphql(query: str, variables: dict | None = None) -> dict:
     Necesario para acceder a orders que el REST API ya no devuelve."""
     import requests
     store = os.environ.get("SHOPIFY_STORE", "").strip()
-    token = os.environ.get("SHOPIFY_ACCESS_TOKEN", "").strip()
     api_version = os.environ.get("SHOPIFY_API_VERSION", "2024-01")
+    # Token vía shopify_auth: modelo nuevo (client_credentials, 24h) con
+    # fallback automático al legacy. Ver backend/services/shopify_auth.py
+    try:
+        from backend.services import shopify_auth
+        token = shopify_auth.token()
+    except Exception as e:  # noqa: BLE001
+        return {"errors": [{"message": f"shopify_auth: {str(e)[:120]}"}]}
     if not store or not token:
-        return {"errors": [{"message": "SHOPIFY_STORE o SHOPIFY_ACCESS_TOKEN no configurado"}]}
+        return {"errors": [{"message": "SHOPIFY_STORE o token de Shopify no configurado"}]}
     url = f"https://{store}/admin/api/{api_version}/graphql.json"
     r = requests.post(
         url,

@@ -56,14 +56,26 @@ def _base_url() -> str:
     return f"https://{SHOPIFY_STORE}/admin/api/{API_VERSION}"
 
 
+def _token() -> str:
+    """Token vigente. Prefiere el modelo nuevo (client_credentials, 24h) y cae
+    al legacy si no hay credenciales de app. Ver backend/services/shopify_auth."""
+    try:
+        from backend.services import shopify_auth
+        return shopify_auth.token()
+    except Exception:
+        # shopify_auth no disponible (script suelto): usar el legacy directo.
+        return ACCESS_TOKEN
+
+
 def _headers() -> dict:
-    if not ACCESS_TOKEN:
+    tok = _token()
+    if not tok:
         raise ShopifyError(
-            "SHOPIFY_ACCESS_TOKEN no configurado. "
-            "Edita el archivo .env con tu access token."
+            "Shopify sin credenciales. Configura SHOPIFY_CLIENT_ID + "
+            "SHOPIFY_CLIENT_SECRET (modelo actual) o SHOPIFY_ACCESS_TOKEN (legacy)."
         )
     return {
-        "X-Shopify-Access-Token": ACCESS_TOKEN,
+        "X-Shopify-Access-Token": tok,
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
