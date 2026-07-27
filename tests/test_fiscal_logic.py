@@ -22,16 +22,19 @@ def test_normalizar_numero_pedido_quita_almohadilla():
 
 
 # ── config por modo ──────────────────────────────────────────────────
-def test_config_documentos_modo_prueba_no_es_electronico():
+def test_config_prueba_usa_electronica_pero_no_estampa():
+    # Siigo exige mismo electronic_type que la factura (que es electrónica),
+    # así que la NC es la electrónica en ambos modos. Lo que cambia es el sello.
     c = F.config_documentos("prueba")
-    assert c["nota_credito_id"] == 27141
-    assert c["electronico"] is False
-
-
-def test_config_documentos_modo_produccion():
-    c = F.config_documentos("produccion")
     assert c["nota_credito_id"] == 11817
     assert c["electronico"] is True
+    assert c["estampar"] is False     # NO va a la DIAN
+
+
+def test_config_produccion_estampa():
+    c = F.config_documentos("produccion")
+    assert c["nota_credito_id"] == 11817
+    assert c["estampar"] is True      # va a la DIAN
 
 
 # ── montos ───────────────────────────────────────────────────────────
@@ -75,7 +78,7 @@ def test_payload_nc_copia_montos_de_la_factura_y_usa_anticipo():
     p = F.construir_payload_nota_credito(
         factura=FACTURA, skus_a_acreditar=["REF-10-M"],
         modo="prueba", fecha="2026-07-07")
-    assert p["document"]["id"] == 27141
+    assert p["document"]["id"] == 11817
     assert p["invoice"] == FACTURA["id"]
     assert p["customer"]["identification"] == "30384838"
     item = p["items"][0]
@@ -90,11 +93,21 @@ def test_payload_nc_copia_montos_de_la_factura_y_usa_anticipo():
     assert p["payments"][0]["value"] == 159900.0
 
 
-def test_payload_nc_modo_produccion_usa_electronica():
+def test_payload_nc_prueba_no_lleva_stamp():
+    p = F.construir_payload_nota_credito(
+        factura=FACTURA, skus_a_acreditar=["REF-10-M"],
+        modo="prueba", fecha="2026-07-07")
+    assert "stamp" not in p            # sin stamp => Siigo no lo manda a la DIAN
+    assert p["reason"] == 1            # motivo DIAN obligatorio en electrónicas
+
+
+def test_payload_nc_produccion_lleva_stamp():
     p = F.construir_payload_nota_credito(
         factura=FACTURA, skus_a_acreditar=["REF-10-M"],
         modo="produccion", fecha="2026-07-07")
     assert p["document"]["id"] == 11817
+    assert p["stamp"] == {"send": True}
+    assert p["reason"] == 1
 
 
 def test_payload_nc_sku_inexistente_falla():

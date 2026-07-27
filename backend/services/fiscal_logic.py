@@ -22,6 +22,11 @@ IVA_19_ID = 6352
 VENDEDOR_ONLINE_ID = 658
 ANTICIPO_CLIENTES_ID = 8316   # Forma de pago de la NC (no toca banco, deja saldo)
 
+# Motivo DIAN de la nota crédito (campo `reason`, obligatorio en electrónicas).
+# 1 = Devolución parcial de los bienes / no aceptación parcial del servicio.
+# Es el que aplica a un cambio o devolución de prenda.
+REASON_DEVOLUCION_PARCIAL = 1
+
 IVA_PORCENTAJE = Decimal("19")
 
 # "Orden Nº: 60112 - Medio de Pago: ..."  → 60112
@@ -46,14 +51,23 @@ def normalizar_numero_pedido(order_name: str) -> str:
 def config_documentos(modo: str) -> dict:
     """Config de documentos según el modo de operación.
 
-    'prueba' usa la NC Proforma (NoElectronic): ejercita todo el flujo
-    contra la cuenta real SIN emitir ante la DIAN.
+    Siigo EXIGE que la nota crédito tenga el mismo `electronic_type` que la
+    factura que acredita (error `invalid_document` si no). Como las ventas
+    online se facturan con factura ELECTRÓNICA, la NC debe ser la electrónica
+    (11817) en ambos modos — una Proforma no puede aplicarse a una factura
+    electrónica.
+
+    La diferencia entre modos es el ESTAMPADO ante la DIAN:
+      - 'prueba':     stamp ausente → Siigo lo toma como false → NO va a la DIAN.
+                      El documento queda en Siigo, revisable y borrable.
+      - 'produccion': stamp true → se envía a la DIAN (irreversible).
     """
-    if modo == "produccion":
-        return {"nota_credito_id": NC_ELECTRONICA_ID, "factura_id": FV_ONLINE_ID,
-                "electronico": True}
-    return {"nota_credito_id": NC_PROFORMA_ID, "factura_id": FV_ONLINE_ID,
-            "electronico": False}
+    return {
+        "nota_credito_id": NC_ELECTRONICA_ID,
+        "factura_id": FV_ONLINE_ID,
+        "electronico": True,
+        "estampar": modo == "produccion",
+    }
 
 
 # ── Montos ───────────────────────────────────────────────────────────
@@ -108,7 +122,7 @@ def construir_payload_nota_credito(*, factura: dict, skus_a_acreditar: list[str]
     cliente = factura.get("customer") or {}
     total = _total_con_iva_de_lineas(lineas)
 
-    return {
+    payload = {
         "document": {"id": cfg["nota_credito_id"]},
         "date": fecha,
         "invoice": factura["id"],
@@ -119,8 +133,14 @@ def construir_payload_nota_credito(*, factura: dict, skus_a_acreditar: list[str]
         "seller": factura.get("seller") or VENDEDOR_ONLINE_ID,
         "items": [_linea_nc(it) for it in lineas],
         "payments": [{"id": ANTICIPO_CLIENTES_ID, "value": total}],
+        # Motivo DIAN: obligatorio en notas crédito electrónicas.
+        "reason": REASON_DEVOLUCION_PARCIAL,
         "observations": f"Postventa — anula ítems de {factura.get('name', '')}",
     }
+    # stamp solo en producción: ausente = Siigo lo toma false = NO va a la DIAN.
+    if cfg.get("estampar"):
+        payload["stamp"] = {"send": True}
+    return payload
 
 
 def _linea_nc(it: dict) -> dict:
@@ -208,7 +228,7 @@ def construir_payload_factura_reemplazo(*, factura_original: dict,
     if isinstance(wh, dict) and wh.get("id") is not None:
         linea["warehouse"] = {"id": wh["id"]}
 
-    return {
+    payload = {
         "document": {"id": cfg["factura_id"]},
         "date": fecha,
         "customer": {
@@ -224,3 +244,7 @@ def construir_payload_factura_reemplazo(*, factura_original: dict,
         "_resumen": {"total": total, "anticipo": anticipo_aplicado,
                      "excedente": excedente},
     }
+    # Igual que la NC: sin stamp no se envía a la DIAN (modo prueba).
+    if cfg.get("estampar"):
+        payload["stamp"] = {"send": True}
+    return payload

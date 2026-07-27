@@ -203,7 +203,7 @@ function PanelFiscal({ caseId, status, onEmitido }:
             </div>
             {preview.modo !== "produccion" ? (
               <p className="text-xs text-amber-600">
-                Modo prueba — se emite una nota crédito Proforma que <b>NO</b> llega a la DIAN.
+                Modo prueba — la nota crédito se crea en Siigo pero <b>NO</b> se envía a la DIAN (sin sello). Es revisable y borrable.
               </p>
             ) : (
               <p className="text-xs text-destructive">
