@@ -284,3 +284,28 @@ def contadores_dashboard() -> dict:
         "top_motivos": top,
         "total": len(casos),
     }
+
+
+def timeline_caso(case_id: str, limite: int = 50) -> list[dict]:
+    """Historial completo del caso, del más reciente al más antiguo.
+
+    Es la caja negra del caso: cambios de estado, notificaciones, documentos
+    fiscales y errores. Se guardaba desde el día uno pero no se exponía.
+    """
+    sb = _sb()
+    if sb is None:
+        return []
+    r = (sb.table("postventa_timeline").select("*")
+           .eq("case_id", case_id).eq("brand_id", _brand_id())
+           .order("created_at", desc=True).limit(limite).execute())
+    return r.data or []
+
+
+def items_caso(case_id: str) -> list[dict]:
+    """Ítems del caso (lo que la clienta devuelve y por qué lo cambia)."""
+    sb = _sb()
+    if sb is None:
+        return []
+    r = (sb.table("postventa_items").select("*")
+           .eq("case_id", case_id).eq("brand_id", _brand_id()).execute())
+    return r.data or []

@@ -5,11 +5,18 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { KpiStrip } from "@/components/kpi-card";
+import { StatusBadge } from "@/components/status-badge";
 import { fmtDateTime } from "@/lib/utils";
 import {
-  listarCasos, dashboardPostventa, ESTADOS_LABEL, type EstadoPostventa,
+  listarCasos, dashboardPostventa, ESTADOS_LABEL, ESTADO_KIND,
+  type EstadoPostventa,
 } from "@/lib/postventa";
+
+const TIPO_LABEL: Record<string, string> = {
+  cambio_talla: "Cambio de talla", cambio_ref: "Cambio de referencia",
+  reembolso: "Reembolso", bono: "Bono", garantia: "Garantía",
+};
 
 export default function PostventaPage() {
   const [filtro, setFiltro] = useState<string>("");
@@ -21,25 +28,38 @@ export default function PostventaPage() {
 
   return (
     <PageShell title="Postventa" subtitle="Cambios, devoluciones y garantías">
-      <div className="flex justify-end mb-4">
+      <div className="flex items-start justify-between gap-4 mb-4">
+        {dash.data ? (
+          <div className="flex-1">
+            <KpiStrip items={[
+              { label: "Abiertos", value: dash.data.abiertos },
+              { label: "Cerrados", value: dash.data.cerrados, tone: "success" },
+              { label: "Total", value: dash.data.total },
+            ]} />
+          </div>
+        ) : <div className="flex-1" />}
         <Link href="/postventa/nuevo"
-          className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-navy-700">
-          + Nuevo caso
+          className="shrink-0 rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white
+                     transition-colors hover:bg-navy-700">
+          Nuevo caso
         </Link>
       </div>
-      {dash.data && (
-        <div className="grid grid-cols-3 gap-3 mb-4">
-          <KpiBox label="Abiertos" value={dash.data.abiertos} />
-          <KpiBox label="Cerrados" value={dash.data.cerrados} />
-          <KpiBox label="Total" value={dash.data.total} />
-        </div>
+
+      {dash.data && dash.data.top_motivos.length > 0 && (
+        <p className="mb-4 text-xs text-graphite">
+          <span className="section-label mr-2">Motivo más frecuente</span>
+          {dash.data.top_motivos[0].motivo.replace(/_/g, " ")}
+          {" · "}
+          <span className="font-display tabular-nums">{dash.data.top_motivos[0].total}</span> casos
+        </p>
       )}
 
-      <div className="flex gap-2 mb-4 flex-wrap">
+      <div className="flex gap-1.5 mb-4 flex-wrap">
         <FiltroChip label="Todos" activo={filtro === ""} onClick={() => setFiltro("")} />
         {(Object.keys(ESTADOS_LABEL) as EstadoPostventa[]).map((e) => (
           <FiltroChip key={e} label={ESTADOS_LABEL[e]} activo={filtro === e}
-                      onClick={() => setFiltro(e)} />
+                      onClick={() => setFiltro(e)}
+                      contador={dash.data?.por_estado[e]} />
         ))}
       </div>
 
@@ -48,26 +68,39 @@ export default function PostventaPage() {
       {casos.data && (
         <div className="space-y-2">
           {casos.data.length === 0 && (
-            <p className="text-sm text-muted-foreground">No hay casos para este filtro.</p>
+            <Card><CardContent className="py-10 text-center">
+              <p className="text-sm text-ink-900">No hay casos para este filtro.</p>
+              <p className="mt-1 text-xs text-graphite">
+                Los cambios y devoluciones que registres aparecerán aquí.
+              </p>
+            </CardContent></Card>
           )}
           {casos.data.map((c) => (
-            <Link key={c.id} href={`/postventa/${c.id}`}>
-              <Card className="hover:bg-accent/40 transition-colors">
-                <CardContent className="flex items-center justify-between py-3">
-                  <div>
-                    <div className="font-medium">{c.case_number}
-                      <span className="text-muted-foreground font-normal"> · {c.type}</span>
+            <Link key={c.id} href={`/postventa/${c.id}`} className="block">
+              <Card className="transition-colors hover:border-navy-600/40 hover:bg-cloud/40">
+                <CardContent className="flex items-center justify-between gap-4 py-3">
+                  <div className="min-w-0">
+                    <div className="flex items-baseline gap-2">
+                      <span className="font-display tabular-nums text-sm text-ink-900">
+                        {c.case_number}
+                      </span>
+                      <span className="text-xs text-graphite truncate">
+                        {TIPO_LABEL[c.type] ?? c.type}
+                      </span>
                     </div>
-                    <div className="text-sm text-muted-foreground">
+                    <p className="mt-0.5 text-sm text-graphite truncate">
                       {c.customer_name || c.customer_email || "Sin cliente"}
-                      {c.shopify_order_name ? ` · ${c.shopify_order_name}` : ""}
-                    </div>
+                      {c.shopify_order_name && (
+                        <span className="font-display tabular-nums"> · {c.shopify_order_name}</span>
+                      )}
+                    </p>
                   </div>
-                  <div className="text-right">
-                    <Badge>{ESTADOS_LABEL[c.status] ?? c.status}</Badge>
-                    <div className="text-xs text-muted-foreground mt-1">
+                  <div className="shrink-0 text-right">
+                    <StatusBadge status={ESTADO_KIND[c.status] ?? "wait"}
+                                 label={ESTADOS_LABEL[c.status] ?? c.status} />
+                    <p className="mt-1 text-[0.68rem] text-graphite tabular-nums">
                       {fmtDateTime(c.created_at)}
-                    </div>
+                    </p>
                   </div>
                 </CardContent>
               </Card>
@@ -79,22 +112,19 @@ export default function PostventaPage() {
   );
 }
 
-function KpiBox({ label, value }: { label: string; value: number }) {
-  return (
-    <Card><CardContent className="py-3">
-      <div className="text-2xl font-semibold">{value}</div>
-      <div className="text-xs text-muted-foreground">{label}</div>
-    </CardContent></Card>
-  );
-}
-
-function FiltroChip({ label, activo, onClick }:
-  { label: string; activo: boolean; onClick: () => void }) {
+function FiltroChip({ label, activo, onClick, contador }:
+  { label: string; activo: boolean; onClick: () => void; contador?: number }) {
   return (
     <button onClick={onClick}
-      className={`px-3 py-1 rounded-full text-sm border ${
-        activo ? "bg-primary text-primary-foreground" : "bg-background"}`}>
+      className={`rounded-sm border px-2.5 py-1 text-xs transition-colors ${
+        activo
+          ? "border-navy-600 bg-navy-600 text-white"
+          : "border-border bg-card text-graphite hover:bg-cloud"}`}>
       {label}
+      {contador !== undefined && contador > 0 && (
+        <span className={`ml-1.5 font-display tabular-nums ${
+          activo ? "text-white/80" : "text-ink-900"}`}>{contador}</span>
+      )}
     </button>
   );
 }

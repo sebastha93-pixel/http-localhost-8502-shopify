@@ -176,3 +176,17 @@ def fiscal_items_factura(case_id: str,
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(502, f"siigo: {str(e)[:300]}")
+
+
+@router.get("/casos/{case_id}/timeline")
+def timeline(case_id: str,
+             _: CurrentUser = Depends(require_permission("postventa", "ver"))):
+    """Historial del caso: estados, notificaciones, documentos fiscales."""
+    return svc.timeline_caso(case_id)
+
+
+@router.get("/casos/{case_id}/items")
+def items(case_id: str,
+          _: CurrentUser = Depends(require_permission("postventa", "ver"))):
+    """Items del caso (lo que se devuelve y su reemplazo)."""
+    return svc.items_caso(case_id)

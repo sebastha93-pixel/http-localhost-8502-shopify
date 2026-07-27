@@ -181,3 +181,22 @@ def test_contadores_dashboard(monkeypatch):
     assert d["abiertos"] == 3
     assert d["top_motivos"][0]["motivo"] == "talla_pequena"
     assert d["top_motivos"][0]["total"] == 2
+
+
+def test_timeline_caso_devuelve_eventos(monkeypatch):
+    class FakeTL(FakeSupabase):
+        def execute(self):
+            resp = MagicMock()
+            resp.data = [{"id": "e1", "event_type": "cambio_estado",
+                          "description": "creado → pendiente_validacion"}]
+            return resp
+    monkeypatch.setattr(svc, "_sb", lambda: FakeTL())
+    r = svc.timeline_caso("c1")
+    assert len(r) == 1
+    assert r[0]["event_type"] == "cambio_estado"
+
+
+def test_timeline_caso_sin_supabase_no_rompe(monkeypatch):
+    monkeypatch.setattr(svc, "_sb", lambda: None)
+    assert svc.timeline_caso("c1") == []
+    assert svc.items_caso("c1") == []
