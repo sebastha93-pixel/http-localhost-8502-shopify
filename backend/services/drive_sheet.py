@@ -113,6 +113,35 @@ def upsert(p: dict) -> None:
         log.warning(f"[drive] upsert {p.get('codigo_referencia')} falló: {e}")
 
 
+def borrar(codigo_referencia: str) -> bool:
+    """Quita de la hoja la fila de una referencia eliminada (match por código
+    en la columna A). Si no la encuentra, no pasa nada."""
+    ws = _hoja()
+    if ws is None:
+        return False
+    try:
+        cod = (codigo_referencia or "").strip()
+        if not cod:
+            return False
+        col = ws.col_values(1)  # incluye encabezado
+        for i, v in enumerate(col):
+            if i == 0:
+                continue
+            if (v or "").strip() == cod:
+                ws.delete_rows(i + 1)
+                return True
+        return False
+    except Exception as e:
+        log.warning(f"[drive] borrar {codigo_referencia} falló: {e}")
+        return False
+
+
+def borrar_async(codigo_referencia: str) -> None:
+    """Igual que borrar() pero en un hilo: no bloquea la respuesta del API."""
+    import threading
+    threading.Thread(target=borrar, args=(codigo_referencia,), daemon=True).start()
+
+
 def upsert_async(p: dict) -> None:
     """Fire-and-forget: no frena el guardado del precosteo (corre en un hilo)."""
     if not configurado():

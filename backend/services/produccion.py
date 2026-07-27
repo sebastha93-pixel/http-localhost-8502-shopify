@@ -973,18 +973,118 @@ def firmar_precosteo(precosteo_id: str, *, usuario_id: str) -> dict:
     return obtener_precosteo(precosteo_id)
 
 
-def eliminar_precosteo(precosteo_id: str) -> None:
-    """Elimina un precosteo (solo borrador). Los ítems caen por CASCADE."""
+def usos_de_referencia(referencia_id: str) -> list[str]:
+    """Motivos, en lenguaje claro, por los que una referencia YA se usó en
+    producción y por tanto NO se debe borrar. Lista vacía = se puede borrar.
+
+    Es la RED DE SEGURIDAD del borrado: la FK de `ordenes_corte` es ON DELETE
+    RESTRICT y la de `orden_corte_referencias` no tiene acción, así que Postgres
+    igual rechazaría el DELETE — pero con un error ilegible. Preguntando antes
+    podemos decir exactamente CUÁL lote la está usando.
+    """
+    sb = _sb()
+    if sb is None:
+        return []
+    motivos: list[str] = []
+
+    # 1) Referencia primaria de una orden de corte
+    try:
+        ocs = (sb.table("ordenes_corte").select("consecutivo")
+                 .eq("referencia_id", referencia_id).limit(5).execute()).data or []
+        if ocs:
+            cods = ", ".join([(o.get("consecutivo") or "?") for o in ocs])
+            motivos.append(f"ya tiene orden de corte ({cods})")
+    except Exception:
+        pass
+
+    # 2) Dentro de un tendido con varias referencias (tabla hija, puede no existir)
+    try:
+        filas = (sb.table("orden_corte_referencias").select("orden_corte_id")
+                   .eq("referencia_id", referencia_id).limit(5).execute()).data or []
+        oc_ids = [f.get("orden_corte_id") for f in filas if f.get("orden_corte_id")]
+        if oc_ids:
+            cods = []
+            try:
+                docs = (sb.table("ordenes_corte").select("consecutivo")
+                          .in_("id", oc_ids).execute()).data or []
+                cods = [(d.get("consecutivo") or "?") for d in docs]
+            except Exception:
+                pass
+            det = f" ({', '.join(cods)})" if cods else ""
+            motivos.append(f"está dentro de un tendido de corte{det}")
+    except Exception:
+        pass
+
+    # 3) Etiquetas ya encoladas/impresas (esta tabla NO tiene FK: quedarían
+    #    filas huérfanas apuntando a una referencia que ya no existe)
+    try:
+        tr = (sb.table("impresion_trabajos").select("id")
+                .eq("referencia_id", referencia_id).limit(1).execute()).data or []
+        if tr:
+            motivos.append("tiene etiquetas en la cola de impresión")
+    except Exception:
+        pass
+
+    return motivos
+
+
+def _borrar_foto_precosteo(precosteo_id: str) -> None:
+    """Borra del bucket la foto de la referencia (best-effort). La extensión
+    varía (jpg/png/webp...), así que se listan los archivos de la carpeta."""
+    sb = _sb()
+    if sb is None:
+        return
+    bucket = "produccion-fotos"
+    try:
+        archivos = sb.storage.from_(bucket).list(precosteo_id) or []
+        rutas = [f"{precosteo_id}/{a['name']}" for a in archivos if a.get("name")]
+        if rutas:
+            sb.storage.from_(bucket).remove(rutas)
+    except Exception as e:
+        log.warning(f"[precosteo] no pude borrar la foto de {precosteo_id}: {e}")
+
+
+def eliminar_precosteo(precosteo_id: str, *, permitir_autorizada: bool = False,
+                       usuario: str = "") -> dict:
+    """Elimina una referencia de precosteo que NO se aprueba. Los ítems caen
+    por CASCADE. Devuelve el código borrado (para el mensaje de la app).
+
+    RED DE SEGURIDAD: si la referencia ya se usó en producción no se borra y se
+    explica por qué — borrarla rompería el historial del lote y el cruce de
+    costos con Siigo. Por defecto tampoco borra una ya AUTORIZADA (bloqueada);
+    `permitir_autorizada=True` es la confirmación explícita del admin.
+    """
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
     actual = obtener_precosteo(precosteo_id)
     if not actual:
         raise ValueError("no_encontrado")
-    if actual.get("bloqueada"):
+    if actual.get("bloqueada") and not permitir_autorizada:
         raise ValueError("no_se_puede_eliminar_bloqueado")
+
+    motivos = usos_de_referencia(precosteo_id)
+    if motivos:
+        raise ValueError("en_uso:" + " · ".join(motivos))
+
+    codigo = (actual.get("codigo_referencia") or "").strip()
     sb.table("referencias_precosteo").delete().eq("id", precosteo_id).execute()
     _cache_invalidate_prefix("precosteos")
+    log.warning(f"[precosteo] ELIMINADA referencia {codigo} ({precosteo_id}) "
+                f"por {usuario or 'desconocido'}")
+
+    # Limpieza de rastros externos (best-effort: si falla, la referencia ya
+    # quedó borrada y eso es lo que importa).
+    _borrar_foto_precosteo(precosteo_id)
+    if codigo:
+        try:
+            from backend.services import drive_sheet as _ds
+            if _ds.configurado():
+                _ds.borrar_async(codigo)
+        except Exception as e:
+            log.warning(f"[precosteo] no pude quitar {codigo} del Drive: {e}")
+
+    return {"codigo_referencia": codigo, "nombre": actual.get("nombre") or ""}
 
 
 def listar_precosteos(*, estado: Optional[str] = None, tela: Optional[str] = None,

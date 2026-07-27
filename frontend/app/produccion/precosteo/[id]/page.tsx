@@ -106,6 +106,35 @@ export default function PrecosteoDetallePage() {
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
   });
 
+  // Eliminar la referencia que NO se aprueba. Solo admin (el backend también
+  // lo exige). `forzar` = confirmación extra cuando ya está autorizada.
+  const eliminarMut = useMutation({
+    mutationFn: (forzar: boolean) =>
+      api.del(`/api/produccion/precosteo/${id}${forzar ? "?forzar=true" : ""}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["produccion", "precosteo"] });
+      router.push("/produccion/precosteo");
+    },
+    onError: (e: Error) => { setErr(e.message); setMsg(""); },
+  });
+
+  function confirmarEliminar(p: Precosteo) {
+    setErr("");
+    if (!window.confirm(
+      `¿Eliminar la referencia ${p.codigo_referencia} — ${p.nombre}?\n\n` +
+      "Se borra el precosteo con todas sus líneas de costo, su foto y su fila " +
+      "en el Drive. NO se puede deshacer.\n\n" +
+      "Si la referencia ya tiene orden de corte o etiquetas, el sistema no la " +
+      "borrará y te dirá cuál lote la está usando."
+    )) return;
+    // Una autorizada pide una segunda confirmación (es la que ya aprobaste).
+    if (p.bloqueada && !window.confirm(
+      `OJO: ${p.codigo_referencia} ya está AUTORIZADA.\n\n` +
+      "¿Seguro que la quieres borrar igual?"
+    )) return;
+    eliminarMut.mutate(!!p.bloqueada);
+  }
+
   const guardarMut = useMutation({
     mutationFn: () => {
       // Los totales por línea y globales los recalcula el backend.
@@ -478,13 +507,25 @@ export default function PrecosteoDetallePage() {
         </CardContent>
       </Card>
 
-      {!p.bloqueada && (
-        <div className="flex justify-end">
-          <button onClick={() => firmarMut.mutate()} disabled={firmarMut.isPending}
-            className="inline-flex items-center gap-2 rounded-sm bg-teal px-6 py-2.5 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-ink-900 disabled:opacity-40">
-            {firmarMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
-            Firmar y bloquear
-          </button>
+      {(esAdmin(user) || !p.bloqueada) && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {/* Eliminar la que NO se aprueba. Solo admin: es irreversible. */}
+          {esAdmin(user) ? (
+            <button onClick={() => confirmarEliminar(p)} disabled={eliminarMut.isPending}
+              title="Eliminar esta referencia si no la apruebas — solo administrador, no se puede deshacer"
+              className="inline-flex items-center gap-1.5 rounded-sm border border-terracotta/40 bg-card px-3 py-1.5 text-xs font-medium text-terracotta transition-colors hover:bg-terracotta/[0.06] disabled:opacity-50">
+              {eliminarMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              Eliminar referencia
+            </button>
+          ) : <span />}
+
+          {!p.bloqueada && (
+            <button onClick={() => firmarMut.mutate()} disabled={firmarMut.isPending}
+              className="inline-flex items-center gap-2 rounded-sm bg-teal px-6 py-2.5 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-ink-900 disabled:opacity-40">
+              {firmarMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
+              Firmar y bloquear
+            </button>
+          )}
         </div>
       )}
     </PageShell>

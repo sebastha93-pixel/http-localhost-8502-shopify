@@ -608,16 +608,47 @@ def sync_drive(
         raise HTTPException(500, f"sync_drive: {str(e)[:200]}")
 
 
+@router.get("/precosteo/{precosteo_id}/usos")
+def precosteo_usos(
+    precosteo_id: str,
+    _: CurrentUser = Depends(require_permission_estricto("produccion_costos", "ver")),
+) -> dict:
+    """¿Se puede borrar esta referencia? Devuelve los motivos que lo impiden.
+    La app lo usa para avisar ANTES de que el usuario intente eliminar."""
+    motivos = svc.usos_de_referencia(precosteo_id)
+    return {"se_puede_eliminar": not motivos, "motivos": motivos}
+
+
 @router.delete("/precosteo/{precosteo_id}")
 def eliminar_precosteo(
     precosteo_id: str,
-    _: CurrentUser = Depends(require_permission_estricto("produccion_costos", "borrar")),
+    forzar: bool = Query(False, description="Confirma borrar una referencia YA AUTORIZADA"),
+    user: CurrentUser = Depends(require_role("admin")),
 ) -> dict:
+    """Elimina una referencia que no se aprueba. SOLO ADMIN: es irreversible.
+
+    No borra si la referencia ya se usó en producción (orden de corte, tendido
+    o etiquetas): en ese caso devuelve 409 explicando cuál lote la usa.
+    """
     try:
-        svc.eliminar_precosteo(precosteo_id)
-        return {"ok": True}
+        info = svc.eliminar_precosteo(precosteo_id, permitir_autorizada=forzar,
+                                      usuario=user.email or "")
+        return {"ok": True, **info}
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        msg = str(e)
+        if msg == "no_encontrado":
+            raise HTTPException(404, "Esa referencia ya no existe.")
+        if msg == "no_se_puede_eliminar_bloqueado":
+            raise HTTPException(409, "Esta referencia ya está AUTORIZADA. "
+                                     "Confirma de nuevo si la quieres borrar igual.")
+        if msg.startswith("en_uso:"):
+            raise HTTPException(409, "No se puede borrar: " + msg[len("en_uso:"):] +
+                                     ". Borrarla rompería el historial del lote y el "
+                                     "cruce de costos con Siigo.")
+        raise HTTPException(400, msg)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"eliminar_precosteo: {str(e)[:200]}")
 
 
 @router.post("/precosteo/{precosteo_id}/foto")

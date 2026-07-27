@@ -2,12 +2,14 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { esAdmin } from "@/lib/auth";
+import { useAuth } from "@/components/auth-provider";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Lock, Sheet, Loader2, CheckCircle } from "lucide-react";
+import { Plus, Lock, Sheet, Loader2, CheckCircle, Trash2, AlertCircle } from "lucide-react";
 
 interface Ref {
   id: string;
@@ -44,11 +46,43 @@ export default function PrecosteoListPage() {
   const [estado, setEstado] = useState<string>("");
 
   const [syncMsg, setSyncMsg] = useState("");
+  const [errDel, setErrDel] = useState("");
+
+  const qc = useQueryClient();
+  const { user } = useAuth();
+  const admin = esAdmin(user);
 
   const q = useQuery<{ precosteos: Ref[] }>({
     queryKey: ["produccion", "precosteo", "list", estado],
     queryFn: () => api.get(`/api/produccion/precosteo${estado ? `?estado=${estado}` : ""}`),
   });
+
+  // Eliminar una referencia que no se aprueba. El backend se niega (409) si ya
+  // se usó en producción y explica cuál lote la está usando.
+  const eliminarMut = useMutation({
+    mutationFn: (v: { id: string; forzar: boolean }) =>
+      api.del(`/api/produccion/precosteo/${v.id}${v.forzar ? "?forzar=true" : ""}`),
+    onSuccess: () => {
+      setErrDel("");
+      qc.invalidateQueries({ queryKey: ["produccion", "precosteo"] });
+    },
+    onError: (e: Error) => setErrDel(e.message),
+  });
+
+  function confirmarEliminar(r: Ref) {
+    setErrDel("");
+    if (!window.confirm(
+      `¿Eliminar la referencia ${r.codigo_referencia} — ${r.nombre}?\n\n` +
+      "Se borra el precosteo con todas sus líneas de costo, su foto y su fila " +
+      "en el Drive. NO se puede deshacer.\n\n" +
+      "Si ya tiene orden de corte o etiquetas, el sistema no la borrará y te " +
+      "dirá cuál lote la está usando."
+    )) return;
+    if (r.bloqueada && !window.confirm(
+      `OJO: ${r.codigo_referencia} ya está AUTORIZADA.\n\n¿Seguro que la borras igual?`
+    )) return;
+    eliminarMut.mutate({ id: r.id, forzar: !!r.bloqueada });
+  }
 
   // ¿Está configurada la sincronización a Google Sheet? (muestra el botón)
   const driveQ = useQuery<{ configurado: boolean }>({
@@ -113,6 +147,14 @@ export default function PrecosteoListPage() {
           <CheckCircle className="h-3.5 w-3.5" /> {syncMsg}
         </div>
       )}
+      {/* Por qué NO se pudo borrar (ej. "ya tiene orden de corte OC-0042") */}
+      {errDel && (
+        <div className="rounded-sm border border-terracotta/40 bg-terracotta/5 px-3 py-2 text-xs text-terracotta flex items-start gap-2">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{errDel}</span>
+          <button onClick={() => setErrDel("")} className="ml-auto shrink-0 underline">cerrar</button>
+        </div>
+      )}
 
       <Card>
         <CardContent className="p-0">
@@ -132,6 +174,7 @@ export default function PrecosteoListPage() {
                   <th className="px-4 py-3 text-right">Margen</th>
                   <th className="px-4 py-3">Insumos confección</th>
                   <th className="px-4 py-3">Estado</th>
+                  {admin && <th className="px-4 py-3 text-right">Acción</th>}
                 </tr>
               </thead>
               <tbody>
@@ -174,6 +217,18 @@ export default function PrecosteoListPage() {
                         <Badge tone="pendiente">Borrador</Badge>
                       )}
                     </td>
+                    {admin && (
+                      <td className="px-4 py-3 text-right">
+                        <button onClick={() => confirmarEliminar(r)}
+                          disabled={eliminarMut.isPending}
+                          title="Eliminar esta referencia (no la apruebo) — no se puede deshacer"
+                          className="p-2 -m-1 text-terracotta hover:text-crimson disabled:opacity-40">
+                          {eliminarMut.isPending && eliminarMut.variables?.id === r.id
+                            ? <Loader2 className="h-4 w-4 animate-spin" />
+                            : <Trash2 className="h-4 w-4" />}
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
