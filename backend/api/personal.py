@@ -15,6 +15,7 @@ Convenciones (espeja backend/api/produccion.py):
 """
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -24,9 +25,12 @@ from backend.core.flags import FLAGS_PERSONAL, flags_activos
 from backend.core.security import (
     CurrentUser, get_current_user, require_permission, require_role, tiene_permiso,
 )
+from backend.services import personal_asistencia as asis_svc
 from backend.services import personal_auditoria as aud
 from backend.services import personal_empleados as emp_svc
+from backend.services import personal_libro as libro_svc
 from backend.services import personal_organizacion as org_svc
+from backend.services import personal_permisos as perm_svc
 from backend.services import personal_reglas as reglas_svc
 from backend.services.personal_base import TablaNoExiste
 
@@ -453,6 +457,405 @@ def establecer_regla(
         )}
     except Exception as e:
         raise _error("establecer_regla", e)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ASISTENCIA
+# ═══════════════════════════════════════════════════════════════════════
+
+class RecalcularBody(BaseModel):
+    empleado_id: Optional[str] = None
+    desde:       str                       # YYYY-MM-DD
+    hasta:       Optional[str] = None
+    forzar:      bool = False              # ignora el bloqueo de periodo cerrado
+
+
+@router.get("/asistencia")
+def listar_asistencia(
+    desde: Optional[str] = None,
+    hasta: Optional[str] = None,
+    empleado_id: Optional[str] = None,
+    estado: Optional[str] = None,
+    limit: int = Query(500, ge=1, le=2000),
+    user: CurrentUser = Depends(require_permission("personal_asistencia", "ver")),
+) -> dict:
+    try:
+        alcance = emp_svc.alcance_empleados(user)
+        filas = asis_svc.listar(desde=desde, hasta=hasta, empleado_id=empleado_id,
+                                estado=estado, empleados_permitidos=alcance,
+                                limit=limit)
+        return {"jornadas": filas, "total": len(filas)}
+    except Exception as e:
+        raise _error("listar_asistencia", e)
+
+
+@router.get("/asistencia/{empleado_id}/{fecha}")
+def obtener_asistencia(
+    empleado_id: str,
+    fecha: str,
+    user: CurrentUser = Depends(require_permission("personal_asistencia", "ver")),
+) -> dict:
+    """Jornada de un día, con la explicación de cómo se calculó.
+
+    La explicación es lo que convierte un número en una conversación posible:
+    "llegaste 12 min tarde porque tu horario empieza 8:00, marcaste 8:12 y la
+    tolerancia son 5 min".
+    """
+    try:
+        if not emp_svc.puede_ver_empleado(user, empleado_id):
+            raise HTTPException(403, "fuera_de_tu_alcance")
+        j = asis_svc.obtener(empleado_id, _fecha(fecha))
+        if not j:
+            raise HTTPException(404, "jornada_no_calculada")
+        return {"jornada": j}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _error("obtener_asistencia", e)
+
+
+@router.post("/asistencia/recalcular")
+def recalcular_asistencia(
+    body: RecalcularBody,
+    user: CurrentUser = Depends(require_permission("personal_asistencia", "modificar")),
+) -> dict:
+    """Reprocesa un rango. Idempotente: correrlo dos veces da lo mismo.
+
+    `forzar` salta el bloqueo de las jornadas de periodos cerrados y exige
+    permiso de borrar — es lo más cerca de reescribir historia que hay aquí.
+    """
+    try:
+        if body.forzar and not tiene_permiso(user, "personal_asistencia", "borrar"):
+            raise HTTPException(403, "forzar_requiere_permiso_de_borrar")
+        desde = _fecha(body.desde)
+        hasta = _fecha(body.hasta) if body.hasta else desde
+        if not body.empleado_id:
+            raise HTTPException(400, "empleado_id_requerido")
+        r = asis_svc.recalcular_rango(body.empleado_id, desde, hasta, forzar=body.forzar)
+        aud.registrar(actor=user.email, accion="recalcular_asistencia",
+                      entidad="jornada", entidad_id=body.empleado_id,
+                      valores_despues={"desde": body.desde, "hasta": body.hasta,
+                                       "forzar": body.forzar})
+        return {"ok": True, **r}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _error("recalcular_asistencia", e)
+
+
+def _fecha(txt: str) -> date:
+    try:
+        return date.fromisoformat(txt[:10])
+    except Exception:
+        raise HTTPException(400, f"fecha_invalida:{txt}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# PERMISOS
+# ═══════════════════════════════════════════════════════════════════════
+
+class PermisoIn(BaseModel):
+    tipo_permiso_id:  str
+    inicio:           str                  # ISO 8601
+    fin:              str
+    motivo:           str = Field(min_length=3, max_length=1000)
+    empleado_id:      Optional[str] = None  # si se omite, el del JWT
+    archivo_soporte:  Optional[str] = None
+    notas_cobertura:  Optional[str] = None
+    enviar:           bool = False
+
+
+class DecisionBody(BaseModel):
+    notas:                Optional[str] = None
+    clasificacion_final:  Optional[str] = None
+
+
+@router.get("/permisos/tipos")
+def listar_tipos_permiso(
+    _: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """Catálogo de tipos. Lo consulta cualquier empleado para solicitar."""
+    return {"tipos": perm_svc.listar_tipos()}
+
+
+@router.get("/permisos")
+def listar_permisos(
+    estado: Optional[str] = None,
+    empleado_id: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=1000),
+    user: CurrentUser = Depends(require_permission("personal_permisos", "ver")),
+) -> dict:
+    try:
+        alcance = emp_svc.alcance_empleados(user)
+        filas = perm_svc.listar(estado=estado, empleado_id=empleado_id,
+                                empleados_permitidos=alcance, limit=limit)
+        return {"permisos": filas, "total": len(filas)}
+    except Exception as e:
+        raise _error("listar_permisos", e)
+
+
+@router.get("/permisos/{permiso_id}")
+def obtener_permiso(
+    permiso_id: str,
+    user: CurrentUser = Depends(require_permission("personal_permisos", "ver")),
+) -> dict:
+    try:
+        p = perm_svc.obtener(permiso_id)
+        if not p:
+            raise HTTPException(404, "permiso_no_existe")
+        if not emp_svc.puede_ver_empleado(user, p["empleado_id"]):
+            raise HTTPException(403, "fuera_de_tu_alcance")
+        return {"permiso": p}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _error("obtener_permiso", e)
+
+
+@router.post("/permisos")
+def crear_permiso(
+    body: PermisoIn,
+    user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """Crea una solicitud.
+
+    Sin `empleado_id` la crea para uno mismo (autoservicio). Pedirla a nombre
+    de otro exige permiso de modificar — es la vía para que Talento Humano
+    registre el permiso de quien no tiene login.
+    """
+    try:
+        if body.empleado_id:
+            if not tiene_permiso(user, "personal_permisos", "modificar"):
+                raise HTTPException(403, "no_puedes_solicitar_a_nombre_de_otro")
+            empleado_id = body.empleado_id
+        else:
+            empleado_id = empleado_actual(user)["id"]
+
+        return {"ok": True, "permiso": perm_svc.crear(
+            empleado_id=empleado_id, tipo_permiso_id=body.tipo_permiso_id,
+            inicio=_instante(body.inicio), fin=_instante(body.fin),
+            motivo=body.motivo, archivo_soporte=body.archivo_soporte,
+            notas_cobertura=body.notas_cobertura, actor=user.email,
+            enviar=body.enviar)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _error("crear_permiso", e)
+
+
+def _instante(txt: str) -> datetime:
+    from backend.core.timeutils import parse_iso
+    try:
+        return parse_iso(txt).replace(tzinfo=None)
+    except Exception:
+        raise HTTPException(400, f"fecha_hora_invalida:{txt}")
+
+
+@router.post("/permisos/{permiso_id}/enviar")
+def enviar_permiso(permiso_id: str,
+                   user: CurrentUser = Depends(get_current_user)) -> dict:
+    try:
+        _solo_propio_o_con_permiso(user, permiso_id)
+        return {"ok": True, "permiso": perm_svc.enviar(permiso_id, actor=user.email)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _error("enviar_permiso", e)
+
+
+@router.post("/permisos/{permiso_id}/aprobar-jefe")
+def aprobar_jefe(
+    permiso_id: str, body: DecisionBody,
+    user: CurrentUser = Depends(require_permission("personal_permisos", "modificar")),
+) -> dict:
+    """El jefe evalúa la AFECTACIÓN OPERATIVA, no la clasificación."""
+    try:
+        return {"ok": True, "permiso": perm_svc.aprobar_jefe(
+            permiso_id, actor=user.email, notas=body.notas or "")}
+    except Exception as e:
+        raise _error("aprobar_jefe", e)
+
+
+@router.post("/permisos/{permiso_id}/rechazar-jefe")
+def rechazar_jefe(
+    permiso_id: str, body: DecisionBody,
+    user: CurrentUser = Depends(require_permission("personal_permisos", "modificar")),
+) -> dict:
+    try:
+        return {"ok": True, "permiso": perm_svc.rechazar_jefe(
+            permiso_id, actor=user.email, notas=body.notas or "")}
+    except Exception as e:
+        raise _error("rechazar_jefe", e)
+
+
+@router.post("/permisos/{permiso_id}/aprobar-th")
+def aprobar_th(
+    permiso_id: str, body: DecisionBody,
+    user: CurrentUser = Depends(require_permission("personal_permisos", "modificar")),
+) -> dict:
+    """Talento Humano valida la CLASIFICACIÓN y puede reclasificar."""
+    try:
+        return {"ok": True, "permiso": perm_svc.aprobar_th(
+            permiso_id, actor=user.email,
+            clasificacion_final=body.clasificacion_final, notas=body.notas or "")}
+    except Exception as e:
+        raise _error("aprobar_th", e)
+
+
+@router.post("/permisos/{permiso_id}/rechazar-th")
+def rechazar_th(
+    permiso_id: str, body: DecisionBody,
+    user: CurrentUser = Depends(require_permission("personal_permisos", "modificar")),
+) -> dict:
+    try:
+        return {"ok": True, "permiso": perm_svc.rechazar_th(
+            permiso_id, actor=user.email, notas=body.notas or "")}
+    except Exception as e:
+        raise _error("rechazar_th", e)
+
+
+@router.post("/permisos/{permiso_id}/cancelar")
+def cancelar_permiso(permiso_id: str, body: DecisionBody,
+                     user: CurrentUser = Depends(get_current_user)) -> dict:
+    try:
+        _solo_propio_o_con_permiso(user, permiso_id)
+        return {"ok": True, "permiso": perm_svc.cancelar(
+            permiso_id, actor=user.email, motivo=body.notas or "")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _error("cancelar_permiso", e)
+
+
+def _solo_propio_o_con_permiso(user: CurrentUser, permiso_id: str) -> dict:
+    """Un empleado puede mover SUS solicitudes; para las ajenas hace falta rol."""
+    p = perm_svc.obtener(permiso_id)
+    if not p:
+        raise HTTPException(404, "permiso_no_existe")
+    if tiene_permiso(user, "personal_permisos", "modificar"):
+        return p
+    yo = emp_svc.obtener_por_usuario(user.id)
+    if not yo or yo["id"] != p["empleado_id"]:
+        raise HTTPException(403, "solo_puedes_gestionar_tus_propias_solicitudes")
+    return p
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# COMPENSACIONES
+# ═══════════════════════════════════════════════════════════════════════
+
+class BloqueIn(BaseModel):
+    inicio: str
+    fin:    str
+
+
+class BloquesBody(BaseModel):
+    bloques: list[BloqueIn] = Field(min_length=1, max_length=30)
+
+
+@router.get("/compensaciones")
+def listar_compensaciones(
+    estado: Optional[str] = None,
+    empleado_id: Optional[str] = None,
+    user: CurrentUser = Depends(require_permission("personal_permisos", "ver")),
+) -> dict:
+    try:
+        alcance = emp_svc.alcance_empleados(user)
+        planes = perm_svc.listar_planes(empleado_id=empleado_id, estado=estado)
+        if alcance is not None:
+            permitidos = set(alcance)
+            planes = [p for p in planes if p.get("empleado_id") in permitidos]
+        return {"planes": planes, "total": len(planes)}
+    except Exception as e:
+        raise _error("listar_compensaciones", e)
+
+
+@router.post("/compensaciones/{plan_id}/bloques")
+def programar_bloques(
+    plan_id: str, body: BloquesBody,
+    user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """Programa cuándo se repone. Programar no compensa: solo cuenta lo que
+    después confirmen las marcaciones reales."""
+    try:
+        bloques = [{"inicio": _instante(b.inicio), "fin": _instante(b.fin)}
+                   for b in body.bloques]
+        return {"ok": True, "bloques": perm_svc.programar_bloques(
+            plan_id, bloques, actor=user.email)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _error("programar_bloques", e)
+
+
+@router.post("/compensaciones/{plan_id}/validar")
+def validar_compensacion(
+    plan_id: str,
+    user: CurrentUser = Depends(require_permission("personal_permisos", "modificar")),
+) -> dict:
+    """Confronta lo programado con lo realmente trabajado y acredita el libro."""
+    try:
+        return {"ok": True, "plan": perm_svc.validar_compensacion(
+            plan_id, actor=user.email)}
+    except Exception as e:
+        raise _error("validar_compensacion", e)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# MI TIEMPO — saldo y extracto
+# ═══════════════════════════════════════════════════════════════════════
+
+@router.get("/mi-tiempo/saldo")
+def mi_saldo(yo: dict = Depends(empleado_actual)) -> dict:
+    """Extracto del libro de tiempo. Solo lectura: el saldo no se edita."""
+    return libro_svc.extracto(yo["id"])
+
+
+@router.get("/mi-tiempo/historial")
+def mi_historial(
+    desde: Optional[str] = None, hasta: Optional[str] = None,
+    limit: int = Query(60, ge=1, le=400),
+    yo: dict = Depends(empleado_actual),
+) -> dict:
+    return {"jornadas": asis_svc.listar(empleado_id=yo["id"], desde=desde,
+                                        hasta=hasta, limit=limit)}
+
+
+@router.get("/mi-tiempo/permisos")
+def mis_permisos(yo: dict = Depends(empleado_actual)) -> dict:
+    return {"permisos": perm_svc.listar(empleado_id=yo["id"], limit=200)}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# INCIDENCIAS
+# ═══════════════════════════════════════════════════════════════════════
+
+@router.get("/incidencias")
+def listar_incidencias(
+    estado: Optional[str] = None,
+    tipo: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=1000),
+    user: CurrentUser = Depends(require_permission("personal_asistencia", "ver")),
+) -> dict:
+    from backend.services.personal_base import _sb
+    sb = _sb()
+    if sb is None:
+        return {"incidencias": []}
+    try:
+        q = sb.table("personal_incidencias").select("*")
+        if estado:
+            q = q.eq("estado", estado)
+        if tipo:
+            q = q.eq("tipo_incidencia", tipo)
+        filas = (q.order("detectada_at", desc=True).limit(limit).execute().data) or []
+        alcance = emp_svc.alcance_empleados(user)
+        if alcance is not None:
+            permitidos = set(alcance)
+            filas = [f for f in filas
+                     if not f.get("empleado_id") or f["empleado_id"] in permitidos]
+        return {"incidencias": filas, "total": len(filas)}
+    except Exception as e:
+        raise _error("listar_incidencias", e)
 
 
 # ═══════════════════════════════════════════════════════════════════════
