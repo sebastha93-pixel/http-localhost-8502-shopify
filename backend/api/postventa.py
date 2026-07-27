@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from backend.core.security import CurrentUser, require_permission
 from backend.services import postventa as svc
 from backend.services import postventa_siigo as siigo_svc
+from backend.services import postventa_shopify as shopify_svc
 from backend.services import postventa_fiscal as fiscal_svc
 
 router = APIRouter(prefix="/api/postventa", tags=["postventa"])
@@ -190,3 +191,12 @@ def items(case_id: str,
           _: CurrentUser = Depends(require_permission("postventa", "ver"))):
     """Items del caso (lo que se devuelve y su reemplazo)."""
     return svc.items_caso(case_id)
+
+
+@router.get("/shopify/discovery")
+def shopify_discovery(
+    _: CurrentUser = Depends(require_permission("postventa", "modificar")),
+):
+    """Que permisos tiene el token de Shopify: si puede descontar ventas,
+    registrar retornos o reservar inventario. Solo lectura."""
+    return shopify_svc.diagnostico()
