@@ -344,9 +344,19 @@ el servidor para los reportes de nómina con formato.
 
 ## 9. Feature flags
 
-| Flag | Default | Controla |
+| Flag | Dónde | Default | Controla |
+|---|---|---|---|
+| `TIME_MANAGEMENT_ENABLED` | Railway | `false` | Router, servicios y crons del backend |
+| `NEXT_PUBLIC_TIME_MANAGEMENT_ENABLED` | Vercel | `false` | Grupo "Personal" del menú |
+
+> **Dos flags, no uno.** Backend y frontend son despliegues distintos, así que
+> el flag de Railway no alcanza al menú de Vercel. Hace falta el par porque
+> "Mi tiempo" no exige permiso —es el autoservicio— y sin el gate del frontend
+> le aparecería a todo el mundo apuntando a una página que aún no existe.
+> **Se activan juntos, y solo cuando las páginas de la Fase 5 estén desplegadas.**
+
+| Flag adicional | Default | Controla |
 |---|---|---|
-| `TIME_MANAGEMENT_ENABLED` | `false` | Todo el módulo: router, menú, crons |
 | `DAHUA_CONNECTOR_ENABLED` | `false` | Endpoints de ingesta |
 | `PAYROLL_EXPORT_ENABLED` | `false` | Exportación a nómina |
 | `TIME_MANAGEMENT_AI_INSIGHTS_ENABLED` | `false` | Hallazgos descriptivos |

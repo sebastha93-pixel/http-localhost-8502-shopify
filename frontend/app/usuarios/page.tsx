@@ -216,6 +216,11 @@ function PermisosMatrix({
   const SUBMODULOS: Record<string, string[]> = {
     produccion: ["produccion", "produccion_ingreso", "produccion_corte",
                  "produccion_remisiones", "produccion_proveedores"],
+    // Personal necesita desglose fino: el jefe solo lleva `personal_permisos`,
+    // el técnico solo `personal_dispositivos`, y nómina solo `personal_nomina`.
+    // Dar el grupo entero a cualquiera de ellos sería sobre-otorgar.
+    personal: ["personal", "personal_asistencia", "personal_permisos",
+               "personal_dispositivos", "personal_nomina", "personal_config"],
   };
 
   function setKey(key: string, acciones: string[]) {

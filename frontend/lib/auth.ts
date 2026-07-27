@@ -57,6 +57,10 @@ export const GRUPOS_PERMISOS = {
                    "produccion_remisiones", "produccion_proveedores",
                    "produccion_cortador"],
   produccion_costos: ["produccion_costos"],
+  // Módulo Personal. Ojo: el autoservicio /personal/mi-tiempo NO está aquí —
+  // no requiere permiso de módulo, lo tiene todo empleado con login.
+  personal:       ["personal", "personal_asistencia", "personal_permisos",
+                   "personal_dispositivos", "personal_nomina", "personal_config"],
   configuracion:  ["configuracion", "usuarios", "auditoria"],
 } as const;
 
@@ -70,6 +74,7 @@ export const GRUPO_LABEL: Record<string, string> = {
   comercial:      "Comercial (ventas, revenue, inteligencia)",
   produccion:     "Producción",
   produccion_costos: "Producción · COSTOS ($) — sensible",
+  personal:       "Personal (asistencia, permisos, compensaciones, nómina)",
   configuracion:  "Configuración (configuración general, usuarios, auditoría)",
 };
 
@@ -106,6 +111,12 @@ export const MODULO_LABEL: Record<string, string> = {
   configuracion: "Configuración",
   usuarios: "Usuarios",
   auditoria: "Auditoría",
+  personal:              "Dashboard, empleados y reportes",
+  personal_asistencia:   "Jornadas, incidencias y correcciones",
+  personal_permisos:     "Permisos, compensaciones y horas extras",
+  personal_dispositivos: "Dispositivos Dahua y conector (datos técnicos)",
+  personal_nomina:       "Novedades de nómina y cierres de periodo",
+  personal_config:       "Horarios, turnos y reglas laborales",
 };
 
 export const ACCIONES = ["ver", "modificar", "borrar"] as const;

@@ -90,6 +90,27 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    // Módulo Personal. "Mi tiempo" va primero y SIN permiso: es el
+    // autoservicio, lo ve todo empleado con login. Si alguien no tiene
+    // ningún permiso del módulo, este es el único item que verá.
+    title: "Personal",
+    items: [
+      { label: "Mi tiempo",      href: "/personal/mi-tiempo",                                    desc: "Tu jornada, permisos y saldo" },
+      { label: "Dashboard",      href: "/personal",              permiso: "personal",            desc: "Asistencia del día y tendencias" },
+      { label: "Empleados",      href: "/personal/empleados",    permiso: "personal",            desc: "Fichas, áreas y jerarquía" },
+      { label: "Asistencia",     href: "/personal/asistencia",   permiso: "personal_asistencia", desc: "Jornadas calculadas por día" },
+      { label: "Permisos",       href: "/personal/permisos",     permiso: "personal_permisos",   desc: "Solicitudes y aprobaciones" },
+      { label: "Compensaciones", href: "/personal/compensaciones", permiso: "personal_permisos", desc: "Tiempo por reponer" },
+      { label: "Horas extras",   href: "/personal/extras",       permiso: "personal_permisos",   desc: "Autorización y seguimiento" },
+      { label: "Incidencias",    href: "/personal/incidencias",  permiso: "personal_asistencia", desc: "Marcaciones incompletas" },
+      { label: "Horarios",       href: "/personal/horarios",     permiso: "personal_config",     desc: "Jornadas y turnos" },
+      { label: "Calendario",     href: "/personal/calendario",   permiso: "personal|personal_permisos", desc: "Vista mensual del equipo" },
+      { label: "Novedades",      href: "/personal/nomina",       permiso: "personal_nomina",     desc: "Para nómina, con revisión" },
+      { label: "Dispositivos",   href: "/personal/dispositivos", permiso: "personal_dispositivos", desc: "Dahua y estado del conector" },
+      { label: "Reportes",       href: "/personal/reportes",     permiso: "personal",            desc: "Puntualidad, ausentismo, permisos" },
+    ],
+  },
+  {
     title: "Configuración",
     items: [
       { label: "Usuarios",            href: "/usuarios",            desc: "Cuentas y permisos" },
@@ -101,6 +122,25 @@ export const NAV_GROUPS: NavGroup[] = [
 
 type UserLike = Pick<User, "rol" | "permisos"> | null | undefined;
 
+/**
+ * Grupos detrás de feature flag.
+ *
+ * El flag del backend (TIME_MANAGEMENT_ENABLED) decide si el API existe, pero
+ * NO alcanza al menú: el frontend es otro despliegue. Sin este gate, "Mi
+ * tiempo" —que a propósito no exige permiso, porque es el autoservicio— le
+ * saldría a TODO el mundo apuntando a una página que aún no existe.
+ *
+ * Poner NEXT_PUBLIC_TIME_MANAGEMENT_ENABLED=true en Vercel cuando las páginas
+ * estén desplegadas (Fase 5). Debe activarse junto con el flag del backend.
+ */
+const GRUPOS_CON_FLAG: Record<string, boolean> = {
+  Personal: process.env.NEXT_PUBLIC_TIME_MANAGEMENT_ENABLED === "true",
+};
+
+export function grupoHabilitado(titulo: string): boolean {
+  return GRUPOS_CON_FLAG[titulo] ?? true;
+}
+
 export function itemVisible(user: UserLike, it: NavItem): boolean {
   if (ADMIN_ONLY.includes(it.href)) return esAdmin(user as User);
   if (COSTOS_ONLY.includes(it.href)) return puedeVerCostosProduccion(user);
@@ -111,6 +151,7 @@ export function itemVisible(user: UserLike, it: NavItem): boolean {
 /** Grupos con solo los links que el usuario puede ver (vacíos se eliminan). */
 export function gruposVisibles(user: UserLike): NavGroup[] {
   return NAV_GROUPS
+    .filter((g) => grupoHabilitado(g.title))
     .map((g) => ({ ...g, items: g.items.filter((it) => itemVisible(user, it)) }))
     .filter((g) => g.items.length > 0);
 }

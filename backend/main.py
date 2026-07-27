@@ -25,6 +25,7 @@ from backend.core.security import hash_password
 from backend.core import scheduler
 from backend.core import bot_scheduler
 from backend.core import revenue_scheduler
+from backend.core import flags
 
 
 # ── Lifespan: bootstrap / cleanup ─────────────────────────────────────────────
@@ -272,6 +273,15 @@ app.include_router(produccion.router)
 app.include_router(produccion.publico)  # rutas públicas /api/publico/lote/:token
 app.include_router(postventa.router)
 app.include_router(whatsapp.router)
+
+# ── Módulo Personal (tiempo, asistencia y permisos) ───────────────────────────
+# Detrás de feature flag: con TIME_MANAGEMENT_ENABLED apagado el router ni
+# siquiera se registra, así que el módulo no existe para nadie. El flag se
+# evalúa una sola vez aquí, en el boot — cambiarlo exige redeploy.
+if flags.personal_habilitado():
+    from backend.api import personal as personal_api
+    app.include_router(personal_api.router)
+    print("   👥 Módulo Personal ACTIVO (TIME_MANAGEMENT_ENABLED=true)")
 
 
 @app.get("/", include_in_schema=False)

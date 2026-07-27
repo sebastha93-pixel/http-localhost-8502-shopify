@@ -65,6 +65,12 @@ MODULOS_GRUPOS = {
                        "produccion_remisiones", "produccion_proveedores",
                        "produccion_cortador"],
     "produccion_costos": ["produccion_costos"],
+    # Módulo Personal (tiempo, asistencia y permisos). Nota: el autoservicio
+    # /personal/mi-tiempo NO requiere ninguno de estos permisos — lo tiene todo
+    # empleado con login, y se aísla por dato (empleado_id sale del JWT).
+    "personal":       ["personal", "personal_asistencia", "personal_permisos",
+                       "personal_dispositivos", "personal_nomina",
+                       "personal_config"],
     "configuracion":  ["configuracion", "usuarios", "auditoria"],
 }
 
