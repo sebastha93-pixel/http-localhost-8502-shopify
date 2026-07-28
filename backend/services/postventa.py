@@ -71,7 +71,8 @@ def crear_caso(*, tipo: str, reason: str, customer_email: str = "",
                customer_phone: str = "", customer_name: str = "",
                shopify_order_id: str = "", shopify_order_name: str = "",
                subreason: str = "", priority: str = "media",
-               source: str = "interno",
+               source: str = "interno", tienda: str = "",
+               pago_excedente_id: Optional[int] = None,
                assigned_to: Optional[str] = None) -> dict:
     """Crea un caso de postventa. Agnóstico a la puerta de entrada (source)."""
     if not L.validar_tipo(tipo):
@@ -102,6 +103,10 @@ def crear_caso(*, tipo: str, reason: str, customer_email: str = "",
         "subreason": subreason or None,
         "priority": priority,
         "source": source,
+        # tienda vacía = caso online. Con tienda, el cambio se atiende en el
+        # punto físico: la prenda entra a su bodega y factura con su prefijo.
+        "tienda": (tienda or "").strip().lower() or None,
+        "pago_excedente_id": pago_excedente_id,
         "assigned_to": assigned_to,
     }
     r = sb.table("postventa_cases").insert(data).execute()
