@@ -167,6 +167,7 @@ class EmpleadoIn(BaseModel):
     usuario_id:        Optional[str] = None
     tipo_contrato:     str = "termino_indefinido"
     sujeto_a_jornada:  bool = True
+    rota_entre_sedes:  bool = False
 
 
 class EmpleadoPatch(BaseModel):
@@ -181,6 +182,7 @@ class EmpleadoPatch(BaseModel):
     estado_laboral:   Optional[str] = None
     fecha_retiro:     Optional[str] = None
     sujeto_a_jornada: Optional[bool] = None
+    rota_entre_sedes: Optional[bool] = None
 
 
 class VincularUsuarioBody(BaseModel):

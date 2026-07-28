@@ -51,15 +51,23 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _COLS = ("id,codigo_empleado,usuario_id,tipo_documento,numero_documento,"
          "nombre_completo,email,telefono,area_id,sede_id,cargo,supervisor_id,"
          "tipo_contrato,estado_laboral,fecha_ingreso,fecha_retiro,"
-         "sujeto_a_jornada,consentimiento_datos_at,created_at,updated_at")
+         "sujeto_a_jornada,rota_entre_sedes,consentimiento_datos_at,"
+         "created_at,updated_at")
 
 # Campos que un PATCH puede tocar. Todo lo demás se ignora en silencio —
 # whitelist explícita, igual que actualizar_ruta_lote en produccion.py.
+#
+# OJO al agregar una columna nueva a la tabla: hay que sumarla AQUÍ y en
+# _COLS, o se descarta sin error y el campo nunca se guarda ni se lee.
+# Pasó con `rota_entre_sedes`: la migración multisede creó la columna pero
+# el servicio la ignoraba, así que el caso de la supernumeraria —marcar en
+# dos tiendas— quedaba roto en silencio. Lo cubre test_campos_de_la_tabla.
 _CAMPOS_EDITABLES = frozenset({
     "nombre_completo", "email", "telefono", "area_id", "sede_id", "cargo",
     "supervisor_id", "tipo_contrato", "estado_laboral", "fecha_retiro",
-    "sujeto_a_jornada", "consentimiento_datos_at", "consentimiento_documento",
-    "tipo_documento", "numero_documento", "usuario_id",
+    "sujeto_a_jornada", "rota_entre_sedes", "consentimiento_datos_at",
+    "consentimiento_documento", "tipo_documento", "numero_documento",
+    "usuario_id",
 })
 
 

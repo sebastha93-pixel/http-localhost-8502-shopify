@@ -235,3 +235,73 @@ def test_listar_sin_tabla_devuelve_vacio(monkeypatch):
 
     monkeypatch.setattr(svc, "_sb", lambda: SinTabla())
     assert svc.listar() == []
+
+
+# ── Guarda contra columnas olvidadas ─────────────────────────────────────────
+
+def test_campos_de_la_tabla_estan_en_el_servicio():
+    """Toda columna de personal_empleados debe leerse y poder editarse.
+
+    Este test nace de un bug real: la migración multisede agregó
+    `rota_entre_sedes` pero nadie la sumó a _COLS ni a _CAMPOS_EDITABLES, así
+    que el servicio la descartaba EN SILENCIO. La supernumeraria que marca en
+    dos tiendas quedaba sin su bandera y su caso entero se rompía sin error.
+
+    Si mañana una migración agrega otra columna, esto falla y obliga a
+    decidir: ¿se expone, o se ignora a propósito?
+    """
+    import pathlib
+    import re
+
+    raiz = pathlib.Path(__file__).parent.parent
+    sql = (raiz / "SUPABASE_MIGRATION_PERSONAL.sql").read_text()
+    extra = (raiz / "SUPABASE_MIGRATION_PERSONAL_MULTISEDE.sql").read_text()
+
+    bloque = sql.split("CREATE TABLE IF NOT EXISTS personal_empleados (")[1]
+    bloque = bloque.split(");")[0]
+    columnas = set()
+    for linea in bloque.splitlines():
+        linea = linea.strip()
+        if not linea or linea.startswith(("--", "CHECK", "CONSTRAINT", "UNIQUE")):
+            continue
+        m = re.match(r"^([a-z_][a-z0-9_]*)\s+[A-Z]", linea)
+        if m:
+            columnas.add(m.group(1))
+    # Columnas añadidas por migraciones posteriores a la misma tabla
+    for m in re.finditer(
+            r"ALTER TABLE personal_empleados\s+ADD COLUMN IF NOT EXISTS (\w+)", extra):
+        columnas.add(m.group(1))
+
+    # Gestionadas por el sistema, no por el usuario: no se editan a mano.
+    DEL_SISTEMA = {"id", "created_at", "updated_at", "codigo_empleado",
+                   "fecha_ingreso"}
+
+    leidas = set(svc._COLS.split(","))
+    sin_leer = columnas - leidas - DEL_SISTEMA - {"consentimiento_documento"}
+    assert not sin_leer, f"columnas que el servicio NO lee: {sorted(sin_leer)}"
+
+    sin_editar = columnas - svc._CAMPOS_EDITABLES - DEL_SISTEMA
+    assert not sin_editar, f"columnas que NO se pueden editar: {sorted(sin_editar)}"
+
+
+def test_rota_entre_sedes_se_puede_actualizar(monkeypatch):
+    """El caso concreto que se rompió: la bandera de la supernumeraria."""
+    guardado = {}
+
+    class FakeSB:
+        def table(self, n): return self
+        def update(self, d):
+            guardado.update(d); self._p = d; return self
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def limit(self, *a, **k): return self
+        def execute(self):
+            r = MagicMock(); r.data = [{"id": "E1", **guardado}]; return r
+
+    monkeypatch.setattr(svc, "obtener", lambda i: _emp("E1"))
+    monkeypatch.setattr(svc, "sb_requerido", lambda: FakeSB())
+    monkeypatch.setattr(svc.aud, "registrar_cambio", lambda **k: None)
+
+    svc.actualizar("E1", rota_entre_sedes=True)
+    assert guardado.get("rota_entre_sedes") is True, \
+        "rota_entre_sedes se descartó: revisa _CAMPOS_EDITABLES"
