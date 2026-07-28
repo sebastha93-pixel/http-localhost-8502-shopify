@@ -92,9 +92,11 @@ def _persistir_datos_cliente_en_overrides() -> None:
         if ov and ov.get("nombre_comprador") and ov.get("telefono_comprador"):
             continue
         try:
+            # `or None` = "no toques este campo si vino vacío". Sin esto, un
+            # pedido que solo trae nombre BORRABA teléfono y ciudad.
             overrides_svc.upsert(
-                orden, nombre=nombre, telefono=tel, ciudad=ciu,
-                autor="auto-enrich",
+                orden, nombre=nombre or None, telefono=tel or None,
+                ciudad=ciu or None, autor="auto-enrich",
             )
             persistidos += 1
         except Exception:

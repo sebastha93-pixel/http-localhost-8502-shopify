@@ -332,9 +332,11 @@ def enriquecer_faltantes_endpoint(
             if not orden:
                 continue
             try:
+                # `or None` = "no toques este campo si vino vacío". Sin esto,
+                # un pedido que solo trae nombre BORRABA teléfono y ciudad.
                 overrides_svc.upsert(
-                    orden, nombre=nombre, telefono=tel, ciudad=ciu,
-                    autor="auto-enrich",
+                    orden, nombre=nombre or None, telefono=tel or None,
+                    ciudad=ciu or None, autor="auto-enrich",
                 )
             except Exception:
                 pass  # no bloquear si Supabase falla

@@ -74,26 +74,40 @@ def obtener(orden: str) -> Optional[dict]:
 def upsert(
     orden: str,
     *,
-    nombre: str = "",
-    telefono: str = "",
-    ciudad: str = "",
+    nombre: Optional[str] = None,
+    telefono: Optional[str] = None,
+    ciudad: Optional[str] = None,
     autor: str,
     novedad_manual: Optional[bool] = None,
     motivo_novedad: str = "",
     carrier_real: Optional[str] = None,
     guia_real: Optional[str] = None,
 ) -> dict:
+    """Crea/actualiza el override de un pedido.
+
+    OJO — REGLA DE ORO: solo se escriben los campos que el llamador PASA.
+    Antes nombre/telefono/ciudad tenían default "" y se mandaban SIEMPRE, así
+    que `"".strip() or None` los ponía en NULL: marcar una novedad o guardar
+    una guía BORRABA el nombre, el teléfono y la ciudad del pedido. Con el bot
+    corriendo en cron eso arrasó con los datos de contacto de cientos de
+    pedidos (2026-07-27). Ahora:
+      - no pasar el campo  -> no se toca
+      - pasar "" (vacío)   -> se borra a propósito (edición manual)
+    """
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
     data: dict = {
-        "orden":              orden,
-        "nombre_comprador":   nombre.strip() or None,
-        "telefono_comprador": telefono.strip() or None,
-        "ciudad_destino":     (ciudad or "").upper().strip() or None,
-        "autor":              autor,
-        "actualizado_en":     datetime.now(timezone.utc).isoformat(),
+        "orden":          orden,
+        "autor":          autor,
+        "actualizado_en": datetime.now(timezone.utc).isoformat(),
     }
+    if nombre is not None:
+        data["nombre_comprador"] = nombre.strip() or None
+    if telefono is not None:
+        data["telefono_comprador"] = telefono.strip() or None
+    if ciudad is not None:
+        data["ciudad_destino"] = ciudad.upper().strip() or None
     if novedad_manual is not None:
         data["novedad_manual"] = novedad_manual
         data["motivo_novedad"] = motivo_novedad.strip() or None

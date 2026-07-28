@@ -19,20 +19,40 @@ _TIMEOUT    = 20
 
 
 def _credenciales() -> Optional[tuple]:
-    """Retorna (store, token, version) desde st.secrets o variables de entorno."""
-    try:
-        import streamlit as st
-        store   = st.secrets.get("SHOPIFY_STORE")
-        token   = st.secrets.get("SHOPIFY_ACCESS_TOKEN")
-        version = st.secrets.get("SHOPIFY_API_VERSION", "2024-01")
-        if store and token:
-            return store, token, version
-    except Exception:
-        pass
+    """Retorna (store, token, version).
+
+    OJO: este enricher era el ÚNICO consumidor de Shopify del OS que leía
+    SHOPIFY_ACCESS_TOKEN crudo. Desde enero-2026 Shopify ya no emite tokens
+    permanentes (shpat_): las apps nuevas dan CLIENT_ID + SECRET y hay que
+    canjearlos por un token que CADUCA A LAS 24 HORAS. Por eso, cuando ese
+    token vencía, el enriquecimiento moría en silencio y los pedidos quedaban
+    sin cliente/ciudad/producto. Ahora pide el token vigente a shopify_auth
+    (que lo renueva solo) y solo cae al legacy si no hay app configurada.
+    """
     import os
-    store   = os.getenv("SHOPIFY_STORE")
-    token   = os.getenv("SHOPIFY_ACCESS_TOKEN")
     version = os.getenv("SHOPIFY_API_VERSION", "2024-01")
+    store   = os.getenv("SHOPIFY_STORE")
+    token   = ""
+
+    # 1) Modelo nuevo: token renovable de 24h (client_credentials).
+    try:
+        from backend.services import shopify_auth
+        token = shopify_auth.token() or ""
+    except Exception as e:
+        log.debug(f"Shopify: shopify_auth no disponible ({e}); uso el legacy")
+
+    # 2) Legacy / entorno Streamlit (scripts sueltos).
+    if not token:
+        try:
+            import streamlit as st
+            store = store or st.secrets.get("SHOPIFY_STORE")
+            token = st.secrets.get("SHOPIFY_ACCESS_TOKEN") or ""
+            version = st.secrets.get("SHOPIFY_API_VERSION", version)
+        except Exception:
+            pass
+    if not token:
+        token = os.getenv("SHOPIFY_ACCESS_TOKEN") or ""
+
     if store and token:
         return store, token, version
     return None
