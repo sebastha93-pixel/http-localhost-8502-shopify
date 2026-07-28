@@ -1204,6 +1204,37 @@ def obtener_precosteo(precosteo_id: str) -> Optional[dict]:
     return {**ref[0], "items": items}
 
 
+def _asegurar_bucket(sb, bucket: str) -> None:
+    """Crea el bucket de Storage si todavía no existe. Idempotente.
+
+    El código siempre asumió que 'produccion-fotos' ya estaba creado a mano en
+    Supabase, y nunca lo estuvo: subir una foto moría con
+    {'statusCode': 404, 'error': 'Bucket not found'}.
+
+    Se crea PÚBLICO de lectura porque es lo que exige el resto del flujo:
+    guardamos `get_public_url(path)` en referencias_precosteo.foto_url y el
+    frontend pinta esa URL directo. Con bucket privado esa URL da 400 — para
+    tener el bucket privado habría que pasar a URLs firmadas (que expiran) y
+    dejar de persistir la URL en la tabla.
+    """
+    try:
+        sb.storage.get_bucket(bucket)
+        return                      # ya existe, nada que hacer
+    except Exception:
+        pass                        # no existe (o no se pudo consultar) → intentar crear
+    try:
+        sb.storage.create_bucket(bucket, options={"public": True})
+        print(f"[produccion] bucket '{bucket}' creado (público de lectura)")
+    except Exception as e:
+        msg = str(e).lower()
+        # Carrera entre workers de Uvicorn: otro lo creó primero. Está bien.
+        if "already exists" in msg or "duplicate" in msg or "resource_already" in msg:
+            return
+        raise RuntimeError(
+            f"no se pudo crear el bucket '{bucket}' en Supabase Storage: {str(e)[:160]}"
+        )
+
+
 def subir_foto_precosteo(precosteo_id: str, *, file_bytes: bytes, filename: str,
                          content_type: str, usuario_id: Optional[str] = None) -> str:
     """Sube la foto de la referencia a Supabase Storage bucket 'produccion-fotos'
@@ -1225,6 +1256,7 @@ def subir_foto_precosteo(precosteo_id: str, *, file_bytes: bytes, filename: str,
         raise ValueError("formato_imagen_no_soportado")
     path = f"{precosteo_id}/foto.{ext}"
     bucket = "produccion-fotos"
+    _asegurar_bucket(sb, bucket)
     try:
         # Upsert por si ya existía
         try:

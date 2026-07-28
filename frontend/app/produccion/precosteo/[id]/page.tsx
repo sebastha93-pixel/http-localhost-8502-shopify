@@ -217,7 +217,21 @@ export default function PrecosteoDetallePage() {
         headers: { Authorization: `Bearer ${token}` },
         body: fd,
       });
-      if (!res.ok) throw new Error((await res.text()).slice(0, 150));
+      if (!res.ok) {
+        // Sacar el `detail` del error en vez de volcar el JSON crudo en
+        // pantalla (antes se veía literal: {"detail":"foto: subir_foto: …"}).
+        const cuerpo = await res.text();
+        let detalle = cuerpo;
+        try {
+          const j = JSON.parse(cuerpo) as { detail?: unknown };
+          if (j?.detail) {
+            detalle = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+          }
+        } catch {
+          /* no era JSON — mostramos el texto tal cual */
+        }
+        throw new Error(detalle.slice(0, 200) || `HTTP ${res.status}`);
+      }
       setMsg("Foto subida.");
       qc.invalidateQueries({ queryKey: ["produccion", "precosteo"] });
     } catch (e: any) {
