@@ -117,3 +117,36 @@ def test_payload_nc_sku_inexistente_falla():
         F.construir_payload_nota_credito(
             factura=FACTURA, skus_a_acreditar=["NO-EXISTE"],
             modo="prueba", fecha="2026-07-07")
+
+
+# ── La DIAN debe haber aceptado la factura ───────────────────────────
+def test_factura_aceptada_por_la_dian():
+    assert F.factura_aceptada_dian({"stamp": {"status": "Accepted"}}) is True
+    assert F.factura_aceptada_dian({"stamp": {"status": "accepted"}}) is True
+
+
+def test_factura_en_proceso_no_admite_nota_credito():
+    # Las ventas del día están en validación: Siigo las rechaza.
+    assert F.factura_aceptada_dian({"stamp": {"status": "InProcess"}}) is False
+    assert F.factura_aceptada_dian({"stamp": {"status": "Rejected"}}) is False
+
+
+def test_factura_sin_stamp_no_es_electronica():
+    # Sin sello no aplica la restricción (documento no electrónico).
+    assert F.factura_aceptada_dian({"name": "FV-11-1121"}) is True
+
+
+def test_payload_nc_rechaza_factura_no_aceptada():
+    factura = {**FACTURA, "stamp": {"status": "InProcess"}}
+    with pytest.raises(ValueError, match="factura_no_aceptada_dian"):
+        F.construir_payload_nota_credito(
+            factura=factura, skus_a_acreditar=["REF-10-M"],
+            modo="prueba", fecha="2026-07-27")
+
+
+def test_motivo_es_legible_para_el_equipo():
+    m = F.motivo_factura_no_apta({"name": "FV-1-64200",
+                                  "stamp": {"status": "InProcess"}})
+    assert "FV-1-64200" in m
+    assert "DIAN" in m
+    assert "horas" in m          # dice qué hacer: esperar

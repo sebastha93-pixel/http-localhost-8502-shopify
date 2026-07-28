@@ -48,13 +48,21 @@ def _pedidos_con_factura(cantidad: int) -> list[dict]:
     if not isinstance(data, dict) or data.get("_error"):
         return []
     pedidos = []
+    descartadas = 0
     for f in data.get("facturas", []):
         num = F.extraer_numero_pedido(f.get("observations") or "")
         if not num:
             continue           # facturas de tienda física: sin pedido Shopify
+        # Solo facturas que la DIAN ya aceptó: a las de hoy no se les puede
+        # hacer nota crédito todavía.
+        if not F.factura_aceptada_dian(f):
+            descartadas += 1
+            continue
         pedidos.append({"numero_pedido": f"#{num}",
                         "factura": f.get("name"),
                         "factura_id": f.get("id")})
+    if descartadas:
+        log.info(f"[banco] {descartadas} facturas descartadas: DIAN no las aceptó aún")
     return pedidos
 
 

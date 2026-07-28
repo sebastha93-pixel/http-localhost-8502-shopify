@@ -86,6 +86,8 @@ def inspeccionar_facturas(limite: int = 3) -> dict:
             "document_id": (inv.get("document") or {}).get("id"),
             "customer_identification": (inv.get("customer") or {}).get("identification"),
             "observations": inv.get("observations"),
+            # Estado DIAN: sin 'Accepted' no se le puede hacer nota crédito.
+            "stamp": inv.get("stamp"),
             # Volcamos las llaves de nivel superior para ubicar dónde podría
             # venir el nº de pedido Shopify sin adivinar.
             "llaves_disponibles": sorted(inv.keys()),

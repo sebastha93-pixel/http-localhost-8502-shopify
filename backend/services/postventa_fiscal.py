@@ -121,6 +121,10 @@ def preview_nota_credito(case_id: str) -> dict:
 
     skus = _skus_del_caso(items)
     modo = fiscal_siigo.modo_actual()
+    # Si la DIAN no ha aceptado la factura, decirlo con claridad en vez de
+    # dejar que Siigo responda un 'invalid_document' que no explica nada.
+    if not F.factura_aceptada_dian(factura):
+        raise ValueError(F.motivo_factura_no_apta(factura))
     payload = F.construir_payload_nota_credito(
         factura=factura, skus_a_acreditar=skus, modo=modo, fecha=_hoy())
 
