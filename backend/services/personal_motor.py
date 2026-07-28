@@ -93,6 +93,9 @@ class Empleado:
     id: str
     sujeto_a_jornada: bool = True
     rota_entre_sedes: bool = False
+    # FALSE = no hay dispositivo que registre sus marcaciones todavía.
+    # Distinto de sujeto_a_jornada, que es exclusión legal.
+    controla_asistencia: bool = True
     sede_id: Optional[str] = None
     estado_laboral: str = "activo"
     fecha_ingreso: Optional[date] = None
@@ -274,6 +277,32 @@ def calcular_jornada(
             incidencias.append(Incidencia(
                 "marcacion_sin_jornada", "alta",
                 "Marcación de un empleado retirado o aún no vinculado."))
+        j.explicacion = " ".join(pasos)
+        j.parametros_usados = _parametros(R)
+        return Resultado(j, [], incidencias)
+
+    # ── Caso: sin dispositivo que registre sus marcaciones ─────────────
+    # Las tiendas todavía no tienen lector. Esas personas SÍ trabajan y SÍ
+    # tienen jornada, pero no hay con qué medirla.
+    #
+    # Sin este corte, cada día suyo saldría "ausente" —una alerta falsa
+    # diaria por persona— y el tablero mostraría un ausentismo que no existe.
+    # Marcar a alguien como ausente cuando el problema es que no hay lector
+    # es peor que no mostrar nada: convierte el tablero en ruido.
+    if not empleado.controla_asistencia:
+        j.estado_asistencia = "sin_datos"
+        j.minutos_esperados = 0
+        pasos.append(
+            "Sin control de acceso: esta sede aún no tiene dispositivo, "
+            "así que no se calcula asistencia. No significa ausencia.")
+        if eventos:
+            # Si llegan marcaciones de alguien marcado como sin control, la
+            # configuración quedó desactualizada — probablemente ya instalaron
+            # el lector y nadie cambió la bandera.
+            incidencias.append(Incidencia(
+                "ajuste_manual_requerido", "media",
+                f"Llegaron {len(eventos)} marcación(es) de un empleado marcado "
+                f"como sin control de asistencia. ¿Ya se instaló el dispositivo?"))
         j.explicacion = " ".join(pasos)
         j.parametros_usados = _parametros(R)
         return Resultado(j, [], incidencias)

@@ -235,6 +235,7 @@ def _empleado(empleado_id: str) -> Optional[motor.Empleado]:
         id=e["id"],
         sujeto_a_jornada=bool(e.get("sujeto_a_jornada", True)),
         rota_entre_sedes=bool(e.get("rota_entre_sedes", False)),
+        controla_asistencia=bool(e.get("controla_asistencia", True)),
         sede_id=e.get("sede_id"),
         estado_laboral=e.get("estado_laboral") or "activo",
         fecha_ingreso=date.fromisoformat(e["fecha_ingreso"][:10]) if e.get("fecha_ingreso") else None,

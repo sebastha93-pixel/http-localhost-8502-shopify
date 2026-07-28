@@ -607,3 +607,61 @@ def test_casos_de_fases_posteriores(caso, fase):
     nadie los dé por probados. Cada uno se implementa en la fase indicada.
     """
     pytest.skip(f"Caso {caso} → se prueba en Fase {fase}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Sedes sin dispositivo de control de acceso
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_sin_dispositivo_no_marca_ausente():
+    """Las tiendas aún no tienen lector. Esa gente SÍ trabaja.
+
+    Sin este corte, cada día suyo saldría 'ausente' —una alerta falsa diaria
+    por persona— y el tablero mostraría un ausentismo que no existe.
+    """
+    e = emp(controla_asistencia=False)
+    r = jornada_normal([], empleado=e)
+    assert r.jornada.estado_asistencia == "sin_datos"
+    assert "falta_entrada" not in r.tipos_incidencia()
+    assert r.jornada.minutos_esperados == 0
+
+
+def test_sin_dispositivo_lo_dice_en_la_explicacion():
+    """Quien lea el detalle debe entender por qué no hay datos."""
+    r = jornada_normal([], empleado=emp(controla_asistencia=False))
+    assert "control de acceso" in r.jornada.explicacion.lower()
+    assert "no significa ausencia" in r.jornada.explicacion.lower()
+
+
+def test_marcacion_inesperada_sin_dispositivo_avisa():
+    """Si llegan marcaciones de alguien 'sin control', la config quedó vieja:
+    probablemente ya instalaron el lector y nadie cambió la bandera."""
+    e = emp(controla_asistencia=False)
+    r = jornada_normal([ev("08:00"), ev("18:00", "salida")], empleado=e)
+    assert "ajuste_manual_requerido" in r.tipos_incidencia()
+
+
+def test_con_dispositivo_si_marca_ausente():
+    """El caso normal no cambia: sin marcaciones y con lector, es ausencia."""
+    r = jornada_normal([], empleado=emp(controla_asistencia=True))
+    assert r.jornada.estado_asistencia == "ausente"
+
+
+def test_sin_control_no_es_lo_mismo_que_no_sujeto_a_jornada():
+    """Son dos conceptos distintos y deben comportarse distinto.
+
+    · sujeto_a_jornada=False  → exclusión LEGAL (CST 162). Trabaja y marca,
+      pero no se le calculan tarde ni extras.
+    · controla_asistencia=False → limitación OPERATIVA. Sí tiene jornada,
+      pero no hay dispositivo que la registre.
+    """
+    legal = jornada_normal([ev("10:00"), ev("21:00", "salida")],
+                           empleado=emp(sujeto_a_jornada=False))
+    operativo = jornada_normal([], empleado=emp(controla_asistencia=False))
+
+    # El excluido legal SÍ acumula tiempo trabajado; solo no se le cobra tarde
+    assert legal.jornada.minutos_trabajados > 0
+    assert legal.jornada.minutos_tarde == 0
+    # El que no tiene lector no acumula nada, porque no hay qué medir
+    assert operativo.jornada.minutos_trabajados == 0
+    assert operativo.jornada.estado_asistencia == "sin_datos"
