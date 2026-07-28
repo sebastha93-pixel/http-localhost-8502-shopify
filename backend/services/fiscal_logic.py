@@ -93,6 +93,34 @@ def _total_con_iva_de_lineas(lineas: list[dict]) -> float:
     return float((subtotal + iva).quantize(Decimal("0.01")))
 
 
+def factura_aceptada_dian(factura: dict) -> bool:
+    """True si la DIAN ya aceptó la factura.
+
+    Una nota crédito ELECTRÓNICA solo puede aplicarse a una factura que la
+    DIAN ya validó. Las ventas del día suelen estar en proceso, y Siigo las
+    rechaza con `invalid_document` en el campo `invoice` — un error que no
+    dice la causa real.
+    """
+    stamp = factura.get("stamp") or {}
+    estado = str(stamp.get("status") or "").strip().lower()
+    # Siigo devuelve "Accepted" cuando la DIAN la validó. Sin stamp (no
+    # electrónica) no aplica esta restricción.
+    if not stamp:
+        return True
+    return estado == "accepted"
+
+
+def motivo_factura_no_apta(factura: dict) -> str:
+    """Explicación legible de por qué no se le puede hacer nota crédito."""
+    stamp = factura.get("stamp") or {}
+    estado = str(stamp.get("status") or "").strip()
+    if not estado:
+        return "la factura no tiene sello DIAN"
+    return (f"la DIAN aún no acepta la factura {factura.get('name', '')} "
+            f"(estado: {estado}). Una nota crédito electrónica solo puede "
+            f"aplicarse a facturas ya validadas — normalmente toma unas horas.")
+
+
 # ── Nota crédito ─────────────────────────────────────────────────────
 def items_factura_por_sku(factura: dict, skus: list[str]) -> list[dict]:
     """Ítems de la factura original cuyo `code` está en `skus`.
@@ -114,6 +142,9 @@ def construir_payload_nota_credito(*, factura: dict, skus_a_acreditar: list[str]
     """
     if not factura or not factura.get("id"):
         raise ValueError("sin_factura_original")
+    # La DIAN debe haber aceptado la factura antes de acreditarla.
+    if not factura_aceptada_dian(factura):
+        raise ValueError("factura_no_aceptada_dian")
     lineas = items_factura_por_sku(factura, skus_a_acreditar)
     if not lineas:
         raise ValueError("items_no_encontrados")
