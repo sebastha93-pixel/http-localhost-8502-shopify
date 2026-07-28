@@ -13,7 +13,7 @@ FACTURA_ONLINE = {
                "taxes": [{"id": 6352}]}],
 }
 
-BODEGA_FLORIDA = 41
+BODEGA_FLORIDA = 5      # confirmada por el fundador
 
 
 # ── La prenda entra a la tienda, no a la bodega online ────────────────
@@ -74,11 +74,11 @@ def test_online_sin_forma_de_pago_usa_cuentas_por_cobrar():
 
 
 # ── Configuración de tiendas ──────────────────────────────────────────
-def test_no_factura_con_ids_adivinados():
-    # Sin document/bodega confirmados, facturar sacaría el prefijo de otro
-    # punto y descuadraría la numeración DIAN.
+def test_no_factura_sin_documento_confirmado():
+    # La bodega ya se conoce, pero sin el documento la factura saldría con el
+    # prefijo de otro punto y descuadraría la numeración DIAN.
     with pytest.raises(ValueError, match="tienda_sin_configurar"):
-        tiendas.validar_para_facturar("florida")
+        tiendas.validar_para_facturar("florida_caja1")
 
 
 def test_tienda_desconocida():
@@ -88,19 +88,34 @@ def test_tienda_desconocida():
 
 def test_config_por_env(monkeypatch):
     monkeypatch.setenv("TIENDAS_JSON",
-                       '{"florida": {"documento_factura_id": 31433, "bodega_id": 41}}')
-    t = tiendas.validar_para_facturar("florida")
+                       '{"florida_caja1": {"documento_factura_id": 31433}}')
+    t = tiendas.validar_para_facturar("florida_caja1")
     assert t["documento_factura_id"] == 31433
-    assert t["bodega_id"] == 41
-    assert t["prefijo_factura"] == "FV-11"       # el default se conserva
+    assert t["bodega_id"] == 5                   # la bodega ya venía por default
+    assert t["prefijo_factura"] == "FV-11"
+
+
+def test_las_dos_cajas_de_florida_comparten_bodega():
+    # Son puntos de cobro distintos (FV-11 / FV-12) de la MISMA tienda: la
+    # prenda entra al mismo inventario sin importar en cuál se atienda.
+    c1 = tiendas.obtener("florida_caja1")
+    c2 = tiendas.obtener("florida_caja2")
+    assert c1["bodega_id"] == c2["bodega_id"] == 5
+    assert c1["prefijo_factura"] != c2["prefijo_factura"]
+    assert c1["tienda"] == c2["tienda"] == "Florida"
+
+
+def test_cada_tienda_tiene_su_bodega():
+    assert tiendas.obtener("arrayanes")["bodega_id"] == 3
+    assert tiendas.obtener("florida_caja1")["bodega_id"] == 5
 
 
 def test_forma_de_pago_debe_ser_de_esa_tienda():
-    assert tiendas.forma_pago_valida("florida", 12244) is True    # datáfono Florida
-    assert tiendas.forma_pago_valida("florida", 8987) is False    # caja Arrayanes
+    assert tiendas.forma_pago_valida("florida_caja1", 12244) is True   # datáfono Florida
+    assert tiendas.forma_pago_valida("florida_caja1", 8987) is False   # caja Arrayanes
 
 
 def test_listar_dice_que_falta():
-    fl = [t for t in tiendas.listar() if t["clave"] == "florida"][0]
+    fl = [t for t in tiendas.listar() if t["clave"] == "florida_caja1"][0]
     assert fl["lista"] is False
     assert "documento_factura_id" in fl["falta"]
