@@ -29,6 +29,16 @@ _PAGO_CAJA_ARRAYANES = 8282
 BODEGA_FLORIDA = 5
 BODEGA_ARRAYANES = 3
 
+# Tipos de documento por punto de venta. Siigo NO los expone en
+# /document-types (devuelve 9 y faltan justo estos), así que se dedujeron de
+# facturas reales con /siigo/prefijos:
+#   FV-6  → 29192  (ej. FV-6-10703)
+#   FV-11 → 31433  (ej. FV-11-1333)
+#   FV-12 → 31434  (ej. FV-12-417)
+DOC_FV6 = 29192
+DOC_FV11 = 31433
+DOC_FV12 = 31434
+
 # Un PUNTO DE VENTA es una caja: tiene su propio prefijo de facturación pero
 # puede compartir bodega con otra caja de la misma tienda. Florida factura
 # desde dos cajas (FV-11 y FV-12) y ambas descargan/ingresan a la bodega 5.
@@ -41,7 +51,7 @@ TIENDAS_DEFAULT: dict[str, dict] = {
         "nombre": "Florida · Caja 1",
         "tienda": "Florida",
         "prefijo_factura": "FV-11",
-        "documento_factura_id": None,
+        "documento_factura_id": DOC_FV11,
         "bodega_nombre": "Florida",
         "bodega_id": BODEGA_FLORIDA,
         "formas_pago": [
@@ -53,7 +63,7 @@ TIENDAS_DEFAULT: dict[str, dict] = {
         "nombre": "Florida · Caja 2",
         "tienda": "Florida",
         "prefijo_factura": "FV-12",
-        "documento_factura_id": None,
+        "documento_factura_id": DOC_FV12,
         "bodega_nombre": "Florida",
         "bodega_id": BODEGA_FLORIDA,     # misma bodega que la caja 1
         "formas_pago": [
@@ -65,7 +75,7 @@ TIENDAS_DEFAULT: dict[str, dict] = {
         "nombre": "Arrayanes",
         "tienda": "Arrayanes",
         "prefijo_factura": "FV-6",
-        "documento_factura_id": None,
+        "documento_factura_id": DOC_FV6,
         "bodega_nombre": "Arrayanes",
         "bodega_id": BODEGA_ARRAYANES,
         "formas_pago": [

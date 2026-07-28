@@ -11,7 +11,7 @@ import {
   obtenerCaso, cambiarEstado, previewFiscal, emitirFiscal,
   previewFactura, emitirFactura, type PreviewFactura,
   itemsFacturaCaso, agregarItem, type ItemFactura,
-  timelineCaso, itemsCaso, ESTADO_KIND, CICLO,
+  timelineCaso, itemsCaso, listarTiendas, ESTADO_KIND, CICLO,
   obtenerLogistica, registrarGuiaRetorno, confirmarRecepcion, registrarDespacho,
   ESTADOS_LABEL, type EstadoPostventa, type PreviewFiscal,
 } from "@/lib/postventa";
@@ -60,6 +60,7 @@ export default function CasoDetallePage() {
                subtitle={`${TIPO_LABEL[c.type] ?? c.type} · ${c.reason.replace(/_/g, " ")}`}>
       {/* Riel de progreso: dónde está el caso y qué sigue */}
       <RielCiclo actual={c.status} />
+      <CanalDelCaso tienda={c.tienda} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Columna de trabajo */}
@@ -122,6 +123,29 @@ function RielCiclo({ actual }: { actual: EstadoPostventa }) {
           </span>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ── Canal: online o tienda física ──────────────────────────────────── */
+function CanalDelCaso({ tienda }: { tienda?: string | null }) {
+  const puntos = useQuery({ queryKey: ["postventa-tiendas"],
+                            queryFn: listarTiendas, enabled: !!tienda });
+  if (!tienda) return null;
+  const p = (puntos.data ?? []).find((x) => x.clave === tienda);
+  return (
+    <div className="mb-4 rounded-sm border border-navy-600/25 bg-cloud/40 px-3 py-2">
+      <p className="text-sm text-ink-900">
+        Cambio presencial en{" "}
+        <b>{p?.nombre ?? tienda}</b>
+        {p && (
+          <span className="text-graphite">
+            {" · "}la prenda entra al inventario de {p.tienda}
+            {" · "}factura{" "}
+            <span className="font-display tabular-nums">{p.prefijo_factura}</span>
+          </span>
+        )}
+      </p>
     </div>
   );
 }

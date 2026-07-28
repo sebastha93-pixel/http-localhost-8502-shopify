@@ -74,11 +74,18 @@ def test_online_sin_forma_de_pago_usa_cuentas_por_cobrar():
 
 
 # ── Configuración de tiendas ──────────────────────────────────────────
-def test_no_factura_sin_documento_confirmado():
-    # La bodega ya se conoce, pero sin el documento la factura saldría con el
-    # prefijo de otro punto y descuadraría la numeración DIAN.
+def test_los_tres_puntos_estan_configurados():
+    # Ids deducidos de facturas reales (Siigo no los expone en /document-types).
+    assert tiendas.validar_para_facturar("florida_caja1")["documento_factura_id"] == 31433
+    assert tiendas.validar_para_facturar("florida_caja2")["documento_factura_id"] == 31434
+    assert tiendas.validar_para_facturar("arrayanes")["documento_factura_id"] == 29192
+
+
+def test_se_niega_si_le_quitan_el_documento(monkeypatch):
+    # La salvaguarda sigue viva: sin documento no se factura.
+    monkeypatch.setenv("TIENDAS_JSON", '{"arrayanes": {"documento_factura_id": null}}')
     with pytest.raises(ValueError, match="tienda_sin_configurar"):
-        tiendas.validar_para_facturar("florida_caja1")
+        tiendas.validar_para_facturar("arrayanes")
 
 
 def test_tienda_desconocida():
@@ -115,7 +122,8 @@ def test_forma_de_pago_debe_ser_de_esa_tienda():
     assert tiendas.forma_pago_valida("florida_caja1", 8987) is False   # caja Arrayanes
 
 
-def test_listar_dice_que_falta():
-    fl = [t for t in tiendas.listar() if t["clave"] == "florida_caja1"][0]
-    assert fl["lista"] is False
-    assert "documento_factura_id" in fl["falta"]
+def test_listar_muestra_los_puntos_listos():
+    puntos = tiendas.listar()
+    assert len(puntos) == 3
+    assert all(p["lista"] for p in puntos)
+    assert {p["prefijo_factura"] for p in puntos} == {"FV-11", "FV-12", "FV-6"}

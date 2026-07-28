@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import { useMutation } from "@tanstack/react-query";
 import { PageShell } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { crearCaso, TIPOS, MOTIVOS, PRIORIDADES, type CasoPostventa } from "@/lib/postventa";
+import { useQuery } from "@tanstack/react-query";
+import { crearCaso, listarTiendas, TIPOS, MOTIVOS, PRIORIDADES,
+         type CasoPostventa } from "@/lib/postventa";
 
 const INPUT =
   "w-full rounded-sm border border-border bg-card px-3 py-2 text-sm text-ink-900 " +
@@ -22,14 +24,21 @@ export default function NuevoCasoPage() {
     tipo: "",
     reason: "",
     priority: "media",
+    tienda: "",
+    pago_excedente_id: "",
   });
+  const puntos = useQuery({ queryKey: ["postventa-tiendas"], queryFn: listarTiendas });
+  const punto = (puntos.data ?? []).find((p) => p.clave === f.tienda);
 
   const set = (k: keyof typeof f) => (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>,
   ) => setF((prev) => ({ ...prev, [k]: e.target.value }));
 
   const mut = useMutation({
-    mutationFn: () => crearCaso({ ...f, source: "interno" }),
+    mutationFn: () => crearCaso({
+      ...f, source: "interno",
+      pago_excedente_id: f.pago_excedente_id ? Number(f.pago_excedente_id) : null,
+    }),
     onSuccess: (caso: CasoPostventa) => router.push(`/postventa/${caso.id}`),
   });
 
@@ -65,6 +74,43 @@ export default function NuevoCasoPage() {
                        onChange={set("shopify_order_id")} />
               </Campo>
             </div>
+          </Seccion>
+
+          <Seccion titulo="Dónde se atiende">
+            <Campo label="Canal">
+              <select className={INPUT} value={f.tienda}
+                onChange={(e) => setF((p) => ({ ...p, tienda: e.target.value,
+                                                pago_excedente_id: "" }))}>
+                <option value="">Online · la prenda vuelve a la bodega web</option>
+                {(puntos.data ?? []).map((p) => (
+                  <option key={p.clave} value={p.clave} disabled={!p.lista}>
+                    {p.nombre} · factura {p.prefijo_factura}
+                    {p.lista ? "" : " (sin configurar)"}
+                  </option>
+                ))}
+              </select>
+            </Campo>
+            {punto && (
+              <>
+                <p className="text-xs text-graphite">
+                  La prenda devuelta entra al inventario de{" "}
+                  <b className="text-ink-900">{punto.tienda}</b> y la factura del
+                  reemplazo sale con el prefijo{" "}
+                  <b className="font-display tabular-nums text-ink-900">
+                    {punto.prefijo_factura}
+                  </b>.
+                </p>
+                <Campo label="Si la prenda nueva vale más, ¿cómo paga la diferencia?">
+                  <select className={INPUT} value={f.pago_excedente_id}
+                    onChange={set("pago_excedente_id")}>
+                    <option value="">Definir al facturar</option>
+                    {punto.formas_pago.map((fp) => (
+                      <option key={fp.id} value={fp.id}>{fp.nombre}</option>
+                    ))}
+                  </select>
+                </Campo>
+              </>
+            )}
           </Seccion>
 
           <Seccion titulo="Solicitud">
