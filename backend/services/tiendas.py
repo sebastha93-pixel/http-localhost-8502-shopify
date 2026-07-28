@@ -25,16 +25,37 @@ _PAGO_CAJA_FLORIDA = 12243
 _PAGO_DATAFONO_ARRAYANES = 8987
 _PAGO_CAJA_ARRAYANES = 8282
 
-# Configuración por defecto. `documento_factura_id` y `bodega_id` quedan en
-# None hasta confirmarlos con /siigo/tipos-documento y /siigo/bodegas: el
-# sistema se niega a facturar con un id adivinado.
+# Bodegas de Siigo (confirmadas por el fundador).
+BODEGA_FLORIDA = 5
+BODEGA_ARRAYANES = 3
+
+# Un PUNTO DE VENTA es una caja: tiene su propio prefijo de facturación pero
+# puede compartir bodega con otra caja de la misma tienda. Florida factura
+# desde dos cajas (FV-11 y FV-12) y ambas descargan/ingresan a la bodega 5.
+#
+# `documento_factura_id` queda en None hasta confirmarlo con
+# /siigo/tipos-documento: el sistema se niega a facturar con un id adivinado
+# porque saldría con el prefijo de otro punto y descuadraría la numeración DIAN.
 TIENDAS_DEFAULT: dict[str, dict] = {
-    "florida": {
-        "nombre": "Florida",
+    "florida_caja1": {
+        "nombre": "Florida · Caja 1",
+        "tienda": "Florida",
         "prefijo_factura": "FV-11",
         "documento_factura_id": None,
         "bodega_nombre": "Florida",
-        "bodega_id": None,
+        "bodega_id": BODEGA_FLORIDA,
+        "formas_pago": [
+            {"id": _PAGO_DATAFONO_FLORIDA, "nombre": "Datáfono Florida"},
+            {"id": _PAGO_CAJA_FLORIDA, "nombre": "Efectivo · Caja Florida"},
+        ],
+    },
+    "florida_caja2": {
+        "nombre": "Florida · Caja 2",
+        "tienda": "Florida",
+        "prefijo_factura": "FV-12",
+        "documento_factura_id": None,
+        "bodega_nombre": "Florida",
+        "bodega_id": BODEGA_FLORIDA,     # misma bodega que la caja 1
         "formas_pago": [
             {"id": _PAGO_DATAFONO_FLORIDA, "nombre": "Datáfono Florida"},
             {"id": _PAGO_CAJA_FLORIDA, "nombre": "Efectivo · Caja Florida"},
@@ -42,10 +63,11 @@ TIENDAS_DEFAULT: dict[str, dict] = {
     },
     "arrayanes": {
         "nombre": "Arrayanes",
+        "tienda": "Arrayanes",
         "prefijo_factura": "FV-6",
         "documento_factura_id": None,
         "bodega_nombre": "Arrayanes",
-        "bodega_id": None,
+        "bodega_id": BODEGA_ARRAYANES,
         "formas_pago": [
             {"id": _PAGO_DATAFONO_ARRAYANES, "nombre": "Datáfono Arrayanes"},
             {"id": _PAGO_CAJA_ARRAYANES, "nombre": "Efectivo · Caja Arrayanes"},
@@ -76,7 +98,9 @@ def listar() -> list[dict]:
         salida.append({
             "clave": clave,
             "nombre": t.get("nombre"),
+            "tienda": t.get("tienda"),
             "prefijo_factura": t.get("prefijo_factura"),
+            "bodega_id": t.get("bodega_id"),
             "formas_pago": t.get("formas_pago") or [],
             "lista": bool(t.get("documento_factura_id") and t.get("bodega_id")),
             "falta": [c for c in ("documento_factura_id", "bodega_id")
