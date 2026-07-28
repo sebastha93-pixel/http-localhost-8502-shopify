@@ -381,3 +381,52 @@ Además de los 36 casos funcionales, la suite prueba explícitamente:
 - `DAHUA_INTEGRATION_REQUIREMENTS.md` — qué falta para la integración real
 - `BIOMETRIC_DATA_HANDLING.md` — tratamiento de datos sensibles
 - `SUPABASE_MIGRATION_PERSONAL.sql` — DDL
+
+---
+
+## Anexo · Horarios reales de MALE DENIM (cargados 2026-07-28)
+
+| Horario | Días | Jornada | Descanso | Semanal |
+|---|---|---|---|---|
+| **Administración** | L–V | 08:30–17:00 | 30 min | **40 h** |
+| **Canal Digital** | L–V | 09:00–17:00 | 30 min | **42,5 h** ⚠️ |
+| | Sáb | 10:00–15:00 | — | |
+| **Apertura CC Plaza Arrayanes** | L–S | 11:00–20:00 | — | 62 h |
+| | Dom | 11:00–19:00 | — | |
+| **Apertura CC Florida** | L–J, Dom | 11:00–20:00 | — | 65 h |
+| | V–S | 11:00–21:00 | — | |
+
+### Los horarios de tienda NO son de una persona
+
+62 y 65 horas semanales son las **horas de apertura del local**. Ninguna persona
+puede trabajarlas: el tope legal es 42 h. Por eso esas dos plantillas existen
+solo como referencia y **no están asignadas a nadie**.
+
+Las cinco personas de tienda —las dos administradoras, las dos vendedoras y la
+supernumeraria— trabajan por **turnos planificados semanalmente**
+(`personal_turnos_planificados`). Mientras no haya turno para un día, el motor
+levanta `horario_no_encontrado`, que es la respuesta correcta: nadie planificó
+ese día, y el sistema no debe inventarlo.
+
+### ⚠️ Canal Digital excede el tope legal por 30 minutos
+
+Ley 2101 de 2021: la jornada máxima bajó a **42 h/semana desde el 15 de julio
+de 2026**. Con descanso de 30 minutos, Canal Digital queda en **42,5 h**.
+
+Se cargó tal como lo definió la empresa, sin ajustarlo. Media hora semanal es
+poco, pero es un incumplimiento y conviene resolverlo. Tres salidas posibles:
+
+1. Sábado de 10:00 a 14:30 en vez de 15:00 → 42 h exactas
+2. Descanso de 1 hora entre semana → 40 h
+3. Reconocer los 30 min como trabajo suplementario
+
+**La decisión es de la empresa con su abogado laboral, no del software.**
+
+### Cargos no sujetos a jornada (CST Art. 162)
+
+Marcados hoy: solo los dos socios (Sebastián Hurtado y María Alejandra Bedoya).
+
+Christian Gutiérrez, Alejandro Uribe y Melisa Giraldo son líderes de área y
+quedaron como **sujetos a jornada**, que es lo conservador: si legalmente lo
+están y se les marca que no, se dejarían de reconocer horas extras que les
+corresponden. Requiere criterio del abogado laboral.
