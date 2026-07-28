@@ -17,6 +17,7 @@ export interface CasoPostventa {
   customer_email?: string | null;
   customer_phone?: string | null;
   shopify_order_name?: string | null;
+  tienda?: string | null;
   created_at: string;
 }
 
@@ -188,3 +189,13 @@ export interface ImpactoVentas {
 }
 export const impactoVentas = () =>
   api.get<ImpactoVentas>(`/api/postventa/impacto-ventas`);
+
+// ── Puntos de venta (cambio presencial) ──────────────────────────────
+export interface PuntoVenta {
+  clave: string; nombre: string; tienda: string;
+  prefijo_factura: string; bodega_id: number | null;
+  formas_pago: { id: number; nombre: string }[];
+  lista: boolean; falta: string[];
+}
+export const listarTiendas = () =>
+  api.get<PuntoVenta[]>(`/api/postventa/tiendas`);
