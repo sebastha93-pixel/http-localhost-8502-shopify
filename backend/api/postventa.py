@@ -314,3 +314,13 @@ def shopify_variantes_dx(
     variante_mas_cara_que no encuentra nada. Solo lectura."""
     from backend.services import fiscal_shopify as FS
     return FS.diagnostico_variantes(precio_base)
+
+
+@router.get("/siigo/tipos-documento")
+def siigo_tipos_documento(
+    _: CurrentUser = Depends(require_permission("postventa", "modificar")),
+):
+    """Todos los tipos de factura con su prefijo (FV-6, FV-11, FV-12...).
+    Necesario para facturar un cambio desde la tienda correcta."""
+    from backend.services import postventa_siigo as s
+    return s.tipos_documento_completos()
