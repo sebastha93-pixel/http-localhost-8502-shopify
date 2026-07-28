@@ -167,6 +167,55 @@ def facturas_aceptadas(minimo: int = 10, max_paginas: int = 6) -> list[dict]:
     return aptas
 
 
+def tipos_documento_completos() -> dict:
+    """TODOS los tipos de documento FV, paginando.
+
+    El prefijo de una factura (FV-11-1121) corresponde al `code` del tipo
+    (code 11). Se necesitan los ids de cada tienda para facturar un cambio
+    desde el punto correcto: Florida FV-11/FV-12, Arrayanes FV-6.
+
+    La consulta simple traía la lista incompleta (faltaban 6, 11 y 12), por
+    eso aquí se pagina y se ordena por code.
+    """
+    if not siigo.siigo_configurado():
+        return {"_error": "siigo_no_configurado"}
+
+    vistos: dict = {}
+    for pagina in range(1, 6):
+        data = _get_seguro("/document-types",
+                           {"type": "FV", "page": pagina, "page_size": 50})
+        if isinstance(data, dict) and data.get("_error"):
+            break
+        filas = data if isinstance(data, list) else (data.get("results") or [])
+        if not filas:
+            break
+        for d in filas:
+            if isinstance(d, dict) and d.get("id") is not None:
+                vistos[d["id"]] = d
+        if len(filas) < 50:
+            break
+
+    def orden(d):
+        try:
+            return int(d.get("code") or 0)
+        except (TypeError, ValueError):
+            return 999
+
+    tipos = sorted(vistos.values(), key=orden)
+    return {
+        "total": len(tipos),
+        "tipos": [{"id": t.get("id"), "code": t.get("code"),
+                   "prefijo": f"FV-{t.get('code')}",
+                   "name": t.get("name"),
+                   "description": t.get("description"),
+                   "activo": t.get("active"),
+                   "electronico": t.get("electronic_type"),
+                   "cost_center_obligatorio": t.get("cost_center_mandatory"),
+                   "cost_center_default": t.get("cost_center_default")}
+                  for t in tipos],
+    }
+
+
 def diagnostico() -> dict:
     """Corrida completa de descubrimiento: config + muestra de facturas.
     Es lo que expone el endpoint para copiar/pegar y aterrizar la Fase 1.
