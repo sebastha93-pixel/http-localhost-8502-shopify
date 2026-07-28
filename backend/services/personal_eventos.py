@@ -168,17 +168,28 @@ def ingerir(
         return {"recibidos": len(eventos), "nuevos": 0, "duplicados": 0,
                 "sin_mapeo": 0, "fechas_afectadas": [], "errores": errores}
 
-    # Los índices únicos parciales de la tabla absorben el duplicado.
-    # No se hace un SELECT previo: sería una condición de carrera.
+    # INSERT plano, sin ON CONFLICT.
+    #
+    # Los índices de idempotencia son PARCIALES (uno aplica cuando hay
+    # id_evento_externo, el otro cuando no). Postgres no puede inferir un
+    # índice parcial en ON CONFLICT sin repetir su WHERE, y PostgREST no
+    # expone esa sintaxis: el upsert fallaba con 42P10 en CADA lote y caía
+    # al reintento individual. Funcionaba, pero desperdiciaba una ida y
+    # vuelta por lote y llenaba el log de falsas alarmas.
+    #
+    # Con INSERT plano el camino feliz es una sola llamada, y el duplicado
+    # lo detecta el índice único igual —solo que como excepción, que es
+    # justo lo que maneja el fallback de abajo.
     insertadas = []
     try:
-        r = sb.table("personal_eventos_crudos").upsert(
-            filas, on_conflict="dispositivo_id,id_evento_externo",
-            ignore_duplicates=True).execute()
+        r = sb.table("personal_eventos_crudos").insert(filas).execute()
         insertadas = r.data or []
     except Exception as ex:
-        # Fallback fila por fila: si el lote choca, no se pierde el resto.
-        log.warning(f"[personal.eventos] lote falló, reintento individual: {ex}")
+        # Un solo duplicado tumba el lote entero, así que se reintenta fila
+        # por fila para no perder los buenos. Es el caso esperado cuando el
+        # conector reenvía tras un timeout.
+        if not _es_duplicado(ex):
+            log.warning(f"[personal.eventos] lote falló, reintento individual: {ex}")
         for f in filas:
             try:
                 r = sb.table("personal_eventos_crudos").insert(f).execute()
