@@ -157,6 +157,32 @@ async def webhook_receiver(request: Request, secret: Optional[str] = Query(None)
         return {"ok": False, "error": "Sin identificador de pedido en el payload",
                 "payload_keys": top_keys, "eventData_keys": ed_keys}
 
+    # ── Diagnóstico: ¿qué trae realmente el payload? ────────────────────
+    # Hoy el webhook se usa solo como TIMBRE: sacamos el id y acto seguido
+    # pedimos GET /sell-orders/{id}, o sea 1 petición de cuota por evento. Si
+    # eventData ya trajera comprador / envío / ítems / fecha de despacho,
+    # podríamos parsearlo directo y bajar ese costo a CERO.
+    #
+    # Nunca lo supimos porque solo se logueaba la estructura cuando NO se
+    # encontraba el identificador. Acá la registramos también en el caso bueno.
+    #
+    # Se loguean SOLO LOS NOMBRES de los campos, nunca los valores: eventData
+    # puede traer nombre, teléfono y dirección de la clienta, y eso no tiene
+    # por qué quedar en los logs.
+    try:
+        ed = payload.get("eventData") if isinstance(payload, dict) else None
+        if isinstance(ed, dict):
+            def _forma(v: Any) -> str:
+                if isinstance(v, dict):
+                    return "{" + ",".join(sorted(v.keys())[:12]) + "}"
+                if isinstance(v, list):
+                    return f"[{len(v)}]"
+                return type(v).__name__
+            forma = ", ".join(f"{k}:{_forma(v)}" for k, v in sorted(ed.items())[:20])
+            log.info(f"[webhook-forma] {evento} · eventData → {forma}")
+    except Exception as e:
+        log.debug(f"[webhook-forma] no se pudo inspeccionar: {e}")
+
     # Refrescar solo ese pedido
     try:
         import sys
