@@ -131,6 +131,42 @@ def inspeccionar_notas_credito(limite: int = 2) -> dict:
     return {"total_en_muestra": len(notas), "notas": notas}
 
 
+def facturas_aceptadas(minimo: int = 10, max_paginas: int = 6) -> list[dict]:
+    """Facturas online que la DIAN YA aceptó, paginando hacia atrás.
+
+    Las ventas del día están en validación y no admiten nota crédito, así que
+    quedarse en la página 1 puede no devolver ninguna útil. Se avanza por
+    páginas hasta juntar `minimo` aceptadas.
+    """
+    from backend.services import fiscal_logic as FL
+
+    aptas: list[dict] = []
+    for pagina in range(1, max_paginas + 1):
+        data = _get_seguro("/invoices", {"page_size": 25, "page": pagina})
+        if isinstance(data, dict) and data.get("_error"):
+            break
+        resultados = data.get("results", []) if isinstance(data, dict) else []
+        if not resultados:
+            break
+        for inv in resultados:
+            if not isinstance(inv, dict):
+                continue
+            if not FL.extraer_numero_pedido(inv.get("observations") or ""):
+                continue                      # sin pedido Shopify
+            if not FL.factura_aceptada_dian(inv):
+                continue                      # la DIAN aún no la validó
+            aptas.append({
+                "id": inv.get("id"),
+                "name": inv.get("name"),
+                "date": inv.get("date"),
+                "observations": inv.get("observations"),
+                "stamp": inv.get("stamp"),
+            })
+            if len(aptas) >= minimo:
+                return aptas
+    return aptas
+
+
 def diagnostico() -> dict:
     """Corrida completa de descubrimiento: config + muestra de facturas.
     Es lo que expone el endpoint para copiar/pegar y aterrizar la Fase 1.

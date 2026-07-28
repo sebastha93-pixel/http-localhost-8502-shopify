@@ -44,12 +44,12 @@ PLAN_DEFAULT = [
 def _pedidos_con_factura(cantidad: int) -> list[dict]:
     """Pedidos reales que ya tienen factura en Siigo (los únicos que sirven:
     sin factura original no hay nota crédito que emitir)."""
-    data = descubrir.inspeccionar_facturas(min(cantidad * 2, 10))
-    if not isinstance(data, dict) or data.get("_error"):
-        return []
+    # Paginar hasta juntar facturas que la DIAN ya aceptó: las del día no
+    # admiten nota crédito y quedarse en la página 1 devolvía cero.
+    aptas = descubrir.facturas_aceptadas(minimo=max(cantidad, 5))
     pedidos = []
     descartadas = 0
-    for f in data.get("facturas", []):
+    for f in aptas:
         num = F.extraer_numero_pedido(f.get("observations") or "")
         if not num:
             continue           # facturas de tienda física: sin pedido Shopify

@@ -1,11 +1,12 @@
 from backend.services import postventa_banco_pruebas as B
 
 
-FACTURAS = {"facturas": [
+# Lo que devuelve facturas_aceptadas(): ya filtradas por DIAN y con pedido.
+FACTURAS_APTAS = [
     {"name": "FV-1-63043", "id": "f1",
-     "observations": "Orden Nº: 60112 - Medio de Pago: Wompi"},
-    {"name": "FV-11-1121", "id": "f2", "observations": ""},   # tienda física
-]}
+     "observations": "Orden Nº: 60112 - Medio de Pago: Wompi",
+     "stamp": {"status": "Accepted"}},
+]
 
 ITEMS_FACTURA = {"factura": {"id": "f1", "name": "FV-1-63043"},
                  "items": [
@@ -14,7 +15,8 @@ ITEMS_FACTURA = {"factura": {"id": "f1", "name": "FV-1-63043"},
 
 
 def _mock_base(monkeypatch, *, preview_total=119000.0):
-    monkeypatch.setattr(B.descubrir, "inspeccionar_facturas", lambda n: FACTURAS)
+    monkeypatch.setattr(B.descubrir, "facturas_aceptadas",
+                        lambda minimo=5, **k: FACTURAS_APTAS)
     monkeypatch.setattr(B.pv, "crear_caso",
                         lambda **k: {"id": "c1", "case_number": "PV-2026-9001", **k})
     monkeypatch.setattr(B.pv, "cambiar_estado", lambda *a, **k: {})
@@ -84,8 +86,8 @@ def test_no_emite_en_modo_produccion(monkeypatch):
 
 
 def test_sin_facturas_lo_dice(monkeypatch):
-    monkeypatch.setattr(B.descubrir, "inspeccionar_facturas",
-                        lambda n: {"facturas": []})
+    monkeypatch.setattr(B.descubrir, "facturas_aceptadas",
+                        lambda minimo=5, **k: [])
     r = B.correr(total=5)
     assert r["_error"] == "sin_pedidos_facturados"
 
