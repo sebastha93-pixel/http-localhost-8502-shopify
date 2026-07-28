@@ -226,7 +226,38 @@ _CAMPOS_ENRIQUECIDOS = (
     "precio_unitario", "cantidad", "line_items",
     "fecha_despacho", "fecha_despacho_confiable", "fecha_promesa", "fecha_entrega",
     "guia_real", "carrier_real", "link_guia", "external_order_id",
+    # Marca de "ya le pedimos el detalle a Melonn". Tiene que sobrevivir a los
+    # webhooks, si no volvemos al bucle infinito de re-consultas. Ver
+    # _detalle_ya_intentado().
+    "_detalle_melonn_intentado_en",
 )
+
+# Cada cuánto vale la pena volver a pedirle a Melonn el detalle de un pedido
+# que ya consultamos y que no nos dio lo que buscábamos.
+_REINTENTO_DETALLE_HORAS = 24
+
+
+def _detalle_ya_intentado(p: dict) -> bool:
+    """True si ya le pedimos el detalle de este pedido hace menos de 24h.
+
+    EL BUG QUE ESTO ARREGLA (encontrado 2026-07-28): _enriquecer_desde_melonn
+    seleccionaba todo pedido en tránsito sin `fecha_despacho_confiable`, y ese
+    flag solo se marca si el detalle de Melonn trae `dispatch_date`. Melonn NO
+    lo está devolviendo — 0 de 535 pedidos lo tenían. Resultado: los 130
+    pedidos en tránsito se re-consultaban en CADA ciclo, para siempre, por una
+    respuesta que nunca llegaba. Era el mayor consumidor de cuota de toda la
+    integración y venía corriendo desde el 8 de julio.
+
+    Ahora se pregunta una vez al día por pedido, no una vez por ciclo.
+    """
+    ts = p.get("_detalle_melonn_intentado_en")
+    if not ts:
+        return False
+    try:
+        transcurrido = (datetime.now() - _parse_iso_naive(str(ts))).total_seconds()
+    except Exception:
+        return False          # marca ilegible → dejar que se reintente
+    return 0 <= transcurrido < _REINTENTO_DETALLE_HORAS * 3600
 
 
 def _campo_vacio(v) -> bool:
@@ -1513,8 +1544,13 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
         #     real → inflaba los días en tránsito y disparaba RIESGO falso).
         falta_despacho = (p.get("sub_estado_logistico") == "en_transito"
                           and not p.get("fecha_despacho_confiable"))
-        if falta_cliente or falta_despacho:
-            indices.append(i)
+        if not (falta_cliente or falta_despacho):
+            continue
+        # No volver a preguntar por algo que ya preguntamos hoy. Sin esto, los
+        # pedidos en tránsito se consultaban en cada ciclo indefinidamente.
+        if _detalle_ya_intentado(p):
+            continue
+        indices.append(i)
 
     if not indices:
         return pedidos
@@ -1552,11 +1588,18 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
                 log.debug(f"detail {candidato}: {e}")
                 continue
 
+        # Registrar el intento ANTES de mirar el resultado. Si el detalle no
+        # llega, o llega sin `dispatch_date`, igual no queremos volver a
+        # preguntar hasta mañana: marcar solo el caso exitoso dejaría el bucle
+        # infinito vivo justo para los pedidos que Melonn no resuelve, que son
+        # precisamente los que lo causaban.
+        p = dict(p)
+        p["_detalle_melonn_intentado_en"] = datetime.now().isoformat()
+        resultado[idx] = p
+
         if not detail:
             log.warning(f"Sin detalle Melonn para {ext} / {internal}")
             continue
-
-        p = dict(p)
 
         # Schema real Melonn API:
         #   buyer.full_name, buyer.phone_number, buyer.email
