@@ -137,8 +137,14 @@ except ImportError:
 _BASE_URL    = "https://api.orbita.melonn.com"
 _TIMEOUT     = 45         # antes 20s — API Melonn responde lento en horas pico
 _CONNECT_TO  = 8          # timeout de conexión separado
-_PAGE_SIZE   = 25         # antes 50 — páginas más pequeñas = response time más rápido
-_MAX_PAGES   = 60         # 25 × 60 = 1500 pedidos, suficiente para ventana 90d
+# 100 por página (antes 25). Con ~535 pedidos activos, el sync horario pasa de
+# ~22 peticiones a ~6: cuatro veces menos consumo de cuota Melonn, que es el
+# recurso escaso. Antes estaba en 25 buscando respuestas más rápidas, pero con
+# la cuota agotada el número de peticiones pesa mucho más que la latencia de
+# cada una. Si Melonn topa el per_page en otro valor, la paginación lo detecta
+# sola y sigue funcionando — ver `tam_pagina` en _fetch_api.
+_PAGE_SIZE   = 100
+_MAX_PAGES   = 60         # 100 × 60 = 6000 pedidos, techo de seguridad
 _CACHE_TTL   = 1800       # 30 min — caché Supabase
 _CACHE_HARD_TTL = 86400   # 24h — pasado esto, fuerza refresh aunque haya datos
 
@@ -1301,6 +1307,15 @@ def _fetch_api() -> list:
     corte       = _fecha_corte()
     pedidos_raw = []
     page        = 0
+    # Tamaño de página EFECTIVO, aprendido de la primera respuesta.
+    #
+    # OJO — por qué no se compara contra _PAGE_SIZE: si Melonn topa el per_page
+    # que pedimos (le pedimos 100 y devuelve 50), `len(items) < _PAGE_SIZE`
+    # daría verdadero en la PRIMERA página y cortaríamos ahí, creyendo que ya
+    # no hay más. Perderíamos cientos de pedidos en silencio, sin ningún error.
+    # Aprendiendo el tope real de la primera página, subir _PAGE_SIZE es seguro
+    # incluso si la API lo limita a otro valor.
+    tam_pagina = None
 
     while page < _MAX_PAGES:
         resp = _get("sell-orders", params={"per_page": _PAGE_SIZE, "page": page})
@@ -1309,6 +1324,12 @@ def _fetch_api() -> list:
         items = resp.get("data") or []
         if not items:
             break
+        if tam_pagina is None:
+            tam_pagina = len(items)
+            if tam_pagina < _PAGE_SIZE:
+                log.info(
+                    f"Melonn topó per_page: pedimos {_PAGE_SIZE}, devuelve {tam_pagina}"
+                )
 
         activos_en_pagina = 0
         for item in items:
@@ -1330,11 +1351,11 @@ def _fetch_api() -> list:
                 activos_en_pagina += 1
 
         # Página completa sin activos operativos → solo hay entregados/terminales
-        if len(items) == _PAGE_SIZE and activos_en_pagina == 0:
+        if len(items) >= tam_pagina and activos_en_pagina == 0:
             log.info(f"Paginación detenida en página {page}: sin activos operativos")
             break
 
-        if len(items) < _PAGE_SIZE:
+        if len(items) < tam_pagina:
             break   # última página
         page += 1
 
