@@ -216,6 +216,53 @@ def tipos_documento_completos() -> dict:
     }
 
 
+def documentos_por_prefijo(max_paginas: int = 12) -> dict:
+    """Deduce el id de cada tipo de factura a partir de facturas REALES.
+
+    La API de Siigo no expone todos los tipos: `/document-types` devuelve 9 y
+    faltan justo los de las tiendas (FV-6, FV-11, FV-12). Pero cada factura sí
+    trae su `document.id` y su `name` con el prefijo, así que el id se deduce
+    recorriendo facturas existentes.
+
+    Devuelve {"FV-11": {"document_id": 31433, "ejemplo": "FV-11-1121"}, ...}
+    """
+    if not siigo.siigo_configurado():
+        return {"_error": "siigo_no_configurado"}
+
+    import re
+    hallados: dict[str, dict] = {}
+    for pagina in range(1, max_paginas + 1):
+        data = _get_seguro("/invoices", {"page_size": 100, "page": pagina})
+        if isinstance(data, dict) and data.get("_error"):
+            break
+        filas = data.get("results", []) if isinstance(data, dict) else []
+        if not filas:
+            break
+        for inv in filas:
+            if not isinstance(inv, dict):
+                continue
+            nombre = str(inv.get("name") or "")
+            m = re.match(r"^(FV-\d+)-", nombre)
+            doc_id = (inv.get("document") or {}).get("id")
+            if not m or doc_id is None:
+                continue
+            prefijo = m.group(1)
+            if prefijo not in hallados:
+                hallados[prefijo] = {"document_id": doc_id, "ejemplo": nombre,
+                                     "vistas": 1, "fecha": inv.get("date")}
+            else:
+                hallados[prefijo]["vistas"] += 1
+
+    def clave(p):
+        try:
+            return int(p.split("-")[1])
+        except (IndexError, ValueError):
+            return 999
+
+    return {"total_prefijos": len(hallados),
+            "prefijos": {k: hallados[k] for k in sorted(hallados, key=clave)}}
+
+
 def diagnostico() -> dict:
     """Corrida completa de descubrimiento: config + muestra de facturas.
     Es lo que expone el endpoint para copiar/pegar y aterrizar la Fase 1.

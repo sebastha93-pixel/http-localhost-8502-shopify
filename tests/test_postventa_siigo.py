@@ -106,3 +106,23 @@ def test_facturas_aceptadas_descarta_tienda_fisica(monkeypatch):
                      "stamp": {"status": "Accepted"}}]} if params.get("page") == 1
         else {"results": []})
     assert pv.facturas_aceptadas(minimo=1) == []   # sin pedido Shopify
+
+
+def test_documentos_por_prefijo_deduce_de_facturas_reales(monkeypatch):
+    # /document-types no trae FV-11, pero las facturas sí revelan su id.
+    facturas = {"results": [
+        {"name": "FV-1-63043", "document": {"id": 11810}, "date": "2026-07-01"},
+        {"name": "FV-11-1121", "document": {"id": 31433}, "date": "2026-07-02"},
+        {"name": "FV-11-1122", "document": {"id": 31433}, "date": "2026-07-03"},
+        {"name": "FV-6-880",   "document": {"id": 27900}, "date": "2026-07-04"},
+    ]}
+    monkeypatch.setattr(pv.siigo, "siigo_configurado", lambda: True)
+    monkeypatch.setattr(pv.siigo, "siigo_get",
+                        lambda path, params=None: facturas if params.get("page") == 1
+                        else {"results": []})
+    r = pv.documentos_por_prefijo()
+    assert r["prefijos"]["FV-11"]["document_id"] == 31433
+    assert r["prefijos"]["FV-11"]["vistas"] == 2
+    assert r["prefijos"]["FV-6"]["document_id"] == 27900
+    # ordenado por número de prefijo, no alfabético
+    assert list(r["prefijos"].keys()) == ["FV-1", "FV-6", "FV-11"]
