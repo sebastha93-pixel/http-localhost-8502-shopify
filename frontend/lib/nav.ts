@@ -106,6 +106,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: "Permisos",       href: "/personal/permisos",     permiso: "personal_permisos",   desc: "Solicitudes y aprobaciones" },
       { label: "Compensaciones", href: "/personal/compensaciones", permiso: "personal_permisos", desc: "Tiempo por reponer" },
       { label: "Incidencias",    href: "/personal/incidencias",  permiso: "personal_asistencia", desc: "Marcaciones incompletas" },
+      { label: "Turnos",         href: "/personal/turnos",       permiso: "personal_config",     desc: "Planificación semanal de tienda" },
     ],
   },
   {

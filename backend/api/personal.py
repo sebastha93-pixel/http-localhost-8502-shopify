@@ -34,6 +34,7 @@ from backend.services import personal_libro as libro_svc
 from backend.services import personal_organizacion as org_svc
 from backend.services import personal_permisos as perm_svc
 from backend.services import personal_reglas as reglas_svc
+from backend.services import personal_turnos as turnos_svc
 from backend.services.personal_base import TablaNoExiste
 
 router = APIRouter(prefix="/api/personal", tags=["personal"])
@@ -892,6 +893,100 @@ def mi_historial(
 @router.get("/mi-tiempo/permisos")
 def mis_permisos(yo: dict = Depends(empleado_actual)) -> dict:
     return {"permisos": perm_svc.listar(empleado_id=yo["id"], limit=200)}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# TURNOS PLANIFICADOS — rotación de tienda
+# ═══════════════════════════════════════════════════════════════════════
+
+class TurnoIn(BaseModel):
+    empleado_id:      str
+    fecha:            str                    # YYYY-MM-DD
+    hora_inicio:      Optional[str] = None   # HH:MM
+    hora_fin:         Optional[str] = None
+    sede_id:          Optional[str] = None
+    descanso_inicio:  Optional[str] = None
+    descanso_fin:     Optional[str] = None
+    cruza_medianoche: bool = False
+    es_dia_laboral:   bool = True
+    notas:            Optional[str] = None
+
+
+class TurnosSemanaBody(BaseModel):
+    turnos: list[TurnoIn] = Field(min_length=1, max_length=400)
+
+
+class CopiarSemanaBody(BaseModel):
+    origen:  str                             # cualquier fecha de la semana origen
+    destino: str
+    sede_id: Optional[str] = None
+
+
+@router.get("/turnos")
+def obtener_semana(
+    lunes: str = Query(..., description="Cualquier fecha de la semana"),
+    sede_id: Optional[str] = None,
+    user: CurrentUser = Depends(require_permission("personal_config", "ver")),
+) -> dict:
+    """La grilla semanal, con las horas por persona y el aviso de tope legal."""
+    try:
+        l = turnos_svc.lunes_de(_fecha(lunes))
+        alcance = emp_svc.alcance_empleados(user)
+        data = turnos_svc.semana(lunes=l, sede_id=sede_id, empleados=alcance)
+        if sede_id:
+            data["apertura"] = turnos_svc.apertura_de_sede(sede_id)
+        return data
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _error("obtener_semana", e)
+
+
+@router.post("/turnos")
+def guardar_turnos(
+    body: TurnosSemanaBody,
+    user: CurrentUser = Depends(require_permission("personal_config", "modificar")),
+) -> dict:
+    """Guarda la planificación. Avisa si alguien excede 42 h, pero no bloquea.
+
+    A veces hay una razón para una semana larga (inventario, temporada). Lo
+    inaceptable no es la excepción: es que nadie se entere de que la hizo.
+    """
+    try:
+        return {"ok": True, **turnos_svc.guardar_semana(
+            [t.model_dump() for t in body.turnos], actor=user.email)}
+    except Exception as e:
+        raise _error("guardar_turnos", e)
+
+
+@router.delete("/turnos/{empleado_id}/{fecha}")
+def eliminar_turno(
+    empleado_id: str, fecha: str,
+    user: CurrentUser = Depends(require_permission("personal_config", "modificar")),
+) -> dict:
+    try:
+        ok = turnos_svc.eliminar(empleado_id, _fecha(fecha), actor=user.email)
+        return {"ok": ok}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _error("eliminar_turno", e)
+
+
+@router.post("/turnos/copiar")
+def copiar_semana(
+    body: CopiarSemanaBody,
+    user: CurrentUser = Depends(require_permission("personal_config", "modificar")),
+) -> dict:
+    """Replica una semana en otra. En tienda los turnos varían poco."""
+    try:
+        return {"ok": True, **turnos_svc.copiar_semana(
+            origen=_fecha(body.origen), destino=_fecha(body.destino),
+            sede_id=body.sede_id, actor=user.email)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _error("copiar_semana", e)
 
 
 # ═══════════════════════════════════════════════════════════════════════
