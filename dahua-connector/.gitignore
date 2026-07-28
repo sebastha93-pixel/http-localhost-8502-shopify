@@ -1,0 +1,5 @@
+# Nunca commitear: trae el token del dispositivo
+config.json
+# Estado local del agente
+cola.db
+conector.log

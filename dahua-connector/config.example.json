@@ -1,0 +1,19 @@
+{
+  "backend_url": "https://backend-production-21f0.up.railway.app",
+  "dispositivo_id": "PEGAR-EL-UUID-DEL-DISPOSITIVO",
+  "device_token": "PEGAR-EL-TOKEN-QUE-DA-LA-PANTALLA-DE-DISPOSITIVOS",
+
+  "proveedor": "mock",
+  "poll_seconds": 60,
+  "lote": 100,
+
+  "_comentario_proveedor": [
+    "mock  = simulador, para probar sin tocar el equipo",
+    "csv   = lee un archivo exportado del Dahua o de SmartPSS",
+    "dahua_http / dss_express = aún NO implementados: faltan modelo,",
+    "        firmware y protocolo del equipo"
+  ],
+
+  "mock": { "empleados": ["1001", "1002", "1003"], "dias": 5 },
+  "csv":  { "ruta": "eventos.csv" }
+}
