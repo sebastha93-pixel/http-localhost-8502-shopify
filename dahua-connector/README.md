@@ -43,11 +43,26 @@ impresión). En Windows, un acceso directo al `.bat` en `shell:startup`.
 |---|---|---|
 | `mock` | Probar el conector sin tocar el equipo | ✅ |
 | `csv` | Cargar una exportación del Dahua o de SmartPSS | ✅ |
-| `dahua_http` · `dss_express` | El equipo real | ⏳ faltan datos |
+| `dahua_http` | El equipo real | ⏳ falta muestra de datos |
 
-Lo que falta para el equipo real: **modelo exacto, firmware y protocolo**. Ver
-`docs/DAHUA_INTEGRATION_REQUIREMENTS.md`. Mientras tanto el módulo se
-desarrolla y se prueba completo con `mock`.
+## El equipo: DHI-ASI6213S
+
+Ya está identificado y sondeado (28-jul-2026):
+
+- **HTTPS puerto 443** con **autenticación Digest MD5** — el puerto 80 cerrado
+- **Puerto 37777 CERRADO**: el SDK nativo no aplica. El camino es la API CGI,
+  que `urllib` maneja de fábrica
+
+Falta confirmar **qué endpoints responde y con qué forma vienen los datos**.
+Para eso:
+
+```
+python3 descubrir.py 10.30.1.4
+```
+
+Te pide la clave del equipo, la usa solo en memoria y te imprime el resultado.
+No la guarda, no la muestra y no sale de tu equipo. Pásame esa salida y ajusto
+el conector a lo que este aparato entrega de verdad.
 
 ## Qué garantiza
 

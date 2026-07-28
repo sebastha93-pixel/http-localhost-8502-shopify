@@ -4,7 +4,41 @@
 desarrolla y se prueba completo con `MockAccessControlProvider` y el importador
 CSV. Esta lista es lo que hace falta para conectar el equipo **real**.
 
-Estado actual: **pendiente de datos del dispositivo.**
+Estado: **equipo identificado y sondeado (2026-07-28). Falta la muestra de datos.**
+
+---
+
+## ✅ CONFIRMADO sobre el equipo real
+
+Sondeado desde un Mac en la misma red (10.30.1.117 → 10.30.1.4, 0,5 ms).
+
+| Dato | Valor |
+|---|---|
+| Modelo | **DHI-ASI6213S** (Access Standalone facial) |
+| Serie | `BF0FBC9PAJA4EBF` |
+| Firmware | `V3.004.0000001.0.R.20250919` |
+| Web | `V5.12.0.250909.2941682` · Safe Baseline V2.4 |
+| IP / MAC | `10.30.1.4` · `e0:2e:fe:d5:b7:a8` |
+| **Autenticación** | **HTTP Digest MD5**, `qop=auth` |
+| **Acceso al API** | **HTTPS puerto 443** — el 80 está CERRADO |
+| **Puerto 37777** | **CERRADO** → el NetSDK **no** es un camino viable |
+| Otros puertos | 8080 abierto · 554 (RTSP) abierto |
+
+### Consecuencia: el camino es la API CGI sobre HTTPS
+
+Con el 37777 cerrado, el SDK nativo queda descartado. Eso **simplifica**: es
+HTTP con Digest sobre TLS, que `urllib` maneja de fábrica. El conector no
+necesita binarios propietarios ni dependencias.
+
+### ⚠️ Lección del sondeo: el 401 no prueba nada
+
+Un primer barrido dio 401 en todos los endpoints y parecía confirmar que todos
+existían. **Un control con rutas inventadas (`esto_no_existe.cgi`) también dio
+401**: el equipo exige autenticación *antes* de mirar la ruta.
+
+Así que la lista de endpoints válidos **sigue sin confirmarse**. Para eso está
+`dahua-connector/descubrir.py`, que se corre con credenciales y reporta qué
+responde de verdad.
 
 ---
 
