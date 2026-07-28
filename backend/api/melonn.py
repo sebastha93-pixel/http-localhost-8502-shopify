@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 import logging
 from typing import Optional, Any
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from backend.core.security import CurrentUser, require_role, require_permission
@@ -441,9 +441,54 @@ def documentos_entrega(
     return {"ok": True, "orden": orden_melonn, "data": data}
 
 
+def _post_autorizacion(orden_melonn: str, autor: str) -> None:
+    """Contabilidad posterior a autorizar — corre FUERA del request.
+
+    OJO: nada de esto cambia el resultado en Melonn. Cuando esta función
+    arranca, el hold ya está liberado y para Melonn el pedido YA está
+    autorizado. Lo único que queda es sincronizar nuestro caché y dejar el
+    rastro de auditoría.
+
+    Antes corría dentro del request y le sumaba ~4,5 s al botón "Autorizar":
+    1,5 s de sleep + leer el blob de ~750 KB del caché (~1,2 s medido) +
+    reescribirlo completo (~1,5 s). El usuario veía "AUTORIZANDO" girando
+    todo ese rato sin que nada de eso le sirviera.
+    """
+    import sys
+    import time
+    from pathlib import Path
+    _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+    import melonn_client as mc
+    import memoria
+
+    # Melonn tarda ~1s en propagar el cambio de estado entre su POST y su
+    # GET — si pedimos el detail de una, devuelve el estado viejo (hold) y
+    # el pedido sigue apareciendo en Pendientes.
+    time.sleep(1.5)
+    try:
+        r = mc.refrescar_un_pedido(orden_melonn)
+        log.info(f"Autorizar {orden_melonn}: refresh → {r.get('accion', 'sin cambio')}")
+    except Exception as e:
+        log.warning(f"No se pudo refrescar pedido tras autorizar {orden_melonn}: {e}")
+
+    # Audit trail — no bloquear nada si Supabase falla.
+    try:
+        memoria.agregar_accion(
+            orden_melonn,
+            "despacho_autorizado",
+            "Despacho autorizado vía dashboard MALE'DENIM OS",
+            autor,
+        )
+    except Exception as e:
+        log.warning(f"Audit trail falló para {orden_melonn}: {e}")
+
+
 @router.post("/pedidos/{orden_melonn}/autorizar-despacho", response_model=AutorizarResponse)
 def autorizar_despacho(
     orden_melonn: str,
+    background_tasks: BackgroundTasks,
     user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
 ) -> AutorizarResponse:
     """
@@ -463,7 +508,6 @@ def autorizar_despacho(
     if str(_SRC) not in sys.path:
         sys.path.insert(0, str(_SRC))
     import melonn_client as mc
-    import memoria
 
     # ── Verificar workflow obligatorio ──────────────────────────────────
     # Buscamos la fila en cod_acciones para esta orden. Si no existe o
@@ -573,27 +617,10 @@ def autorizar_despacho(
     if not ok:
         raise HTTPException(status_code=400, detail=mensaje)
 
-    # Refrescar ESE pedido en el caché. Esperamos un instante porque Melonn
-    # puede tardar ~1s en propagar el cambio de estado entre su POST y su
-    # GET — si llamamos el detail inmediatamente, devuelve el estado viejo
-    # (hold) y el pedido sigue apareciendo en Pendientes.
-    import time as _t
-    _t.sleep(1.5)
-    try:
-        r = mc.refrescar_un_pedido(orden_melonn)
-        log.info(f"Autorizar {orden_melonn}: refresh → {r.get('accion', 'sin cambio')}")
-    except Exception as e:
-        log.warning(f"No se pudo refrescar pedido tras autorizar {orden_melonn}: {e}")
-
-    # Audit trail: el usuario autenticado del JWT
-    try:
-        memoria.agregar_accion(
-            orden_melonn,
-            "despacho_autorizado",
-            "Despacho autorizado vía dashboard MALE'DENIM OS",
-            user.nombre,
-        )
-    except Exception:
-        pass  # No bloquear la autorización si Supabase falla
+    # Acá el hold ya está liberado: para Melonn el pedido está autorizado y
+    # la asesora puede seguir trabajando. Refrescar el caché y escribir la
+    # auditoría son tareas nuestras, no del usuario — van a background para
+    # devolver el botón de inmediato en vez de dejarlo girando ~4,5 s más.
+    background_tasks.add_task(_post_autorizacion, orden_melonn, user.nombre)
 
     return AutorizarResponse(ok=True, mensaje=mensaje, orden_melonn=orden_melonn)

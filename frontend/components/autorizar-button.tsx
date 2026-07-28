@@ -57,8 +57,15 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
     onSuccess: (data) => {
       setFeedback("ok");
       setMsg(data.mensaje);
-      qc.invalidateQueries({ queryKey: ["melonn"] });
       qc.invalidateQueries({ queryKey: ["metricas"] });
+      // El backend responde en cuanto Melonn libera el hold, y refresca su
+      // caché en background (~2s: espera la propagación de Melonn + reescribe
+      // el blob). Si pedimos la lista de una, llega el estado viejo y el
+      // pedido sigue apareciendo en Pendientes. Mientras tanto el botón ya
+      // dice "Autorizado", así que la espera no se siente.
+      setTimeout(() => {
+        qc.invalidateQueries({ queryKey: ["melonn"] });
+      }, 4000);
     },
     onError: (err: Error) => {
       setFeedback("error");
