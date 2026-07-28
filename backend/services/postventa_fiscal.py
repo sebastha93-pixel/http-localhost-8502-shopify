@@ -125,8 +125,15 @@ def preview_nota_credito(case_id: str) -> dict:
     # dejar que Siigo responda un 'invalid_document' que no explica nada.
     if not F.factura_aceptada_dian(factura):
         raise ValueError(F.motivo_factura_no_apta(factura))
+    # Cambio en tienda: la prenda entra a la bodega de esa tienda, no a la
+    # bodega de donde salió la venta online (evita el traslado manual).
+    bodega_destino = None
+    if caso.get("tienda"):
+        from backend.services import tiendas
+        bodega_destino = tiendas.validar_para_facturar(caso["tienda"])["bodega_id"]
     payload = F.construir_payload_nota_credito(
-        factura=factura, skus_a_acreditar=skus, modo=modo, fecha=_hoy())
+        factura=factura, skus_a_acreditar=skus, modo=modo, fecha=_hoy(),
+        bodega_destino=bodega_destino)
 
     total = payload["payments"][0]["value"]
     subtotal = round(sum(
@@ -232,9 +239,20 @@ def preview_factura_reemplazo(case_id: str) -> dict:
 
     item_reemplazo = _item_reemplazo(caso, items[0], factura)
     modo = fiscal_siigo.modo_actual()
+    # En tienda la factura sale del punto de venta (su prefijo y su bodega) y
+    # el excedente se cobra ahí mismo, no como cuenta por cobrar.
+    doc_id = bodega = pago_exc = None
+    if caso.get("tienda"):
+        from backend.services import tiendas
+        t = tiendas.validar_para_facturar(caso["tienda"])
+        doc_id, bodega = t["documento_factura_id"], t["bodega_id"]
+        pago_exc = caso.get("pago_excedente_id")
+        if pago_exc and not tiendas.forma_pago_valida(caso["tienda"], pago_exc):
+            raise ValueError("forma_pago_no_es_de_esa_tienda")
     payload = F.construir_payload_factura_reemplazo(
         factura_original=factura, item_reemplazo=item_reemplazo,
-        credito_con_iva=float(nc.get("amount") or 0), modo=modo, fecha=_hoy())
+        credito_con_iva=float(nc.get("amount") or 0), modo=modo, fecha=_hoy(),
+        documento_id=doc_id, bodega_id=bodega, pago_excedente_id=pago_exc)
     resumen = payload.pop("_resumen")
 
     _guardar_fiscal(case_id=case_id, doc_kind="factura",

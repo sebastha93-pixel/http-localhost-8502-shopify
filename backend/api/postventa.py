@@ -29,6 +29,8 @@ class CrearCasoIn(BaseModel):
     subreason: str = ""
     priority: str = "media"
     source: str = "interno"
+    tienda: str = ""
+    pago_excedente_id: Optional[int] = None
     assigned_to: Optional[str] = None
 
 
@@ -314,3 +316,13 @@ def shopify_variantes_dx(
     variante_mas_cara_que no encuentra nada. Solo lectura."""
     from backend.services import fiscal_shopify as FS
     return FS.diagnostico_variantes(precio_base)
+
+
+@router.get("/tiendas")
+def listar_tiendas(
+    _: CurrentUser = Depends(require_permission("postventa", "ver")),
+):
+    """Puntos de venta para atender un cambio presencial, con su estado de
+    configuracion y las formas de pago disponibles alli."""
+    from backend.services import tiendas
+    return tiendas.listar()
