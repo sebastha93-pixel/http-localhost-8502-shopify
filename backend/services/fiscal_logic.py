@@ -134,7 +134,8 @@ def items_factura_por_sku(factura: dict, skus: list[str]) -> list[dict]:
 
 
 def construir_payload_nota_credito(*, factura: dict, skus_a_acreditar: list[str],
-                                   modo: str, fecha: str) -> dict:
+                                   modo: str, fecha: str,
+                                   bodega_destino: Optional[int] = None) -> dict:
     """Arma el cuerpo del POST de la nota crédito. NO emite nada.
 
     Los montos se COPIAN de la factura original (ítems por SKU), no del panel.
@@ -162,7 +163,10 @@ def construir_payload_nota_credito(*, factura: dict, skus_a_acreditar: list[str]
             "branch_office": cliente.get("branch_office", 0),
         },
         "seller": factura.get("seller") or VENDEDOR_ONLINE_ID,
-        "items": [_linea_nc(it) for it in lineas],
+        # bodega_destino: en un cambio EN TIENDA la prenda entra al inventario
+        # de esa tienda, no a la bodega de donde salió la venta online. Evita
+        # tener que hacer después un traslado manual en Siigo.
+        "items": [_linea_nc(it, bodega_destino=bodega_destino) for it in lineas],
         # ANTICIPO CLIENTES maneja vencimiento (due_date: true en /payment-types),
         # así que Siigo exige due_date. Se usa la fecha del documento.
         "payments": [{"id": ANTICIPO_CLIENTES_ID, "value": total,
@@ -177,7 +181,7 @@ def construir_payload_nota_credito(*, factura: dict, skus_a_acreditar: list[str]
     return payload
 
 
-def _linea_nc(it: dict) -> dict:
+def _linea_nc(it: dict, *, bodega_destino: Optional[int] = None) -> dict:
     """Convierte un ítem de la factura Siigo en un ítem de nota crédito.
 
     Copia lo que el POST necesita: code, cantidad, precio base y —crítico para
@@ -197,11 +201,14 @@ def _linea_nc(it: dict) -> dict:
         linea["seller"] = it["seller"]
     # Bodega: el producto es de inventario (ej. MELONN). Se copia para que la
     # NC devuelva el stock a la misma bodega de la factura.
-    wh = it.get("warehouse")
-    if isinstance(wh, dict) and wh.get("id") is not None:
-        linea["warehouse"] = {"id": wh["id"]}
-    elif isinstance(wh, (int, str)) and wh not in ("", None):
-        linea["warehouse"] = {"id": wh}
+    if bodega_destino is not None:
+        linea["warehouse"] = {"id": int(bodega_destino)}
+    else:
+        wh = it.get("warehouse")
+        if isinstance(wh, dict) and wh.get("id") is not None:
+            linea["warehouse"] = {"id": wh["id"]}
+        elif isinstance(wh, (int, str)) and wh not in ("", None):
+            linea["warehouse"] = {"id": wh}
     if it.get("discount"):
         linea["discount"] = it["discount"]
     return linea
@@ -221,7 +228,10 @@ def base_desde_precio_con_iva(precio_con_iva: float) -> float:
 def construir_payload_factura_reemplazo(*, factura_original: dict,
                                         item_reemplazo: dict,
                                         credito_con_iva: float,
-                                        modo: str, fecha: str) -> dict:
+                                        modo: str, fecha: str,
+                                        documento_id: Optional[int] = None,
+                                        bodega_id: Optional[int] = None,
+                                        pago_excedente_id: Optional[int] = None) -> dict:
     """Arma el POST de la factura del reemplazo. NO emite.
 
     Regla del fundador:
@@ -249,8 +259,10 @@ def construir_payload_factura_reemplazo(*, factura_original: dict,
     payments = [{"id": ANTICIPO_CLIENTES_ID, "value": anticipo_aplicado,
                  "due_date": fecha}]
     if excedente > 0:
-        payments.append({"id": EXCEDENTE_PAYMENT_ID, "value": excedente,
-                         "due_date": fecha})
+        # En tienda el excedente se cobra ahí mismo (datáfono o caja); online
+        # queda como cuenta por cobrar.
+        payments.append({"id": int(pago_excedente_id or EXCEDENTE_PAYMENT_ID),
+                         "value": excedente, "due_date": fecha})
 
     linea = {
         "code": item_reemplazo.get("code"),
@@ -265,8 +277,13 @@ def construir_payload_factura_reemplazo(*, factura_original: dict,
     if isinstance(wh, dict) and wh.get("id") is not None:
         linea["warehouse"] = {"id": wh["id"]}
 
+    if bodega_id is not None:
+        linea["warehouse"] = {"id": int(bodega_id)}
+
     payload = {
-        "document": {"id": cfg["factura_id"]},
+        # documento_id: el punto de venta que factura (Florida FV-11/FV-12,
+        # Arrayanes FV-6). Sin él sale con el prefijo de online.
+        "document": {"id": int(documento_id) if documento_id else cfg["factura_id"]},
         "date": fecha,
         "customer": {
             "identification": cliente.get("identification"),

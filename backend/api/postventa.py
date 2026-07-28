@@ -29,6 +29,8 @@ class CrearCasoIn(BaseModel):
     subreason: str = ""
     priority: str = "media"
     source: str = "interno"
+    tienda: str = ""
+    pago_excedente_id: Optional[int] = None
     assigned_to: Optional[str] = None
 
 
@@ -324,3 +326,13 @@ def siigo_tipos_documento(
     Necesario para facturar un cambio desde la tienda correcta."""
     from backend.services import postventa_siigo as s
     return s.tipos_documento_completos()
+
+
+@router.get("/tiendas")
+def listar_tiendas(
+    _: CurrentUser = Depends(require_permission("postventa", "ver")),
+):
+    """Puntos de venta para atender un cambio presencial, con su estado de
+    configuracion y las formas de pago disponibles alli."""
+    from backend.services import tiendas
+    return tiendas.listar()
