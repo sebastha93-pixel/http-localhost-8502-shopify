@@ -336,3 +336,15 @@ def listar_tiendas(
     configuracion y las formas de pago disponibles alli."""
     from backend.services import tiendas
     return tiendas.listar()
+
+
+@router.get("/siigo/prefijos")
+def siigo_prefijos(
+    _: CurrentUser = Depends(require_permission("postventa", "modificar")),
+):
+    """Id de cada tipo de factura deducido de facturas reales.
+
+    /document-types no expone los tipos de las tiendas (FV-6, FV-11, FV-12);
+    aqui se deducen recorriendo facturas existentes."""
+    from backend.services import postventa_siigo as s
+    return s.documentos_por_prefijo()
