@@ -77,3 +77,32 @@ def test_inspeccionar_notas_credito_extrae_estructura(monkeypatch):
     assert m["document_id"] == 11817
     assert m["invoice_ref"] == "abc-factura"
     assert "items" in m["llaves_disponibles"]
+
+
+def test_facturas_aceptadas_pagina_hasta_encontrarlas(monkeypatch):
+    # Página 1: todas de hoy (InProcess). Página 2: ya aceptadas.
+    paginas = {
+        1: {"results": [
+            {"id": "a", "name": "FV-1-64200", "observations": "Orden Nº: 61226",
+             "stamp": {"status": "InProcess"}},
+        ]},
+        2: {"results": [
+            {"id": "b", "name": "FV-1-63043", "observations": "Orden Nº: 60112",
+             "stamp": {"status": "Accepted"}},
+        ]},
+    }
+    monkeypatch.setattr(pv.siigo, "siigo_configurado", lambda: True)
+    monkeypatch.setattr(pv.siigo, "siigo_get",
+                        lambda path, params=None: paginas.get(params.get("page"), {"results": []}))
+    r = pv.facturas_aceptadas(minimo=1)
+    assert len(r) == 1
+    assert r[0]["name"] == "FV-1-63043"      # saltó la de hoy
+
+
+def test_facturas_aceptadas_descarta_tienda_fisica(monkeypatch):
+    monkeypatch.setattr(pv.siigo, "siigo_configurado", lambda: True)
+    monkeypatch.setattr(pv.siigo, "siigo_get", lambda path, params=None: {
+        "results": [{"id": "x", "name": "FV-11-1121", "observations": "",
+                     "stamp": {"status": "Accepted"}}]} if params.get("page") == 1
+        else {"results": []})
+    assert pv.facturas_aceptadas(minimo=1) == []   # sin pedido Shopify
