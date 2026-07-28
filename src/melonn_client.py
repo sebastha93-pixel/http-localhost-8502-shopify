@@ -33,18 +33,68 @@ log = logging.getLogger(__name__)
 _bg_lock    = threading.Lock()
 _bg_running = False
 
+# Candado COMPARTIDO entre los 4 workers de Uvicorn. `_bg_running` es una
+# variable de proceso, así que solo frenaba refreshes dentro del MISMO worker:
+# los 4 podían estar martillando Melonn al mismo tiempo.
+#
+# El círculo vicioso que esto rompe (2026-07-28):
+#   1. Melonn nos devuelve 429 → _fetch_api muere y retorna vacío
+#   2. al retornar vacío, el caché NO se actualiza → sigue stale
+#   3. cada visita a la página ve caché stale y vuelve a llamar acá
+#   4. → otro martilleo de ~60s a Melonn, que vuelve a dar 429
+# Nunca salía solo: mientras más se usaba la app, más se saturaba. Por eso
+# "autorizar despacho" dejó de funcionar — no quedaba cuota para el POST.
+_BG_LOCK_PATH = Path("/tmp/maledenim-melonn-bg.lock")
+_BG_CLAIM_SEC     = 180    # un refresh no debería tardar más que esto
+_BG_COOLDOWN_SEC  = 900    # 15 min de tregua a Melonn tras un fallo
+
+
+def _bg_bloqueado() -> tuple[bool, str]:
+    """(True, motivo) si otro worker está refrescando o venimos de un fallo."""
+    try:
+        estado, hasta = _BG_LOCK_PATH.read_text().strip().split(":", 1)
+        restante = float(hasta) - time.time()
+    except FileNotFoundError:
+        return False, ""
+    except Exception:
+        return False, ""      # candado corrupto → no bloquear
+    if restante <= 0:
+        return False, ""
+    return True, f"{estado}, {int(restante)}s restantes"
+
+
+def _bg_marcar(estado: str, segundos: float) -> None:
+    try:
+        _BG_LOCK_PATH.write_text(f"{estado}:{time.time() + segundos:.0f}")
+    except Exception as e:
+        log.debug(f"[bg] no se pudo escribir el candado: {e}")
+
+
+def _bg_liberar() -> None:
+    try:
+        _BG_LOCK_PATH.unlink()
+    except Exception:
+        pass
+
+
 def _refresh_background():
     """
     Lanza un fetch completo en un hilo daemon.
-    Si ya hay uno en curso, no lanza otro.
+    No lanza otro si ya hay uno en curso (en ESTE worker o en cualquier otro),
+    ni si venimos de un fallo reciente por saturación de Melonn.
     Actualiza Supabase cuando termina → próxima sesión carga datos frescos.
     """
     global _bg_running
+    bloqueado, motivo = _bg_bloqueado()
+    if bloqueado:
+        log.info(f"[bg] Skip: {motivo}")
+        return
     with _bg_lock:
         if _bg_running:
             log.info("[bg] Skip: ya hay un refresh en curso")
             return
         _bg_running = True
+    _bg_marcar("refrescando", _BG_CLAIM_SEC)
 
     def _run():
         global _bg_running
@@ -54,11 +104,19 @@ def _refresh_background():
             elapsed = time.time() - t0
             if pedidos:
                 _cache_guardar(pedidos)
+                _bg_liberar()
                 log.info(f"[bg] OK: {len(pedidos)} pedidos guardados en Supabase · {elapsed:.1f}s")
             else:
-                log.warning(f"[bg] _fetch_api retornó vacío después de {elapsed:.1f}s")
+                # Casi siempre es 429. Darle tregua a Melonn en vez de volver a
+                # intentar en la siguiente visita a la página.
+                _bg_marcar("cooldown tras fallo", _BG_COOLDOWN_SEC)
+                log.warning(
+                    f"[bg] _fetch_api retornó vacío después de {elapsed:.1f}s "
+                    f"— pausando refreshes {_BG_COOLDOWN_SEC}s"
+                )
         except Exception as e:
             elapsed = time.time() - t0
+            _bg_marcar("cooldown tras error", _BG_COOLDOWN_SEC)
             log.error(f"[bg] ERROR después de {elapsed:.1f}s: {e}", exc_info=True)
         finally:
             with _bg_lock:
@@ -781,11 +839,12 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
     los 10 req/s que permite la API de Melonn.
     """
     url = f"{_BASE_URL}/{path.lstrip('/')}"
-    for attempt, backoff in enumerate([0] + _RETRY_BACKOFF):
-        if backoff:
-            log.warning(f"Melonn rate-limit — esperando {backoff}s (intento {attempt+1}/{_RETRY_MAX+1})")
-            time.sleep(backoff)
-
+    # OJO: NO dormir acá. Cada `continue` de abajo ya durmió lo suyo (el
+    # Retry-After de Melonn, o el backoff). Antes se dormía en los dos lados,
+    # así que un solo GET con 429 costaba ~90s en vez de ~50s: 20 (Retry-After)
+    # + 3 (backoff) + 20 + 8 + 20 + 20. Eso hacía que _fetch_api muriera entero
+    # en un par de llamadas y el caché nunca se refrescara.
+    for attempt in range(_RETRY_MAX + 1):
         _rate_limiter.wait()  # respeta el techo de _MAX_RPS req/s
 
         try:
@@ -797,13 +856,17 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
             )
 
             if r.status_code in (429, 503):
+                if attempt >= _RETRY_MAX:
+                    log.warning(f"HTTP {r.status_code} en {path} — reintentos agotados")
+                    return None
                 # Respeta Retry-After si la API lo devuelve
                 retry_after = int(r.headers.get("Retry-After", _RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF)-1)]))
-                log.warning(f"HTTP {r.status_code} — Retry-After: {retry_after}s")
-                if attempt < _RETRY_MAX:
-                    time.sleep(retry_after)
-                    continue
-                return None  # agotados los reintentos
+                log.warning(
+                    f"HTTP {r.status_code} en {path} — esperando {retry_after}s "
+                    f"(intento {attempt+1}/{_RETRY_MAX+1})"
+                )
+                time.sleep(retry_after)
+                continue
 
             r.raise_for_status()
             data = r.json()
@@ -844,11 +907,10 @@ def _post(path: str, body: dict = None) -> tuple:
     # Vale la pena esperar — la acción del usuario es crítica.
     post_backoff = [3, 8, 15, 25, 35]
 
-    for attempt, backoff in enumerate([0] + post_backoff):
-        if backoff:
-            log.warning(f"POST rate-limit — esperando {backoff}s (intento {attempt+1}/{len(post_backoff)+1})")
-            time.sleep(backoff)
-
+    # Mismo bug que en _get: acá también se dormía arriba Y en la rama del 429,
+    # así que el botón "Autorizar" podía quedarse >2 min girando antes de
+    # rendirse. Ahora cada rama duerme una sola vez, explícitamente.
+    for attempt in range(len(post_backoff) + 1):
         _rate_limiter.wait()
         try:
             r = requests.post(
@@ -895,6 +957,9 @@ def _post(path: str, body: dict = None) -> tuple:
         except Exception as e:
             log.warning(f"POST {url} error: {e}")
             if attempt < len(post_backoff):
+                # Antes este `continue` no dormía: se apoyaba en el sleep del
+                # tope del loop, que ya no está. Dormimos acá explícitamente.
+                time.sleep(post_backoff[attempt])
                 continue
             return False, None, str(e)
 
