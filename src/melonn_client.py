@@ -155,6 +155,46 @@ _RETRY_BACKOFF     = [3, 8, 20]       # antes 5,15,30 — más rápido para no c
 _CACHE_TTL_NOVEDAD = 1800             # igual que TTL principal
 
 
+# ── Cuota de la API agotada (distinto de un throttle pasajero) ─────────────────
+# La API de Melonn corre sobre AWS API Gateway, que devuelve DOS 429 distintos:
+#   {"message": "Too Many Requests"} -> throttle por rate/burst. Reintentar SIRVE.
+#   {"message": "Limit Exceeded"}    -> cuota del usage plan agotada. Reintentar
+#                                       NO sirve hasta que resetee la ventana o
+#                                       Melonn amplíe el plan.
+# Verificado 2026-07-28: UNA petición aislada, desde fuera de la app y sin nada
+# más corriendo, ya devolvía 429 {"message":"Limit Exceeded"}. O sea que no era
+# nuestro volumen. Antes tratábamos los dos igual, así que el botón "Autorizar"
+# se comía ~86s de reintentos condenados y terminaba en un error que le echaba
+# la culpa a la saturación.
+_QUOTA_MSG           = "Limit Exceeded"
+_QUOTA_COOLDOWN_SEC  = 300
+_quota_agotada_hasta = 0.0
+
+_ERROR_CUOTA = (
+    "La cuota de la API de Melonn está agotada (no es saturación pasajera: "
+    "reintentar no sirve). Hay que pedirle a Melonn que amplíe el plan, o "
+    "esperar a que reinicie la cuota."
+)
+
+
+def _es_cuota_agotada(r) -> bool:
+    """True si el 429 es por cuota del plan, no por ráfaga."""
+    try:
+        return (r.json() or {}).get("message") == _QUOTA_MSG
+    except Exception:
+        return False
+
+
+def _marcar_cuota_agotada() -> None:
+    global _quota_agotada_hasta
+    _quota_agotada_hasta = time.time() + _QUOTA_COOLDOWN_SEC
+
+
+def cuota_agotada() -> bool:
+    """Para que la UI/health pueda decir por qué no hay datos frescos."""
+    return time.time() < _quota_agotada_hasta
+
+
 class _RateLimiter:
     """Token bucket simplificado — garantiza <= _MAX_RPS requests/s."""
     def __init__(self):
@@ -838,6 +878,15 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
     Aplica el token-bucket antes de cada intento para nunca superar
     los 10 req/s que permite la API de Melonn.
     """
+    # Si ya sabemos que la cuota está agotada, no gastar ni la petición ni los
+    # reintentos. OJO: este corto solo aplica a los GET (sincronización,
+    # background). Los POST (acciones del usuario, como autorizar despacho) SÍ
+    # intentan siempre — son una sola petición y así el usuario se entera en el
+    # momento en que la cuota vuelva, sin esperar a que expire el cooldown.
+    if cuota_agotada():
+        log.info(f"Skip GET {path}: cuota Melonn agotada")
+        return None
+
     url = f"{_BASE_URL}/{path.lstrip('/')}"
     # OJO: NO dormir acá. Cada `continue` de abajo ya durmió lo suyo (el
     # Retry-After de Melonn, o el backoff). Antes se dormía en los dos lados,
@@ -856,6 +905,11 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
             )
 
             if r.status_code in (429, 503):
+                if _es_cuota_agotada(r):
+                    # Reintentar es tiempo tirado. Cortar de una.
+                    _marcar_cuota_agotada()
+                    log.error(f"CUOTA Melonn agotada (Limit Exceeded) en {path} — sin reintentos")
+                    return None
                 if attempt >= _RETRY_MAX:
                     log.warning(f"HTTP {r.status_code} en {path} — reintentos agotados")
                     return None
@@ -930,6 +984,14 @@ def _post(path: str, body: dict = None) -> tuple:
 
             # Rate limit / temporal: reintentar
             if r.status_code in (429, 503):
+                if _es_cuota_agotada(r):
+                    # Cuota del plan agotada: los 5 reintentos que seguían eran
+                    # ~86s de espera para un fracaso garantizado. Fallar ya, y
+                    # decirle al usuario la verdad de por qué.
+                    _marcar_cuota_agotada()
+                    _registrar_429(True)
+                    log.error(f"CUOTA Melonn agotada (Limit Exceeded) en POST {path} — sin reintentos")
+                    return False, None, _ERROR_CUOTA
                 retry_after_hdr = r.headers.get("Retry-After")
                 if retry_after_hdr and retry_after_hdr.isdigit() and int(retry_after_hdr) <= 60:
                     wait = int(retry_after_hdr)
