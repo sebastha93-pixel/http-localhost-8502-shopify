@@ -10,7 +10,6 @@ import { useAuth } from "@/components/auth-provider";
 import { ROL_LABEL, puedeVerModulo } from "@/lib/auth";
 import { NAV_HOME, gruposVisibles, homePath, type NavGroup, type NavItem } from "@/lib/nav";
 import { SyncButton } from "@/components/sync-button";
-import { NotificacionesBell } from "@/components/notificaciones-bell";
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -70,7 +69,6 @@ function UserBox() {
             {ROL_LABEL[user.rol]}
           </p>
         </div>
-        <NotificacionesBell />
         <button
           onClick={logout}
           title="Cerrar sesión"

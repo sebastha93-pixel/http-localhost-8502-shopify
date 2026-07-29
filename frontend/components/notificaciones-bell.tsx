@@ -1,17 +1,18 @@
 "use client";
 
 /**
- * Campanita de avisos internos.
+ * Campanita de avisos internos — fija arriba a la derecha.
  *
- * Suena cuando llega algo nuevo. El sonido se GENERA con Web Audio en vez de
- * cargar un mp3: no hay archivo que servir, no depende del CSP ni de que el
- * asset exista en el build.
+ * Va en AuthShell y no en PageShell: así aparece en TODAS las páginas
+ * privadas, incluidas las que no usan PageShell.
+ *
+ * El sonido se GENERA con Web Audio en vez de cargar un mp3: no hay archivo
+ * que servir, no depende del CSP ni de que el asset exista en el build.
  *
  * OJO con el autoplay: los navegadores bloquean el audio hasta que el usuario
- * interactúa con la página al menos una vez. Por eso se "desbloquea" con el
- * primer click/tecla de la sesión (ver `useDesbloqueoAudio`). En la práctica:
- * el primer aviso del día puede llegar mudo si nadie ha tocado nada todavía;
- * a partir del primer click suena siempre.
+ * interactúa con la página al menos una vez. Se desbloquea con el primer
+ * click/tecla de la sesión. En la práctica: el primer aviso del día puede
+ * llegar mudo; de ahí en adelante suena siempre.
  */
 
 import { useEffect, useRef, useState, useCallback } from "react";
@@ -44,7 +45,24 @@ const ICONO: Record<string, typeof Bell> = {
   lote_etapa: Truck,
 };
 
-/** Dos notas cortas, como un timbre discreto. Sin archivos externos. */
+// ── Sonido ────────────────────────────────────────────────────────────────
+// Agrupado acá arriba para que ajustarlo sea trivial: sube VOLUMEN si en el
+// taller no se oye, o baja GOLPES a 1 si resulta insistente.
+// Las amplitudes de abajo suman ~1.3 en el instante del golpe, así que el
+// maestro se queda en 0.62 para que el pico caiga cerca de 0.8 — fuerte pero
+// sin pegarle al techo. OJO: no subas VOLUMEN por encima de 0.75 sin bajar las
+// amplitudes de `parciales`; el compresor está puesto suave (−6 dB, ratio 4)
+// para que solo dome los picos, y si le entra mucha señal aplasta el golpe y
+// suena MÁS FLOJO, no más fuerte. Ese error ya lo cometí una vez acá.
+const VOLUMEN = 0.62;
+const GOLPES = 2;        // repeticiones del golpe
+const SEPARACION = 0.19; // segundos entre golpes
+
+/**
+ * Golpe de campana con cuerpo: fundamental grave + armónicos + un "clac" de
+ * ataque. Antes eran dos senoidales limpias y sonaban a notificación de
+ * celular; esto se parece más a un timbre de taller, que es donde se usa.
+ */
 function tocarTimbre() {
   try {
     const Ctx =
@@ -53,26 +71,74 @@ function tocarTimbre() {
         .webkitAudioContext;
     if (!Ctx) return;
     const ctx = new Ctx();
-    const notas = [
-      { f: 880, t: 0 },
-      { f: 1174, t: 0.11 },
+
+    // Compresor: deja subir el volumen sin que sature ni distorsione.
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -6;
+    comp.ratio.value = 4;
+    comp.connect(ctx.destination);
+
+    const maestro = ctx.createGain();
+    maestro.gain.value = VOLUMEN;
+    maestro.connect(comp);
+
+    // Parciales de una campana: la fundamental da el peso, las de arriba el
+    // brillo que atraviesa el ruido ambiente. Amplitud decreciente y colas
+    // más cortas en los agudos = suena a metal, no a pitido.
+    const parciales = [
+      { f: 220, a: 0.52, dur: 1.1, tipo: "triangle" as OscillatorType },
+      { f: 440, a: 0.32, dur: 0.9, tipo: "sine" as OscillatorType },
+      { f: 660, a: 0.19, dur: 0.6, tipo: "sine" as OscillatorType },
+      { f: 1320, a: 0.10, dur: 0.35, tipo: "sine" as OscillatorType },
     ];
-    notas.forEach(({ f, t }) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.value = f;
-      // Ataque y caída suaves: un tono cuadrado sin envolvente suena a "click".
-      gain.gain.setValueAtTime(0, ctx.currentTime + t);
-      gain.gain.linearRampToValueAtTime(0.18, ctx.currentTime + t + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.28);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(ctx.currentTime + t);
-      osc.stop(ctx.currentTime + t + 0.3);
-    });
-    // Cerrar el contexto para no acumular uno por aviso.
-    setTimeout(() => ctx.close().catch(() => {}), 800);
+
+    for (let g = 0; g < GOLPES; g++) {
+      const t0 = ctx.currentTime + g * SEPARACION;
+      // Segundo golpe un semitono abajo: da el "din-don" en vez de repetir.
+      const detune = g === 0 ? 1 : 0.94;
+
+      parciales.forEach(({ f, a, dur, tipo }) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = tipo;
+        osc.frequency.value = f * detune;
+        // Ataque casi instantáneo (3ms) = percusión. Caída exponencial = campana.
+        gain.gain.setValueAtTime(0, t0);
+        gain.gain.linearRampToValueAtTime(a, t0 + 0.003);
+        gain.gain.exponentialRampToValueAtTime(0.0008, t0 + dur);
+        osc.connect(gain);
+        gain.connect(maestro);
+        osc.start(t0);
+        osc.stop(t0 + dur + 0.05);
+      });
+
+      // "Clac" del badajo: ruido cortísimo pasado por filtro. Es lo que hace
+      // que el golpe se sienta contundente y no solo fuerte.
+      const dur = 0.05;
+      const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * dur), ctx.sampleRate);
+      const datos = buf.getChannelData(0);
+      for (let i = 0; i < datos.length; i++) {
+        // Decae rápido para que sea un golpe, no un siseo.
+        datos[i] = (Math.random() * 2 - 1) * (1 - i / datos.length) ** 3;
+      }
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      const bp = ctx.createBiquadFilter();
+      bp.type = "bandpass";
+      bp.frequency.value = 2400;
+      bp.Q.value = 1.2;
+      const gClac = ctx.createGain();
+      gClac.gain.value = 0.26;
+      src.connect(bp);
+      bp.connect(gClac);
+      gClac.connect(maestro);
+      src.start(t0);
+    }
+
+    // Cerrar el contexto: si no, se acumula uno por aviso y el navegador
+    // acaba negando los nuevos (hay un tope de contextos vivos).
+    const total = GOLPES * SEPARACION + 1.4;
+    setTimeout(() => ctx.close().catch(() => {}), total * 1000);
   } catch {
     /* sin audio disponible — el badge visual sigue funcionando */
   }
@@ -112,7 +178,7 @@ export function NotificacionesBell() {
   const qc = useQueryClient();
   const [abierto, setAbierto] = useState(false);
   const audioListo = useDesbloqueoAudio();
-  // null = primera carga. Sin esto, al entrar suena por los avisos viejos.
+  // null = primera carga. Sin esto suena al entrar por los avisos viejos.
   const previas = useRef<number | null>(null);
 
   const q = useQuery<Respuesta>({
@@ -129,7 +195,6 @@ export function NotificacionesBell() {
     if (!q.data) return;
     const antes = previas.current;
     previas.current = noLeidas;
-    // Solo suena si SUBIÓ, y nunca en la primera carga.
     if (antes !== null && noLeidas > antes && audioListo.current) {
       tocarTimbre();
     }
@@ -160,16 +225,21 @@ export function NotificacionesBell() {
   const items = q.data?.notificaciones ?? [];
 
   return (
-    <div className="relative">
+    <div className="fixed top-6 right-6 z-40">
       <button
         onClick={() => setAbierto((v) => !v)}
         title={noLeidas ? `${noLeidas} sin leer` : "Avisos"}
         aria-label={noLeidas ? `Avisos: ${noLeidas} sin leer` : "Avisos"}
-        className="relative text-steel/70 hover:text-white p-1 rounded hover:bg-white/5"
+        className={cn(
+          "relative flex h-9 w-9 items-center justify-center rounded-sm border bg-card shadow-sm transition-colors",
+          noLeidas > 0
+            ? "border-terracotta/40 text-terracotta hover:bg-terracotta/5"
+            : "border-border text-graphite hover:bg-cloud dark:hover:bg-ink-800",
+        )}
       >
-        <Bell className="h-3.5 w-3.5" />
+        <Bell className="h-4 w-4" />
         {noLeidas > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[1rem] h-4 px-1 flex items-center justify-center rounded-full bg-terracotta text-[0.6rem] font-bold text-white tabular-nums">
+          <span className="absolute -top-1.5 -right-1.5 min-w-[1.15rem] h-[1.15rem] px-1 flex items-center justify-center rounded-full bg-terracotta text-[0.62rem] font-bold text-white tabular-nums shadow">
             {noLeidas > 99 ? "99+" : noLeidas}
           </span>
         )}
@@ -177,14 +247,13 @@ export function NotificacionesBell() {
 
       {abierto && (
         <>
-          {/* Capa para cerrar al hacer click afuera */}
           <div
             className="fixed inset-0 z-40"
             onClick={() => setAbierto(false)}
             aria-hidden
           />
-          <div className="absolute bottom-full right-0 mb-2 z-50 w-80 max-h-96 overflow-y-auto rounded-sm border border-border bg-white shadow-lg">
-            <div className="sticky top-0 flex items-center justify-between border-b border-border bg-white px-3 py-2">
+          <div className="absolute top-full right-0 mt-2 z-50 w-80 max-h-[70vh] overflow-y-auto rounded-sm border border-border bg-card shadow-lg">
+            <div className="sticky top-0 flex items-center justify-between border-b border-border bg-card px-3 py-2">
               <span className="text-[0.68rem] font-semibold uppercase tracking-[0.15em] text-graphite">
                 Avisos
               </span>
@@ -220,7 +289,7 @@ export function NotificacionesBell() {
                             "text-xs leading-snug",
                             n.leida
                               ? "text-graphite"
-                              : "font-semibold text-ink",
+                              : "font-semibold text-ink-900 dark:text-foreground",
                           )}
                         >
                           {n.titulo}
@@ -240,7 +309,7 @@ export function NotificacionesBell() {
                     <li
                       key={n.id}
                       className={cn(
-                        "px-3 py-2.5 hover:bg-concrete/50",
+                        "px-3 py-2.5 hover:bg-cloud/60 dark:hover:bg-ink-800/60",
                         !n.leida && "bg-terracotta/[0.04]",
                       )}
                     >
