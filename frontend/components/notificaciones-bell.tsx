@@ -186,6 +186,11 @@ export function NotificacionesBell() {
     queryFn: () => api.get("/api/notificaciones"),
     enabled: !!user,
     refetchInterval: 20_000,
+    // CRÍTICO para este caso de uso: sin esto, React Query PAUSA el intervalo
+    // cuando la pestaña pierde el foco (es su default). El diseñador tendría
+    // la app abierta en otra pestaña, el cortador cerraría el corte, y no se
+    // enteraría hasta volver a la pestaña — justo cuando el aviso ya no sirve.
+    refetchIntervalInBackground: true,
     refetchOnWindowFocus: true,
   });
 
