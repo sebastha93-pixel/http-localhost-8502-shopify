@@ -3,8 +3,10 @@ backend.api.melonn — Endpoints REST de logística (Melonn).
 """
 from __future__ import annotations
 
+import json
 import os
 import logging
+import re
 from typing import Optional, Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -169,19 +171,34 @@ async def webhook_receiver(request: Request, secret: Optional[str] = Query(None)
     # Se loguean SOLO LOS NOMBRES de los campos, nunca los valores: eventData
     # puede traer nombre, teléfono y dirección de la clienta, y eso no tiene
     # por qué quedar en los logs.
+    # La primera versión de esto solo miraba `payload["eventData"]` y solo si era
+    # un dict — así que con 7 webhooks recibidos y aceptados no logueó ni uno.
+    # Ahora se recorre el payload COMPLETO en profundidad y siempre queda rastro.
     try:
-        ed = payload.get("eventData") if isinstance(payload, dict) else None
-        if isinstance(ed, dict):
-            def _forma(v: Any) -> str:
-                if isinstance(v, dict):
-                    return "{" + ",".join(sorted(v.keys())[:12]) + "}"
-                if isinstance(v, list):
-                    return f"[{len(v)}]"
-                return type(v).__name__
-            forma = ", ".join(f"{k}:{_forma(v)}" for k, v in sorted(ed.items())[:20])
-            log.info(f"[webhook-forma] {evento} · eventData → {forma}")
+        def _forma(v: Any, prof: int = 0) -> str:
+            """Describe la estructura, nunca los valores."""
+            if isinstance(v, dict):
+                if prof >= 2:
+                    return "{…}"
+                return "{" + ", ".join(
+                    f"{k}:{_forma(vv, prof + 1)}" for k, vv in sorted(v.items())[:18]
+                ) + "}"
+            if isinstance(v, list):
+                return f"[{len(v)}×{_forma(v[0], prof + 1)}]" if v else "[]"
+            if v is None:
+                return "null"
+            return type(v).__name__
+        log.info(f"[webhook-forma] {evento} · payload → {_forma(payload)[:1200]}")
+
+        # Atajo: marcar de una si viene algún campo de fecha/hora, que es lo que
+        # andamos buscando (ship_timestamp para la fecha real de despacho).
+        crudo = json.dumps(payload) if payload else ""
+        fechas = sorted(set(re.findall(
+            r'"([a-z_]*(?:timestamp|_date|_at|promise[a-z_]*))"', crudo, re.I)))
+        if fechas:
+            log.info(f"[webhook-fechas] {evento} · campos temporales: {', '.join(fechas)}")
     except Exception as e:
-        log.debug(f"[webhook-forma] no se pudo inspeccionar: {e}")
+        log.warning(f"[webhook-forma] no se pudo inspeccionar: {e}")
 
     # Refrescar solo ese pedido
     try:
