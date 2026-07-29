@@ -130,7 +130,7 @@ async def webhook_receive(request: Request, background_tasks: BackgroundTasks) -
     obj = payload.get("object") or ""
     if obj == "whatsapp_business_account":
         _stats["whatsapp_events"] += 1
-        result = _procesar_whatsapp(payload)
+        result = _procesar_whatsapp(payload, background_tasks)
     elif obj == "page":
         _stats["messenger_events"] += 1
         result = _procesar_messenger(payload)
@@ -156,10 +156,16 @@ async def webhook_receive(request: Request, background_tasks: BackgroundTasks) -
 # Parsers por canal
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _procesar_whatsapp(payload: dict) -> dict:
+def _procesar_whatsapp(payload: dict, background_tasks: Optional[BackgroundTasks] = None) -> dict:
     """Parsea evento de WhatsApp Cloud API.
     Estructura: payload.entry[].changes[].value.messages[] (incoming)
                                        .value.statuses[] (delivery/read)
+
+    `background_tasks` viene del endpoint y sirve para encolar la transcripción
+    de audios. Es opcional a propósito: si algún día se llama a esta función
+    fuera de una request (un backfill, un test), el audio se guarda igual y solo
+    se pierde la transcripción. ANTES no era un parámetro y se usaba de todos
+    modos: cada audio entrante tumbaba el lote con NameError.
     """
     sb = db._sb()
     if sb is None:
@@ -228,7 +234,8 @@ def _procesar_whatsapp(payload: dict) -> dict:
                                     _tx.transcribir_uno(f"meta-wa-{msg_id_arg}", media_id_arg)
                                 except Exception:
                                     pass
-                            background_tasks.add_task(_tx_now)
+                            if background_tasks is not None:
+                                background_tasks.add_task(_tx_now)
 
             # Statuses (sent/delivered/read) — son los eventos para OUTGOING
             # Meta los envía con el id del mensaje saliente. Si NO lo teníamos
