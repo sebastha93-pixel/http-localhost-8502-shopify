@@ -112,7 +112,10 @@ def avisar_lote_avanzo(ruta: dict, *, etapa_nueva: str, oc: Optional[dict],
             tipo="lote_etapa",
             titulo=f"Lote {cons}: {texto}",
             mensaje=f"El lote del corte {cons} pasó a «{texto}».",
-            enlace=f"/produccion/rutas?lote={ruta.get('id') or ''}",
+            # Al panel de rutas, sin query param: /produccion/rutas NO lee
+            # ningún `?lote=`, así que pasarlo era decorativo — el enlace
+            # prometía llevar al lote y solo abría la lista.
+            enlace="/produccion/rutas",
             meta={"ruta_id": ruta.get("id"),
                   "orden_corte_id": (oc or {}).get("id"),
                   "consecutivo": cons, "etapa": etapa_nueva},

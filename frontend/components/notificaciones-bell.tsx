@@ -10,17 +10,20 @@
  * que servir, no depende del CSP ni de que el asset exista en el build.
  *
  * OJO con el autoplay: los navegadores bloquean el audio hasta que el usuario
- * interactúa con la página al menos una vez. Se desbloquea con el primer
- * click/tecla de la sesión. En la práctica: el primer aviso del día puede
- * llegar mudo; de ahí en adelante suena siempre.
+ * interactúa con la página. El contexto se crea al montar y se despierta con
+ * cualquier gesto (click, tecla, scroll, rueda, foco). Si la página se carga y
+ * NADIE la toca, no hay forma de hacerlo sonar — es política del navegador, no
+ * un bug. Para esos casos está el botón "Probar" del panel, y sobre todo la
+ * notificación del sistema, cuyo permiso SÍ persiste entre recargas.
  */
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
-import { Bell, Check, Scissors, PackageCheck, Truck } from "lucide-react";
+import { Bell, Check, Scissors, PackageCheck, Truck, Volume2 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 interface Notificacion {
@@ -242,6 +245,7 @@ function hace(iso: string): string {
 export function NotificacionesBell() {
   const { user } = useAuth();
   const qc = useQueryClient();
+  const router = useRouter();
   const [abierto, setAbierto] = useState(false);
   const audioCtx = useAudioCompartido();
   // null = primera carga. Sin esto suena al entrar por los avisos viejos.
@@ -285,29 +289,18 @@ export function NotificacionesBell() {
 
   const noLeidas = q.data?.no_leidas ?? 0;
 
-  useEffect(() => {
-    if (!q.data) return;
-    const antes = previas.current;
-    previas.current = noLeidas;
-    if (antes === null || noLeidas <= antes) return;
-
-    if (audioCtx.current) tocarTimbre(audioCtx.current);
-
-    // Notificación del sistema: es lo único que se ve cuando el navegador
-    // está detrás de otra ventana. `tag` fijo para que no se apilen 10.
-    try {
-      if (typeof Notification !== "undefined" &&
-          Notification.permission === "granted") {
-        const nueva = q.data?.notificaciones?.find((x) => !x.leida);
-        new Notification("MALE'DENIM · Producción", {
-          body: nueva?.titulo ?? `${noLeidas} avisos sin leer`,
-          tag: "maledenim-avisos",
-        });
-      }
-    } catch {
-      /* sin soporte de notificaciones — el sonido y el badge siguen */
+  // Prueba manual del timbre. El click en sí ya despierta el AudioContext
+  // (useAudioCompartido escucha `click`), así que si antes no sonaba, después
+  // de tocar este botón una vez empieza a sonar en esta pestaña.
+  const probarSonido = useCallback(() => {
+    const ctx = audioCtx.current;
+    if (!ctx) return;
+    if (ctx.state === "suspended") {
+      ctx.resume().then(() => tocarTimbre(ctx)).catch(() => {});
+    } else {
+      tocarTimbre(ctx);
     }
-  }, [noLeidas, q.data, audioCtx]);
+  }, [audioCtx]);
 
   const marcarTodas = useCallback(async () => {
     try {
@@ -329,6 +322,46 @@ export function NotificacionesBell() {
     },
     [qc],
   );
+
+  useEffect(() => {
+    if (!q.data) return;
+    const antes = previas.current;
+    previas.current = noLeidas;
+    if (antes === null || noLeidas <= antes) return;
+
+    if (audioCtx.current) tocarTimbre(audioCtx.current);
+
+    // Notificación del sistema: es lo único que se ve cuando el navegador
+    // está detrás de otra ventana. `tag` fijo para que no se apilen 10.
+    try {
+      if (typeof Notification !== "undefined" &&
+          Notification.permission === "granted") {
+        const nueva = q.data?.notificaciones?.find((x) => !x.leida);
+        const banner = new Notification("MALE'DENIM · Producción", {
+          body: nueva?.titulo ?? `${noLeidas} avisos sin leer`,
+          tag: "maledenim-avisos",
+        });
+        // Tocar el banner lleva al movimiento que lo genero. Sin esto el
+        // banner era decorativo: se podia hacer click y no pasaba nada.
+        banner.onclick = () => {
+          try {
+            window.focus();          // traer el navegador al frente
+            banner.close();
+            if (nueva) {
+              if (!nueva.leida) marcarUna(nueva.id);
+              if (nueva.enlace) router.push(nueva.enlace);
+            }
+          } catch {
+            /* si no se puede navegar, al menos se enfocó la ventana */
+          }
+        };
+      }
+    } catch {
+      /* sin soporte de notificaciones — el sonido y el badge siguen */
+    }
+  }, [noLeidas, q.data, audioCtx, router, marcarUna]);
+
+
 
   if (!user) return null;
   const items = q.data?.notificaciones ?? [];
@@ -366,14 +399,26 @@ export function NotificacionesBell() {
               <span className="text-[0.68rem] font-semibold uppercase tracking-[0.15em] text-graphite">
                 Avisos
               </span>
-              {noLeidas > 0 && (
+              <div className="flex items-center gap-3">
+                {/* Probar el timbre a voluntad. Doble propósito: además de
+                    dejarte oírlo, el click DESBLOQUEA el audio del navegador
+                    — que es la parte frágil de todo esto. */}
                 <button
-                  onClick={marcarTodas}
-                  className="inline-flex items-center gap-1 text-[0.68rem] font-semibold text-teal hover:underline"
+                  onClick={probarSonido}
+                  title="Escuchar el timbre (y habilitar el audio de esta pestaña)"
+                  className="inline-flex items-center gap-1 text-[0.68rem] font-semibold text-graphite hover:text-ink-900 dark:hover:text-foreground"
                 >
-                  <Check className="h-3 w-3" /> Marcar todas
+                  <Volume2 className="h-3 w-3" /> Probar
                 </button>
-              )}
+                {noLeidas > 0 && (
+                  <button
+                    onClick={marcarTodas}
+                    className="inline-flex items-center gap-1 text-[0.68rem] font-semibold text-teal hover:underline"
+                  >
+                    <Check className="h-3 w-3" /> Marcar todas
+                  </button>
+                )}
+              </div>
             </div>
 
             {items.length === 0 ? (
