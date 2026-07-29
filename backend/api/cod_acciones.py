@@ -24,6 +24,7 @@ Tabla en Supabase:
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -32,7 +33,37 @@ from pydantic import BaseModel
 from backend.core.security import CurrentUser, require_role, require_permission
 from backend.services import revenue_db as db
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/cod-acciones", tags=["cod-acciones"])
+
+def _bitacora(orden: str, tipo: str, descripcion: str, autor: str) -> None:
+    """Deja el evento en la tabla `acciones` (la bitácora del pedido).
+
+    POR QUÉ HACE FALTA: `cod_acciones` es un UPSERT con on_conflict en
+    orden_melonn — UNA fila por pedido. Guarda el ESTADO actual, que es lo que
+    el gate de autorizar-despacho necesita, pero pisa lo anterior: si llamas
+    tres veces a la clienta solo sobrevive la última, y si marcas "no contesta"
+    y luego "acuerdo", el "no contesta" desaparece.
+
+    Estado y bitácora son cosas distintas y estaban confundidas: por eso el
+    contacto con la clienta se veía en la pestaña Pendientes (que lee
+    cod_acciones directo) pero NUNCA aparecía en el historial del pedido.
+
+    Nunca levanta: el estado ya quedó guardado, y perder una línea de bitácora
+    no puede tumbar la acción del usuario.
+    """
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _S = _Path(__file__).resolve().parent.parent.parent / "src"
+        if str(_S) not in _sys.path:
+            _sys.path.insert(0, str(_S))
+        import memoria
+        memoria.agregar_accion(orden, tipo, descripcion, autor)
+    except Exception as e:
+        log.warning(f"[cod_acciones] bitacora {tipo} de {orden}: {str(e)[:160]}")
+
 
 
 class ContactoIn(BaseModel):
@@ -159,6 +190,10 @@ def registrar_contacto(
             # El path era la "otra" clave — guardarla en orden_tienda
             payload.setdefault("orden_tienda", orden_melonn)
         sb.table("cod_acciones").upsert(payload, on_conflict="orden_melonn").execute()
+        VIA_TEXTO = {"llamada": "Llamada", "mensaje": "WhatsApp"}
+        _bitacora(pk, "llamada",
+                  f"{VIA_TEXTO.get(body.via, body.via)} a la clienta",
+                  getattr(user, "nombre", "") or getattr(user, "email", "") or "Equipo")
         return {"ok": True, "contacto_via": body.via, "contacto_at": now_iso}
     except Exception as e:
         raise HTTPException(500, f"upsert: {str(e)[:200]}")
@@ -211,6 +246,14 @@ def registrar_respuesta(
         if otro_id:
             payload["orden_tienda"] = otro_id
         sb.table("cod_acciones").upsert(payload, on_conflict="orden_melonn").execute()
+        RESP_TEXTO = {
+            "aprobacion":  ("acuerdo_cliente", "La clienta confirmó el pedido"),
+            "no_contesta": ("llamada",         "La clienta no contestó"),
+            "rechazo":     ("devolucion",      "La clienta rechazó el pedido"),
+        }
+        tipo, texto = RESP_TEXTO.get(body.valor, ("otro", f"Respuesta: {body.valor}"))
+        _bitacora(pk, tipo, texto,
+                  getattr(user, "nombre", "") or getattr(user, "email", "") or "Equipo")
         return {"ok": True, "respuesta": body.valor, "respuesta_at": now_iso}
     except HTTPException:
         raise

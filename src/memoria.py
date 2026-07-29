@@ -190,14 +190,76 @@ TIPOS_ACCION = ["despacho_autorizado", "llamada", "escalado", "visita",
                 "acuerdo_cliente", "gestion_transportadora", "resuelto",
                 "devolucion", "otro"]
 
+# ── Llave canónica de un pedido ────────────────────────────────────────────────
+# EL BUG QUE ESTO ARREGLA (2026-07-29): nadie decidía cuál era la llave de un
+# pedido, así que cada quien guardaba con lo que tenía a mano. Medido en
+# producción: las 12 últimas filas de `acciones` estaban guardadas con
+# orden_tienda ("61288"), mientras el frontend pedía el historial con
+# orden_melonn ("M1785..."). Resultado: 12 despachos autorizados por Laura
+# García existían en la base y eran INVISIBLES en la app.
+#
+# La canónica es orden_melonn: siempre está presente (orden_tienda viene null
+# en pedidos cargados a mano) y es lo que el frontend ya prefería.
+#
+# Se normaliza al ESCRIBIR y al LEER, así que da igual con qué llame el
+# llamador. Eso hace el bug imposible, no solo corregido.
+_MAPA_TTL = 300.0
+_mapa_cache: dict = {"ts": 0.0, "mapa": {}}
+
+
+def _mapa_tienda_a_melonn() -> dict:
+    """{orden_tienda: orden_melonn} desde el caché de Melonn, memoizado 5 min.
+
+    Sin memoizar, cada expansión de un pedido leería el blob de ~750 KB.
+    """
+    import time
+    now = time.time()
+    if now - _mapa_cache["ts"] < _MAPA_TTL and _mapa_cache["mapa"]:
+        return _mapa_cache["mapa"]
+    mapa: dict = {}
+    try:
+        import melonn_client as mc
+        hit = mc._cache_leer(ignorar_ttl=True)
+        if hit:
+            for p in hit[0]:
+                ot, om = p.get("orden_tienda"), p.get("orden_melonn")
+                if ot and om:
+                    mapa[str(ot)] = str(om)
+    except Exception as e:
+        print(f"[memoria] no pude construir el mapa de órdenes: {e}")
+    if mapa:
+        _mapa_cache.update(ts=now, mapa=mapa)
+    return mapa
+
+
+def normalizar_orden(orden: str) -> str:
+    """Devuelve la llave canónica (orden_melonn) para cualquier identificador.
+
+    Si ya es un M-id lo deja igual. Si es un orden_tienda y está en el caché,
+    lo traduce. Si no se puede traducir devuelve la entrada tal cual: perder el
+    dato sería peor que guardarlo con una llave imperfecta.
+    """
+    o = str(orden or "").strip()
+    if not o:
+        return o
+    if o[0] in "Mm" and o[1:].isdigit():
+        return o
+    return _mapa_tienda_a_melonn().get(o, o)
+
+
 def cargar_acciones(orden: str) -> pd.DataFrame:
     sb = _client()
     if sb is None:
         return pd.DataFrame()
     try:
+        canon = normalizar_orden(orden)
+        # Se busca por la canónica Y por la que entró: así el historial viejo
+        # (guardado con orden_tienda) aparece aunque la migración no haya
+        # corrido, y sigue apareciendo si alguien guarda con la otra llave.
+        llaves = {canon, str(orden or "").strip()} - {""}
         res = (sb.table("acciones")
                .select("tipo,descripcion,autor,creada_en")
-               .eq("orden", orden)
+               .in_("orden", sorted(llaves))
                .order("creada_en", desc=False)
                .execute())
         df = pd.DataFrame(res.data)
@@ -216,7 +278,7 @@ def agregar_accion(orden: str, tipo: str, descripcion: str, autor: str) -> tuple
         return False, "Supabase no está conectado"
     try:
         sb.table("acciones").insert({
-            "orden":       orden,
+            "orden":       normalizar_orden(orden),
             "tipo":        tipo,
             "descripcion": descripcion.strip(),
             "autor":       autor.strip() or "Equipo",
