@@ -63,14 +63,12 @@ const SEPARACION = 0.19; // segundos entre golpes
  * ataque. Antes eran dos senoidales limpias y sonaban a notificación de
  * celular; esto se parece más a un timbre de taller, que es donde se usa.
  */
-function tocarTimbre() {
+function tocarTimbre(ctx: AudioContext) {
   try {
-    const Ctx =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext })
-        .webkitAudioContext;
-    if (!Ctx) return;
-    const ctx = new Ctx();
+    // El contexto llega YA creado y desbloqueado por un gesto del usuario.
+    // Si está suspendido (el navegador lo duerme en pestañas de fondo), se
+    // reanuda: eso SÍ está permitido, porque el contexto nació de un gesto.
+    if (ctx.state === "suspended") void ctx.resume();
 
     // Compresor: deja subir el volumen sin que sature ni distorsione.
     const comp = ctx.createDynamicsCompressor();
@@ -135,32 +133,59 @@ function tocarTimbre() {
       src.start(t0);
     }
 
-    // Cerrar el contexto: si no, se acumula uno por aviso y el navegador
-    // acaba negando los nuevos (hay un tope de contextos vivos).
-    const total = GOLPES * SEPARACION + 1.4;
-    setTimeout(() => ctx.close().catch(() => {}), total * 1000);
+    // NO se cierra el contexto: es compartido y se reutiliza en cada aviso.
+    // Cerrarlo obligaría a crear uno nuevo, y uno creado fuera de un gesto
+    // del usuario nace suspendido y no suena — que era justo el bug.
   } catch {
     /* sin audio disponible — el badge visual sigue funcionando */
   }
 }
 
-/** El navegador exige un gesto del usuario antes de permitir audio. */
-function useDesbloqueoAudio() {
-  const listo = useRef(false);
+/**
+ * Crea UN AudioContext en el primer gesto del usuario y lo reutiliza siempre.
+ *
+ * EL BUG QUE ESTO ARREGLA: antes se creaba un contexto nuevo en el momento de
+ * cada aviso. Si la pestaña estaba en segundo plano (el caso normal: tienes la
+ * app abierta y trabajas en otra cosa), ese contexto nacía suspendido y el
+ * aviso llegaba MUDO. El badge subía, el sonido no salía.
+ *
+ * Un contexto creado DURANTE un gesto queda autorizado para toda la vida de la
+ * página y puede sonar después, incluso desde una pestaña de fondo.
+ */
+function useAudioCompartido() {
+  const ref = useRef<AudioContext | null>(null);
   useEffect(() => {
-    const desbloquear = () => {
-      listo.current = true;
-      window.removeEventListener("click", desbloquear);
-      window.removeEventListener("keydown", desbloquear);
+    const crear = () => {
+      if (ref.current) return;
+      const Ctx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
+      if (!Ctx) return;
+      try {
+        const ctx = new Ctx();
+        // Un tick de silencio: algunos navegadores solo consideran el contexto
+        // "usado" (y por tanto autorizado) si algo suena dentro del gesto.
+        const g = ctx.createGain();
+        g.gain.value = 0;
+        g.connect(ctx.destination);
+        const o = ctx.createOscillator();
+        o.connect(g);
+        o.start();
+        o.stop(ctx.currentTime + 0.01);
+        ref.current = ctx;
+      } catch {
+        /* sin audio */
+      }
     };
-    window.addEventListener("click", desbloquear);
-    window.addEventListener("keydown", desbloquear);
+    window.addEventListener("click", crear);
+    window.addEventListener("keydown", crear);
     return () => {
-      window.removeEventListener("click", desbloquear);
-      window.removeEventListener("keydown", desbloquear);
+      window.removeEventListener("click", crear);
+      window.removeEventListener("keydown", crear);
     };
   }, []);
-  return listo;
+  return ref;
 }
 
 function hace(iso: string): string {
@@ -177,9 +202,24 @@ export function NotificacionesBell() {
   const { user } = useAuth();
   const qc = useQueryClient();
   const [abierto, setAbierto] = useState(false);
-  const audioListo = useDesbloqueoAudio();
+  const audioCtx = useAudioCompartido();
   // null = primera carga. Sin esto suena al entrar por los avisos viejos.
   const previas = useRef<number | null>(null);
+
+  // Permiso para notificaciones del sistema (macOS/Windows). Se pide en el
+  // primer gesto, no al cargar: pedirlo de entrada es intrusivo y los
+  // navegadores penalizan los prompts sin contexto.
+  useEffect(() => {
+    const pedir = () => {
+      window.removeEventListener("click", pedir);
+      if (typeof Notification !== "undefined" &&
+          Notification.permission === "default") {
+        Notification.requestPermission().catch(() => {});
+      }
+    };
+    window.addEventListener("click", pedir);
+    return () => window.removeEventListener("click", pedir);
+  }, []);
 
   const q = useQuery<Respuesta>({
     queryKey: ["notificaciones"],
@@ -200,10 +240,25 @@ export function NotificacionesBell() {
     if (!q.data) return;
     const antes = previas.current;
     previas.current = noLeidas;
-    if (antes !== null && noLeidas > antes && audioListo.current) {
-      tocarTimbre();
+    if (antes === null || noLeidas <= antes) return;
+
+    if (audioCtx.current) tocarTimbre(audioCtx.current);
+
+    // Notificación del sistema: es lo único que se ve cuando el navegador
+    // está detrás de otra ventana. `tag` fijo para que no se apilen 10.
+    try {
+      if (typeof Notification !== "undefined" &&
+          Notification.permission === "granted") {
+        const nueva = q.data?.notificaciones?.find((x) => !x.leida);
+        new Notification("MALE'DENIM · Producción", {
+          body: nueva?.titulo ?? `${noLeidas} avisos sin leer`,
+          tag: "maledenim-avisos",
+        });
+      }
+    } catch {
+      /* sin soporte de notificaciones — el sonido y el badge siguen */
     }
-  }, [noLeidas, q.data, audioListo]);
+  }, [noLeidas, q.data, audioCtx]);
 
   const marcarTodas = useCallback(async () => {
     try {
