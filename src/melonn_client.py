@@ -243,6 +243,49 @@ _CAMPOS_ENRIQUECIDOS = (
 _REINTENTO_DETALLE_HORAS = 24
 
 
+def _limpiar_nombre_estado(nombre: str) -> str:
+    """El DETALLE de Melonn devuelve el nombre del estado duplicado:
+    "Ready For PackingReady For Packing". Si la cadena es exactamente su
+    primera mitad repetida, la colapsa. Verificado contra la API 2026-07-29.
+    """
+    n = (nombre or "").strip()
+    if n and len(n) % 2 == 0:
+        mitad = len(n) // 2
+        # Mínimo 3 caracteres por mitad: sin esto, un nombre legítimo de dos
+        # letras como "aa" se colapsaría a "a". Los estados reales de Melonn
+        # son largos ("Ready For Packing"), así que el piso no estorba.
+        if mitad >= 3 and n[:mitad] == n[mitad:]:
+            return n[:mitad]
+    return n
+
+
+def _estado_de(obj: dict) -> tuple:
+    """(código, nombre) del estado, tolerando las DOS formas que usa Melonn.
+
+    EL BUG QUE ESTO ARREGLA (verificado contra la API 2026-07-29): el LISTADO
+    y el DETALLE devuelven el estado con nombres de campo distintos.
+
+        LISTADO:  {"code": 28, "name": "Ready For Packing"}
+        DETALLE:  {"id":   28, "name": "Ready For PackingReady For Packing"}
+
+    Leíamos solo `code`. En el detalle no existe, así que daba 0 — y el camino
+    del webhook usa el detalle. Resultado: cada refresco por webhook dejaba el
+    pedido con código de estado 0 y lo sacaba de su clasificación real
+    (pendiente / en tránsito / entregado). Encima el nombre venía duplicado.
+    """
+    st = obj.get("sell_order_state") or obj.get("state") or {}
+    if not isinstance(st, dict):
+        return 0, ""
+    code = st.get("code")
+    if code is None:
+        code = st.get("id")      # el detalle lo llama `id`
+    try:
+        code = int(code or 0)
+    except (TypeError, ValueError):
+        code = 0
+    return code, _limpiar_nombre_estado(str(st.get("name") or ""))
+
+
 def _detalle_ya_intentado(p: dict) -> bool:
     """True si ya le pedimos el detalle de este pedido hace menos de 24h.
 
@@ -800,8 +843,10 @@ def refrescar_un_pedido(identificador: str) -> dict:
         nuevo = {
             "orden_melonn":   f"M{detail.get('internal_order_number') or usado}",
             "orden_tienda":   detail.get("external_order_number") or usado,
-            "estado_melonn":  ((detail.get("state") or {}).get("name") or ""),
-            "estado_melonn_code": int(((detail.get("state") or {}).get("code") or 0)),
+            # Doblemente equivocado antes: leía `state` (el detalle usa
+            # `sell_order_state`) y `code` (el detalle usa `id`).
+            "estado_melonn":      _estado_de(detail)[1],
+            "estado_melonn_code": _estado_de(detail)[0],
             "_raw": True,
         }
 
@@ -1232,8 +1277,9 @@ def _normalizar(raw: dict) -> dict:
     (dispatch_date, promise_date, delivery_date) NO están en este endpoint.
     → Cliente y fechas de despacho se enriquecen desde Shopify en shopify_enricher.
     """
-    estado    = str((raw.get("sell_order_state") or {}).get("name") or "")
-    estado_code = int((raw.get("sell_order_state") or {}).get("code") or 0)
+    # _normalizar se usa TANTO con items del listado como con el detalle
+    # (refrescar_un_pedido). Cada uno nombra el campo distinto — ver _estado_de.
+    estado_code, estado = _estado_de(raw)
     metodo    = str((raw.get("shipping_method") or {}).get("name") or "")
     valor_cod = raw.get("payment_on_delivery_amount")
     pay_type  = raw.get("payment_on_delivery_type") or {}
