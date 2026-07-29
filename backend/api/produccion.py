@@ -8,6 +8,7 @@ FASE 1 · Bloque 2: Ingreso + Inventario.
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import List, Optional
 
@@ -18,6 +19,8 @@ from backend.core.security import (CurrentUser, require_role, require_permission
                                     require_permission_estricto, tiene_permiso_costos,
                                     require_permission_any, tiene_permiso)
 from backend.services import produccion as svc
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/produccion", tags=["produccion"])
 
@@ -764,6 +767,14 @@ def crear_corte(
             trazos_url=body.trazos_url,
             created_by=user.email,
         )
+        # Avisar a los cortadores que hay orden nueva. Fuera del try de la
+        # creación no: si esto revienta, la orden ya está creada y no queremos
+        # devolver 500 por un aviso.
+        try:
+            from backend.services import avisos_produccion as avisos
+            avisos.avisar_corte_creado(oc, creado_por=user.email)
+        except Exception as e:
+            log.warning(f"[avisos] corte_creado: {str(e)[:160]}")
         return {"ok": True, "orden_corte": oc}
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -1124,6 +1135,13 @@ def cerrar_corte(
             rollos_liquidados=body.rollos_liquidados,
         )
         resp: dict = {"ok": True, "orden_corte": oc}
+        # Avisar al diseñador que creó esta orden que el cortador la cerró.
+        # `oc` viene de cerrar_orden_corte y trae created_by + consecutivo.
+        try:
+            from backend.services import avisos_produccion as avisos
+            avisos.avisar_corte_cerrado(oc, cerrado_por=user.email)
+        except Exception as e:
+            log.warning(f"[avisos] corte_cerrado: {str(e)[:160]}")
         # FLUJO NUEVO: si el cortador eligió confeccionista al cerrar, se
         # AUTO-GENERA la remisión de confección SIN imprimirla (impresion_liberada
         # = False) y se avisa al confeccionista que tiene un lote por recoger.

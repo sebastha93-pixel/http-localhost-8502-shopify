@@ -4278,6 +4278,24 @@ def cambiar_etapa_ruta(ruta_id: str, etapa_nueva: str) -> dict:
                 except Exception:
                     pass
         _PROV_RESP_CACHE["ts"] = 0.0
+
+    # Aviso al diseñador que creó la orden de corte de este lote.
+    # Se engancha ACÁ, en el servicio, y no en el endpoint: así también cubre
+    # el flujo donde el confeccionista acepta por link público (que llama esta
+    # misma función) y avanzar_etapa_si_antes(). Un solo punto, sin agujeros.
+    try:
+        from backend.services import avisos_produccion as _avisos
+        _oc = None
+        _oc_id = ruta_full.get("orden_corte_id")
+        if _oc_id:
+            _r = (sb.table("ordenes_corte").select("id,consecutivo,created_by")
+                    .eq("id", _oc_id).limit(1).execute()).data
+            _oc = _r[0] if _r else None
+        _avisos.avisar_lote_avanzo(ruta_full, etapa_nueva=etapa_nueva, oc=_oc)
+    except Exception as _e:
+        # El lote YA cambió de etapa. Que falle el aviso no puede revertirlo.
+        log.warning(f"[avisos] lote {ruta_id} → {etapa_nueva}: {str(_e)[:160]}")
+
     return ruta_full
 
 

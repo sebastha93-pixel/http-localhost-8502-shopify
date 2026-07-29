@@ -19,7 +19,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.core.config import settings
-from backend.api import auditoria, auth, bot, clientes, cod_acciones, comercial, conciliacion, dashboard, finanzas, health, historico, inventario, melonn, meta, metricas, pedidos, postventa, produccion, revenue, whatsapp
+from backend.api import auditoria, auth, bot, clientes, cod_acciones, comercial, conciliacion, dashboard, finanzas, health, historico, inventario, melonn, meta, metricas, notificaciones, pedidos, postventa, produccion, revenue, whatsapp
 from backend.services import usuarios as usuarios_svc
 from backend.core.security import hash_password
 from backend.core import scheduler
@@ -268,6 +268,7 @@ app.include_router(clientes.router)
 app.include_router(revenue.router)
 app.include_router(meta.router)
 app.include_router(cod_acciones.router)
+app.include_router(notificaciones.router)
 app.include_router(produccion.router)
 app.include_router(produccion.publico)  # rutas públicas /api/publico/lote/:token
 app.include_router(postventa.router)
