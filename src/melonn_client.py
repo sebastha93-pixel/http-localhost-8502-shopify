@@ -231,6 +231,10 @@ _CAMPOS_ENRIQUECIDOS = (
     "sku", "producto", "variante", "imagen_producto",
     "precio_unitario", "cantidad", "line_items",
     "fecha_despacho", "fecha_despacho_confiable", "fecha_promesa", "fecha_entrega",
+    # Ventana prometida por Melonn + intentos de entrega. Vienen de
+    # sell_order_attempt (?fields=sell_order_promises) y son caros de traer,
+    # así que no se pueden perder en cada webhook.
+    "promesa_entrega_min", "promesa_entrega_max", "intentos_entrega",
     "guia_real", "carrier_real", "link_guia", "external_order_id",
     # Marca de "ya le pedimos el detalle a Melonn". Tiene que sobrevivir a los
     # webhooks, si no volvemos al bucle infinito de re-consultas. Ver
@@ -817,6 +821,14 @@ def refrescar_un_pedido(identificador: str) -> dict:
             "sku", "producto", "variante", "imagen_producto",
             "precio_unitario", "cantidad", "line_items",
             "fecha_despacho", "fecha_promesa", "fecha_entrega",
+            # OJO: esta lista se había quedado atrás respecto a
+            # _CAMPOS_ENRIQUECIDOS. Le faltaba `fecha_despacho_confiable`, así
+            # que un webhook la borraba y el pedido volvía a calificar para
+            # re-consulta — realimentando el bucle que arreglamos hoy. Y le
+            # faltaban las promesas, que son caras de traer.
+            "fecha_despacho_confiable",
+            "promesa_entrega_min", "promesa_entrega_max", "intentos_entrega",
+            "_detalle_melonn_intentado_en",
             "guia_real", "carrier_real", "link_guia", "external_order_id",
         }
         def _vacio(v):
@@ -1661,7 +1673,13 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
             if not candidato:
                 continue
             try:
-                detail = _get(f"sell-orders/{candidato}")
+                # ?fields=sell_order_promises trae el bloque sell_order_attempt
+                # con las fechas REALES (ship_timestamp, delivery_timestamp) y
+                # las ventanas prometidas. SIN este parámetro esos campos NO
+                # vienen — y eso era la causa del bucle infinito: buscábamos
+                # `dispatch_date`, que no existe en ninguna respuesta.
+                detail = _get(f"sell-orders/{candidato}",
+                              params={"fields": "sell_order_promises"})
                 if detail:
                     break
             except Exception as e:
@@ -1744,27 +1762,50 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
         if direccion and not p.get("direccion"):
             p["direccion"] = direccion
 
-        # Fecha de despacho REAL de Melonn — es la fuente autoritativa
-        # (Shopify da la fecha del registro de fulfillment, no del despacho).
-        # Por eso dispatch_date SIEMPRE gana y se marca como confiable.
-        dd = detail.get("dispatch_date") or ""
-        if dd:
-            try:
-                p["fecha_despacho"] = str(dd).split("T")[0]
+        # ── Fechas reales, desde sell_order_attempt ──────────────────────────
+        # ANTES leía `dispatch_date`, `delivery_date` y `promise_date`. NINGUNO
+        # DE LOS TRES EXISTE en las respuestas de Melonn — verificado volcando
+        # todas las claves de pedidos reales en varios estados. Por eso
+        # `fecha_despacho_confiable` nunca se marcaba y los pedidos en tránsito
+        # se re-consultaban en cada ciclo, para siempre (el bucle de las 130).
+        #
+        # Los campos de verdad viven en sell_order_attempt[], que SOLO llega si
+        # se pide ?fields=sell_order_promises (arriba). Cada attempt es un
+        # intento de entrega; `current: true` marca el vigente.
+        attempts = detail.get("sell_order_attempt") or []
+        if isinstance(attempts, list) and attempts:
+            act = next((a for a in attempts
+                        if isinstance(a, dict) and a.get("current")), None)
+            if act is None:
+                act = attempts[-1] if isinstance(attempts[-1], dict) else {}
+
+            def _dia(v) -> str:
+                return str(v).split("T")[0] if v else ""
+
+            # Despacho real: la fuente autoritativa. Shopify da la fecha del
+            # registro del fulfillment, no la del despacho, y por eso inflaba
+            # los días en tránsito.
+            envio = _dia(act.get("ship_timestamp"))
+            if envio:
+                p["fecha_despacho"] = envio
                 p["fecha_despacho_confiable"] = True
-            except Exception:
-                pass
-        # Entrega / promesa: solo rellenar si faltan.
-        for src_key, dst_key in [
-            ("delivery_date",  "fecha_entrega"),
-            ("promise_date",   "fecha_promesa"),
-        ]:
-            raw = detail.get(src_key) or ""
-            if raw and not p.get(dst_key):
-                try:
-                    p[dst_key] = str(raw).split("T")[0]
-                except Exception:
-                    pass
+
+            # Solo rellenar si faltan: no pisar lo que ya trajo el listado.
+            entrega = _dia(act.get("delivery_timestamp")) or _dia(act.get("pickup_timestamp"))
+            if entrega and not p.get("fecha_entrega"):
+                p["fecha_entrega"] = entrega
+
+            # Ventana prometida de entrega. Es dato NUEVO: permite decir "se
+            # pasó de lo que Melonn prometió" en vez de solo contar días.
+            promesa = _dia(act.get("delivery_promise_max")) or _dia(act.get("pickup_promise_max"))
+            if promesa and not p.get("fecha_promesa"):
+                p["fecha_promesa"] = promesa
+            pmin = act.get("delivery_promise_min") or act.get("pickup_promise_min")
+            if pmin and not p.get("promesa_entrega_min"):
+                p["promesa_entrega_min"] = _dia(pmin)
+            if act.get("delivery_promise_max") and not p.get("promesa_entrega_max"):
+                p["promesa_entrega_max"] = _dia(act["delivery_promise_max"])
+            p["intentos_entrega"] = len(attempts)
 
         if nombre or telefono or ciudad:
             completados += 1
