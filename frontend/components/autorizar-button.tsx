@@ -22,6 +22,22 @@ interface AccionFlow {
   respuesta?: "aprobacion" | "no_contesta" | "rechazo" | null;
 }
 
+// Estados de Melonn que YA pasaron el hold de fulfillment. Pedir la
+// liberación en cualquiera de ellos devuelve HTTP 400 "Sell order ... is not
+// in a state that can be released", porque no queda hold que liberar.
+//   5, 7, 24, 28 = en tránsito (28 = "Ready For Packing")
+//   6, 8         = entregado
+// Los ÚNICOS liberables son 26 (hold del seller) y 29 (hold por condiciones
+// externas). Antes el botón solo miraba el workflow de contacto y nunca el
+// estado real, así que ofrecía "Autorizar" en pedidos ya despachados —
+// y encima escondía la acción en los que sí la necesitaban.
+//
+// Ojo con el criterio: se lista lo que YA ESTÁ LIBERADO en vez de exigir
+// {26,29}. Si llega un código que no conocemos (o 0 por un dato incompleto),
+// preferimos dejar el botón visible y que Melonn decida, antes que esconderle
+// al usuario una acción que quizá sí necesita.
+const ESTADOS_YA_LIBERADOS = [5, 6, 7, 8, 24, 28];
+
 export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
   const qc = useQueryClient();
   const { user } = useAuth();
@@ -92,6 +108,21 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
         </button>
         {msg && <span className="text-[0.7rem] text-graphite max-w-[200px] text-right">{msg}</span>}
       </div>
+    );
+  }
+
+  // ── Ya pasó el hold: no hay nada que autorizar ────────────────────────
+  // Va ANTES del gate de contacto a propósito: si Melonn ya liberó el pedido,
+  // "Contactar primero" o "Falta respuesta" serían mentiras — el despacho ya
+  // salió. Lo honesto es decir que ya está autorizado.
+  if (ESTADOS_YA_LIBERADOS.includes(pedido.estado_melonn_code)) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 text-xs font-semibold text-teal"
+        title={`Melonn ya liberó este pedido (estado ${pedido.estado_melonn_code}: ${pedido.estado_melonn})`}
+      >
+        <CheckCircle className="h-3.5 w-3.5" /> Ya autorizado
+      </span>
     );
   }
 

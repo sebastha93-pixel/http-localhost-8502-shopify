@@ -641,6 +641,17 @@ def autorizar_despacho(
         raise HTTPException(status_code=502, detail=f"Melonn API error: {exc}")
 
     if not ok:
+        # Melonn responde en inglés y de forma opaca cuando el pedido ya pasó
+        # el hold: "Sell order M... is not in a state that can be released".
+        # No es un fallo: es que ya está autorizado y va a empaque. Traducirlo
+        # evita que parezca un error del sistema.
+        if "not in a state that can be released" in (mensaje or "").lower():
+            raise HTTPException(
+                status_code=409,
+                detail=("Este pedido ya no está esperando autorización — Melonn "
+                        "ya lo liberó y va a empaque. Dale a «Sincronizar datos» "
+                        "para actualizar el tablero."),
+            )
         raise HTTPException(status_code=400, detail=mensaje)
 
     # Acá el hold ya está liberado: para Melonn el pedido está autorizado y
