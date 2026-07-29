@@ -957,8 +957,21 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
     """
     GET con rate limiting y retry/backoff automático en 429/503.
 
-    Aplica el token-bucket antes de cada intento para nunca superar
-    los 10 req/s que permite la API de Melonn.
+    Aplica el token-bucket antes de cada intento.
+
+    OJO CON EL LÍMITE REAL: la documentación de Melonn dice textualmente "All
+    endpoints have a request limit of 1 request per second". El comentario que
+    estaba acá decía 10 req/s — estaba mal, y era una trampa: alguien podía
+    subir _MAX_RPS confiando en ese margen inexistente.
+
+    _MAX_RPS = 0.5 (una petición cada 2s) queda por debajo del tope, pero el
+    limitador es POR PROCESO y corren 4 workers de Uvicorn: en el peor caso, si
+    los cuatro piden a la vez, el ritmo combinado llega a 2 req/s y Melonn
+    responde 429. No se baja más porque penalizaría las acciones del usuario
+    (autorizar despacho esperaría hasta 4s); en la práctica solo el worker líder
+    hace tráfico sostenido, así que el ritmo real se mantiene bajo 1 req/s.
+
+    Además hay DOS 429 distintos y no significan lo mismo — ver _es_cuota_agotada.
     """
     # Si ya sabemos que la cuota está agotada, no gastar ni la petición ni los
     # reintentos. OJO: este corto solo aplica a los GET (sincronización,
