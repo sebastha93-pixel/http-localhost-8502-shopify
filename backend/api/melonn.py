@@ -85,11 +85,34 @@ async def webhook_receiver(request: Request, secret: Optional[str] = Query(None)
         or request.headers.get("x-melonn-secret")
         or ""
     ).strip()
-    provisto = header_secret or (secret or "").strip()
-    if provisto != expected:
+    query_secret = (secret or "").strip()
+    # Vale CUALQUIERA de los dos caminos. Antes era `header or query`, y ese
+    # short-circuit tenía una trampa: si la cabecera llegaba con un valor
+    # equivocado, GANABA sobre un query correcto y devolvíamos 401. Con Melonn
+    # mandando el secret por los dos lados, rotar uno solo habría tumbado los 8
+    # webhooks. Es el mismo secreto compartido, así que aceptar cualquiera de las
+    # dos fuentes no debilita nada y elimina el riesgo al rotar.
+    if header_secret != expected and query_secret != expected:
         _registrar_webhook("fallidos_auth", "?", "?", "secret inválido")
         log.warning(f"Webhook con secret inválido (header={'sí' if header_secret else 'no'}, query={'sí' if secret else 'no'})")
         raise HTTPException(401, "Secret inválido")
+
+    # ¿La CABECERA sola bastaría? Melonn manda el secret por los dos caminos: en
+    # el query string y en la cabecera X-Webhook-Secret. El del query queda
+    # escrito en texto plano en los logs de Railway, así que queremos quitarlo de
+    # la URL — pero solo si la cabecera de verdad llega bien formada.
+    #
+    # En el panel de Melonn la cabecera se configura en un único campo con el
+    # texto "X-Webhook-Secret:valor", así que no es obvio si la envía como
+    # cabecera real o como valor pegado. Esto lo responde con un webhook real.
+    # NO se loguea el valor del secret, solo si coincide.
+    if header_secret == expected:
+        log.info("[webhook-auth] la cabecera X-Webhook-Secret es válida por sí sola "
+                 "— se puede quitar ?secret= de la URL en el panel de Melonn")
+    else:
+        log.info(f"[webhook-auth] la cabecera NO sirve sola (llegó={'sí' if header_secret else 'no'}"
+                 f"{', pero no coincide' if header_secret else ''}) — "
+                 "el ?secret= de la URL es imprescindible por ahora")
 
     try:
         payload = await request.json()
