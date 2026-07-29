@@ -48,15 +48,21 @@ const ICONO: Record<string, typeof Bell> = {
 // ── Sonido ────────────────────────────────────────────────────────────────
 // Agrupado acá arriba para que ajustarlo sea trivial: sube VOLUMEN si en el
 // taller no se oye, o baja GOLPES a 1 si resulta insistente.
-// Las amplitudes de abajo suman ~1.3 en el instante del golpe, así que el
-// maestro se queda en 0.62 para que el pico caiga cerca de 0.8 — fuerte pero
-// sin pegarle al techo. OJO: no subas VOLUMEN por encima de 0.75 sin bajar las
-// amplitudes de `parciales`; el compresor está puesto suave (−6 dB, ratio 4)
-// para que solo dome los picos, y si le entra mucha señal aplasta el golpe y
-// suena MÁS FLOJO, no más fuerte. Ese error ya lo cometí una vez acá.
+//
+// Cuentas actuales: los `parciales` de abajo suman 1.60 y el "clac" 0.13 =
+// 1.73; por 0.62 del maestro da un pico de ~1.07, que el compresor
+// (−3 dB, ratio 3) deja en ~0.81 de salida.
+//
+// DOS TRAMPAS, las dos ya pisadas acá:
+//  1. Subir VOLUMEN sin bajar las amplitudes NO lo hace más fuerte. Le mete
+//     más señal al compresor, que aplasta el golpe y suena MÁS FLOJO. Si
+//     quieres más nivel, sube el threshold del compresor, no el maestro.
+//  2. Subir los agudos tampoco. El oído es más sensible entre 2 y 4 kHz, así
+//     que ahí lo que se gana es aspereza, no volumen. Para más cuerpo se sube
+//     110/220 Hz y se alargan las colas.
 const VOLUMEN = 0.62;
 const GOLPES = 2;        // repeticiones del golpe
-const SEPARACION = 0.19; // segundos entre golpes
+const SEPARACION = 0.26; // segundos entre golpes
 
 /**
  * Golpe de campana con cuerpo: fundamental grave + armónicos + un "clac" de
@@ -72,28 +78,37 @@ function tocarTimbre(ctx: AudioContext) {
 
     // Compresor: deja subir el volumen sin que sature ni distorsione.
     const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -6;
-    comp.ratio.value = 4;
+    comp.threshold.value = -3;
+    comp.ratio.value = 3;
     comp.connect(ctx.destination);
 
     const maestro = ctx.createGain();
     maestro.gain.value = VOLUMEN;
     maestro.connect(comp);
 
-    // Parciales de una campana: la fundamental da el peso, las de arriba el
-    // brillo que atraviesa el ruido ambiente. Amplitud decreciente y colas
-    // más cortas en los agudos = suena a metal, no a pitido.
+    // Acorde consonante sobre La: 110 (sub) · 220 (fundamental) · 330 (quinta)
+    // · 440 (octava) · 660 (quinta alta, suave). Todos armónicos enteros de
+    // 110, así que no hay batimientos: suena a acorde, no a alarma.
+    //
+    // POR QUÉ NO HAY NADA ARRIBA DE 660: el oído es más sensible entre 2 y 4
+    // kHz, que es exactamente donde vive lo "estridente". La versión anterior
+    // tenía un parcial en 1320 y el "clac" filtrado en 2400: eso picaba. Para
+    // que suene MÁS FUERTE sin lastimar, la energía va en graves y medios, que
+    // dan peso y volumen percibido. Colas más largas también leen como "más
+    // lleno" sin subir un solo decibel de pico.
     const parciales = [
-      { f: 220, a: 0.52, dur: 1.1, tipo: "triangle" as OscillatorType },
-      { f: 440, a: 0.32, dur: 0.9, tipo: "sine" as OscillatorType },
-      { f: 660, a: 0.19, dur: 0.6, tipo: "sine" as OscillatorType },
-      { f: 1320, a: 0.10, dur: 0.35, tipo: "sine" as OscillatorType },
+      { f: 110, a: 0.34, dur: 1.5, tipo: "sine" as OscillatorType },
+      { f: 220, a: 0.58, dur: 1.4, tipo: "triangle" as OscillatorType },
+      { f: 330, a: 0.30, dur: 1.1, tipo: "sine" as OscillatorType },
+      { f: 440, a: 0.26, dur: 1.0, tipo: "sine" as OscillatorType },
+      { f: 660, a: 0.12, dur: 0.7, tipo: "sine" as OscillatorType },
     ];
 
     for (let g = 0; g < GOLPES; g++) {
       const t0 = ctx.currentTime + g * SEPARACION;
-      // Segundo golpe un semitono abajo: da el "din-don" en vez de repetir.
-      const detune = g === 0 ? 1 : 0.94;
+      // Segundo golpe una CUARTA JUSTA abajo (0.75 = 3/4): el "din-don"
+      // clasico. El semitono anterior (0.94) chocaba con el primero.
+      const detune = g === 0 ? 1 : 0.75;
 
       parciales.forEach(({ f, a, dur, tipo }) => {
         const osc = ctx.createOscillator();
@@ -123,10 +138,10 @@ function tocarTimbre(ctx: AudioContext) {
       src.buffer = buf;
       const bp = ctx.createBiquadFilter();
       bp.type = "bandpass";
-      bp.frequency.value = 2400;
-      bp.Q.value = 1.2;
+      bp.frequency.value = 1100;
+      bp.Q.value = 0.8;
       const gClac = ctx.createGain();
-      gClac.gain.value = 0.26;
+      gClac.gain.value = 0.13;
       src.connect(bp);
       bp.connect(gClac);
       gClac.connect(maestro);
