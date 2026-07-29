@@ -170,34 +170,60 @@ function tocarTimbre(ctx: AudioContext) {
 function useAudioCompartido() {
   const ref = useRef<AudioContext | null>(null);
   useEffect(() => {
-    const crear = () => {
-      if (ref.current) return;
-      const Ctx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext })
-          .webkitAudioContext;
-      if (!Ctx) return;
-      try {
-        const ctx = new Ctx();
-        // Un tick de silencio: algunos navegadores solo consideran el contexto
-        // "usado" (y por tanto autorizado) si algo suena dentro del gesto.
-        const g = ctx.createGain();
-        g.gain.value = 0;
-        g.connect(ctx.destination);
-        const o = ctx.createOscillator();
-        o.connect(g);
-        o.start();
-        o.stop(ctx.currentTime + 0.01);
-        ref.current = ctx;
-      } catch {
-        /* sin audio */
-      }
+    const Ctx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext })
+        .webkitAudioContext;
+    if (!Ctx) return;
+
+    // Se crea DE ENTRADA, no al primer click. Nace suspendido (política de
+    // autoplay) pero existir desde el arranque significa que cualquier gesto
+    // posterior lo puede despertar. Antes se creaba solo al hacer click, así
+    // que si el usuario recargaba y se iba a otra ventana sin tocar nada —su
+    // flujo real— no había contexto y el aviso llegaba mudo.
+    try {
+      ref.current = new Ctx();
+    } catch {
+      return;
+    }
+
+    // Cualquiera de estos gestos sirve para despertarlo. Se escucha una lista
+    // amplia a propósito: mientras más caminos, más probable que quede listo
+    // antes del primer aviso. `pointerdown` y `touchstart` cubren tablet.
+    const EVENTOS = [
+      "pointerdown", "mousedown", "click", "keydown",
+      "touchstart", "wheel", "scroll", "focus",
+    ] as const;
+
+    const despertar = () => {
+      const ctx = ref.current;
+      if (!ctx) return;
+      if (ctx.state === "running") return;
+      ctx.resume()
+        .then(() => {
+          // Tick inaudible: algunos navegadores solo dan el contexto por
+          // "usado" —y por tanto autorizado a sonar luego— si algo se
+          // reprodujo dentro del gesto.
+          try {
+            const g = ctx.createGain();
+            g.gain.value = 0;
+            g.connect(ctx.destination);
+            const o = ctx.createOscillator();
+            o.connect(g);
+            o.start();
+            o.stop(ctx.currentTime + 0.01);
+          } catch {
+            /* da igual, lo importante era el resume */
+          }
+        })
+        .catch(() => {});
     };
-    window.addEventListener("click", crear);
-    window.addEventListener("keydown", crear);
+
+    EVENTOS.forEach((e) =>
+      window.addEventListener(e, despertar, { passive: true }),
+    );
     return () => {
-      window.removeEventListener("click", crear);
-      window.removeEventListener("keydown", crear);
+      EVENTOS.forEach((e) => window.removeEventListener(e, despertar));
     };
   }, []);
   return ref;
@@ -224,16 +250,24 @@ export function NotificacionesBell() {
   // Permiso para notificaciones del sistema (macOS/Windows). Se pide en el
   // primer gesto, no al cargar: pedirlo de entrada es intrusivo y los
   // navegadores penalizan los prompts sin contexto.
+  //
+  // A DIFERENCIA DEL AUDIO, este permiso PERSISTE entre recargas. Es por eso
+  // el canal fiable para quien deja la app abierta y trabaja en otra ventana:
+  // se concede una vez y macOS pone el banner (con su propio sonido) para
+  // siempre, sin depender de la política de autoplay que tumba el audio en
+  // cada recarga.
   useEffect(() => {
+    if (typeof Notification === "undefined") return;
+    if (Notification.permission !== "default") return;
+    const EVENTOS = ["pointerdown", "click", "keydown", "touchstart"] as const;
     const pedir = () => {
-      window.removeEventListener("click", pedir);
-      if (typeof Notification !== "undefined" &&
-          Notification.permission === "default") {
-        Notification.requestPermission().catch(() => {});
-      }
+      EVENTOS.forEach((e) => window.removeEventListener(e, pedir));
+      Notification.requestPermission().catch(() => {});
     };
-    window.addEventListener("click", pedir);
-    return () => window.removeEventListener("click", pedir);
+    EVENTOS.forEach((e) =>
+      window.addEventListener(e, pedir, { passive: true }),
+    );
+    return () => EVENTOS.forEach((e) => window.removeEventListener(e, pedir));
   }, []);
 
   const q = useQuery<Respuesta>({
