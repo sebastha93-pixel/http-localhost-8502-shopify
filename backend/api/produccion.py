@@ -1949,6 +1949,37 @@ def remision_pdf(
     )
 
 
+@router.get("/remisiones/{rem_id}/pwg")
+def remision_pwg(
+    rem_id: str,
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+):
+    """La MISMA remisión, pero en PWG-Raster para el agente local.
+
+    La RICOH M 320F no interpreta PDF (solo JBGRD y URF), así que el PDF hay
+    que rasterizarlo antes de mandárselo. El endpoint /pdf de arriba sigue
+    intacto porque es el que usan las personas (botón Imprimir del navegador,
+    que sí sabe rasterizar). Ver backend/services/pwg_raster.py.
+    """
+    rem = svc.obtener_remision(rem_id)
+    if not rem:
+        raise HTTPException(404, "Remisión no encontrada")
+    try:
+        pdf = _generar_remision_pdf(rem)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"remision_pdf: {str(e)[:200]}")
+    try:
+        from backend.services import pwg_raster
+        raster = pwg_raster.pdf_a_pwg(pdf)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        # A propósito NO se cae al PDF: la impresora lo aceptaría y lo tiraría
+        # a la basura, y el agente marcaría "impresa" sin que salga papel.
+        raise HTTPException(500, f"remision_pwg: {str(e)[:200]}")
+    return Response(content=raster, media_type="image/pwg-raster")
+
+
 # ── Cola de impresión (agente local por IP → RICOH) ──────────────────────
 # El agente local corre en un PC de la red de MALE'DENIM: pide las remisiones
 # pendientes, baja cada PDF de /remisiones/{id}/pdf y lo manda a la RICOH por

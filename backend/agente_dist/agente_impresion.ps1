@@ -2,11 +2,20 @@
 #  AGENTE DE IMPRESION MALE'DENIM  (version PowerShell para el servidor MDS)
 #  Sin dependencias: corre con el PowerShell que trae Windows.
 #
-#  Hace lo mismo que el agente Python del Mac:
-#   1) Remisiones PDF pendientes  -> RICOH   (PDF Direct Print, IP:9100)
-#   2) Etiquetas ZPL pendientes   -> Honeywell (stickers) / SAT (lavado)
-#   3) Paginas PDF de PRUEBA      -> cualquier impresora (destino=ricoh, etc.)
+#  Que imprime y por donde:
+#   1) Remisiones pendientes      -> RICOH, PWG-Raster por IPP (puerto 631)
+#   2) Etiquetas ZPL pendientes   -> Honeywell (stickers) / SAT (lavado), RAW 9100
+#   3) Paginas de PRUEBA          -> cualquiera de las tres
 #  Lee config.json en la MISMA carpeta (backend, credenciales, impresoras).
+#
+#  v2.4 (2026-07-30): ARREGLO DE LA RICOH — antes marcaba "impresa" sin papel.
+#   Esa maquina declara "CMD:JBGRD,URF": no interpreta PDF, y su puerto 9100
+#   acepta la conexion y DESCARTA todo (se probo con PDF, PWG y URF, mirando la
+#   cola interna de la impresora: no registraba ni un trabajo). Ahora la
+#   remision se pide ya rasterizada (/pwg) y se manda por IPP, que ademas
+#   responde si acepto o rechazo — antes el socket "tenia exito" siempre.
+#   Las termicas NO cambian: esas si hablan ZPL/TSPL nativo por el 9100.
+#   No hace falta tocar config.json: la RICOH va por IPP por defecto.
 #
 #  v2.3 BLINDADO (2026-07-27): nunca se apaga por un error.
 #   - Login inicial con reintento infinito (aguanta que la red no este lista).
@@ -73,8 +82,8 @@ function ApiBytes([string]$ruta) {
     }
 }
 
-# --- Envio RAW a IP:9100 -------------------------------------------------
-function Imprimir([byte[]]$datos, $impresora) {
+# --- Envio RAW a IP:9100 (impresoras termicas: hablan ZPL/TSPL nativo) ---
+function ImprimirRaw([byte[]]$datos, $impresora) {
     $puerto = 9100; if ($impresora.port) { $puerto = [int]$impresora.port }
     $cliente = New-Object System.Net.Sockets.TcpClient
     $cliente.SendTimeout = 30000; $cliente.ReceiveTimeout = 30000
@@ -84,6 +93,93 @@ function Imprimir([byte[]]$datos, $impresora) {
         $flujo.Write($datos, 0, $datos.Length)
         $flujo.Flush()
     } finally { $cliente.Close() }
+}
+
+# --- Envio por IPP al puerto 631 (la RICOH) ------------------------------
+# POR QUE (verificado 2026-07-30 contra la maquina, mirando su cola interna):
+# la RICOH M 320F declara "CMD:JBGRD,URF" — NO entiende PDF. Su puerto 9100
+# acepta la conexion y DESCARTA todo (PDF, PWG y URF por igual), asi que el
+# agente marcaba "impresa" sin que saliera papel. El unico camino que imprime
+# es PWG-Raster por IPP en el 631. El backend ya entrega el raster listo.
+# OJO PowerShell: una funcion que "devuelve" un byte[] lo DESENROLLA en el
+# stream de salida y el llamador recibe Object[], con lo que List[byte].AddRange
+# revienta ("Cannot convert argument"). Por eso el atributo se AGREGA a la lista
+# que se recibe, en vez de devolverse.
+function AgregarAtributoIPP($lista, [byte]$tag, [string]$nombre, [string]$valor) {
+    $n = [Text.Encoding]::UTF8.GetBytes($nombre)
+    $v = [Text.Encoding]::UTF8.GetBytes($valor)
+    $lista.Add($tag)
+    $lista.Add([byte](($n.Length -shr 8) -band 0xFF))
+    $lista.Add([byte]($n.Length -band 0xFF))
+    foreach ($x in $n) { $lista.Add($x) }
+    $lista.Add([byte](($v.Length -shr 8) -band 0xFF))
+    $lista.Add([byte]($v.Length -band 0xFF))
+    foreach ($x in $v) { $lista.Add($x) }
+}
+
+function ImprimirIPP([byte[]]$datos, $impresora, [string]$titulo, [string]$formato) {
+    $puerto = 631; if ($impresora.ipp_port) { $puerto = [int]$impresora.ipp_port }
+    $uriImpresora = "ipp://$($impresora.ip)/ipp/print"
+    if (-not $formato) { $formato = "image/pwg-raster" }
+    if (-not $titulo)  { $titulo  = "MALE DENIM" }
+
+    $req = New-Object 'System.Collections.Generic.List[byte]'
+    foreach ($x in [byte[]](0x02, 0x00)) { $req.Add($x) }            # IPP 2.0
+    foreach ($x in [byte[]](0x00, 0x02)) { $req.Add($x) }            # Print-Job
+    foreach ($x in [byte[]](0x00, 0x00, 0x00, 0x01)) { $req.Add($x) } # request-id
+    $req.Add([byte]0x01)                         # operation-attributes-tag
+    AgregarAtributoIPP $req 0x47 "attributes-charset" "utf-8"
+    AgregarAtributoIPP $req 0x48 "attributes-natural-language" "en"
+    AgregarAtributoIPP $req 0x45 "printer-uri" $uriImpresora
+    AgregarAtributoIPP $req 0x42 "requesting-user-name" "maledenim"
+    AgregarAtributoIPP $req 0x42 "job-name" $titulo
+    AgregarAtributoIPP $req 0x49 "document-format" $formato
+    $req.Add([byte]0x03)                         # end-of-attributes-tag
+    $req.AddRange($datos)                        # $datos ya es [byte[]] tipado
+    $cuerpo = $req.ToArray()
+
+    $http = [Net.HttpWebRequest]::Create("http://$($impresora.ip):$puerto/ipp/print")
+    $http.Method = "POST"
+    $http.ContentType = "application/ipp"
+    $http.ContentLength = $cuerpo.Length
+    $http.Timeout = 120000
+    $http.ReadWriteTimeout = 120000
+    $flujo = $http.GetRequestStream()
+    try { $flujo.Write($cuerpo, 0, $cuerpo.Length) } finally { $flujo.Close() }
+
+    $resp = $http.GetResponse()
+    try {
+        $ms = New-Object IO.MemoryStream
+        $resp.GetResponseStream().CopyTo($ms)
+        $r = $ms.ToArray()
+    } finally { $resp.Close() }
+
+    # La respuesta IPP trae el status-code en los bytes 2-3. Todo lo que sea
+    # >= 0x0100 es error: hay que LANZAR para que el trabajo NO se marque como
+    # impreso y se reintente. (Aun asi, "aceptado" no garantiza papel: con el
+    # formato equivocado la maquina acepta y tira la hoja. De ahi que el
+    # formato lo fije el backend y no se improvise aca.)
+    if ($r.Length -lt 4) { throw "IPP: respuesta vacia de $($impresora.ip)" }
+    $estado = ([int]$r[2] * 256) + [int]$r[3]
+    if ($estado -ge 0x0100) {
+        throw ("IPP: la impresora rechazo el trabajo (status 0x{0:X4})" -f $estado)
+    }
+}
+
+# --- Despacho: cada impresora por donde entiende --------------------------
+function UsaIPP([string]$nombre, $impresora) {
+    if ($impresora.modo) { return ($impresora.modo -eq "ipp") }
+    # Sin 'modo' en el config.json (el caso del servidor MDS hoy): la RICOH va
+    # por IPP porque su 9100 no imprime nada. Las termicas siguen por RAW.
+    return ($nombre -eq "ricoh")
+}
+
+function Imprimir([byte[]]$datos, $impresora, [string]$nombre, [string]$titulo) {
+    if (UsaIPP $nombre $impresora) {
+        ImprimirIPP $datos $impresora $titulo "image/pwg-raster"
+    } else {
+        ImprimirRaw $datos $impresora
+    }
 }
 
 # --- CANDADO DE INSTANCIA UNICA -----------------------------------------
@@ -200,11 +296,13 @@ while ($true) {
                         ApiJson "POST" ("/api/produccion/impresion/" + $rid + "/impresa") | Out-Null
                         Log ("  [OK] Confirmada {0} (ya habia salido impresa)" -f $etq)
                     } else {
-                        $pdf = ApiBytes ("/api/produccion/remisiones/" + $rid + "/pdf")
-                        Imprimir $pdf $Conf.printers.ricoh
+                        # /pwg y no /pdf: la RICOH no interpreta PDF. El backend
+                        # entrega la remision ya rasterizada. Ver ImprimirIPP.
+                        $hoja = ApiBytes ("/api/produccion/remisiones/" + $rid + "/pwg")
+                        Imprimir $hoja $Conf.printers.ricoh "ricoh" ("Remision " + $etq)
                         MarcarSalio $rid          # <- ANTES de confirmar
                         ApiJson "POST" ("/api/produccion/impresion/" + $rid + "/impresa") | Out-Null
-                        Log ("  [OK] Impresa {0} ({1} KB) -> ricoh" -f $etq, [int]($pdf.Length / 1024))
+                        Log ("  [OK] Impresa {0} ({1} KB) -> ricoh" -f $etq, [int]($hoja.Length / 1024))
                     }
                 }.GetNewClosure()
             }
@@ -229,7 +327,7 @@ while ($true) {
                     Log ("  [OK] Confirmado {0} (ya habia salido impreso)" -f $etq)
                 } else {
                     $contenido = ApiBytes ("/api/produccion/impresion/trabajos/" + $tid + "/contenido")
-                    Imprimir $contenido $imp.Value
+                    Imprimir $contenido $imp.Value $destino $etq
                     MarcarSalio $tid              # <- ANTES de confirmar
                     ApiJson "POST" ("/api/produccion/impresion/trabajos/" + $tid + "/impreso") | Out-Null
                     Log ("  [OK] Impreso {0} -> {1}" -f $etq, $destino)

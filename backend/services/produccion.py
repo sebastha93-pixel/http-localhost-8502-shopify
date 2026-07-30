@@ -3752,9 +3752,13 @@ def generar_contenido_trabajo(t: dict) -> bytes:
     (imagen compuesta desde la plantilla guardada, editable en la app)."""
     tipo = t.get("tipo")
     if tipo == "prueba_ricoh":
-        # Página PDF de PRUEBA → la RICOH la imprime tal cual (PDF Direct Print).
+        # Página de PRUEBA para la RICOH. Se compone en PDF y se entrega como
+        # PWG-Raster: esa máquina NO interpreta PDF (ver pwg_raster.py), le
+        # llegaba el PDF y lo descartaba en silencio.
         p = t.get("payload") or {}
-        return _pdf_prueba_ricoh(int(p.get("n") or 1), int(p.get("total") or 1))
+        pdf = _pdf_prueba_ricoh(int(p.get("n") or 1), int(p.get("total") or 1))
+        from backend.services import pwg_raster
+        return pwg_raster.pdf_a_pwg(pdf)
     if tipo == "instruccion_lavado":
         p = t.get("payload") or {}
         codigo = (p.get("codigo_referencia") or "").strip()

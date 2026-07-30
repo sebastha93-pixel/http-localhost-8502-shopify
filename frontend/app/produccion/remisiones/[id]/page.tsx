@@ -7,15 +7,15 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, API_BASE } from "@/lib/api";
-import { getToken } from "@/lib/auth";
+import { api } from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
 import { fmtFecha } from "@/lib/utils";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { TablaInsumosSeparar } from "@/components/tabla-insumos-separar";
-import { ArrowLeft, Truck, Loader2, MessageCircle, Copy, Printer } from "lucide-react";
+import { BotonImprimirRemision } from "@/components/boton-imprimir-remision";
+import { ArrowLeft, Truck, Loader2, MessageCircle, Copy } from "lucide-react";
 
 interface Item {
   id: string;
@@ -61,23 +61,6 @@ export default function RemisionDetallePage() {
   });
 
   const [errAccion, setErrAccion] = useState("");
-  const [imprimiendo, setImprimiendo] = useState(false);
-
-  async function imprimirPDF() {
-    setImprimiendo(true);
-    try {
-      const r = await fetch(`${API_BASE}/api/produccion/remisiones/${id}/pdf`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const blob = await r.blob();
-      window.open(URL.createObjectURL(blob), "_blank");
-    } catch (e) {
-      setErrAccion(`No se pudo generar el PDF: ${e instanceof Error ? e.message : "error"}`);
-    } finally {
-      setImprimiendo(false);
-    }
-  }
   const [waEnviado, setWaEnviado] = useState<"auto" | "manual" | "">("");
   const recogida = useMutation({
     mutationFn: () => api.post<{ ok: boolean; remision: { whatsapp?: { enviado: boolean; wa_url: string }[] } }>(
@@ -123,11 +106,7 @@ export default function RemisionDetallePage() {
           <ArrowLeft className="h-3.5 w-3.5" /> Volver a remisiones
         </Link>
         <div className="flex items-center gap-3">
-          <button onClick={imprimirPDF} disabled={imprimiendo}
-            className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-white px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud disabled:opacity-40">
-            {imprimiendo ? <Loader2 className="h-3 w-3 animate-spin" /> : <Printer className="h-3 w-3" />}
-            Imprimir
-          </button>
+          <BotonImprimirRemision remisionId={id} />
           <Badge tone={yaRecogida ? "normal" : "pendiente"}>{labelEstado}</Badge>
         </div>
       </div>

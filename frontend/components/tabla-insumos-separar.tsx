@@ -13,8 +13,8 @@
  */
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, API_BASE } from "@/lib/api";
-import { getToken } from "@/lib/auth";
+import { api } from "@/lib/api";
+import { useImprimirRemision } from "@/components/boton-imprimir-remision";
 import { fmtDateTime } from "@/lib/utils";
 import { MEDIDAS_CIERRES, TALLAS_CIERRES } from "@/lib/cierres";
 import { CheckCircle, Loader2 } from "lucide-react";
@@ -73,19 +73,14 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
   const [fichaEnviada, setFichaEnviada] = useState<boolean | null>(null);
   const [etiquetas, setEtiquetas] = useState<number | null>(null);
 
-  async function imprimirRemision() {
+  // Mismo camino que el botón Imprimir de las remisiones: iframe oculto +
+  // print(). El addEventListener("load") sobre una pestaña nueva no dispara
+  // el diálogo de forma fiable con un PDF, por eso se comparte el hook.
+  const { imprimir: imprimirPdfRemision } = useImprimirRemision();
+
+  function imprimirRemision() {
     if (!remisionId) return;
-    try {
-      const r = await fetch(`${API_BASE}/api/produccion/remisiones/${remisionId}/pdf`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (!r.ok) return;
-      const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
-      const win = window.open(url, "_blank");
-      // Disparar el diálogo de impresión apenas cargue el PDF
-      if (win) win.addEventListener("load", () => { try { win.print(); } catch { /* noop */ } });
-    } catch { /* la remisión sigue imprimible desde el botón Imprimir */ }
+    imprimirPdfRemision(remisionId);
   }
 
   // Cargar estado guardado de la hoja de ruta

@@ -13,6 +13,7 @@ import { fmtFecha } from "@/lib/utils";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { BotonImprimirRemision } from "@/components/boton-imprimir-remision";
 import { Plus, FileText, Scissors } from "lucide-react";
 
 interface Remision {
@@ -22,6 +23,8 @@ interface Remision {
   estado: string;
   tipo?: string; // 'confeccion' | 'terminacion'
   created_at: string;
+  impresa_at?: string | null;         // la marcó el agente local
+  impresion_liberada?: boolean;       // false = retenida hasta separar insumos
   confeccionista?: { nombre: string };
   items?: { orden_corte?: { consecutivo?: string; referencia?: { codigo_referencia?: string } } }[];
 }
@@ -109,6 +112,7 @@ export default function RemisionesPage() {
                   <th className="px-4 py-2">Fecha</th>
                   <th className="px-4 py-2">Creada</th>
                   <th className="px-4 py-2">Estado</th>
+                  <th className="px-4 py-2">Impresión</th>
                 </tr>
               </thead>
               <tbody>
@@ -148,6 +152,23 @@ export default function RemisionesPage() {
                         <Badge tone={r.estado === "recogida" ? "normal" : "pendiente"}>
                           {etiquetaEstado(r)}
                         </Badge>
+                      </td>
+                      {/* Salida MANUAL: si el agente no sacó la hoja, se imprime
+                          desde acá por el navegador, sin entrar al detalle. */}
+                      <td className="px-4 py-2 whitespace-nowrap">
+                        <BotonImprimirRemision
+                          remisionId={r.id}
+                          compacto
+                          etiqueta={r.impresa_at ? "Reimprimir" : "Imprimir"}
+                          titulo={r.impresa_at
+                            ? "El agente ya la envió a la RICOH. Vuelve a imprimirla desde este PC."
+                            : "Imprimir la remisión desde este PC"}
+                        />
+                        <span className="ml-2 text-[0.6rem] text-graphite">
+                          {r.impresion_liberada === false
+                            ? "retenida"
+                            : r.impresa_at ? "enviada al agente" : "en cola"}
+                        </span>
                       </td>
                     </tr>
                   );
