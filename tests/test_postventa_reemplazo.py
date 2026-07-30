@@ -111,3 +111,31 @@ def test_una_salida_inventada_se_rechaza():
 
 def test_el_mensaje_del_saldo_dice_el_monto():
     assert "149.900" in R.texto_saldo_a_favor(149900)
+
+
+# ── El limite de la lista NO puede decidir si algo existe ──────────────────
+
+def _inventario_grande():
+    """Mas referencias que el limite de la lista. La buscada queda al final
+    del orden a proposito: es exactamente donde el corte la escondia."""
+    filas = [{"code": f"1{i:04d}-1T8", "referencia": f"1{i:04d}-1", "talla": "8",
+              "nombre": "RELLENO", "stock": {"Florida": 1}, "total": 1}
+             for i in range(80)]
+    filas.append({"code": "99999-1T10", "referencia": "99999-1", "talla": "10",
+                  "nombre": "JEAN FLARE", "stock": {"Florida": 8}, "total": 8})
+    return {"referencias": filas}
+
+
+def test_verifica_contra_TODO_el_inventario_no_solo_la_pagina_mostrada():
+    """La lista corta en 60 para no reventar la pantalla. Si la verificacion
+    usa esa misma lista, una prenda que SI existe se rechaza por estar fuera
+    del corte — que es justo lo que paso con 21603-1T10 (8 en Florida)."""
+    inv = _inventario_grande()
+    ok, det = R.verificar_disponible(inv, "Florida", "99999-1T10")
+    assert ok, det
+    assert "8" in det
+
+
+def test_la_lista_si_puede_truncar():
+    """Mostrar 60 esta bien: es una pantalla, no una decision."""
+    assert len(R.opciones_con_stock(_inventario_grande(), "Florida")) == 60
