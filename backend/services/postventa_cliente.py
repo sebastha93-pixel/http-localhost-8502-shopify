@@ -16,6 +16,7 @@ from typing import Optional
 from backend.services import siigo
 from backend.services import fiscal_logic as F
 from backend.services import tiendas
+from backend.services import postventa_logic as L
 
 log = logging.getLogger("postventa_cliente")
 
@@ -122,7 +123,12 @@ def compras_por_cedula(cedula: str, *, limite: int = 12) -> dict:
         nombre = str(inv.get("name") or "")
         doc_id = (inv.get("document") or {}).get("id")
         canal = _canal_de(doc_id, nombre)
-        aceptada = F.factura_aceptada_dian(inv)
+        # Dos condiciones distintas y ambas obligatorias: que la DIAN haya
+        # aceptado la factura (si no, Siigo rechaza la NC) y que la compra
+        # siga en plazo de cambio. Que la DIAN la acepte no la vuelve eterna.
+        fecha = _fecha_de(inv)
+        en_plazo = L.dentro_de_ventana(fecha)
+        aceptada = F.factura_aceptada_dian(inv) and en_plazo
         compras.append({
             "factura_id": inv.get("id"),
             "factura": nombre,
@@ -134,8 +140,11 @@ def compras_por_cedula(cedula: str, *, limite: int = 12) -> dict:
             "pedido": (lambda n: f"#{n}" if n else None)(
                 F.extraer_numero_pedido(inv.get("observations") or "")),
             "acreditable": aceptada,
-            "motivo_no_acreditable": (None if aceptada
-                                      else F.motivo_factura_no_apta(inv)),
+            "motivo_no_acreditable": (
+                None if aceptada
+                else (L.motivo_fuera_de_ventana(fecha) if not en_plazo
+                      else F.motivo_factura_no_apta(inv))),
+            "dias": L.dias_desde(fecha),
             "prendas": [{"sku": it.get("code"),
                          "descripcion": it.get("description"),
                          "precio": it.get("price")}

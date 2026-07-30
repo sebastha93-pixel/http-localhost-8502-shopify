@@ -126,6 +126,12 @@ def preview_nota_credito(case_id: str) -> dict:
     # dejar que Siigo responda un 'invalid_document' que no explica nada.
     if not F.factura_aceptada_dian(factura):
         raise ValueError(F.motivo_factura_no_apta(factura))
+    # Ultimo punto para parar un cambio vencido. La lista de compras ya lo
+    # avisa, pero un caso viejo o llenado a mano puede llegar hasta aqui; una
+    # vez emitida la NC, deshacerla es un tramite.
+    from backend.services import postventa_logic as _L
+    if not _L.dentro_de_ventana(factura.get("date")):
+        raise ValueError(_L.motivo_fuera_de_ventana(factura.get("date")))
     # Cambio en tienda: la prenda entra a la bodega de esa tienda, no a la
     # bodega de donde salió la venta online (evita el traslado manual).
     bodega_destino = None
