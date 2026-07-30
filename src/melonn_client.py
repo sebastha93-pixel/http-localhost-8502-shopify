@@ -246,6 +246,11 @@ _CAMPOS_ENRIQUECIDOS = (
 # que ya consultamos y que no nos dio lo que buscábamos.
 _REINTENTO_DETALLE_HORAS = 24
 
+# Estados de los que ya no se espera novedad: se pregunta UNA vez y se archiva.
+# Sin esto, incluir a los entregados en el enriquecedor costaría ~600 peticiones
+# diarias para siempre.
+_ESTADOS_TERMINALES = ("entregado", "resuelto", "cancelado", "devuelto")
+
 
 def _limpiar_nombre_estado(nombre: str) -> str:
     """El DETALLE de Melonn devuelve el nombre del estado duplicado:
@@ -306,6 +311,13 @@ def _detalle_ya_intentado(p: dict) -> bool:
     ts = p.get("_detalle_melonn_intentado_en")
     if not ts:
         return False
+    # ESTADO TERMINAL = SE PREGUNTA UNA SOLA VEZ, NUNCA MÁS.
+    # Un pedido entregado ya no va a cambiar: si Melonn no nos dio su
+    # ship_timestamp cuando preguntamos, no lo va a dar mañana tampoco.
+    # Reintentarlo a diario recrearía el "bucle de las 130" pero mucho peor
+    # (~600 peticiones diarias eternas, ver el docstring de arriba).
+    if (p.get("sub_estado_logistico") or "") in _ESTADOS_TERMINALES:
+        return True
     try:
         transcurrido = (datetime.now() - _parse_iso_naive(str(ts))).total_seconds()
     except Exception:
@@ -1631,11 +1643,25 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
             continue
         # (a) pedidos manuales sin datos de cliente
         falta_cliente = not p.get("nombre_comprador")
-        # (b) pedidos EN TRÁNSITO cuya fecha de despacho aún no viene de Melonn
-        #     (la de Shopify = fecha del registro de fulfillment, no del despacho
-        #     real → inflaba los días en tránsito y disparaba RIESGO falso).
-        falta_despacho = (p.get("sub_estado_logistico") == "en_transito"
-                          and not p.get("fecha_despacho_confiable"))
+        # (b) pedidos YA DESPACHADOS sin fecha de despacho fiable.
+        #     La de Shopify es la fecha del registro del fulfillment, no la del
+        #     despacho real, e inflaba los días en tránsito disparando RIESGO
+        #     falso. La única fuente buena es `ship_timestamp` del detalle.
+        #
+        #     ANTES ESTO ERA SOLO `== "en_transito"`, y ahí estaba el hueco de
+        #     fondo (medido 2026-07-30): a los ENTREGADOS nunca se les preguntaba,
+        #     así que solo tenían fecha los que alcanzaron a consultarse mientras
+        #     iban en tránsito — 90 de 727 (12%), contra 101 de 148 (68%) en
+        #     tránsito. Sin fecha de despacho no se puede medir cuánto tardó una
+        #     entrega, que es justo el SLA que interesa.
+        #
+        #     Cuota: son ~750 pedidos de atraso, a 60 por ciclo horario se
+        #     drenan en medio día; el tope diario de Melonn es 10.000 y hoy se
+        #     usan ~500. Y NO se repite: los terminales se preguntan una sola vez
+        #     (ver _ESTADOS_TERMINALES en _detalle_ya_intentado).
+        falta_despacho = (
+            p.get("sub_estado_logistico") in ("en_transito", "entregado", "novedad")
+            and not p.get("fecha_despacho_confiable"))
         if not (falta_cliente or falta_despacho):
             continue
         # No volver a preguntar por algo que ya preguntamos hoy. Sin esto, los
@@ -1647,12 +1673,21 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
     if not indices:
         return pedidos
 
-    # Priorizar por número de orden descendente (más recientes primero)
-    def _key(i: int) -> int:
-        ot = str(pedidos[i].get("orden_tienda", "")).split("-")[0]
-        return int(ot) if ot.isdigit() else 0
+    # PRIMERO LOS VIVOS. Con el atraso de entregados (~750) los pedidos EN
+    # TRÁNSITO quedarían al final de la cola, y son justo los que se están
+    # vigilando en vivo: su SLA importa hoy, el del entregado es historia.
+    # Dentro de cada grupo, los más recientes primero.
+    _PRIORIDAD = {"en_transito": 0, "novedad": 1}
 
-    indices.sort(key=_key, reverse=True)
+    def _key(i: int):
+        p = pedidos[i]
+        ot = str(p.get("orden_tienda", "")).split("-")[0]
+        num = int(ot) if ot.isdigit() else 0
+        prio = _PRIORIDAD.get(p.get("sub_estado_logistico") or "", 2)
+        # num negativo = descendente, sin invertir todo el criterio
+        return (prio, -num)
+
+    indices.sort(key=_key)
     indices = indices[:max_pedidos]
 
     log.info(f"Melonn detail enricher: consultando {len(indices)} pedidos manuales")
