@@ -36,6 +36,9 @@ estado: dict = {
     "interval_seconds": BOT_INTERVAL_SEC,
     "lote": BOT_LOTE,
     "ultimo_run": None,
+    # Resumen de la última pasada del enriquecedor HTTP (transportadora + guía).
+    # Se declara acá para que /api/bot/status tenga forma estable.
+    "ultimo_tracking": None,
     "procesados_hoy": 0,
     "fecha_contador": None,
     "ultimo_resultado": None,
@@ -56,6 +59,22 @@ def _loop():
 
     while not _stop.is_set():
         try:
+            # ── PRIMERO la vía barata: el portal de tracking por HTTP ────────
+            # Trae transportadora + guía real sin navegador y sin gastar cuota
+            # de la Sellers API (es otro host). 0,6 s por pedido contra los ~8 s
+            # de Playwright, así que se lleva el grueso del trabajo y al bot le
+            # queda casi nada. NO cuenta contra el tope diario del bot porque no
+            # usa el mismo recurso. Ver services/tracking_enricher.py.
+            try:
+                from backend.services import tracking_enricher
+                r = tracking_enricher.pasada()
+                if r.get("candidatos"):
+                    estado["ultimo_tracking"] = {
+                        "cuando": datetime.now(timezone.utc).isoformat(), **r
+                    }
+            except Exception as e:
+                log.warning(f"Tracking enricher falló (sigue el bot): {e}")
+
             # Reset contador diario
             if estado["fecha_contador"] != _hoy():
                 estado["fecha_contador"] = _hoy()

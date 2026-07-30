@@ -26,6 +26,18 @@ const CARRIERS: CarrierDef[] = [
   { name: "Servientrega",     short: "Servi.",  url: "https://www.servientrega.com/wps/portal/inicio/rastrea-tu-envio",                              color: "bg-khaki",   match: /servientrega/i },
 ];
 
+// Etiquetas para los pedidos SIN guía (entregas locales del área metropolitana
+// de Medellín). Ahí la transportadora es un mensajero que no emite número, así
+// que lo único que se puede mostrar es en qué estado va.
+const ESTADO_ENVIO: Record<string, string> = {
+  pendiente_despacho: "Pendiente de despacho",
+  en_transito: "En tránsito",
+  entregado: "Entregado",
+  novedad: "Con novedad",
+  devuelto: "Devuelto",
+  cancelado: "Cancelado",
+};
+
 
 export function EnvioInfo({ pedido }: { pedido: Pedido }) {
   const { user } = useAuth();
@@ -128,6 +140,23 @@ export function EnvioInfo({ pedido }: { pedido: Pedido }) {
               >
                 {copied === "guia" ? <Check className="h-3.5 w-3.5 text-teal" /> : <Copy className="h-3.5 w-3.5" />}
               </button>
+            </div>
+          )}
+          {/* Entrega local: hay transportadora pero NO hay guía, y nunca la va a
+              haber. En el área metropolitana de Medellín entregan mensajeros
+              (Rapiboy, EASYWAY, Cabify, CORDIANDINA) que no emiten número de
+              guía. Sin esta línea el recuadro se ve como un dato faltante y
+              alguien va a salir a buscar una guía que no existe. */}
+          {carrier && !guia && (
+            <div className="flex items-start gap-2 text-sm">
+              <span className="h-3.5 w-3.5 flex-none" />
+              <span className="text-[0.7rem] font-bold uppercase tracking-wider text-graphite pt-0.5">Estado</span>
+              <span className="min-w-0">
+                <span className="text-ink font-semibold">{ESTADO_ENVIO[pedido.sub_estado_logistico] || pedido.estado_melonn || "—"}</span>
+                <span className="block text-[0.65rem] text-graphite leading-snug">
+                  Mensajería local — no genera número de guía
+                </span>
+              </span>
             </div>
           )}
         </div>
