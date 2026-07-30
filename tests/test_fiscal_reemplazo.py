@@ -23,7 +23,7 @@ def test_reemplazo_mismo_precio_solo_anticipo():
         credito_con_iva=159900.0, modo="prueba", fecha="2026-07-07")
     assert p["document"]["id"] == 11810
     assert p["items"][0]["price"] == 134369.75
-    assert p["items"][0]["warehouse"] == {"id": 32}
+    assert p["items"][0]["warehouse"] == 32   # numero plano: lo que exige el POST
     # anticipo cubre todo, sin excedente
     assert p["payments"] == [{"id": 8316, "value": 159900.0,
                               "due_date": "2026-07-07"}]

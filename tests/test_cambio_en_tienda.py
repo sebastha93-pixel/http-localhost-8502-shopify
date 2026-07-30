@@ -22,14 +22,14 @@ def test_nc_en_tienda_ingresa_a_la_bodega_de_la_tienda():
         factura=FACTURA_ONLINE, skus_a_acreditar=["A-10"],
         modo="prueba", fecha="2026-07-27", bodega_destino=BODEGA_FLORIDA)
     # Sin traslado manual: la prenda queda donde físicamente está.
-    assert p["items"][0]["warehouse"] == {"id": BODEGA_FLORIDA}
+    assert p["items"][0]["warehouse"] == BODEGA_FLORIDA
 
 
 def test_nc_online_conserva_la_bodega_de_origen():
     p = F.construir_payload_nota_credito(
         factura=FACTURA_ONLINE, skus_a_acreditar=["A-10"],
         modo="prueba", fecha="2026-07-27")
-    assert p["items"][0]["warehouse"] == {"id": 32}    # MELONN
+    assert p["items"][0]["warehouse"] == 32    # MELONN
 
 
 # ── La factura sale del punto de venta correcto ───────────────────────
@@ -40,7 +40,7 @@ def test_factura_sale_con_el_documento_de_la_tienda():
         credito_con_iva=149900.0, modo="prueba", fecha="2026-07-27",
         documento_id=31433, bodega_id=BODEGA_FLORIDA)
     assert p["document"]["id"] == 31433              # FV-11, no el de online
-    assert p["items"][0]["warehouse"] == {"id": BODEGA_FLORIDA}
+    assert p["items"][0]["warehouse"] == BODEGA_FLORIDA
 
 
 def test_sin_documento_usa_el_de_online():

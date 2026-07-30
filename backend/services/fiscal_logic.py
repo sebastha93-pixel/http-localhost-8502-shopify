@@ -181,6 +181,24 @@ def construir_payload_nota_credito(*, factura: dict, skus_a_acreditar: list[str]
     return payload
 
 
+def _warehouse_id(valor) -> Optional[int]:
+    """La bodega para el POST de Siigo: un NUMERO plano.
+
+    Doc oficial: `items.warehouse  number`. El GET la devuelve expandida como
+    {"id": 32, "name": "MELONN"}, igual que hace con `taxes`. Si se le manda el
+    objeto, Siigo descarta el campo EN SILENCIO (es opcional) y el documento se
+    crea sin bodega: el inventario nunca se mueve y nada avisa.
+    """
+    if isinstance(valor, dict):
+        valor = valor.get("id")
+    if valor is None or valor == "":
+        return None
+    try:
+        return int(valor)
+    except (TypeError, ValueError):
+        return None
+
+
 def _linea_nc(it: dict, *, bodega_destino: Optional[int] = None) -> dict:
     """Convierte un ítem de la factura Siigo en un ítem de nota crédito.
 
@@ -201,14 +219,10 @@ def _linea_nc(it: dict, *, bodega_destino: Optional[int] = None) -> dict:
         linea["seller"] = it["seller"]
     # Bodega: el producto es de inventario (ej. MELONN). Se copia para que la
     # NC devuelva el stock a la misma bodega de la factura.
-    if bodega_destino is not None:
-        linea["warehouse"] = {"id": int(bodega_destino)}
-    else:
-        wh = it.get("warehouse")
-        if isinstance(wh, dict) and wh.get("id") is not None:
-            linea["warehouse"] = {"id": wh["id"]}
-        elif isinstance(wh, (int, str)) and wh not in ("", None):
-            linea["warehouse"] = {"id": wh}
+    wid = _warehouse_id(bodega_destino if bodega_destino is not None
+                        else it.get("warehouse"))
+    if wid is not None:
+        linea["warehouse"] = wid
     if it.get("discount"):
         linea["discount"] = it["discount"]
     return linea
@@ -273,12 +287,11 @@ def construir_payload_factura_reemplazo(*, factura_original: dict,
     }
     if item_reemplazo.get("seller"):
         linea["seller"] = item_reemplazo["seller"]
-    wh = item_reemplazo.get("warehouse")
-    if isinstance(wh, dict) and wh.get("id") is not None:
-        linea["warehouse"] = {"id": wh["id"]}
-
-    if bodega_id is not None:
-        linea["warehouse"] = {"id": int(bodega_id)}
+    # bodega_id manda (la tienda que factura); si no, la del ítem.
+    wid = _warehouse_id(bodega_id if bodega_id is not None
+                        else item_reemplazo.get("warehouse"))
+    if wid is not None:
+        linea["warehouse"] = wid
 
     payload = {
         # documento_id: el punto de venta que factura (Florida FV-11/FV-12,
