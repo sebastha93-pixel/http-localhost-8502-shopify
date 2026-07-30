@@ -119,11 +119,49 @@ def upsert(
     return res.data[0] if res.data else data
 
 
+# Un M-id (M1785269442459430) es el número INTERNO de Melonn, no una guía de
+# transportadora. El caché lo trae en `guia_real` porque el enriquecedor de
+# Shopify lo guardaba como respaldo, y en pantalla quedaba presentado como si
+# fuera la guía — peor aún, junto a la transportadora correcta ("EASYWAY
+# M1783632128570331"), que invita a rastrearlo en una web donde no existe.
+# Medido el 2026-07-30: 661 pedidos activos así.
+import re as _re
+
+_RE_MID = _re.compile(r"^[Mm]\d{10,}$")
+
+
+def es_mid_melonn(v) -> bool:
+    return bool(_RE_MID.match(str(v or "").strip()))
+
+
+def _limpiar_mid(p: dict) -> dict:
+    """Borra del pedido lo que NO es una guía real de transportadora.
+
+    Va ANTES de aplicar el override, y a propósito no depende de que exista
+    override: si el caché trae basura, un override vacío no podía limpiarla
+    (solo se pisaban los campos que el override TENÍA con valor). Así los
+    pedidos de mensajería local quedan con su transportadora y sin guía —
+    que es la verdad — en vez de mostrar el número interno de Melonn.
+    """
+    mid = es_mid_melonn(p.get("guia_real"))
+    carrier_melonn = str(p.get("carrier_real") or "").strip().lower() == "melonn"
+    if not mid and not carrier_melonn:
+        return p
+    p = dict(p)
+    if mid:
+        p["guia_real"] = None
+    if carrier_melonn:
+        # "Melonn" es el operador logístico, no quien lleva el paquete.
+        p["carrier_real"] = None
+    return p
+
+
 def aplicar_a_pedido(p: dict, overrides_map: dict[str, dict]) -> dict:
     """
     Aplica el override que matche por orden_melonn o orden_tienda.
     Devuelve una nueva copia del pedido (no muta el original).
     """
+    p = _limpiar_mid(p)
     if not overrides_map:
         return p
     o = (overrides_map.get(p.get("orden_melonn", ""))

@@ -1782,10 +1782,46 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
             def _dia(v) -> str:
                 return str(v).split("T")[0] if v else ""
 
+            def _despacho_plausible(dia: str, pedido: dict) -> bool:
+                """¿Esta fecha de despacho puede ser cierta?
+
+                Dos imposibles: despachar antes de que el pedido exista, y
+                despachar en el futuro. Ante cualquier duda de parseo devuelve
+                True (no se descarta un dato por no poder leer la fecha de
+                creación) — el que filtra de verdad es el caso claro.
+                """
+                try:
+                    d = date.fromisoformat(dia[:10])
+                except Exception:
+                    return False
+                if d > date.today():
+                    return False
+                creado = str(pedido.get("fecha_creacion") or "")[:10]
+                if creado:
+                    try:
+                        if d < date.fromisoformat(creado):
+                            return False
+                    except Exception:
+                        pass
+                return True
+
             # Despacho real: la fuente autoritativa. Shopify da la fecha del
             # registro del fulfillment, no la del despacho, y por eso inflaba
             # los días en tránsito.
             envio = _dia(act.get("ship_timestamp"))
+            # CORDÓN SANITARIO (2026-07-30): un despacho no puede ser anterior a
+            # la creación del pedido ni estar en el futuro. Melonn manda basura
+            # acá de vez en cuando y el valor se HEREDA entre sincronizaciones
+            # (está en _CAMPOS_ENRIQUECIDOS), así que un dato malo se queda
+            # pegado para siempre. Caso real: el 61360 se creó el 30-jul y traía
+            # ship_timestamp del 12-jun → la app mostraba 48 días de tránsito de
+            # un pedido despachado ese mismo día. Si la fecha no tiene sentido no
+            # se guarda, y sobre todo NO se marca confiable.
+            if envio and not _despacho_plausible(envio, p):
+                log.warning(
+                    f"{p.get('orden_tienda')}: ship_timestamp {envio} imposible "
+                    f"(creado {str(p.get('fecha_creacion'))[:10]}) — se ignora")
+                envio = ""
             if envio:
                 p["fecha_despacho"] = envio
                 p["fecha_despacho_confiable"] = True

@@ -118,30 +118,55 @@ def es_novedad_visible(p: dict) -> bool:
 
 # ── Helpers internos ─────────────────────────────────────────────────────────
 
+# Estados en los que el pedido AÚN NO SALIÓ de bodega. No puede llevar días en
+# tránsito: contarlos ponía en RIESGO pedidos que nadie ha despachado (medido el
+# 2026-07-30: el 58639 mostraba 56 días "en tránsito" sin haber salido nunca).
+_SIN_DESPACHAR = ("pendiente_despacho", "pendiente", "por_despachar", "cancelado")
+
+
 def _dias_reales(p: dict) -> int:
     """
     Días que el pedido ha estado / estuvo en tránsito.
 
+    - Si todavía no se despacha: 0 (no hay tránsito que medir)
     - Si está entregado y existe fecha_entrega: fecha_entrega - fecha_despacho
       (mide el tiempo REAL que tomó la entrega, no días después de entregado)
     - Si está activo: hoy - fecha_despacho
     - Fallback: campo dias_en_transito del pedido
     """
+    sub = p.get("sub_estado_logistico", "")
+    if sub in _SIN_DESPACHAR:
+        return 0
+
     fd = p.get("fecha_despacho")
     if not fd:
         return int(p.get("dias_en_transito") or 0)
 
     try:
-        fd_date = date.fromisoformat(str(fd))
+        fd_date = date.fromisoformat(str(fd)[:10])
     except Exception:
         return int(p.get("dias_en_transito") or 0)
 
+    # Fecha de despacho imposible: anterior a la creación del pedido, o futura.
+    # Melonn manda basura en `ship_timestamp` de vez en cuando y el valor se
+    # HEREDA entre sincronizaciones, así que un dato malo se queda pegado para
+    # siempre. Caso real: el 61360 se creó el 30-jul y traía despacho del
+    # 12-jun → 48 días de tránsito inventados. Ante la duda, no se inventa: se
+    # cae al contador de Melonn.
+    try:
+        fc = p.get("fecha_creacion")
+        if fc and fd_date < date.fromisoformat(str(fc)[:10]):
+            return int(p.get("dias_en_transito") or 0)
+    except Exception:
+        pass
+    if fd_date > date.today():
+        return int(p.get("dias_en_transito") or 0)
+
     # Si está entregado y hay fecha de entrega → usar tiempo real
-    sub = p.get("sub_estado_logistico", "")
     fe = p.get("fecha_entrega")
     if sub == "entregado" and fe:
         try:
-            return max(0, (date.fromisoformat(str(fe)) - fd_date).days)
+            return max(0, (date.fromisoformat(str(fe)[:10]) - fd_date).days)
         except Exception:
             pass
 
