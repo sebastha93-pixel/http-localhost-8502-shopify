@@ -352,6 +352,21 @@ def siigo_prefijos(
     return s.documentos_por_prefijo()
 
 
+@router.get("/siigo/nota-credito")
+def siigo_nota_credito(
+    numero: int,
+    _: CurrentUser = Depends(require_permission("postventa", "ver")),
+):
+    """Una NC ya emitida tal cual la guardo Siigo: a que bodega entro cada
+    prenda y si fue a la DIAN. Solo lectura.
+
+    Responde de un tiron la pregunta de despues de emitir: si el stock de la
+    tienda no se movio, fue porque el item llego sin bodega (bug nuestro) o
+    porque Siigo la tiene pero no mueve inventario (parametrizacion)."""
+    from backend.services import postventa_siigo as s
+    return s.nota_credito_por_numero(numero)
+
+
 @router.get("/clientes/compras")
 def compras_por_cedula(
     cedula: str,
