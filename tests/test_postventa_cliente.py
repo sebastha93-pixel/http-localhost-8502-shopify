@@ -168,3 +168,32 @@ def test_prefiere_date_sobre_metadata(monkeypatch):
                                   metadata={"created": "2026-01-01T00:00:00Z"})]}
     _mock2(monkeypatch, facturas=con_ambas)
     assert C.compras_por_cedula("30384838")["compras"][0]["fecha"] == "2026-07-20"
+
+
+# ── Ventana de 30 dias ─────────────────────────────────────────────────────
+# Una compra vieja no se puede cambiar. Se marca en la lista para que la
+# asesora lo vea ANTES de abrir el caso, no despues de emitir la NC.
+
+def test_marca_las_compras_fuera_del_plazo(monkeypatch):
+    viejas = {"results": [dict(FACTURAS["results"][0], date="2026-01-15",
+                               id="vieja")]}
+    _mock2(monkeypatch, facturas=viejas)
+    c = C.compras_por_cedula("30384838")["compras"][0]
+    assert c["acreditable"] is False
+    assert "plazo" in (c["motivo_no_acreditable"] or "").lower()
+
+
+def test_una_compra_reciente_sigue_sirviendo(monkeypatch):
+    from datetime import date, timedelta
+    ayer = (date.today() - timedelta(days=1)).isoformat()
+    recientes = {"results": [dict(FACTURAS["results"][0], date=ayer)]}
+    _mock2(monkeypatch, facturas=recientes)
+    assert C.compras_por_cedula("30384838")["compras"][0]["acreditable"] is True
+
+
+def test_la_ventana_manda_aunque_la_dian_haya_aceptado(monkeypatch):
+    """Que la DIAN la acepto no significa que este en plazo."""
+    viejas = {"results": [dict(FACTURAS["results"][0], date="2025-01-15",
+                               stamp={"status": "Accepted"})]}
+    _mock2(monkeypatch, facturas=viejas)
+    assert C.compras_por_cedula("30384838")["compras"][0]["acreditable"] is False

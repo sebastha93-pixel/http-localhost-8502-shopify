@@ -1,3 +1,4 @@
+import datetime as _dt
 import pytest
 from backend.services import postventa_fiscal as PF
 from backend.services import fiscal_siigo
@@ -6,7 +7,12 @@ from backend.services import fiscal_siigo
 CASO = {"id": "c1", "case_number": "PV-2026-0001", "type": "cambio_talla",
         "shopify_order_name": "#60112", "status": "aprobado"}
 
-FACTURA = {"id": "f2", "name": "FV-1-63043",
+# `date` va siempre: Siigo la manda, y sin ella el motor bloquea el cambio
+# por no poder validar el plazo de 30 dias. Se calcula relativa para que el
+# fixture no se venza con el tiempo.
+_AYER = (_dt.date.today() - _dt.timedelta(days=1)).isoformat()
+
+FACTURA = {"id": "f2", "name": "FV-1-63043", "date": _AYER,
            "customer": {"identification": "30384838", "branch_office": 0},
            "seller": 658,
            "items": [{"code": "REF-1", "description": "Jean", "quantity": 1,
