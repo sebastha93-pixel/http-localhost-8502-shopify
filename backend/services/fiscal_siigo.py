@@ -44,9 +44,28 @@ class EmisorSiigo:
     _ENDPOINTS = {"nota_credito": "/credit-notes", "factura": "/invoices"}
 
     def buscar_factura_original(self, *, numero_pedido: str,
-                                desde: str = "", hasta: str = "") -> Optional[dict]:
-        """Encuentra la factura de venta online cuyo `observations` contiene
-        'Orden Nº: <numero_pedido>'. Devuelve None si no existe."""
+                                desde: str = "", hasta: str = "",
+                                factura_id: str = "") -> Optional[dict]:
+        """La factura de la compra que se está cambiando.
+
+        Dos vías, en este orden:
+
+        1. **Por id** — cuando la asesora eligió la compra buscando por cédula
+           ya sabemos cuál es. Es exacto y de una sola llamada. Es la ÚNICA vía
+           para las compras en tienda: sus facturas (FV-6/11/12) no llevan
+           'Orden Nº' en `observations` ni el document_id de la venta online,
+           así que por nº de pedido no aparecen nunca.
+        2. **Por nº de pedido** — el camino de siempre para las ventas online,
+           que sí guardan 'Orden Nº: <pedido>' en `observations`.
+        """
+        if factura_id:
+            try:
+                inv = siigo.siigo_get(f"/invoices/{factura_id}")
+            except Exception as e:  # noqa: BLE001
+                log.warning("no se pudo traer la factura %s: %s", factura_id, e)
+                return None
+            return inv if isinstance(inv, dict) and inv.get("id") else None
+
         objetivo = F.normalizar_numero_pedido(numero_pedido)
         if not objetivo:
             return None

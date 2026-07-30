@@ -27,6 +27,7 @@ class CrearCasoIn(BaseModel):
     customer_cedula: str = ""
     shopify_order_id: str = ""
     shopify_order_name: str = ""
+    siigo_invoice_id: str = ""
     subreason: str = ""
     priority: str = "media"
     source: str = "interno"

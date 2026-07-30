@@ -71,6 +71,7 @@ def crear_caso(*, tipo: str, reason: str, customer_email: str = "",
                customer_phone: str = "", customer_name: str = "",
                customer_cedula: str = "",
                shopify_order_id: str = "", shopify_order_name: str = "",
+               siigo_invoice_id: str = "",
                subreason: str = "", priority: str = "media",
                source: str = "interno", tienda: str = "",
                pago_excedente_id: Optional[int] = None,
@@ -100,6 +101,10 @@ def crear_caso(*, tipo: str, reason: str, customer_email: str = "",
         "customer_name": customer_name or None,
         # Con la cédula se localizan sus compras en Siigo y su historial.
         "customer_cedula": (customer_cedula or "").strip() or None,
+        # La factura exacta que se está cambiando. Imprescindible para las
+        # compras en tienda: sus facturas no se pueden encontrar por nº de
+        # pedido porque sencillamente no lo tienen.
+        "siigo_invoice_id": (siigo_invoice_id or "").strip() or None,
         "status": "creado",
         "type": tipo,
         "reason": reason,

@@ -115,7 +115,8 @@ def preview_nota_credito(case_id: str) -> dict:
 
     emisor = obtener_emisor()
     factura = emisor.buscar_factura_original(
-        numero_pedido=caso.get("shopify_order_name") or "")
+        numero_pedido=caso.get("shopify_order_name") or "",
+        factura_id=caso.get("siigo_invoice_id") or "")
     if factura is None:
         raise ValueError("factura_original_no_encontrada")
 
@@ -233,7 +234,8 @@ def preview_factura_reemplazo(case_id: str) -> dict:
 
     emisor = obtener_emisor()
     factura = emisor.buscar_factura_original(
-        numero_pedido=caso.get("shopify_order_name") or "")
+        numero_pedido=caso.get("shopify_order_name") or "",
+        factura_id=caso.get("siigo_invoice_id") or "")
     if factura is None:
         raise ValueError("factura_original_no_encontrada")
 
@@ -302,7 +304,8 @@ def items_factura_del_caso(case_id: str) -> dict:
         raise ValueError("caso_no_encontrado")
     emisor = obtener_emisor()
     factura = emisor.buscar_factura_original(
-        numero_pedido=caso.get("shopify_order_name") or "")
+        numero_pedido=caso.get("shopify_order_name") or "",
+        factura_id=caso.get("siigo_invoice_id") or "")
     if factura is None:
         raise ValueError("factura_original_no_encontrada")
     return {

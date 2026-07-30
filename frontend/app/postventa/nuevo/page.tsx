@@ -21,6 +21,7 @@ export default function NuevoCasoPage() {
     customer_phone: "",
     shopify_order_name: "",
     shopify_order_id: "",
+    siigo_invoice_id: "",
     tipo: "",
     reason: "",
     priority: "media",
@@ -47,6 +48,9 @@ export default function NuevoCasoPage() {
       customer_email: p.customer_email || cli?.email    || "",
       customer_phone: p.customer_phone || cli?.telefono || "",
       shopify_order_name: c.pedido ?? "",
+      // La factura exacta. Sin esto, una compra de tienda no se puede
+      // encontrar después: no tiene nº de pedido con el cual buscarla.
+      siigo_invoice_id: c.factura_id,
       // Si compró en una tienda, el caso se abre en ese mismo punto.
       tienda: c.canal && c.canal !== "online" ? c.canal : p.tienda,
     }));

@@ -17,6 +17,9 @@ export interface CasoPostventa {
   customer_email?: string | null;
   customer_phone?: string | null;
   shopify_order_name?: string | null;
+  /** Factura exacta en Siigo. Es la única vía para las compras en tienda,
+   *  que no tienen nº de pedido con el cual encontrarla. */
+  siigo_invoice_id?: string | null;
   tienda?: string | null;
   created_at: string;
 }
