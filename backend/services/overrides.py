@@ -41,18 +41,43 @@ def _sb() -> Optional[Client]:
         return None
 
 
+# PostgREST corta en 1.000 filas por defecto (max-rows). Sin paginar, un
+# select("*") sobre esta tabla devolvía 1.000 de 2.875 filas y el 65% de los
+# overrides se DESCARTABA EN SILENCIO en cada lectura: guías, transportadoras,
+# y también nombre, teléfono, ciudad y novedades manuales. El síntoma visible
+# el 2026-07-30 fue "no veo las guías reales" — había 678 guías reales para
+# pedidos activos y en pantalla se veían 25.
+_PAGINA = 1000
+_TOPE_PAGINAS = 100      # 100k filas; si se pasa de ahí, algo más está mal
+
+
 def cargar_map() -> dict[str, dict]:
-    """Retorna {orden: {todos los campos de override}}."""
+    """Retorna {orden: {todos los campos de override}}, TODAS las filas."""
     sb = _sb()
     if sb is None:
         return {}
+    out: dict[str, dict] = {}
+    desde = 0
     try:
-        # Select * para que tolere columnas nuevas sin redeploy
-        res = sb.table("pedido_overrides").select("*").execute()
-        return {r["orden"]: r for r in (res.data or [])}
+        for _ in range(_TOPE_PAGINAS):
+            # Select * para que tolere columnas nuevas sin redeploy.
+            # .range() es inclusivo en ambos extremos.
+            res = (sb.table("pedido_overrides").select("*")
+                     .range(desde, desde + _PAGINA - 1).execute())
+            filas = res.data or []
+            for r in filas:
+                out[r["orden"]] = r
+            if len(filas) < _PAGINA:
+                return out
+            desde += _PAGINA
+        print(f"[overrides] cargar_map: corté en {_TOPE_PAGINAS} páginas "
+              f"({len(out)} filas) — revisar por qué hay tantas")
+        return out
     except Exception as e:
         print(f"[overrides] Error cargar_map: {e}")
-        return {}
+        # Devolver lo que se alcanzó a leer es mejor que perderlo todo, pero
+        # que quede dicho en el log que va incompleto.
+        return out
 
 
 def obtener(orden: str) -> Optional[dict]:
