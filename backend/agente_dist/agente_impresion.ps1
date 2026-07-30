@@ -41,6 +41,19 @@ function Log([string]$msg) {
 # --- API con token (re-login automatico en 401) --------------------------
 $script:Token = ""
 
+# El backend usa esta version para decidir si le entrega trabajos de la RICOH:
+# solo se los da a un agente que sepa hablar IPP (2.4+). Un agente viejo los
+# mandaria al 9100, que los descarta, y los marcaria como impresos sin que
+# salga papel. SUBIR al cambiar la forma de imprimir.
+$script:AgenteVersion = "2.4"
+
+function Cabeceras {
+    return @{
+        Authorization       = "Bearer $script:Token"
+        "X-Agente-Version"  = $script:AgenteVersion
+    }
+}
+
 function Login {
     $cuerpo = @{ email = $Conf.email; password = $Conf.password } | ConvertTo-Json
     $r = Invoke-RestMethod -Method Post -Uri "$Base/api/auth/login" `
@@ -56,9 +69,9 @@ function EsError401($e) {
 function ApiJson([string]$metodo, [string]$ruta) {
     try {
         return Invoke-RestMethod -Method $metodo -Uri ($Base + $ruta) `
-            -Headers @{ Authorization = "Bearer $script:Token" } -TimeoutSec 60
+            -Headers (Cabeceras) -TimeoutSec 60
     } catch {
-        if (EsError401 $_) { Login; return Invoke-RestMethod -Method $metodo -Uri ($Base + $ruta) -Headers @{ Authorization = "Bearer $script:Token" } -TimeoutSec 60 }
+        if (EsError401 $_) { Login; return Invoke-RestMethod -Method $metodo -Uri ($Base + $ruta) -Headers (Cabeceras) -TimeoutSec 60 }
         throw
     }
 }
@@ -68,12 +81,12 @@ function ApiBytes([string]$ruta) {
     try {
         try {
             Invoke-WebRequest -UseBasicParsing -Uri ($Base + $ruta) `
-                -Headers @{ Authorization = "Bearer $script:Token" } -OutFile $tmp -TimeoutSec 90
+                -Headers (Cabeceras) -OutFile $tmp -TimeoutSec 90
         } catch {
             if (EsError401 $_) {
                 Login
                 Invoke-WebRequest -UseBasicParsing -Uri ($Base + $ruta) `
-                    -Headers @{ Authorization = "Bearer $script:Token" } -OutFile $tmp -TimeoutSec 90
+                    -Headers (Cabeceras) -OutFile $tmp -TimeoutSec 90
             } else { throw }
         }
         return [IO.File]::ReadAllBytes($tmp)

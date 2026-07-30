@@ -12,7 +12,8 @@ import logging
 import os
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
+from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query,
+                     Request, Response, UploadFile)
 from pydantic import BaseModel, Field
 
 from backend.core.security import (CurrentUser, require_role, require_permission,
@@ -1980,22 +1981,46 @@ def remision_pwg(
     return Response(content=raster, media_type="image/pwg-raster")
 
 
-# ── Cola de impresión (agente local por IP → RICOH) ──────────────────────
+# ── Cola de impresión (agente local en la red → RICOH y térmicas) ────────
 # El agente local corre en un PC de la red de MALE'DENIM: pide las remisiones
-# pendientes, baja cada PDF de /remisiones/{id}/pdf y lo manda a la RICOH por
-# su IP (puerto 9100). Al terminar marca cada una como impresa.
+# pendientes, baja cada una ya rasterizada de /remisiones/{id}/pwg y la manda a
+# la RICOH por IPP. Al terminar marca cada una como impresa.
 # El LATIDO del agente se registra solo cuando quien consulta es el usuario
 # de servicio del agente local — así el panel de estado (que usan humanos)
 # no lo toca y "agente caído" se detecta de verdad.
 _EMAIL_AGENTE = "impresion@maledenim.com"
 
+# Primera versión del agente que sabe hablar IPP con la RICOH. Un agente
+# anterior manda al puerto 9100, donde esa máquina DESCARTA todo, y acto seguido
+# marca la remisión como impresa: el papel no sale y nadie se entera. Para que
+# eso no vuelva a pasar, a los agentes viejos se les ESCONDE el trabajo de la
+# RICOH — así la remisión se queda visible en la cola (el chip del módulo
+# Impresión muestra pendientes y antigüedad) en vez de perderse en silencio.
+# Las térmicas no se tocan: esas sí funcionan con cualquier versión.
+_AGENTE_MIN_RICOH = (2, 4)
+
+
+def _agente_habla_ipp(request: Request) -> bool:
+    partes = (request.headers.get("X-Agente-Version") or "").strip().split(".")
+    try:
+        v = tuple(int(x) for x in partes[:2])
+    except ValueError:
+        return False
+    return len(v) == 2 and v >= _AGENTE_MIN_RICOH
+
 
 @router.get("/impresion/pendientes")
 def impresion_pendientes(
+    request: Request,
     user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ):
-    if (user.email or "").lower() == _EMAIL_AGENTE:
+    es_agente = (user.email or "").lower() == _EMAIL_AGENTE
+    if es_agente:
         svc._latido_agente()
+        if not _agente_habla_ipp(request):
+            log.warning("Agente de impresión DESACTUALIZADO (sin IPP): no se le "
+                        "entregan remisiones para la RICOH. Correr instalar.ps1.")
+            return {"pendientes": [], "agente_desactualizado": True}
     return {"pendientes": svc.remisiones_pendientes_impresion()}
 
 
@@ -2136,11 +2161,17 @@ def impresion_reimprimir(
 # la SAT (instrucciones de lavado) en la red de la empresa.
 @router.get("/impresion/trabajos")
 def impresion_trabajos(
+    request: Request,
     user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ):
+    trabajos = svc.trabajos_pendientes_impresion()
     if (user.email or "").lower() == _EMAIL_AGENTE:
         svc._latido_agente()
-    return {"trabajos": svc.trabajos_pendientes_impresion()}
+        if not _agente_habla_ipp(request):
+            # Mismo motivo que en /impresion/pendientes: la prueba de la RICOH
+            # también va en raster y un agente viejo la tiraría al 9100.
+            trabajos = [t for t in trabajos if (t.get("destino") or "") != "ricoh"]
+    return {"trabajos": trabajos}
 
 
 @router.get("/impresion/trabajos/{trabajo_id}/contenido")
