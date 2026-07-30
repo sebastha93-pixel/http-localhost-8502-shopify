@@ -658,7 +658,9 @@ function ElegirQueSeLleva({ caseId, tienda, onListo, onSaldo, calculando }:
           </button>
         </div>
         {saldoMut.isError && (
-          <p className="text-sm text-terracotta">No se pudo cerrar el caso.</p>
+          <p className="text-sm text-terracotta">
+            {(saldoMut.error as Error)?.message || "No se pudo cerrar el caso."}
+          </p>
         )}
       </div>
     );
@@ -711,8 +713,10 @@ function ElegirQueSeLleva({ caseId, tienda, onListo, onSaldo, calculando }:
         ))}
       </div>
       {fijar.isError && (
+        // El backend dice el motivo exacto; taparlo con una causa inventada
+        // manda a buscar donde no es.
         <p className="text-sm text-terracotta">
-          No se pudo elegir esa prenda. Puede que ya no tenga existencias.
+          {(fijar.error as Error)?.message || "No se pudo elegir esa prenda."}
         </p>
       )}
       <button onClick={() => setSalida(null)}

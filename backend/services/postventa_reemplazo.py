@@ -75,15 +75,26 @@ def verificar_disponible(inventario: dict, bodega_nombre: str,
     puede afirmar que haya, y facturar a ciegas es justo lo que se quiere
     evitar.
     """
-    if not (inventario or {}).get("referencias"):
+    filas = (inventario or {}).get("referencias") or []
+    if not filas:
         return False, ("No se pudo leer el inventario de Siigo, así que no se "
                        "puede confirmar que la prenda esté disponible.")
     code = (code or "").strip()
-    for o in opciones_con_stock(inventario, bodega_nombre):
-        if o["code"] == code:
-            return True, f"{o['stock']} disponible(s) en {bodega_nombre}"
-    return False, (f"{code or 'La referencia'} no tiene existencias en "
-                   f"{bodega_nombre}.")
+    objetivo = (bodega_nombre or "").strip()
+
+    # Se recorre el inventario COMPLETO, no `opciones_con_stock`: esa función
+    # arma la lista de la pantalla y la corta en 60. Usarla aquí rechazaba
+    # prendas que sí existían solo por quedar fuera del corte — una decisión
+    # no se puede tomar sobre una vista truncada.
+    for f in filas:
+        if not isinstance(f, dict) or f.get("code") != code:
+            continue
+        cant = (f.get("stock") or {}).get(objetivo) or 0
+        if cant > 0:
+            return True, f"{int(cant)} disponible(s) en {objetivo}"
+        return False, (f"{code} existe pero no tiene unidades en {objetivo}.")
+    return False, (f"{code or 'La referencia'} no está en el inventario de "
+                   f"{objetivo}.")
 
 
 # ── Qué hace la clienta con el crédito de la nota crédito ──────────────────
