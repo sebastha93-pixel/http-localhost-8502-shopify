@@ -2,10 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { PageShell } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { useQuery, useMutation } from "@tanstack/react-query";
 import { formatMoney, fmtDateTime } from "@/lib/utils";
 import { crearCaso, listarTiendas, comprasPorCedula, TIPOS, MOTIVOS, PRIORIDADES,
          type CasoPostventa, type Compra } from "@/lib/postventa";
