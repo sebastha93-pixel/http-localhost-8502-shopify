@@ -199,3 +199,18 @@ export interface PuntoVenta {
 }
 export const listarTiendas = () =>
   api.get<PuntoVenta[]>(`/api/postventa/tiendas`);
+
+// ── Buscar compras por cédula ────────────────────────────────────────
+export interface PrendaCompra { sku: string; descripcion: string; precio: number; }
+export interface Compra {
+  factura_id: string; factura: string; fecha: string; total: number;
+  canal: string | null; donde: string; pedido: string | null;
+  acreditable: boolean; motivo_no_acreditable: string | null;
+  prendas: PrendaCompra[];
+}
+export interface ComprasCliente {
+  cedula: string; total: number; acreditables: number; compras: Compra[];
+  _error?: string;
+}
+export const comprasPorCedula = (cedula: string) =>
+  api.get<ComprasCliente>(`/api/postventa/clientes/compras?cedula=${encodeURIComponent(cedula)}`);
