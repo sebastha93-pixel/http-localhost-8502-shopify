@@ -25,9 +25,16 @@ _PAGO_CAJA_FLORIDA = 12243
 _PAGO_DATAFONO_ARRAYANES = 8987
 _PAGO_CAJA_ARRAYANES = 8282
 
-# Bodegas de Siigo (confirmadas por el fundador).
-BODEGA_FLORIDA = 5
-BODEGA_ARRAYANES = 3
+# Bodegas de Siigo — ids REALES de la API, leídos de GET /warehouses.
+#
+# OJO: el número que se ve en la pantalla de Siigo NO es el id de la API.
+# Estuvieron configuradas como 5 y 3 (los códigos visibles) y Siigo rechazó
+# la nota crédito con "The warehouse doesn't exist: 5". Es el mismo patrón de
+# los tipos de documento (FV-11 se ve como 11 y su id es 31433).
+#
+#   16 INSUMOS · 32 MELONN · 37 Arrayanes · 45 Segundas · 48 Florida
+BODEGA_FLORIDA = 48
+BODEGA_ARRAYANES = 37
 
 # Tipos de documento por punto de venta. Siigo NO los expone en
 # /document-types (devuelve 9 y faltan justo estos), así que se dedujeron de
@@ -41,7 +48,7 @@ DOC_FV12 = 31434
 
 # Un PUNTO DE VENTA es una caja: tiene su propio prefijo de facturación pero
 # puede compartir bodega con otra caja de la misma tienda. Florida factura
-# desde dos cajas (FV-11 y FV-12) y ambas descargan/ingresan a la bodega 5.
+# desde dos cajas (FV-11 y FV-12) y ambas descargan/ingresan a la bodega 48.
 #
 # `documento_factura_id` queda en None hasta confirmarlo con
 # /siigo/tipos-documento: el sistema se niega a facturar con un id adivinado
@@ -147,3 +154,37 @@ def forma_pago_valida(clave: str, payment_id: int) -> bool:
     if not t:
         return False
     return any(int(p["id"]) == int(payment_id) for p in (t.get("formas_pago") or []))
+
+
+def bodegas_invalidas(bodegas_siigo: list[dict]) -> Optional[list[dict]]:
+    """Puntos de venta cuya bodega NO sirve para emitir en Siigo.
+
+    Siigo exige que la bodega "exista en Siigo nube y esté activa". Si no,
+    rechaza el documento con `invalid_reference`. Peor: mientras el campo iba
+    mal formado, Siigo lo descartaba en silencio y el error no aparecía nunca
+    —el inventario simplemente no se movía.
+
+    Devuelve **None** si no se pudo consultar Siigo: sin datos no se puede
+    afirmar que la configuración esté bien, y decir "todo ok" sería mentir.
+    """
+    if not bodegas_siigo:
+        return None
+    activas = {int(b["id"]) for b in bodegas_siigo
+               if b.get("id") is not None and b.get("active", True)}
+    existentes = {int(b["id"]) for b in bodegas_siigo if b.get("id") is not None}
+
+    malas = []
+    for clave, t in _config().items():
+        bod = t.get("bodega_id")
+        if bod is None:
+            continue
+        bod = int(bod)
+        if bod not in existentes:
+            motivo = "no_existe"
+        elif bod not in activas:
+            motivo = "inactiva"
+        else:
+            continue
+        malas.append({"tienda": clave, "nombre": t.get("nombre"),
+                      "bodega_id": bod, "motivo": motivo})
+    return malas

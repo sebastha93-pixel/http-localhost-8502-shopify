@@ -28,6 +28,7 @@ from backend.services import postventa_siigo as descubrir
 from backend.services import postventa_fiscal as fiscal
 from backend.services import fiscal_siigo
 from backend.services import fiscal_logic as F
+from backend.services import siigo as siigo_svc
 
 log = logging.getLogger("postventa_banco")
 
@@ -401,6 +402,24 @@ def correr(*, total: int = 20, dry_run: bool = True,
                 "detalle": "El banco no emite en modo producción: serían "
                            "documentos electrónicos reales ante la DIAN. "
                            "Ponga SIIGO_POSTVENTA_MODO=prueba."}
+
+    # Las bodegas configuradas deben existir y estar activas en Siigo. Se
+    # verifica ANTES de emitir: una bodega inventada no produce un error
+    # visible hasta que Siigo rechaza el documento, y mientras el campo iba
+    # mal formado ni siquiera eso — el stock simplemente no se movía.
+    from backend.services import tiendas
+    malas = tiendas.bodegas_invalidas(siigo_svc.listar_bodegas())
+    if malas is None:
+        return {"_error": "bodegas_no_verificables",
+                "detalle": "No se pudieron leer las bodegas de Siigo "
+                           "(GET /warehouses). Sin eso no se puede afirmar que "
+                           "la configuración de las tiendas sirva."}
+    if malas:
+        return {"_error": "bodegas_mal_configuradas", "detalle": malas,
+                "como_arreglar": "Los ids reales salen de GET /warehouses "
+                                 "(endpoint /api/inventario/siigo/descubrir). "
+                                 "El número que se ve en la pantalla de Siigo "
+                                 "NO es el id de la API."}
 
     pedidos = _pedidos_con_factura(total)
     if not pedidos:
