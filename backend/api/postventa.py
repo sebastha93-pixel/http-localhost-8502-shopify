@@ -24,6 +24,7 @@ class CrearCasoIn(BaseModel):
     customer_email: str = ""
     customer_phone: str = ""
     customer_name: str = ""
+    customer_cedula: str = ""
     shopify_order_id: str = ""
     shopify_order_name: str = ""
     subreason: str = ""
@@ -348,3 +349,14 @@ def siigo_prefijos(
     aqui se deducen recorriendo facturas existentes."""
     from backend.services import postventa_siigo as s
     return s.documentos_por_prefijo()
+
+
+@router.get("/clientes/compras")
+def compras_por_cedula(
+    cedula: str,
+    _: CurrentUser = Depends(require_permission("postventa", "ver")),
+):
+    """Compras de una clienta por cedula: online y de tienda, con sus prendas
+    y si ya se les puede hacer nota credito. Evita pedirle el nº de pedido."""
+    from backend.services import postventa_cliente
+    return postventa_cliente.compras_por_cedula(cedula)

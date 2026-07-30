@@ -69,6 +69,7 @@ def _siguiente_consecutivo(anio: int) -> int:
 
 def crear_caso(*, tipo: str, reason: str, customer_email: str = "",
                customer_phone: str = "", customer_name: str = "",
+               customer_cedula: str = "",
                shopify_order_id: str = "", shopify_order_name: str = "",
                subreason: str = "", priority: str = "media",
                source: str = "interno", tienda: str = "",
@@ -97,6 +98,8 @@ def crear_caso(*, tipo: str, reason: str, customer_email: str = "",
         "customer_email": customer_email or None,
         "customer_phone": customer_phone or None,
         "customer_name": customer_name or None,
+        # Con la cédula se localizan sus compras en Siigo y su historial.
+        "customer_cedula": (customer_cedula or "").strip() or None,
         "status": "creado",
         "type": tipo,
         "reason": reason,
