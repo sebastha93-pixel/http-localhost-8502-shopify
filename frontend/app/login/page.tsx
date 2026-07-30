@@ -22,12 +22,27 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
+  // Si la sesión venció a media tarea, api.ts nos manda acá con ?volver=…
+  // para no perder la pantalla en la que estaba trabajando la persona.
+  //
+  // Se lee del window y NO con useSearchParams a propósito: ese hook obliga a
+  // envolver la página en un <Suspense> o el build de Next falla al
+  // prerenderizarla.
+  //
+  // Solo se aceptan rutas internas: un `volver` con http:// o //otro-host
+  // sería un redirect abierto hacia un sitio ajeno.
+  const [volver] = useState(() => {
+    if (typeof window === "undefined") return "";
+    const v = new URLSearchParams(window.location.search).get("volver") || "";
+    return v.startsWith("/") && !v.startsWith("//") ? v : "";
+  });
+
   const mut = useMutation({
     mutationFn: () => api.post<LoginResponse>("/api/auth/login", { email, password }),
     onSuccess: (data) => {
       setToken(data.access_token);
       qc.setQueryData(["auth", "me"], data.user);
-      router.replace(homePath(data.user));
+      router.replace(volver || homePath(data.user));
     },
     onError: (err: Error) => {
       setError(err.message || "Error al iniciar sesión");

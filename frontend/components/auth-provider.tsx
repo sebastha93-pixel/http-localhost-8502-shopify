@@ -59,7 +59,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!hydrated) return;
     if (!token && !isPublic) {
-      router.replace("/login");
+      // Guardamos dónde estaba para devolverlo ahí después de entrar, en vez
+      // de mandarlo siempre al home y que pierda la pantalla.
+      const volver = pathname && pathname !== "/"
+        ? `?volver=${encodeURIComponent(pathname)}` : "";
+      router.replace(`/login${volver}`);
     }
     // Si ya estás autenticado y estás en /login, mándate a la app.
     // No aplicamos esta regla a las otras rutas públicas (/lote/, /terminacion/)

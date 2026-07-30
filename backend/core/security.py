@@ -66,6 +66,53 @@ def decode_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Token inválido")
 
 
+# ── Sesión deslizante ────────────────────────────────────────────────
+# El token vive unas horas. Antes, cuando vencía, el frontend te echaba al
+# /login en medio de lo que estuvieras haciendo — aunque llevaras todo el día
+# trabajando en la app. Ahora: si al usuario le queda menos de la MITAD de la
+# vida del token, se le entrega uno nuevo en la cabecera de la respuesta y el
+# navegador lo guarda. Mientras uses la app, la sesión no se cae nunca.
+#
+# Se renueva a media vida y no en cada llamada para no reemitir un token en
+# cada una de las decenas de peticiones que hace una pantalla.
+#
+# Por qué NO es un token eterno: `get_current_user` revalida contra la base
+# cada 30 s que el usuario siga ACTIVO y con el mismo rol, así que desactivar
+# a alguien en Supabase lo saca en medio minuto, dure lo que dure su token.
+
+def renovar_token_si_conviene(token: str) -> Optional[str]:
+    """Token nuevo si al actual le queda menos de media vida; None si no toca.
+
+    Nunca lanza: esto corre en un middleware para TODAS las peticiones, y un
+    token inválido o vencido no es asunto suyo — de eso se encarga el endpoint.
+    """
+    try:
+        payload = jwt.decode(token, settings.auth_jwt_secret, algorithms=["HS256"])
+    except Exception:
+        return None
+
+    exp = payload.get("exp")
+    if not exp:
+        return None
+    restante_s = int(exp) - int(datetime.now(timezone.utc).timestamp())
+    if restante_s <= 0:
+        return None
+    if restante_s > (settings.auth_jwt_expiry_min * 60) // 2:
+        return None      # todavía le queda cuerda
+
+    try:
+        return create_access_token(CurrentUser(
+            id=str(payload.get("sub") or ""),
+            email=str(payload.get("email") or ""),
+            nombre=str(payload.get("nombre") or ""),
+            rol=str(payload.get("rol") or ""),
+            cargo=str(payload.get("cargo") or ""),
+            permisos=payload.get("permisos") or {},
+        ))
+    except Exception:
+        return None
+
+
 # ── Dependency para extraer el usuario actual ────────────────────────
 
 _bearer = HTTPBearer(auto_error=False)

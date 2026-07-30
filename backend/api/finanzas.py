@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from backend.core.security import CurrentUser, get_current_user, require_role, require_permission
 from backend.services import melonn as melonn_svc
@@ -27,16 +27,32 @@ router = APIRouter(prefix="/api/finanzas", tags=["finanzas"])
 # ── Modelos ──────────────────────────────────────────────────────────
 
 class PagoMP(BaseModel):
-    mp_id: str
-    valor_bruto: float
-    comision: float
-    valor_neto: float
-    email: str
-    nombre_pagador: str
-    fecha_aprobado: str
-    estado: str
-    descripcion: str
-    external_reference: str
+    mp_id: str = ""
+    valor_bruto: float = 0.0
+    comision: float = 0.0
+    valor_neto: float = 0.0
+    email: str = ""
+    nombre_pagador: str = ""
+    fecha_aprobado: str = ""
+    estado: str = ""
+    descripcion: str = ""
+    external_reference: str = ""
+
+    # Cinturón de seguridad del borde. mp_client ya normaliza los null, pero
+    # este modelo NO puede volver a tumbar la vista de finanzas completa por un
+    # solo pago incompleto: el 2026-07-30, UN pago sin email de 386 devolvía 500
+    # en todo el endpoint (y en la consola se veía como un error de CORS).
+    # Un default no basta: pydantic valida el None igual si la clave viene.
+    @field_validator("mp_id", "email", "nombre_pagador", "fecha_aprobado",
+                     "estado", "descripcion", "external_reference", mode="before")
+    @classmethod
+    def _texto_vacio_si_null(cls, v):
+        return "" if v is None else v
+
+    @field_validator("valor_bruto", "comision", "valor_neto", mode="before")
+    @classmethod
+    def _cero_si_null(cls, v):
+        return 0.0 if v is None else v
 
 
 class PagosMPResponse(BaseModel):

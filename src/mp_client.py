@@ -82,23 +82,30 @@ def obtener_pagos(
         if not resultados:
             break
 
+        # OJO: `.get(clave, "")` NO protege de un valor null — el default solo
+        # aplica si FALTA la clave. MercadoPago manda null de verdad, y medido
+        # el 2026-07-30 sobre 100 pagos reales: payer.email null en 1,
+        # first_name y last_name null en los 100. Con `.get` eso dejaba
+        # email=None (que reventaba el endpoint con un 500) y el nombre del
+        # pagador como el texto literal "None None". De ahí el `or` en todos.
         for p in resultados:
             comision = sum(
-                f.get("amount", 0)
-                for f in p.get("fee_details", [])
+                (f.get("amount") or 0)
+                for f in (p.get("fee_details") or [])
                 if f.get("type") == "mercadopago_fee"
             )
+            bruto = p.get("transaction_amount") or 0
             pagos.append({
-                "mp_id": str(p.get("id")),
-                "valor_bruto": p.get("transaction_amount", 0),
+                "mp_id": str(p.get("id") or ""),
+                "valor_bruto": bruto,
                 "comision": comision,
-                "valor_neto": p.get("transaction_amount", 0) - comision,
-                "email": (p.get("payer") or {}).get("email", ""),
+                "valor_neto": bruto - comision,
+                "email": (p.get("payer") or {}).get("email") or "",
                 "nombre_pagador": _nombre_pagador(p),
-                "fecha_aprobado": p.get("date_approved", "")[:10],
-                "estado": p.get("status", ""),
-                "descripcion": str(p.get("description", "")),
-                "external_reference": p.get("external_reference", ""),
+                "fecha_aprobado": (p.get("date_approved") or "")[:10],
+                "estado": p.get("status") or "",
+                "descripcion": str(p.get("description") or ""),
+                "external_reference": p.get("external_reference") or "",
             })
 
         paging = data.get("paging", {})
@@ -111,9 +118,15 @@ def obtener_pagos(
 
 
 def _nombre_pagador(p: dict) -> str:
+    """Nombre del pagador, o "" si MercadoPago no lo trae.
+
+    El f-string de antes convertía los null en el texto "None": salía
+    "None None" como nombre en TODOS los pagos de checkout, porque ahí
+    first_name y last_name siempre vienen null.
+    """
     payer = p.get("payer") or {}
-    nombre = f"{payer.get('first_name', '')} {payer.get('last_name', '')}".strip()
-    return nombre
+    partes = [payer.get("first_name"), payer.get("last_name")]
+    return " ".join(str(x).strip() for x in partes if x).strip()
 
 
 # ── Matching ───────────────────────────────────────────────────────────────────

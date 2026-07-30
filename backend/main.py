@@ -17,6 +17,7 @@ import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from backend.core.config import settings
 from backend.api import auditoria, auth, bot, clientes, cod_acciones, comercial, conciliacion, dashboard, finanzas, health, historico, inventario, melonn, meta, metricas, notificaciones, pedidos, postventa, produccion, revenue, whatsapp
@@ -222,6 +223,50 @@ app = FastAPI(
 )
 
 
+# ── Errores 500 CON cabeceras CORS ────────────────────────────────────────────
+# OJO EL ORDEN: en Starlette el último middleware que se agrega queda por FUERA,
+# así que este se declara ANTES del CORS para quedar por DENTRO y que CORS
+# alcance a ponerle sus cabeceras a la respuesta.
+#
+# Sin esto, una excepción no atrapada subía hasta el ServerErrorMiddleware, que
+# responde un 500 pelado SIN cabeceras CORS. El navegador entonces no reporta
+# "error 500 en tal endpoint" sino "Origin is not allowed by
+# Access-Control-Allow-Origin", y uno se va a buscar un problema de CORS que no
+# existe. Pasó el 2026-07-30 con /api/finanzas/mercadopago: la consola estaba
+# llena de errores de CORS y el fallo real era un pago sin email.
+@app.middleware("http")
+async def errores_como_respuesta(request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"error_interno: {type(e).__name__}: {str(e)[:200]}"},
+        )
+
+
+# ── Sesión deslizante: token nuevo antes de que venza ─────────────────────────
+# Si al token le queda menos de media vida, se devuelve uno fresco en
+# X-Token-Renovado y el frontend lo guarda. Mientras la persona esté usando la
+# app no la vuelve a echar al login. Ver security.renovar_token_si_conviene.
+# La cabecera va en expose_headers del CORS o el navegador no deja leerla.
+@app.middleware("http")
+async def renovar_sesion(request, call_next):
+    response = await call_next(request)
+    auth = request.headers.get("authorization") or ""
+    if auth.lower().startswith("bearer "):
+        try:
+            from backend.core.security import renovar_token_si_conviene
+            nuevo = renovar_token_si_conviene(auth[7:].strip())
+            if nuevo:
+                response.headers["X-Token-Renovado"] = nuevo
+        except Exception:
+            pass      # que una renovación fallida nunca tumbe la petición
+    return response
+
+
 # ── CORS — permitir que el frontend Next.js consuma este API ──────────────────
 app.add_middleware(
     CORSMiddleware,
@@ -229,6 +274,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    # Sin esto el JS del navegador NO puede leer la cabecera del token nuevo.
+    expose_headers=["X-Token-Renovado"],
 )
 
 

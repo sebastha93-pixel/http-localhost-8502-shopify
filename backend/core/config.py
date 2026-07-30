@@ -32,7 +32,13 @@ class Settings(BaseSettings):
     auth_jwt_secret: str = Field(default="dev-only-change-in-prod-XXXX", alias="AUTH_JWT_SECRET")
     # TTL del access token: 2 horas. Suficiente para una jornada operativa sin
     # exponer la sesión por 7 días en caso de XSS robando el token de localStorage.
-    auth_jwt_expiry_min: int = Field(default=120, alias="AUTH_JWT_EXPIRY_MIN")
+    # 12 h: una jornada completa sin que la app te eche al login. Además la
+    # sesión se RENUEVA sola mientras trabajes (ver renovar_token_si_conviene),
+    # así que esto solo importa cuando dejas una pestaña abierta y no la tocas.
+    # Es seguro estirarlo porque get_current_user revalida contra la base cada
+    # 30 s: si desactivas a alguien en Supabase, queda fuera en medio minuto
+    # aunque su token siga vigente.
+    auth_jwt_expiry_min: int = Field(default=720, alias="AUTH_JWT_EXPIRY_MIN")
 
     # Bootstrap del primer admin (solo se usa si la tabla usuarios está vacía)
     auth_bootstrap_email:    str = Field(default="", alias="AUTH_BOOTSTRAP_EMAIL")
