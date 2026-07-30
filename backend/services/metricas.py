@@ -138,7 +138,11 @@ def _dias_reales(p: dict) -> int:
     if sub in _SIN_DESPACHAR:
         return 0
 
-    fd = p.get("fecha_despacho")
+    # PRIMERO lo que VIMOS pasar. `fecha_despacho_observada` la anota el sync
+    # cuando ve el pedido cambiar de "no despachado" a "despachado", así que es
+    # un hecho presenciado y no un campo reportado. Melonn manda fechas
+    # imposibles de vez en cuando; lo nuestro no.
+    fd = p.get("fecha_despacho_observada") or p.get("fecha_despacho")
     if not fd:
         return int(p.get("dias_en_transito") or 0)
 

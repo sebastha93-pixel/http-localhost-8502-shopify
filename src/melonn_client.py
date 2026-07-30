@@ -240,6 +240,10 @@ _CAMPOS_ENRIQUECIDOS = (
     # webhooks, si no volvemos al bucle infinito de re-consultas. Ver
     # _detalle_ya_intentado().
     "_detalle_melonn_intentado_en",
+    # Despacho que VIMOS ocurrir (transición de estado). Es un dato que no se
+    # puede volver a calcular: si se pierde, no hay forma de recuperarlo porque
+    # la transición ya pasó. Ver _marcar_despacho_observado().
+    "fecha_despacho_observada", "fecha_despacho_origen",
 )
 
 # Cada cuánto vale la pena volver a pedirle a Melonn el detalle de un pedido
@@ -345,10 +349,58 @@ def _clave_pedido(p: dict) -> str:
     return f"T{p.get('orden_tienda') or ''}"
 
 
+# ── Fecha de despacho PROPIA ─────────────────────────────────────────────────
+# Melonn es una fuente pobre para esto: `ship_timestamp` solo llega si se pide el
+# detalle, y de vez en cuando trae fechas imposibles. Medido el 2026-07-30: solo
+# el 12% de los entregados tenía fecha, así que el "días en tránsito" de la
+# mayoría salía del contador de Melonn y no de un cálculo auditable.
+#
+# La solución que NO depende de ellos: mirar el cambio de estado. Cuando un
+# pedido pasa de "no despachado" a "despachado", ESE es el momento del despacho,
+# y lo sabemos porque lo vimos pasar. Se anota una vez y no se vuelve a tocar.
+#
+# Límite honesto: solo sirve de aquí en adelante. Para lo ya despachado no hay
+# transición que observar — eso depende del backfill de Melonn.
+_NO_DESPACHADO = ("pendiente_despacho", "pendiente", "por_despachar")
+_YA_DESPACHADO = ("en_transito", "novedad", "entregado", "resuelto", "devuelto")
+
+
+def _marcar_despacho_observado(p: dict, prev: dict) -> bool:
+    """Anota la fecha de despacho si ACABAMOS DE VER la transición.
+
+    Devuelve True si se anotó. No pisa una fecha propia ya existente: el
+    despacho pasa una sola vez, y si el pedido vuelve a "en tránsito" tras una
+    novedad eso no es un despacho nuevo.
+    """
+    if p.get("fecha_despacho_observada"):
+        return False
+    antes = prev.get("sub_estado_logistico") or ""
+    ahora = p.get("sub_estado_logistico") or ""
+    if antes not in _NO_DESPACHADO or ahora not in _YA_DESPACHADO:
+        return False
+    from datetime import datetime as _dt
+    try:
+        from zoneinfo import ZoneInfo
+        hoy = _dt.now(ZoneInfo("America/Bogota")).date().isoformat()
+    except Exception:
+        hoy = _dt.now().date().isoformat()
+    p["fecha_despacho_observada"] = hoy
+    # Si no había fecha fiable, esta manda: la vimos nosotros.
+    if not p.get("fecha_despacho_confiable"):
+        p["fecha_despacho"] = hoy
+        p["fecha_despacho_confiable"] = True
+        p["fecha_despacho_origen"] = "transicion_observada"
+    return True
+
+
 def _heredar_enriquecidos(frescos: list) -> list:
     """Copia los campos enriquecidos del caché anterior a los pedidos frescos
     de Melonn, para no re-consultar Shopify lo que ya trajimos. Solo rellena
-    campos vacíos del pedido fresco — el estado/logística fresco manda."""
+    campos vacíos del pedido fresco — el estado/logística fresco manda.
+
+    Acá también se detecta el DESPACHO: es el único punto del código donde
+    conviven el estado anterior y el nuevo del mismo pedido.
+    """
     try:
         hit = _cache_leer(ignorar_ttl=True)
     except Exception:
@@ -358,10 +410,15 @@ def _heredar_enriquecidos(frescos: list) -> list:
     viejos = hit[0] or []
     idx = {_clave_pedido(p): p for p in viejos}
     heredados = 0
+    despachos = 0
     for p in frescos:
         prev = idx.get(_clave_pedido(p))
         if not prev:
             continue
+        # OJO EL ORDEN: la transición se evalúa ANTES de heredar, porque heredar
+        # copiaría la fecha vieja y el estado anterior dejaría de ser visible.
+        if _marcar_despacho_observado(p, prev):
+            despachos += 1
         for c in _CAMPOS_ENRIQUECIDOS:
             if _campo_vacio(p.get(c)) and not _campo_vacio(prev.get(c)):
                 p[c] = prev[c]
@@ -369,6 +426,9 @@ def _heredar_enriquecidos(frescos: list) -> list:
                     heredados += 1
     if heredados:
         log.info(f"[enrich] {heredados} pedidos heredaron datos del caché (sin re-consultar Shopify)")
+    if despachos:
+        log.info(f"[despacho] {despachos} pedido(s) pasaron a despachado en este ciclo "
+                 f"— fecha anotada por observación propia")
     return frescos
 
 # ── Clasificación de estados ───────────────────────────────────────────────────
@@ -839,6 +899,9 @@ def refrescar_un_pedido(identificador: str) -> dict:
             # re-consulta — realimentando el bucle que arreglamos hoy. Y le
             # faltaban las promesas, que son caras de traer.
             "fecha_despacho_confiable",
+            # El despacho observado NO se puede recalcular: la transición ya
+            # pasó. Un webhook que lo borre lo pierde para siempre.
+            "fecha_despacho_observada", "fecha_despacho_origen",
             "promesa_entrega_min", "promesa_entrega_max", "intentos_entrega",
             "_detalle_melonn_intentado_en",
             "guia_real", "carrier_real", "link_guia", "external_order_id",
