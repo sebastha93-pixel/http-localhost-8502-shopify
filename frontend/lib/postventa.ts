@@ -208,8 +208,14 @@ export interface Compra {
   acreditable: boolean; motivo_no_acreditable: string | null;
   prendas: PrendaCompra[];
 }
+/** Siigo guarda el nombre/email/teléfono en el CLIENTE, no en la factura. */
+export interface ClienteSiigo {
+  nombre: string; email: string; telefono: string;
+  identification?: string; branch_office?: number;
+}
 export interface ComprasCliente {
   cedula: string; total: number; acreditables: number; compras: Compra[];
+  cliente?: ClienteSiigo;
   _error?: string;
 }
 export const comprasPorCedula = (cedula: string) =>

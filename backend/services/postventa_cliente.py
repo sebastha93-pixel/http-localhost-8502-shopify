@@ -38,6 +38,63 @@ def _canal_de(document_id: Optional[int], nombre: str) -> dict:
     return {"canal": None, "etiqueta": f"Otro ({prefijo})"}
 
 
+def _telefono_de(p) -> str:
+    """Siigo guarda el teléfono como {indicative, number, extension} o plano."""
+    if isinstance(p, dict):
+        return str(p.get("number") or "").strip()
+    return str(p or "").strip()
+
+
+def datos_de_cliente(c: dict) -> dict:
+    """Nombre, email y teléfono de un cliente de Siigo.
+
+    `name` es una LISTA: [nombre, apellido] si es persona, [razón social] si es
+    empresa. Si viene vacía se arma del primer contacto, que es lo que pasa con
+    los clientes creados desde la caja de la tienda.
+    """
+    c = c if isinstance(c, dict) else {}
+    crudo = c.get("name")
+    partes = crudo if isinstance(crudo, list) else [crudo]
+    nombre = " ".join(str(p).strip() for p in partes if p).strip()
+
+    contactos = [x for x in (c.get("contacts") or []) if isinstance(x, dict)]
+    contacto = contactos[0] if contactos else {}
+    if not nombre:
+        nombre = " ".join(str(contacto.get(k) or "").strip()
+                          for k in ("first_name", "last_name")).strip()
+
+    telefonos = [x for x in (c.get("phones") or []) if x]
+    return {
+        "nombre": nombre,
+        "email": str(contacto.get("email") or "").strip(),
+        "telefono": (_telefono_de(contacto.get("phone"))
+                     or _telefono_de(telefonos[0] if telefonos else None)),
+    }
+
+
+def _traer_cliente(cedula: str) -> dict:
+    """Datos de contacto de la clienta. Secundario: si falla, se sigue sin
+    ellos — las compras son lo que de verdad importa."""
+    try:
+        r = siigo.siigo_get("/customers", {"identification": cedula})
+    except Exception as e:  # noqa: BLE001
+        log.warning("no se pudo traer el cliente %s: %s", cedula, e)
+        return {"nombre": "", "email": "", "telefono": ""}
+    filas = r.get("results", []) if isinstance(r, dict) else []
+    return datos_de_cliente(filas[0] if filas else {})
+
+
+def _fecha_de(inv: dict) -> Optional[str]:
+    """Fecha de la compra. El listado de Siigo no siempre trae `date`; cuando
+    falta, la de creación sirve para que la asesora pueda distinguir entre
+    varias compras de la misma clienta."""
+    for v in (inv.get("date"), (inv.get("metadata") or {}).get("created"),
+              inv.get("created")):
+        if v:
+            return str(v)
+    return None
+
+
 def compras_por_cedula(cedula: str, *, limite: int = 12) -> dict:
     """Compras de la clienta, de la más reciente a la más antigua.
 
@@ -69,7 +126,7 @@ def compras_por_cedula(cedula: str, *, limite: int = 12) -> dict:
         compras.append({
             "factura_id": inv.get("id"),
             "factura": nombre,
-            "fecha": inv.get("date"),
+            "fecha": _fecha_de(inv),
             "total": inv.get("total"),
             "canal": canal["canal"],
             "donde": canal["etiqueta"],
@@ -86,11 +143,14 @@ def compras_por_cedula(cedula: str, *, limite: int = 12) -> dict:
         })
 
     compras.sort(key=lambda c: c.get("fecha") or "", reverse=True)
-    cliente = ((filas[0].get("customer") or {}) if filas else {})
+    ref = ((filas[0].get("customer") or {}) if filas else {})
     return {
         "cedula": cedula,
-        "cliente": {"identification": cliente.get("identification"),
-                    "branch_office": cliente.get("branch_office", 0)},
+        # La factura solo trae la cédula; nombre/email/teléfono se piden aparte
+        # para que la asesora no tenga que digitarlos.
+        "cliente": {**_traer_cliente(cedula),
+                    "identification": ref.get("identification") or cedula,
+                    "branch_office": ref.get("branch_office", 0)},
         "total": len(compras),
         "acreditables": sum(1 for c in compras if c["acreditable"]),
         "compras": compras,

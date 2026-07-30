@@ -360,3 +360,47 @@ def compras_por_cedula(
     y si ya se les puede hacer nota credito. Evita pedirle el nº de pedido."""
     from backend.services import postventa_cliente
     return postventa_cliente.compras_por_cedula(cedula)
+
+
+@router.get("/clientes/crudo")
+def cliente_siigo_crudo(
+    cedula: str,
+    _: CurrentUser = Depends(require_permission("postventa", "ver")),
+):
+    """Diagnostico: QUE campos devuelve Siigo de verdad para esa cedula.
+
+    Sirve para cuando un dato sale vacio en el panel (paso con la fecha) y hay
+    que saber si el problema es el nombre del campo o que Siigo no lo manda.
+    No inventa nada: muestra las llaves tal cual y solo los valores de fecha.
+    """
+    from backend.services import siigo
+    if not siigo.siigo_configurado():
+        return {"_error": "siigo_no_configurado"}
+
+    def _sonda(path: str, params: dict) -> dict:
+        try:
+            r = siigo.siigo_get(path, params)
+        except Exception as e:  # noqa: BLE001
+            return {"error": str(e)[:250]}
+        filas = r.get("results", []) if isinstance(r, dict) else []
+        if not filas or not isinstance(filas[0], dict):
+            return {"resultados": len(filas), "llaves": []}
+        f = filas[0]
+        return {
+            "resultados": len(filas),
+            "llaves": sorted(f.keys()),
+            # Solo campos de fecha y estructura — nunca montos ni PII completa.
+            "fechas": {k: v for k, v in f.items()
+                       if any(t in k.lower() for t in ("date", "created"))},
+            "metadata": f.get("metadata"),
+            "tipo_name": type(f.get("name")).__name__,
+            "llaves_contacto": sorted((f.get("contacts") or [{}])[0].keys())
+                               if f.get("contacts") else [],
+        }
+
+    return {
+        "cedula": cedula,
+        "invoices": _sonda("/invoices", {"customer_identification": cedula,
+                                         "page_size": 3, "page": 1}),
+        "customers": _sonda("/customers", {"identification": cedula}),
+    }
