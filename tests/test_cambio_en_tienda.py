@@ -98,7 +98,7 @@ def test_config_por_env(monkeypatch):
                        '{"florida_caja1": {"documento_factura_id": 31433}}')
     t = tiendas.validar_para_facturar("florida_caja1")
     assert t["documento_factura_id"] == 31433
-    assert t["bodega_id"] == 5                   # la bodega ya venía por default
+    assert t["bodega_id"] == 48                  # la bodega ya venía por default
     assert t["prefijo_factura"] == "FV-11"
 
 
@@ -107,14 +107,14 @@ def test_las_dos_cajas_de_florida_comparten_bodega():
     # prenda entra al mismo inventario sin importar en cuál se atienda.
     c1 = tiendas.obtener("florida_caja1")
     c2 = tiendas.obtener("florida_caja2")
-    assert c1["bodega_id"] == c2["bodega_id"] == 5
+    assert c1["bodega_id"] == c2["bodega_id"] == 48
     assert c1["prefijo_factura"] != c2["prefijo_factura"]
     assert c1["tienda"] == c2["tienda"] == "Florida"
 
 
 def test_cada_tienda_tiene_su_bodega():
-    assert tiendas.obtener("arrayanes")["bodega_id"] == 3
-    assert tiendas.obtener("florida_caja1")["bodega_id"] == 5
+    assert tiendas.obtener("arrayanes")["bodega_id"] == 37
+    assert tiendas.obtener("florida_caja1")["bodega_id"] == 48
 
 
 def test_forma_de_pago_debe_ser_de_esa_tienda():

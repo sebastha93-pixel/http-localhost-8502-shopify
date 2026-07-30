@@ -164,3 +164,29 @@ def test_excedente_en_caja_ajena_falla_aunque_el_anticipo_este_bien():
         {"id": F.ANTICIPO_CLIENTES_ID, "value": 119000},
         {"id": pago_florida, "value": 20000}]}, "arrayanes")
     assert not ok
+
+
+def _bodegas_ok(monkeypatch):
+    monkeypatch.setattr(B.siigo_svc, "listar_bodegas",
+                        lambda: [{"id": 37, "name": "Arrayanes", "active": True},
+                                 {"id": 48, "name": "Florida", "active": True}])
+
+
+def test_el_banco_avisa_si_una_bodega_configurada_no_existe(monkeypatch):
+    """La config decia bodega 5 y en Siigo era la 48. Se emitio una NC contra
+    una bodega inexistente antes de que nadie se enterara. El banco tiene que
+    cazarlo ANTES de emitir, no despues."""
+    monkeypatch.setattr(B.descubrir, "facturas_aceptadas", lambda minimo=5, **k: [])
+    monkeypatch.setattr(B.siigo_svc, "listar_bodegas",
+                        lambda: [{"id": 32, "name": "MELONN", "active": True}])
+    r = B.correr(total=1, dry_run=True)
+    assert r["_error"] == "bodegas_mal_configuradas"
+    assert any(m["tienda"] == "florida_caja1" for m in r["detalle"])
+
+
+def test_si_no_se_pueden_leer_las_bodegas_no_da_verde(monkeypatch):
+    """Sin poder verificar, el gate no puede afirmar que la config sirve."""
+    monkeypatch.setattr(B.siigo_svc, "listar_bodegas", lambda: [])
+    monkeypatch.setattr(B.descubrir, "facturas_aceptadas", lambda minimo=5, **k: [])
+    r = B.correr(total=1, dry_run=True)
+    assert r["_error"] == "bodegas_no_verificables"

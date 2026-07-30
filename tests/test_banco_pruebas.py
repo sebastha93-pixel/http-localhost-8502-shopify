@@ -24,11 +24,18 @@ ITEMS_FACTURA = {"factura": {"id": "f1", "name": "FV-1-63043"},
                      {"code": "B-12", "description": "Blusa", "price": 50000.0}]}
 
 
+BODEGAS_SIIGO = [{"id": 32, "name": "MELONN", "active": True},
+                 {"id": 37, "name": "Arrayanes", "active": True},
+                 {"id": 48, "name": "Florida", "active": True}]
+
+
 def _mock_base(monkeypatch, *, preview_total=119000.0,
                facturas_tienda=FACTURAS_TIENDA, bodega_nc=None):
     # bodega_nc=None ⇒ se usa la que corresponde al punto (caso feliz).
     monkeypatch.setattr(B.descubrir, "facturas_aceptadas",
                         lambda minimo=5, **k: FACTURAS_APTAS)
+    # La guarda de bodegas corre antes que todo: sin esto el banco ni arranca.
+    monkeypatch.setattr(B.siigo_svc, "listar_bodegas", lambda: BODEGAS_SIIGO)
     # El motor real arma la NC con la bodega del punto del caso; el mock hace
     # lo mismo para que la verificación tenga algo real que mirar.
     from backend.services import tiendas as _T
@@ -145,6 +152,7 @@ def test_no_emite_en_modo_produccion(monkeypatch):
 
 
 def test_sin_facturas_lo_dice(monkeypatch):
+    monkeypatch.setattr(B.siigo_svc, "listar_bodegas", lambda: BODEGAS_SIIGO)
     monkeypatch.setattr(B.descubrir, "facturas_aceptadas",
                         lambda minimo=5, **k: [])
     r = B.correr(total=5)
