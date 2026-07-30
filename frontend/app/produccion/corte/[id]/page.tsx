@@ -13,6 +13,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, API_BASE } from "@/lib/api";
 import { fmtFecha, hoyBogotaISO } from "@/lib/utils";
 import { TimelineNotas } from "@/components/timeline-notas";
+import { ReasignarConfeccionista } from "@/components/reasignar-confeccionista";
 import { getToken, puedeAccionModulo } from "@/lib/auth";
 import { ordenarTallas, TALLAS_SUPERIOR } from "@/lib/espigas";
 import { useAuth } from "@/components/auth-provider";
@@ -1999,6 +2000,7 @@ interface RutaCorte {
   id: string;
   token_publico: string;
   token_publico_terminacion?: string;
+  remision_id?: string;   // para poder reasignar el confeccionista del lote
   etapa: string;
   precio_confeccion?: number;
   precio_terminacion?: number;
@@ -2045,6 +2047,12 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
   });
 
   // Lavanderías del directorio — para marcar a cuál se envía el lote
+  // Mismo queryKey que arriba: React Query lo comparte, no es otra petición.
+  const confeccionQ = useQuery<{ confeccionistas: { id: string; nombre: string }[] }>({
+    queryKey: ["confeccionistas", "confeccion"],
+    queryFn: () => api.get("/api/produccion/confeccionistas?tipo=confeccion&incluir_inactivos=false"),
+  });
+
   const lavanderiasQ = useQuery<{ confeccionistas: { id: string; nombre: string }[] }>({
     queryKey: ["confeccionistas", "lavanderia"],
     queryFn: () => api.get("/api/produccion/confeccionistas?tipo=lavanderia&incluir_inactivos=false"),
@@ -2228,6 +2236,18 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
             );
           })}
         </ol>
+
+        {/* Reasignar confeccionista — solo antes de que arranque la confección.
+            Después el cambio es físico (la tela ya está donde está) y el
+            backend lo rechaza igual. */}
+        {r.remision_id && (r.etapa === "asignado" || r.etapa === "aceptado") && (
+          <ReasignarConfeccionista
+            remisionId={r.remision_id}
+            actual={r.confeccionista?.nombre}
+            confeccionistas={confeccionQ.data?.confeccionistas || []}
+            onHecho={() => q.refetch()}
+          />
+        )}
 
         {/* Info general */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">

@@ -15,6 +15,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { TablaInsumosSeparar } from "@/components/tabla-insumos-separar";
 import { BotonImprimirRemision } from "@/components/boton-imprimir-remision";
+import { ReasignarConfeccionista } from "@/components/reasignar-confeccionista";
 import { ArrowLeft, Truck, Loader2, MessageCircle, Copy } from "lucide-react";
 
 interface Item {
@@ -58,6 +59,12 @@ export default function RemisionDetallePage() {
     queryKey: ["produccion", "remision", id],
     queryFn: () => api.get(`/api/produccion/remisiones/${id}`),
     enabled: !!id,
+  });
+
+  // Para el selector al reasignar el confeccionista del lote.
+  const confeccionistasQ = useQuery<{ confeccionistas: { id: string; nombre: string }[] }>({
+    queryKey: ["confeccionistas", "confeccion"],
+    queryFn: () => api.get("/api/produccion/confeccionistas?tipo=confeccion&incluir_inactivos=false"),
   });
 
   const [errAccion, setErrAccion] = useState("");
@@ -122,6 +129,19 @@ export default function RemisionDetallePage() {
           <Info label="Total unidades"   value={String(totalUnidades)} />
         </CardContent>
       </Card>
+
+      {/* Cambiar de confeccionista: se eligió mal al cerrar el informe, o el
+          confeccionista avisó que no puede recibir. Solo mientras no lo haya
+          recogido — después el cambio es físico, no de datos. Terminación va
+          por otro campo de la hoja de ruta, así que no se ofrece acá. */}
+      {!esTerm && !yaRecogida && (
+        <ReasignarConfeccionista
+          remisionId={id}
+          actual={rem.confeccionista?.nombre}
+          confeccionistas={confeccionistasQ.data?.confeccionistas || []}
+          onHecho={() => q.refetch()}
+        />
+      )}
 
       {/* Items */}
       <Card>

@@ -2149,6 +2149,40 @@ def impresion_marcar_impresa(
     return {"ok": svc.marcar_remision_impresa(rem_id)}
 
 
+class ReasignarConfeccionistaIn(BaseModel):
+    confeccionista_id: str
+    motivo: str = ""
+
+
+@router.post("/remisiones/{rem_id}/reasignar-confeccionista")
+def remision_reasignar_confeccionista(
+    rem_id: str,
+    body: ReasignarConfeccionistaIn,
+    user: CurrentUser = Depends(require_permission_any(
+        ("produccion_remisiones", "produccion_corte"), "modificar")),
+) -> dict:
+    """Cambia el confeccionista de un lote ya remitido, ANTES de que se lo lleven.
+
+    Para cuando se eligió mal al cerrar el informe de corte, o el confeccionista
+    avisa que no puede recibir el lote. Ver el servicio para todo lo que
+    arrastra (hoja de ruta, aceptación anulada, reimpresión, aviso al nuevo).
+    """
+    try:
+        return {"ok": True, **svc.reasignar_confeccionista_remision(
+            remision_id=rem_id,
+            nuevo_confeccionista_id=body.confeccionista_id,
+            motivo=body.motivo,
+            usuario=user.email,
+        )}
+    except ValueError as e:
+        # Los casos previstos se devuelven como 400 con su código, para que el
+        # frontend pueda explicarlos en español en vez de un error genérico.
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"reasignar_confeccionista: {str(e)[:200]}")
+
+
 @router.post("/impresion/{rem_id}/reimprimir")
 def impresion_reimprimir(
     rem_id: str,

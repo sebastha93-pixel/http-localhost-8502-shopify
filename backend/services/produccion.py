@@ -3306,6 +3306,143 @@ def marcar_remision_impresa(rem_id: str) -> bool:
         return False
 
 
+def reasignar_confeccionista_remision(*, remision_id: str,
+                                      nuevo_confeccionista_id: str,
+                                      motivo: str = "",
+                                      usuario: str = "sistema") -> dict:
+    """Cambia el confeccionista de una remisión de confección ya generada.
+
+    PARA QUÉ: al cerrar el informe de corte se elige el confeccionista ahí
+    mismo, y a veces se elige mal, o el confeccionista avisa después que no
+    puede recibir el lote. Antes había que borrar la remisión y volver a
+    empezar; esto lo reasigna con todo lo que arrastra:
+
+      · la remisión y la hoja de ruta del lote apuntan al nuevo proveedor
+      · se ANULA la aceptación del anterior (si ya había aceptado, esa
+        aceptación es de otro lote a efectos prácticos) y la etapa vuelve a
+        "asignado"
+      · si la remisión YA se había impreso, se vuelve a encolar: el papel que
+        salió tiene el nombre equivocado y alguien lo va a entregar
+      · se avisa al NUEVO confeccionista que tiene un lote por recoger
+      · queda el rastro en las notas de la hoja de ruta (quién, cuándo, por qué)
+
+    SOLO ANTES DE QUE SE LO LLEVEN. Si el lote ya está recogido el cambio no es
+    de datos sino físico, y reescribir el registro sería mentir sobre quién
+    tiene la mercancía — ahí se bloquea a propósito.
+
+    NO manda WhatsApp al confeccionista anterior por su cuenta: devuelve
+    `aviso_anterior.wa_url` para que la persona decida y lo mande de un toque.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+
+    rem = obtener_remision(remision_id)
+    if not rem:
+        raise ValueError("remision_no_encontrada")
+    if (rem.get("tipo") or "confeccion") != "confeccion":
+        # Terminación vive en otro campo de la ruta (terminacion_id) y tiene
+        # su propio circuito de etiquetas. No se mezcla acá.
+        raise ValueError("solo_remisiones_de_confeccion")
+    if rem.get("estado") == "recogida":
+        raise ValueError("lote_ya_recogido")
+
+    anterior = rem.get("confeccionista") or {}
+    anterior_id = rem.get("confeccionista_id")
+    if str(anterior_id) == str(nuevo_confeccionista_id):
+        raise ValueError("mismo_confeccionista")
+
+    c = (sb.table("confeccionistas").select("id,nombre,activo,tipo")
+           .eq("id", nuevo_confeccionista_id).limit(1).execute()).data
+    if not c:
+        raise ValueError("proveedor_no_encontrado")
+    if not c[0].get("activo"):
+        raise ValueError("proveedor_inactivo")
+    if (c[0].get("tipo") or "confeccion").lower() != "confeccion":
+        raise ValueError("proveedor_no_es_confeccion")
+    nuevo_nombre = c[0].get("nombre") or "—"
+
+    sb.table("remisiones").update({
+        "confeccionista_id": nuevo_confeccionista_id,
+        "updated_at": _now_iso(),
+    }).eq("id", remision_id).execute()
+
+    # Hoja de ruta de cada lote de la remisión.
+    marca = (f"[{_now_iso()[:16]}] Reasignado de "
+             f"{anterior.get('nombre') or '—'} a {nuevo_nombre} por {usuario}"
+             + (f". Motivo: {motivo.strip()}" if motivo.strip() else ""))
+    rutas_tocadas = 0
+    for it in (rem.get("items") or []):
+        oc_id = it.get("orden_corte_id")
+        if not oc_id:
+            continue
+        try:
+            ruta = obtener_ruta_por_corte(oc_id)
+            if not ruta:
+                continue
+            notas = (ruta.get("notas") or "").strip()
+            sb.table("hoja_ruta_lote").update({
+                "confeccionista_id": nuevo_confeccionista_id,
+                # La aceptación era del anterior: ya no vale.
+                "aceptado_at": None,
+                "etapa": "asignado",
+                "notas": (notas + "\n" + marca).strip(),
+                "updated_at": _now_iso(),
+            }).eq("id", ruta["id"]).execute()
+            rutas_tocadas += 1
+        except Exception as e:
+            log.warning(f"[reasignar] ruta de {oc_id}: {str(e)[:160]}")
+
+    # El papel ya impreso lleva el nombre viejo → que vuelva a salir.
+    reimprimir = bool(rem.get("impresa_at"))
+    if reimprimir:
+        marcar_remision_reimprimir(remision_id)
+
+    rem_full = obtener_remision(remision_id)
+    aviso = []
+    try:
+        aviso = _notificar_lote_por_recoger(rem_full)
+    except Exception as e:
+        log.warning(f"[reasignar] aviso al nuevo confeccionista: {str(e)[:160]}")
+
+    return {
+        "remision": rem_full,
+        "anterior": {"id": anterior_id, "nombre": anterior.get("nombre") or ""},
+        "nuevo": {"id": nuevo_confeccionista_id, "nombre": nuevo_nombre},
+        "rutas_actualizadas": rutas_tocadas,
+        "reencolada_para_imprimir": reimprimir,
+        "aviso_nuevo": aviso,
+        "aviso_anterior": _wa_url_reasignacion(anterior, rem_full, nuevo_nombre),
+    }
+
+
+def _wa_url_reasignacion(anterior: dict, rem: dict, nuevo_nombre: str) -> dict:
+    """Link de WhatsApp LISTO para avisarle al confeccionista anterior que el
+    lote ya no es suyo. No se manda solo: si se reasignó por error de digitación
+    el anterior nunca supo nada y un mensaje lo confundiría. Lo decide la
+    persona."""
+    from urllib.parse import quote
+    refs = []
+    for it in (rem.get("items") or []):
+        oc = it.get("orden_corte") or {}
+        ref = (oc.get("referencia") or {}).get("codigo_referencia") or oc.get("consecutivo")
+        if ref:
+            refs.append(str(ref))
+    refs_txt = ", ".join(refs) if refs else "—"
+    nombre = anterior.get("nombre") or "equipo"
+    msg = (f"Hola {nombre}, el lote de referencia *{refs_txt}* que te habíamos "
+           f"anunciado quedó reasignado, no lo recojas. Cualquier duda nos "
+           f"escribes. Gracias 🧵")
+    tel = "".join(ch for ch in str(anterior.get("telefono") or "") if ch.isdigit())
+    tel = tel if tel.startswith("57") else (f"57{tel}" if tel else "")
+    return {
+        "nombre": nombre,
+        "telefono": tel,
+        "wa_url": (f"https://wa.me/{tel}?text={quote(msg)}" if tel
+                   else f"https://wa.me/?text={quote(msg)}"),
+    }
+
+
 def marcar_remision_reimprimir(rem_id: str) -> bool:
     """Vuelve a poner la remisión en la cola (impresa_at = NULL) para reimprimir."""
     sb = _sb()
