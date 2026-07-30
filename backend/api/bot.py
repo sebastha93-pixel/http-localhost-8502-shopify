@@ -76,26 +76,46 @@ def _seleccionar_pedidos(req: ScrapeRequest) -> list[str]:
     # Solo procesar pedidos que REALMENTE pueden tener guía en Melonn:
     # estados de despacho/tránsito (5=Packed, 7=Shipped, 8=Delivered, 24=Prepared,
     # 28=Ready for packing). Excluimos:
-    #   - entregados (no necesitan)
     #   - code 26/29 (hold, sin transportadora asignada aún)
     #   - code 1/2 (prepago en alistamiento, sin despachar)
+    #   - los entregados QUE YA TIENEN transportadora (los que no la tienen sí
+    #     se procesan una vez; ver el bloque `if entregado` más abajo)
     CODES_CON_GUIA = {5, 7, 8, 24, 28}
-    # Prioridad: novedad visible (1) > en_transito (2)
+    # Prioridad: novedad visible (1) > Medellín (2) > resto en tránsito (3) >
+    # entregados sin guía (4, relleno histórico, no le quita turno a los vivos)
     candidatos: list[tuple[int, dict]] = []
     for p in pedidos:
         sub = p.get("sub_estado_logistico")
-        if sub == "entregado":
-            continue  # nunca procesar entregados
+        entregado = (sub == "entregado")
         code = int(p.get("estado_melonn_code") or 0)
         es_novedad = bool(p.get("es_novedad_visible"))
-        # Procesar si: está en estado con guía O es novedad visible
-        if code not in CODES_CON_GUIA and not es_novedad:
+        # Procesar si: está en estado con guía, es novedad visible, o ya se
+        # entregó pero nunca le sacamos la transportadora (ver abajo).
+        if code not in CODES_CON_GUIA and not es_novedad and not entregado:
             continue
         orden = p.get("orden_tienda") or ""
         if not orden:
             continue
         ov = overrides.get(orden) or overrides.get(p.get("orden_melonn", ""))
         ya_procesado = ov and ov.get("carrier_real")
+
+        # ENTREGADOS — antes se saltaban SIEMPRE ("nunca procesar entregados").
+        # El efecto era perder la guía de forma permanente: un pedido que se
+        # entregaba antes de que el bot lo alcanzara ya no volvía a ser
+        # candidato nunca, y se quedaba mostrando el M-id de Melonn. Medido el
+        # 2026-07-29: 376 de 687 entregados sin guía real por esta razón.
+        # Ahora se procesan UNA vez, solo si nunca se les sacó transportadora.
+        # Van con prioridad 4 (la más baja) para no quitarle turno a los pedidos
+        # vivos, que es donde la guía sirve para gestionar.
+        if entregado:
+            if ya_procesado:
+                continue
+            candidatos.append((
+                4,
+                {"orden_tienda": orden, "melonn_id": str(p.get("orden_melonn") or "")},
+            ))
+            continue
+
         zona = (p.get("zona") or "").upper()
         es_medellin = "MEDELLIN" in zona or "MEDELLÍN" in zona
 

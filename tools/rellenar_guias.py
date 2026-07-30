@@ -125,21 +125,37 @@ def main() -> int:
         except Exception as e:
             print(f"  lote {i//LOTE + 1} FALLÓ: {str(e)[:140]}")
 
-    # Extraer guía del primer fulfillment que la traiga.
-    listos, sin_tracking = [], []
+    # Extraer la guía de la TRANSPORTADORA REAL. Ojo: NO vale el primer
+    # fulfillment que traiga número — Melonn crea el suyo con
+    # tracking_company="Melonn" y su M-id interno como tracking_number, que no
+    # sirve para rastrear. Si escribiéramos eso en overrides estaríamos
+    # guardando basura con apariencia de guía (y pisando la real).
+    from shopify_enricher import es_mid_melonn
+
+    listos, sin_tracking, solo_mid = [], [], []
     for sid, o in encontrados.items():
         guia = carrier = ""
         for f in (o.get("fulfillments") or []):
-            guia = guia or _primer(f.get("tracking_number"), f.get("tracking_numbers"))
-            carrier = carrier or _primer(f.get("tracking_company"))
-            if guia and carrier:
-                break
+            num = _primer(f.get("tracking_number"), f.get("tracking_numbers"))
+            comp = _primer(f.get("tracking_company"))
+            if not num:
+                continue
+            if "melonn" in comp.lower() or es_mid_melonn(num):
+                continue                    # M-id: no es una guía, se ignora
+            guia, carrier = num, comp
+            break
         p = por_id[sid]
         orden = p.get("orden_tienda") or p.get("orden_melonn")
         if guia:
             listos.append((orden, guia, carrier))
+        elif (o.get("fulfillments") or []):
+            solo_mid.append(orden)
         else:
             sin_tracking.append(orden)
+
+    if solo_mid:
+        print(f"  con fulfillment pero SOLO M-id de Melonn: {len(solo_mid)} "
+              f"→ se omiten (la guía real la saca el bot de tracking)")
 
     print()
     print(f"con guía en Shopify   : {len(listos)}")

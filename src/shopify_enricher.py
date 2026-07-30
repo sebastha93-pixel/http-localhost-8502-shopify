@@ -7,6 +7,7 @@ Una sola llamada batch por sync → eficiente y sin rate-limit issues.
 """
 
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -16,6 +17,63 @@ log = logging.getLogger(__name__)
 
 _BATCH_SIZE = 250   # Shopify acepta hasta 250 IDs por request
 _TIMEOUT    = 20
+
+# Un "M-id" es el número interno de Melonn (M1785245936464547). Melonn lo
+# escribe en Shopify como si fuera una guía, con tracking_company="Melonn", pero
+# NO sirve para rastrear con la transportadora: es su id de orden. La guía de
+# verdad la ponen Coordinadora / ENVÍA / Servientrega / Domina.
+_RE_MID = re.compile(r"^[Mm]\d{10,}$")
+
+
+def es_mid_melonn(v) -> bool:
+    """True si el valor es un id interno de Melonn y no una guía real."""
+    return bool(_RE_MID.match(str(v or "").strip()))
+
+
+def _es_carrier_melonn(v) -> bool:
+    return "melonn" in str(v or "").lower()
+
+
+def _primer(*vals) -> str:
+    """Primer valor no vacío, desenvolviendo listas (Shopify manda ambas formas:
+    `tracking_number` y `tracking_numbers`)."""
+    for v in vals:
+        if isinstance(v, list):
+            v = v[0] if v else None
+        if v:
+            return str(v).strip()
+    return ""
+
+
+def elegir_tracking(fulls: list) -> tuple:
+    """Elige el mejor tracking de los fulfillments de un pedido de Shopify.
+
+    Devuelve `((numero, transportadora, url), es_real)` — o `(None, False)` si
+    ningún fulfillment trae número.
+
+    PRECEDENCIA (2026-07-29): antes se tomaba el PRIMER fulfillment con número.
+    Melonn crea su propio fulfillment con tracking_company="Melonn" y su M-id
+    interno como tracking_number, así que cuando ese iba primero GANABA, y la
+    guía real que Coordinadora escribía en un fulfillment posterior se
+    descartaba. Medido ese día: 376 de 687 pedidos entregados se quedaron
+    mostrando el M-id en vez de la guía.
+
+    Ahora se recorren TODOS y se prefiere cualquier transportadora que no sea
+    Melonn. El M-id queda solo como respaldo, y `es_real=False` le avisa al
+    llamador que eso NO es una guía rastreable (para no pisar una buena con ella).
+    """
+    real = respaldo = None
+    for f in (fulls or []):
+        num = _primer(f.get("tracking_number"), f.get("tracking_numbers"))
+        comp = _primer(f.get("tracking_company"))
+        url = _primer(f.get("tracking_url"), f.get("tracking_urls"))
+        if not num:
+            continue
+        if _es_carrier_melonn(comp) or es_mid_melonn(num):
+            respaldo = respaldo or (num, comp, url)
+        else:
+            return (num, comp, url), True   # transportadora real: no hay mejor
+    return (respaldo, False) if respaldo else (None, False)
 
 
 def _credenciales() -> Optional[tuple]:
@@ -322,29 +380,22 @@ def enriquecer(pedidos: list) -> list:
             # Shopify guarda transportadora + número + link de rastreo en el
             # fulfillment. Antes se ignoraban → la guía no aparecía salvo que
             # Melonn mandara su link o alguien la digitara a mano.
-            # Buscamos en TODOS los fulfillments (a veces el primero viene sin
-            # tracking y un fulfillment posterior sí lo trae).
-            def _primer(*vals):
-                for v in vals:
-                    if isinstance(v, list):
-                        v = v[0] if v else None
-                    if v:
-                        return str(v).strip()
-                return ""
-
-            for f in fulls:
-                num = _primer(f.get("tracking_number"), f.get("tracking_numbers"))
-                comp = _primer(f.get("tracking_company"))
-                url = _primer(f.get("tracking_url"), f.get("tracking_urls"))
-                if num and not p.get("guia_real"):
+            # La elección (y por qué NO vale el primero) está en elegir_tracking.
+            elegido, es_real = elegir_tracking(fulls)
+            if elegido:
+                num, comp, url = elegido
+                # Si lo guardado era el M-id y ahora tenemos la guía real, se
+                # PISA. Sin esto no habría forma de corregirlo nunca: `guia_real`
+                # está en _CAMPOS_ENRIQUECIDOS, o sea que se hereda del caché
+                # entre syncs, y el M-id se quedaría pegado para siempre.
+                if not p.get("guia_real") or (es_real and es_mid_melonn(p.get("guia_real"))):
                     p["guia_real"] = num
-                if comp and not p.get("carrier_real"):
+                if comp and (not p.get("carrier_real")
+                             or (es_real and _es_carrier_melonn(p.get("carrier_real")))):
                     p["carrier_real"] = comp
                 # link_guia: si Melonn no dejó link, usar el de Shopify
                 if url and not p.get("link_guia"):
                     p["link_guia"] = url
-                if p.get("guia_real") and p.get("carrier_real"):
-                    break
 
         # Tienda / canal
         if not p.get("tienda"):
