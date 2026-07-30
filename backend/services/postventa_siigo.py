@@ -131,6 +131,53 @@ def inspeccionar_notas_credito(limite: int = 2) -> dict:
     return {"total_en_muestra": len(notas), "notas": notas}
 
 
+def nota_credito_por_numero(numero: int, *, max_paginas: int = 12) -> dict:
+    """Una nota crédito ya emitida, tal cual la guardó Siigo.
+
+    Sirve para responder de un tirón la pregunta que importa después de emitir:
+    ¿a qué bodega entró cada prenda? Si el ítem llega sin `warehouse`, Siigo no
+    sabe a qué inventario devolverla — y el stock no se mueve.
+
+    Solo lectura. Pagina hacia atrás porque las NC recientes empujan a las
+    viejas fuera de la primera página rápido.
+    """
+    if not siigo.siigo_configurado():
+        return {"_error": "siigo_no_configurado"}
+    objetivo = int(numero)
+    for pagina in range(1, max_paginas + 1):
+        data = _get_seguro("/credit-notes", {"page_size": 25, "page": pagina})
+        if isinstance(data, dict) and data.get("_error"):
+            return data
+        filas = data.get("results", []) if isinstance(data, dict) else []
+        if not filas:
+            break
+        for nc in filas:
+            if not isinstance(nc, dict) or int(nc.get("number") or 0) != objetivo:
+                continue
+            items = [i for i in (nc.get("items") or []) if isinstance(i, dict)]
+            bodegas = []
+            for it in items:
+                wh = it.get("warehouse") or {}
+                bodegas.append({"code": it.get("code"),
+                                "bodega_id": wh.get("id"),
+                                "bodega": wh.get("name")})
+            return {
+                "nombre": nc.get("name"),
+                "numero": nc.get("number"),
+                "fecha": nc.get("date"),
+                "factura": nc.get("invoice"),
+                "observaciones": nc.get("observations"),
+                # Si viene `stamp` la NC fue a la DIAN y ya no se puede borrar.
+                "estampada": bool(nc.get("stamp")),
+                "bodegas": bodegas,
+                "sin_bodega": any(b["bodega_id"] is None for b in bodegas),
+                "items": items,
+            }
+    return {"_error": "nota_no_encontrada",
+            "detalle": f"No se halló la NC {numero} en las últimas "
+                       f"{max_paginas * 25} notas crédito."}
+
+
 def facturas_recientes(max_paginas: int = 6, page_size: int = 25) -> list[dict]:
     """Facturas tal cual vienen de Siigo, SIN filtrar por canal.
 
