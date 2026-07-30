@@ -214,7 +214,8 @@ def _item_reemplazo(caso: dict, item: dict, factura: dict) -> dict:
             "price_base": base}
 
 
-def preview_factura_reemplazo(case_id: str) -> dict:
+def preview_factura_reemplazo(case_id: str, *,
+                              pagos_excedente: Optional[list] = None) -> dict:
     """Arma la factura del reemplazo (consume el anticipo de la NC). NO emite."""
     if _fiscal_existente(case_id, "factura"):
         raise ValueError("factura_ya_emitida")
@@ -241,20 +242,30 @@ def preview_factura_reemplazo(case_id: str) -> dict:
 
     item_reemplazo = _item_reemplazo(caso, items[0], factura)
     modo = fiscal_siigo.modo_actual()
-    # En tienda la factura sale del punto de venta (su prefijo y su bodega) y
-    # el excedente se cobra ahí mismo, no como cuenta por cobrar.
+    # En tienda: la prenda sale de la BODEGA del punto y el excedente se cobra
+    # ahí mismo. El PREFIJO, en cambio, no puede ser el de la caja: Siigo no
+    # deja emitir por API con FV-6/11/12 (rangos DIAN del punto de venta).
+    # Ver tiendas.documento_para_facturar.
     doc_id = bodega = pago_exc = None
     if caso.get("tienda"):
         from backend.services import tiendas
         t = tiendas.validar_para_facturar(caso["tienda"])
-        doc_id, bodega = t["documento_factura_id"], t["bodega_id"]
+        doc_id = tiendas.documento_para_facturar(caso["tienda"])
+        bodega = t["bodega_id"]
         pago_exc = caso.get("pago_excedente_id")
+        # Los medios con que se cobró el excedente tienen que ser de ESA caja:
+        # cobrar en el datáfono de la otra tienda descuadra las dos.
+        ajenos = tiendas.pagos_ajenos(caso["tienda"], pagos_excedente or [])
+        if ajenos:
+            raise ValueError(
+                f"forma_pago_no_es_de_esa_tienda: {ajenos}")
         if pago_exc and not tiendas.forma_pago_valida(caso["tienda"], pago_exc):
             raise ValueError("forma_pago_no_es_de_esa_tienda")
     payload = F.construir_payload_factura_reemplazo(
         factura_original=factura, item_reemplazo=item_reemplazo,
         credito_con_iva=float(nc.get("amount") or 0), modo=modo, fecha=_hoy(),
-        documento_id=doc_id, bodega_id=bodega, pago_excedente_id=pago_exc)
+        documento_id=doc_id, bodega_id=bodega, pago_excedente_id=pago_exc,
+        pagos_excedente=pagos_excedente)
     resumen = payload.pop("_resumen")
 
     _guardar_fiscal(case_id=case_id, doc_kind="factura",

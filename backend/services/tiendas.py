@@ -46,6 +46,24 @@ DOC_FV6 = 29192
 DOC_FV11 = 31433
 DOC_FV12 = 31434
 
+# ── Con qué comprobante se EMITE la factura del reemplazo ──────────────────
+# Los prefijos de arriba sirven para IDENTIFICAR la compra y para que la nota
+# crédito referencie la factura del punto. Pero NO se puede emitir con ellos:
+#
+#   POST /invoices  →  document_settings
+#                      "The id cannot be used, you must verify the document
+#                       settings"  ·  Params: ["document.id"]
+#
+# Y `/document-types` nunca los devuelve — esa ausencia era la señal, no un
+# descuido. Son rangos DIAN de las cajas: su consecutivo lo lleva el punto de
+# venta, y meterle facturas desde fuera rompería la numeración.
+#
+# Mientras se habilita la resolución de FV-5 «Factura de venta Cambios»
+# (id 27154, hoy inactivo), el reemplazo se factura con FV-1. El día que FV-5
+# esté listo basta poner SIIGO_DOC_FACTURA_CAMBIO=27154 en Railway.
+DOC_FV1_ONLINE = 11810
+DOC_FV5_CAMBIOS = 27154
+
 # Un PUNTO DE VENTA es una caja: tiene su propio prefijo de facturación pero
 # puede compartir bodega con otra caja de la misma tienda. Florida factura
 # desde dos cajas (FV-11 y FV-12) y ambas descargan/ingresan a la bodega 48.
@@ -188,3 +206,38 @@ def bodegas_invalidas(bodegas_siigo: list[dict]) -> Optional[list[dict]]:
         malas.append({"tienda": clave, "nombre": t.get("nombre"),
                       "bodega_id": bod, "motivo": motivo})
     return malas
+
+
+def documento_para_facturar(clave: str) -> int:
+    """Comprobante con el que SÍ se puede emitir por API.
+
+    Ojo: esto solo decide el PREFIJO. La bodega sigue siendo la del punto
+    (`bodega_id`), así que la prenda nueva sale del inventario de esa tienda
+    aunque la factura lleve otro consecutivo.
+    """
+    crudo = os.environ.get("SIIGO_DOC_FACTURA_CAMBIO", "").strip()
+    if crudo:
+        try:
+            return int(crudo)
+        except ValueError:
+            log.warning(f"[tiendas] SIIGO_DOC_FACTURA_CAMBIO invalido "
+                        f"({crudo!r}), se usa FV-1")
+    return DOC_FV1_ONLINE
+
+
+def pagos_ajenos(clave: str, pagos: list[dict]) -> list[int]:
+    """Medios de pago que NO son de esa caja.
+
+    Cobrar en el datáfono de Florida un cambio de Arrayanes descuadra las dos
+    cajas a la vez. El ANTICIPO se exceptúa: lo pone el sistema al aplicar el
+    crédito de la nota crédito, no la cajera, y no entra al arqueo.
+    """
+    from backend.services.fiscal_logic import ANTICIPO_CLIENTES_ID
+    malos = []
+    for p in (pagos or []):
+        pid = int(p.get("id") or 0)
+        if not pid or pid == ANTICIPO_CLIENTES_ID:
+            continue
+        if not forma_pago_valida(clave, pid):
+            malos.append(pid)
+    return malos

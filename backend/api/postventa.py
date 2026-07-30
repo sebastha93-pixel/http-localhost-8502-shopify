@@ -42,6 +42,18 @@ class ElegirReemplazoIn(BaseModel):
     requested_price: Optional[float] = None
 
 
+class PagoIn(BaseModel):
+    id: int
+    value: float
+
+
+class PreviewFacturaIn(BaseModel):
+    """Con que medio(s) se cobro el excedente. Sin esto no se puede cruzar la
+    caja del dia, porque la factura sale por FV-1 y no entra al consecutivo
+    del punto de venta."""
+    pagos_excedente: list[PagoIn] = []
+
+
 class SaldoAFavorIn(BaseModel):
     monto: float = 0
 
@@ -160,11 +172,17 @@ def fiscal_emitir(case_id: str,
 
 
 @router.post("/casos/{case_id}/fiscal/factura/preview")
-def fiscal_factura_preview(case_id: str,
+def fiscal_factura_preview(case_id: str, body: Optional[PreviewFacturaIn] = None,
                            _: CurrentUser = Depends(require_permission("postventa", "modificar"))):
-    """Arma la factura del reemplazo (consume el anticipo). NO emite."""
+    """Arma la factura del reemplazo (consume el anticipo). NO emite.
+
+    `pagos_excedente` deja marcado con que medio se cobro la diferencia. Es lo
+    que permite cruzar la caja del dia: la factura sale por FV-1 y no entra al
+    consecutivo del punto de venta, asi que sin esto la plata cobrada en la
+    tienda no se puede casar con nada."""
+    pagos = [p.model_dump() for p in (body.pagos_excedente if body else [])]
     try:
-        return fiscal_svc.preview_factura_reemplazo(case_id)
+        return fiscal_svc.preview_factura_reemplazo(case_id, pagos_excedente=pagos)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
