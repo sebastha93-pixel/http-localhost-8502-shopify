@@ -131,6 +131,25 @@ def inspeccionar_notas_credito(limite: int = 2) -> dict:
     return {"total_en_muestra": len(notas), "notas": notas}
 
 
+def facturas_recientes(max_paginas: int = 6, page_size: int = 25) -> list[dict]:
+    """Facturas tal cual vienen de Siigo, SIN filtrar por canal.
+
+    `facturas_aceptadas` solo devuelve las online (exige 'Orden Nº'), así que
+    no sirve para probar el flujo de tienda. Aquí se devuelve todo y quien
+    llama decide qué le sirve.
+    """
+    salida: list[dict] = []
+    for pagina in range(1, max_paginas + 1):
+        data = _get_seguro("/invoices", {"page_size": page_size, "page": pagina})
+        if isinstance(data, dict) and data.get("_error"):
+            break
+        resultados = data.get("results", []) if isinstance(data, dict) else []
+        if not resultados:
+            break
+        salida.extend(r for r in resultados if isinstance(r, dict))
+    return salida
+
+
 def facturas_aceptadas(minimo: int = 10, max_paginas: int = 6) -> list[dict]:
     """Facturas online que la DIAN YA aceptó, paginando hacia atrás.
 
