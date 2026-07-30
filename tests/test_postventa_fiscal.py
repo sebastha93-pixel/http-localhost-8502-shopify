@@ -1,5 +1,6 @@
 import pytest
 from backend.services import postventa_fiscal as PF
+from backend.services import fiscal_siigo
 
 
 CASO = {"id": "c1", "case_number": "PV-2026-0001", "type": "cambio_talla",
@@ -179,3 +180,65 @@ def test_items_factura_del_caso_sin_factura(monkeypatch):
     monkeypatch.setattr(PF, "obtener_emisor", lambda: E())
     with pytest.raises(ValueError, match="factura_original_no_encontrada"):
         PF.items_factura_del_caso("c1")
+
+
+# ── Factura de compras hechas EN TIENDA ────────────────────────────────────
+# Una factura de tienda (FV-6/11/12) no tiene "Orden Nº" en observations ni
+# lleva el document_id de la venta online, así que buscarla por nº de pedido
+# es imposible. Pero la asesora YA eligió la factura exacta al buscar por
+# cédula: se guarda su id y se trae directo.
+
+class _EmisorConId(fiscal_siigo.EmisorSiigo):
+    pass
+
+
+def test_trae_la_factura_por_id_sin_paginar(monkeypatch):
+    """Con el id no se busca: se pide directo. Exacto y sin recorrer páginas."""
+    llamadas = []
+
+    def _get(path, params=None):
+        llamadas.append(path)
+        return {"id": "abc-123", "name": "FV-11-1202",
+                "document": {"id": 31433}, "items": []}
+    monkeypatch.setattr(fiscal_siigo.siigo, "siigo_get", _get)
+    fiscal_siigo.limpiar_cache_facturas()
+
+    f = _EmisorConId().buscar_factura_original(numero_pedido="", factura_id="abc-123")
+    assert f["name"] == "FV-11-1202"
+    assert llamadas == ["/invoices/abc-123"]
+
+
+def test_el_id_manda_sobre_el_numero_de_pedido(monkeypatch):
+    """Si hay id, no se pagina aunque venga tambien un nº de pedido."""
+    def _get(path, params=None):
+        if path.startswith("/invoices/"):
+            return {"id": "abc-123", "name": "FV-11-1202", "items": []}
+        raise AssertionError("no debio paginar teniendo el id")
+    monkeypatch.setattr(fiscal_siigo.siigo, "siigo_get", _get)
+    fiscal_siigo.limpiar_cache_facturas()
+
+    f = _EmisorConId().buscar_factura_original(numero_pedido="#61208",
+                                               factura_id="abc-123")
+    assert f["name"] == "FV-11-1202"
+
+
+def test_sin_id_sigue_buscando_por_numero_de_pedido(monkeypatch):
+    """La via de siempre (compras online) no cambia."""
+    inv = {"id": "f1", "name": "FV-1-64151",
+           "observations": "Orden Nº: 61208", "items": []}
+    monkeypatch.setattr(fiscal_siigo.siigo, "siigo_get",
+                        lambda p, params=None: {"results": [inv]})
+    fiscal_siigo.limpiar_cache_facturas()
+
+    f = _EmisorConId().buscar_factura_original(numero_pedido="#61208")
+    assert f["name"] == "FV-1-64151"
+
+
+def test_si_el_id_no_existe_en_siigo_devuelve_none(monkeypatch):
+    def _boom(path, params=None):
+        raise RuntimeError("404 not found")
+    monkeypatch.setattr(fiscal_siigo.siigo, "siigo_get", _boom)
+    fiscal_siigo.limpiar_cache_facturas()
+
+    assert _EmisorConId().buscar_factura_original(
+        numero_pedido="", factura_id="no-existe") is None

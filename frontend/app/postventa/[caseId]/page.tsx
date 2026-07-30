@@ -65,7 +65,8 @@ export default function CasoDetallePage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Columna de trabajo */}
         <div className="lg:col-span-2 space-y-4">
-          <PanelItems caseId={caseId} status={c.status} onAgregado={refrescar} />
+          <PanelItems caseId={caseId} status={c.status} onAgregado={refrescar}
+            sinCompraEnlazada={!c.siigo_invoice_id && !c.shopify_order_name} />
           <PanelLogistica caseId={caseId} status={c.status} onCambio={refrescar} />
           <PanelFiscal caseId={caseId} status={c.status} onEmitido={refrescar} />
           <PanelFactura caseId={caseId} status={c.status} tipo={c.type} onEmitido={refrescar} />
@@ -219,8 +220,9 @@ function PanelTimeline({ caseId }: { caseId: string }) {
 }
 
 /* ── Ítems del caso + selector desde la factura ─────────────────────── */
-function PanelItems({ caseId, status, onAgregado }:
-  { caseId: string; status: string; onAgregado: () => void }) {
+function PanelItems({ caseId, status, onAgregado, sinCompraEnlazada }:
+  { caseId: string; status: string; onAgregado: () => void;
+    sinCompraEnlazada?: boolean }) {
   const [nuevoSku, setNuevoSku] = useState("");
   const yaEnCaso = useQuery({ queryKey: ["postventa-items", caseId],
                               queryFn: () => itemsCaso(caseId) });
@@ -275,9 +277,21 @@ function PanelItems({ caseId, status, onAgregado }:
         <>
           {deFactura.isLoading && <p className="text-sm text-graphite">Buscando la factura en Siigo…</p>}
           {deFactura.isError && (
-            <p className="text-sm text-terracotta">
-              No se encontró la factura del pedido en Siigo. Revisa el nº de pedido.
-            </p>
+            sinCompraEnlazada ? (
+              // Decir la verdad: no hay nº de pedido que "revisar". Pasa con
+              // los casos abiertos a mano y con las compras en tienda de antes
+              // de que se guardara la factura.
+              <p className="text-sm text-terracotta">
+                Este caso no tiene la compra enlazada, así que no se puede traer
+                la factura. Ábrelo de nuevo buscando por cédula y eligiendo la
+                compra, o agrega la prenda a mano aquí abajo.
+              </p>
+            ) : (
+              <p className="text-sm text-terracotta">
+                No se encontró la factura en Siigo. Si la compra fue en tienda,
+                el caso debe abrirse eligiendo la compra desde la cédula.
+              </p>
+            )
           )}
           {deFactura.data && (
             <>
