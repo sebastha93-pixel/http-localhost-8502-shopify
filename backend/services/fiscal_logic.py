@@ -245,7 +245,8 @@ def construir_payload_factura_reemplazo(*, factura_original: dict,
                                         modo: str, fecha: str,
                                         documento_id: Optional[int] = None,
                                         bodega_id: Optional[int] = None,
-                                        pago_excedente_id: Optional[int] = None) -> dict:
+                                        pago_excedente_id: Optional[int] = None,
+                                        pagos_excedente: Optional[list] = None) -> dict:
     """Arma el POST de la factura del reemplazo. NO emite.
 
     Regla del fundador:
@@ -273,10 +274,14 @@ def construir_payload_factura_reemplazo(*, factura_original: dict,
     payments = [{"id": ANTICIPO_CLIENTES_ID, "value": anticipo_aplicado,
                  "due_date": fecha}]
     if excedente > 0:
-        # En tienda el excedente se cobra ahí mismo (datáfono o caja); online
-        # queda como cuenta por cobrar.
-        payments.append({"id": int(pago_excedente_id or EXCEDENTE_PAYMENT_ID),
-                         "value": excedente, "due_date": fecha})
+        # En tienda el excedente se cobra ahí mismo y hay que dejar marcado con
+        # qué (para cruzar la caja); online queda como cuenta por cobrar.
+        if pagos_excedente:
+            for pg in repartir_excedente(pagos_excedente, excedente):
+                payments.append({**pg, "due_date": fecha})
+        else:
+            payments.append({"id": int(pago_excedente_id or EXCEDENTE_PAYMENT_ID),
+                             "value": excedente, "due_date": fecha})
 
     linea = {
         "code": item_reemplazo.get("code"),
@@ -315,3 +320,35 @@ def construir_payload_factura_reemplazo(*, factura_original: dict,
     if cfg.get("estampar"):
         payload["stamp"] = {"send": True}
     return payload
+
+
+def repartir_excedente(pagos: list[dict], excedente: float) -> list[dict]:
+    """Valida cómo se cobró el excedente y devuelve las líneas de pago.
+
+    La factura del cambio en tienda sale por FV-1, así que NO entra al
+    consecutivo de la caja. Para que el arqueo diario cuadre igual, tiene que
+    quedar marcado con qué medio se cobró y cuánto — y la suma tiene que dar
+    exacta. Un descuadre silencioso aquí aparece días después como plata que
+    nadie sabe de dónde salió.
+
+    Se admite repartir entre varios medios (parte tarjeta, parte efectivo),
+    igual que en la caja.
+    """
+    limpios = [{"id": int(p["id"]), "value": round(float(p.get("value") or 0), 2)}
+               for p in (pagos or []) if p.get("id") and float(p.get("value") or 0) > 0]
+    objetivo = round(float(excedente or 0), 2)
+
+    if objetivo <= 0:
+        return []
+    if not limpios:
+        raise ValueError(
+            f"sin_medios_de_pago: hay un excedente de ${objetivo:,.0f} y no se "
+            f"indicó con qué se cobró. Sin eso no se puede cruzar la caja."
+            .replace(",", "."))
+
+    suma = round(sum(p["value"] for p in limpios), 2)
+    if abs(suma - objetivo) > 1.0:      # 1 peso de holgura por redondeo
+        raise ValueError(
+            f"pagos_no_cuadran: los medios suman ${suma:,.0f} y el excedente es "
+            f"${objetivo:,.0f}.".replace(",", "."))
+    return limpios

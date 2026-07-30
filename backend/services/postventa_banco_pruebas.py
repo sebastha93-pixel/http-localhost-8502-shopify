@@ -113,10 +113,14 @@ def verificar_bodega_nc(payload: dict, clave_tienda: str) -> tuple[bool, str]:
 
 
 def verificar_documento_factura(payload: dict, clave_tienda: str) -> tuple[bool, str]:
-    """La factura del reemplazo sale con el prefijo del punto (FV-6/11/12).
-    Facturarla como venta online descuadra la venta de la tienda."""
+    """La factura del reemplazo sale con el comprobante que SI se puede usar
+    por API.
+
+    Ojo: NO es el prefijo de la caja. Siigo no deja emitir con FV-6/11/12
+    (rangos DIAN del punto de venta), asi que hoy sale por FV-1 y el arqueo
+    se cruza por los medios de pago. Ver tiendas.documento_para_facturar."""
     from backend.services import tiendas
-    esperado = int((tiendas.obtener(clave_tienda) or {}).get("documento_factura_id") or 0)
+    esperado = int(tiendas.documento_para_facturar(clave_tienda))
     real = int((payload.get("document") or {}).get("id") or 0)
     if real != esperado:
         return False, (f"la factura debía salir con el documento {esperado} "
@@ -218,7 +222,7 @@ def _preview_factura_simulado(case_id: str, r: dict,
     if clave_tienda:
         from backend.services import tiendas
         t = tiendas.validar_para_facturar(clave_tienda)
-        extra = {"documento_id": t["documento_factura_id"],
+        extra = {"documento_id": tiendas.documento_para_facturar(clave_tienda),
                  "bodega_id": t["bodega_id"],
                  "pago_excedente_id": _pago_del_punto(clave_tienda)}
 

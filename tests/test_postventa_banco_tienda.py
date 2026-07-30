@@ -78,25 +78,33 @@ def test_arrayanes_no_acepta_la_bodega_de_florida():
 
 # ── La factura sale con el prefijo del punto ───────────────────────────────
 
-def test_la_factura_usa_el_documento_del_punto():
-    ok, det = B.verificar_documento_factura({"document": {"id": tiendas.DOC_FV11}},
-                                            "florida_caja1")
+def test_la_factura_usa_el_comprobante_habilitado_para_api():
+    """NO el prefijo de la caja: Siigo no deja emitir con FV-11 por API."""
+    doc = tiendas.documento_para_facturar("florida_caja1")
+    assert doc == tiendas.DOC_FV1_ONLINE
+    ok, det = B.verificar_documento_factura({"document": {"id": doc}}, "florida_caja1")
     assert ok, det
 
 
-def test_falla_si_la_factura_sale_como_venta_online():
-    """Facturar un cambio de tienda con FV-1 descuadra la venta del punto."""
-    ok, det = B.verificar_documento_factura({"document": {"id": 11810}},
+def test_facturar_con_el_prefijo_de_la_caja_se_marca_mal():
+    """Siigo lo rechaza con document_settings; el banco tiene que verlo antes."""
+    ok, _ = B.verificar_documento_factura({"document": {"id": tiendas.DOC_FV11}},
+                                          "florida_caja1")
+    assert not ok
+
+
+def test_falla_si_sale_con_un_comprobante_que_no_toca():
+    ok, det = B.verificar_documento_factura({"document": {"id": 99999}},
                                             "florida_caja1")
     assert not ok
-    assert str(tiendas.DOC_FV11) in det
 
 
-def test_cada_caja_de_florida_tiene_su_propio_prefijo():
-    assert B.verificar_documento_factura({"document": {"id": tiendas.DOC_FV12}},
-                                         "florida_caja2")[0]
-    assert not B.verificar_documento_factura({"document": {"id": tiendas.DOC_FV12}},
-                                             "florida_caja1")[0]
+def test_el_comprobante_de_facturacion_se_cambia_por_entorno(monkeypatch):
+    """El dia que FV-5 «Cambios» tenga resolucion: una variable, cero codigo."""
+    monkeypatch.setenv("SIIGO_DOC_FACTURA_CAMBIO", str(tiendas.DOC_FV5_CAMBIOS))
+    ok, _ = B.verificar_documento_factura(
+        {"document": {"id": tiendas.DOC_FV5_CAMBIOS}}, "florida_caja1")
+    assert ok
 
 
 # ── El excedente se cobra en la caja de ese punto ──────────────────────────

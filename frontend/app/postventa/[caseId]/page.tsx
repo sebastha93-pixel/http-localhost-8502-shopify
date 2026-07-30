@@ -15,7 +15,7 @@ import {
   obtenerLogistica, registrarGuiaRetorno, confirmarRecepcion, registrarDespacho,
   ESTADOS_LABEL, type EstadoPostventa, type PreviewFiscal,
   opcionesReemplazo, elegirReemplazo, dejarSaldoAFavor,
-  type OpcionReemplazo,
+  type OpcionReemplazo, type PagoExcedente,
 } from "@/lib/postventa";
 
 // Transiciones ofrecidas en UI (espejo del backend postventa_logic.TRANSICIONES).
@@ -531,7 +531,14 @@ function PanelFactura({ caseId, status, tipo, tienda, onEmitido }:
   { caseId: string; status: string; tipo: string; tienda?: string | null;
     onEmitido: () => void }) {
   const [preview, setPreview] = useState<PreviewFactura | null>(null);
-  const prevMut = useMutation({ mutationFn: () => previewFactura(caseId), onSuccess: setPreview });
+  // El excedente se cobra en la caja de la tienda. Se pide primero SIN pagos
+  // para saber cuánto es, y luego se re-arma con el reparto que indique la
+  // asesora — sin eso el arqueo del día no se puede cruzar.
+  const [pagos, setPagos] = useState<Record<number, string>>({});
+  const prevMut = useMutation({
+    mutationFn: (p: PagoExcedente[] = []) => previewFactura(caseId, p),
+    onSuccess: setPreview,
+  });
   const emitMut = useMutation({
     mutationFn: () => emitirFactura(caseId),
     onSuccess: () => { setPreview(null); onEmitido(); } });
@@ -546,7 +553,7 @@ function PanelFactura({ caseId, status, tipo, tienda, onEmitido }:
 
         {!preview && (
           <ElegirQueSeLleva caseId={caseId} tienda={tienda}
-            onListo={() => prevMut.mutate()}
+            onListo={() => prevMut.mutate([])}
             onSaldo={onEmitido}
             calculando={prevMut.isPending} />
         )}
@@ -563,8 +570,16 @@ function PanelFactura({ caseId, status, tipo, tienda, onEmitido }:
               <Fila k="Paga la clienta" v={formatMoney(preview.resumen.excedente)} destacado />
             </dl>
             {preview.resumen.excedente > 0 && (
-              <p className="text-xs text-ochre">
-                La prenda nueva vale más: la clienta paga el excedente.
+              <CobroDelExcedente
+                excedente={preview.resumen.excedente}
+                tienda={tienda}
+                pagos={pagos} setPagos={setPagos}
+                onRecalcular={(p) => prevMut.mutate(p)}
+                recalculando={prevMut.isPending} />
+            )}
+            {prevMut.isError && (
+              <p className="text-sm text-terracotta">
+                {(prevMut.error as Error)?.message || "No se pudo armar la factura."}
               </p>
             )}
             <AvisoModo modo={preview.modo} />
@@ -731,6 +746,71 @@ function ElegirQueSeLleva({ caseId, tienda, onListo, onSaldo, calculando }:
 const INPUT_BUSCAR =
   "w-full rounded-sm border border-border bg-card px-3 py-2 text-sm text-ink-900 " +
   "placeholder:text-graphite/60 focus:outline-none focus:ring-2 focus:ring-navy-600/30";
+
+
+/* ── Con qué se cobró el excedente ───────────────────────────────────── */
+/* La factura del cambio sale por FV-1, así que NO entra al consecutivo de la
+   caja. Marcar el medio de pago es lo único que permite cruzar el arqueo del
+   día: sin eso, la plata cobrada en la tienda no se casa con nada.
+   Se puede repartir entre varios, como en el POS. */
+function CobroDelExcedente({ excedente, tienda, pagos, setPagos,
+                             onRecalcular, recalculando }:
+  { excedente: number; tienda?: string | null;
+    pagos: Record<number, string>; setPagos: (p: Record<number, string>) => void;
+    onRecalcular: (p: PagoExcedente[]) => void; recalculando: boolean }) {
+  const puntos = useQuery({ queryKey: ["postventa-tiendas"], queryFn: listarTiendas });
+  const punto = (puntos.data ?? []).find((p) => p.clave === tienda);
+  const medios = punto?.formas_pago ?? [];
+
+  const lista: PagoExcedente[] = medios
+    .map((m) => ({ id: m.id, value: Number(pagos[m.id] ?? 0) }))
+    .filter((p) => p.value > 0);
+  const suma = lista.reduce((a, p) => a + p.value, 0);
+  const cuadra = Math.abs(suma - excedente) < 1;
+
+  if (!tienda) {
+    return (
+      <p className="text-xs text-ochre">
+        La prenda nueva vale más: queda como cuenta por cobrar.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-2 rounded-sm border border-ochre/40 bg-ochre/5 p-3">
+      <p className="text-sm text-ink-900">
+        La clienta paga <strong>{formatMoney(excedente)}</strong>. ¿Con qué?
+      </p>
+      <p className="text-[0.68rem] text-graphite">
+        Esta factura sale por FV-1 y no entra al consecutivo de la caja.
+        Marcarlo aquí es lo que permite cuadrar el arqueo del día.
+      </p>
+      {medios.map((m) => (
+        <label key={m.id} className="flex items-center justify-between gap-3">
+          <span className="text-sm text-ink-900">{m.nombre}</span>
+          <input inputMode="numeric" placeholder="0"
+            className="w-32 rounded-sm border border-border bg-card px-2 py-1
+                       text-right text-sm tabular-nums focus:outline-none
+                       focus:ring-2 focus:ring-navy-600/30"
+            value={pagos[m.id] ?? ""}
+            onChange={(e) => setPagos({ ...pagos, [m.id]: e.target.value.replace(/\D/g, "") })} />
+        </label>
+      ))}
+      <div className="flex items-center justify-between border-t border-border pt-2">
+        <span className="text-xs text-graphite">Suma</span>
+        <span className={`text-sm tabular-nums ${cuadra ? "text-sage" : "text-terracotta"}`}>
+          {formatMoney(suma)}{cuadra ? "" : ` · faltan ${formatMoney(excedente - suma)}`}
+        </span>
+      </div>
+      <button type="button" disabled={!cuadra || recalculando}
+        onClick={() => onRecalcular(lista)}
+        className="rounded-sm bg-navy-600 px-3 py-1.5 text-sm font-medium text-white
+                   hover:bg-navy-700 disabled:opacity-50">
+        {recalculando ? "Aplicando…" : "Aplicar medios de pago"}
+      </button>
+    </div>
+  );
+}
 
 /* ── Piezas compartidas ─────────────────────────────────────────────── */
 function Totales({ subtotal, iva, total }:
