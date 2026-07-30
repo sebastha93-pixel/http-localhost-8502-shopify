@@ -41,6 +41,110 @@ PLAN_DEFAULT = [
 ]
 
 
+# Reparto de los casos de TIENDA. Se ejercitan los tres puntos a propósito:
+# Florida y Arrayanes tienen bodegas distintas, y probar uno solo no revelaría
+# un mapeo cruzado entre punto de venta y bodega.
+PLAN_TIENDA_DEFAULT = [
+    ("florida_caja1", "cambio_talla", "talla_pequena"),
+    ("arrayanes",     "cambio_ref",   "cambio_por_otro"),
+    ("florida_caja2", "cambio_talla", "talla_grande"),
+    ("arrayanes",     "reembolso",    "arrepentimiento"),
+    ("florida_caja1", "cambio_ref",   "cambio_por_otro"),
+]
+
+
+def _tienda_por_documento() -> dict[int, str]:
+    """document_id de Siigo → clave del punto de venta."""
+    from backend.services import tiendas
+    salida = {}
+    for p in tiendas.listar():
+        t = tiendas.obtener(p["clave"]) or {}
+        doc = t.get("documento_factura_id")
+        if doc:
+            salida[int(doc)] = p["clave"]
+    return salida
+
+
+def facturas_de_tienda(facturas: list[dict]) -> list[dict]:
+    """De un lote de facturas, las hechas EN TIENDA que la DIAN ya aceptó.
+
+    Se enlazan por **id**, no por nº de pedido: una compra presencial no tiene
+    pedido Shopify. Esa era justamente la razón por la que el banco las saltaba
+    y el flujo presencial se quedó sin probar.
+    """
+    mapa = _tienda_por_documento()
+    salida = []
+    for f in facturas:
+        if not isinstance(f, dict):
+            continue
+        clave = mapa.get(int((f.get("document") or {}).get("id") or 0))
+        if not clave:
+            continue                      # online u otro prefijo
+        if not F.factura_aceptada_dian(f):
+            continue                      # sin aceptación DIAN no hay NC
+        salida.append({"factura": f.get("name"), "factura_id": f.get("id"),
+                       "tienda": clave, "numero_pedido": ""})
+    return salida
+
+
+def verificar_bodega_nc(payload: dict, clave_tienda: str) -> tuple[bool, str]:
+    """La prenda devuelta debe entrar a la bodega de ESE punto.
+
+    Si entra a la bodega online, el inventario de la tienda queda corto y el de
+    MELONN inflado — y nadie se entera hasta el conteo físico.
+    """
+    from backend.services import tiendas
+    esperada = int((tiendas.obtener(clave_tienda) or {}).get("bodega_id") or 0)
+    items = payload.get("items") or []
+    if not items:
+        # Un payload vacío no prueba nada. Darlo por bueno es cómo un gate
+        # llega a "verde" sin haber mirado lo que decía verificar.
+        return False, "la NC llegó sin items: no hay bodega que verificar"
+    malas = []
+    for it in items:
+        real = int((it.get("warehouse") or {}).get("id") or 0)
+        if real != esperada:
+            malas.append(f"{it.get('code')}→bodega {real}")
+    if malas:
+        return False, (f"la NC debía entrar a la bodega {esperada} "
+                       f"({clave_tienda}) y entró a: {', '.join(malas)}")
+    return True, f"bodega {esperada}"
+
+
+def verificar_documento_factura(payload: dict, clave_tienda: str) -> tuple[bool, str]:
+    """La factura del reemplazo sale con el prefijo del punto (FV-6/11/12).
+    Facturarla como venta online descuadra la venta de la tienda."""
+    from backend.services import tiendas
+    esperado = int((tiendas.obtener(clave_tienda) or {}).get("documento_factura_id") or 0)
+    real = int((payload.get("document") or {}).get("id") or 0)
+    if real != esperado:
+        return False, (f"la factura debía salir con el documento {esperado} "
+                       f"({clave_tienda}) y salió con {real}")
+    return True, f"documento {esperado}"
+
+
+def verificar_pago_excedente(payload: dict, clave_tienda: str) -> tuple[bool, str]:
+    """El excedente se cobra en la caja de ESE punto.
+
+    En tienda la clienta está presente y paga ahí mismo; dejarlo como cuenta
+    por cobrar es plata que nadie va a cobrar nunca.
+    """
+    from backend.services import tiendas
+    # El ANTICIPO es el crédito que dejó la nota crédito, no plata que entre
+    # por la caja: siempre está y es legítimo. Solo se juzga lo que la clienta
+    # paga de más.
+    pagos = [p for p in (payload.get("payments") or [])
+             if p.get("id") and int(p["id"]) != F.ANTICIPO_CLIENTES_ID]
+    if not pagos:
+        return True, "sin excedente"
+    malos = [str(p["id"]) for p in pagos
+             if not tiendas.forma_pago_valida(clave_tienda, int(p["id"]))]
+    if malos:
+        return False, (f"formas de pago que no son de {clave_tienda}: "
+                       f"{', '.join(malos)}")
+    return True, f"{len(pagos)} pago(s) del punto"
+
+
 def _pedidos_con_factura(cantidad: int) -> list[dict]:
     """Pedidos reales que ya tienen factura en Siigo (los únicos que sirven:
     sin factura original no hay nota crédito que emitir)."""
@@ -66,7 +170,18 @@ def _pedidos_con_factura(cantidad: int) -> list[dict]:
     return pedidos
 
 
-def _preview_factura_simulado(case_id: str, r: dict) -> Optional[dict]:
+def _pago_del_punto(clave_tienda: str) -> Optional[int]:
+    """Forma de pago de esa caja para cobrar el excedente. En tienda la clienta
+    está presente y paga ahí mismo — no queda como cuenta por cobrar."""
+    if not clave_tienda:
+        return None
+    from backend.services import tiendas
+    formas = (tiendas.obtener(clave_tienda) or {}).get("formas_pago") or []
+    return int(formas[0]["id"]) if formas else None
+
+
+def _preview_factura_simulado(case_id: str, r: dict,
+                              clave_tienda: str = "") -> Optional[dict]:
     """Arma la factura del reemplazo SIN exigir que la NC esté emitida.
 
     En dry-run la NC no se emite, así que `preview_factura_reemplazo` (que
@@ -96,19 +211,31 @@ def _preview_factura_simulado(case_id: str, r: dict) -> Optional[dict]:
                           "description": it.get("original_variant") or "",
                           "price_base": float(it.get("original_price") or 0)}
 
+    # En tienda la factura sale del punto de venta: su prefijo, su bodega y su
+    # caja. Simularla como venta online no probaría nada de eso.
+    extra: dict = {}
+    if clave_tienda:
+        from backend.services import tiendas
+        t = tiendas.validar_para_facturar(clave_tienda)
+        extra = {"documento_id": t["documento_factura_id"],
+                 "bodega_id": t["bodega_id"],
+                 "pago_excedente_id": _pago_del_punto(clave_tienda)}
+
     payload = FL.construir_payload_factura_reemplazo(
         factura_original={"id": "sim", "name": "sim", "customer": {},
                           "seller": FL.VENDEDOR_ONLINE_ID},
         item_reemplazo=item_reemplazo, credito_con_iva=float(credito),
-        modo="prueba", fecha="2026-01-01")
-    return {"resumen": payload["_resumen"]}
+        modo="prueba", fecha="2026-01-01", **extra)
+    return {"resumen": payload["_resumen"], "payload": payload}
 
 
 def _correr_uno(pedido: dict, tipo: str, motivo: str, *, dry_run: bool,
                 actor: str) -> dict:
     """Un caso completo: crear → aprobar → ítem → preview [→ emitir]."""
-    r: dict[str, Any] = {"pedido": pedido["numero_pedido"], "tipo": tipo,
-                         "pasos": [], "ok": False}
+    tienda = pedido.get("tienda") or ""
+    r: dict[str, Any] = {"pedido": pedido.get("numero_pedido") or pedido.get("factura"),
+                         "canal": tienda or "online",
+                         "tipo": tipo, "pasos": [], "ok": False}
 
     def paso(nombre: str, ok: bool, detalle: str = ""):
         r["pasos"].append({"paso": nombre, "ok": ok, "detalle": detalle[:300]})
@@ -117,7 +244,12 @@ def _correr_uno(pedido: dict, tipo: str, motivo: str, *, dry_run: bool,
     try:
         caso = pv.crear_caso(tipo=tipo, reason=motivo,
                              customer_name="Prueba banco",
-                             shopify_order_name=pedido["numero_pedido"],
+                             shopify_order_name=pedido.get("numero_pedido") or "",
+                             # Una compra de tienda solo se puede enlazar por
+                             # id de factura: no tiene nº de pedido.
+                             siigo_invoice_id=pedido.get("factura_id") or "",
+                             tienda=tienda,
+                             pago_excedente_id=_pago_del_punto(tienda),
                              source=MARCA_PRUEBA)
         r["case_id"] = caso["id"]
         r["case_number"] = caso["case_number"]
@@ -182,6 +314,14 @@ def _correr_uno(pedido: dict, tipo: str, motivo: str, *, dry_run: bool,
              f"{tot.get('total')} (esperado {esperado})")
         if not cuadra:
             return r
+
+        # Cambio presencial: la prenda devuelta tiene que entrar al inventario
+        # de ESA tienda. Si entra a la bodega online, la tienda queda corta y
+        # MELONN inflada — y no se nota hasta el conteo físico.
+        if tienda:
+            ok_bod, det_bod = verificar_bodega_nc(prev.get("payload") or {}, tienda)
+            if not paso("nc_entra_a_la_bodega_del_punto", ok_bod, det_bod):
+                return r
     except Exception as e:  # noqa: BLE001
         return r if not paso("preview_nota_credito", False, str(e)) else r
 
@@ -189,7 +329,7 @@ def _correr_uno(pedido: dict, tipo: str, motivo: str, *, dry_run: bool,
     # anticipo / excedente, que es lo que el gate anterior no cubría.
     if tipo not in fiscal.TIPOS_SIN_FACTURA:
         try:
-            prevf = _preview_factura_simulado(cid, r)
+            prevf = _preview_factura_simulado(cid, r, clave_tienda=tienda)
             if prevf is None or prevf.get("_motivo"):
                 # No pasa callado: si no se pudo validar la factura, el caso
                 # FALLA y dice por qué.
@@ -204,6 +344,18 @@ def _correr_uno(pedido: dict, tipo: str, motivo: str, *, dry_run: bool,
                  f"excedente {res['excedente']}")
             if not suma_ok:
                 return r
+
+            # La factura del cambio presencial sale del punto de venta: su
+            # prefijo (FV-6/11/12) y su caja. Con FV-1 se descuadra la venta
+            # de la tienda; con la caja de otra tienda, el arqueo.
+            if tienda:
+                pl = prevf.get("payload") or {}
+                ok_doc, det_doc = verificar_documento_factura(pl, tienda)
+                if not paso("factura_sale_del_punto", ok_doc, det_doc):
+                    return r
+                ok_pago, det_pago = verificar_pago_excedente(pl, tienda)
+                if not paso("excedente_se_cobra_en_esa_caja", ok_pago, det_pago):
+                    return r
         except Exception as e:  # noqa: BLE001
             paso("preview_factura_reemplazo", False, str(e))
             return r
@@ -267,6 +419,29 @@ def correr(*, total: int = 20, dry_run: bool = True,
         resultados.append(_correr_uno(pedido, tipo, motivo,
                                       dry_run=dry_run, actor=actor))
 
+    # ── Cambios EN TIENDA ──────────────────────────────────────────────
+    # Antes se saltaban a propósito ("sin pedido Shopify") y por eso el gate
+    # daba verde con el flujo presencial sin probar. Ahora se enlazan por id
+    # de factura, que es la vía correcta.
+    facturas_t = facturas_de_tienda(descubrir.facturas_recientes(max_paginas=8))
+    aviso_tienda = ""
+    if not facturas_t:
+        # No pasa callado: un gate que no probó tienda no puede decir "verde".
+        aviso_tienda = ("No se hallaron facturas de tienda (FV-6/11/12) "
+                        "aceptadas por la DIAN. El flujo presencial NO se probó.")
+        log.warning("[banco] %s", aviso_tienda)
+    else:
+        for i, (clave, tipo, motivo) in enumerate(PLAN_TIENDA_DEFAULT):
+            # Solo se usan facturas del punto que toca: la bodega y el prefijo
+            # se validan contra ESE punto.
+            del_punto = [f for f in facturas_t if f["tienda"] == clave]
+            if not del_punto:
+                log.info("[banco] sin facturas de %s, se omite", clave)
+                continue
+            resultados.append(_correr_uno(del_punto[i % len(del_punto)],
+                                          tipo, motivo,
+                                          dry_run=dry_run, actor=actor))
+
     ok = [r for r in resultados if r.get("ok")]
     fallidos = [r for r in resultados if not r.get("ok")]
     por_tipo: dict[str, dict] = {}
@@ -274,6 +449,23 @@ def correr(*, total: int = 20, dry_run: bool = True,
         d = por_tipo.setdefault(r["tipo"], {"total": 0, "ok": 0})
         d["total"] += 1
         d["ok"] += 1 if r.get("ok") else 0
+
+    por_canal: dict[str, dict] = {}
+    for r in resultados:
+        d = por_canal.setdefault(r.get("canal", "online"), {"total": 0, "ok": 0})
+        d["total"] += 1
+        d["ok"] += 1 if r.get("ok") else 0
+
+    # El gate NO puede decir "verde" si dejó un canal sin probar. Esa fue
+    # exactamente la falla del gate anterior: 20/20 en verde con el flujo de
+    # tienda nunca ejercitado, y se rompió en producción.
+    de_tienda = [r for r in resultados if r.get("canal") != "online"]
+    cubre_tienda = bool(de_tienda)
+    faltas = []
+    if not cubre_tienda:
+        faltas.append(aviso_tienda or "no se probó ningún cambio en tienda")
+    if len(ok) < total:
+        faltas.append(f"solo {len(ok)} casos exitosos de {total} pedidos")
 
     return {
         "modo": fiscal_siigo.modo_actual(),
@@ -283,7 +475,14 @@ def correr(*, total: int = 20, dry_run: bool = True,
         "exitosos": len(ok),
         "fallidos": len(fallidos),
         "por_tipo": por_tipo,
-        "gate_verde": len(fallidos) == 0 and len(ok) >= total,
+        "por_canal": por_canal,
+        "cobertura": {
+            "online": len(resultados) - len(de_tienda),
+            "tienda": len(de_tienda),
+            "puntos_probados": sorted({r["canal"] for r in de_tienda}),
+        },
+        "gate_verde": len(fallidos) == 0 and len(ok) >= total and cubre_tienda,
+        "por_que_no_verde": faltas,
         "detalle_fallidos": fallidos,
         "resultados": resultados,
     }
