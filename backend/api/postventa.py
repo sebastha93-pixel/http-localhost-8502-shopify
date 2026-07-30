@@ -36,6 +36,16 @@ class CrearCasoIn(BaseModel):
     assigned_to: Optional[str] = None
 
 
+class ElegirReemplazoIn(BaseModel):
+    requested_sku: str
+    requested_variant: str = ""
+    requested_price: Optional[float] = None
+
+
+class SaldoAFavorIn(BaseModel):
+    monto: float = 0
+
+
 class ItemIn(BaseModel):
     original_sku: str = ""
     original_variant: str = ""
@@ -181,6 +191,92 @@ def fiscal_items_factura(case_id: str,
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(502, f"siigo: {str(e)[:300]}")
+
+
+# ── Que se lleva la clienta ──────────────────────────────────────────
+@router.get("/casos/{case_id}/reemplazo/opciones")
+def reemplazo_opciones(
+    case_id: str,
+    q: str = "",
+    _: CurrentUser = Depends(require_permission("postventa", "ver")),
+):
+    """Referencias que ESE punto puede entregar hoy, con su existencia.
+
+    Sin esto se puede facturar una prenda que la tienda no tiene: queda un
+    documento fiscal emitido y una clienta esperando algo inexistente."""
+    from backend.services import postventa_reemplazo as R
+    from backend.services import tiendas
+    from backend.services import siigo
+
+    caso = svc.obtener_caso(case_id)
+    if caso is None:
+        raise HTTPException(404, "caso_no_encontrado")
+    clave = caso.get("tienda")
+    if not clave:
+        raise HTTPException(400, "El caso no es de tienda: no hay bodega "
+                                 "contra la cual verificar existencias.")
+    t = tiendas.obtener(clave) or {}
+    bodega = t.get("bodega_nombre") or t.get("tienda")
+    if not siigo.siigo_configurado():
+        raise HTTPException(503, "Siigo no configurado.")
+    inv = siigo.inventario_por_bodega()
+    return {"bodega": bodega, "tienda": t.get("nombre"),
+            "opciones": R.opciones_con_stock(inv, bodega, q=q)}
+
+
+@router.post("/casos/{case_id}/reemplazo")
+def reemplazo_elegir(
+    case_id: str, body: ElegirReemplazoIn,
+    user: CurrentUser = Depends(require_permission("postventa", "modificar")),
+):
+    """Fija la prenda del reemplazo. Se niega si esa tienda no la tiene."""
+    from backend.services import postventa_reemplazo as R
+    from backend.services import tiendas
+    from backend.services import siigo
+
+    caso = svc.obtener_caso(case_id)
+    if caso is None:
+        raise HTTPException(404, "caso_no_encontrado")
+    clave = caso.get("tienda")
+    if clave:
+        t = tiendas.obtener(clave) or {}
+        bodega = t.get("bodega_nombre") or t.get("tienda")
+        inv = siigo.inventario_por_bodega() if siigo.siigo_configurado() else {}
+        ok, detalle = R.verificar_disponible(inv, bodega, body.requested_sku)
+        if not ok:
+            raise HTTPException(400, detalle)
+    try:
+        item = svc.elegir_reemplazo(case_id, requested_sku=body.requested_sku,
+                                    requested_variant=body.requested_variant,
+                                    requested_price=body.requested_price)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    svc.registrar_evento(case_id, "reemplazo_elegido",
+                         f"Se lleva {body.requested_sku}", created_by=user.id)
+    return item
+
+
+@router.post("/casos/{case_id}/saldo-a-favor")
+def reemplazo_saldo_a_favor(
+    case_id: str, body: SaldoAFavorIn,
+    user: CurrentUser = Depends(require_permission("postventa", "modificar")),
+):
+    """La clienta no se lleva nada hoy: el credito queda a su nombre.
+
+    NO se emite factura de reemplazo — hacerlo inventaria una venta. El
+    anticipo ya esta en Siigo desde la nota credito y se consume cuando
+    vuelva. Se deja escrito el monto: es el respaldo de la clienta."""
+    from backend.services import postventa_reemplazo as R
+    caso = svc.obtener_caso(case_id)
+    if caso is None:
+        raise HTTPException(404, "caso_no_encontrado")
+    svc.registrar_evento(case_id, "saldo_a_favor",
+                         R.texto_saldo_a_favor(body.monto), created_by=user.id)
+    try:
+        svc.cambiar_estado(case_id, "cerrado", actor=user.email)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "monto": body.monto}
 
 
 @router.get("/casos/{case_id}/timeline")
