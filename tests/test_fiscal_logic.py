@@ -88,7 +88,7 @@ def test_payload_nc_copia_montos_de_la_factura_y_usa_anticipo():
     assert item["taxes"] == [{"id": 6352}]
     # seller y warehouse copiados de la factura (producto de inventario)
     assert item["seller"] == 658
-    assert item["warehouse"] == {"id": 32}
+    assert item["warehouse"] == 32   # el GET la trae expandida, el POST la quiere plana
     assert p["payments"][0]["id"] == 8316
     assert p["payments"][0]["value"] == 159900.0
     # ANTICIPO maneja vencimiento -> Siigo exige due_date
