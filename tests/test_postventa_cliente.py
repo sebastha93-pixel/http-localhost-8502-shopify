@@ -82,3 +82,89 @@ def test_error_de_siigo_no_lanza(monkeypatch):
     monkeypatch.setattr(C.siigo, "siigo_get", explota)
     r = C.compras_por_cedula("123")
     assert r["_error"] == "siigo_error"
+
+
+# ── Datos de la clienta ────────────────────────────────────────────────────
+# La factura de Siigo solo trae la cédula del cliente, no su nombre. Para
+# rellenar el caso hay que pedirlos aparte a /customers.
+
+CLIENTE = {"results": [{
+    "identification": "30384838",
+    "person_type": "Person",
+    "name": ["Laura", "Restrepo"],
+    "commercial_name": "",
+    "contacts": [{"first_name": "Laura", "last_name": "Restrepo",
+                  "email": "laura@correo.com",
+                  "phone": {"indicative": "57", "number": "3105558899"}}],
+    "phones": [{"indicative": "57", "number": "6015551122"}],
+}]}
+
+
+def _mock2(monkeypatch, cliente=CLIENTE, facturas=FACTURAS):
+    """Mock que distingue /invoices de /customers."""
+    monkeypatch.setattr(C.siigo, "siigo_configurado", lambda: True)
+
+    def _get(path, params=None):
+        if path.startswith("/customers"):
+            if isinstance(cliente, Exception):
+                raise cliente
+            return cliente
+        return facturas
+    monkeypatch.setattr(C.siigo, "siigo_get", _get)
+
+
+def test_trae_nombre_email_y_telefono_de_la_clienta(monkeypatch):
+    _mock2(monkeypatch)
+    cli = C.compras_por_cedula("30384838")["cliente"]
+    assert cli["nombre"] == "Laura Restrepo"
+    assert cli["email"] == "laura@correo.com"
+    assert cli["telefono"] == "3105558899"
+
+
+def test_si_no_se_puede_traer_el_cliente_las_compras_igual_sirven(monkeypatch):
+    """Regla de oro: un dato secundario que falla NO rompe el caso."""
+    _mock2(monkeypatch, cliente=RuntimeError("siigo 429"))
+    r = C.compras_por_cedula("30384838")
+    assert r["total"] == 3
+    assert r["cliente"]["nombre"] == ""
+
+
+def test_nombre_de_empresa_viene_en_un_solo_elemento():
+    d = C.datos_de_cliente({"name": ["COMERCIALIZADORA SAS"], "person_type": "Company"})
+    assert d["nombre"] == "COMERCIALIZADORA SAS"
+
+
+def test_nombre_se_arma_del_contacto_si_falta_el_del_cliente():
+    d = C.datos_de_cliente({"name": [], "contacts": [
+        {"first_name": "Ana", "last_name": "Gómez", "email": "a@b.co"}]})
+    assert d["nombre"] == "Ana Gómez"
+    assert d["email"] == "a@b.co"
+
+
+def test_telefono_cae_al_de_la_empresa_si_el_contacto_no_tiene():
+    d = C.datos_de_cliente({"name": ["X"], "contacts": [{"email": "a@b.co"}],
+                            "phones": [{"number": "6015551122"}]})
+    assert d["telefono"] == "6015551122"
+
+
+def test_cliente_vacio_no_revienta():
+    d = C.datos_de_cliente({})
+    assert d == {"nombre": "", "email": "", "telefono": ""}
+
+
+# ── Fecha de la compra ─────────────────────────────────────────────────────
+# Sin fecha la asesora no puede distinguir entre varias compras de la misma
+# clienta. Si el listado no trae `date`, se cae a metadata.created.
+
+def test_usa_metadata_created_si_la_factura_no_trae_date(monkeypatch):
+    sin_fecha = {"results": [dict(FACTURAS["results"][0], date=None,
+                                  metadata={"created": "2026-07-20T14:03:00Z"})]}
+    _mock2(monkeypatch, facturas=sin_fecha)
+    assert C.compras_por_cedula("30384838")["compras"][0]["fecha"] == "2026-07-20T14:03:00Z"
+
+
+def test_prefiere_date_sobre_metadata(monkeypatch):
+    con_ambas = {"results": [dict(FACTURAS["results"][0],
+                                  metadata={"created": "2026-01-01T00:00:00Z"})]}
+    _mock2(monkeypatch, facturas=con_ambas)
+    assert C.compras_por_cedula("30384838")["compras"][0]["fecha"] == "2026-07-20"

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { PageShell } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
-import { formatMoney, fmtDateTime } from "@/lib/utils";
+import { formatMoney, fmtFecha } from "@/lib/utils";
 import { crearCaso, listarTiendas, comprasPorCedula, TIPOS, MOTIVOS, PRIORIDADES,
          type CasoPostventa, type Compra } from "@/lib/postventa";
 
@@ -38,8 +38,14 @@ export default function NuevoCasoPage() {
 
   function usarCompra(c: Compra) {
     setElegida(c);
+    // Todo lo que Siigo ya sabe se llena solo; lo que el sistema no trae
+    // (o lo que la asesora quiera corregir) se sigue pudiendo editar.
+    const cli = buscar.data?.cliente;
     setF((p) => ({
       ...p,
+      customer_name:  p.customer_name  || cli?.nombre   || "",
+      customer_email: p.customer_email || cli?.email    || "",
+      customer_phone: p.customer_phone || cli?.telefono || "",
       shopify_order_name: c.pedido ?? "",
       // Si compró en una tienda, el caso se abre en ese mismo punto.
       tienda: c.canal && c.canal !== "online" ? c.canal : p.tienda,
@@ -127,8 +133,8 @@ export default function NuevoCasoPage() {
                       <p className="font-display tabular-nums text-sm text-ink-900">
                         {formatMoney(c.total ?? 0)}
                       </p>
-                      <p className="text-[0.68rem] text-graphite tabular-nums">
-                        {fmtDateTime(c.fecha)}
+                      <p className="text-xs text-graphite tabular-nums">
+                        {fmtFecha(c.fecha)}
                       </p>
                     </div>
                   </div>
