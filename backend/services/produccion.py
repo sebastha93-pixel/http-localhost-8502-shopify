@@ -3204,11 +3204,19 @@ def obtener_remision(rem_id: str) -> Optional[dict]:
 # este timestamp. En memoria a propósito — si el backend se reinicia, el
 # siguiente poll lo repuebla en segundos. Da visibilidad de "agente caído"
 # sin migraciones ni tablas nuevas.
-_AGENTE_VISTO: dict = {"ts": 0.0}
+_AGENTE_VISTO: dict = {"ts": 0.0, "version": "", "ipp": None}
 
 
-def _latido_agente() -> None:
+def _latido_agente(version: str = "", habla_ipp: Optional[bool] = None) -> None:
+    """Marca que el agente se reportó. Guarda además qué versión es, para poder
+    DECIR en el panel que está desactualizado: si no habla IPP no se le
+    entregan trabajos de la RICOH y la cola crece — sin este dato, esa cola
+    creciendo no tiene explicación visible."""
     _AGENTE_VISTO["ts"] = time.time()
+    if version:
+        _AGENTE_VISTO["version"] = version
+    if habla_ipp is not None:
+        _AGENTE_VISTO["ipp"] = habla_ipp
 
 
 def estado_impresion() -> dict:
@@ -3235,6 +3243,11 @@ def estado_impresion() -> dict:
         # Umbral holgado: con varios workers Uvicorn los polls del agente se
         # reparten — ESTE worker puede llevar un par de minutos sin ver uno.
         "agente_en_linea": hace_s is not None and hace_s < 180,
+        "agente_version": _AGENTE_VISTO.get("version") or "",
+        # True = el agente no sabe imprimir en la RICOH (no habla IPP), así que
+        # sus remisiones se quedan en cola a propósito. Se arregla corriendo
+        # instalar.ps1 en el servidor MDS.
+        "agente_desactualizado": _AGENTE_VISTO.get("ipp") is False,
         "pendientes": len(pendientes),
         "mas_viejo_min": mas_viejo_min,
     }

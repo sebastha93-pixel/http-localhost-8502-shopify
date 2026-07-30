@@ -127,7 +127,7 @@ export default function ModuloImpresionPage() {
   const pendientes = trabajos.filter((t) => !t.impresa_at).length;
 
   // Signos vitales: ¿el agente local está reportándose? ¿hay cola represada?
-  const estadoQ = useQuery<{ agente_en_linea: boolean; agente_hace_s: number | null; pendientes: number; mas_viejo_min: number }>({
+  const estadoQ = useQuery<{ agente_en_linea: boolean; agente_hace_s: number | null; pendientes: number; mas_viejo_min: number; agente_version?: string; agente_desactualizado?: boolean }>({
     queryKey: ["produccion", "impresion", "estado"],
     queryFn: () => api.get("/api/produccion/impresion/estado"),
     refetchInterval: 15000,
@@ -190,7 +190,17 @@ export default function ModuloImpresionPage() {
                 ? "Agente de impresión sin reportarse desde el último reinicio"
                 : `Agente de impresión SIN CONEXIÓN · hace ${Math.round(salud.agente_hace_s / 60)} min — revisa que el Mac del agente esté prendido`}
           </span>
-          {salud.pendientes > 0 && salud.mas_viejo_min >= 5 && (
+          {/* Agente viejo: el backend le RETIENE a propósito los trabajos de la
+              RICOH (mandaría el raster al puerto 9100, que lo descarta, y los
+              marcaría como impresos sin sacar papel). Sin este aviso, la cola
+              creciendo no tendría explicación. */}
+          {salud.agente_desactualizado && (
+            <span className="inline-flex items-center gap-1.5 rounded-sm border border-terracotta/40 bg-terra-soft px-2.5 py-1 text-[0.65rem] font-semibold uppercase tracking-widest text-terracotta">
+              <AlertCircle className="h-3 w-3" />
+              Agente desactualizado{salud.agente_version ? ` (v${salud.agente_version})` : ""} — no imprime en la RICOH. Corre el instalador en el servidor MDS.
+            </span>
+          )}
+          {salud.pendientes > 0 && salud.mas_viejo_min >= 5 && !salud.agente_desactualizado && (
             <span className="inline-flex items-center gap-1.5 rounded-sm border border-amber-400/50 bg-amber-50 px-2.5 py-1 text-[0.65rem] font-semibold uppercase tracking-widest text-amber-700">
               <AlertCircle className="h-3 w-3" />
               {salud.pendientes} trabajo(s) esperando hace {salud.mas_viejo_min} min — ¿impresora apagada o sin cinta?

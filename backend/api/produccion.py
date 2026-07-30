@@ -2014,10 +2014,12 @@ def impresion_pendientes(
     request: Request,
     user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ):
-    es_agente = (user.email or "").lower() == _EMAIL_AGENTE
-    if es_agente:
-        svc._latido_agente()
-        if not _agente_habla_ipp(request):
+    if (user.email or "").lower() == _EMAIL_AGENTE:
+        ipp = _agente_habla_ipp(request)
+        svc._latido_agente(
+            version=(request.headers.get("X-Agente-Version") or "").strip(),
+            habla_ipp=ipp)
+        if not ipp:
             log.warning("Agente de impresión DESACTUALIZADO (sin IPP): no se le "
                         "entregan remisiones para la RICOH. Correr instalar.ps1.")
             return {"pendientes": [], "agente_desactualizado": True}
@@ -2166,8 +2168,11 @@ def impresion_trabajos(
 ):
     trabajos = svc.trabajos_pendientes_impresion()
     if (user.email or "").lower() == _EMAIL_AGENTE:
-        svc._latido_agente()
-        if not _agente_habla_ipp(request):
+        ipp = _agente_habla_ipp(request)
+        svc._latido_agente(
+            version=(request.headers.get("X-Agente-Version") or "").strip(),
+            habla_ipp=ipp)
+        if not ipp:
             # Mismo motivo que en /impresion/pendientes: la prueba de la RICOH
             # también va en raster y un agente viejo la tiraría al 9100.
             trabajos = [t for t in trabajos if (t.get("destino") or "") != "ricoh"]
