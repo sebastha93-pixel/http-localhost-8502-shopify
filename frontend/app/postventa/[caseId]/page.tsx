@@ -14,6 +14,8 @@ import {
   timelineCaso, itemsCaso, listarTiendas, ESTADO_KIND, CICLO,
   obtenerLogistica, registrarGuiaRetorno, confirmarRecepcion, registrarDespacho,
   ESTADOS_LABEL, type EstadoPostventa, type PreviewFiscal,
+  opcionesReemplazo, elegirReemplazo, dejarSaldoAFavor,
+  type OpcionReemplazo,
 } from "@/lib/postventa";
 
 // Transiciones ofrecidas en UI (espejo del backend postventa_logic.TRANSICIONES).
@@ -69,7 +71,8 @@ export default function CasoDetallePage() {
             sinCompraEnlazada={!c.siigo_invoice_id && !c.shopify_order_name} />
           <PanelLogistica caseId={caseId} status={c.status} onCambio={refrescar} />
           <PanelFiscal caseId={caseId} status={c.status} onEmitido={refrescar} />
-          <PanelFactura caseId={caseId} status={c.status} tipo={c.type} onEmitido={refrescar} />
+          <PanelFactura caseId={caseId} status={c.status} tipo={c.type}
+            tienda={c.tienda} onEmitido={refrescar} />
 
           {acciones.length > 0 && (
             <section>
@@ -524,8 +527,9 @@ function PanelFiscal({ caseId, status, onEmitido }:
 }
 
 /* ── Factura del reemplazo ──────────────────────────────────────────── */
-function PanelFactura({ caseId, status, tipo, onEmitido }:
-  { caseId: string; status: string; tipo: string; onEmitido: () => void }) {
+function PanelFactura({ caseId, status, tipo, tienda, onEmitido }:
+  { caseId: string; status: string; tipo: string; tienda?: string | null;
+    onEmitido: () => void }) {
   const [preview, setPreview] = useState<PreviewFactura | null>(null);
   const prevMut = useMutation({ mutationFn: () => previewFactura(caseId), onSuccess: setPreview });
   const emitMut = useMutation({
@@ -539,12 +543,12 @@ function PanelFactura({ caseId, status, tipo, onEmitido }:
     <Card className="stitch-rail border-navy-600/25">
       <CardContent className="py-4 space-y-3">
         <p className="section-label">Factura del reemplazo · Siigo</p>
+
         {!preview && (
-          <button disabled={prevMut.isPending} onClick={() => prevMut.mutate()}
-            className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white
-                       transition-colors hover:bg-navy-700 disabled:opacity-50">
-            {prevMut.isPending ? "Calculando…" : "Previsualizar factura"}
-          </button>
+          <ElegirQueSeLleva caseId={caseId} tienda={tienda}
+            onListo={() => prevMut.mutate()}
+            onSaldo={onEmitido}
+            calculando={prevMut.isPending} />
         )}
         {prevMut.isError && (
           <p className="text-sm text-terracotta">
@@ -587,6 +591,142 @@ function PanelFactura({ caseId, status, tipo, onEmitido }:
     </Card>
   );
 }
+
+
+/* ── Qué se lleva la clienta ─────────────────────────────────────────── */
+/* Dos salidas y nada más: se lleva otra prenda, o deja el saldo a favor.
+   La lista solo muestra lo que ESA tienda tiene hoy — facturar algo que no
+   está deja un documento fiscal emitido y a la clienta esperando. */
+function ElegirQueSeLleva({ caseId, tienda, onListo, onSaldo, calculando }:
+  { caseId: string; tienda?: string | null; onListo: () => void;
+    onSaldo: () => void; calculando: boolean }) {
+  const [salida, setSalida] = useState<"reemplazo" | "saldo" | null>(null);
+  const [q, setQ] = useState("");
+  const [elegido, setElegido] = useState<OpcionReemplazo | null>(null);
+
+  const ops = useQuery({
+    queryKey: ["postventa-reemplazo", caseId, q],
+    queryFn: () => opcionesReemplazo(caseId, q),
+    enabled: salida === "reemplazo" && !!tienda,
+  });
+  const fijar = useMutation({
+    mutationFn: (o: OpcionReemplazo) => elegirReemplazo(caseId, o.code, o.nombre),
+    onSuccess: (_d, o) => { setElegido(o); onListo(); },
+  });
+  const saldoMut = useMutation({
+    mutationFn: () => dejarSaldoAFavor(caseId, 0),
+    onSuccess: onSaldo,
+  });
+
+  if (!salida) {
+    return (
+      <div className="space-y-2">
+        <p className="text-sm text-graphite">¿Qué hace la clienta con su crédito?</p>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => setSalida("reemplazo")}
+            className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white
+                       transition-colors hover:bg-navy-700">
+            Se lleva otra prenda
+          </button>
+          <button onClick={() => setSalida("saldo")}
+            className="rounded-sm border border-border bg-card px-4 py-2 text-sm
+                       font-medium text-ink-900 hover:bg-cloud">
+            Deja saldo a favor
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (salida === "saldo") {
+    return (
+      <div className="space-y-2">
+        <p className="text-sm text-ink-900">
+          No se emite factura. El crédito queda a nombre de la clienta en Siigo
+          y se consume cuando vuelva.
+        </p>
+        <div className="flex gap-2">
+          <button disabled={saldoMut.isPending} onClick={() => saldoMut.mutate()}
+            className="rounded-sm bg-navy-600 px-4 py-2 text-sm font-medium text-white
+                       hover:bg-navy-700 disabled:opacity-50">
+            {saldoMut.isPending ? "Guardando…" : "Confirmar saldo a favor"}
+          </button>
+          <button onClick={() => setSalida(null)}
+            className="rounded-sm border border-border bg-card px-4 py-2 text-sm
+                       font-medium text-graphite hover:bg-cloud">
+            Volver
+          </button>
+        </div>
+        {saldoMut.isError && (
+          <p className="text-sm text-terracotta">No se pudo cerrar el caso.</p>
+        )}
+      </div>
+    );
+  }
+
+  if (!tienda) {
+    return (
+      <p className="text-sm text-ochre">
+        Este caso no es de tienda, así que no hay bodega contra la cual verificar
+        existencias. Se factura con la referencia del caso.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-2.5">
+      <input className={INPUT_BUSCAR} value={q} onChange={(e) => setQ(e.target.value)}
+        placeholder="Buscar referencia, nombre o talla…" />
+      {ops.isLoading && <p className="text-sm text-graphite">Leyendo el inventario…</p>}
+      {ops.isError && (
+        <p className="text-sm text-terracotta">
+          No se pudo leer el inventario de Siigo. Sin eso no se puede confirmar
+          que la prenda esté disponible.
+        </p>
+      )}
+      {ops.data && ops.data.opciones.length === 0 && (
+        <p className="text-sm text-graphite">
+          Sin existencias en {ops.data.bodega} para esa búsqueda.
+        </p>
+      )}
+      <div className="max-h-64 space-y-1.5 overflow-y-auto">
+        {(ops.data?.opciones ?? []).map((o) => (
+          <button type="button" key={o.code} onClick={() => fijar.mutate(o)}
+            disabled={fijar.isPending}
+            className={`flex w-full items-center justify-between gap-3 rounded-sm border
+                        p-2.5 text-left transition-colors disabled:opacity-50 ${
+              elegido?.code === o.code ? "border-navy-600 bg-cloud/60"
+                                       : "border-border hover:bg-cloud/40"}`}>
+            <span className="min-w-0">
+              <span className="block text-sm text-ink-900">
+                <span className="font-display tabular-nums">{o.code}</span>
+                <span className="text-graphite"> · talla {o.talla}</span>
+              </span>
+              <span className="block truncate text-xs text-graphite">{o.nombre}</span>
+            </span>
+            <span className="shrink-0 text-xs text-sage tabular-nums">
+              {o.stock} en {o.bodega}
+            </span>
+          </button>
+        ))}
+      </div>
+      {fijar.isError && (
+        <p className="text-sm text-terracotta">
+          No se pudo elegir esa prenda. Puede que ya no tenga existencias.
+        </p>
+      )}
+      <button onClick={() => setSalida(null)}
+        className="text-xs text-graphite underline underline-offset-2">
+        Volver
+      </button>
+      {calculando && <p className="text-sm text-graphite">Calculando la factura…</p>}
+    </div>
+  );
+}
+
+const INPUT_BUSCAR =
+  "w-full rounded-sm border border-border bg-card px-3 py-2 text-sm text-ink-900 " +
+  "placeholder:text-graphite/60 focus:outline-none focus:ring-2 focus:ring-navy-600/30";
 
 /* ── Piezas compartidas ─────────────────────────────────────────────── */
 function Totales({ subtotal, iva, total }:

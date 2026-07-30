@@ -223,3 +223,26 @@ export interface ComprasCliente {
 }
 export const comprasPorCedula = (cedula: string) =>
   api.get<ComprasCliente>(`/api/postventa/clientes/compras?cedula=${encodeURIComponent(cedula)}`);
+
+/* ── Qué se lleva la clienta ─────────────────────────────────────────── */
+/** Una referencia que ESE punto puede entregar hoy. `stock` es el de esa
+ *  bodega, no el total de la marca. */
+export interface OpcionReemplazo {
+  code: string; referencia: string; talla: string;
+  nombre: string; stock: number; bodega: string;
+}
+export interface OpcionesReemplazo {
+  bodega: string; tienda: string; opciones: OpcionReemplazo[];
+}
+export const opcionesReemplazo = (id: string, q = "") =>
+  api.get<OpcionesReemplazo>(
+    `/api/postventa/casos/${id}/reemplazo/opciones?q=${encodeURIComponent(q)}`);
+
+export const elegirReemplazo = (id: string, requested_sku: string,
+                                requested_variant = "") =>
+  api.post(`/api/postventa/casos/${id}/reemplazo`,
+           { requested_sku, requested_variant });
+
+/** La clienta no se lleva nada hoy: el crédito queda a su nombre en Siigo. */
+export const dejarSaldoAFavor = (id: string, monto: number) =>
+  api.post(`/api/postventa/casos/${id}/saldo-a-favor`, { monto });
