@@ -202,3 +202,46 @@ def motivo_fuera_de_ventana(fecha_factura, *, hoy=None) -> str:
         return "La factura no tiene fecha legible: no se puede validar el plazo."
     return (f"La compra tiene {d} días y el plazo para cambios es de "
             f"{dias_de_cambio()} días.")
+
+
+# Tipos que NO llevan factura de reemplazo: la clienta no se lleva prenda
+# nueva, solo se le devuelve el valor.
+TIPOS_SIN_FACTURA: set[str] = {"reembolso", "bono"}
+
+
+def ciclo_del_caso(tipo: str, *, tienda: str = "") -> list[str]:
+    """Los pasos que ESTE caso recorre de verdad.
+
+    Pintarle los 12 estados posibles a todos los casos hace que un cambio de
+    talla en tienda —que son cuatro pasos— parezca un trámite de diez, con
+    logística inversa que nunca va a ocurrir porque la clienta trae la prenda
+    en la mano. Un flujo se siente pesado sobre todo porque se VE pesado.
+
+    Tres cosas lo determinan:
+      · si el tipo necesita que alguien lo autorice (solo garantía y las
+        salidas de dinero);
+      · si es presencial — ahí no hay nada que enviar ni que recibir;
+      · si lleva factura de reemplazo (reembolso y bono no).
+    """
+    presencial = bool((tienda or "").strip())
+    pasos: list[str] = []
+
+    if requiere_aprobacion(tipo):
+        pasos += ["creado", "pendiente_validacion"]
+    pasos.append("aprobado")
+
+    if not presencial:
+        pasos += ["esperando_envio_cliente", "en_transito_bodega",
+                  "recibido_bodega"]
+
+    pasos.append("nota_credito_emitida")
+    lleva_factura = (tipo or "").strip() not in TIPOS_SIN_FACTURA
+    if lleva_factura:
+        pasos.append("factura_emitida")
+    # Solo hay algo que despachar si hay prenda de reemplazo. Un reembolso se
+    # cierra con la nota crédito: no sale nada de la bodega.
+    if not presencial and lleva_factura:
+        pasos.append("cambio_enviado")
+
+    pasos.append("cerrado")
+    return pasos

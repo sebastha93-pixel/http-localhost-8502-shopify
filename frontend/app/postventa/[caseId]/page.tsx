@@ -61,7 +61,7 @@ export default function CasoDetallePage() {
     <PageShell title={c.case_number}
                subtitle={`${TIPO_LABEL[c.type] ?? c.type} · ${c.reason.replace(/_/g, " ")}`}>
       {/* Riel de progreso: dónde está el caso y qué sigue */}
-      <RielCiclo actual={c.status} />
+      <RielCiclo actual={c.status} ciclo={c.ciclo} />
       <CanalDelCaso tienda={c.tienda} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -106,8 +106,12 @@ export default function CasoDetallePage() {
 }
 
 /* ── Riel del ciclo de vida ─────────────────────────────────────────── */
-function RielCiclo({ actual }: { actual: EstadoPostventa }) {
-  const idx = CICLO.indexOf(actual);
+function RielCiclo({ actual, ciclo }:
+  { actual: EstadoPostventa; ciclo?: EstadoPostventa[] }) {
+  // El ciclo REAL de este caso. Un cambio de talla en tienda son 4 pasos;
+  // pintarle los 10 posibles lo hace ver como un trámite largo.
+  const pasos = ciclo?.length ? ciclo : CICLO;
+  const idx = pasos.indexOf(actual);
   const fuera = idx === -1;   // rechazado / escalado
   return (
     <div className="mb-4 flex items-center gap-2 overflow-x-auto pb-1">
@@ -115,7 +119,7 @@ function RielCiclo({ actual }: { actual: EstadoPostventa }) {
                    label={ESTADOS_LABEL[actual] ?? actual} />
       {!fuera && (
         <div className="flex items-center gap-1.5">
-          {CICLO.map((e, i) => (
+          {pasos.map((e, i) => (
             <span key={e} title={ESTADOS_LABEL[e]}
               className={`h-1 rounded-full transition-colors ${
                 i < idx ? "w-6 bg-sage"
@@ -123,7 +127,7 @@ function RielCiclo({ actual }: { actual: EstadoPostventa }) {
                 : "w-6 bg-concrete"}`} />
           ))}
           <span className="ml-1 text-[0.68rem] text-graphite whitespace-nowrap">
-            paso {idx + 1} de {CICLO.length}
+            paso {idx + 1} de {pasos.length}
           </span>
         </div>
       )}

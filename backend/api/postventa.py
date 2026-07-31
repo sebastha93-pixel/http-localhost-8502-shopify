@@ -110,6 +110,11 @@ def detalle(case_id: str,
     caso = svc.obtener_caso(case_id)
     if caso is None:
         raise HTTPException(404, "caso_no_encontrado")
+    # El ciclo REAL de este caso, no los 12 estados posibles. Un cambio de
+    # talla en tienda son 4 pasos; pintarle 10 lo hace ver como un tramite.
+    from backend.services import postventa_logic as _L
+    caso["ciclo"] = _L.ciclo_del_caso(caso.get("type") or "",
+                                      tienda=caso.get("tienda") or "")
     return caso
 
 
