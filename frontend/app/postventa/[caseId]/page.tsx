@@ -73,7 +73,8 @@ export default function CasoDetallePage() {
             tienda={c.tienda} onCambio={refrescar} />
           <PanelFiscal caseId={caseId} status={c.status} onEmitido={refrescar} />
           <PanelFactura caseId={caseId} status={c.status} tipo={c.type}
-            tienda={c.tienda} onEmitido={refrescar} />
+            tienda={c.tienda} credito={c.credito_disponible}
+            onEmitido={refrescar} />
 
           {acciones.length > 0 && (
             <section>
@@ -539,9 +540,9 @@ function PanelFiscal({ caseId, status, onEmitido }:
 }
 
 /* ── Factura del reemplazo ──────────────────────────────────────────── */
-function PanelFactura({ caseId, status, tipo, tienda, onEmitido }:
+function PanelFactura({ caseId, status, tipo, tienda, credito, onEmitido }:
   { caseId: string; status: string; tipo: string; tienda?: string | null;
-    onEmitido: () => void }) {
+    credito?: number; onEmitido: () => void }) {
   const [preview, setPreview] = useState<PreviewFactura | null>(null);
   // El excedente se cobra en la caja de la tienda. Se pide primero SIN pagos
   // para saber cuánto es, y luego se re-arma con el reparto que indique la
@@ -568,7 +569,7 @@ function PanelFactura({ caseId, status, tipo, tienda, onEmitido }:
         <p className="section-label">Factura del reemplazo · Siigo</p>
 
         {!preview && (
-          <ElegirQueSeLleva caseId={caseId} tienda={tienda}
+          <ElegirQueSeLleva caseId={caseId} tienda={tienda} credito={credito}
             onListo={() => prevMut.mutate([])}
             onSaldo={onEmitido}
             calculando={prevMut.isPending} />
@@ -643,9 +644,9 @@ function PanelFactura({ caseId, status, tipo, tienda, onEmitido }:
 /* Dos salidas y nada más: se lleva otra prenda, o deja el saldo a favor.
    La lista solo muestra lo que ESA tienda tiene hoy — facturar algo que no
    está deja un documento fiscal emitido y a la clienta esperando. */
-function ElegirQueSeLleva({ caseId, tienda, onListo, onSaldo, calculando }:
-  { caseId: string; tienda?: string | null; onListo: () => void;
-    onSaldo: () => void; calculando: boolean }) {
+function ElegirQueSeLleva({ caseId, tienda, credito, onListo, onSaldo, calculando }:
+  { caseId: string; tienda?: string | null; credito?: number;
+    onListo: () => void; onSaldo: () => void; calculando: boolean }) {
   const [salida, setSalida] = useState<"reemplazo" | "saldo" | null>(null);
   const [q, setQ] = useState("");
   const [elegido, setElegido] = useState<OpcionReemplazo | null>(null);
@@ -665,7 +666,7 @@ function ElegirQueSeLleva({ caseId, tienda, onListo, onSaldo, calculando }:
     onSuccess: (_d, o) => { setElegido(o); onListo(); },
   });
   const saldoMut = useMutation({
-    mutationFn: () => dejarSaldoAFavor(caseId, 0),
+    mutationFn: () => dejarSaldoAFavor(caseId),
     onSuccess: onSaldo,
   });
 
@@ -692,6 +693,17 @@ function ElegirQueSeLleva({ caseId, tienda, onListo, onSaldo, calculando }:
   if (salida === "saldo") {
     return (
       <div className="space-y-2">
+        {/* El monto se muestra ANTES de confirmar: es lo que la clienta va a
+            reclamar después, y tiene que poder verlo quien la atiende. */}
+        {typeof credito === "number" && credito > 0 && (
+          <div className="flex items-baseline justify-between gap-3 rounded-sm
+                          border border-navy-600/25 bg-cloud/60 p-3">
+            <span className="text-sm text-ink-900">Queda a favor de la clienta</span>
+            <span className="font-display tabular-nums text-lg text-ink-900">
+              {formatMoney(credito)}
+            </span>
+          </div>
+        )}
         <p className="text-sm text-ink-900">
           No se emite factura. El crédito queda a nombre de la clienta en Siigo
           y se consume cuando vuelva.

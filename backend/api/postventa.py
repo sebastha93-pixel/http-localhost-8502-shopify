@@ -119,6 +119,9 @@ def detalle(case_id: str,
     from backend.services import postventa_logic as _L
     caso["ciclo"] = _L.ciclo_del_caso(caso.get("type") or "",
                                       tienda=caso.get("tienda") or "")
+    # Lo que quedo a favor de la clienta tras la nota credito. Se manda con el
+    # caso para que la pantalla lo muestre ANTES de confirmar un saldo.
+    caso["credito_disponible"] = fiscal_svc.credito_disponible(case_id)
     return caso
 
 
@@ -310,13 +313,16 @@ def reemplazo_saldo_a_favor(
     caso = svc.obtener_caso(case_id)
     if caso is None:
         raise HTTPException(404, "caso_no_encontrado")
+    # El monto lo calcula el backend leyendo la NC emitida, no lo manda el
+    # navegador: ese numero es el respaldo de la clienta cuando vuelva.
+    monto = fiscal_svc.credito_disponible(case_id)
     svc.registrar_evento(case_id, "saldo_a_favor",
-                         R.texto_saldo_a_favor(body.monto), created_by=user.id)
+                         R.texto_saldo_a_favor(monto), created_by=user.id)
     try:
         svc.cambiar_estado(case_id, "cerrado", actor=user.email)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return {"ok": True, "monto": body.monto}
+    return {"ok": True, "monto": monto}
 
 
 @router.post("/inventario/sincronizar")
