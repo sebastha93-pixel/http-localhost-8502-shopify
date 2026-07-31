@@ -360,3 +360,19 @@ def items_factura_del_caso(case_id: str) -> dict:
             "variant": it.get("description"),
         } for it in (factura.get("items") or [])],
     }
+
+
+def credito_disponible(case_id: str) -> float:
+    """Cuánto quedó a favor de la clienta: el total de la nota crédito emitida.
+
+    Lo calcula el backend y no se recibe del navegador. Ese monto es el
+    respaldo de la clienta cuando vuelva a reclamarlo, así que no puede
+    depender de lo que mande una pantalla.
+    """
+    nc = _fiscal_existente(case_id, "nota_credito")
+    if not nc:
+        return 0.0
+    try:
+        return round(float(nc.get("amount") or 0), 2)
+    except (TypeError, ValueError):
+        return 0.0

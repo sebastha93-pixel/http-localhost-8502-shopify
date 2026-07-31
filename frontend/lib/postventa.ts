@@ -23,6 +23,8 @@ export interface CasoPostventa {
   tienda?: string | null;
   /** Los pasos que ESTE caso recorre. Un cambio en tienda son 4, no 10. */
   ciclo?: EstadoPostventa[];
+  /** Lo que quedó a favor de la clienta tras la nota crédito. */
+  credito_disponible?: number;
   created_at: string;
 }
 
@@ -260,8 +262,11 @@ export const elegirReemplazo = (id: string, requested_sku: string,
            { requested_sku, requested_variant });
 
 /** La clienta no se lleva nada hoy: el crédito queda a su nombre en Siigo. */
-export const dejarSaldoAFavor = (id: string, monto: number) =>
-  api.post(`/api/postventa/casos/${id}/saldo-a-favor`, { monto });
+/** El monto lo calcula el backend leyendo la nota crédito emitida: es el
+ *  respaldo de la clienta y no puede depender de lo que mande la pantalla. */
+export const dejarSaldoAFavor = (id: string) =>
+  api.post<{ ok: boolean; monto: number }>(
+    `/api/postventa/casos/${id}/saldo-a-favor`, {});
 
 /* ── Cierre de caja ──────────────────────────────────────────────────── */
 /** Lo que la cajera SUMA a su arqueo: el excedente se cobró en su caja pero
