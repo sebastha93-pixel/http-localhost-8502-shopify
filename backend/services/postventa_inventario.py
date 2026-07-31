@@ -32,6 +32,36 @@ TABLA = "postventa_inventario"
 VIEJO_SEGUNDOS = 3600
 
 
+def precio_base(producto: dict) -> Optional[float]:
+    """Precio de venta del producto SIN IVA, como lo quiere el payload.
+
+    Siigo lo trae en `prices[].price_list[].value` y declara en `tax_included`
+    si ese valor ya lleva IVA. Normalizarlo al revés duplica o parte el precio
+    y nada avisa: la factura sale, con el número equivocado.
+
+    None si no hay precio — y sin precio NO se factura. Un cambio de 169.900
+    salió por 67.960 justamente por tomar el precio de otra fuente.
+    """
+    listas = (producto or {}).get("prices") or []
+    valor = None
+    for l in listas:
+        for item in (l.get("price_list") or []):
+            v = item.get("value")
+            if v:
+                valor = float(v)
+                break
+        if valor:
+            break
+    if not valor or valor <= 0:
+        return None
+    if producto.get("tax_included"):
+        return round(valor / (1 + IVA_PORCENTAJE / 100), 2)
+    return round(valor, 2)
+
+
+IVA_PORCENTAJE = 19
+
+
 def filas_desde_siigo(inventario: dict, *, brand_id: str) -> list[dict]:
     """Aplana el inventario de Siigo a una fila por (referencia, bodega).
 
@@ -57,6 +87,9 @@ def filas_desde_siigo(inventario: dict, *, brand_id: str) -> list[dict]:
                 "nombre": f.get("nombre"),
                 "bodega": bodega,
                 "cantidad": c,
+                # Precio de la TIENDA. El de Shopify puede estar en promoción y
+                # no es el que paga quien compra en el local.
+                "precio_base": f.get("precio_base"),
             })
     return salida
 
@@ -159,6 +192,7 @@ def buscar(bodega: str, *, q: str = "", limite: int = 60) -> dict:
         "opciones": [{"code": f["code"], "referencia": f.get("referencia"),
                       "talla": f.get("talla"), "nombre": f.get("nombre"),
                       "stock": int(float(f.get("cantidad") or 0)),
+                      "precio_base": f.get("precio_base"),
                       "bodega": bodega} for f in filas],
         "frescura": frescura_texto(edad),
         "viejo": esta_viejo(edad),
@@ -231,3 +265,17 @@ def arrancar_refresco():
                              name="postventa-inventario")
     _hilo.start()
     return _hilo
+
+
+def precio_de(bodega: str, code: str) -> Optional[float]:
+    """Precio SIN IVA con que esa tienda vende esa referencia."""
+    sb = _sb()
+    if sb is None:
+        return None
+    filas = (sb.table(TABLA).select("precio_base")
+               .eq("brand_id", _brand()).eq("bodega", bodega)
+               .eq("code", (code or "").strip()).limit(1).execute().data or [])
+    if not filas:
+        return None
+    v = filas[0].get("precio_base")
+    return float(v) if v else None

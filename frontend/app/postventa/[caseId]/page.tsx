@@ -749,8 +749,11 @@ function ElegirQueSeLleva({ caseId, tienda, onListo, onSaldo, calculando }:
       )}
       <div className="max-h-64 space-y-1.5 overflow-y-auto">
         {(ops.data?.opciones ?? []).map((o) => (
-          <button type="button" key={o.code} onClick={() => fijar.mutate(o)}
-            disabled={fijar.isPending}
+          <button type="button" key={o.code}
+            onClick={() => o.precio_base && fijar.mutate(o)}
+            title={o.precio_base ? undefined
+                   : "Esta referencia no tiene precio de venta en Siigo"}
+            disabled={fijar.isPending || !o.precio_base}
             className={`flex w-full items-center justify-between gap-3 rounded-sm border
                         p-2.5 text-left transition-colors disabled:opacity-50 ${
               elegido?.code === o.code ? "border-navy-600 bg-cloud/60"
@@ -762,8 +765,15 @@ function ElegirQueSeLleva({ caseId, tienda, onListo, onSaldo, calculando }:
               </span>
               <span className="block truncate text-xs text-graphite">{o.nombre}</span>
             </span>
-            <span className="shrink-0 text-xs text-sage tabular-nums">
-              {o.stock} en {o.bodega}
+            <span className="shrink-0 text-right">
+              <span className="block text-sm tabular-nums text-ink-900">
+                {o.precio_base
+                  ? formatMoney(Math.round(o.precio_base * 1.19))
+                  : <span className="text-ochre text-xs">sin precio</span>}
+              </span>
+              <span className="block text-xs text-sage tabular-nums">
+                {o.stock} en {o.bodega}
+              </span>
             </span>
           </button>
         ))}

@@ -34,3 +34,9 @@ create index if not exists idx_postventa_inv_bodega
 -- Verificación de una referencia puntual antes de facturar.
 create index if not exists idx_postventa_inv_code
   on postventa_inventario(brand_id, code);
+
+-- Precio de venta de la TIENDA, sin IVA. Va aquí y no se pide a Shopify:
+-- una referencia en promoción online se facturaría al precio de internet,
+-- no al del local. Pasó: un cambio de 169.900 salió por 67.960.
+alter table postventa_inventario
+  add column if not exists precio_base numeric(12,2);
