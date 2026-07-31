@@ -191,6 +191,7 @@ def emitir_nota_credito(case_id: str, *, actor: str = "sistema") -> dict:
 
 # ── Factura del reemplazo ────────────────────────────────────────────
 from backend.services import fiscal_shopify  # noqa: E402
+from backend.services import postventa_inventario as INV  # noqa: E402
 
 TIPOS_SIN_FACTURA = {"reembolso", "bono"}
 
@@ -213,6 +214,23 @@ def _item_reemplazo(caso: dict, item: dict, factura: dict) -> dict:
                 "price_base": o.get("price"),
                 "seller": o.get("seller"),
                 "warehouse": o.get("warehouse")}
+    # EN TIENDA el precio lo pone la TIENDA. Tomarlo de Shopify facturaba al
+    # precio de internet: un cambio de 169.900 salio por 67.960 porque esa
+    # referencia estaba en promocion online.
+    if caso.get("tienda"):
+        from backend.services import tiendas
+        t = tiendas.obtener(caso["tienda"]) or {}
+        bodega = t.get("bodega_nombre") or t.get("tienda")
+        base = INV.precio_de(bodega, requested)
+        if base is None:
+            raise ValueError(
+                f"sin_precio_en_la_tienda: {requested} no tiene precio de venta "
+                f"en el inventario de {bodega}. Actualiza el inventario o "
+                f"revisa el producto en Siigo.")
+        return {"code": requested,
+                "description": item.get("requested_variant") or requested,
+                "price_base": base}
+
     base = fiscal_shopify.precio_base_variante(requested)
     if base is None:
         raise ValueError("precio_shopify_no_encontrado")

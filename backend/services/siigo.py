@@ -391,8 +391,13 @@ def inventario_por_bodega(*, force: bool = False, max_paginas: int = 80) -> dict
                 total += q
             if total <= 0:
                 continue
+            from backend.services import postventa_inventario as _inv
             filas.append({"code": code, "referencia": ref, "talla": talla,
-                          "nombre": pr.get("name") or "", "stock": stock, "total": total})
+                          "nombre": pr.get("name") or "", "stock": stock,
+                          "total": total,
+                          # Precio de la tienda, SIN IVA. El de Shopify puede
+                          # estar en promocion y no es el que paga el local.
+                          "precio_base": _inv.precio_base(pr)})
         if len(results) < 100:
             break
         page += 1

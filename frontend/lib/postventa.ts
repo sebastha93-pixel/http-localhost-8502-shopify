@@ -239,6 +239,8 @@ export const comprasPorCedula = (cedula: string) =>
 export interface OpcionReemplazo {
   code: string; referencia: string; talla: string;
   nombre: string; stock: number; bodega: string;
+  /** Precio de la TIENDA, sin IVA. El de Shopify puede estar en promoción. */
+  precio_base?: number | null;
 }
 export interface OpcionesReemplazo {
   bodega: string; tienda: string; opciones: OpcionReemplazo[];
