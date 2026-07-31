@@ -269,11 +269,17 @@ export const dejarSaldoAFavor = (id: string, monto: number) =>
 export interface MedioCobrado { id: number; nombre: string; total: number; }
 export interface CasoCobrado {
   caso: string; factura: string; cobrado: number; medios: MedioCobrado[];
+  /** true confirmado en Siigo · false no coincide · null no se pudo leer */
+  confirmado?: boolean | null;
+  en_siigo?: number | null;
 }
 export interface CierrePunto {
   tienda: string; nombre: string; fecha: string;
   total_cobrado: number; por_medio: MedioCobrado[]; casos: CasoCobrado[];
   notas_credito: { cantidad: number; total: number };
+  confirmados?: number;
+  revisar?: { caso: string; factura: string; cobrado: number;
+              en_siigo: number | null; motivo: string }[];
 }
 export const cierreCaja = (fecha = "") =>
   api.get<{ fecha: string; puntos: CierrePunto[] }>(

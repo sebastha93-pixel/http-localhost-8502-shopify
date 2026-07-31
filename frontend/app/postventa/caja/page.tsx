@@ -63,14 +63,41 @@ function Punto({ p }: { p: CierrePunto }) {
         {p.casos.length > 0 && (
           <div className="space-y-1">
             <p className="text-[0.68rem] text-graphite">
-              Casos ({p.casos.length}) — para auditar si el arqueo no cuadra
+              Casos ({p.casos.length})
+              {typeof p.confirmados === "number" &&
+                ` · ${p.confirmados} confirmado(s) en Siigo`}
             </p>
             {p.casos.map((c) => (
-              <div key={c.caso} className="flex justify-between gap-3 text-xs">
-                <span className="font-display tabular-nums text-ink-900">{c.caso}</span>
-                <span className="text-graphite truncate">{c.factura}</span>
+              <div key={c.caso} className="flex items-center justify-between gap-3 text-xs">
+                <span className="flex items-center gap-1.5 min-w-0">
+                  {/* Un punto, no una alarma. El caso normal no debe gritar. */}
+                  <span title={c.confirmado === true ? "Confirmado en Siigo"
+                               : c.confirmado === false ? "No coincide con Siigo"
+                               : "Sin verificar"}
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                      c.confirmado === true ? "bg-sage"
+                      : c.confirmado === false ? "bg-terracotta" : "bg-concrete"}`} />
+                  <span className="font-display tabular-nums text-ink-900">{c.caso}</span>
+                  <span className="text-graphite truncate">{c.factura}</span>
+                </span>
                 <span className="tabular-nums text-ink-900">{formatMoney(c.cobrado)}</span>
               </div>
+            ))}
+          </div>
+        )}
+
+        {(p.revisar?.length ?? 0) > 0 && (
+          <div className="rounded-sm border border-terracotta/40 bg-terracotta/5 p-3 space-y-1.5">
+            <p className="text-sm text-ink-900">
+              {p.revisar!.length} cobro(s) no coinciden con Siigo. No los sumes
+              hasta revisarlos.
+            </p>
+            {p.revisar!.map((r) => (
+              <p key={r.caso} className="text-[0.68rem] text-graphite">
+                <span className="font-display tabular-nums text-ink-900">{r.caso}</span>
+                {" · aquí "}{formatMoney(r.cobrado)}
+                {r.en_siigo !== null && <>{" · en Siigo "}{formatMoney(r.en_siigo)}</>}
+              </p>
             ))}
           </div>
         )}
