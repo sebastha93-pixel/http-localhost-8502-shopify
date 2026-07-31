@@ -377,8 +377,14 @@ function Row({
       )}
       {has("dias") && (
         <Td align="right">
-          <span className={overSla ? "text-terracotta font-semibold tabular-nums" : "tabular-nums"}>
-            {dias}d{sla > 0 && ` / ${sla}`}
+          {/* El "≈" avisa que NO hay fecha de despacho y los días se estimaron
+              desde la creación del pedido. Sin esta marca una estimación se lee
+              como un dato exacto — y antes ni eso: se mostraba 0. */}
+          <span className={overSla ? "text-terracotta font-semibold tabular-nums" : "tabular-nums"}
+            title={p.dias_estimados
+              ? "Estimado desde la creación del pedido: Melonn no nos dio la fecha de despacho"
+              : undefined}>
+            {p.dias_estimados ? "≈" : ""}{dias}d{sla > 0 && ` / ${sla}`}
           </span>
         </Td>
       )}

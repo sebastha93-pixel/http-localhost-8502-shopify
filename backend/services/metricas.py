@@ -121,7 +121,41 @@ def es_novedad_visible(p: dict) -> bool:
 # Estados en los que el pedido AÚN NO SALIÓ de bodega. No puede llevar días en
 # tránsito: contarlos ponía en RIESGO pedidos que nadie ha despachado (medido el
 # 2026-07-30: el 58639 mostraba 56 días "en tránsito" sin haber salido nunca).
-_SIN_DESPACHAR = ("pendiente_despacho", "pendiente", "por_despachar", "cancelado")
+_SIN_DESPACHAR = ("pendiente_despacho", "pendiente", "por_despachar", "cancelado",
+                  # En la bodega de Melonn (empacando / listo). No ha salido, así
+                  # que no tiene días de tránsito. Ver CODIGOS_EN_PREPARACION.
+                  "en_preparacion")
+
+
+def _dias_estimados(p: dict) -> int:
+    """Días cuando NO tenemos fecha de despacho, estimados desde la creación.
+
+    POR QUÉ NO SE USA `dias_en_transito` DE MELONN: vale **0 siempre**. Medido el
+    2026-07-31 sobre los 572 pedidos despachados sin fecha propia: los 572 traían
+    0. O sea que la app mostraba "0 días" para el 53% de la flota — 56 en
+    tránsito, 35 novedades y 481 entregados — y como el riesgo se calcula con ese
+    número, NINGUNO de esos podía salir como VENCIDO. El sistema de alertas
+    estaba ciego para más de la mitad de los pedidos.
+
+    La creación del pedido es una cota INFERIOR del despacho (se despacha
+    después de crearse), así que contar desde ahí SOBRE-estima los días de
+    tránsito. Para vigilar riesgo eso es lo correcto: preferimos revisar un
+    pedido de más que dejar pasar uno vencido en silencio.
+
+    Devuelve 0 solo si de verdad no hay de dónde estimar. El llamador marca
+    estos casos como estimados (ver clasificar → dias_estimados) para que la
+    pantalla pueda mostrarlos con "≈" y nadie los confunda con un dato exacto.
+    """
+    fc = p.get("fecha_creacion")
+    if not fc:
+        return 0
+    try:
+        creado = date.fromisoformat(str(fc)[:10])
+    except Exception:
+        return 0
+    if creado > date.today():
+        return 0
+    return max(0, (date.today() - creado).days)
 
 
 def _dias_reales(p: dict) -> int:
@@ -132,7 +166,7 @@ def _dias_reales(p: dict) -> int:
     - Si está entregado y existe fecha_entrega: fecha_entrega - fecha_despacho
       (mide el tiempo REAL que tomó la entrega, no días después de entregado)
     - Si está activo: hoy - fecha_despacho
-    - Fallback: campo dias_en_transito del pedido
+    - Sin fecha de despacho: se ESTIMA desde la creación del pedido. Ver abajo.
     """
     sub = p.get("sub_estado_logistico", "")
     if sub in _SIN_DESPACHAR:
@@ -144,12 +178,12 @@ def _dias_reales(p: dict) -> int:
     # imposibles de vez en cuando; lo nuestro no.
     fd = p.get("fecha_despacho_observada") or p.get("fecha_despacho")
     if not fd:
-        return int(p.get("dias_en_transito") or 0)
+        return _dias_estimados(p)
 
     try:
         fd_date = date.fromisoformat(str(fd)[:10])
     except Exception:
-        return int(p.get("dias_en_transito") or 0)
+        return _dias_estimados(p)
 
     # Fecha de despacho imposible: anterior a la creación del pedido, o futura.
     # Melonn manda basura en `ship_timestamp` de vez en cuando y el valor se
@@ -225,12 +259,19 @@ def clasificar(p: dict) -> dict:
         score  = r.score
         motivo = r.motivos[0] if r.motivos else "—"
 
+    # ¿Los días salen de una fecha de despacho real, o son una estimación desde
+    # la creación? La pantalla debe poder distinguirlo (mostrar "≈ 5 d" en vez
+    # de "5 d") para que nadie tome una estimación como un hecho.
+    tiene_fecha = bool(p.get("fecha_despacho_observada") or p.get("fecha_despacho"))
+    estimados = (not tiene_fecha) and sub not in _SIN_DESPACHAR and dias_real > 0
+
     enriched = {
         **p,
         "nivel":               nivel,
         "score":               score,
         "tipo_recaudo":        "Contraentrega" if es_cod else "Prepago",
         "dias_real":           dias_real,
+        "dias_estimados":      estimados,
         "sla_critico":         r.zona_info.sla_critico,
         "zona":                r.zona_info.zona,
         "motivo_riesgo":       motivo,

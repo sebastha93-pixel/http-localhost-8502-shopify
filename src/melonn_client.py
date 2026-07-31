@@ -465,22 +465,35 @@ CODIGOS_EXCLUIR = {9, 15, 16, 17, 18, 19}
 CODIGOS_PROCESO_INTERNO = {3, 4, 10, 12, 22, 25, 27}
 
 # ── Whitelist por código ───────────────────────────────────────────────────────
-#   Pendiente seller → 26          "Alistamiento en espera · Seller"
-#   En tránsito      → 5,7,24,28  "En bodega lista" + "Con transportadora"
+#   Pendiente seller → 26, 29      "Alistamiento en espera · Seller"
+#   En preparación   → 1,2,5,24,28 "En bodega de Melonn, todavía NO salió"
+#   En tránsito      → 7           "Con la transportadora, en la calle"
 #   Entregado        → 6, 8        "Picked-up by buyer" / "Delivered to buyer"
-#   Prepago novedad  → 1, 2        (se muestra en tab Pedidos Pagos)
-#   Novedades ext.   → por NOMBRE  (código no confirmado en API docs)
+#   Novedades ext.   → 20 + NOMBRE (código no confirmado en API docs)
+#
+# CORREGIDO 2026-07-31. `en_transito` incluía 5 (Packed), 24 (Prepared for
+# dispatch) y 28 (Ready For Packing) — estados de BODEGA. Se metieron ahí a
+# propósito "para no perder visibilidad", pero la etiqueta miente y arrastra
+# consecuencias: esos pedidos empezaban a acumular días de SLA sin haber salido,
+# y en la tabla se leían como si fueran en la calle. Medido: 60 de 176 "en
+# tránsito" estaban en la bodega, y 36 de 38 "novedades" eran código 2
+# (ready for fulfillment), que no es ninguna novedad.
+#
+# La partición correcta YA EXISTÍA en el frontend: /contraentrega y /envios
+# agrupan por código crudo con proceso=[1,2,5,24,28] y transito=[7]. Esto pone
+# el campo grueso de acuerdo con ellos, en vez de tener dos verdades.
 CODIGOS_PENDIENTE_DESPACHO = {26, 29}
-CODIGOS_EN_TRANSITO        = {5, 7, 24, 28}
+CODIGOS_EN_PREPARACION     = {1, 2, 5, 24, 28}
+CODIGOS_EN_TRANSITO        = {7}
 CODIGOS_ENTREGADO          = {6, 8}
 CODIGOS_NOVEDAD            = {20}
 CODIGOS_RESUELTO           = set()
 CODIGOS_ACTIVOS            = (
     CODIGOS_PENDIENTE_DESPACHO
+    | CODIGOS_EN_PREPARACION
     | CODIGOS_EN_TRANSITO
     | CODIGOS_ENTREGADO
     | CODIGOS_NOVEDAD
-    | {1, 2}
 )
 # Códigos OPERATIVOS — excluye entregados (6,8) del criterio de paginación.
 # Las páginas con solo entregados no cuentan como "activas" y detienen el loop.
@@ -530,19 +543,23 @@ ESTADOS_PENDIENTE_DESPACHO = {
 #   5  = Empacada · lista para salir
 #   24 = Preparada para despacho
 #   28 = Lista para empaque · en bodega
+# SOLO el 7. Los nombres de bodega se movieron a ESTADOS_EN_PREPARACION: seguían
+# acá y hacían que un pedido empacado se clasificara "en tránsito" POR NOMBRE
+# aunque su código ya no estuviera en CODIGOS_EN_TRANSITO. Lo cazó la prueba de
+# clasificación, no la lectura del código.
 ESTADOS_EN_TRANSITO = {
     "Shipped - in transit", "Despachada - en tránsito", "En tránsito",  # 7
+}
+
+# En la bodega de Melonn: NO ha salido. Antes vivían repartidos entre
+# ESTADOS_EN_TRANSITO (5, 24, 28) y ESTADOS_NOVEDAD_PREPAGO (1, 2).
+ESTADOS_EN_PREPARACION = {
+    "Received - valid", "Recibida - valida",                             # 1
+    "All items reserved - ready for fulfillment",                        # 2
+    "Recibida - valida - lista para alistamiento",                       # 2
     "Packed", "Empacada",                                                # 5
     "Prepared for dispatch", "Preparada para despacho",                  # 24
     "Ready For Packing", "Lista para empaque",                           # 28
-}
-
-# Novedades prepago — códigos 1 y 2 (se muestran en tab Pedidos Pagos)
-ESTADOS_NOVEDAD_PREPAGO = {
-    "Received - valid",                              # 1 inglés
-    "Recibida - valida",                             # 1 español
-    "All items reserved - ready for fulfillment",    # 2 inglés
-    "Recibida - valida - lista para alistamiento",   # 2 español
 }
 
 # Proceso interno puro — nunca se muestra (alistado, picking, packing interno)
@@ -555,11 +572,13 @@ ESTADOS_PROCESO_INTERNO = {
 }
 
 # Aliases para compatibilidad con caché antiguo
-ESTADOS_NOVEDAD   = ESTADOS_NOVEDAD_EXTERNA | ESTADOS_NOVEDAD_PREPAGO
+# Los códigos 1 y 2 YA NO son novedad (eran 36 de 38 "novedades" del tablero:
+# pedidos esperando alistamiento, no incidencias). Ahora viven en preparación.
+ESTADOS_NOVEDAD   = ESTADOS_NOVEDAD_EXTERNA
 ESTADOS_RESUELTO  = set()
 ESTADOS_RESUELTOS = ESTADOS_EXCLUIR
 ESTADOS_ACTIVOS   = (
-    ESTADOS_PENDIENTE_DESPACHO | ESTADOS_EN_TRANSITO
+    ESTADOS_PENDIENTE_DESPACHO | ESTADOS_EN_PREPARACION | ESTADOS_EN_TRANSITO
     | ESTADOS_NOVEDAD | ESTADOS_ENTREGADO
 )
 
@@ -1353,12 +1372,16 @@ def _fecha_corte() -> date:
 def _sub_estado_logistico(estado: str, codigo: int = 0, es_cod: bool = False) -> str:
     """
     Clasifica el estado Melonn en las categorías operativas del dashboard.
-    Códigos confirmados en producción (junio 2026):
-      pendiente_despacho → 26
-      en_transito        → 5, 7, 24, 28
-      novedad COD        → 20 únicamente (Delivery not posible)
-      novedad prepago    → 1, 2 + 20, 29
+    Códigos confirmados en producción (corregido 2026-07-31):
+      pendiente_despacho → 26, 29   esperando que el seller libere
+      en_preparacion     → 1,2,5,24,28  en la bodega de Melonn, NO salió
+      en_transito        → 7        con la transportadora, en la calle
+      novedad            → 20 + novedades externas por nombre
       entregado          → 6, 8
+
+    OJO: "en_transito" es SOLO el 7. Antes incluía 5/24/28 (estados de bodega) y
+    el 1/2 caían en "novedad" para prepago, lo que llenaba el tablero de
+    novedades que no eran novedades. Ver el bloque de CODIGOS_* arriba.
     """
     if codigo in CODIGOS_NOVEDAD or estado in ESTADOS_NOVEDAD_EXTERNA:
                                                   return "novedad"
@@ -1366,11 +1389,9 @@ def _sub_estado_logistico(estado: str, codigo: int = 0, es_cod: bool = False) ->
                                                   return "entregado"
     if codigo in CODIGOS_EN_TRANSITO or estado in ESTADOS_EN_TRANSITO:
                                                   return "en_transito"
+    if codigo in CODIGOS_EN_PREPARACION:          return "en_preparacion"
     if codigo in CODIGOS_PENDIENTE_DESPACHO or estado in ESTADOS_PENDIENTE_DESPACHO:
                                                   return "pendiente_despacho"
-    # Códigos 1 y 2 solo se muestran como novedad en prepago — no en COD
-    if not es_cod and estado in ESTADOS_NOVEDAD_PREPAGO:
-                                                  return "novedad"
     return "otro"
 
 
@@ -1549,7 +1570,10 @@ def _fetch_api() -> list:
         sub = p["sub_estado_logistico"]
 
         # Incluir todas las órdenes activas D2C
-        if sub in ("pendiente_despacho", "en_transito", "novedad", "entregado"):
+        # OJO: si falta un estado acá, esos pedidos DESAPARECEN del tablero.
+        # Al separar "en_preparacion" de "en_transito" habrían quedado fuera 96.
+        if sub in ("pendiente_despacho", "en_preparacion", "en_transito",
+                   "novedad", "entregado"):
             resultado.append(p)
 
     # Traer-y-guardar: heredar del caché anterior los campos ya enriquecidos
@@ -2067,7 +2091,10 @@ def _enriquecer_y_filtrar(pedidos: list) -> list:
             continue
 
         # Incluir todas las órdenes activas D2C
-        if sub in ("pendiente_despacho", "en_transito", "novedad", "entregado"):
+        # OJO: si falta un estado acá, esos pedidos DESAPARECEN del tablero.
+        # Al separar "en_preparacion" de "en_transito" habrían quedado fuera 96.
+        if sub in ("pendiente_despacho", "en_preparacion", "en_transito",
+                   "novedad", "entregado"):
             resultado.append(p)
 
     # ── Deduplicar por orden_tienda ──────────────────────────────────────

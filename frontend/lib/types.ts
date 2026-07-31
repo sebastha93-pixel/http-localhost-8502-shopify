@@ -53,6 +53,9 @@ export interface Pedido {
   nivel?: NivelRiesgo;
   score?: number;
   dias_real?: number;
+  /** true = los días NO salen de una fecha de despacho, se estimaron
+   *  desde la creación del pedido. La tabla los muestra con "≈". */
+  dias_estimados?: boolean;
   sla_critico?: number;
   zona?: string;
   motivo_riesgo?: string;

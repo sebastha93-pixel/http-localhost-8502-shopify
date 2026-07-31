@@ -31,6 +31,8 @@ const CARRIERS: CarrierDef[] = [
 // que lo único que se puede mostrar es en qué estado va.
 const ESTADO_ENVIO: Record<string, string> = {
   pendiente_despacho: "Pendiente de despacho",
+  // En la bodega de Melonn (empacando o listo), todavía NO salió.
+  en_preparacion: "En preparación en bodega",
   en_transito: "En tránsito",
   entregado: "Entregado",
   novedad: "Con novedad",
