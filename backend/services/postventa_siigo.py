@@ -277,6 +277,19 @@ def tipos_documento_completos() -> dict:
                    "activo": t.get("active"),
                    "electronico": t.get("electronic_type"),
                    "cost_center_obligatorio": t.get("cost_center_mandatory"),
+                   # Campos que decidian el exito de una emision y estabamos
+                   # botando al mapear. Cada uno costo (o iba a costar) un
+                   # rechazo de Siigo que no dice la causa:
+                   #   discount_type   -> "Percentage" o "Value": de esto
+                   #                      depende COMO se manda un descuento
+                   #   automatic_number-> si es false hay que mandar `number`
+                   #   advance_payment -> si el comprobante admite anticipos,
+                   #                      que es justo como se paga el cambio
+                   "discount_type": t.get("discount_type"),
+                   "numeracion_automatica": t.get("automatic_number"),
+                   "admite_anticipos": t.get("advance_payment"),
+                   "decimales": t.get("decimals"),
+                   "consecutivo": t.get("consecutive"),
                    "cost_center_default": t.get("cost_center_default")}
                   for t in tipos],
     }
