@@ -123,9 +123,10 @@ export interface PreviewFactura {
 /** Con qué medio(s) se cobró el excedente. Sin esto no se puede cruzar la caja
  *  del día: la factura sale por FV-1 y no entra al consecutivo del punto. */
 export interface PagoExcedente { id: number; value: number; }
-export const previewFactura = (id: string, pagos_excedente: PagoExcedente[] = []) =>
+export const previewFactura = (id: string, pagos_excedente: PagoExcedente[] = [],
+                               descuento_pesos = 0) =>
   api.post<PreviewFactura>(`/api/postventa/casos/${id}/fiscal/factura/preview`,
-                           { pagos_excedente });
+                           { pagos_excedente, descuento_pesos });
 export const emitirFactura = (id: string) =>
   api.post<{ siigo_document_number: string }>(`/api/postventa/casos/${id}/fiscal/factura/emitir`);
 

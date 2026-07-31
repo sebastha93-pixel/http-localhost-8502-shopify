@@ -539,8 +539,12 @@ function PanelFactura({ caseId, status, tipo, tienda, onEmitido }:
   // para saber cuánto es, y luego se re-arma con el reparto que indique la
   // asesora — sin eso el arqueo del día no se puede cruzar.
   const [pagos, setPagos] = useState<Record<number, string>>({});
+  // El descuento se escribe en PESOS. Si el comprobante lo exige en
+  // porcentaje, el backend convierte — la asesora no tiene por qué saberlo.
+  const [descuento, setDescuento] = useState("");
   const prevMut = useMutation({
-    mutationFn: (p: PagoExcedente[] = []) => previewFactura(caseId, p),
+    mutationFn: (p: PagoExcedente[] = []) =>
+      previewFactura(caseId, p, Number(descuento || 0)),
     onSuccess: setPreview,
   });
   const emitMut = useMutation({
@@ -568,7 +572,22 @@ function PanelFactura({ caseId, status, tipo, tienda, onEmitido }:
         )}
         {preview && (
           <div className="space-y-3">
+            <label className="flex items-center justify-between gap-3">
+              <span className="text-sm text-graphite">
+                Descuento <span className="text-[0.68rem]">(en pesos, si aplica)</span>
+              </span>
+              <input inputMode="numeric" placeholder="0"
+                className="w-32 rounded-sm border border-border bg-card px-2 py-1
+                           text-right text-sm tabular-nums focus:outline-none
+                           focus:ring-2 focus:ring-navy-600/30"
+                value={descuento}
+                onChange={(e) => setDescuento(e.target.value.replace(/\D/g, ""))}
+                onBlur={() => prevMut.mutate([])} />
+            </label>
             <dl className="rounded-sm border border-border bg-cloud/40 p-3 text-sm space-y-1.5">
+              {Number(descuento) > 0 && (
+                <Fila k="Descuento" v={`− ${formatMoney(Number(descuento))}`} />
+              )}
               <Fila k="Total factura" v={formatMoney(preview.resumen.total)} />
               <Fila k="Cubierto por anticipo" v={formatMoney(preview.resumen.anticipo)} />
               <Fila k="Paga la clienta" v={formatMoney(preview.resumen.excedente)} destacado />

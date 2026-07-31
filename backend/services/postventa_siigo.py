@@ -352,3 +352,42 @@ def diagnostico() -> dict:
         "muestra_facturas": inspeccionar_facturas(3),
         "muestra_notas_credito": inspeccionar_notas_credito(2),
     }
+
+
+# ── Config del tipo de documento (cacheada) ───────────────────────────
+# `discount_type` NO es igual en todos: FV-1 lo quiere en "Value" y FV-5 en
+# "Percentage". Mandarlo al revés produce una factura con el monto equivocado
+# y SIN error. Se lee del comprobante en uso, nunca se asume.
+_TIPOS_CACHE: dict = {"ts": 0.0, "data": None}
+_TIPOS_TTL = 3600
+
+
+def limpiar_cache_tipos() -> None:
+    _TIPOS_CACHE["ts"] = 0.0
+    _TIPOS_CACHE["data"] = None
+
+
+def _tipos_documento() -> dict:
+    """{document_id: config} de los tipos de factura. Cambian muy poco."""
+    import time
+    ahora = time.time()
+    if _TIPOS_CACHE["data"] and (ahora - _TIPOS_CACHE["ts"]) < _TIPOS_TTL:
+        return _TIPOS_CACHE["data"]
+    data = _get_seguro("/document-types", {"type": "FV"})
+    if isinstance(data, dict) and data.get("_error"):
+        return _TIPOS_CACHE["data"] or {}
+    filas = data.get("results", data) if isinstance(data, dict) else data
+    if not isinstance(filas, list):
+        return _TIPOS_CACHE["data"] or {}
+    mapa = {int(t["id"]): t for t in filas
+            if isinstance(t, dict) and t.get("id") is not None}
+    _TIPOS_CACHE.update({"ts": ahora, "data": mapa})
+    return mapa
+
+
+def tipo_de_descuento(documento_id: int) -> Optional[str]:
+    """"Value" o "Percentage" para ESE comprobante. None si no se sabe —
+    y sin saberlo NO se manda descuento."""
+    t = _tipos_documento().get(int(documento_id or 0)) or {}
+    v = (t.get("discount_type") or "").strip()
+    return v or None

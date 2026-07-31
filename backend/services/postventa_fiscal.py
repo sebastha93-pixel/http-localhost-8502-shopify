@@ -14,6 +14,7 @@ from typing import Optional
 from backend.services import postventa as pv
 from backend.services import fiscal_logic as F
 from backend.services import fiscal_siigo
+from backend.services import postventa_siigo as descubrir
 
 log = logging.getLogger("postventa_fiscal")
 
@@ -221,7 +222,8 @@ def _item_reemplazo(caso: dict, item: dict, factura: dict) -> dict:
 
 
 def preview_factura_reemplazo(case_id: str, *,
-                              pagos_excedente: Optional[list] = None) -> dict:
+                              pagos_excedente: Optional[list] = None,
+                              descuento_pesos: float = 0) -> dict:
     """Arma la factura del reemplazo (consume el anticipo de la NC). NO emite."""
     if _fiscal_existente(case_id, "factura"):
         raise ValueError("factura_ya_emitida")
@@ -272,7 +274,12 @@ def preview_factura_reemplazo(case_id: str, *,
         factura_original=factura, item_reemplazo=item_reemplazo,
         credito_con_iva=float(nc.get("amount") or 0), modo=modo, fecha=_hoy(),
         documento_id=doc_id, bodega_id=bodega, pago_excedente_id=pago_exc,
-        pagos_excedente=pagos_excedente, centro_costo_id=centro_costo)
+        pagos_excedente=pagos_excedente, centro_costo_id=centro_costo,
+        descuento_pesos=descuento_pesos,
+        # Se LEE del comprobante en uso: FV-1 lo quiere en pesos y FV-5 en
+        # porcentaje. Asumirlo daria una factura con el monto equivocado.
+        discount_type=(descubrir.tipo_de_descuento(doc_id or F.config_documentos(modo)["factura_id"])
+                       if descuento_pesos else None))
     resumen = payload.pop("_resumen")
 
     _guardar_fiscal(case_id=case_id, doc_kind="factura",

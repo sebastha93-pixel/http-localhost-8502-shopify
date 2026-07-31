@@ -48,10 +48,14 @@ class PagoIn(BaseModel):
 
 
 class PreviewFacturaIn(BaseModel):
+    """`descuento_pesos` va en PESOS — la asesora piensa en pesos con la
+    clienta enfrente. La conversion a porcentaje, si el comprobante la exige,
+    la hace el motor."""
     """Con que medio(s) se cobro el excedente. Sin esto no se puede cruzar la
     caja del dia, porque la factura sale por FV-1 y no entra al consecutivo
     del punto de venta."""
     pagos_excedente: list[PagoIn] = []
+    descuento_pesos: float = 0
 
 
 class SaldoAFavorIn(BaseModel):
@@ -195,7 +199,9 @@ def fiscal_factura_preview(case_id: str, body: Optional[PreviewFacturaIn] = None
     tienda no se puede casar con nada."""
     pagos = [p.model_dump() for p in (body.pagos_excedente if body else [])]
     try:
-        return fiscal_svc.preview_factura_reemplazo(case_id, pagos_excedente=pagos)
+        return fiscal_svc.preview_factura_reemplazo(
+            case_id, pagos_excedente=pagos,
+            descuento_pesos=(body.descuento_pesos if body else 0))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
