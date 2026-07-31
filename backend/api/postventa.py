@@ -305,6 +305,28 @@ def reemplazo_saldo_a_favor(
     return {"ok": True, "monto": body.monto}
 
 
+@router.get("/caja/cierre")
+def caja_cierre(
+    fecha: str = "",
+    tienda: str = "",
+    _: CurrentUser = Depends(require_permission("postventa", "ver")),
+):
+    """Cierre diario de postventa por punto de venta.
+
+    El excedente de un cambio se cobra en el datafono o la caja de la tienda,
+    pero la factura sale por FV-5 desde Siigo Nube: el POS no lo ve. Esto es
+    lo que la cajera SUMA a su arqueo para que el dia cuadre.
+
+    Solo cuenta plata que entro a la caja — el anticipo no es plata."""
+    from backend.services import postventa_caja as caja
+    from datetime import datetime, timezone
+    dia = (fecha or "").strip() or datetime.now(timezone.utc).date().isoformat()
+    if tienda:
+        docs = caja.documentos_del_dia(dia)
+        return caja.cierre_del_dia(docs, tienda=tienda, fecha=dia)
+    return {"fecha": dia, "puntos": caja.cierre_de_todos(dia)}
+
+
 @router.get("/casos/{case_id}/timeline")
 def timeline(case_id: str,
              _: CurrentUser = Depends(require_permission("postventa", "ver"))):

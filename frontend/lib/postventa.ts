@@ -252,3 +252,19 @@ export const elegirReemplazo = (id: string, requested_sku: string,
 /** La clienta no se lleva nada hoy: el crédito queda a su nombre en Siigo. */
 export const dejarSaldoAFavor = (id: string, monto: number) =>
   api.post(`/api/postventa/casos/${id}/saldo-a-favor`, { monto });
+
+/* ── Cierre de caja ──────────────────────────────────────────────────── */
+/** Lo que la cajera SUMA a su arqueo: el excedente se cobró en su caja pero
+ *  la factura salió por FV-5 desde Siigo Nube, y el POS no lo ve. */
+export interface MedioCobrado { id: number; nombre: string; total: number; }
+export interface CasoCobrado {
+  caso: string; factura: string; cobrado: number; medios: MedioCobrado[];
+}
+export interface CierrePunto {
+  tienda: string; nombre: string; fecha: string;
+  total_cobrado: number; por_medio: MedioCobrado[]; casos: CasoCobrado[];
+  notas_credito: { cantidad: number; total: number };
+}
+export const cierreCaja = (fecha = "") =>
+  api.get<{ fecha: string; puntos: CierrePunto[] }>(
+    `/api/postventa/caja/cierre${fecha ? `?fecha=${fecha}` : ""}`);
