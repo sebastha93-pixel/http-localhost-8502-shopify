@@ -72,6 +72,11 @@ DOC_FV12 = 31434
 DOC_FV1_ONLINE = 11810
 DOC_FV5_CAMBIOS = 27154
 
+# Comprobantes que exigen centro de costos (`cost_center_obligatorio: true`).
+# Con FV-5 activo, una tienda sin centro de costos hace que Siigo rechace la
+# factura AL EMITIR — con la clienta enfrente. Mejor negarse antes.
+DOCS_CON_CENTRO_COSTO = {DOC_FV5_CAMBIOS}
+
 # Un PUNTO DE VENTA es una caja: tiene su propio prefijo de facturación pero
 # puede compartir bodega con otra caja de la misma tienda. Florida factura
 # desde dos cajas (FV-11 y FV-12) y ambas descargan/ingresan a la bodega 48.
@@ -137,20 +142,38 @@ def _config() -> dict[str, dict]:
     return base
 
 
+def campos_obligatorios() -> tuple[str, ...]:
+    """Qué tiene que estar configurado para poder facturar.
+
+    El centro de costos solo es obligatorio si se está facturando con un
+    comprobante que lo exige (FV-5 «Cambios» sí, FV-1 no). Pedirlo siempre
+    bloquearía tiendas que hoy funcionan.
+    """
+    base = ("documento_factura_id", "bodega_id")
+    if documento_para_facturar("") in DOCS_CON_CENTRO_COSTO:
+        return base + ("centro_costo_id",)
+    return base
+
+
 def listar() -> list[dict]:
     """Tiendas con su estado de configuración, para el selector del panel."""
+    obligatorios = campos_obligatorios()
     salida = []
     for clave, t in _config().items():
+        falta = [c for c in obligatorios if not t.get(c)]
         salida.append({
             "clave": clave,
             "nombre": t.get("nombre"),
             "tienda": t.get("tienda"),
             "prefijo_factura": t.get("prefijo_factura"),
             "bodega_id": t.get("bodega_id"),
+            # Se exponen para poder VERIFICAR la config desde la app. Un dato
+            # que no se puede ver es un dato en el que no se puede confiar.
+            "centro_costo_id": t.get("centro_costo_id"),
+            "documento_facturacion_id": documento_para_facturar(clave),
             "formas_pago": t.get("formas_pago") or [],
-            "lista": bool(t.get("documento_factura_id") and t.get("bodega_id")),
-            "falta": [c for c in ("documento_factura_id", "bodega_id")
-                      if not t.get(c)],
+            "lista": not falta,
+            "falta": falta,
         })
     return salida
 
@@ -168,7 +191,7 @@ def validar_para_facturar(clave: str) -> dict:
     t = obtener(clave)
     if t is None:
         raise ValueError(f"tienda_desconocida: {clave}")
-    faltan = [c for c in ("documento_factura_id", "bodega_id") if not t.get(c)]
+    faltan = [c for c in campos_obligatorios() if not t.get(c)]
     if faltan:
         raise ValueError(
             f"tienda_sin_configurar: a {t.get('nombre')} le falta {', '.join(faltan)}. "
