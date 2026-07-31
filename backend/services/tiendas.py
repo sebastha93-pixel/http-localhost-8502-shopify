@@ -241,3 +241,25 @@ def pagos_ajenos(clave: str, pagos: list[dict]) -> list[int]:
         if not forma_pago_valida(clave, pid):
             malos.append(pid)
     return malos
+
+
+def centro_costo_de(clave: str) -> Optional[int]:
+    """Centro de costos del punto, si está configurado.
+
+    FV-5 «Cambios» lo exige (`cost_center_obligatorio: true`) y no trae uno
+    por defecto. Va por punto de venta a propósito: así el cambio queda
+    contabilizado en la tienda donde ocurrió.
+
+    Devuelve None mientras no se configure — y con FV-1, que no lo pide, todo
+    sigue funcionando. Los ids se leen de GET /cost-centers; el número que se
+    ve en la pantalla de Siigo NO sirve (ya nos pasó con bodegas y documentos).
+    """
+    t = obtener(clave) or {}
+    v = t.get("centro_costo_id")
+    if v in (None, ""):
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        log.warning(f"[tiendas] centro_costo_id invalido en {clave}: {v!r}")
+        return None
