@@ -115,13 +115,23 @@ def consultar(mid: str, reintentos: int = 1) -> dict | None:
             if _RE_MID.match(guia):
                 guia = ""        # es el M-id, no una guía
             estado = str(d.get("status") or "").strip().upper()
+            # OJO: son DOS cosas distintas y antes venían mezcladas en un solo
+            # campo. `detailedDeliveredDate` es la entrega al cliente por la
+            # transportadora; `pickedUpDate` es cuando el cliente lo recogió él
+            # mismo en un punto (solo aparece en pedidos de recogida — medido
+            # 2026-07-30: existe en 4 de 120). Para medir cuánto tardó una
+            # entrega sirve la primera; la segunda cierra el pedido igual, así
+            # que se conserva aparte y `entregado_en` cae a ella si no hay otra.
+            entrega = str(d.get("detailedDeliveredDate") or "").strip()
+            recogida = str(d.get("pickedUpDate") or "").strip()
             return {
                 "carrier": str(d.get("courierCompany") or "").strip(),
                 "guia": guia,
                 "estado": estado,
                 "estado_es": ESTADO_ES.get(estado, estado.title()),
-                "entregado_en": str(d.get("detailedDeliveredDate")
-                                    or d.get("pickedUpDate") or "").strip(),
+                "entregado_el": entrega[:10],
+                "recogido_el": recogida[:10],
+                "entregado_en": str(entrega or recogida).strip(),
             }
         except Exception as e:
             if intento < reintentos:

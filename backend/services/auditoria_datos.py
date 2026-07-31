@@ -60,6 +60,19 @@ def _pct(parte: int, total: int) -> float:
     return round(100.0 * parte / total, 1) if total else 0.0
 
 
+def _entrega_antes(p: dict) -> bool:
+    """True si la entrega quedó ANTES del despacho (par imposible)."""
+    from datetime import date
+    fd = p.get("fecha_despacho_observada") or p.get("fecha_despacho")
+    fe = p.get("fecha_entrega")
+    if not fd or not fe:
+        return False
+    try:
+        return date.fromisoformat(str(fe)[:10]) < date.fromisoformat(str(fd)[:10])
+    except Exception:
+        return False
+
+
 def reporte(pedidos: list[dict], *, max_ejemplos: int = 50) -> dict:
     """Radiografía de confiabilidad de la lista que devuelve el módulo."""
     total = len(pedidos)
@@ -138,6 +151,15 @@ def reporte(pedidos: list[dict], *, max_ejemplos: int = 50) -> dict:
            "contraentrega sin teléfono: no se puede confirmar con el cliente",
            [p for p in pedidos if p.get("es_contraentrega")
             and _vacio(p.get("telefono_comprador"))])
+
+    # PARES IMPOSIBLES. Detectado el 2026-07-31 midiendo los 41 pedidos con
+    # ambas fechas: el mínimo daba -1 día, o sea entregado ANTES de despachado.
+    # `_dias_reales` lo tapa con max(0, …) y muestra 0, que es peor que un error:
+    # parece un dato. Acá se saca a la luz, porque un par incoherente invalida
+    # cualquier promedio de tiempo de entrega que se calcule con él.
+    _anota("entrega_antes_del_despacho",
+           "fecha de entrega ANTERIOR a la de despacho: el par es imposible",
+           [p for p in pedidos if _entrega_antes(p)])
 
     # ── Veredicto, sin adornos ──────────────────────────────────────────
     auditable = dias["auditable_pct"]

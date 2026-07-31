@@ -244,6 +244,9 @@ _CAMPOS_ENRIQUECIDOS = (
     # puede volver a calcular: si se pierde, no hay forma de recuperarlo porque
     # la transición ya pasó. Ver _marcar_despacho_observado().
     "fecha_despacho_observada", "fecha_despacho_origen",
+    # Fecha de entrega del portal + la marca de "ya pregunté". Sin la marca en
+    # esta lista se re-consultaría el portal en CADA ciclo, para siempre.
+    "fecha_entrega_origen", "_portal_entrega_intentado",
 )
 
 # Cada cuánto vale la pena volver a pedirle a Melonn el detalle de un pedido
@@ -391,6 +394,82 @@ def _marcar_despacho_observado(p: dict, prev: dict) -> bool:
         p["fecha_despacho_confiable"] = True
         p["fecha_despacho_origen"] = "transicion_observada"
     return True
+
+
+# ── Fecha de ENTREGA desde el portal de tracking ─────────────────────────────
+# Estaba vacía en el 100% de los pedidos: 0 de 749 entregados la tenían, así que
+# no se podía medir cuánto tardó NINGUNA entrega, y nada lo decía (lo destapó el
+# reporte de auditoría). La Sellers API no la da en el listado y su detalle es
+# caro; el portal público SÍ la trae en `detailedDeliveredDate`.
+#
+# POR QUÉ ACÁ Y NO EN tracking_enricher: hay que escribirla en el CACHÉ, no en
+# pedido_overrides — esa tabla no tiene columna de fecha y añadirla exige una
+# migración que solo Sebastián puede correr. `fecha_entrega` ya existe y ya está
+# en las dos listas de herencia, así que llenarla acá no necesita nada nuevo.
+#
+# COSTO: otro host (api.melonn.com), NO gasta la cuota de 10.000/día de la
+# Sellers API. Se pregunta UNA vez por pedido: un entregado no cambia.
+_PORTAL_MAX_POR_CICLO = 80
+_PORTAL_PAUSA_SEG = 0.5
+
+
+def _enriquecer_fecha_entrega(pedidos: list, max_pedidos: int = _PORTAL_MAX_POR_CICLO) -> list:
+    """Rellena fecha_entrega de los entregados preguntándole al portal."""
+    try:
+        import melonn_tracking as mt
+    except Exception as e:
+        log.warning(f"[entrega] no pude importar melonn_tracking: {e}")
+        return pedidos
+
+    candidatos = [
+        i for i, p in enumerate(pedidos)
+        if p.get("sub_estado_logistico") == "entregado"
+        and not p.get("fecha_entrega")
+        and p.get("orden_melonn")
+        # Marca propia: si ya se preguntó y el portal no la dio, no se insiste.
+        # Un entregado es terminal; volver a preguntar a diario es el "bucle de
+        # las 130" otra vez.
+        and not p.get("_portal_entrega_intentado")
+    ]
+    if not candidatos:
+        return pedidos
+
+    # Los más recientes primero: son los que alguien va a mirar.
+    def _num(i: int) -> int:
+        ot = str(pedidos[i].get("orden_tienda", "")).split("-")[0]
+        return int(ot) if ot.isdigit() else 0
+    candidatos.sort(key=_num, reverse=True)
+    candidatos = candidatos[:max_pedidos]
+
+    import time as _t
+    llenados = 0
+    for i in candidatos:
+        p = pedidos[i]
+        try:
+            r = mt.consultar(p["orden_melonn"])
+        except Exception:
+            r = None
+        _t.sleep(_PORTAL_PAUSA_SEG)
+        # Se marca SIEMPRE que se preguntó, con dato o sin él.
+        p["_portal_entrega_intentado"] = True
+        if not r:
+            continue
+        entrega = (r.get("entregado_el") or "").strip()
+        recogida = (r.get("recogido_el") or "").strip()
+        if entrega:
+            p["fecha_entrega"] = entrega
+            p["fecha_entrega_origen"] = "portal_entregado"
+            llenados += 1
+        elif recogida:
+            # Recogida en punto: cierra el pedido igual, pero se marca distinto
+            # para no mezclar "entrega a domicilio" con "el cliente fue por él".
+            p["fecha_entrega"] = recogida
+            p["fecha_entrega_origen"] = "portal_recogido_por_cliente"
+            llenados += 1
+    if llenados:
+        log.info(f"[entrega] {llenados} de {len(candidatos)} entregados "
+                 f"recibieron fecha de entrega del portal")
+    return pedidos
 
 
 def _heredar_enriquecidos(frescos: list) -> list:
@@ -921,6 +1000,7 @@ def refrescar_un_pedido(identificador: str) -> dict:
             # El despacho observado NO se puede recalcular: la transición ya
             # pasó. Un webhook que lo borre lo pierde para siempre.
             "fecha_despacho_observada", "fecha_despacho_origen",
+            "fecha_entrega_origen", "_portal_entrega_intentado",
             "promesa_entrega_min", "promesa_entrega_max", "intentos_entrega",
             "_detalle_melonn_intentado_en",
             "guia_real", "carrier_real", "link_guia", "external_order_id",
@@ -1581,6 +1661,13 @@ def _fetch_api() -> list:
     # Shopify. El enricher salta los pedidos que ya tienen nombre_comprador,
     # así que solo consulta los NUEVOS o los que aún no se enriquecieron.
     resultado = _heredar_enriquecidos(resultado)
+
+    # Fecha de ENTREGA desde el portal (gratis, otro host). Va DESPUÉS de heredar
+    # para no re-preguntar por lo que ya trae fecha del ciclo anterior.
+    try:
+        resultado = _enriquecer_fecha_entrega(resultado)
+    except Exception as e:
+        log.warning(f"[entrega] enriquecimiento falló (sigue el sync): {e}")
 
     # Enriquecer con datos de cliente y fechas desde Shopify (solo faltantes)
     if _SHOPIFY_ENRICHER_OK and resultado:
