@@ -281,8 +281,10 @@ def listar_centros_costo() -> list[dict]:
             return data
         return data.get("results") or data.get("data") or []
     except Exception as e:
+        # Antes se devolvia [] y era indistinguible de "no hay ninguno" — asi
+        # se pierde una tarde buscando centros de costo que si existian.
         log.warning(f"[siigo] cost-centers: {e}")
-        return []
+        raise
 
 
 def muestra_productos(limit: int = 5) -> dict:
@@ -312,13 +314,24 @@ def muestra_facturas_venta(desde: Optional[str] = None, limit: int = 3) -> dict:
         return {"error": str(e)[:200]}
 
 
+def _centros_costo_o_error():
+    try:
+        return listar_centros_costo()
+    except Exception as e:  # noqa: BLE001
+        return {"_error": str(e)[:300],
+                "nota": "No se pudieron leer los centros de costo. Vacio por "
+                        "error NO significa que no existan."}
+
+
 def descubrir_estructura_tiendas() -> dict:
     """Diagnóstico único: junta bodegas, centros de costo y muestras de productos
     y facturas para confirmar cómo están Florida y Arrayanes en Siigo."""
     return {
         "configurado":   siigo_configurado(),
         "bodegas":       listar_bodegas(),
-        "centros_costo": listar_centros_costo(),
+        # Se reporta el fallo como dato: una lista vacia por error se lee
+        # igual que "no hay ninguno", y esa ambiguedad ya nos costo caro.
+        "centros_costo": _centros_costo_o_error(),
         "productos":     muestra_productos(limit=3),
         "facturas":      muestra_facturas_venta(limit=2),
     }

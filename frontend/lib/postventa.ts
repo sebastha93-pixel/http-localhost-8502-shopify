@@ -213,6 +213,8 @@ export interface Compra {
   factura_id: string; factura: string; fecha: string; total: number;
   canal: string | null; donde: string; pedido: string | null;
   acreditable: boolean; motivo_no_acreditable: string | null;
+  /** Días desde la factura. Pasado el plazo ya no se puede cambiar. */
+  dias?: number | null;
   prendas: PrendaCompra[];
 }
 /** Siigo guarda el nombre/email/teléfono en el CLIENTE, no en la factura. */

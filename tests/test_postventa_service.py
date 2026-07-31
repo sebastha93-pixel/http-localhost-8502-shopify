@@ -48,8 +48,24 @@ def test_crear_caso_valida_tipo(monkeypatch):
                           customer_email="a@b.com")
     assert caso["case_number"].startswith("PV-")
     assert caso["case_number"].endswith("0004")
-    assert caso["status"] == "creado"
+    # Un cambio de talla nace aprobado: no hay nada que autorizar.
+    assert caso["status"] == "aprobado"
     assert caso["source"] == "interno"
+
+
+def test_la_garantia_si_nace_esperando_aprobacion(monkeypatch):
+    monkeypatch.setattr(svc, "_sb", lambda: FakeSupabase())
+    monkeypatch.setattr(svc, "_siguiente_consecutivo", lambda anio: 5)
+    caso = svc.crear_caso(tipo="garantia", reason="producto_defectuoso")
+    assert caso["status"] == "creado"
+
+
+def test_el_reembolso_tampoco_se_auto_aprueba(monkeypatch):
+    """Saca plata: lo mira un humano."""
+    monkeypatch.setattr(svc, "_sb", lambda: FakeSupabase())
+    monkeypatch.setattr(svc, "_siguiente_consecutivo", lambda anio: 6)
+    assert svc.crear_caso(tipo="reembolso",
+                          reason="arrepentimiento")["status"] == "creado"
 
 
 def test_crear_caso_tipo_invalido(monkeypatch):

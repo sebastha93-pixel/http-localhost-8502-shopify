@@ -139,6 +139,11 @@ export default function NuevoCasoPage() {
                       </p>
                       <p className="text-xs text-graphite tabular-nums">
                         {fmtFecha(c.fecha)}
+                        {typeof c.dias === "number" && (
+                          <span className={c.acreditable ? "" : " text-ochre"}>
+                            {" · "}{c.dias}d
+                          </span>
+                        )}
                       </p>
                     </div>
                   </div>

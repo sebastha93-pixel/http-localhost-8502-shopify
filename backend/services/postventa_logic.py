@@ -6,6 +6,8 @@ estados, validaciones y cálculos. 100% testeable con pytest.
 """
 from __future__ import annotations
 
+import os
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -124,3 +126,79 @@ def calcular_diferencia(original: float, requested: Optional[float]) -> float:
 def formato_case_number(anio: int, consecutivo: int) -> str:
     """Consecutivo legible: PV-2026-0001 (mínimo 4 dígitos, crece si hace falta)."""
     return f"PV-{anio}-{consecutivo:04d}"
+
+
+# ── Qué necesita que un humano lo autorice ────────────────────────────
+# Un cambio de talla no lo necesita: la clienta está ahí con la prenda y la
+# asesora ya la vio. Pedir aprobación en cada caso es un paso vacío.
+#
+# Sí lo necesitan:
+#   · garantía  — alguien tiene que mirar el defecto y decidir si aplica;
+#   · reembolso y bono — sacan plata, no se auto-aprueban.
+# Ante un tipo desconocido, se pide aprobación: el default seguro es el
+# que hace que un humano mire.
+TIPOS_SIN_APROBACION: set[str] = {"cambio_talla", "cambio_ref"}
+
+
+def requiere_aprobacion(tipo: str) -> bool:
+    return (tipo or "").strip() not in TIPOS_SIN_APROBACION
+
+
+def estado_inicial(tipo: str) -> str:
+    """Dónde nace el caso. Los cambios simples arrancan aprobados."""
+    return "creado" if requiere_aprobacion(tipo) else "aprobado"
+
+
+# ── Ventana para cambiar ──────────────────────────────────────────────
+# Pasado el plazo la prenda ya no se cambia. Se controla contra la fecha de
+# la FACTURA, no la del caso: lo que importa es hace cuánto compró.
+DIAS_CAMBIO_DEFAULT = 30
+
+
+def dias_de_cambio() -> int:
+    """Política de la marca, no del código: otra puede tener 15 o 60."""
+    crudo = os.environ.get("POSTVENTA_DIAS_CAMBIO", "").strip()
+    if crudo:
+        try:
+            v = int(crudo)
+            if v > 0:
+                return v
+        except ValueError:
+            pass
+    return DIAS_CAMBIO_DEFAULT
+
+
+def _fecha(valor) -> Optional[date]:
+    """Siigo manda '2026-07-29' o '2026-07-29T10:30:00Z'."""
+    if not valor:
+        return None
+    try:
+        return date.fromisoformat(str(valor)[:10])
+    except ValueError:
+        return None
+
+
+def dias_desde(fecha_factura, *, hoy=None) -> Optional[int]:
+    f = _fecha(fecha_factura)
+    if f is None:
+        return None
+    ref = _fecha(hoy) or datetime.now(timezone.utc).date()
+    return (ref - f).days
+
+
+def dentro_de_ventana(fecha_factura, *, hoy=None) -> bool:
+    """¿La compra todavía admite cambio?
+
+    Sin fecha legible devuelve False: no se puede afirmar que esté en plazo,
+    y dejar pasar un cambio vencido cuesta una nota crédito que tocará anular.
+    """
+    d = dias_desde(fecha_factura, hoy=hoy)
+    return d is not None and d <= dias_de_cambio()
+
+
+def motivo_fuera_de_ventana(fecha_factura, *, hoy=None) -> str:
+    d = dias_desde(fecha_factura, hoy=hoy)
+    if d is None:
+        return "La factura no tiene fecha legible: no se puede validar el plazo."
+    return (f"La compra tiene {d} días y el plazo para cambios es de "
+            f"{dias_de_cambio()} días.")

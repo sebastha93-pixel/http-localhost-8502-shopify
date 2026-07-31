@@ -93,6 +93,14 @@ def crear(body: CrearCasoIn,
         raise HTTPException(400, str(e))
     svc.registrar_evento(caso["id"], "creado", f"Caso creado por {user.email}",
                          created_by=user.id)
+    # Que quede escrito por que no paso por aprobacion: sin esto, mirando el
+    # historial parece que alguien se salto un paso.
+    from backend.services import postventa_logic as _L
+    if not _L.requiere_aprobacion(body.tipo):
+        svc.registrar_evento(
+            caso["id"], "aprobado_automatico",
+            f"Aprobado automaticamente: un {body.tipo} no requiere autorizacion.",
+            created_by=user.id)
     return caso
 
 

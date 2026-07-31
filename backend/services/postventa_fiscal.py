@@ -126,6 +126,12 @@ def preview_nota_credito(case_id: str) -> dict:
     # dejar que Siigo responda un 'invalid_document' que no explica nada.
     if not F.factura_aceptada_dian(factura):
         raise ValueError(F.motivo_factura_no_apta(factura))
+    # Ultimo punto para parar un cambio vencido. La lista de compras ya lo
+    # avisa, pero un caso viejo o llenado a mano puede llegar hasta aqui; una
+    # vez emitida la NC, deshacerla es un tramite.
+    from backend.services import postventa_logic as _L
+    if not _L.dentro_de_ventana(factura.get("date")):
+        raise ValueError(_L.motivo_fuera_de_ventana(factura.get("date")))
     # Cambio en tienda: la prenda entra a la bodega de esa tienda, no a la
     # bodega de donde salió la venta online (evita el traslado manual).
     bodega_destino = None
@@ -246,12 +252,13 @@ def preview_factura_reemplazo(case_id: str, *,
     # ahí mismo. El PREFIJO, en cambio, no puede ser el de la caja: Siigo no
     # deja emitir por API con FV-6/11/12 (rangos DIAN del punto de venta).
     # Ver tiendas.documento_para_facturar.
-    doc_id = bodega = pago_exc = None
+    doc_id = bodega = pago_exc = centro_costo = None
     if caso.get("tienda"):
         from backend.services import tiendas
         t = tiendas.validar_para_facturar(caso["tienda"])
         doc_id = tiendas.documento_para_facturar(caso["tienda"])
         bodega = t["bodega_id"]
+        centro_costo = tiendas.centro_costo_de(caso["tienda"])
         pago_exc = caso.get("pago_excedente_id")
         # Los medios con que se cobró el excedente tienen que ser de ESA caja:
         # cobrar en el datáfono de la otra tienda descuadra las dos.
@@ -265,7 +272,7 @@ def preview_factura_reemplazo(case_id: str, *,
         factura_original=factura, item_reemplazo=item_reemplazo,
         credito_con_iva=float(nc.get("amount") or 0), modo=modo, fecha=_hoy(),
         documento_id=doc_id, bodega_id=bodega, pago_excedente_id=pago_exc,
-        pagos_excedente=pagos_excedente)
+        pagos_excedente=pagos_excedente, centro_costo_id=centro_costo)
     resumen = payload.pop("_resumen")
 
     _guardar_fiscal(case_id=case_id, doc_kind="factura",

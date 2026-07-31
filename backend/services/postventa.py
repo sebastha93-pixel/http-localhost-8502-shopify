@@ -105,7 +105,10 @@ def crear_caso(*, tipo: str, reason: str, customer_email: str = "",
         # compras en tienda: sus facturas no se pueden encontrar por nº de
         # pedido porque sencillamente no lo tienen.
         "siigo_invoice_id": (siigo_invoice_id or "").strip() or None,
-        "status": "creado",
+        # Un cambio de talla o de referencia nace APROBADO: la clienta está
+        # ahí con la prenda y la asesora ya la vio. Garantía, reembolso y bono
+        # sí esperan a que un humano los mire.
+        "status": L.estado_inicial(tipo),
         "type": tipo,
         "reason": reason,
         "subreason": subreason or None,

@@ -246,7 +246,8 @@ def construir_payload_factura_reemplazo(*, factura_original: dict,
                                         documento_id: Optional[int] = None,
                                         bodega_id: Optional[int] = None,
                                         pago_excedente_id: Optional[int] = None,
-                                        pagos_excedente: Optional[list] = None) -> dict:
+                                        pagos_excedente: Optional[list] = None,
+                                        centro_costo_id: Optional[int] = None) -> dict:
     """Arma el POST de la factura del reemplazo. NO emite.
 
     Regla del fundador:
@@ -298,7 +299,13 @@ def construir_payload_factura_reemplazo(*, factura_original: dict,
     if wid is not None:
         linea["warehouse"] = wid
 
+    # FV-5 «Cambios» exige centro de costos y no trae default; FV-1 no lo pide.
+    # Si no hay, NO se manda el campo: mandarlo vacío es mandar basura.
+    extra_doc = ({"cost_center": int(centro_costo_id)}
+                 if centro_costo_id not in (None, "") else {})
+
     payload = {
+        **extra_doc,
         # documento_id: el punto de venta que factura (Florida FV-11/FV-12,
         # Arrayanes FV-6). Sin él sale con el prefijo de online.
         "document": {"id": int(documento_id) if documento_id else cfg["factura_id"]},
