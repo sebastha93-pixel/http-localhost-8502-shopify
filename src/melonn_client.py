@@ -921,6 +921,17 @@ def refrescar_un_pedido(identificador: str) -> dict:
             if k in ENRIQUECIDOS and _vacio(v):
                 continue  # no borrar dato enriquecido con un vacío del webhook
             merged[k] = v
+        # EL DESPACHO LLEGA POR ACÁ, NO POR EL SYNC (corregido 2026-07-31).
+        # La detección se puso primero solo en _heredar_enriquecidos y en 14 h
+        # no anotó NADA: el webhook de Melonn actualiza el caché en tiempo real,
+        # así que cuando el sync horario corría, el estado "anterior" del caché
+        # ya era el nuevo y la transición era invisible. Este es el único punto
+        # donde el cambio se ve llegar. Se deja también en el sync como respaldo
+        # por si los webhooks se caen (ya ha pasado).
+        try:
+            _marcar_despacho_observado(merged, viejo)
+        except Exception as e:
+            log.warning(f"[despacho] no pude evaluar la transición: {str(e)[:120]}")
         return merged
 
     try:
