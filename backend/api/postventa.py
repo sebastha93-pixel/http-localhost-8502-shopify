@@ -230,9 +230,8 @@ def reemplazo_opciones(
 
     Sin esto se puede facturar una prenda que la tienda no tiene: queda un
     documento fiscal emitido y una clienta esperando algo inexistente."""
-    from backend.services import postventa_reemplazo as R
+    from backend.services import postventa_inventario as INV
     from backend.services import tiendas
-    from backend.services import siigo
 
     caso = svc.obtener_caso(case_id)
     if caso is None:
@@ -243,11 +242,11 @@ def reemplazo_opciones(
                                  "contra la cual verificar existencias.")
     t = tiendas.obtener(clave) or {}
     bodega = t.get("bodega_nombre") or t.get("tienda")
-    if not siigo.siigo_configurado():
-        raise HTTPException(503, "Siigo no configurado.")
-    inv = siigo.inventario_por_bodega()
-    return {"bodega": bodega, "tienda": t.get("nombre"),
-            "opciones": R.opciones_con_stock(inv, bodega, q=q)}
+    # Se lee de NUESTRA tabla, no de Siigo: recorrer el catalogo en cada
+    # busqueda tardaba minutos y fallaba distinto en cada worker.
+    r = INV.buscar(bodega, q=q)
+    r["tienda"] = t.get("nombre")
+    return r
 
 
 @router.post("/casos/{case_id}/reemplazo")
@@ -256,9 +255,8 @@ def reemplazo_elegir(
     user: CurrentUser = Depends(require_permission("postventa", "modificar")),
 ):
     """Fija la prenda del reemplazo. Se niega si esa tienda no la tiene."""
-    from backend.services import postventa_reemplazo as R
+    from backend.services import postventa_inventario as INV
     from backend.services import tiendas
-    from backend.services import siigo
 
     caso = svc.obtener_caso(case_id)
     if caso is None:
@@ -267,8 +265,7 @@ def reemplazo_elegir(
     if clave:
         t = tiendas.obtener(clave) or {}
         bodega = t.get("bodega_nombre") or t.get("tienda")
-        inv = siigo.inventario_por_bodega() if siigo.siigo_configurado() else {}
-        ok, detalle = R.verificar_disponible(inv, bodega, body.requested_sku)
+        ok, detalle = INV.disponible(bodega, body.requested_sku)
         if not ok:
             raise HTTPException(400, detalle)
     try:
@@ -303,6 +300,18 @@ def reemplazo_saldo_a_favor(
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "monto": body.monto}
+
+
+@router.post("/inventario/sincronizar")
+def inventario_sincronizar(
+    _: CurrentUser = Depends(require_permission("postventa", "modificar")),
+):
+    """Refresca el inventario de tienda desde Siigo.
+
+    Normalmente lo hace solo el worker lider cada tanto. Esto es para cuando
+    la asesora acaba de recibir mercancia y necesita verla ya."""
+    from backend.services import postventa_inventario as INV
+    return INV.sincronizar()
 
 
 @router.get("/caja/cierre")

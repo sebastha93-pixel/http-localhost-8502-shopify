@@ -92,6 +92,15 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"   ⚠️  Scheduler no arrancó: {e}")
 
+        # Inventario de tienda para postventa. Solo el lider: si lo corrieran
+        # los 4 workers serian 4 recorridas simultaneas del catalogo de Siigo.
+        try:
+            from backend.services import postventa_inventario as _inv
+            _inv.arrancar_refresco()
+            print(f"   📦 Inventario postventa · refresco cada {_inv.INTERVALO_SEGUNDOS}s")
+        except Exception as e:
+            print(f"   ⚠️  Inventario postventa no arrancó: {e}")
+
         # Cron del bot scraper (solo si BOT_AUTO_ENABLED=true)
         try:
             bot_scheduler.start()

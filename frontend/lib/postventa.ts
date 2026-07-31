@@ -239,7 +239,12 @@ export interface OpcionReemplazo {
 }
 export interface OpcionesReemplazo {
   bodega: string; tienda: string; opciones: OpcionReemplazo[];
+  /** De cuándo es el dato. La caja del POS pudo vender esa talla hace rato. */
+  frescura?: string; viejo?: boolean;
 }
+export const sincronizarInventario = () =>
+  api.post<{ filas?: number; _error?: string; detalle?: string }>(
+    "/api/postventa/inventario/sincronizar");
 export const opcionesReemplazo = (id: string, q = "") =>
   api.get<OpcionesReemplazo>(
     `/api/postventa/casos/${id}/reemplazo/opciones?q=${encodeURIComponent(q)}`);
