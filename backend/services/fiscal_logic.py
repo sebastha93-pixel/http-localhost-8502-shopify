@@ -154,7 +154,14 @@ def construir_payload_nota_credito(*, factura: dict, skus_a_acreditar: list[str]
     cliente = factura.get("customer") or {}
     total = _total_con_iva_de_lineas(lineas)
 
+    # La NC se contabiliza DONDE se contabilizó la venta que reversa — aunque
+    # el cambio se atienda en otra tienda. Si no lleva el centro de costos de
+    # la factura original, ese canal queda inflado: se le sumó la venta y
+    # nunca se le resta.
+    cc = _warehouse_id(factura.get("cost_center"))
+
     payload = {
+        **({"cost_center": cc} if cc is not None else {}),
         "document": {"id": cfg["nota_credito_id"]},
         "date": fecha,
         "invoice": factura["id"],
@@ -299,10 +306,15 @@ def construir_payload_factura_reemplazo(*, factura_original: dict,
     if wid is not None:
         linea["warehouse"] = wid
 
-    # FV-5 «Cambios» exige centro de costos y no trae default; FV-1 no lo pide.
-    # Si no hay, NO se manda el campo: mandarlo vacío es mandar basura.
-    extra_doc = ({"cost_center": int(centro_costo_id)}
-                 if centro_costo_id not in (None, "") else {})
+    # Centro de costos. En MALE son CANALES de venta (PAGINA WEB, INSTAGRAM,
+    # WHATSAPP…), así que un cambio ONLINE hereda el de la factura original:
+    # forzar otro le quitaría la venta al canal que la generó y dañaría la
+    # medición de pauta. En tienda manda el del punto, porque el cambio
+    # ocurrió físicamente ahí.
+    # FV-5 «Cambios» lo exige; FV-1 no. Si no hay ninguno, no se manda.
+    cc = _warehouse_id(centro_costo_id if centro_costo_id is not None
+                       else factura_original.get("cost_center"))
+    extra_doc = {"cost_center": cc} if cc is not None else {}
 
     payload = {
         **extra_doc,
