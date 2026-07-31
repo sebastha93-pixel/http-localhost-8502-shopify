@@ -265,6 +265,21 @@ def clasificar(p: dict) -> dict:
     tiene_fecha = bool(p.get("fecha_despacho_observada") or p.get("fecha_despacho"))
     estimados = (not tiene_fecha) and sub not in _SIN_DESPACHAR and dias_real > 0
 
+    # PROCEDENCIA DE LOS DÍAS. Un número sin procedencia no se puede auditar,
+    # solo creer. Cuatro valores posibles y ninguno miente por omisión:
+    #   medido        → hay fecha de despacho; los días se calcularon con ella
+    #   estimado      → NO hay fecha; se contó desde la creación del pedido
+    #   sin_despachar → no salió de bodega, no hay tránsito que medir
+    #   sin_dato      → despachado y no hay ni fecha ni creación de dónde estimar
+    if sub in _SIN_DESPACHAR:
+        dias_origen = "sin_despachar"
+    elif tiene_fecha:
+        dias_origen = "medido"
+    elif dias_real > 0:
+        dias_origen = "estimado"
+    else:
+        dias_origen = "sin_dato"
+
     enriched = {
         **p,
         "nivel":               nivel,
@@ -272,6 +287,12 @@ def clasificar(p: dict) -> dict:
         "tipo_recaudo":        "Contraentrega" if es_cod else "Prepago",
         "dias_real":           dias_real,
         "dias_estimados":      estimados,
+        "dias_origen":         dias_origen,
+        # De dónde salió la fecha de despacho, para el reporte de auditoría.
+        "fecha_despacho_origen": (
+            p.get("fecha_despacho_origen")
+            or ("desconocido" if tiene_fecha else "")
+        ),
         "sla_critico":         r.zona_info.sla_critico,
         "zona":                r.zona_info.zona,
         "motivo_riesgo":       motivo,

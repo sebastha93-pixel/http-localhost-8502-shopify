@@ -1958,6 +1958,9 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
             if envio:
                 p["fecha_despacho"] = envio
                 p["fecha_despacho_confiable"] = True
+                # PROCEDENCIA: de dónde salió esta fecha. Sin esto no se puede
+                # auditar un número — solo creerle.
+                p["fecha_despacho_origen"] = "melonn_ship_timestamp"
 
             # Solo rellenar si faltan: no pisar lo que ya trajo el listado.
             entrega = _dia(act.get("delivery_timestamp")) or _dia(act.get("pickup_timestamp"))

@@ -373,6 +373,11 @@ def enriquecer(pedidos: list) -> list:
                         p["fecha_despacho"] = datetime.fromisoformat(
                             raw_dt.replace("Z", "+00:00")
                         ).date().isoformat()
+                        # PROCEDENCIA. Esta fecha es la del REGISTRO del
+                        # fulfillment, no la del despacho físico: queda marcada
+                        # como la de menor confianza de las tres para que el
+                        # reporte de auditoría no la cuente como medida.
+                        p["fecha_despacho_origen"] = "shopify_fulfillment"
                     except Exception:
                         pass
 

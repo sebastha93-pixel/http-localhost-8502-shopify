@@ -457,6 +457,35 @@ def pedidos(
     return PedidoListResponse(**data)
 
 
+@router.get("/auditoria-datos")
+def auditoria_datos(
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
+) -> dict:
+    """¿De qué se puede fiar el módulo logístico y de qué no?
+
+    Devuelve, campo por campo, qué porcentaje está MEDIDO, qué está estimado y
+    qué no se sabe — más la lista de pedidos que no se pueden auditar. Corre
+    sobre exactamente lo que devuelve /pedidos, o sea lo que ve el usuario: medir
+    la tabla de origen en vez de la respuesta fue el error que dejó pasar el bug
+    de las guías (había 678 guías en base y 25 en pantalla).
+
+    Pide sesión a propósito: es un informe interno de calidad de datos.
+    """
+    try:
+        data = svc.obtener_pedidos(forzar_refresh=False)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Melonn API error: {exc}")
+    overrides = overrides_svc.cargar_map()
+    pedidos = [metricas_svc.clasificar(overrides_svc.aplicar_a_pedido(p, overrides))
+               for p in data["pedidos"]]
+    from backend.services import auditoria_datos as aud
+    return {
+        "fetched_at": data.get("fetched_at"),
+        "fuente": data.get("fuente"),
+        **aud.reporte(pedidos),
+    }
+
+
 @router.get("/pedidos/{orden}")
 def pedido_detalle(orden: str) -> dict:
     """Detalle de un pedido específico (por orden_tienda u orden_melonn)."""
