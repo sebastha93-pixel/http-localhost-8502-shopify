@@ -4072,13 +4072,11 @@ CATEGORIAS_INSUMOS_CORTE = ("INSUMO CONFECCION", "INSUMO TERMINACION")
 # Margen de error del 1% al SEPARAR insumos, SOLO para estos (los demás van
 # exactos). Se redondea hacia arriba porque son unidades discretas.
 MARGEN_SEPARACION_INSUMOS = 0.01
-_INSUMOS_CON_MARGEN = ("boton", "remache", "lavado", "pretin")  # botones, remaches, instrucción de lavado, pretineras
 
 
-def _insumo_lleva_margen(nombre: str) -> bool:
-    import unicodedata
-    n = unicodedata.normalize("NFD", (nombre or "").lower()).encode("ascii", "ignore").decode()
-    return any(k in n for k in _INSUMOS_CON_MARGEN)
+# _insumo_lleva_margen se movió a insumos_catalogo.py, donde vive como RESPALDO
+# de las reglas por substring. Acá quedaba como una segunda verdad sobre las
+# mismas reglas, y dos verdades es como empezó el problema.
 
 
 def calcular_insumos_requeridos_corte(
@@ -4153,8 +4151,6 @@ def calcular_insumos_requeridos_corte(
     if not unid_talla:
         unid_talla = {str(t): int(v or 0)
                       for t, v in (oc.get("curva_trazo") or {}).items() if int(v or 0) > 0}
-    PALABRAS_POR_TALLA = ("CIERRE", "MARQUILLA", "CREMALLERA")
-
     items = []
     total_costo = 0.0
     for it in (p.get("items") or []):
@@ -4165,14 +4161,16 @@ def calcular_insumos_requeridos_corte(
         if base_por_prenda <= 0:
             continue
         total_teorico = round(base_por_prenda * cantidad_base, 3)
-        # +1% de margen SOLO para botones, remaches, instrucción de lavado y
-        # pretineras (redondeado hacia arriba). El resto va exacto.
-        if _insumo_lleva_margen(it.get("item") or ""):
-            total_req = math.ceil(total_teorico * (1 + MARGEN_SEPARACION_INSUMOS))
-            margen = round(MARGEN_SEPARACION_INSUMOS * 100, 2)
-        else:
-            total_req = total_teorico
-            margen = 0
+        # Las reglas del insumo salen del CATÁLOGO (unidad, merma, por talla) y
+        # no de buscar palabras en el nombre. Un insumo mal escrito ya no queda
+        # fuera de todo en silencio — pasaba con "ELAASTICO" (doble A).
+        # Si la migración del catálogo aún no corrió, `propiedades` devuelve las
+        # reglas viejas por substring, así que esto no cambia nada hasta que
+        # exista la tabla. Ver backend/services/insumos_catalogo.py.
+        from backend.services import insumos_catalogo as _ic
+        reglas = _ic.propiedades(it.get("item") or "")
+        total_req = _ic.cantidad_a_separar(it.get("item") or "", total_teorico)
+        margen = reglas["merma_pct"]
         vu = float(it.get("valor_unitario") or 0)
         costo = round(vu * total_req, 2)
         total_costo += costo
@@ -4185,11 +4183,17 @@ def calcular_insumos_requeridos_corte(
             "margen_pct":          margen,
             "valor_unitario":      vu,
             "costo_total":         costo,
+            # Qué unidad es y qué tabla de medidas aplica, para que la UI no lo
+            # tenga que deducir del nombre.
+            "unidad":              reglas["unidad"],
+            "tabla_medidas":       reglas["tabla_medidas"],
+            # False = el nombre no está en el catálogo y las reglas se
+            # adivinaron. La UI lo marca para que alguien corrija el nombre.
+            "en_catalogo":         reglas["en_catalogo"],
         }
-        # Cierres/cremalleras y marquillas se ENTREGAN separados por talla:
-        # cada talla lleva su cierre (largo) y su marquilla (número).
-        nombre_up = str(it.get("item") or "").upper()
-        if unid_talla and any(w in nombre_up for w in PALABRAS_POR_TALLA):
+        # Los que se ENTREGAN separados por talla (cierres, marquillas): cada
+        # talla lleva su cierre con su largo y su marquilla con su número.
+        if unid_talla and reglas["por_talla"]:
             fila["por_talla"] = {
                 t: int(math.ceil(base_por_prenda * n))
                 for t, n in unid_talla.items()}
