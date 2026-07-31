@@ -15,7 +15,7 @@ import {
   obtenerLogistica, registrarGuiaRetorno, confirmarRecepcion, registrarDespacho,
   ESTADOS_LABEL, type EstadoPostventa, type PreviewFiscal,
   opcionesReemplazo, elegirReemplazo, dejarSaldoAFavor,
-  type OpcionReemplazo, type PagoExcedente,
+  type OpcionReemplazo, type PagoExcedente, sincronizarInventario,
 } from "@/lib/postventa";
 
 // Transiciones ofrecidas en UI (espejo del backend postventa_logic.TRANSICIONES).
@@ -628,6 +628,11 @@ function ElegirQueSeLleva({ caseId, tienda, onListo, onSaldo, calculando }:
     queryFn: () => opcionesReemplazo(caseId, q),
     enabled: salida === "reemplazo" && !!tienda,
   });
+  // Trae el inventario de Siigo a nuestra tabla. Tarda, así que se avisa.
+  const sync = useMutation({
+    mutationFn: sincronizarInventario,
+    onSuccess: () => ops.refetch(),
+  });
   const fijar = useMutation({
     mutationFn: (o: OpcionReemplazo) => elegirReemplazo(caseId, o.code, o.nombre),
     onSuccess: (_d, o) => { setElegido(o); onListo(); },
@@ -709,6 +714,19 @@ function ElegirQueSeLleva({ caseId, tienda, onListo, onSaldo, calculando }:
         <p className="text-sm text-graphite">
           Sin existencias en {ops.data.bodega} para esa búsqueda.
         </p>
+      )}
+      {ops.data?.frescura && (
+        <div className="flex items-center justify-between gap-2">
+          <span className={`text-[0.68rem] ${ops.data.viejo ? "text-ochre" : "text-graphite"}`}>
+            {ops.data.frescura}
+          </span>
+          <button type="button" disabled={sync.isPending}
+            onClick={() => sync.mutate()}
+            className="text-[0.68rem] text-navy-600 underline underline-offset-2
+                       disabled:opacity-50">
+            {sync.isPending ? "Actualizando… (tarda un par de minutos)" : "Actualizar ahora"}
+          </button>
+        </div>
       )}
       <div className="max-h-64 space-y-1.5 overflow-y-auto">
         {(ops.data?.opciones ?? []).map((o) => (
