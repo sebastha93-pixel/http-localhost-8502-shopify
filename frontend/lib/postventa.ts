@@ -21,6 +21,8 @@ export interface CasoPostventa {
    *  que no tienen nº de pedido con el cual encontrarla. */
   siigo_invoice_id?: string | null;
   tienda?: string | null;
+  /** Los pasos que ESTE caso recorre. Un cambio en tienda son 4, no 10. */
+  ciclo?: EstadoPostventa[];
   created_at: string;
 }
 

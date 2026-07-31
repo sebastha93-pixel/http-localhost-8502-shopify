@@ -63,13 +63,18 @@ export default function PostventaPage() {
         </p>
       )}
 
+      {/* Solo los estados que TIENEN casos. Trece chips vacíos hacen ver el
+          flujo como un trámite largo, y ninguno de ellos lleva a nada. El
+          activo se conserva aunque quede en cero para poder volver. */}
       <div className="flex gap-1.5 mb-4 flex-wrap">
         <FiltroChip label="Todos" activo={filtro === ""} onClick={() => setFiltro("")} />
-        {(Object.keys(ESTADOS_LABEL) as EstadoPostventa[]).map((e) => (
-          <FiltroChip key={e} label={ESTADOS_LABEL[e]} activo={filtro === e}
-                      onClick={() => setFiltro(e)}
-                      contador={dash.data?.por_estado[e]} />
-        ))}
+        {(Object.keys(ESTADOS_LABEL) as EstadoPostventa[])
+          .filter((e) => (dash.data?.por_estado[e] ?? 0) > 0 || filtro === e)
+          .map((e) => (
+            <FiltroChip key={e} label={ESTADOS_LABEL[e]} activo={filtro === e}
+                        onClick={() => setFiltro(e)}
+                        contador={dash.data?.por_estado[e]} />
+          ))}
       </div>
 
       {casos.isLoading && <LoadingState />}
