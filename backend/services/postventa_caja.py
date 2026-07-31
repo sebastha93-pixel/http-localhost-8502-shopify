@@ -126,8 +126,9 @@ def documentos_del_dia(fecha: str) -> list[dict]:
         return []
     dia = str(fecha or "")[:10]
     r = (sb.table("postventa_fiscal")
-           .select("doc_kind,status,created_at,siigo_document_number,amount,"
-                   "payload_snapshot,postventa_cases(tienda,case_number)")
+           .select("doc_kind,status,created_at,siigo_document_number,"
+                   "siigo_document_id,amount,payload_snapshot,"
+                   "postventa_cases(tienda,case_number)")
            .eq("brand_id", pv._brand_id())
            .eq("status", "emitido")
            .gte("created_at", f"{dia}T00:00:00")
@@ -140,8 +141,88 @@ def documentos_del_dia(fecha: str) -> list[dict]:
     return filas
 
 
+def _factura_de_siigo(documento_id: Optional[str]) -> Optional[dict]:
+    if not documento_id:
+        return None
+    try:
+        from backend.services import siigo
+        return siigo.siigo_get(f"/invoices/{documento_id}")
+    except Exception as e:  # noqa: BLE001
+        log.warning("[caja] no se pudo leer la factura %s: %s", documento_id, e)
+        return None
+
+
+def verificar(cierre: dict, documentos: list[dict]) -> dict:
+    """Confirma cada cobro contra la factura guardada en Siigo.
+
+    Se hace por caso y no en bloque para poder decir CUÁL no coincide: un
+    total que no cuadra sin saber dónde no le sirve a quien cierra la caja.
+    """
+    por_caso = {d.get("caso", {}).get("case_number"): d for d in documentos
+                if d.get("doc_kind") == "factura"}
+    confirmados = 0
+    revisar = []
+    for c in cierre.get("casos", []):
+        d = por_caso.get(c.get("caso")) or {}
+        enviado = _cobrado(d.get("payload_snapshot") or {})
+        fac = _factura_de_siigo(d.get("siigo_document_id"))
+        v = comparar_pagos(enviado=enviado, factura=fac)
+        c["confirmado"] = v["coincide"]
+        c["en_siigo"] = v.get("en_siigo")
+        if v["coincide"] is True:
+            confirmados += 1
+        else:
+            revisar.append({"caso": c.get("caso"), "factura": c.get("factura"),
+                            "cobrado": c.get("cobrado"),
+                            "en_siigo": v.get("en_siigo"),
+                            "motivo": v.get("motivo") or
+                                      "La factura en Siigo no tiene el mismo cobro."})
+    cierre["confirmados"] = confirmados
+    cierre["revisar"] = revisar
+    return cierre
+
+
 def cierre_de_todos(fecha: str) -> list[dict]:
     """Un cierre por punto de venta. Lo que se imprime al cerrar el día."""
     docs = documentos_del_dia(fecha)
-    return [cierre_del_dia(docs, tienda=p["clave"], fecha=fecha)
+    return [verificar(cierre_del_dia(docs, tienda=p["clave"], fecha=fecha), docs)
             for p in tiendas.listar()]
+
+
+# ── Confirmación contra Siigo ─────────────────────────────────────────
+# El cierre sumaba `payload_snapshot`: lo que le MANDAMOS a Siigo. Nunca
+# volvía a leer la factura. Siigo descarta en silencio lo que no le gusta
+# —pasó con `warehouse`— así que el cierre podía mandar a la cajera a buscar
+# plata que la contabilidad no tiene.
+
+def comparar_pagos(*, enviado: list, factura: Optional[dict]) -> dict:
+    """Lo que cobramos según nosotros vs. lo que quedó en la factura.
+
+    `coincide` es None cuando no se pudo leer la factura: sin dato no se
+    afirma que esté bien. Un cierre sin cobros no necesita verificación.
+    """
+    nuestro = round(sum(p["value"] for p in _sin_anticipo(enviado)), 2)
+    if nuestro <= 0:
+        return {"coincide": True, "enviado": 0.0, "en_siigo": 0.0}
+    if not factura:
+        return {"coincide": None, "enviado": nuestro, "en_siigo": None,
+                "motivo": "No se pudo leer la factura en Siigo."}
+    suyo = round(sum(p["value"] for p in
+                     _sin_anticipo(factura.get("payments") or [])), 2)
+    return {"coincide": abs(nuestro - suyo) <= 1.0,
+            "enviado": nuestro, "en_siigo": suyo}
+
+
+def _sin_anticipo(pagos) -> list[dict]:
+    salida = []
+    for p in (pagos or []):
+        pid = p.get("id")
+        if not pid or int(pid) == F.ANTICIPO_CLIENTES_ID:
+            continue
+        try:
+            v = round(float(p.get("value") or 0), 2)
+        except (TypeError, ValueError):
+            continue
+        if v > 0:
+            salida.append({"id": int(pid), "value": v})
+    return salida
