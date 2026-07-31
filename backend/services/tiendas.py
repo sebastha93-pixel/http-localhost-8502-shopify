@@ -36,6 +36,14 @@ _PAGO_CAJA_ARRAYANES = 8282
 BODEGA_FLORIDA = 48
 BODEGA_ARRAYANES = 37
 
+# Centros de costo, leidos de GET /cost-centers (no del numero de pantalla).
+# En MALE los centros de costo son CANALES de venta (PAGINA WEB, INSTAGRAM,
+# WHATSAPP...). Los almacenes son los de las tiendas fisicas: un cambio
+# presencial se contabiliza en el local donde ocurrio.
+#   85 CAMBIOS · 97 PAGINA WEB · 677 ALMACEN ARRAYANES · 774 ALMACEN FLORIDA
+CC_ALMACEN_FLORIDA = 774
+CC_ALMACEN_ARRAYANES = 677
+
 # Tipos de documento por punto de venta. Siigo NO los expone en
 # /document-types (devuelve 9 y faltan justo estos), así que se dedujeron de
 # facturas reales con /siigo/prefijos:
@@ -79,6 +87,7 @@ TIENDAS_DEFAULT: dict[str, dict] = {
         "documento_factura_id": DOC_FV11,
         "bodega_nombre": "Florida",
         "bodega_id": BODEGA_FLORIDA,
+        "centro_costo_id": CC_ALMACEN_FLORIDA,
         "formas_pago": [
             {"id": _PAGO_DATAFONO_FLORIDA, "nombre": "Datáfono Florida"},
             {"id": _PAGO_CAJA_FLORIDA, "nombre": "Efectivo · Caja Florida"},
@@ -91,6 +100,7 @@ TIENDAS_DEFAULT: dict[str, dict] = {
         "documento_factura_id": DOC_FV12,
         "bodega_nombre": "Florida",
         "bodega_id": BODEGA_FLORIDA,     # misma bodega que la caja 1
+        "centro_costo_id": CC_ALMACEN_FLORIDA,
         "formas_pago": [
             {"id": _PAGO_DATAFONO_FLORIDA, "nombre": "Datáfono Florida"},
             {"id": _PAGO_CAJA_FLORIDA, "nombre": "Efectivo · Caja Florida"},
@@ -103,6 +113,7 @@ TIENDAS_DEFAULT: dict[str, dict] = {
         "documento_factura_id": DOC_FV6,
         "bodega_nombre": "Arrayanes",
         "bodega_id": BODEGA_ARRAYANES,
+        "centro_costo_id": CC_ALMACEN_ARRAYANES,
         "formas_pago": [
             {"id": _PAGO_DATAFONO_ARRAYANES, "nombre": "Datáfono Arrayanes"},
             {"id": _PAGO_CAJA_ARRAYANES, "nombre": "Efectivo · Caja Arrayanes"},
