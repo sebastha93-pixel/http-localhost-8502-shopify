@@ -10,9 +10,12 @@ panel) para que el documento cuadre al centavo con la DIAN.
 """
 from __future__ import annotations
 
+import logging
 import re
 from decimal import Decimal
 from typing import Optional
+
+log = logging.getLogger("fiscal_logic")
 
 # ── IDs de la cuenta ─────────────────────────────────────────────────
 NC_ELECTRONICA_ID = 11817     # Nota Crédito Electrónica (va a DIAN)
@@ -246,6 +249,43 @@ def base_desde_precio_con_iva(precio_con_iva: float) -> float:
     return float((v / factor).quantize(Decimal("0.01")))
 
 
+def descuento_para(discount_type: Optional[str], *, base: float,
+                   descuento_pesos: float) -> Optional[float]:
+    """El descuento en la unidad que ESE comprobante espera.
+
+    `discount_type` viene del tipo de documento en Siigo y NO es igual en
+    todos:
+
+        FV-1  "Value"       -> pesos
+        FV-5  "Percentage"  -> porcentaje
+
+    Escribirlo fijo produce una factura con el monto equivocado según cuál
+    esté activo, y sale SIN error — solo mal. Por eso ante un tipo que no se
+    reconoce NO se manda descuento: una factura sin descuento se corrige; una
+    con el monto errado ya salió a la DIAN.
+
+    La asesora escribe pesos, que es como piensa con la clienta enfrente.
+    """
+    base = float(base or 0)
+    pesos = round(float(descuento_pesos or 0), 2)
+    if pesos <= 0 or base <= 0:
+        return None
+    if pesos > base:
+        raise ValueError(
+            f"descuento_mayor_que_el_precio: {pesos:,.0f} sobre {base:,.0f}"
+            .replace(",", "."))
+    tipo = (discount_type or "").strip().lower()
+    if tipo == "value":
+        return pesos
+    if tipo == "percentage":
+        # `decimals: true` en el comprobante, así que no hay que redondear a
+        # entero: eso desviaría el total en varios pesos.
+        return round(pesos * 100.0 / base, 4)
+    log.warning("[fiscal] discount_type desconocido (%r): no se manda descuento",
+                discount_type)
+    return None
+
+
 def construir_payload_factura_reemplazo(*, factura_original: dict,
                                         item_reemplazo: dict,
                                         credito_con_iva: float,
@@ -254,7 +294,9 @@ def construir_payload_factura_reemplazo(*, factura_original: dict,
                                         bodega_id: Optional[int] = None,
                                         pago_excedente_id: Optional[int] = None,
                                         pagos_excedente: Optional[list] = None,
-                                        centro_costo_id: Optional[int] = None) -> dict:
+                                        centro_costo_id: Optional[int] = None,
+                                        descuento_pesos: float = 0,
+                                        discount_type: Optional[str] = None) -> dict:
     """Arma el POST de la factura del reemplazo. NO emite.
 
     Regla del fundador:
@@ -272,7 +314,16 @@ def construir_payload_factura_reemplazo(*, factura_original: dict,
     cliente = factura_original.get("customer") or {}
     price_base = Decimal(str(item_reemplazo["price_base"]))
     qty = Decimal(str(item_reemplazo.get("quantity") or 1))
-    total = float((price_base * qty * (Decimal("1") + IVA_PORCENTAJE / Decimal("100")))
+    # El descuento baja la base gravable: el IVA y el excedente se calculan
+    # sobre el precio YA descontado. Calcularlos sobre el de lista haría que
+    # la clienta pagara de más.
+    bruto = price_base * qty
+    desc_pesos = Decimal(str(round(float(descuento_pesos or 0), 2)))
+    if desc_pesos > bruto:
+        raise ValueError("descuento_mayor_que_el_precio")
+    neto = bruto - desc_pesos
+
+    total = float((neto * (Decimal("1") + IVA_PORCENTAJE / Decimal("100")))
                   .quantize(Decimal("0.01")))
     credito = float(Decimal(str(credito_con_iva)).quantize(Decimal("0.01")))
 
@@ -300,6 +351,12 @@ def construir_payload_factura_reemplazo(*, factura_original: dict,
     }
     if item_reemplazo.get("seller"):
         linea["seller"] = item_reemplazo["seller"]
+    # El precio de lista NO se toca: la clienta ve cuánto costaba y cuánto se
+    # ahorró. Bajar el precio en vez de descontar borraría ese dato.
+    desc = descuento_para(discount_type, base=float(bruto),
+                          descuento_pesos=float(desc_pesos))
+    if desc is not None:
+        linea["discount"] = desc
     # bodega_id manda (la tienda que factura); si no, la del ítem.
     wid = _warehouse_id(bodega_id if bodega_id is not None
                         else item_reemplazo.get("warehouse"))
