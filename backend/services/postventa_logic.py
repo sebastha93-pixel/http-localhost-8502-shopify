@@ -245,3 +245,15 @@ def ciclo_del_caso(tipo: str, *, tienda: str = "") -> list[str]:
 
     pasos.append("cerrado")
     return pasos
+
+
+def hubo_cambio_de_reemplazo(anterior, nuevo) -> bool:
+    """¿La prenda elegida cambió de verdad?
+
+    La asesora vuelve a la lista y reelige mientras ajusta el precio o revisa
+    tallas. Registrar cada clic deja el historial lleno de líneas iguales — y
+    el historial es lo que se mira cuando algo no cuadra.
+    """
+    a = (anterior or "").strip().lower()
+    b = (nuevo or "").strip().lower()
+    return a != b

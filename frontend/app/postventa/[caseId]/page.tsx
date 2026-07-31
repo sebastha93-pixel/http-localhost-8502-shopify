@@ -69,7 +69,8 @@ export default function CasoDetallePage() {
         <div className="lg:col-span-2 space-y-4">
           <PanelItems caseId={caseId} status={c.status} onAgregado={refrescar}
             sinCompraEnlazada={!c.siigo_invoice_id && !c.shopify_order_name} />
-          <PanelLogistica caseId={caseId} status={c.status} onCambio={refrescar} />
+          <PanelLogistica caseId={caseId} status={c.status}
+            tienda={c.tienda} onCambio={refrescar} />
           <PanelFiscal caseId={caseId} status={c.status} onEmitido={refrescar} />
           <PanelFactura caseId={caseId} status={c.status} tipo={c.type}
             tienda={c.tienda} onEmitido={refrescar} />
@@ -346,8 +347,12 @@ const ESTADOS_CON_LOGISTICA = new Set([
   "recibido_bodega", "nota_credito_emitida", "factura_emitida", "cambio_enviado",
 ]);
 
-function PanelLogistica({ caseId, status, onCambio }:
-  { caseId: string; status: string; onCambio: () => void }) {
+function PanelLogistica({ caseId, status, tienda, onCambio }:
+  { caseId: string; status: string; tienda?: string | null;
+    onCambio: () => void }) {
+  // En un cambio PRESENCIAL no hay logística inversa: la clienta trae la
+  // prenda en la mano y se lleva la otra ahí mismo. El return va DESPUÉS de
+  // los hooks — salir antes rompe las reglas de React.
   const [guiaRet, setGuiaRet] = useState("");
   const [transRet, setTransRet] = useState("");
   const [guiaDesp, setGuiaDesp] = useState("");
@@ -366,6 +371,9 @@ function PanelLogistica({ caseId, status, onCambio }:
     mutationFn: () => registrarDespacho(caseId, guiaDesp, transDesp),
     onSuccess: () => { setGuiaDesp(""); setTransDesp(""); refrescar(); } });
 
+  // Presencial: la clienta trae la prenda y se lleva la otra ahí mismo. No
+  // hay guía que registrar ni nada que despachar.
+  if (tienda) return null;
   if (!ESTADOS_CON_LOGISTICA.has(status)) return null;
 
   const l = log.data ?? {};

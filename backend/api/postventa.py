@@ -279,14 +279,20 @@ def reemplazo_elegir(
         ok, detalle = INV.disponible(bodega, body.requested_sku)
         if not ok:
             raise HTTPException(400, detalle)
+    from backend.services import postventa_logic as _L
+    previos = svc.items_caso(case_id) or [{}]
+    antes = (previos[0] or {}).get("requested_sku")
     try:
         item = svc.elegir_reemplazo(case_id, requested_sku=body.requested_sku,
                                     requested_variant=body.requested_variant,
                                     requested_price=body.requested_price)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    svc.registrar_evento(case_id, "reemplazo_elegido",
-                         f"Se lleva {body.requested_sku}", created_by=user.id)
+    # Solo si cambio de verdad: la asesora reelige mientras ajusta, y cada
+    # clic dejaba una linea igual en el historial.
+    if _L.hubo_cambio_de_reemplazo(antes, body.requested_sku):
+        svc.registrar_evento(case_id, "reemplazo_elegido",
+                             f"Se lleva {body.requested_sku}", created_by=user.id)
     return item
 
 
