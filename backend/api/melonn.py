@@ -486,6 +486,28 @@ def auditoria_datos(
     }
 
 
+@router.get("/diagnostico-filtros")
+def diagnostico_filtros(
+    solo_contraentrega: bool = Query(default=False),
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
+) -> dict:
+    """¿Qué pedidos descarta el tablero y por qué regla?
+
+    Responde la pregunta "Melonn dice 21 y la app muestra 17, ¿dónde están los
+    4?". Pide el listado CRUDO (paginando hasta el final, sin el corte
+    anticipado) y clasifica cada descarte con su número de orden.
+
+    OJO: gasta cuota de Melonn porque pagina completo. Es para diagnóstico
+    puntual, no para dejarlo llamando desde una pantalla.
+    """
+    try:
+        from backend.services import diagnostico_filtros as dg
+        return dg.reporte(solo_contraentrega=solo_contraentrega)
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"diagnostico_filtros: {str(exc)[:200]}")
+
+
 @router.get("/pedidos/{orden}")
 def pedido_detalle(orden: str) -> dict:
     """Detalle de un pedido específico (por orden_tienda u orden_melonn)."""

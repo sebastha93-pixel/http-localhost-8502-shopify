@@ -1562,6 +1562,41 @@ def _fetch_api() -> list:
       - Si la página viene incompleta (<50) → es la última página.
       - Límite de seguridad: _MAX_PAGES páginas.
     """
+    return _fetch_api_filtrado()
+
+
+def _fetch_api_raw(max_pages: int = _MAX_PAGES) -> list:
+    """TODO lo que devuelve el listado de Melonn, sin filtrar y SIN el corte
+    anticipado de paginación. Es la verdad contra la cual comparar el tablero.
+
+    Existe para poder responder "¿por qué no aparece el pedido X?": el fetch
+    normal descarta por seis reglas distintas y además puede detenerse antes de
+    la última página si encuentra una completa sin pedidos operativos. Si esa
+    heurística se equivoca, pierde pedidos sin dejar rastro — acá se ve.
+
+    Solo para diagnóstico: pagina hasta el final, así que gasta más cuota.
+    """
+    out: list = []
+    page = 0
+    tam = None
+    while page < max_pages:
+        resp = _get("sell-orders", params={"per_page": _PAGE_SIZE, "page": page})
+        if resp is None:
+            break
+        items = resp.get("data") or []
+        if not items:
+            break
+        if tam is None:
+            tam = len(items)
+        out.extend(items)
+        if len(items) < tam:
+            break
+        page += 1
+    log.info(f"[diagnostico] listado crudo: {len(out)} pedidos en {page + 1} página(s)")
+    return out
+
+
+def _fetch_api_filtrado() -> list:
     corte       = _fecha_corte()
     pedidos_raw = []
     page        = 0
