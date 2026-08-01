@@ -277,6 +277,24 @@ def _cerrar(hallazgos: list, medidas: dict, avisar: bool) -> dict:
     rojos = [h for h in hallazgos if h["nivel"] == "rojo"]
     amarillos = [h for h in hallazgos if h["nivel"] == "amarillo"]
     semaforo = "rojo" if rojos else ("amarillo" if amarillos else "verde")
+
+    # El chequeo anterior se lee ANTES de guardar el nuevo — se necesita para
+    # decidir si este aviso ya se mandó.
+    previo = None
+    try:
+        previo = _ultimo_chequeo()
+    except Exception:
+        pass
+
+    avisado_en = ((previo or {}).get("medidas") or {}).get("avisado_en")
+    mandar = bool(avisar and rojos and _debe_avisar(rojos, previo))
+    if mandar:
+        avisado_en = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Se arrastra en cada fila: así una sola lectura de la fila anterior siempre
+    # dice cuándo fue el último aviso, sin recorrer el histórico.
+    if avisado_en:
+        medidas["avisado_en"] = avisado_en
+
     reporte = {
         "semaforo":  semaforo,
         "ok":        semaforo == "verde",
@@ -290,9 +308,46 @@ def _cerrar(hallazgos: list, medidas: dict, avisar: bool) -> dict:
         _guardar(reporte)
     except Exception:
         pass
-    if avisar and rojos:
+    if mandar:
         _notificar(rojos, medidas)
+    elif avisar and rojos:
+        log.info(f"[salud] {len(rojos)} en rojo, ya avisado — no repito el aviso")
     return reporte
+
+
+# Cada cuánto se vuelve a avisar de un problema que sigue igual.
+RECORDAR_CADA_H = 6
+
+
+def _debe_avisar(rojos: list, previo: Optional[dict]) -> bool:
+    """¿Mandar aviso, o este problema ya se avisó?
+
+    El scheduler chequea cada hora. Sin este filtro, un problema que dure el día
+    manda ~10 avisos idénticos — y una campanita que repite es una campanita que
+    se deja de leer, que es justo lo contrario de para qué existe esto.
+
+    Se avisa cuando: es un problema nuevo o distinto, o cuando el mismo problema
+    sigue vivo y ya pasaron RECORDAR_CADA_H horas del último aviso.
+    """
+    if not previo:
+        return True
+    claves_ahora = sorted({h["clave"] for h in rojos})
+    claves_antes = sorted({h.get("clave") for h in (previo.get("hallazgos") or [])
+                           if h.get("nivel") == "rojo"})
+    if claves_ahora != claves_antes:
+        return True   # cambió el problema: hay que contarlo
+
+    avisado_en = (previo.get("medidas") or {}).get("avisado_en")
+    if not avisado_en:
+        return True   # mismo problema pero nunca se avisó
+    try:
+        cuando = datetime.fromisoformat(str(avisado_en))
+        if cuando.tzinfo is None:
+            cuando = cuando.replace(tzinfo=timezone.utc)
+        horas = (datetime.now(timezone.utc) - cuando).total_seconds() / 3600
+        return horas >= RECORDAR_CADA_H
+    except Exception:
+        return True   # si no se entiende la fecha, mejor avisar que callarse
 
 
 def _notificar(rojos: list, medidas: dict) -> None:
