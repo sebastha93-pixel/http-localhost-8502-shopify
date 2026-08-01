@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { usePedidos } from "@/lib/hooks";
 import { PedidosTable } from "@/components/pedidos-table";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
+import { SaludLogisticaChip } from "@/components/salud-logistica-chip";
 import { KpiStrip } from "@/components/kpi-card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Pedido } from "@/lib/types";
@@ -32,6 +33,7 @@ export default function EnviosPage() {
     <PageShell
       title="Envíos"
       subtitle={`${groups.todos.length} envíos prepago · pagados, en flujo logístico`}
+      aside={<SaludLogisticaChip />}
       isFetching={isFetching}
       onRefresh={() => refetch()}
     >

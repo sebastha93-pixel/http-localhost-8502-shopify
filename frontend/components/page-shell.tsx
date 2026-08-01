@@ -9,8 +9,14 @@ interface PageShellProps {
   subtitle?: string;
   isFetching?: boolean;
   onRefresh?: () => void;
-  /** Timestamp (ms) de la última carga de datos — muestra "Actualizado hace Xm". */
+  /** Timestamp (ms) de la última carga de datos — muestra "Actualizado hace Xm".
+   *  OJO: es cuándo el NAVEGADOR pidió los datos, no cuándo la app le preguntó a
+   *  la fuente. En las pantallas de logística eso no alcanza (los datos pueden
+   *  venir de un caché viejo y verse recién cargados) — para eso está `aside`. */
   dataUpdatedAt?: number;
+  /** Se pinta a la izquierda de "Refrescar". Para indicadores propios de la
+   *  pantalla, como el semáforo de confiabilidad del tablero logístico. */
+  aside?: React.ReactNode;
   children: React.ReactNode;
 }
 
@@ -27,7 +33,7 @@ function UpdatedAgo({ at }: { at: number }) {
   return <span className="text-[0.68rem] text-graphite/80 tabular-nums">Actualizado {txt}</span>;
 }
 
-export function PageShell({ title, subtitle, isFetching, onRefresh, dataUpdatedAt, children }: PageShellProps) {
+export function PageShell({ title, subtitle, isFetching, onRefresh, dataUpdatedAt, aside, children }: PageShellProps) {
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-end sm:justify-between">
@@ -44,6 +50,7 @@ export function PageShell({ title, subtitle, isFetching, onRefresh, dataUpdatedA
         </div>
         <div className="flex shrink-0 items-center gap-3 self-start sm:self-auto">
         {dataUpdatedAt ? <UpdatedAgo at={dataUpdatedAt} /> : null}
+        {aside}
         {onRefresh && (
           <button
             onClick={onRefresh}

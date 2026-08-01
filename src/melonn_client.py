@@ -1023,10 +1023,67 @@ def _cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:
     return _sq_cache_leer(ignorar_ttl)
 
 
-def _cache_guardar(pedidos: list, fuente: str = "api_live"):
-    """Escribe en Supabase Y en SQLite (redundancia)."""
+# Cuánto puede encogerse el caché de un guardado a otro sin que se considere un
+# accidente. 0.40 = si el nuevo tiene menos del 40% del anterior, se bloquea.
+# El caso real que esto habría atajado: 1.208 pedidos → 3 (0,2%), el 2026-08-01,
+# cuando un webhook reescribió el caché entero con un solo pedido y el tablero de
+# Envíos apareció en cero. Un encogimiento legítimo grande —arreglar la ventana
+# de 90 días bajó 2.126 → 1.158, o sea 54%— pasa sin problema.
+_CAIDA_MAXIMA = 0.40
+_MINIMO_ABSOLUTO = 50        # por debajo de esto no hay tablero que valga
+
+
+def _total_en_cache() -> int:
+    """Cuántos pedidos tiene el caché HOY. Lee solo el contador, no el blob."""
+    try:
+        sb = _sb()
+        if sb:
+            rows = (sb.table(_SB_TABLA).select("total").eq("id", 1).execute()).data
+            if rows:
+                return int(rows[0].get("total") or 0)
+    except Exception:
+        pass
+    return 0
+
+
+def _cache_guardar(pedidos: list, fuente: str = "api_live", forzar: bool = False):
+    """Escribe en Supabase Y en SQLite (redundancia).
+
+    CON CANDADO: rechaza un guardado que borraría la mayor parte del tablero.
+    Antes cualquier ruta podía dejar el caché en tres pedidos y nadie se enteraba
+    hasta abrir la app. `forzar=True` es para los casos donde encoger es la
+    intención (cargar un CSV, limpiar a mano).
+    """
+    nuevos = len(pedidos)
+    if not forzar:
+        antes = _total_en_cache()
+        demasiado_chico = (
+            antes >= _MINIMO_ABSOLUTO
+            and (nuevos < _MINIMO_ABSOLUTO or nuevos < antes * _CAIDA_MAXIMA)
+        )
+        if demasiado_chico:
+            log.error(
+                f"GUARDADO BLOQUEADO: el caché pasaría de {antes} a {nuevos} "
+                f"pedidos (fuente={fuente}). Eso no es un cambio de datos, es "
+                f"una pérdida. Se conserva el caché anterior; revisar por qué "
+                f"llegó una lista tan corta."
+            )
+            _CANDADO_CACHE.update({
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "antes": antes, "intento": nuevos, "fuente": fuente,
+            })
+            return
     _sb_cache_guardar(pedidos, fuente)
     _sq_cache_guardar(pedidos, fuente)
+
+
+# Último guardado que el candado rechazó. Lo lee el chequeo de salud: un bloqueo
+# significa que algo intentó vaciar el tablero y hay que mirar por qué.
+_CANDADO_CACHE: dict = {"ts": None, "antes": 0, "intento": 0, "fuente": ""}
+
+
+def ultimo_guardado_bloqueado() -> dict:
+    return dict(_CANDADO_CACHE)
 
 
 def stock_por_warehouse(warehouse_code: str = "MED-2") -> dict[str, int]:
@@ -1763,6 +1820,20 @@ def _fetch_api_raw(max_pages: int = _MAX_PAGES) -> list:
     return out
 
 
+# Radiografía del último fetch al listado. La lee el chequeo de salud para poder
+# responder "¿el tablero está completo?" sin adivinar. Es de proceso, no
+# compartida entre workers: el chequeo la complementa con el reloj de Supabase.
+_ULTIMO_FETCH: dict = {
+    "ts": None, "paginas": 0, "pedidos_en_ventana": 0,
+    "motivo_fin": "nunca_corrio", "completo": False,
+}
+
+
+def ultimo_fetch() -> dict:
+    """Cómo terminó el último fetch del listado, para el chequeo de salud."""
+    return dict(_ULTIMO_FETCH)
+
+
 def _fetch_api_filtrado() -> list:
     corte       = _fecha_corte()
     pedidos_raw = []
@@ -1780,12 +1851,21 @@ def _fetch_api_filtrado() -> list:
     # agotada), el loop no corre y el log de abajo la leería sin existir.
     activos_en_pagina = 0
 
+    motivo_fin = "tope_paginas"
+
     while page < _MAX_PAGES:
         resp = _get("sell-orders", params={"per_page": _PAGE_SIZE, "page": page})
         if resp is None:
+            # Un GET fallido (cuota agotada, 5xx, timeout) cortaba la paginación
+            # SIN DEJAR RASTRO, y lo que se había alcanzado a traer se guardaba
+            # como si fuera el listado completo. Así fue como el 2026-08-01 medí
+            # 1.310 pedidos "crudos" y creí que Melonn no tenía más: la lista
+            # estaba cortada a la mitad y yo comparé el tablero contra ella.
+            motivo_fin = f"fallo_get_pagina_{page}"
             break
         items = resp.get("data") or []
         if not items:
+            motivo_fin = "sin_mas_datos"
             break
         if tam_pagina is None:
             tam_pagina = len(items)
@@ -1828,11 +1908,35 @@ def _fetch_api_filtrado() -> list:
         # media hora, ~670 peticiones al día sobre una cuota de 10.000. Pagar
         # eso es más barato que perder un pedido en silencio.
         if len(items) < tam_pagina:
-            break   # última página
+            motivo_fin = "ultima_pagina"
+            break
         page += 1
 
-    log.info(f"Melonn API: {len(pedidos_raw)} pedidos ({page+1} página(s), "
-             f"{activos_en_pagina} operativos en la última)")
+    # ── ¿El listado quedó COMPLETO? ──────────────────────────────────────────
+    # Solo dos finales son buenos: la última página vino incompleta, o Melonn
+    # devolvió una página vacía. Cualquier otro final significa que faltan
+    # pedidos, y un listado incompleto NO puede reemplazar el caché: pisaría
+    # datos buenos con datos parciales, que es justo lo que no se puede notar
+    # a simple vista.
+    completo = motivo_fin in ("ultima_pagina", "sin_mas_datos")
+    _ULTIMO_FETCH.update({
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "paginas": page + 1,
+        "pedidos_en_ventana": len(pedidos_raw),
+        "motivo_fin": motivo_fin,
+        "completo": completo,
+    })
+    log.info(f"Melonn API: {len(pedidos_raw)} pedidos en ventana "
+             f"({page + 1} página(s), fin={motivo_fin})")
+
+    if not completo:
+        # Devolver vacío es lo correcto: obtener_pedidos_activos conserva el
+        # caché anterior cuando el fetch viene vacío. Mejor datos de hace un rato
+        # que un tablero al que le faltan pedidos sin avisar.
+        log.error(f"FETCH INCOMPLETO ({motivo_fin}) — se descartan los "
+                  f"{len(pedidos_raw)} pedidos traídos y se conserva el caché "
+                  f"anterior. El tablero queda viejo, pero no mutilado.")
+        return []
 
     # Sellar el reloj del listado SOLO si de verdad trajimos algo. Si la cuota
     # está agotada, _get devuelve None, pedidos_raw queda vacío y NO se sella:
@@ -2590,7 +2694,8 @@ def cargar_desde_csv(pedidos: list) -> dict:
     """
     if not pedidos:
         return {"ok": False, "msg": "Sin pedidos válidos"}
-    _cache_guardar(pedidos, fuente="csv_upload")
+    # forzar: acá encoger el caché ES la intención (alguien subió un CSV a mano).
+    _cache_guardar(pedidos, fuente="csv_upload", forzar=True)
     return {"ok": True, "total": len(pedidos)}
 
 

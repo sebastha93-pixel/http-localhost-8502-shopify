@@ -508,6 +508,35 @@ def diagnostico_filtros(
         raise HTTPException(500, f"diagnostico_filtros: {str(exc)[:200]}")
 
 
+@router.get("/salud")
+def salud(
+    _: CurrentUser = Depends(require_permission("operaciones", "ver")),
+) -> dict:
+    """¿El tablero logístico se puede creer ahora mismo?
+
+    Semáforo + hallazgos. Es barato: mide sobre el caché, no llama a Melonn, así
+    que la pantalla lo puede pedir sin gastar cuota.
+
+    CON permiso, aunque no devuelva datos de clientes: mientras esté pendiente
+    decidir qué hacer con los endpoints públicos de este módulo, no se abre uno
+    nuevo. Si algún día hace falta un monitor externo, se abre a propósito.
+
+    `avisar` queda apagado acá — el aviso a la campanita lo manda el scheduler,
+    para no notificar cada vez que alguien abre la pantalla.
+    """
+    try:
+        from backend.services import salud_logistica
+        return salud_logistica.chequear(avisar=False)
+    except Exception as exc:
+        import traceback; traceback.print_exc()
+        # Un chequeo de salud que devuelve 500 no sirve de nada: el monitor no
+        # sabría distinguir "el tablero está mal" de "el chequeo está mal".
+        return {"semaforo": "rojo", "ok": False,
+                "hallazgos": [{"nivel": "rojo", "clave": "chequeo_caido",
+                               "mensaje": f"El chequeo de salud falló: {str(exc)[:200]}"}],
+                "medidas": {}}
+
+
 @router.get("/pedidos/{orden}")
 def pedido_detalle(orden: str) -> dict:
     """Detalle de un pedido específico (por orden_tienda u orden_melonn)."""

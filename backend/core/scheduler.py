@@ -145,6 +145,7 @@ def _refresh_once(full: bool = False) -> dict:
                 _persistir_datos_cliente_en_overrides()
             except Exception as e:
                 log.debug(f"Persist overrides: {e}")
+            _chequear_salud()
             last_run["ok"] = True
             log.info("Scheduler light: ✓")
             return {"ok": True, "type": "light"}
@@ -153,6 +154,8 @@ def _refresh_once(full: bool = False) -> dict:
         log.info("Scheduler: sync_completo...")
         result = mc.sync_completo()
         _last_full_at = time.time()
+
+        _chequear_salud()
 
         last_run["ok"] = bool(result.get("ok"))
         last_run["completados"] = result.get("completados", 0)
@@ -213,6 +216,33 @@ def start() -> threading.Thread:
 def stop():
     """Detiene el scheduler (al apagar el servidor)."""
     _stop_event.set()
+
+
+def _chequear_salud() -> None:
+    """Centinela del tablero logístico, después de cada refresh.
+
+    Va acá y no en un cron aparte porque el momento útil para preguntar "¿el
+    tablero se puede creer?" es justo cuando acabamos de intentar actualizarlo.
+
+    avisar=True: si algo está en rojo, aviso a la campanita de operaciones. Esta
+    es la pieza que faltaba — el 2026-08-01 el tablero falló cuatro veces sin dar
+    un solo error, y se descubrió porque Sebastián contó pedidos a mano.
+
+    Nunca revienta el tick del scheduler: el refresh de datos importa más que el
+    chequeo, así que cualquier fallo acá se registra y se sigue.
+    """
+    try:
+        from backend.services import salud_logistica
+        r = salud_logistica.chequear(avisar=True)
+        sem = r.get("semaforo")
+        if sem == "verde":
+            log.info(f"[salud] verde · {r.get('medidas', {}).get('total_tablero')} pedidos")
+        else:
+            claves = [h.get("clave") for h in (r.get("hallazgos") or [])]
+            log.warning(f"[salud] {sem} · {claves}")
+        last_run["salud"] = sem
+    except Exception as e:
+        log.warning(f"[salud] el chequeo falló (no afecta el refresh): {str(e)[:180]}")
 
 
 def trigger_cooldown(seconds: int = COOLDOWN_AFTER_429_SEC):

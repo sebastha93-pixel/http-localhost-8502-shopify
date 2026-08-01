@@ -3,6 +3,7 @@
 import { usePedidos } from "@/lib/hooks";
 import { PedidosTable } from "@/components/pedidos-table";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
+import { SaludLogisticaChip } from "@/components/salud-logistica-chip";
 
 export default function LogisticaPage() {
   const { data, isLoading, error, refetch, isFetching } = usePedidos();
@@ -14,6 +15,7 @@ export default function LogisticaPage() {
     <PageShell
       title="Logística"
       subtitle={`${data.total} pedidos activos en operación`}
+      aside={<SaludLogisticaChip />}
       isFetching={isFetching}
       onRefresh={() => refetch()}
     >
