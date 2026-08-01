@@ -1368,6 +1368,28 @@ def cache_info() -> Optional[dict]:
 
 
 # ── Melonn API ─────────────────────────────────────────────────────────────────
+# ── Por qué falló el último GET ───────────────────────────────────────────────
+#
+# `_get` devuelve None por seis motivos distintos y todos se veían igual desde
+# arriba. Con la paginación completa, el listado murió en la página 42 y el
+# mensaje fue "fallo_get_pagina_42" — que no dice si fue cuota agotada, una
+# ráfaga, un timeout o un 500 de Melonn. Sin eso hay que adivinar la causa, y
+# adivinar es exactamente lo que salió mal hoy.
+_ULTIMO_FALLO_GET: dict = {"motivo": "", "path": "", "ts": None}
+
+
+def _fallo(motivo: str, path: str) -> None:
+    _ULTIMO_FALLO_GET.update({
+        "motivo": motivo, "path": path,
+        "ts": datetime.now().isoformat(timespec="seconds"),
+    })
+
+
+def ultimo_fallo_get() -> dict:
+    """Motivo del último GET fallido, para el chequeo de salud."""
+    return dict(_ULTIMO_FALLO_GET)
+
+
 def _get(path: str, params: dict = None) -> Optional[dict]:
     """
     GET con rate limiting y retry/backoff automático en 429/503.
@@ -1395,6 +1417,7 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
     # momento en que la cuota vuelva, sin esperar a que expire el cooldown.
     if cuota_agotada():
         log.info(f"Skip GET {path}: cuota Melonn agotada")
+        _fallo("cuota_en_cooldown", path)
         return None
 
     url = f"{_BASE_URL}/{path.lstrip('/')}"
@@ -1419,9 +1442,11 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
                     # Reintentar es tiempo tirado. Cortar de una.
                     _marcar_cuota_agotada()
                     log.error(f"CUOTA Melonn agotada (Limit Exceeded) en {path} — sin reintentos")
+                    _fallo("cuota_agotada", path)
                     return None
                 if attempt >= _RETRY_MAX:
                     log.warning(f"HTTP {r.status_code} en {path} — reintentos agotados")
+                    _fallo(f"http_{r.status_code}_reintentos_agotados", path)
                     return None
                 # Respeta Retry-After si la API lo devuelve
                 retry_after = int(r.headers.get("Retry-After", _RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF)-1)]))
@@ -1439,16 +1464,20 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
                 if attempt < _RETRY_MAX:
                     time.sleep(_RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF)-1)])
                     continue
+                _fallo("limit_exceeded_json", path)
                 return None
             return data
 
         except requests.HTTPError as e:
             log.warning(f"HTTP {e.response.status_code} en {url}")
+            _fallo(f"http_{e.response.status_code}", path)
             return None
         except Exception as e:
             log.warning(f"Request error en {url}: {e}")
+            _fallo(f"{type(e).__name__}", path)
             return None
 
+    _fallo("reintentos_agotados", path)
     return None
 
 
@@ -1879,7 +1908,8 @@ def _fetch_api_filtrado() -> list:
             # como si fuera el listado completo. Así fue como el 2026-08-01 medí
             # 1.310 pedidos "crudos" y creí que Melonn no tenía más: la lista
             # estaba cortada a la mitad y yo comparé el tablero contra ella.
-            motivo_fin = f"fallo_get_pagina_{page}"
+            causa = (ultimo_fallo_get().get("motivo") or "sin_causa_registrada")
+            motivo_fin = f"fallo_get_pagina_{page}:{causa}"
             break
         items = resp.get("data") or []
         if not items:

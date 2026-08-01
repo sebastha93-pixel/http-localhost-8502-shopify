@@ -17,6 +17,11 @@ log = logging.getLogger(__name__)
 
 _BATCH_SIZE = 250   # Shopify acepta hasta 250 IDs por request
 _TIMEOUT    = 20
+# Búsquedas por NOMBRE de orden permitidas en una pasada. Cada una es UNA petición
+# a Shopify dentro del bucle; sin tope, 3.200 pedidos históricos sin cliente
+# generaron 288 respuestas 429 en una ventana de logs (2026-08-01). Shopify admite
+# ~2 peticiones/s, así que 25 son ~13 s de la pasada. Ver `enriquecer`.
+_TOPE_BY_NAME = 25
 
 # Un "M-id" es el número interno de Melonn (M1785245936464547). Melonn lo
 # escribe en Shopify como si fuera una guía, con tracking_company="Melonn", pero
@@ -254,6 +259,42 @@ def enriquecer(pedidos: list) -> list:
     if images_map:
         log.info(f"Shopify enricher: {len(images_map)} imágenes de producto cargadas")
 
+    # ── Presupuesto de búsquedas por NOMBRE en esta pasada ───────────────────
+    #
+    # La búsqueda por nombre es UNA petición a Shopify por pedido, dentro del
+    # bucle, y no tenía tope. Mientras el tablero traía ~1.150 pedidos no se
+    # notaba. El 2026-08-01, al arreglar la paginación de Melonn, el tablero pasó
+    # a 4.380 y aparecieron ~3.200 pedidos históricos sin datos de cliente: el
+    # enriquecedor intentó buscarlos TODOS, uno por uno. Resultado medido en los
+    # logs de Railway: 288 respuestas `429 Too Many Requests` de Shopify en una
+    # sola ventana, ahogando cualquier otro error en el log.
+    #
+    # No es solo ruido: postventa ESCRIBE en Shopify (notas de crédito, cambios).
+    # Dejar al enriquecedor golpeando 3.200 veces pone en riesgo operaciones
+    # reales por completar un dato de un pedido de mayo.
+    #
+    # Los abiertos van primero: a un pedido entregado hace dos meses nadie lo va
+    # a llamar. Los que no alcanzan quedan para la pasada siguiente — es el mismo
+    # criterio de _lazy_enrich, que ya trabaja por tandas.
+    def _id_unico(p: dict) -> str:
+        return str(p.get("orden_melonn") or p.get("orden_tienda") or "")
+
+    candidatos = [
+        p for p in pedidos
+        if not p.get("nombre_comprador")
+        and not shopify_map.get(str(p.get("external_order_id") or ""))
+        and str(p.get("orden_tienda") or "").split("-")[0].strip().isdigit()
+    ]
+    candidatos.sort(
+        key=lambda p: 1 if p.get("sub_estado_logistico") == "entregado" else 0)
+    con_presupuesto = {_id_unico(p) for p in candidatos[:_TOPE_BY_NAME]}
+    if len(candidatos) > _TOPE_BY_NAME:
+        # Se dice en voz alta a propósito: un tope callado se lee como
+        # "ya está todo enriquecido" cuando faltan miles.
+        log.info(f"Shopify enricher: {len(candidatos)} pedidos sin cliente; busco "
+                 f"{_TOPE_BY_NAME} en esta pasada (abiertos primero), "
+                 f"{len(candidatos) - _TOPE_BY_NAME} quedan para la siguiente")
+
     enriquecidos = []
     for p in pedidos:
         sid = str(p.get("external_order_id") or "")
@@ -261,7 +302,8 @@ def enriquecer(pedidos: list) -> list:
 
         # Fallback: buscar por nombre de orden cuando falta external_order_id
         # Cubre: reenvíos ("58043-NUEVO_ENVIO"), caché viejo sin ID, etc.
-        if not o and not p.get("nombre_comprador") and creds:
+        if not o and not p.get("nombre_comprador") and creds \
+                and _id_unico(p) in con_presupuesto:
             orden_tienda = str(p.get("orden_tienda") or "")
             base = orden_tienda.split("-")[0].strip()
             if base.isdigit():

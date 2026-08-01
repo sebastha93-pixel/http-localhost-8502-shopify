@@ -110,11 +110,18 @@ def _revisar_fetch(mc, marcar, medidas: dict) -> None:
         if uf.get("motivo_fin") == "nunca_corrio":
             pass   # este worker no ha corrido un fetch; no es un hallazgo
         elif not uf.get("completo"):
+            # El motivo trae la causa real detrás del fallo (cuota agotada,
+            # ráfaga, timeout, 5xx) — sin eso hay que adivinar, y adivinar es lo
+            # que salió mal hoy. Ver `_fallo` en melonn_client.
             marcar("rojo", "fetch_incompleto",
                    f"El último fetch se cortó por '{uf.get('motivo_fin')}': "
                    f"falta parte del listado. El tablero conservó los datos "
                    f"anteriores en vez de guardar una lista mutilada.",
                    motivo=uf.get("motivo_fin"))
+        try:
+            medidas["ultimo_fallo_get"] = mc.ultimo_fallo_get()
+        except Exception:
+            pass
     except Exception as e:
         log.info(f"[salud] sin radiografía del fetch: {str(e)[:120]}")
 
