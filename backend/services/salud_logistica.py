@@ -129,6 +129,15 @@ def chequear(*, avisar: bool = False) -> dict:
                "No hay registro de un fetch al listado de Melonn. El tablero "
                "puede estar viviendo solo de webhooks, que no traen los pedidos "
                "que no cambian.")
+    elif edad_seg < -60:
+        # Edad negativa = "sincronizado en el futuro". Es desalineación de relojes
+        # (marca en UTC, resta en hora local) y es peligrosa en silencio: haría
+        # ver el caché fresco para siempre y el listado no se pediría nunca más.
+        marcar("rojo", "reloj_desalineado",
+               f"El último fetch aparece {abs(edad_seg) / 60:.0f} minutos en el "
+               f"FUTURO. Los relojes no concuerdan, así que no se puede saber si "
+               f"el tablero está al día. Revisar la zona horaria del servidor.",
+               segundos=round(edad_seg))
     else:
         mins = edad_seg / 60
         if mins > FETCH_ROJO_MIN:

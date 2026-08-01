@@ -922,9 +922,21 @@ def _caduco_vs_melonn(ttl: int = _CACHE_TTL) -> bool:
     Mide contra el reloj del último fetch REAL, no contra el del caché: el caché
     lo reescribe cada webhook y por eso nunca parecía vencido. None (nunca hubo
     fetch, o solo hubo webhooks) cuenta como vencido.
+
+    Una edad NEGATIVA también cuenta como vencido. Significa que los relojes no
+    concuerdan (marca en UTC, comparación en hora local), y si se dejara pasar
+    como "recién sincronizado" el listado no se volvería a pedir NUNCA — el mismo
+    bug de los estados congelados, otra vez y en silencio. Ante un reloj que no se
+    entiende, refrescar.
     """
     edad = _edad_fetch_api_memo()
-    return edad is None or edad > ttl
+    if edad is None:
+        return True
+    if edad < -60:
+        log.error(f"Reloj del fetch inconsistente: edad {edad:.0f}s (negativa). "
+                  f"Trato el caché como vencido para no congelar los estados.")
+        return True
+    return edad > ttl
 
 
 def _edad_fetch_api_sb() -> Optional[float]:
@@ -935,7 +947,12 @@ def _edad_fetch_api_sb() -> Optional[float]:
               .eq("id", _SB_FILA_API).execute()).data
     if not rows:
         return None
-    return (datetime.now() - _parse_iso_naive(rows[0]["fetched_at"])).total_seconds()
+    # utcnow y no now(): la marca se escribe con datetime.utcnow(). En Railway el
+    # contenedor va en UTC y da igual, pero corriendo esto en un portátil en hora
+    # de Bogotá la resta daba −272 minutos, o sea "sincronizado en el futuro" →
+    # el caché se habría visto fresco para siempre.
+    return (datetime.utcnow()
+            - _parse_iso_naive(rows[0]["fetched_at"])).total_seconds()
 
 
 def _edad_fetch_api_sq() -> Optional[float]:
@@ -945,7 +962,8 @@ def _edad_fetch_api_sq() -> Optional[float]:
         row = c.execute("SELECT fetched_at FROM melonn_fetch_marca WHERE id=1").fetchone()
     if not row:
         return None
-    return (datetime.now() - _parse_iso_naive(row["fetched_at"])).total_seconds()
+    # utcnow: _marcar_fetch_api escribe la misma marca UTC en los dos lados.
+    return (datetime.utcnow() - _parse_iso_naive(row["fetched_at"])).total_seconds()
 
 
 # ── SQLite (caché local / fallback) ───────────────────────────────────────────
