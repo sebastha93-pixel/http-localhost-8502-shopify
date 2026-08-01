@@ -221,6 +221,17 @@ _rate_limiter = _RateLimiter()
 _DB_PATH        = Path(__file__).parent.parent / "data" / "db" / "maledenim.db"
 _JSON_BOOTSTRAP = Path(__file__).parent.parent / "data" / "logistica" / "bootstrap.json"
 _SB_TABLA       = "melonn_cache"    # tabla en Supabase
+# Fila 1 = el caché de pedidos. Fila 2 = SOLO la hora del último fetch real al
+# listado de Melonn. Son dos relojes distintos y confundirlos era el bug:
+# `fetched_at` de la fila 1 se actualiza con CADA webhook (porque el webhook
+# reescribe el caché completo), así que el caché nunca parecía viejo y el
+# refresh programado se saltaba por el guard de _MIN_REFRESH_SECS. Resultado:
+# el listado casi nunca se volvía a pedir y los estados quedaban congelados en
+# lo último que dijo un webhook. Medido 2026-08-01: el tablero mostraba 74
+# pedidos en código 29 y Melonn tenía 17; 56 en código 2 y Melonn tenía 0.
+# Usar una fila aparte en vez de una columna nueva evita migración: si el
+# esquema cambiara bajo nuestros pies, el módulo entero dejaría de leer caché.
+_SB_FILA_API    = 2
 
 # Campos que se enriquecen desde Shopify/detail y que NO deben re-consultarse
 # ni borrarse: se heredan del caché entre syncs (traer-y-guardar) y se
@@ -562,7 +573,11 @@ CODIGOS_PROCESO_INTERNO = {3, 4, 10, 12, 22, 25, 27}
 # agrupan por código crudo con proceso=[1,2,5,24,28] y transito=[7]. Esto pone
 # el campo grueso de acuerdo con ellos, en vez de tener dos verdades.
 CODIGOS_PENDIENTE_DESPACHO = {26, 29}
-CODIGOS_EN_PREPARACION     = {1, 2, 5, 24, 28}
+# 23 = "Packed - on hold": empacada y retenida en bodega. Estaba fuera de TODOS
+# los conjuntos, así que caía en "otro" y el pedido DESAPARECÍA del tablero sin
+# dejar rastro. Encontrado 2026-08-01 con el pedido #61358, contraentrega,
+# invisible desde el 30 de julio.
+CODIGOS_EN_PREPARACION     = {1, 2, 5, 23, 24, 28}
 CODIGOS_EN_TRANSITO        = {7}
 CODIGOS_ENTREGADO          = {6, 8}
 CODIGOS_NOVEDAD            = {20}
@@ -637,6 +652,7 @@ ESTADOS_EN_PREPARACION = {
     "All items reserved - ready for fulfillment",                        # 2
     "Recibida - valida - lista para alistamiento",                       # 2
     "Packed", "Empacada",                                                # 5
+    "Packed - on hold", "Empacada - retenida",                           # 23
     "Prepared for dispatch", "Preparada para despacho",                  # 24
     "Ready For Packing", "Lista para empaque",                           # 28
 }
@@ -779,8 +795,10 @@ def _sb_cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:
         # fetched_at viene como string ISO desde Supabase (Postgres puede
         # recortar la fracción de segundo → parser tolerante).
         fetched_at = _parse_iso_naive(row["fetched_at"])
-        age        = (datetime.now() - fetched_at).total_seconds()
-        fresco     = age <= _CACHE_TTL
+        # La frescura se mide contra Melonn, NO contra la última escritura del
+        # caché: cada webhook reescribe la fila y adelantaba este reloj, así que
+        # el caché se veía fresco para siempre y el listado no se volvía a pedir.
+        fresco     = not _caduco_vs_melonn()
         if not fresco and not ignorar_ttl:
             return None
 
@@ -819,9 +837,107 @@ def _sb_limpiar():
     try:
         sb = _sb()
         if sb:
-            sb.table(_SB_TABLA).delete().eq("id", 1).execute()
+            sb.table(_SB_TABLA).delete().in_("id", [1, _SB_FILA_API]).execute()
     except Exception as e:
         log.warning(f"Supabase limpiar error: {e}")
+
+
+# ── El reloj del ÚLTIMO FETCH REAL al listado ─────────────────────────────────
+#
+# Distinto del `fetched_at` de la fila 1, que cambia con cada webhook. Ver el
+# comentario de _SB_FILA_API. Se guarda en su propia fila para poder leerlo sin
+# arrastrar el blob de pedidos (son ~1.200 pedidos en un solo JSON).
+
+def _marcar_fetch_api() -> None:
+    """Sella "acabamos de pedirle el listado completo a Melonn"."""
+    ahora = datetime.utcnow().isoformat()
+    try:
+        sb = _sb()
+        if sb:
+            sb.table(_SB_TABLA).upsert({
+                "id":           _SB_FILA_API,
+                "fetched_at":   ahora,
+                "pedidos_json": "{}",
+                "total":        0,
+            }).execute()
+    except Exception as e:
+        log.warning(f"No pude sellar la hora del fetch: {e}")
+    try:
+        # Tabla propia y no la fila 2 de melonn_pedidos_cache: esa tabla tiene
+        # CHECK (id = 1) y el insert fallaría en silencio.
+        with _conn() as c:
+            c.execute("CREATE TABLE IF NOT EXISTS melonn_fetch_marca ("
+                      "id INTEGER PRIMARY KEY CHECK (id = 1), fetched_at TEXT NOT NULL)")
+            c.execute("INSERT OR REPLACE INTO melonn_fetch_marca (id, fetched_at) "
+                      "VALUES (1, ?)", (ahora,))
+            c.commit()
+    except Exception as e:
+        log.debug(f"SQLite marca fetch: {e}")
+
+
+def _edad_fetch_api() -> Optional[float]:
+    """Segundos desde el último fetch real al listado. None si nunca hubo uno.
+
+    None se trata como "hay que refrescar": es el estado del primer arranque
+    después de este cambio, y también el de un caché escrito solo por webhooks.
+    """
+    for leer in (_edad_fetch_api_sb, _edad_fetch_api_sq):
+        try:
+            v = leer()
+            if v is not None:
+                return v
+        except Exception:
+            continue
+    return None
+
+
+_memo_edad: dict = {"ts": 0.0, "valor": None}
+_MEMO_EDAD_SEG = 5
+
+
+def _edad_fetch_api_memo() -> Optional[float]:
+    """_edad_fetch_api con memo corto: se consulta en cada lectura de caché y
+    /pedidos se pide muchas veces por minuto. 5s no cambia ninguna decisión
+    (el TTL es de 30 min) y ahorra una consulta por request."""
+    ahora = time.time()
+    if (ahora - _memo_edad["ts"]) < _MEMO_EDAD_SEG:
+        base = _memo_edad["valor"]
+        return None if base is None else base + (ahora - _memo_edad["ts"])
+    v = _edad_fetch_api()
+    _memo_edad["ts"], _memo_edad["valor"] = ahora, v
+    return v
+
+
+def _caduco_vs_melonn(ttl: int = _CACHE_TTL) -> bool:
+    """True si hay que volver a pedirle el listado completo a Melonn.
+
+    Mide contra el reloj del último fetch REAL, no contra el del caché: el caché
+    lo reescribe cada webhook y por eso nunca parecía vencido. None (nunca hubo
+    fetch, o solo hubo webhooks) cuenta como vencido.
+    """
+    edad = _edad_fetch_api_memo()
+    return edad is None or edad > ttl
+
+
+def _edad_fetch_api_sb() -> Optional[float]:
+    sb = _sb()
+    if not sb:
+        return None
+    rows = (sb.table(_SB_TABLA).select("fetched_at")
+              .eq("id", _SB_FILA_API).execute()).data
+    if not rows:
+        return None
+    return (datetime.now() - _parse_iso_naive(rows[0]["fetched_at"])).total_seconds()
+
+
+def _edad_fetch_api_sq() -> Optional[float]:
+    with _conn() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS melonn_fetch_marca ("
+                  "id INTEGER PRIMARY KEY CHECK (id = 1), fetched_at TEXT NOT NULL)")
+        row = c.execute("SELECT fetched_at FROM melonn_fetch_marca WHERE id=1").fetchone()
+    if not row:
+        return None
+    return (datetime.now() - _parse_iso_naive(row["fetched_at"])).total_seconds()
 
 
 # ── SQLite (caché local / fallback) ───────────────────────────────────────────
@@ -862,8 +978,7 @@ def _sq_cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:
             log.info("SQLite cache: config_hash cambió — invalidando")
             return None
         fetched_at = _parse_iso_naive(row["fetched_at"])
-        age    = (datetime.now() - fetched_at).total_seconds()
-        fresco = age <= _CACHE_TTL
+        fresco = not _caduco_vs_melonn()   # ver _caduco_vs_melonn
         if not fresco and not ignorar_ttl:
             return None
         pedidos = json.loads(row["pedidos_json"])
@@ -1108,12 +1223,19 @@ def cache_info() -> Optional[dict]:
                 fetched_at = _parse_iso_naive(row["fetched_at"])
                 age        = (datetime.now() - fetched_at).total_seconds()
                 hash_ok    = cfg_hash == _config_hash()
+                # Dos edades, a propósito:
+                #   age_s     → hace cuánto se escribió el caché (lo mueve el webhook)
+                #   api_age_s → hace cuánto le pedimos el listado a Melonn
+                # `stale` mira la SEGUNDA: es la que dice si los estados pueden
+                # estar viejos. Confundirlas era el bug.
+                api_age    = _edad_fetch_api_memo()
                 return {
                     "fetched_at":  fetched_at,
                     "age_s":       age,
+                    "api_age_s":   api_age,
                     "total":       row["total"],
-                    "fresco":      age <= _CACHE_TTL and hash_ok,
-                    "stale":       age > _CACHE_TTL or not hash_ok,
+                    "fresco":      (not _caduco_vs_melonn()) and hash_ok,
+                    "stale":       _caduco_vs_melonn() or not hash_ok,
                     "fuente":      fuente,
                     "config_hash": cfg_hash,
                     "hash_ok":     hash_ok,
@@ -1137,9 +1259,10 @@ def cache_info() -> Optional[dict]:
         return {
             "fetched_at":  fetched_at,
             "age_s":       age,
+            "api_age_s":   _edad_fetch_api_memo(),
             "total":       row["total"],
-            "fresco":      age <= _CACHE_TTL and hash_ok,
-            "stale":       age > _CACHE_TTL or not hash_ok,
+            "fresco":      (not _caduco_vs_melonn()) and hash_ok,
+            "stale":       _caduco_vs_melonn() or not hash_ok,
             "fuente":      fuente,
             "config_hash": row["config_hash"],
             "hash_ok":     hash_ok,
@@ -1449,6 +1572,9 @@ def _fecha_corte() -> date:
     return date.today() - timedelta(days=90)
 
 
+_ESTADOS_DESCONOCIDOS: set[str] = set()
+
+
 def _sub_estado_logistico(estado: str, codigo: int = 0, es_cod: bool = False) -> str:
     """
     Clasifica el estado Melonn en las categorías operativas del dashboard.
@@ -1472,6 +1598,27 @@ def _sub_estado_logistico(estado: str, codigo: int = 0, es_cod: bool = False) ->
     if codigo in CODIGOS_EN_PREPARACION:          return "en_preparacion"
     if codigo in CODIGOS_PENDIENTE_DESPACHO or estado in ESTADOS_PENDIENTE_DESPACHO:
                                                   return "pendiente_despacho"
+    # "otro" = el pedido se cae del tablero y NADIE se entera. Pasó con el código
+    # 23 ("Packed - on hold"): un pedido contraentrega llevaba dos días invisible.
+    # Un estado nuevo de Melonn vuelve a abrir el mismo hueco, así que acá queda
+    # el aviso. `_ESTADOS_DESCONOCIDOS` evita repetir el log por cada pedido.
+    #
+    # Los excluidos A PROPÓSITO (cancelados, proceso interno) también caen en
+    # "otro" y NO son un hallazgo: sin este filtro el log se llenaría con los
+    # ~270 cancelados de cada sync y el aviso real se perdería entre ellos.
+    excluido_a_proposito = (
+        codigo in CODIGOS_EXCLUIR or codigo in CODIGOS_PROCESO_INTERNO
+        or estado in ESTADOS_EXCLUIR or estado in ESTADOS_PROCESO_INTERNO
+    )
+    if (codigo or estado) and not excluido_a_proposito:
+        clave = f"{codigo}|{estado}"
+        if clave not in _ESTADOS_DESCONOCIDOS:
+            _ESTADOS_DESCONOCIDOS.add(clave)
+            log.warning(
+                f"[estado desconocido] código {codigo} '{estado}' no está en "
+                f"ningún conjunto — el pedido NO aparecerá en el tablero. "
+                f"Clasificarlo en CODIGOS_* de melonn_client.py"
+            )
     return "otro"
 
 
@@ -1609,6 +1756,9 @@ def _fetch_api_filtrado() -> list:
     # Aprendiendo el tope real de la primera página, subir _PAGE_SIZE es seguro
     # incluso si la API lo limita a otro valor.
     tam_pagina = None
+    # Se inicializa acá y no dentro del while: si la primera página falla (cuota
+    # agotada), el loop no corre y el log de abajo la leería sin existir.
+    activos_en_pagina = 0
 
     while page < _MAX_PAGES:
         resp = _get("sell-orders", params={"per_page": _PAGE_SIZE, "page": page})
@@ -1631,28 +1781,36 @@ def _fetch_api_filtrado() -> list:
             estado_n = str((item.get("sell_order_state") or {}).get("name") or "")
             es_activo          = (estado_c in CODIGOS_ACTIVOS
                                   or estado_n in ESTADOS_NOVEDAD_EXTERNA)
-            # Entregados (6,8) se recogen pero NO cuentan para decidir si
-            # hay más páginas relevantes — evita paginar historial de entregas
-            es_activo_operativo = (estado_c in CODIGOS_ACTIVOS_OPERATIVO
-                                   or estado_n in ESTADOS_NOVEDAD_EXTERNA)
 
             if fc and fc < corte and not es_activo:
                 continue
 
             pedidos_raw.append(item)
-            if es_activo_operativo:
+            if (estado_c in CODIGOS_ACTIVOS_OPERATIVO
+                    or estado_n in ESTADOS_NOVEDAD_EXTERNA):
                 activos_en_pagina += 1
 
-        # Página completa sin activos operativos → solo hay entregados/terminales
-        if len(items) >= tam_pagina and activos_en_pagina == 0:
-            log.info(f"Paginación detenida en página {page}: sin activos operativos")
-            break
-
+        # SE QUITÓ EL CORTE ANTICIPADO (2026-08-01). Antes se cortaba acá en
+        # cuanto una página completa no traía ningún pedido operativo, asumiendo
+        # que lo que seguía era solo historial. La apuesta depende de que Melonn
+        # devuelva el listado del más nuevo al más viejo, y eso no está
+        # documentado ni garantizado: si algún día ordena al revés, o si se
+        # acumulan 100 entregados seguidos, el corte se come los pedidos nuevos
+        # y no queda ni un error en los logs. Hoy son 14 páginas — 28s cada
+        # media hora, ~670 peticiones al día sobre una cuota de 10.000. Pagar
+        # eso es más barato que perder un pedido en silencio.
         if len(items) < tam_pagina:
             break   # última página
         page += 1
 
-    log.info(f"Melonn API: {len(pedidos_raw)} pedidos ({page+1} página(s))")
+    log.info(f"Melonn API: {len(pedidos_raw)} pedidos ({page+1} página(s), "
+             f"{activos_en_pagina} operativos en la última)")
+
+    # Sellar el reloj del listado SOLO si de verdad trajimos algo. Si la cuota
+    # está agotada, _get devuelve None, pedidos_raw queda vacío y NO se sella:
+    # así el próximo tick vuelve a intentar en vez de esperar otros 30 minutos.
+    if pedidos_raw:
+        _marcar_fetch_api()
 
     resultado = []
     for item in pedidos_raw:
@@ -2304,8 +2462,14 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
         # reutilizamos ese caché en lugar de volver a golpear la API.
         info_actual = cache_info()
         if info_actual and not info_actual.get("stale") and info_actual.get("fuente") == "api_live":
-            age = info_actual.get("age_s", _MIN_REFRESH_SECS + 1)
-            if age < _MIN_REFRESH_SECS:
+            # OJO: api_age_s, NO age_s. Con age_s este guard bloqueaba el refresh
+            # del scheduler casi siempre: cada webhook dejaba el caché con menos
+            # de 60s de edad, así que "ya sincronizó alguien hace poco" era
+            # verdad para el caché y mentira para Melonn. El listado se dejó de
+            # pedir y los estados se congelaron (medido: 74 pedidos en código 29
+            # contra 17 reales). api_age_s = None → nunca hubo fetch → sí refresca.
+            age = info_actual.get("api_age_s")
+            if age is not None and age < _MIN_REFRESH_SECS:
                 pedidos, fetched_at, _, fuente_hit = _cache_leer(ignorar_ttl=True)
                 log.info(f"Refresh bloqueado — caché api_live tiene {int(age)}s (<{_MIN_REFRESH_SECS}s)")
                 return pedidos, omitidos, {
