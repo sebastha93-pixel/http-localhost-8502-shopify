@@ -53,11 +53,16 @@ def _clasificar_descarte(item: dict) -> tuple[str, str]:
     # el reporte miente sobre por qué se cayó el pedido.
     es_activo = (code in mc.CODIGOS_ACTIVOS
                  or nombre_limpio in mc.ESTADOS_NOVEDAD_EXTERNA)
+    # Igual que en _fetch_api_filtrado: la ventana solo se salta para los que
+    # siguen ABIERTOS. Entregado está cerrado y sí se corta por viejo.
+    sigue_abierto = (code in mc.CODIGOS_ACTIVOS_OPERATIVO
+                     or nombre_limpio in mc.ESTADOS_NOVEDAD_EXTERNA)
 
     fc = mc._parsear_fecha(item.get("creation_date"))
     corte = mc._fecha_corte()
-    if fc and fc < corte and not es_activo:
-        return ("fuera_de_ventana", f"creado {fc} y no está activo")
+    if fc and fc < corte and not sigue_abierto:
+        return ("fuera_de_ventana",
+                f"creado {fc}, antes del corte {corte}, y ya está cerrado")
 
     # El filtro real es una WHITELIST por código, no una lista negra. Se separa
     # el motivo para poder distinguir "cancelado" (correcto) de "código que no

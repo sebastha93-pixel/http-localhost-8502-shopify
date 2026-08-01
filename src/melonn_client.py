@@ -787,10 +787,18 @@ def _sb_cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:
             log.info("Supabase cache: formato v1 o inválido — descartando")
             return None
 
-        stored_hash = envelope.get("config_hash","")
-        if stored_hash != _config_hash():
-            log.info(f"Supabase cache: config_hash cambió ({stored_hash} → {_config_hash()}) — invalidando")
-            return None
+        # config_hash distinto = la clasificación cambió en un deploy. ANTES se
+        # devolvía None acá, y eso dejaba el tablero EN CERO hasta que terminara
+        # un fetch nuevo (visto en producción el 2026-08-01). Ahora cuenta como
+        # "viejo", no como "ilegible": se sirve el dato y se refresca en segundo
+        # plano. Es seguro porque _enriquecer_y_filtrar re-deriva el sub_estado,
+        # la contraentrega y la whitelist en CADA lectura, así que la
+        # clasificación nueva ya se aplica sobre los pedidos guardados.
+        stored_hash = envelope.get("config_hash", "")
+        hash_ok = stored_hash == _config_hash()
+        if not hash_ok:
+            log.info(f"Supabase cache: config_hash cambió "
+                     f"({stored_hash} → {_config_hash()}) — sirvo y refresco")
 
         # fetched_at viene como string ISO desde Supabase (Postgres puede
         # recortar la fracción de segundo → parser tolerante).
@@ -798,7 +806,7 @@ def _sb_cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:
         # La frescura se mide contra Melonn, NO contra la última escritura del
         # caché: cada webhook reescribe la fila y adelantaba este reloj, así que
         # el caché se veía fresco para siempre y el listado no se volvía a pedir.
-        fresco     = not _caduco_vs_melonn()
+        fresco     = hash_ok and not _caduco_vs_melonn()
         if not fresco and not ignorar_ttl:
             return None
 
@@ -973,12 +981,13 @@ def _sq_cache_leer(ignorar_ttl: bool = False) -> Optional[tuple]:
             ).fetchone()
         if not row:
             return None
+        # Igual que en Supabase: hash distinto = viejo, no ilegible. Ver allá.
         stored_hash = row["config_hash"] or ""
-        if stored_hash != _config_hash():
-            log.info("SQLite cache: config_hash cambió — invalidando")
-            return None
+        hash_ok = stored_hash == _config_hash()
+        if not hash_ok:
+            log.info("SQLite cache: config_hash cambió — sirvo y refresco")
         fetched_at = _parse_iso_naive(row["fetched_at"])
-        fresco = not _caduco_vs_melonn()   # ver _caduco_vs_melonn
+        fresco = hash_ok and not _caduco_vs_melonn()   # ver _caduco_vs_melonn
         if not fresco and not ignorar_ttl:
             return None
         pedidos = json.loads(row["pedidos_json"])
@@ -1165,9 +1174,20 @@ def refrescar_un_pedido(identificador: str) -> dict:
     # Mezclar con caché actual
     hit = _cache_leer(ignorar_ttl=True)
     if not hit:
-        # No hay caché — guardamos solo este pedido (raro pero válido)
-        _cache_guardar([nuevo], fuente="webhook")
-        return {"ok": True, "accion": "creado", "orden": nuevo.get("orden_tienda")}
+        # NO escribir. Antes se guardaba [nuevo] "raro pero válido", y BORRABA el
+        # tablero entero: cuando el caché queda ilegible —el caso típico es que
+        # cambió `config_hash` en un deploy— el primer webhook que llegaba dejaba
+        # el caché con UN pedido. Pasó en producción el 2026-08-01: 1.208 pedidos
+        # → 3, y Sebastián vio Envíos en cero.
+        # El pedido no se pierde: el refresh del listado lo vuelve a traer.
+        log.warning("[webhook] caché ilegible o vacío — NO lo sobrescribo con un "
+                    "solo pedido; lanzo el refresh del listado completo")
+        try:
+            _refresh_background()
+        except Exception as e:
+            log.warning(f"[webhook] no pude lanzar el refresh: {str(e)[:120]}")
+        return {"ok": True, "accion": "sin_cache_refresh_lanzado",
+                "orden": nuevo.get("orden_tienda")}
 
     pedidos, _ft, _ts, fuente = hit
     encontrado = False
@@ -1779,15 +1799,23 @@ def _fetch_api_filtrado() -> list:
             fc       = _parsear_fecha(item.get("creation_date"))
             estado_c = int((item.get("sell_order_state") or {}).get("code") or 0)
             estado_n = str((item.get("sell_order_state") or {}).get("name") or "")
-            es_activo          = (estado_c in CODIGOS_ACTIVOS
-                                  or estado_n in ESTADOS_NOVEDAD_EXTERNA)
+            # ¿Sigue ABIERTO? (pendiente, en preparación, en tránsito, novedad)
+            # Entregado NO cuenta: un pedido entregado está cerrado.
+            sigue_abierto = (estado_c in CODIGOS_ACTIVOS_OPERATIVO
+                             or estado_n in ESTADOS_NOVEDAD_EXTERNA)
 
-            if fc and fc < corte and not es_activo:
+            # La ventana de 90 días solo se salta para los que siguen abiertos.
+            # ANTES la excepción era `es_activo`, que INCLUYE entregado (6 y 8),
+            # así que la ventana no cortaba ni un entregado por viejo que fuera.
+            # Con el corte anticipado de paginación eso no se notaba —la
+            # paginación moría antes de llegar al historial—; al quitarlo, el
+            # tablero se llenó con TODA la historia de entregas: 1.709 entregados
+            # y 2.126 pedidos en total, contra ~1.150 que debía tener.
+            if fc and fc < corte and not sigue_abierto:
                 continue
 
             pedidos_raw.append(item)
-            if (estado_c in CODIGOS_ACTIVOS_OPERATIVO
-                    or estado_n in ESTADOS_NOVEDAD_EXTERNA):
+            if sigue_abierto:
                 activos_en_pagina += 1
 
         # SE QUITÓ EL CORTE ANTICIPADO (2026-08-01). Antes se cortaba acá en
