@@ -1917,6 +1917,9 @@ def _fetch_api_filtrado() -> list:
     # Se inicializa acá y no dentro del while: si la primera página falla (cuota
     # agotada), el loop no corre y el log de abajo la leería sin existir.
     activos_en_pagina = 0
+    en_ventana_en_pagina = 0
+    # Páginas llenas seguidas sin un solo pedido dentro de la ventana de 90 días.
+    paginas_fuera_ventana = 0
 
     motivo_fin = "tope_paginas"
 
@@ -1943,6 +1946,7 @@ def _fetch_api_filtrado() -> list:
                 )
 
         activos_en_pagina = 0
+        en_ventana_en_pagina = 0
         for item in items:
             fc       = _parsear_fecha(item.get("creation_date"))
             estado_c = int((item.get("sell_order_state") or {}).get("code") or 0)
@@ -1963,18 +1967,43 @@ def _fetch_api_filtrado() -> list:
                 continue
 
             pedidos_raw.append(item)
+            en_ventana_en_pagina += 1
             if sigue_abierto:
                 activos_en_pagina += 1
 
-        # SE QUITÓ EL CORTE ANTICIPADO (2026-08-01). Antes se cortaba acá en
-        # cuanto una página completa no traía ningún pedido operativo, asumiendo
-        # que lo que seguía era solo historial. La apuesta depende de que Melonn
-        # devuelva el listado del más nuevo al más viejo, y eso no está
-        # documentado ni garantizado: si algún día ordena al revés, o si se
-        # acumulan 100 entregados seguidos, el corte se come los pedidos nuevos
-        # y no queda ni un error en los logs. Hoy son 14 páginas — 28s cada
-        # media hora, ~670 peticiones al día sobre una cuota de 10.000. Pagar
-        # eso es más barato que perder un pedido en silencio.
+        # ── Cortar cuando ya pasamos la ventana ──────────────────────────────
+        #
+        # HISTORIA, porque acá me equivoqué dos veces en el mismo día:
+        #
+        # Antes había un corte que paraba cuando una página completa no traía
+        # ningún pedido OPERATIVO. Lo quité porque "no hay operativos" es un
+        # proxy —una racha de 100 entregados lo dispara— y porque el corte se
+        # confundía con un GET fallido, truncando el listado en silencio.
+        #
+        # Quitarlo del todo fue peor: Melonn no ofrece filtro por fecha en el
+        # listado, así que la ventana de 90 días se aplica DE ESTE LADO, después
+        # de bajar los datos. Sin corte, paginar significa descargar la historia
+        # completa de pedidos de la empresa: el barrido llegó a la página 61,
+        # topó nuestro techo de _MAX_PAGES y quedó marcado incompleto para
+        # siempre — el tablero dejó de actualizarse (medido 2026-08-01, tres
+        # chequeos seguidos en rojo con `tope_paginas`).
+        #
+        # El corte correcto es por FECHA, que es el criterio real de la ventana,
+        # y no por estado, que era una corazonada. Se exigen DOS páginas llenas
+        # seguidas sin un solo pedido dentro de la ventana, para tolerar rezagados.
+        #
+        # Y si Melonn cambiara el orden del listado, esto NO falla en silencio:
+        # cortaría en la primera página, el barrido traería casi nada, y el
+        # candado anti-vaciado de _cache_guardar rechazaría el guardado mientras
+        # el centinela lo marca en rojo. Ruidoso, que es el punto.
+        if len(items) >= tam_pagina and en_ventana_en_pagina == 0:
+            paginas_fuera_ventana += 1
+            if paginas_fuera_ventana >= 2:
+                motivo_fin = "fuera_de_ventana"
+                break
+        else:
+            paginas_fuera_ventana = 0
+
         if len(items) < tam_pagina:
             motivo_fin = "ultima_pagina"
             break
@@ -1986,7 +2015,7 @@ def _fetch_api_filtrado() -> list:
     # pedidos, y un listado incompleto NO puede reemplazar el caché: pisaría
     # datos buenos con datos parciales, que es justo lo que no se puede notar
     # a simple vista.
-    completo = motivo_fin in ("ultima_pagina", "sin_mas_datos")
+    completo = motivo_fin in ("ultima_pagina", "sin_mas_datos", "fuera_de_ventana")
     _ULTIMO_FETCH.update({
         "ts": datetime.now().isoformat(timespec="seconds"),
         "paginas": page + 1,
