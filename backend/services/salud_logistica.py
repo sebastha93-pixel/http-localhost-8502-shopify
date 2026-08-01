@@ -98,6 +98,39 @@ def _guardar(reporte: dict) -> None:
         log.warning(f"[salud] no pude guardar el chequeo: {str(e)[:150]}")
 
 
+def _revisar_fetch(mc, marcar, medidas: dict) -> None:
+    """¿El último fetch quedó completo? ¿Se bloqueó algún guardado?
+
+    Aparte de chequear() y no dentro, porque hay que llamarlo DESPUÉS de leer el
+    tablero (leer puede disparar un refresh) y también en el camino de error.
+    """
+    try:
+        uf = mc.ultimo_fetch()
+        medidas["ultimo_fetch"] = uf
+        if uf.get("motivo_fin") == "nunca_corrio":
+            pass   # este worker no ha corrido un fetch; no es un hallazgo
+        elif not uf.get("completo"):
+            marcar("rojo", "fetch_incompleto",
+                   f"El último fetch se cortó por '{uf.get('motivo_fin')}': "
+                   f"falta parte del listado. El tablero conservó los datos "
+                   f"anteriores en vez de guardar una lista mutilada.",
+                   motivo=uf.get("motivo_fin"))
+    except Exception as e:
+        log.info(f"[salud] sin radiografía del fetch: {str(e)[:120]}")
+
+    try:
+        bloq = mc.ultimo_guardado_bloqueado()
+        if bloq.get("ts"):
+            medidas["guardado_bloqueado"] = bloq
+            marcar("rojo", "guardado_bloqueado",
+                   f"Se bloqueó un guardado que dejaba el caché en "
+                   f"{bloq.get('intento')} pedidos (tenía {bloq.get('antes')}), "
+                   f"fuente '{bloq.get('fuente')}'. El candado hizo su trabajo, "
+                   f"pero hay que ver por qué llegó una lista tan corta.")
+    except Exception:
+        pass
+
+
 def chequear(*, avisar: bool = False) -> dict:
     """Mide el tablero y devuelve un semáforo con los hallazgos.
 
@@ -150,35 +183,12 @@ def chequear(*, avisar: bool = False) -> dict:
                    f"{mins:.0f} minutos sin pedirle el listado a Melonn.",
                    minutos=round(mins, 1))
 
-    # ── 2. ¿El último fetch quedó completo? ──────────────────────────────────
-    try:
-        uf = mc.ultimo_fetch()
-        medidas["ultimo_fetch"] = uf
-        if uf.get("motivo_fin") == "nunca_corrio":
-            pass   # este worker no ha corrido un fetch; no es un hallazgo
-        elif not uf.get("completo"):
-            marcar("rojo", "fetch_incompleto",
-                   f"El último fetch se cortó por '{uf.get('motivo_fin')}': "
-                   f"falta parte del listado. El tablero conservó los datos "
-                   f"anteriores en vez de guardar una lista mutilada.",
-                   motivo=uf.get("motivo_fin"))
-    except Exception as e:
-        log.info(f"[salud] sin radiografía del fetch: {str(e)[:120]}")
-
-    # ── 3. ¿Alguien intentó vaciar el caché? ─────────────────────────────────
-    try:
-        bloq = mc.ultimo_guardado_bloqueado()
-        if bloq.get("ts"):
-            medidas["guardado_bloqueado"] = bloq
-            marcar("rojo", "guardado_bloqueado",
-                   f"Se bloqueó un guardado que dejaba el caché en "
-                   f"{bloq.get('intento')} pedidos (tenía {bloq.get('antes')}), "
-                   f"fuente '{bloq.get('fuente')}'. El candado hizo su trabajo, "
-                   f"pero hay que ver por qué llegó una lista tan corta.")
-    except Exception:
-        pass
-
-    # ── 4. El tablero mismo ──────────────────────────────────────────────────
+    # ── 2. El tablero mismo ──────────────────────────────────────────────────
+    # Va ANTES de revisar la radiografía del fetch, y no después, porque leer el
+    # tablero puede DISPARAR un refresh (si el caché está vencido, lanza uno en
+    # segundo plano). Al revés, un fetch que falla durante este mismo chequeo no
+    # se vería hasta la vuelta siguiente. Lo comprobé sin querer: corriendo esto
+    # sin llave de Melonn, el fetch dio 401 y el chequeo igual dijo verde.
     pedidos: list = []
     try:
         pedidos, _om, meta = mc.obtener_pedidos_activos()
@@ -187,7 +197,10 @@ def chequear(*, avisar: bool = False) -> dict:
     except Exception as e:
         marcar("rojo", "tablero_ilegible",
                f"No pude leer el tablero: {str(e)[:150]}")
+        _revisar_fetch(mc, marcar, medidas)
         return _cerrar(hallazgos, medidas, avisar)
+
+    _revisar_fetch(mc, marcar, medidas)
 
     medidas["total_tablero"] = len(pedidos)
     if not pedidos:
