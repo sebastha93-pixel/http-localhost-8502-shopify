@@ -35,10 +35,15 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 # ── Umbrales ─────────────────────────────────────────────────────────────────
-# El scheduler pide el listado cada hora y el TTL del caché son 30 min. Con eso,
-# 90 min sin hablar con Melonn ya es raro y 4 horas es que algo está roto.
-FETCH_AMARILLO_MIN = 90
-FETCH_ROJO_MIN     = 240
+# El barrido completo del listado corre cada 2 h (_CACHE_TTL en melonn_client) y
+# el scheduler tiene tick horario. Con eso, 3 h sin barrer ya significa que un
+# barrido se saltó, y 6 h que llevan varios fallando seguidos.
+#
+# OJO si se cambia _CACHE_TTL: estos dos números tienen que moverse con él, o el
+# semáforo empieza a mentir. Un centinela mal calibrado es peor que ninguno,
+# porque da verde sobre un tablero viejo.
+FETCH_AMARILLO_MIN = 180
+FETCH_ROJO_MIN     = 360
 # Cuánto puede caer el total entre dos chequeos sin que sea sospechoso.
 CAIDA_SOSPECHOSA   = 0.25
 # A partir de esta hora de Bogotá ya debería haber pedidos del día.

@@ -145,7 +145,27 @@ _CONNECT_TO  = 8          # timeout de conexión separado
 # sola y sigue funcionando — ver `tam_pagina` en _fetch_api.
 _PAGE_SIZE   = 100
 _MAX_PAGES   = 60         # 100 × 60 = 6000 pedidos, techo de seguridad
-_CACHE_TTL   = 1800       # 30 min — caché Supabase
+
+# Cada cuánto se vuelve a barrer el listado COMPLETO de Melonn.
+#
+# Eran 30 min. Con el corte anticipado de paginación el barrido eran ~9 páginas;
+# al quitarlo (porque truncaba en silencio) pasó a ser de 43 páginas / 4.200
+# pedidos / ~90 s de peticiones seguidas. A 30 min eso son 48 barridos al día =
+# ~2.100 peticiones, contra las ~500 que consumía antes toda la app. Y el
+# 2026-08-01 el barrido empezó a morir en la página 42.
+#
+# Se sube a 2 h por una razón de fondo: el barrido NO es cómo se enteran las
+# pantallas de un cambio. Los webhooks de Melonn actualizan el estado de un
+# pedido en tiempo real; el barrido es la RED DE SEGURIDAD para lo que el webhook
+# no trajo (webhook perdido, pedido cancelado que hay que sacar, estado que
+# cambió sin aviso). Una red de seguridad cada 2 h es razonable; pagar 90 s de
+# API cada media hora para revisar 4.000 entregas que ya no pueden cambiar, no.
+#
+# El arreglo de fondo es paginar por tramos con cursor, para que un barrido
+# completo se arme entre varios ticks sin depender de 45 peticiones seguidas sin
+# un solo fallo. Queda pendiente a propósito: hoy ya van muchos despliegues en
+# este módulo y ese cambio merece hacerse con calma.
+_CACHE_TTL   = 7200       # 2 h — barrido completo del listado
 _CACHE_HARD_TTL = 86400   # 24h — pasado esto, fuerza refresh aunque haya datos
 
 # Rate limiting — Melonn permite EXACTAMENTE 1 req/s (doc oficial Postman).
