@@ -40,6 +40,9 @@ interface Ruta {
   confeccionista?: { nombre: string };
   terminacion?: { nombre: string };
   lavanderia?: { nombre: string };
+  /** Etapas que este lote NO recorre (precosteo con el proceso en 0 o
+   *  sin el item). Viene del backend, ya deducida. */
+  etapas_omitidas?: string[] | null;
 }
 
 interface LoteRow {
@@ -56,16 +59,30 @@ const TABS = [
 ];
 
 // ── Pipeline de etapas ────────────────────────────────────────────────
-const PASOS = ["Corte", "Confección", "Lavandería", "Terminación", "Bodega"] as const;
+//
+// Ya NO es una constante. Era ["Corte","Confección","Lavandería","Terminación",
+// "Bodega"] para TODOS los lotes, y por eso una prenda que no lava seguía
+// mostrando el paso Lavandería aunque el precosteo ya dijera que no lo lleva
+// (Sebastián borró el item y "seguía apareciendo" — era esto).
+function sinLavanderia(ruta?: Ruta): boolean {
+  return (ruta?.etapas_omitidas || []).includes("lavanderia");
+}
 
-/** Devuelve el índice del paso ACTUAL (0-4); -1 si ya despachó todo. */
+function pasosDe(ruta?: Ruta): string[] {
+  const pasos = ["Corte", "Confección", "Lavandería", "Terminación", "Bodega"];
+  return sinLavanderia(ruta) ? pasos.filter((x) => x !== "Lavandería") : pasos;
+}
+
+/** Índice del paso ACTUAL dentro de `pasosDe(ruta)`; -1 si ya despachó todo. */
 function pasoActual(oc: OrdenCorte, ruta?: Ruta): number {
   if (oc.estado !== "cortada") return 0;
   if (!ruta) return 1; // cortada, esperando asignación a confección
+  // Sin lavandería el arreglo tiene 4 pasos, así que terminación corre un lugar.
+  const salto = sinLavanderia(ruta) ? 1 : 0;
   const e = ruta.etapa;
   if (["asignado", "aceptado", "en_confeccion"].includes(e)) return 1;
   if (e === "lavanderia") return 2;
-  if (["terminacion_recibida", "terminacion_terminada"].includes(e)) return 3;
+  if (["terminacion_recibida", "terminacion_terminada"].includes(e)) return 3 - salto;
   if (e === "despachado") return -1; // completo
   return 1;
 }
@@ -101,7 +118,9 @@ function siguienteAccion(oc: OrdenCorte, ruta?: Ruta): { texto: string; hecho?: 
   if (!ruta)                      return { texto: "Cuenta los insumos y genera la remisión de confección" };
   const e = ruta.etapa;
   if (["asignado", "aceptado", "en_confeccion"].includes(e))
-    return { texto: "Sube la remisión de recogida cuando salga a lavandería" };
+    return sinLavanderia(ruta)
+      ? { texto: "Esta referencia no lleva lavandería — marca recibido en terminación" }
+      : { texto: "Sube la remisión de recogida cuando salga a lavandería" };
   if (e === "lavanderia")            return { texto: "Marca recibido cuando llegue a terminación" };
   if (e === "terminacion_recibida")  return { texto: "Marca terminación lista al terminar el proceso" };
   if (e === "terminacion_terminada") return { texto: "Marca ingreso a bodega para cerrar el lote" };
@@ -240,9 +259,9 @@ function LoteCard({ oc, ruta }: { oc: OrdenCorte; ruta?: Ruta }) {
             </span>
           </div>
 
-          {/* Pipeline de etapas */}
+          {/* Pipeline de etapas — se arma por lote, no es una lista fija */}
           <div className="flex items-center gap-1">
-            {PASOS.map((paso, i) => {
+            {pasosDe(ruta).map((paso, i) => {
               const completo = actual === -1 || i < actual;
               const esActual = actual === i;
               return (

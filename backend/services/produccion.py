@@ -4243,7 +4243,7 @@ def obtener_ruta_por_corte(oc_id: str) -> Optional[dict]:
                    "cantidad_programada,referencia_lote,"
                    "referencia:referencia_id(codigo_referencia,nombre,tela,color,foto_url))")
            .eq("orden_corte_id", oc_id).limit(1).execute()).data
-    return r[0] if r else None
+    return _con_etapas_omitidas(r[0]) if r else None
 
 
 def obtener_ruta_por_token_terminacion(token: str) -> Optional[dict]:
@@ -4259,7 +4259,7 @@ def obtener_ruta_por_token_terminacion(token: str) -> Optional[dict]:
                .eq("token_publico_terminacion", token).limit(1).execute()).data
     except Exception:
         return None
-    return r[0] if r else None
+    return _con_etapas_omitidas(r[0]) if r else None
 
 
 def obtener_ruta_por_token(token: str) -> Optional[dict]:
@@ -4272,7 +4272,7 @@ def obtener_ruta_por_token(token: str) -> Optional[dict]:
                    "cantidad_programada,referencia_lote,fecha_entrega,"
                    "referencia:referencia_id(codigo_referencia,nombre,tela,color,foto_url))")
            .eq("token_publico", token).limit(1).execute()).data
-    return r[0] if r else None
+    return _con_etapas_omitidas(r[0]) if r else None
 
 
 def _precio_proceso_precosteo(referencia_id: Optional[str], proceso: str) -> Optional[float]:
@@ -4376,6 +4376,27 @@ def etapas_de_ruta(ruta: dict) -> tuple:
     """La secuencia de etapas que ESTA ruta sí recorre."""
     omitidas = _etapas_omitidas(ruta)
     return tuple(e for e in ETAPAS_RUTA if e not in omitidas)
+
+
+def _con_etapas_omitidas(ruta: Optional[dict]) -> Optional[dict]:
+    """Rellena `etapas_omitidas` en la respuesta cuando la columna está en NULL.
+
+    HACE FALTA, y su ausencia fue un bug real (2026-08-03): la máquina de etapas
+    deducía las omitidas por dentro y funcionaba, pero los endpoints devolvían la
+    fila cruda —con la columna en NULL para las 11 rutas existentes— así que el
+    frontend no tenía cómo saber que un lote no lava. Sebastián borró el item de
+    lavandería del precosteo y la etapa "seguía apareciendo": el backend ya lo
+    sabía y la pantalla no.
+
+    Se calcula al leer, no se escribe: para persistirlo está el backfill y el
+    snapshot al crear la ruta.
+    """
+    if not ruta:
+        return ruta
+    if ruta.get("etapas_omitidas") is None:
+        ruta = dict(ruta)
+        ruta["etapas_omitidas"] = sorted(_etapas_omitidas(ruta))
+    return ruta
 
 
 def crear_ruta_lote(*, orden_corte_id: str, confeccionista_id: str,
@@ -4643,7 +4664,9 @@ def listar_rutas(*, etapa: Optional[str] = None,
         q = q.eq("etapa", etapa)
     if confeccionista_id:
         q = q.eq("confeccionista_id", confeccionista_id)
-    return q.execute().data or []
+    # Enriquecer TODAS: el panel de rutas es justo donde se necesita ver el chip
+    # "sin lavandería", y devolvía la columna en NULL.
+    return [_con_etapas_omitidas(x) for x in (q.execute().data or [])]
 
 
 # ═══════════════════════════════════════════════════════════════════════

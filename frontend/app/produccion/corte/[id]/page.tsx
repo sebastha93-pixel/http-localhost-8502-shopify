@@ -2006,6 +2006,9 @@ interface RutaCorte {
   precio_terminacion?: number;
   fecha_entrega_confeccion?: string;
   remision_lavanderia_url?: string;
+  /** Etapas que este lote NO recorre (precosteo con el proceso en 0 o sin
+   *  el item). La deduce el backend. */
+  etapas_omitidas?: string[] | null;
   terminacion_id?: string;
   asignado_at?: string;
   aceptado_at?: string;
@@ -2117,6 +2120,10 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
   }
 
   const r = q.data;
+  // Un lote cuya referencia no lleva lavandería NO debe mostrar esa etapa: si se
+  // muestra, se queda ahí en gris para siempre y parece un paso pendiente.
+  const omitidas = r.etapas_omitidas || [];
+  const sinLavanderia = omitidas.includes("lavanderia");
   const etapas = [
     { key: "asignado",              label: "Asignado",         ts: r.asignado_at },
     { key: "aceptado",              label: "Aceptado",         ts: r.aceptado_at },
@@ -2125,7 +2132,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
     { key: "terminacion_recibida",  label: "En terminación",   ts: r.terminacion_recibida_at },
     { key: "terminacion_terminada", label: "Terminado",        ts: r.terminacion_terminada_at },
     { key: "despachado",            label: "Ingreso a bodega", ts: r.despachado_at },
-  ];
+  ].filter((e) => !omitidas.includes(e.key));
   const idxActual = etapas.findIndex((e) => e.key === r.etapa);
 
   const notifMsg = `MALE'DENIM · Lote *${consecutivo}* pasó a etapa *${r.etapa}*. Ver detalle: ${typeof window !== "undefined" ? window.location.origin : ""}/produccion/corte/${ordenCorteId}`;
@@ -2140,6 +2147,23 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
   // Botón siguiente etapa según la actual
   function botonSiguiente() {
     if (r.etapa === "asignado") return null; // solo confeccionista puede aceptar
+    // Lote que no lava: de confección pasa DIRECTO a terminación. Sin esto, la
+    // única acción ofrecida era subir una remisión de lavandería que no existe,
+    // y el lote se quedaba en confección sin forma de avanzar desde la app.
+    if (sinLavanderia && (r.etapa === "aceptado" || r.etapa === "en_confeccion")) {
+      return (
+        <div>
+          <button onClick={() => cambiarEtapa.mutate("terminacion_recibida")} disabled={cambiarEtapa.isPending}
+            className="rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
+            Marcar como recibido en terminación
+          </button>
+          <p className="mt-1 text-[0.7rem] text-graphite">
+            Esta referencia <strong>no lleva lavandería</strong> (el precosteo la tiene
+            en cero), así que de confección pasa directo a terminación.
+          </p>
+        </div>
+      );
+    }
     if (r.etapa === "aceptado" || r.etapa === "en_confeccion") {
       return (
         <div className="flex flex-wrap items-end gap-2">
@@ -2258,8 +2282,10 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
           <div><span className="text-graphite">Fecha entrega:</span> <span className="text-ink-900 font-semibold tabular">{fmtFecha(r.fecha_entrega_confeccion)}</span></div>
         </div>
 
-        {/* Remisión de lavandería */}
-        {(r.etapa === "aceptado" || r.etapa === "en_confeccion" || r.etapa === "lavanderia" || r.remision_lavanderia_url) && (
+        {/* Remisión de lavandería — no se ofrece si el lote no lava. Pedirla
+            sería pedir un documento que no existe, y el backend la rechaza con
+            `lavanderia_no_aplica`. */}
+        {!sinLavanderia && (r.etapa === "aceptado" || r.etapa === "en_confeccion" || r.etapa === "lavanderia" || r.remision_lavanderia_url) && (
           <div>
             <p className="text-[0.7rem] uppercase tracking-widest text-graphite mb-1">
               Remisión de lavandería (URL / referencia) — al guardarla el lote pasa a Lavandería
