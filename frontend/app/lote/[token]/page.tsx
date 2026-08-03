@@ -29,6 +29,8 @@ interface LotePublico {
   fecha_entrega?: string;
   confeccionista_nombre: string;
   etapa: string;
+  /** Etapas que este lote NO recorre (del precosteo: proceso en 0). */
+  etapas_omitidas?: string[] | null;
   aceptado_at?: string;
   insumos: Insumo[];
 }
@@ -247,8 +249,18 @@ export default function LotePublicoPage() {
               Lote aceptado {l.aceptado_at ? `el ${new Date(l.aceptado_at).toLocaleDateString("es-CO")}` : ""}
             </p>
             <p className="mt-1 text-xs text-graphite">
-              Cuando termines confección, escríbele a MALE&apos;DENIM por WhatsApp
-              con la remisión de lavandería.
+              {(l.etapas_omitidas || []).includes("lavanderia") ? (
+                <>
+                  Esta referencia <strong>no lleva lavandería</strong>. Cuando
+                  termines confección, escríbele a MALE&apos;DENIM por WhatsApp
+                  para coordinar la entrega directa a terminación.
+                </>
+              ) : (
+                <>
+                  Cuando termines confección, escríbele a MALE&apos;DENIM por
+                  WhatsApp con la remisión de lavandería.
+                </>
+              )}
             </p>
           </div>
         )}

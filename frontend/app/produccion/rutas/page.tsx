@@ -24,6 +24,9 @@ interface Ruta {
   asignado_at: string;
   aceptado_at?: string;
   lavanderia_at?: string;
+  /** Etapas que este lote NO recorre. Viene del precosteo: proceso en 0 =
+   *  la prenda no lleva ese proceso. Ver etapas_omitidas_por_precosteo. */
+  etapas_omitidas?: string[] | null;
   terminacion_recibida_at?: string;
   terminacion_terminada_at?: string;
   despachado_at?: string;
@@ -82,7 +85,7 @@ export default function RutasPage() {
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
   return (
-    <PageShell title="Rutas de lote" subtitle="Confección → lavandería → terminación → despacho">
+    <PageShell title="Rutas de lote" subtitle="Confección → lavandería → terminación → despacho · la lavandería se omite cuando el precosteo la tiene en 0">
       {/* KPIs por etapa */}
       <Card>
         <CardContent className="p-5 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
@@ -149,7 +152,16 @@ export default function RutasPage() {
                       <td className="px-4 py-2 text-ink-900">{r.confeccionista?.nombre || "—"}</td>
                       <td className="px-4 py-2 text-graphite">{r.terminacion?.nombre || "—"}</td>
                       <td className="px-4 py-2">
-                        <Badge tone={toneEtapa(r.etapa)}>{r.etapa}</Badge>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge tone={toneEtapa(r.etapa)}>{r.etapa}</Badge>
+                          {/* Sin esto, alguien ve un lote que paso de confeccion a
+                              terminacion y cree que se perdio un paso. */}
+                          {(r.etapas_omitidas || []).includes("lavanderia") && (
+                            <Badge tone="neutral" title="El precosteo tiene lavandería en 0: esta referencia no lleva ese proceso">
+                              sin lavandería
+                            </Badge>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-2 text-right tabular text-graphite">
                         {dias != null ? (

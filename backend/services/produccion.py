@@ -4299,6 +4299,85 @@ def _precio_proceso_precosteo(referencia_id: Optional[str], proceso: str) -> Opt
     return None
 
 
+# ── Procesos que una referencia NO lleva ─────────────────────────────────────
+#
+# REGLA (Sebastián, 2026-08-03): si en el precosteo el proceso está en VALOR 0,
+# la prenda no lleva ese proceso. No hay campo nuevo ni tabla nueva — se usa el
+# dato que ya se digita, que además ya venía correcto: de las 19 referencias
+# autorizadas, 6 tienen Lavandería en 0 (las de base TECHNOVA y ATLAS).
+#
+# EL PROBLEMA QUE ARREGLA: la hoja de ruta era una secuencia FIJA que siempre
+# incluía `lavanderia`. Un lote de esas 6 referencias se quedaba parado en esa
+# etapa acumulando días por un proceso que nunca tuvo, y el costo del lote
+# cargaba una lavandería inexistente.
+#
+# Hoy solo lavandería es opcional. La estructura sirve para cualquier otra: se
+# agrega una línea al mapa.
+_ETAPA_POR_PROCESO = {
+    "lavanderia": "lavanderia",
+}
+
+
+def etapas_omitidas_por_precosteo(referencia_id: Optional[str]) -> list[str]:
+    """Etapas de la hoja de ruta que esta referencia NO lleva, según su precosteo.
+
+    Se apoya en `_precio_proceso_precosteo`, que ya devuelve None cuando el valor
+    unitario es 0 — o sea que la semántica "0 = no aplica" ya existía, pero solo
+    se usaba para el precio y no para la ruta.
+    """
+    if not referencia_id:
+        return []
+    omitidas = []
+    for proceso, etapa in _ETAPA_POR_PROCESO.items():
+        try:
+            if _precio_proceso_precosteo(referencia_id, proceso) is None:
+                omitidas.append(etapa)
+        except Exception as e:
+            # Si el precosteo no se puede leer, NO omitir: mejor una etapa de más
+            # que un lote que se salta lavandería porque falló una consulta.
+            log.warning(f"[ruta] no pude leer proceso '{proceso}' de {referencia_id}: "
+                        f"{str(e)[:120]} — asumo que SÍ aplica")
+    return omitidas
+
+
+def _etapas_omitidas(ruta: dict) -> set[str]:
+    """Las etapas que esta ruta no lleva.
+
+    `etapas_omitidas` en NULL significa "nunca se calculó" (rutas creadas antes
+    de esta regla), y entonces se deduce del precosteo. Una lista vacía significa
+    "calculado, no se omite nada" — son cosas distintas y por eso la columna no
+    tiene default.
+
+    NUNCA se omite una etapa que ya tiene timestamp: eso ya pasó, y borrarlo del
+    recorrido sería falsear el historial del lote.
+    """
+    guardadas = ruta.get("etapas_omitidas")
+    if isinstance(guardadas, list):
+        omitidas = {str(x) for x in guardadas}
+    else:
+        ref = ((ruta.get("orden_corte") or {}).get("referencia_id")
+               or ruta.get("referencia_id"))
+        if not ref:
+            try:
+                oc = obtener_orden_corte(ruta.get("orden_corte_id") or "")
+                ref = (oc or {}).get("referencia_id")
+            except Exception:
+                ref = None
+        omitidas = set(etapas_omitidas_por_precosteo(ref))
+    ts_por_etapa = {
+        "lavanderia":            "lavanderia_at",
+        "terminacion_recibida":  "terminacion_recibida_at",
+        "terminacion_terminada": "terminacion_terminada_at",
+    }
+    return {e for e in omitidas if not ruta.get(ts_por_etapa.get(e, ""))}
+
+
+def etapas_de_ruta(ruta: dict) -> tuple:
+    """La secuencia de etapas que ESTA ruta sí recorre."""
+    omitidas = _etapas_omitidas(ruta)
+    return tuple(e for e in ETAPAS_RUTA if e not in omitidas)
+
+
 def crear_ruta_lote(*, orden_corte_id: str, confeccionista_id: str,
                      precio_confeccion: Optional[float] = None,
                      fecha_entrega_confeccion: Optional[str] = None,
@@ -4328,6 +4407,10 @@ def crear_ruta_lote(*, orden_corte_id: str, confeccionista_id: str,
         "remision_id":              remision_id or None,
         "etapa":                    "asignado",
         "created_by":               created_by,
+        # Se congela al crear la ruta, no se calcula al leer: si mañana alguien
+        # cambia el precosteo, el recorrido de un lote que ya arrancó no puede
+        # cambiar por debajo. Es el mismo criterio que el precio de confección.
+        "etapas_omitidas":          etapas_omitidas_por_precosteo(oc.get("referencia_id")),
     }
     sb.table("hoja_ruta_lote").insert(row).execute()
     return obtener_ruta_por_corte(orden_corte_id)
@@ -4400,10 +4483,25 @@ def cambiar_etapa_ruta(ruta_id: str, etapa_nueva: str) -> dict:
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
-    r = (sb.table("hoja_ruta_lote").select("etapa").eq("id", ruta_id).limit(1).execute()).data
+    r = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
     if not r:
         raise ValueError("no_encontrada")
-    actual = r[0].get("etapa") or "asignado"
+    ruta_prev = r[0]
+    actual = ruta_prev.get("etapa") or "asignado"
+
+    # Si la etapa pedida no aplica en esta ruta (lavandería en un lote que no
+    # lava), NO se para ahí: se avanza a la siguiente que sí aplica. Antes el
+    # lote se quedaba en esa etapa acumulando días por un proceso inexistente.
+    omitidas = _etapas_omitidas(ruta_prev)
+    if etapa_nueva in omitidas:
+        siguientes = [e for e in ETAPAS_RUTA[orden[etapa_nueva] + 1:]
+                      if e not in omitidas]
+        if not siguientes:
+            raise ValueError(f"etapa_no_aplica_sin_siguiente:{etapa_nueva}")
+        log.info(f"[ruta {ruta_id}] '{etapa_nueva}' no aplica en este lote "
+                 f"(precosteo en 0) → avanzo a '{siguientes[0]}'")
+        etapa_nueva = siguientes[0]
+
     if orden[etapa_nueva] < orden.get(actual, 0):
         raise ValueError(f"no_se_puede_retroceder:{actual}→{etapa_nueva}")
 
@@ -4466,12 +4564,21 @@ def avanzar_etapa_si_antes(ruta_id: str, etapa_objetivo: str) -> Optional[dict]:
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
-    r = (sb.table("hoja_ruta_lote").select("etapa").eq("id", ruta_id).limit(1).execute()).data
+    r = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
     if not r:
         raise ValueError("no_encontrada")
     actual = r[0].get("etapa") or "asignado"
     if orden.get(actual, 0) >= orden[etapa_objetivo]:
         return None
+    # Si la objetivo no aplica, cambiar_etapa_ruta la traduce a la siguiente que
+    # sí — pero hay que comprobar acá que eso siga siendo un AVANCE, porque si el
+    # lote ya está más adelante que la traducción, esto no debe hacer nada.
+    omitidas = _etapas_omitidas(r[0])
+    if etapa_objetivo in omitidas:
+        siguientes = [e for e in ETAPAS_RUTA[orden[etapa_objetivo] + 1:]
+                      if e not in omitidas]
+        if not siguientes or orden.get(actual, 0) >= orden[siguientes[0]]:
+            return None
     return cambiar_etapa_ruta(ruta_id, etapa_objetivo)
 
 
@@ -4484,6 +4591,12 @@ def subir_remision_lavanderia(ruta_id: str, *, file_bytes: bytes, filename: str,
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
+    # Si este lote no lleva lavandería, subir una remisión de recogida es un
+    # error de operación (lote equivocado, o el precosteo está mal). Se corta con
+    # un mensaje claro en vez de crear una etapa que no existe en su recorrido.
+    _r = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
+    if _r and "lavanderia" in _etapas_omitidas(_r[0]):
+        raise ValueError("lavanderia_no_aplica")
     ext = (filename.rsplit(".", 1)[-1] if "." in filename else "pdf").lower()
     if ext not in ("pdf", "png", "jpg", "jpeg", "webp"):
         raise ValueError("formato_no_soportado")
