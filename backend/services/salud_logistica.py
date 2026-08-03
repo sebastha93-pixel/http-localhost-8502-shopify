@@ -48,6 +48,12 @@ FETCH_ROJO_MIN     = 360
 CAIDA_SOSPECHOSA   = 0.25
 # A partir de esta hora de Bogotá ya debería haber pedidos del día.
 HORA_ESPERA_PEDIDOS = 11
+# Cuánto tiene que pesar un problema de datos sobre los pedidos ABIERTOS para que
+# mueva el semáforo. Un puñado es normal (un pedido recién despachado no tiene
+# fecha medida hasta la siguiente tanda del enriquecedor); lo que importa es que
+# no se vuelva costumbre. Cualquiera de los dos criterios lo activa.
+UMBRAL_ABIERTOS_PCT = 5.0
+UMBRAL_ABIERTOS_MIN = 10
 _TZ_BOGOTA = timezone(timedelta(hours=-5))
 _TABLA = "logistica_salud"
 
@@ -280,20 +286,83 @@ def chequear(*, avisar: bool = False) -> dict:
         key=lambda x: x[0] or 0))
 
     # ── 8. Fechas imposibles (entrega antes del despacho) ────────────────────
+    #
+    # ESTE CHEQUEO NUNCA CORRIÓ hasta el 2026-08-02: se llamaba `reporte()` sin
+    # argumentos y la firma real es `reporte(pedidos)`. El TypeError caía en el
+    # `except` de abajo, se registraba en log.info y `medidas["auditoria"]`
+    # quedaba en null. O sea: 37 chequeos en verde con una de sus preguntas sin
+    # hacer. Es exactamente el pecado que este módulo existe para cazar —
+    # silencio que se lee como "todo bien" — y lo tenía adentro.
+    #
+    # Por eso el `except` ya no calla: si un sub-chequeo no puede correr, ESO es
+    # un hallazgo. Un chequeo roto no puede volver a esconderse detrás de un
+    # semáforo verde.
+    # Y OJO CON QUÉ LISTA se audita. Hay que medir lo que VE EL USUARIO, no el
+    # caché crudo: el teléfono y la guía viven en `pedido_overrides` y se pintan
+    # encima al leer, y `dias_origen` lo pone `clasificar()`. Auditando el caché
+    # pelado salía "NO AUDITABLE, 0% medido" y 341 contraentregas sin teléfono —
+    # todo falso, porque los overrides no se habían aplicado todavía.
+    # Es el mismo error que dejó pasar el bug de las guías (678 en base, 25 en
+    # pantalla) y está advertido en el endpoint /auditoria-datos. Lo repetí igual.
     try:
         from backend.services import auditoria_datos
-        aud = auditoria_datos.reporte()
+        from backend.services import metricas as metricas_svc
+        from backend.services import overrides as overrides_svc
+        _ov = overrides_svc.cargar_map()
+        vista = [metricas_svc.clasificar(overrides_svc.aplicar_a_pedido(p, _ov))
+                 for p in pedidos]
+        aud = auditoria_datos.reporte(vista)
+
+        # DOS auditorías, y el semáforo solo lo mueve la segunda.
+        #
+        # Sobre el tablero completo hay 331 contraentregas sin teléfono y 9 pares
+        # de fechas imposibles — y las 340 están en pedidos YA ENTREGADOS. Nadie
+        # va a llamar a un pedido entregado en mayo. Poner eso en ámbar cada hora
+        # sería el ruido contra el que existe la regla de no repetir avisos: se
+        # aprende a ignorar el semáforo y el día que salga algo de verdad, no se
+        # mira. Se mide sobre los ABIERTOS, que son los que se pueden trabajar.
+        abiertos = [p for p in vista
+                    if (p.get("sub_estado_logistico") or "") != "entregado"]
+        aud_abiertos = auditoria_datos.reporte(abiertos) if abiertos else {}
+
         medidas["auditoria"] = {
             "veredicto": aud.get("veredicto"),
             "problemas": aud.get("problemas"),
+            "dias": aud.get("dias"),
+            # Lo mismo pero solo sobre lo accionable.
+            "abiertos": {
+                "total": len(abiertos),
+                "veredicto": aud_abiertos.get("veredicto"),
+                "problemas": aud_abiertos.get("problemas"),
+            },
         }
-        probs = aud.get("problemas") or []
-        if isinstance(probs, list) and probs:
-            marcar("amarillo", "fechas_imposibles",
-                   f"La auditoría de datos encontró {len(probs)} problema(s) de "
-                   f"fechas o procedencia.")
+        # Y con umbral, porque un puñado es NORMAL, no un defecto: un pedido
+        # recién despachado no tiene fecha medida hasta que el enriquecedor la
+        # traiga en su próxima tanda. Sin umbral esto quedaría en ámbar
+        # permanente por 1 pedido de 380 — y un ámbar permanente no es una
+        # alerta, es un adorno que enseña a no mirar el semáforo.
+        probs = [p for p in (aud_abiertos.get("problemas") or [])
+                 if isinstance(p, dict)]
+        n_ab = max(len(abiertos), 1)
+        graves = [p for p in probs
+                  if int(p.get("n") or 0) >= UMBRAL_ABIERTOS_MIN
+                  or (int(p.get("n") or 0) / n_ab * 100) >= UMBRAL_ABIERTOS_PCT]
+        medidas["auditoria"]["abiertos"]["bajo_umbral"] = [
+            {"clave": p.get("clave"), "n": p.get("n")}
+            for p in probs if p not in graves
+        ]
+        if graves:
+            detalle = ", ".join(f"{p.get('clave')} ({p.get('n')})" for p in graves[:4])
+            marcar("amarillo", "datos_incompletos_en_abiertos",
+                   f"Hay pedidos ABIERTOS con datos que impiden trabajarlos: "
+                   f"{detalle}. Sobre {len(abiertos)} pedidos abiertos.",
+                   ejemplos=graves[:5])
     except Exception as e:
-        log.info(f"[salud] auditoría no disponible: {str(e)[:120]}")
+        log.warning(f"[salud] la auditoría de datos no pudo correr: {str(e)[:150]}")
+        marcar("amarillo", "chequeo_no_corrio",
+               f"La auditoría de fechas no pudo correr ({type(e).__name__}: "
+               f"{str(e)[:100]}). El semáforo está incompleto: esta pregunta "
+               f"quedó sin hacer.")
 
     return _cerrar(hallazgos, medidas, avisar)
 
