@@ -576,7 +576,16 @@ def firmar_precosteo(
 ) -> dict:
     """Firma y bloquea. Requiere flag `puede_autorizar_precosteo` en usuarios."""
     try:
-        return svc.firmar_precosteo(precosteo_id, usuario_id=user.id)
+        p = svc.firmar_precosteo(precosteo_id, usuario_id=user.id)
+        # El aviso va DESPUÉS de firmar y no puede tumbar la firma: autorizar es
+        # la acción, avisar es la cortesía. Mismo criterio que corte_creado y
+        # corte_cerrado, que también se avisan desde la capa de API.
+        try:
+            from backend.services import avisos_produccion as avisos
+            avisos.avisar_precosteo_autorizado(p, autorizado_por=user.email)
+        except Exception:
+            pass
+        return p
     except ValueError as e:
         # sin_permiso, ya_bloqueado, no_encontrado → 403 vs 400 vs 404
         msg = str(e)

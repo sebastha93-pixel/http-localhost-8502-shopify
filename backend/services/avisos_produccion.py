@@ -55,6 +55,40 @@ def _consecutivo(oc: Optional[dict]) -> str:
     return str(oc.get("consecutivo") or oc.get("id") or "?")
 
 
+def avisar_precosteo_autorizado(p: dict, *, autorizado_por: str) -> None:
+    """Se autorizó (firmó) un precosteo → avisar al diseñador que lo creó.
+
+    POR QUÉ EXISTE (2026-08-04): era el único punto del flujo donde alguien
+    quedaba esperando SIN SABERLO. Hasta que el precosteo no está autorizado, el
+    diseñador no puede crear la orden de corte — y nada le decía que ya podía.
+    Sebastián autorizó 26620-1 y 26621-1 y preguntó por qué no llegó el aviso: no
+    se había perdido, no existía.
+
+    Va al CREADOR y no por rol, igual que `corte_cerrado`: hay una persona
+    concreta esperando esta autorización, no un puesto.
+    """
+    try:
+        dest = (p.get("created_by") or "").strip()
+        cod = str(p.get("codigo_referencia") or p.get("id") or "?")
+        if not dest:
+            log.info(f"[avisos] precosteo {cod} sin created_by — sin aviso")
+            return
+        nombre = (p.get("nombre") or "").strip()
+        detalle = f" · {nombre}" if nombre else ""
+        notif.crear(
+            destinatario_email=dest,
+            tipo="precosteo_autorizado",
+            titulo=f"Precosteo {cod} autorizado",
+            mensaje=(f"{autorizado_por or 'Dirección'} autorizó la referencia "
+                     f"{cod}{detalle}. Ya puedes crear la orden de corte."),
+            enlace=f"/produccion/precosteo/{p.get('id') or ''}",
+            meta={"precosteo_id": p.get("id"), "codigo_referencia": cod},
+            creado_por=autorizado_por,
+        )
+    except Exception as e:
+        log.warning(f"[avisos] precosteo_autorizado falló: {str(e)[:160]}")
+
+
 def avisar_corte_creado(oc: dict, *, creado_por: str) -> None:
     """Diseñador creó una orden de corte → avisar a los cortadores."""
     try:
