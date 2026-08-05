@@ -243,3 +243,65 @@ def listar_addi(
         desde=desde,
         hasta=hasta,
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CONCILIACIÓN BANCARIA · el OS le pregunta al servicio de recon
+# ═══════════════════════════════════════════════════════════════════════
+#
+# La conciliación vive en `male-denim-reconciliation` (Railway), con su propia
+# API y su propio schema `recon` en la MISMA Supabase — que PostgREST no expone,
+# así que la costura es HTTP. Ver backend/services/recon_client.py para el por qué.
+#
+# Estos endpoints son un PROXY a propósito: la API key del servicio de
+# conciliación no puede viajar al navegador. El OS la guarda y responde ya
+# masticado.
+#
+# Ninguno devuelve 5xx si el otro servicio está caído: responden
+# `disponible: false` con el motivo, y la pantalla lo dice. Un tablero de plata
+# que muestra ceros sin avisar es peor que uno que muestra el error.
+
+@router.get("/conciliacion/estado")
+def conciliacion_estado(_: CurrentUser = Depends(get_current_user)) -> dict:
+    """¿Está conectado el módulo de conciliación bancaria?"""
+    from backend.services import recon_client
+    return recon_client.salud()
+
+
+@router.get("/conciliacion/resumen")
+def conciliacion_resumen(
+    forzar: bool = Query(default=False, description="Ignora el caché de 90s"),
+    _: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """Pendiente por plataforma, cruces hechos y excepciones abiertas.
+
+    `por_plataforma` es la respuesta a "cuánto esperar de cada pasarela": el dato
+    que el OS no podía calcular solo, porque el eslabón de la consignación vive
+    en el otro servicio.
+    """
+    from backend.services import recon_client
+    return recon_client.resumen(forzar=forzar)
+
+
+@router.get("/conciliacion/liquidaciones")
+def conciliacion_liquidaciones(
+    limite: int = Query(default=50, ge=1, le=200),
+    _: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """Los lotes de liquidación: cada consignación agrupada por pasarela.
+
+    Trae `descompuesto`: un lote sin el detalle de los pedidos que lo componen se
+    vería igual que uno cuadrado al peso, y no es lo mismo.
+    """
+    from backend.services import recon_client
+    return recon_client.liquidaciones(limite=limite)
+
+
+@router.get("/conciliacion/excepciones")
+def conciliacion_excepciones(
+    limite: int = Query(default=100, ge=1, le=500),
+    _: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """Lo que el motor no pudo cuadrar — la lista de trabajo real."""
+    from backend.services import recon_client
+    return recon_client.excepciones(limite=limite)

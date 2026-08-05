@@ -6,6 +6,7 @@ import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { KpiStrip } from "@/components/kpi-card";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatMoney, formatMoneyShort, fmtDateTime } from "@/lib/utils";
+import { ConciliacionBancaria } from "@/components/conciliacion-bancaria";
 
 interface ResumenFinanzas {
   cod_total: number;
@@ -96,6 +97,14 @@ export default function FinanzasPage() {
             { label: "Comisiones",    value: formatMoneyShort(data.mp_comisiones) },
           ]}
         />
+      </section>
+
+      {/* Conciliación bancaria — vive en el servicio male-denim-reconciliation.
+          Va al final porque es el cierre del ciclo del dinero: arriba está lo que
+          se vendió y está por cobrar, acá lo que ya entró al banco y cuánto falta
+          por plataforma. Se pinta solo si el servicio responde. */}
+      <section>
+        <ConciliacionBancaria />
       </section>
     </PageShell>
   );
