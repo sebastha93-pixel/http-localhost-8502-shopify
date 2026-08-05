@@ -334,6 +334,17 @@ def actualizar_ingreso(ingreso_id: str, **campos) -> dict:
 # Igual que `puede_autorizar_precosteo`, el flag se lee de la BASE en cada
 # llamada y no del token: así revocarlo tiene efecto inmediato y no cuando expire
 # la sesión.
+def _email_de(usuario_id: Optional[str]) -> str:
+    """Email del usuario, para dejarlo en el movimiento de inventario."""
+    if not usuario_id:
+        return "sistema"
+    try:
+        from backend.services import usuarios as _usuarios
+        return (_usuarios.obtener_por_id(usuario_id) or {}).get("email") or str(usuario_id)
+    except Exception:
+        return str(usuario_id)
+
+
 def _puede_ajustar_metraje(usuario_id: Optional[str]) -> bool:
     if not usuario_id:
         return False
@@ -393,15 +404,43 @@ def actualizar_rollo_ingreso(rollo_id: str, *, usuario_id: Optional[str] = None,
         anterior = float(rollo.get("metros_inicial") or 0)
         disponible = float(rollo.get("metros_disponible") or 0)
         consumido = anterior - disponible
-        nuevo_disponible = nuevos_metros - consumido
-        if nuevo_disponible < 0:
-            # Corregir a menos de lo ya cortado no es una corrección, es un dato
-            # imposible: habría salido más tela de la que el rollo tenía.
-            raise ValueError(
-                f"metros_menores_al_consumo: de este rollo ya salieron "
-                f"{consumido:.2f} m a corte, no puede quedar en {nuevos_metros:.2f} m")
+
+        if disponible <= 0:
+            # ROLLO AGOTADO. Acá el consumo NO se conserva: se corrige junto con
+            # el metraje. Si el rollo se acabó, es porque el corte usó todo lo que
+            # FÍSICAMENTE traía — y eso es justo el número que se está corrigiendo.
+            # Conservar el consumo viejo daría un disponible negativo y rechazaría
+            # la corrección, que es lo que pasaba antes: de los 83 rollos ya
+            # usados, 74 están agotados, así que la corrección servía para 9.
+            # El caso que lo destapó: ING-2026-0003, 22 rollos, 21 agotados.
+            nuevo_disponible = 0.0
+        else:
+            # Parcialmente consumido: los metros que salieron a corte se MIDIERON
+            # en la mesa, así que ese dato manda. Se conserva y se ajusta el saldo.
+            nuevo_disponible = nuevos_metros - consumido
+            if nuevo_disponible < 0:
+                # Corregir a menos de lo ya cortado no es una corrección, es un
+                # dato imposible: habría salido más tela de la que el rollo tenía.
+                raise ValueError(
+                    f"metros_menores_al_consumo: de este rollo ya salieron "
+                    f"{consumido:.2f} m a corte, no puede quedar en {nuevos_metros:.2f} m")
         update["metros_inicial"] = nuevos_metros
         update["metros_disponible"] = round(nuevo_disponible, 2)
+
+        # RASTRO. Corregir el metraje de un rollo ya usado cambia el consumo real
+        # del lote que lo cortó, y por tanto su costo por prenda. Eso no puede
+        # pasar sin quedar registrado: es exactamente lo que Sebastián pidió
+        # cuando dijo que la información debe poder auditarse.
+        _correccion_pendiente = {
+            "rollo_id": rollo_id,
+            "tipo": "correccion_metraje",
+            "metros": round(nuevos_metros - anterior, 2),
+            "doc_ref": "correccion_ingreso",
+            "usuario": _email_de(usuario_id),
+            "nota": (f"Metraje corregido de {anterior:.2f} a {nuevos_metros:.2f} m "
+                     f"(ya cortados {consumido:.2f} m; saldo "
+                     f"{disponible:.2f} → {nuevo_disponible:.2f})"),
+        }
 
     if not update:
         raise ValueError("sin_campos")
@@ -413,6 +452,15 @@ def actualizar_rollo_ingreso(rollo_id: str, *, usuario_id: Optional[str] = None,
             sb.table("movimientos_inventario").update({"metros": nuevos_metros})               .eq("rollo_id", rollo_id).eq("tipo", "ingreso").execute()
         except Exception as e:
             log.warning(f"[ingreso] no se actualizó movimiento del rollo {rollo_id}: {e}")
+        # El rastro de la corrección. Va DESPUÉS de escribir, y en su propio try:
+        # si falla el registro no se deshace una corrección que ya quedó bien —
+        # pero se avisa, porque un cambio de metraje sin rastro es justo lo que no
+        # se puede auditar.
+        try:
+            sb.table("movimientos_inventario").insert(_correccion_pendiente).execute()
+        except Exception as e:
+            log.error(f"[metraje] rollo {rollo_id} corregido pero SIN registrar el "
+                      f"movimiento: {str(e)[:160]}")
         ingreso_id = rollo.get("orden_ingreso_id")
         if ingreso_id:
             todos = (sb.table("rollos_tela").select("metros_inicial")
