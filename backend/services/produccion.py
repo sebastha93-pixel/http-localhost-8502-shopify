@@ -476,7 +476,11 @@ def eliminar_rollo_ingreso(rollo_id: str, *, usuario_id: Optional[str] = None) -
             f"rollo_ya_consumido: {rollo.get('codigo_interno')} ya salió a corte. "
             f"Los metros se pueden corregir, el rollo no se puede borrar.")
 
-    ingreso_id = rollo.get("ingreso_id")
+    # La columna se llama `orden_ingreso_id`, NO `ingreso_id`. Usé el nombre
+    # equivocado en la primera versión: el rollo se borraba y después PostgREST
+    # rechazaba el filtro, así que los totales de la orden quedaban mal y el
+    # usuario veía un error 500 sobre una operación que ya había pasado a medias.
+    ingreso_id = rollo.get("orden_ingreso_id")
     sb.table("movimientos_inventario").delete().eq("rollo_id", rollo_id).execute()
     sb.table("rollos_tela").delete().eq("id", rollo_id).execute()
 
@@ -488,7 +492,7 @@ def eliminar_rollo_ingreso(rollo_id: str, *, usuario_id: Optional[str] = None) -
     if ingreso_id:
         restantes = (sb.table("rollos_tela")
                        .select("metros_inicial")
-                       .eq("ingreso_id", ingreso_id).execute()).data or []
+                       .eq("orden_ingreso_id", ingreso_id).execute()).data or []
         sb.table("ordenes_ingreso").update({
             "total_rollos": len(restantes),
             "total_metros": round(sum(float(x.get("metros_inicial") or 0)
