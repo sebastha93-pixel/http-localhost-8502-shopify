@@ -10,7 +10,7 @@ import { getToken } from "@/lib/auth";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Printer, ArrowLeft, Tag, Loader2, Pencil, Trash2, Check, X } from "lucide-react";
+import { Printer, ArrowLeft, Tag, Loader2, Pencil, Trash2, Check, X, Ban } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 
 interface Rollo {
@@ -98,6 +98,32 @@ export default function DetalleIngresoPage() {
     },
     onError: (e: Error) => setErrAccion(`No se pudo eliminar el rollo: ${e.message}`),
   });
+
+  // El rollo nunca llego a bodega. NO es borrar: anula los metros y quita el
+  // consumo ficticio del corte, dejando escrito cuanto facturo la textilera.
+  const anularRollo = useMutation({
+    mutationFn: (rolloId: string) =>
+      api.post(`/api/produccion/ingreso/rollos/${rolloId}/no-recibido`,
+               { motivo: "El rollo nunca llegó a bodega" }),
+    onSuccess: () => {
+      setErrAccion("");
+      qc.invalidateQueries({ queryKey: ["produccion", "ingreso", id] });
+    },
+    onError: (e: Error) => setErrAccion(`No se pudo anular el rollo: ${e.message}`),
+  });
+  function confirmarAnular(r: Rollo) {
+    const cortado = r.metros_inicial - r.metros_disponible;
+    if (!window.confirm(
+      `¿Marcar ${r.codigo_interno} como NUNCA RECIBIDO?\n\n` +
+      `· Sus metros quedan en 0 (la textilera facturó ${r.metros_inicial} m).\n` +
+      (cortado > 0
+        ? `· Se quita el consumo de ${cortado.toFixed(1)} m del corte que lo usó, porque nunca existió.\n`
+        : "") +
+      `· Queda el registro de los metros facturados, para reclamarle al proveedor.\n\n` +
+      `Esto no se puede deshacer.`
+    )) return;
+    anularRollo.mutate(r.id);
+  }
 
   /** Nadie lo ha tocado: sigue disponible y con los metros completos.
    *  Es la MISMA regla que `_rollo_intacto` en el backend. */
@@ -397,6 +423,17 @@ export default function DetalleIngresoPage() {
                         {/* Borrar UN rollo. Solo si nadie lo consumió: corregir un
                             número deja el rollo en su sitio, borrarlo lo desaparece
                             y el lote que se cortó con él quedaría apuntando al vacío. */}
+                        {/* "Nunca llegó" aparece justo cuando la papelera NO:
+                            en rollos que el sistema cree usados. Es el caso de un
+                            rollo facturado que no entró a bodega. */}
+                        {puedeMetraje && !intactoRollo(r) && r.estado !== "no_recibido" && (
+                          <button onClick={() => confirmarAnular(r)}
+                            disabled={anularRollo.isPending}
+                            title="Este rollo nunca llegó a bodega — anular metros y quitar el consumo"
+                            className="text-graphite transition-colors hover:text-terracotta disabled:opacity-40">
+                            <Ban className="h-3 w-3" />
+                          </button>
+                        )}
                         {puedeMetraje && intactoRollo(r) && (
                           <button onClick={() => confirmarEliminarRollo(r)}
                             disabled={eliminarRollo.isPending}

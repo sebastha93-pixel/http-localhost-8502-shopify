@@ -201,6 +201,30 @@ def actualizar_rollo_ingreso(
         raise HTTPException(500, f"actualizar_rollo: {str(e)[:200]}")
 
 
+@router.post("/ingreso/rollos/{rollo_id}/no-recibido")
+def anular_rollo_no_recibido(
+    rollo_id: str,
+    body: dict | None = None,
+    user: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
+) -> dict:
+    """El rollo nunca llegó a bodega: se ANULA (metros en cero), no se borra.
+
+    Distinto de eliminar: eliminar exige rollo intacto y lo desaparece. Esto sirve
+    justo para el caso contrario — un rollo que el sistema cree consumido pero que
+    nunca entró. Quita el consumo ficticio del corte, deja los metros en cero y
+    guarda cuántos facturó la textilera, que es lo que se le reclama.
+    """
+    try:
+        return svc.anular_rollo_no_recibido(
+            rollo_id, motivo=((body or {}).get("motivo") or ""), usuario_id=user.id)
+    except PermissionError:
+        raise HTTPException(403, "Solo quien tenga el permiso de metraje puede anular un rollo. Pídeselo a Sebastián.")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"anular_rollo: {str(e)[:200]}")
+
+
 @router.delete("/ingreso/rollos/{rollo_id}")
 def eliminar_rollo_ingreso(
     rollo_id: str,

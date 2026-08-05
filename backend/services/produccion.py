@@ -471,6 +471,101 @@ def actualizar_rollo_ingreso(rollo_id: str, *, usuario_id: Optional[str] = None,
     return (sb.table("rollos_tela").select("*").eq("id", rollo_id).limit(1).execute()).data[0]
 
 
+ESTADO_NO_RECIBIDO = "no_recibido"
+
+
+def anular_rollo_no_recibido(rollo_id: str, *, motivo: str = "",
+                             usuario_id: Optional[str] = None) -> dict:
+    """El rollo NUNCA LLEGÓ: se anula, no se borra.
+
+    EL CASO REAL (2026-08-05, ING-2026-0003): ROLLO-2026-000027, GALICIA GREY,
+    49 m. La textilera lo facturó, se ingresó, el cortador pistoleó su código y
+    quedó como consumido en el corte 2607-0016… y el rollo nunca entró a la
+    bodega. El dato lo confirma solo: sin esos 49 m el consumo de ese corte da
+    1,724 m/prenda contra un promedio técnico de 1,74 — cuadra. Con ellos da
+    1,891, o sea un 8,7% de desperdicio que nunca existió.
+
+    ANULAR Y NO BORRAR, por dos razones:
+      1. Si se borra el rollo se pierde la evidencia de que la textilera facturó
+         metros que no llegaron — y eso es plata que se le reclama al proveedor.
+      2. Borrarlo dejaría al corte apuntando a un rollo inexistente.
+
+    QUÉ HACE, y por qué así:
+      · Los metros quedan en CERO, inicial y disponible. Es lo que lo vuelve
+        inofensivo en cualquier suma del inventario SIN depender de que cada
+        consulta filtre el estado nuevo — hay dos que filtran solo `agotado` y se
+        lo tragarían como tela disponible.
+      · Se borra el consumo del corte: era ficción. El corte queda con lo que de
+        verdad se cortó.
+      · Se borran los movimientos del rollo (ingreso y corte): registran hechos
+        que no pasaron.
+      · Se inserta UN movimiento de anulación que deja escrito cuántos metros
+        facturó la textilera, quién anuló y por qué. Ese es el rastro que queda,
+        y el que sirve para el reclamo.
+    """
+    if not _puede_ajustar_metraje(usuario_id):
+        raise PermissionError("sin_permiso_metraje")
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    r = (sb.table("rollos_tela").select("*").eq("id", rollo_id).limit(1).execute()).data
+    if not r:
+        raise ValueError("rollo_no_encontrado")
+    rollo = r[0]
+    if (rollo.get("estado") or "") == ESTADO_NO_RECIBIDO:
+        raise ValueError("rollo_ya_anulado")
+    facturados = float(rollo.get("metros_inicial") or 0)
+
+    # Qué cortes lo tenían como consumido — se guarda para poder decirlo.
+    cortes = []
+    try:
+        for l in (sb.table("orden_corte_rollos").select("orden_corte_id,metros_usados")
+                    .eq("rollo_id", rollo_id).execute()).data or []:
+            oc = (sb.table("ordenes_corte").select("consecutivo")
+                    .eq("id", l["orden_corte_id"]).limit(1).execute()).data
+            cortes.append({"orden": (oc[0].get("consecutivo") if oc else "?"),
+                           "metros": float(l.get("metros_usados") or 0)})
+        sb.table("orden_corte_rollos").delete().eq("rollo_id", rollo_id).execute()
+    except Exception as e:
+        log.warning(f"[anular] no pude limpiar el consumo de {rollo_id}: {str(e)[:140]}")
+
+    sb.table("movimientos_inventario").delete().eq("rollo_id", rollo_id).execute()
+    sb.table("rollos_tela").update({
+        "metros_inicial": 0,
+        "metros_disponible": 0,
+        "estado": ESTADO_NO_RECIBIDO,
+        "updated_at": _now_iso(),
+    }).eq("id", rollo_id).execute()
+
+    detalle = ", ".join(f"{c['orden']} ({c['metros']:.2f} m)" for c in cortes)
+    sb.table("movimientos_inventario").insert({
+        "rollo_id": rollo_id,
+        "tipo": "anulacion_no_recibido",
+        "metros": -facturados,
+        "doc_ref": "rollo_no_recibido",
+        "usuario": _email_de(usuario_id),
+        "nota": (f"ANULADO: la textilera facturó {facturados:.2f} m que nunca "
+                 f"llegaron a bodega."
+                 + (f" Se quitó el consumo de {detalle}." if detalle else "")
+                 + (f" Motivo: {motivo}" if motivo else "")),
+    }).execute()
+
+    ingreso_id = rollo.get("orden_ingreso_id")
+    total = None
+    if ingreso_id:
+        todos = (sb.table("rollos_tela").select("metros_inicial")
+                   .eq("orden_ingreso_id", ingreso_id).execute()).data or []
+        total = round(sum(float(x.get("metros_inicial") or 0) for x in todos), 2)
+        sb.table("ordenes_ingreso").update({
+            "total_metros": total, "updated_at": _now_iso(),
+        }).eq("id", ingreso_id).execute()
+
+    return {"ok": True, "codigo_interno": rollo.get("codigo_interno"),
+            "metros_facturados_anulados": facturados,
+            "cortes_corregidos": cortes,
+            "nuevo_total_ingreso": total}
+
+
 def eliminar_ingreso(ingreso_id: str, *, usuario_id: Optional[str] = None) -> dict:
     """Elimina una orden de ingreso completa revirtiendo el inventario.
     Solo si NINGÚN rollo fue consumido (todos intactos), y solo quien tenga
