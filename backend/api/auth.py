@@ -88,6 +88,9 @@ class UsuarioOut(BaseModel):
     permisos: dict = {}
     activo: bool
     puede_autorizar_precosteo: bool = False
+    # Puede borrar ingresos de tela y cambiar metros. Ver la migración
+    # 20260805020000_permiso_metraje.sql.
+    puede_ajustar_metraje: bool = False
     puede_autorizar_corte: bool = False
     creado_en: Optional[str] = None
 
@@ -109,6 +112,7 @@ class ActualizarUsuarioBody(BaseModel):
     activo: Optional[bool] = None
     password: Optional[str] = Field(default=None, min_length=8)
     puede_autorizar_precosteo: Optional[bool] = None
+    puede_ajustar_metraje: Optional[bool] = None
     puede_autorizar_corte:     Optional[bool] = None
 
 
@@ -161,6 +165,7 @@ def _to_out(u: dict) -> UsuarioOut:
         permisos=u.get("permisos") or {},
         activo=u.get("activo", True),
         puede_autorizar_precosteo=bool(u.get("puede_autorizar_precosteo")),
+        puede_ajustar_metraje=bool(u.get("puede_ajustar_metraje")),
         puede_autorizar_corte=bool(u.get("puede_autorizar_corte")),
         creado_en=u.get("creado_en"),
     )

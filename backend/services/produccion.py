@@ -316,9 +316,46 @@ def actualizar_ingreso(ingreso_id: str, **campos) -> dict:
     return obtener_ingreso(ingreso_id) or res.data[0]
 
 
-def actualizar_rollo_ingreso(rollo_id: str, **campos) -> dict:
-    """Corrige un rollo de un ingreso. Los metros solo se pueden cambiar si el
-    rollo está intacto (nadie lo ha consumido); los datos descriptivos siempre."""
+# ── Quién puede tocar el METRAJE ──────────────────────────────────────────────
+#
+# REGLA (Sebastián, 2026-08-05): borrar un ingreso de tela o cambiar el metraje
+# lo hace UNA sola persona. Lo demás del ingreso —composición, tono, ancho,
+# número de rollo, costo— lo sigue corrigiendo quien tenga el módulo.
+#
+# POR QUÉ ES DISTINTO DEL RESTO: el metraje es la base del inventario y del
+# consumo por lote. Un metro de más o de menos no se nota en la pantalla, pero
+# mueve el costo de cada prenda que salga de ese rollo y no deja rastro de que
+# alguien lo cambió. Un tono mal escrito se ve; 300 metros que eran 280, no.
+#
+# Se resuelve con un FLAG POR USUARIO y no con el rol admin, porque admin hoy son
+# dos personas (Sebastián y María Alejandra) y porque tampoco se quiere clavar un
+# correo en el código: el día que delegue, se prende el flag y listo.
+#
+# Igual que `puede_autorizar_precosteo`, el flag se lee de la BASE en cada
+# llamada y no del token: así revocarlo tiene efecto inmediato y no cuando expire
+# la sesión.
+def _puede_ajustar_metraje(usuario_id: Optional[str]) -> bool:
+    if not usuario_id:
+        return False
+    try:
+        from backend.services import usuarios as _usuarios
+        u = _usuarios.obtener_por_id(usuario_id) or {}
+        return bool(u.get("puede_ajustar_metraje"))
+    except Exception as e:
+        # Ante la duda, NO autorizar. Es el sentido correcto de fallar en un
+        # permiso: que un error de lectura bloquee, no que abra.
+        log.warning(f"[metraje] no pude verificar el permiso de {usuario_id}: "
+                    f"{str(e)[:120]} — niego por defecto")
+        return False
+
+
+def actualizar_rollo_ingreso(rollo_id: str, *, usuario_id: Optional[str] = None,
+                             **campos) -> dict:
+    """Corrige un rollo de un ingreso.
+
+    Los metros: solo si el rollo está intacto Y quien pide tiene
+    `puede_ajustar_metraje`. Los datos descriptivos: siempre, con el módulo.
+    Ver `_puede_ajustar_metraje`."""
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
@@ -333,6 +370,10 @@ def actualizar_rollo_ingreso(rollo_id: str, **campos) -> dict:
 
     nuevos_metros = campos.get("metros_inicial")
     if nuevos_metros is not None:
+        # El permiso se revisa ANTES de validar el valor: si no puede, da igual
+        # que el número sea correcto o que el rollo esté intacto.
+        if not _puede_ajustar_metraje(usuario_id):
+            raise PermissionError("sin_permiso_metraje")
         nuevos_metros = float(nuevos_metros)
         if nuevos_metros <= 0:
             raise ValueError("metros_invalidos")
@@ -361,9 +402,12 @@ def actualizar_rollo_ingreso(rollo_id: str, **campos) -> dict:
     return (sb.table("rollos_tela").select("*").eq("id", rollo_id).limit(1).execute()).data[0]
 
 
-def eliminar_ingreso(ingreso_id: str) -> dict:
+def eliminar_ingreso(ingreso_id: str, *, usuario_id: Optional[str] = None) -> dict:
     """Elimina una orden de ingreso completa revirtiendo el inventario.
-    Solo si NINGÚN rollo fue consumido (todos intactos)."""
+    Solo si NINGÚN rollo fue consumido (todos intactos), y solo quien tenga
+    `puede_ajustar_metraje` — ver `_puede_ajustar_metraje`."""
+    if not _puede_ajustar_metraje(usuario_id):
+        raise PermissionError("sin_permiso_metraje")
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
@@ -1280,8 +1324,14 @@ def subir_foto_precosteo(precosteo_id: str, *, file_bytes: bytes, filename: str,
 
 
 def ajustar_stock(*, rollo_id: str, metros_delta: float, nota: str,
+                  usuario_id: Optional[str] = None,
                   usuario: str) -> dict:
     """Ajuste manual de stock de un rollo (admin). Registra movimiento."""
+    # Un ajuste de stock ES cambiar el metraje, aunque se llame distinto: mueve
+    # metros_disponible. Si no estuviera bajo la misma llave, la restricción del
+    # PATCH sería decorativa — se cambiaría el metraje por esta puerta.
+    if not _puede_ajustar_metraje(usuario_id):
+        raise PermissionError("sin_permiso_metraje")
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")

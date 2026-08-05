@@ -182,11 +182,19 @@ def actualizar_ingreso(
 def actualizar_rollo_ingreso(
     rollo_id: str,
     body: dict,
-    _: CurrentUser = Depends(require_permission("produccion_ingreso", "modificar")),
+    user: CurrentUser = Depends(require_permission("produccion_ingreso", "modificar")),
 ) -> dict:
-    """Corrige un rollo. Metros solo si el rollo está intacto."""
+    """Corrige un rollo.
+
+    Los datos descriptivos (composición, tono, ancho, costo…) los cambia quien
+    tenga el módulo. Los METROS, solo quien tenga `puede_ajustar_metraje` y solo
+    si el rollo está intacto — el metraje es la base del inventario y del costo
+    por prenda, y un metro de más no se ve en pantalla.
+    """
     try:
-        return svc.actualizar_rollo_ingreso(rollo_id, **(body or {}))
+        return svc.actualizar_rollo_ingreso(rollo_id, usuario_id=user.id, **(body or {}))
+    except PermissionError:
+        raise HTTPException(403, "Solo quien tenga el permiso de metraje puede borrar un ingreso o cambiar los metros de un rollo. Pídeselo a Sebastián.")
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
@@ -196,12 +204,17 @@ def actualizar_rollo_ingreso(
 @router.delete("/ingreso/{ingreso_id}")
 def eliminar_ingreso(
     ingreso_id: str,
-    _: CurrentUser = Depends(require_role("admin")),
+    user: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
 ) -> dict:
     """Elimina el ingreso completo revirtiendo inventario.
-    Requiere autorización de administrador; falla si algún rollo ya se consumió."""
+
+    Antes pedía rol admin, que hoy son DOS personas. Ahora pide el flag
+    `puede_ajustar_metraje` — una sola. Falla igual si algún rollo ya se consumió.
+    """
     try:
-        return svc.eliminar_ingreso(ingreso_id)
+        return svc.eliminar_ingreso(ingreso_id, usuario_id=user.id)
+    except PermissionError:
+        raise HTTPException(403, "Solo quien tenga el permiso de metraje puede borrar un ingreso o cambiar los metros de un rollo. Pídeselo a Sebastián.")
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
@@ -417,16 +430,23 @@ class AjusteIn(BaseModel):
 def ajuste_stock(
     rollo_id: str,
     body: AjusteIn,
-    user: CurrentUser = Depends(require_role("admin")),
+    user: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
 ) -> dict:
-    """Ajuste manual de stock — solo admin. metros_delta puede ser negativo."""
+    """Ajuste manual de stock. metros_delta puede ser negativo.
+
+    Bajo la MISMA llave que el metraje: un ajuste mueve metros_disponible, así
+    que sin esto la restricción del PATCH sería decorativa.
+    """
     try:
         return svc.ajustar_stock(
             rollo_id=rollo_id,
             metros_delta=body.metros_delta,
             nota=body.nota,
+            usuario_id=user.id,
             usuario=user.email,
         )
+    except PermissionError:
+        raise HTTPException(403, "Solo quien tenga el permiso de metraje puede borrar un ingreso o cambiar los metros de un rollo. Pídeselo a Sebastián.")
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:

@@ -22,6 +22,7 @@ interface Usuario {
   permisos?: Record<string, string[]>;
   activo: boolean;
   puede_autorizar_precosteo?: boolean;
+  puede_ajustar_metraje?: boolean;
   puede_autorizar_corte?: boolean;
   creado_en?: string;
 }
@@ -437,6 +438,7 @@ function UsuarioRow({
   const [errEdit, setErrEdit] = useState("");
   const [puedePrecosteo, setPuedePrecosteo] = useState(!!u.puede_autorizar_precosteo);
   const [puedeCorte, setPuedeCorte]         = useState(!!u.puede_autorizar_corte);
+  const [puedeMetraje, setPuedeMetraje]     = useState(!!u.puede_ajustar_metraje);
 
   const mut = useMutation({
     mutationFn: () => {
@@ -444,6 +446,7 @@ function UsuarioRow({
         nombre, cargo, rol, activo,
         puede_autorizar_precosteo: puedePrecosteo,
         puede_autorizar_corte: puedeCorte,
+        puede_ajustar_metraje: puedeMetraje,
       };
       if (rol === "user") body.permisos = permisos;
       if (password) body.password = password;
@@ -506,6 +509,13 @@ function UsuarioRow({
               <label className="flex items-center gap-2 text-xs">
                 <input type="checkbox" checked={puedeCorte} onChange={(e) => setPuedeCorte(e.target.checked)} />
                 Puede autorizar corte
+              </label>
+              {/* El metraje es la base del inventario y del costo por prenda: un
+                  metro de más no se ve en pantalla pero mueve el costo de todo el
+                  lote. Arranca apagado para todos. */}
+              <label className="flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={puedeMetraje} onChange={(e) => setPuedeMetraje(e.target.checked)} />
+                Puede borrar ingresos de tela y cambiar metros
               </label>
             </div>
             <div className="flex items-center gap-2">

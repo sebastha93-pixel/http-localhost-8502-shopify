@@ -19,6 +19,10 @@ export interface User {
   rol: Rol;
   permisos?: Record<string, string[] | Record<string, boolean>>;
   activo?: boolean;
+  /** Puede borrar ingresos de tela, cambiar metros de un rollo y hacer
+   *  ajustes de stock. Lo decide la BASE, no el rol — ver
+   *  20260805020000_permiso_metraje.sql. */
+  puede_ajustar_metraje?: boolean;
 }
 
 export function getToken(): string | null {

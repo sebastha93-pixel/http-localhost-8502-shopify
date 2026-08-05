@@ -58,7 +58,9 @@ export default function DetalleIngresoPage() {
   const router = useRouter();
   const qc = useQueryClient();
   const { user } = useAuth();
-  const esAdmin = user?.rol === "admin";
+  // Borrar el ingreso y cambiar metros NO es cosa de rol: es un flag por
+  // usuario. Antes bastaba con ser admin, que son dos personas.
+  const puedeMetraje = !!user?.puede_ajustar_metraje;
   const [editando, setEditando] = useState(false);
   const [form, setForm] = useState<Record<string, string>>({});
   const [errAccion, setErrAccion] = useState("");
@@ -119,7 +121,11 @@ export default function DetalleIngresoPage() {
     };
     const n = parseFloat((formRollo.metros_inicial || "").replace(",", "."));
     if (n && n > 0 && n !== r.metros_inicial) {
-      if (!intacto) {
+      // El backend lo rechaza con 403 de todas formas; acá se evita mandar una
+      // petición condenada y se explica en el mismo lenguaje.
+      if (!puedeMetraje) {
+        setErrAccion("No tienes permiso para cambiar los metros. Lo demás del rollo sí se guarda.");
+      } else if (!intacto) {
         setErrAccion(`El rollo ${r.codigo_interno} ya fue consumido — el nombre se puede corregir, los metros no.`);
       } else {
         body.metros_inicial = n;
@@ -192,9 +198,9 @@ export default function DetalleIngresoPage() {
             className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-medium text-ink-900 transition-colors hover:bg-cloud">
             {editando ? <><X className="h-3.5 w-3.5" /> Cancelar</> : <><Pencil className="h-3.5 w-3.5" /> Editar</>}
           </button>
-          {esAdmin && (
+          {puedeMetraje && (
             <button onClick={() => confirmarEliminar(ing)} disabled={eliminarIng.isPending}
-              title="Eliminar ingreso completo (revierte inventario) — solo administrador"
+              title="Eliminar ingreso completo (revierte inventario) — requiere permiso de metraje"
               className="inline-flex items-center gap-1.5 rounded-sm border border-terracotta/40 bg-card px-3 py-1.5 text-xs font-medium text-terracotta transition-colors hover:bg-terracotta/[0.06] disabled:opacity-50">
               {eliminarIng.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
               Eliminar ingreso
@@ -338,8 +344,12 @@ export default function DetalleIngresoPage() {
                       <span className="inline-flex items-center gap-1.5">
                         <input value={formRollo.metros_inicial || ""}
                           onChange={(e) => setFormRollo((f) => ({ ...f, metros_inicial: e.target.value }))}
-                          disabled={r.metros_disponible !== r.metros_inicial || r.estado !== "disponible"}
-                          title={r.metros_disponible !== r.metros_inicial ? "Rollo ya consumido: metros bloqueados" : "Metros del rollo"}
+                          disabled={!puedeMetraje || r.metros_disponible !== r.metros_inicial || r.estado !== "disponible"}
+                          title={!puedeMetraje
+                            ? "Solo quien tenga el permiso de metraje puede cambiar los metros"
+                            : r.metros_disponible !== r.metros_inicial
+                              ? "Rollo ya consumido: metros bloqueados"
+                              : "Metros del rollo"}
                           className="w-20 rounded-sm border border-border bg-card px-2 py-1 text-right text-sm disabled:opacity-40" />
                         <button onClick={() => guardarRollo(r)} disabled={corregirRollo.isPending}
                           title="Guardar cambios del rollo"
