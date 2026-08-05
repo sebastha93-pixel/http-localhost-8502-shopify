@@ -25,6 +25,16 @@ class CurrentUser(BaseModel):
     cargo: str = ""      # cargo en la empresa (ej. "Asesora de ventas", "Logística")
     permisos: dict = {}  # dict modulo -> lista de acciones (solo aplica si rol='user')
     activo: bool = True
+    # Puede borrar ingresos de tela, cambiar los metros de un rollo y hacer
+    # ajustes de stock. Se llena SIEMPRE desde la base en /auth/me, nunca desde el
+    # token: así revocarlo tiene efecto inmediato.
+    #
+    # ESTUVO ROTO (2026-08-05): el campo se agregó a UsuarioOut —la lista de
+    # /usuarios— pero no acá, y /auth/me devuelve CurrentUser. Resultado: el flag
+    # nunca llegaba al navegador, el frontend lo leía como false y Sebastián se
+    # quedó sin poder editar el metraje justo después de que le dieran el permiso.
+    # Poner un control detrás de un dato que no viaja es peor que no ponerlo.
+    puede_ajustar_metraje: bool = False
 
 
 # ── Hashing ─────────────────────────────────────────────────────────

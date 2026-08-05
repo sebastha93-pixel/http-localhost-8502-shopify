@@ -150,6 +150,26 @@ def login(body: LoginBody, request: Request) -> LoginResponse:
 
 @router.get("/me", response_model=CurrentUser)
 def me(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    """El usuario de la sesión, con los flags FRESCOS de la base.
+
+    No se devuelve `user` tal cual: viene del token, y el token se firmó cuando la
+    persona entró. Un permiso que se prende (o se revoca) ahora tiene que verse
+    ahora, no cuando expire la sesión — que con la sesión deslizante puede ser
+    nunca. Es la misma regla que usa el backend al verificar el permiso.
+    """
+    try:
+        u = svc.obtener_por_id(user.id)
+        if u:
+            user = user.model_copy(update={
+                "puede_ajustar_metraje": bool(u.get("puede_ajustar_metraje")),
+                # El rol y activo también pueden haber cambiado desde el login.
+                "rol": u.get("rol") or user.rol,
+                "activo": bool(u.get("activo", True)),
+                "permisos": u.get("permisos") or user.permisos,
+            })
+    except Exception:
+        # Si la base no responde se devuelve lo del token: peor es no responder.
+        pass
     return user
 
 
