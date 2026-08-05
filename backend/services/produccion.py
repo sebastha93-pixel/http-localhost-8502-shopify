@@ -371,16 +371,37 @@ def actualizar_rollo_ingreso(rollo_id: str, *, usuario_id: Optional[str] = None,
     nuevos_metros = campos.get("metros_inicial")
     if nuevos_metros is not None:
         # El permiso se revisa ANTES de validar el valor: si no puede, da igual
-        # que el número sea correcto o que el rollo esté intacto.
+        # que el número sea correcto.
         if not _puede_ajustar_metraje(usuario_id):
             raise PermissionError("sin_permiso_metraje")
         nuevos_metros = float(nuevos_metros)
         if nuevos_metros <= 0:
             raise ValueError("metros_invalidos")
-        if not _rollo_intacto(rollo):
-            raise ValueError("rollo_ya_consumido: no se pueden cambiar los metros")
+
+        # SE QUITÓ LA EXIGENCIA DE ROLLO INTACTO (2026-08-05, pedido de Sebastián).
+        # Antes solo se podían corregir los metros de un rollo que nadie hubiera
+        # tocado, y 83 de 180 rollos quedaban fuera. Pero el caso real es
+        # justamente ese: el proveedor factura 300 m, se digitan 300, se corta, y
+        # después se descubre que el rollo traía 280. Si no se puede corregir, el
+        # costo por prenda de ese lote queda mal para siempre.
+        #
+        # LA CLAVE ES CONSERVAR LO YA CONSUMIDO. `metros_disponible` no se
+        # reescribe con el valor nuevo: se mueve el MISMO delta, para que
+        # (inicial − disponible) —los metros que de verdad salieron a corte— no
+        # cambie. Poner disponible = nuevos_metros, como hacía antes para los
+        # intactos, en un rollo consumido regalaría los metros ya usados.
+        anterior = float(rollo.get("metros_inicial") or 0)
+        disponible = float(rollo.get("metros_disponible") or 0)
+        consumido = anterior - disponible
+        nuevo_disponible = nuevos_metros - consumido
+        if nuevo_disponible < 0:
+            # Corregir a menos de lo ya cortado no es una corrección, es un dato
+            # imposible: habría salido más tela de la que el rollo tenía.
+            raise ValueError(
+                f"metros_menores_al_consumo: de este rollo ya salieron "
+                f"{consumido:.2f} m a corte, no puede quedar en {nuevos_metros:.2f} m")
         update["metros_inicial"] = nuevos_metros
-        update["metros_disponible"] = nuevos_metros
+        update["metros_disponible"] = round(nuevo_disponible, 2)
 
     if not update:
         raise ValueError("sin_campos")
@@ -426,6 +447,57 @@ def eliminar_ingreso(ingreso_id: str, *, usuario_id: Optional[str] = None) -> di
     sb.table("ordenes_ingreso").delete().eq("id", ingreso_id).execute()
     return {"ok": True, "numero_ingreso": ing.get("numero_ingreso"),
             "rollos_eliminados": len(rollo_ids)}
+
+
+def eliminar_rollo_ingreso(rollo_id: str, *, usuario_id: Optional[str] = None) -> dict:
+    """Borra UN rollo de un ingreso y recalcula los totales de la orden.
+
+    POR QUÉ (2026-08-05, pedido de Sebastián): antes solo existía borrar el
+    ingreso COMPLETO. Si llegaban 12 rollos y uno se digitó dos veces, o uno no
+    llegó, había que borrar los 12 y volver a montar todo.
+
+    SÍ EXIGE ROLLO INTACTO, y esto no es lo mismo que corregir el metraje:
+    corregir un número deja el rollo en su sitio y la orden de corte que lo usó
+    sigue apuntando a algo real. BORRARLO lo desaparece, y el lote que se cortó
+    con él quedaría apuntando al vacío. Un rollo consumido es historia de
+    producción, no un dato que se pueda deshacer.
+    """
+    if not _puede_ajustar_metraje(usuario_id):
+        raise PermissionError("sin_permiso_metraje")
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    r = (sb.table("rollos_tela").select("*").eq("id", rollo_id).limit(1).execute()).data
+    if not r:
+        raise ValueError("rollo_no_encontrado")
+    rollo = r[0]
+    if not _rollo_intacto(rollo):
+        raise ValueError(
+            f"rollo_ya_consumido: {rollo.get('codigo_interno')} ya salió a corte. "
+            f"Los metros se pueden corregir, el rollo no se puede borrar.")
+
+    ingreso_id = rollo.get("ingreso_id")
+    sb.table("movimientos_inventario").delete().eq("rollo_id", rollo_id).execute()
+    sb.table("rollos_tela").delete().eq("id", rollo_id).execute()
+
+    # Recalcular los totales DESDE los rollos que quedan, no restando del total
+    # guardado: si el total venía mal, restar lo arrastra; contar de nuevo lo
+    # corrige. Si era el último rollo, la orden queda en 0 y NO se borra sola —
+    # borrar el ingreso es una decisión aparte, con su propio botón.
+    restantes = []
+    if ingreso_id:
+        restantes = (sb.table("rollos_tela")
+                       .select("metros_inicial")
+                       .eq("ingreso_id", ingreso_id).execute()).data or []
+        sb.table("ordenes_ingreso").update({
+            "total_rollos": len(restantes),
+            "total_metros": round(sum(float(x.get("metros_inicial") or 0)
+                                      for x in restantes), 2),
+            "updated_at": _now_iso(),
+        }).eq("id", ingreso_id).execute()
+    return {"ok": True, "codigo_interno": rollo.get("codigo_interno"),
+            "metros_devueltos": float(rollo.get("metros_inicial") or 0),
+            "rollos_restantes": len(restantes)}
 
 
 def corregir_movimiento_insumo(mov_id: str, nueva_cantidad: float, usuario: str) -> dict:

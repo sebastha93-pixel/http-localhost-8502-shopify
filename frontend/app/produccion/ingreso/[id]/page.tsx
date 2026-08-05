@@ -88,6 +88,30 @@ export default function DetalleIngresoPage() {
     onSuccess: () => router.push("/produccion/ingreso"),
     onError: (e: Error) => setErrAccion(`No se pudo eliminar: ${e.message}`),
   });
+  // Borrar UN rollo, sin tumbar el ingreso completo.
+  const eliminarRollo = useMutation({
+    mutationFn: (rolloId: string) =>
+      api.del(`/api/produccion/ingreso/rollos/${rolloId}`),
+    onSuccess: () => {
+      setErrAccion("");
+      qc.invalidateQueries({ queryKey: ["produccion", "ingreso", id] });
+    },
+    onError: (e: Error) => setErrAccion(`No se pudo eliminar el rollo: ${e.message}`),
+  });
+
+  /** Nadie lo ha tocado: sigue disponible y con los metros completos.
+   *  Es la MISMA regla que `_rollo_intacto` en el backend. */
+  function intactoRollo(r: Rollo) {
+    return r.estado === "disponible" && r.metros_disponible === r.metros_inicial;
+  }
+  function confirmarEliminarRollo(r: Rollo) {
+    if (!window.confirm(
+      `¿Eliminar el rollo ${r.codigo_interno} (${r.metros_inicial} m) del ingreso?\n\n` +
+      `Se devuelve el inventario y se recalculan los totales de la orden. ` +
+      `El resto de los rollos no se toca.`
+    )) return;
+    eliminarRollo.mutate(r.id);
+  }
 
   function abrirEdicion(ing: Ingreso) {
     setForm({
@@ -125,9 +149,11 @@ export default function DetalleIngresoPage() {
       // petición condenada y se explica en el mismo lenguaje.
       if (!puedeMetraje) {
         setErrAccion("No tienes permiso para cambiar los metros. Lo demás del rollo sí se guarda.");
-      } else if (!intacto) {
-        setErrAccion(`El rollo ${r.codigo_interno} ya fue consumido — el nombre se puede corregir, los metros no.`);
       } else {
+        // Se manda aunque el rollo ya se haya consumido: corregir el metraje es
+        // el caso REAL (el proveedor facturó 300 m y el rollo traía 280). El
+        // backend conserva lo ya cortado y rechaza si el nuevo valor queda por
+        // debajo de eso.
         body.metros_inicial = n;
       }
     }
@@ -344,11 +370,11 @@ export default function DetalleIngresoPage() {
                       <span className="inline-flex items-center gap-1.5">
                         <input value={formRollo.metros_inicial || ""}
                           onChange={(e) => setFormRollo((f) => ({ ...f, metros_inicial: e.target.value }))}
-                          disabled={!puedeMetraje || r.metros_disponible !== r.metros_inicial || r.estado !== "disponible"}
+                          disabled={!puedeMetraje}
                           title={!puedeMetraje
                             ? "Solo quien tenga el permiso de metraje puede cambiar los metros"
                             : r.metros_disponible !== r.metros_inicial
-                              ? "Rollo ya consumido: metros bloqueados"
+                              ? `Corregir metros. Ya salieron ${(r.metros_inicial - r.metros_disponible).toFixed(2)} m a corte: eso se conserva y el disponible se ajusta solo.`
                               : "Metros del rollo"}
                           className="w-20 rounded-sm border border-border bg-card px-2 py-1 text-right text-sm disabled:opacity-40" />
                         <button onClick={() => guardarRollo(r)} disabled={corregirRollo.isPending}
@@ -368,6 +394,17 @@ export default function DetalleIngresoPage() {
                           className="text-graphite transition-colors hover:text-navy-600">
                           <Pencil className="h-3 w-3" />
                         </button>
+                        {/* Borrar UN rollo. Solo si nadie lo consumió: corregir un
+                            número deja el rollo en su sitio, borrarlo lo desaparece
+                            y el lote que se cortó con él quedaría apuntando al vacío. */}
+                        {puedeMetraje && intactoRollo(r) && (
+                          <button onClick={() => confirmarEliminarRollo(r)}
+                            disabled={eliminarRollo.isPending}
+                            title="Eliminar solo este rollo del ingreso"
+                            className="text-graphite transition-colors hover:text-terracotta disabled:opacity-40">
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        )}
                       </span>
                     )}
                   </td>

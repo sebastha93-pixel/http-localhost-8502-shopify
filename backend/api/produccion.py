@@ -201,6 +201,29 @@ def actualizar_rollo_ingreso(
         raise HTTPException(500, f"actualizar_rollo: {str(e)[:200]}")
 
 
+@router.delete("/ingreso/rollos/{rollo_id}")
+def eliminar_rollo_ingreso(
+    rollo_id: str,
+    user: CurrentUser = Depends(require_permission("produccion_ingreso", "ver")),
+) -> dict:
+    """Borra UN rollo del ingreso y recalcula los totales de la orden.
+
+    Existe porque antes solo se podía borrar el ingreso completo: si de 12 rollos
+    uno se digitó dos veces, había que borrar los 12.
+
+    Falla si el rollo ya salió a corte — ahí es historia de producción. Los metros
+    de un rollo consumido SÍ se pueden corregir; el rollo no se puede desaparecer.
+    """
+    try:
+        return svc.eliminar_rollo_ingreso(rollo_id, usuario_id=user.id)
+    except PermissionError:
+        raise HTTPException(403, "Solo quien tenga el permiso de metraje puede borrar rollos o cambiar los metros. Pídeselo a Sebastián.")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"eliminar_rollo: {str(e)[:200]}")
+
+
 @router.delete("/ingreso/{ingreso_id}")
 def eliminar_ingreso(
     ingreso_id: str,
