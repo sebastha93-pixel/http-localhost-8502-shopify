@@ -13,6 +13,7 @@ import { getToken } from "@/lib/auth";
 import { fmtDateTime } from "@/lib/utils";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
+import { BotonInformeInventario } from "@/components/boton-informe-inventario";
 import { Plus, Loader2, AlertCircle, Save, Trash2, PackagePlus, QrCode, Pencil, Check, X } from "lucide-react";
 
 interface Insumo {
@@ -192,7 +193,8 @@ export default function InsumosPage() {
   const negativos = insumos.filter((i) => i.cantidad_disponible < 0);
 
   return (
-    <PageShell title="Insumos" subtitle="Entradas manuales · salidas automáticas al entregar remisiones">
+    <PageShell title="Insumos" subtitle="Entradas manuales · salidas automáticas al entregar remisiones"
+      aside={<BotonInformeInventario tipo="insumos" />}>
       <div className="flex items-center justify-between">
         <p className="text-xs text-graphite">{insumos.length} insumo(s) en inventario</p>
         <button onClick={() => setMostrarIngreso(true)}

@@ -7,6 +7,7 @@ import { api, API_BASE } from "@/lib/api";
 import { getToken } from "@/lib/auth";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
+import { BotonInformeInventario } from "@/components/boton-informe-inventario";
 import { Badge } from "@/components/ui/badge";
 import { ChevronDown, ChevronRight, Loader2, Printer } from "lucide-react";
 
@@ -107,6 +108,7 @@ export default function InventarioPage() {
       title="Inventario de tela"
       subtitle="Rollos agrupados por tela y tono"
       onRefresh={() => resumenQ.refetch()}
+      aside={<BotonInformeInventario tipo="telas" />}
     >
       <Card>
         <CardContent className={`p-4 grid grid-cols-2 ${conValor ? "md:grid-cols-4" : "md:grid-cols-3"} gap-4`}>

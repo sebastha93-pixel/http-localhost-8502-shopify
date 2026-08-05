@@ -340,6 +340,60 @@ def inventario_resumen(
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# INFORMES DE INVENTARIO · para imprimir y para trabajar los números
+# ═══════════════════════════════════════════════════════════════════════
+#
+# El costo va SOLO si quien pide tiene `produccion_costos`, igual que en
+# /inventario/resumen. Un informe que se imprime y se queda sobre una mesa no
+# puede filtrar costos que en pantalla están tapados.
+
+@router.get("/inventario/informe.pdf")
+def informe_inventario_pdf(
+    tipo: str = Query(default="ambos", pattern="^(telas|insumos|ambos)$"),
+    user: CurrentUser = Depends(
+        require_permission_any(("produccion_ingreso", "produccion_cortador"), "ver")),
+):
+    """Inventario imprimible, con columna en blanco para el conteo físico."""
+    from fastapi.responses import Response
+    from backend.services import informe_inventario as inf
+    try:
+        contenido = inf.pdf(tipo=tipo, con_costos=tiene_permiso_costos(user))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"informe_pdf: {str(e)[:200]}")
+    from datetime import datetime
+    nombre = f"inventario_{tipo}_{datetime.now().strftime('%Y-%m-%d')}.pdf"
+    return Response(
+        content=contenido, media_type="application/pdf",
+        # inline: abre en el visor del navegador y de ahí se imprime con Ctrl+P,
+        # que es lo que se pidió. Con attachment habría que abrir el archivo antes.
+        headers={"Content-Disposition": f'inline; filename="{nombre}"'},
+    )
+
+
+@router.get("/inventario/informe.xlsx")
+def informe_inventario_xlsx(
+    user: CurrentUser = Depends(
+        require_permission_any(("produccion_ingreso", "produccion_cortador"), "ver")),
+):
+    """Mismo inventario en Excel: hoja de Telas y hoja de Insumos."""
+    from fastapi.responses import Response
+    from backend.services import informe_inventario as inf
+    try:
+        contenido = inf.xlsx(con_costos=tiene_permiso_costos(user))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"informe_xlsx: {str(e)[:200]}")
+    from datetime import datetime
+    nombre = f"inventario_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+    return Response(
+        content=contenido,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nombre}"'},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # ETIQUETA (PDF Zebra 10×10 con Code128)
 # ═══════════════════════════════════════════════════════════════════════
 
