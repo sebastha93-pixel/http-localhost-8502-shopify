@@ -106,3 +106,55 @@ def test_corte_por_fecha_para_al_salir_de_la_ventana(tmp_path, monkeypatch):
     assert len(res) == 100
     assert mc.ultimo_fetch()["motivo_fin"] == "fuera_de_ventana"
     assert mc.ultimo_fetch()["completo"] is True
+
+
+def test_cursor_arranca_vacio(tmp_path, monkeypatch):
+    _aislar_disco(monkeypatch, tmp_path)
+    e = mc._barrido_leer()
+    assert e["generacion"] == 0
+    assert e["pagina"] == 0
+    assert e["vistas"] == []
+    assert e["ultimo_completo_en"] is None
+
+
+def test_cursor_guarda_y_lee(tmp_path, monkeypatch):
+    _aislar_disco(monkeypatch, tmp_path)
+    e = mc._barrido_leer()
+    e.update({"generacion": 7, "pagina": 22, "vistas": ["M1", "M2"],
+              "paginas_fuera_ventana": 1})
+    mc._barrido_guardar(e)
+
+    leido = mc._barrido_leer()
+    assert leido["generacion"] == 7
+    assert leido["pagina"] == 22
+    assert leido["vistas"] == ["M1", "M2"]
+    assert leido["paginas_fuera_ventana"] == 1
+
+
+def test_el_lease_bloquea_a_otro_worker(tmp_path, monkeypatch):
+    _aislar_disco(monkeypatch, tmp_path)
+    e = mc._barrido_leer()
+    assert mc._barrido_tomar_lease(e, "worker-A") is True
+
+    e2 = mc._barrido_leer()
+    assert mc._barrido_tomar_lease(e2, "worker-B") is False
+
+
+def test_el_mismo_worker_puede_renovar_su_lease(tmp_path, monkeypatch):
+    _aislar_disco(monkeypatch, tmp_path)
+    e = mc._barrido_leer()
+    assert mc._barrido_tomar_lease(e, "worker-A") is True
+    assert mc._barrido_tomar_lease(mc._barrido_leer(), "worker-A") is True
+
+
+def test_un_lease_vencido_no_bloquea(tmp_path, monkeypatch):
+    """Si un worker muere a mitad de tramo, el cursor no puede quedar tomado
+    para siempre."""
+    from datetime import datetime, timedelta
+    _aislar_disco(monkeypatch, tmp_path)
+    e = mc._barrido_leer()
+    e["lease_worker"] = "worker-muerto"
+    e["lease_hasta"] = (datetime.utcnow() - timedelta(seconds=10)).isoformat()
+    mc._barrido_guardar(e)
+
+    assert mc._barrido_tomar_lease(mc._barrido_leer(), "worker-B") is True

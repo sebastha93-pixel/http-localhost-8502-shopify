@@ -986,6 +986,135 @@ def _edad_fetch_api_sq() -> Optional[float]:
     return (datetime.utcnow() - _parse_iso_naive(row["fetched_at"])).total_seconds()
 
 
+# ── Barrido por tramos: el cursor ─────────────────────────────────────────────
+#
+# POR QUÉ EXISTE: el barrido son ~44 páginas seguidas (~88 s, porque el limitador
+# deja 2 s entre GETs). Si UNA falla, `_fetch_api_filtrado` marca el fetch
+# incompleto y descarta todo lo traído. Descartarlo es correcto —mejor un tablero
+# viejo que uno mutilado— pero depender de 44 peticiones seguidas sin un fallo no
+# se puede garantizar. Con cursor, un fallo cuesta esa página.
+#
+# Fila propia (id=3) y no un campo del caché: el blob de pedidos son ~6,5 MB y
+# esto se lee y escribe en cada tick.
+_SB_FILA_BARRIDO = 3
+
+_BARRIDO_VACIO: dict = {
+    "v": 1,
+    "generacion": 0,
+    "pagina": 0,
+    # Contador del corte por fecha. TIENE que persistir entre tramos: exige DOS
+    # páginas llenas seguidas sin pedidos en ventana, y si un tramo termina justo
+    # entre esas dos y el contador se reinicia, el barrido NO CORTA NUNCA. Eso es
+    # el `tope_paginas` que dejó el tablero pegado el 2026-08-01.
+    "paginas_fuera_ventana": 0,
+    "iniciado_en": None,
+    "vistas": [],           # claves vistas en la generación en curso
+    "ausencias": {},        # clave -> barridos consecutivos sin verla
+    "paginas_barrido_previo": 0,
+    "motivo_ultimo_tramo": "nunca_corrio",
+    "ultimo_tramo_en": None,
+    "ultimo_completo_en": None,
+    "lease_worker": "",
+    "lease_hasta": None,
+}
+
+# Un tramo de 22 páginas son ~44 s. 90 da margen sin dejar el cursor tomado
+# demasiado tiempo si el worker muere a mitad.
+_LEASE_SEG = 90
+
+
+def _barrido_leer() -> dict:
+    """Estado del barrido. Supabase manda, SQLite es el respaldo.
+
+    Siempre devuelve un dict completo: las claves que falten se rellenan con
+    _BARRIDO_VACIO, para que añadir un campo nuevo no rompa un cursor ya escrito.
+    """
+    for leer in (_barrido_leer_sb, _barrido_leer_sq):
+        try:
+            v = leer()
+            if v is not None:
+                return {**_BARRIDO_VACIO, **v}
+        except Exception as e:
+            log.debug(f"[barrido] no pude leer el cursor ({leer.__name__}): {e}")
+    return dict(_BARRIDO_VACIO)
+
+
+def _barrido_leer_sb() -> Optional[dict]:
+    sb = _sb()
+    if not sb:
+        return None
+    rows = (sb.table(_SB_TABLA).select("pedidos_json")
+              .eq("id", _SB_FILA_BARRIDO).execute()).data
+    if not rows:
+        return None
+    e = json.loads(rows[0]["pedidos_json"])
+    return e if isinstance(e, dict) else None
+
+
+def _barrido_leer_sq() -> Optional[dict]:
+    with _conn() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS melonn_barrido ("
+                  "id INTEGER PRIMARY KEY CHECK (id = 1), estado_json TEXT NOT NULL)")
+        row = c.execute("SELECT estado_json FROM melonn_barrido WHERE id=1").fetchone()
+    if not row:
+        return None
+    e = json.loads(row["estado_json"])
+    return e if isinstance(e, dict) else None
+
+
+def _barrido_guardar(estado: dict) -> None:
+    """Escribe el cursor en Supabase Y en SQLite. Si Supabase falla, SQLite
+    conserva el avance dentro del contenedor: peor que nada es volver a barrer
+    desde la página 0."""
+    blob = json.dumps(estado, default=str)
+    try:
+        sb = _sb()
+        if sb:
+            sb.table(_SB_TABLA).upsert({
+                "id":           _SB_FILA_BARRIDO,
+                "fetched_at":   datetime.utcnow().isoformat(),
+                "pedidos_json": blob,
+                "total":        len(estado.get("vistas") or []),
+            }).execute()
+    except Exception as e:
+        log.warning(f"[barrido] no pude guardar el cursor en Supabase: {e}")
+    try:
+        with _conn() as c:
+            c.execute("CREATE TABLE IF NOT EXISTS melonn_barrido ("
+                      "id INTEGER PRIMARY KEY CHECK (id = 1), estado_json TEXT NOT NULL)")
+            c.execute("INSERT OR REPLACE INTO melonn_barrido (id, estado_json) "
+                      "VALUES (1, ?)", (blob,))
+            c.commit()
+    except Exception as e:
+        log.debug(f"[barrido] SQLite cursor: {e}")
+
+
+def _barrido_tomar_lease(estado: dict, worker: str) -> bool:
+    """True si este worker puede avanzar el cursor. Muta `estado` con el lease.
+
+    LÍMITE CONOCIDO: es leer-y-escribir, no un compare-and-set atómico. Dos
+    workers que lean en el mismo instante pueden creer los dos que lo tomaron.
+    Se acepta porque la consecuencia es benigna: barrerían el mismo tramo dos
+    veces (fusión idempotente — ver _fusionar_tramo) y se gastarían ~22
+    peticiones de más sobre una cuota de 10.000. Lo que esto sí evita, que es lo
+    que importa, es que dos workers avancen el cursor a rangos DISTINTOS y entre
+    los dos se salten páginas.
+    """
+    hasta = estado.get("lease_hasta")
+    if hasta and estado.get("lease_worker") != worker:
+        try:
+            if _parse_iso_naive(hasta) > datetime.utcnow():
+                return False
+        except Exception:
+            pass          # lease ilegible → tratarlo como libre
+    from datetime import timedelta
+    estado["lease_worker"] = worker
+    estado["lease_hasta"] = (datetime.utcnow()
+                             + timedelta(seconds=_LEASE_SEG)).isoformat()
+    _barrido_guardar(estado)
+    return True
+
+
 # ── SQLite (caché local / fallback) ───────────────────────────────────────────
 
 def _init_tabla():
