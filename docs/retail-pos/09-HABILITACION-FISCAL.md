@@ -126,6 +126,50 @@ número de pantalla no sirve para nada.
 Si el prefijo **no** aparece: vuelve al paso 2. No sigas. Ese es exactamente el estado en el
 que están hoy FV-6/11/12, y significa que la API no lo va a aceptar.
 
+> **Por qué la ausencia sí es concluyente.** La historia del repo lo confirma: primero se
+> construyó `tipos_documento_completos()` **paginando** `/document-types` justamente
+> sospechando que la lista llegaba incompleta (commit `77bb93a`). No apareció nada nuevo. Sólo
+> entonces se construyó el rodeo de deducir los ids recorriendo facturas reales (`9c76415`).
+> Es decir: se descartó que fuera un problema de paginación **antes** de aceptar que la
+> ausencia era real.
+
+### Paso 3b · Los siete campos que deciden si la emisión funciona
+
+La respuesta de `/document-types` trae, por cada comprobante, campos que **deciden el éxito de
+una emisión** y que conviene mirar el mismo día que lo creas — no en el primer rechazo con la
+clienta enfrente. El repo ya los expone
+([`postventa_siigo.py:271-294`](../../backend/services/postventa_siigo.py)):
+
+| Campo | Qué decide | Qué queremos ver |
+|---|---|---|
+| `electronic_type` | Si es factura electrónica de verdad | Que sea electrónico |
+| `active` | Si está habilitado | `true` |
+| `automatic_number` | **Si Siigo asigna el consecutivo DIAN, o lo tenemos que mandar nosotros** | Preferimos `true` — ver abajo |
+| `cost_center_mandatory` | Si exige centro de costo | Si es `true`, cargar 774 / 677 |
+| `discount_type` | Si los descuentos se mandan como `Percentage` o como `Value` | Determina cómo mapea el POS los descuentos |
+| `decimals` | Cuántos decimales admite | Afecta el redondeo del IVA |
+| `consecutive` | En qué número va el rango | Para vigilar el agotamiento |
+
+**El que más pesa es `automatic_number`.**
+
+- Si es `true`, Siigo asigna el consecutivo DIAN al emitir. Es lo más simple y lo que asume
+  el diseño por defecto.
+- Si es `false`, **el consecutivo DIAN lo tenemos que asignar nosotros** y mandarlo en el
+  campo `number`. Eso no rompe el diseño, pero agrega una regla que hay que implementar bien:
+  el número se reserva **en el momento de emitir** (en el worker, que es de una sola réplica y
+  toma lock), nunca en el momento de la venta. Y hay que registrar los huecos: si el `POST`
+  falla después de haber reservado un número, ese número queda quemado y debe quedar
+  documentado, no reutilizado.
+
+Esto refuerza, por cierto, la decisión de **un prefijo por tienda y no por caja**: como el
+número fiscal se asigna al emitir —en el servidor, serializado— las dos cajas de Florida
+pueden compartir prefijo sin competir por el consecutivo. Si el número se asignara en la caja,
+compartir prefijo sí sería un problema.
+
+Los otros dos que ya costaron caro en postventa: `discount_type` decide **cómo** se manda un
+descuento (mandar un porcentaje donde espera un valor es un rechazo que no dice la causa), y
+`advance_payment` decide si el comprobante admite anticipos.
+
 ### Paso 4 · Factura de prueba y relectura
 
 Con `SIIGO_POSTVENTA_MODO=prueba` (el valor por defecto — no toca DIAN):
@@ -199,9 +243,19 @@ La Fase 3 (fiscal) no arranca hasta que esto esté en verde:
 - [ ] Comprobante creado en Siigo por tienda
 - [ ] **El prefijo aparece en `GET /document-types`** ← la prueba decisiva
 - [ ] `id` real de la API anotado (no el de pantalla)
+- [ ] Anotados los siete campos del paso 3b, en especial **`automatic_number`** y `discount_type`
 - [ ] Factura de prueba emitida por API con ese prefijo
 - [ ] Factura **releída** y verificada: prefijo, total, pagos, bodega, centro de costo
 - [ ] Ids cargados en `retail.cajas`
 - [ ] *(opcional, alto valor)* FV-5 activo y `SIIGO_DOC_FACTURA_CAMBIO` puesto
+
+### Qué de esto cambia el código
+
+| Resultado | Impacto |
+|---|---|
+| `automatic_number: true` | Ninguno. El diseño ya lo asume. |
+| `automatic_number: false` | El worker fiscal asigna y reserva el consecutivo DIAN al emitir, con registro de huecos. ~2 días en Fase 3. |
+| `discount_type` distinto en cada tienda | El mapeador convierte por comprobante. Ya está previsto: es un campo del adaptador, no del dominio. |
+| `cost_center_mandatory: true` | Ninguno. 774 y 677 ya están cargados. |
 
 Cuando esto esté, el riesgo R1 —el único bloqueante del proyecto— queda cerrado.
