@@ -19,6 +19,22 @@ export interface ConfigCheck {
 }
 
 // ── Melonn ──────────────────────────────────────────────────────────────────
+/**
+ * Proyección del estado del carrier. Fuente única: _sub_estado_logistico()
+ * en src/melonn_client.py — con "otro" de catch-all, así que el conjunto es
+ * cerrado y ningún otro valor puede llegar por la API.
+ *
+ * OJO: no existe "resuelto" ni "devuelto". Resolver un caso es una decisión
+ * interna, no un hecho del carrier: ese concepto vive en el `tipo` de las
+ * acciones de auditoría ("resuelto", "devolucion"), no aquí.
+ */
+export type SubEstadoLogistico =
+  | "novedad"
+  | "entregado"
+  | "en_transito"
+  | "pendiente_despacho"
+  | "otro";
+
 export interface ItemPedido {
   sku: string;
   titulo: string;
@@ -33,7 +49,7 @@ export interface Pedido {
   orden_tienda: string;
   estado_melonn: string;
   estado_melonn_code: number;
-  sub_estado_logistico: string;
+  sub_estado_logistico: SubEstadoLogistico;
   canal_venta: string;
   es_b2b: boolean;
   nombre_comprador: string;
