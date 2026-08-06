@@ -1702,6 +1702,7 @@ def crear_orden_corte(*, referencia_id: Optional[str] = None,
                        cantidad_programada: Optional[int] = None,
                        promedio_tecnico: Optional[float] = None,
                        responsable: Optional[str] = None,
+                       responsable_email: Optional[str] = None,
                        fecha_envio: Optional[str] = None,
                        indicaciones: Optional[str] = None,
                        destinatarios_correo: Optional[list[str]] = None,
@@ -1798,6 +1799,7 @@ def crear_orden_corte(*, referencia_id: Optional[str] = None,
         "metros_consumidos": metros_teo,
         "rendimiento_teorico": rendimiento,
         "responsable": responsable or None,
+        "responsable_email": None,   # se llena abajo si vino un cortador elegido
         "fecha_envio": fecha_envio or None,
         "fecha_limite": fecha_envio or None,   # retro-compat con la columna vieja
         "indicaciones": indicaciones or None,
@@ -1806,13 +1808,39 @@ def crear_orden_corte(*, referencia_id: Optional[str] = None,
         "estado": "borrador",
         "created_by": created_by,
     }
+
+    # EL CORTADOR ELEGIDO MANDA. Si vino del selector, su nombre y su correo se
+    # toman de la ficha real: así el nombre que se muestra y la identidad que da
+    # el permiso no se pueden separar (era justo lo que se separaba cuando el
+    # campo era texto libre). Y su correo entra en los destinatarios sin que
+    # nadie lo escriba: el error del 2026-08-06 fue escribir el correo a mano en
+    # el campo de al lado.
+    _ficha = resolver_cortador(responsable_email)
+    if _ficha:
+        row["responsable"] = _ficha["nombre"]
+        row["responsable_email"] = _ficha["email"]
+        _dest = list(row["destinatarios_correo"])
+        if not any((d or "").strip().lower() == _ficha["email"].lower() for d in _dest):
+            _dest.insert(0, _ficha["email"])
+        row["destinatarios_correo"] = _dest
     try:
         r = sb.table("ordenes_corte").insert(row).execute()
     except Exception as e:
         msg = str(e)
         cols_nuevas = ("cantidad_programada", "promedio_tecnico", "fecha_envio",
                        "trazos_url", "destinatarios_correo")
-        if any(c in msg for c in cols_nuevas):
+        # `responsable_email` es de 2026-08-06. Si la migración todavía no corrió,
+        # se guarda la orden SIN la identidad (el nombre ya quedó) en vez de
+        # perderla. Va en su propia rama a propósito: la lista de abajo bota
+        # varias columnas de un golpe, y botar `destinatarios_correo` mandaría el
+        # correo de autorización a nadie sin que se note.
+        if "responsable_email" in msg:
+            row.pop("responsable_email", None)
+            log.warning("[corte] falta la columna responsable_email; corre "
+                        "20260806010000_responsable_email_corte.sql en Supabase. "
+                        "La orden se guarda solo con el nombre del cortador.")
+            r = sb.table("ordenes_corte").insert(row).execute()
+        elif any(c in msg for c in cols_nuevas):
             for c in cols_nuevas:
                 row.pop(c, None)
             r = sb.table("ordenes_corte").insert(row).execute()
@@ -1824,6 +1852,111 @@ def crear_orden_corte(*, referencia_id: Optional[str] = None,
     _guardar_referencias_corte(oc["id"], specs)
     _cache_invalidate_prefix("ordenes_corte")
     return oc
+
+
+def cortadores_inscritos() -> list[dict]:
+    """Cortadores con acceso al portal, para el selector de la orden de corte.
+
+    SALE DE LOS PERMISOS, no de una lista escrita en el código: el día que entre
+    un cortador nuevo se le da acceso a la plataforma y aparece aquí solo. Ese
+    fue el pedido: "si mañana tenemos 2 cortadores más, simplemente al darles
+    acceso a la plataforma quedan visibles".
+
+    `solo_corte` distingue al cortador puro (solo ve SUS órdenes) de quien tiene
+    el módulo completo —diseño, un admin— que también puede quedar como
+    responsable pero ve todo. Se marca para que el selector lo diga y nadie
+    asigne por error a alguien que no está en la mesa de corte.
+    """
+    from backend.services import usuarios as usr
+    out: list[dict] = []
+    for u in usr.listar():
+        email = (u.get("email") or "").strip()
+        if not email or not u.get("activo"):
+            continue
+        perms = u.get("permisos") or {}
+        if not perms.get("produccion_cortador"):
+            continue
+        out.append({
+            "nombre": (u.get("nombre") or email).strip(),
+            "email": email,
+            "solo_corte": not perms.get("produccion_corte"),
+        })
+    out.sort(key=lambda x: (not x["solo_corte"], x["nombre"].upper()))
+    return out
+
+
+def resolver_cortador(email: Optional[str]) -> Optional[dict]:
+    """Convierte un correo en la ficha del cortador inscrito, o revienta.
+
+    Se valida contra la lista real de usuarios en vez de confiar en lo que llegó
+    del navegador: si se guardara un correo que no es de nadie, la orden volvería
+    a quedar sin dueño y el cortador no la vería —justo el problema que este
+    campo viene a resolver—. Un correo inventado tiene que fallar RUIDOSAMENTE al
+    guardar, no callado al leer.
+
+    Devuelve None si no vino correo (el campo sigue siendo opcional).
+    """
+    e = (email or "").strip().lower()
+    if not e:
+        return None
+    for c in cortadores_inscritos():
+        if c["email"].strip().lower() == e:
+            return c
+    raise ValueError(
+        f"cortador_no_inscrito: {e} no es un usuario activo con acceso de "
+        f"cortador. Dale acceso en Usuarios y vuelve a intentar.")
+
+
+def reasignar_responsable_corte(oc_id: str, *, responsable_email: Optional[str],
+                                responsable: Optional[str] = None,
+                                usuario: str = "") -> dict:
+    """Cambia el cortador de una orden que todavía no se cortó.
+
+    POR QUÉ EXISTE (2026-08-06): cuando una orden se asignó al cortador
+    equivocado no había NINGUNA forma de corregirlo desde la app —`responsable`
+    solo se escribía al crear—. Tocó borrar la orden completa y volverla a
+    crear, con sus trazos y su curva. Un dato mal escrito no puede costar una
+    orden entera.
+
+    Una orden ya CORTADA no se reasigna: el informe, el consumo y la remisión ya
+    quedaron a nombre de quien la cortó, y cambiarlo sería reescribir la historia.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    oc = obtener_orden_corte(oc_id)
+    if not oc:
+        raise ValueError("orden_no_encontrada")
+    if oc.get("estado") == "cortada":
+        raise ValueError("orden_ya_cortada: no se puede cambiar el cortador de "
+                         "una orden que ya tiene informe")
+
+    ficha = resolver_cortador(responsable_email)
+    if ficha:
+        # El nombre se toma de la ficha, no de lo que digan de afuera: así el
+        # nombre que se muestra y la identidad que da el permiso no se pueden
+        # separar nunca.
+        nuevo_nombre, nuevo_email = ficha["nombre"], ficha["email"]
+    else:
+        # Sin correo: queda solo el nombre (compatibilidad con el texto libre).
+        nuevo_nombre, nuevo_email = (responsable or "").strip() or None, None
+
+    update = {"responsable": nuevo_nombre, "responsable_email": nuevo_email,
+              "updated_at": _now_iso()}
+    try:
+        r = sb.table("ordenes_corte").update(update).eq("id", oc_id).execute()
+    except Exception as e:
+        if "responsable_email" in str(e):
+            raise RuntimeError(
+                "falta_migracion: corre 20260806010000_responsable_email_corte.sql "
+                "en Supabase antes de reasignar cortadores") from e
+        raise
+    if not r.data:
+        raise ValueError("no_encontrado")
+    _cache_invalidate_prefix("ordenes_corte")
+    log.info(f"[corte] {oc.get('consecutivo')}: responsable "
+             f"{oc.get('responsable')!r} -> {nuevo_nombre!r} ({nuevo_email}) por {usuario}")
+    return obtener_orden_corte(oc_id) or r.data[0]
 
 
 def reabrir_orden_corte(oc_id: str, *, usuario: str) -> dict:

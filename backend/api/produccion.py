@@ -838,6 +838,9 @@ class CrearCorteBody(BaseModel):
     num_capas:             Optional[int] = None   # capas del tendido (manual)
     largo_trazo:           float = Field(gt=0)
     responsable:           Optional[str] = None
+    # Correo del cortador ELEGIDO del selector. Es la identidad real; el backend
+    # saca de ahí el nombre para que no puedan quedar en desacuerdo.
+    responsable_email:     Optional[str] = None
     fecha_envio:           Optional[str] = None
     indicaciones:          Optional[str] = None
     destinatarios_correo:  list[str] = Field(default_factory=list)
@@ -892,6 +895,7 @@ def crear_corte(
             num_capas=body.num_capas,
             referencias=[r.model_dump() for r in body.referencias] if body.referencias else None,
             responsable=body.responsable,
+            responsable_email=body.responsable_email,
             fecha_envio=body.fecha_envio,
             indicaciones=body.indicaciones,
             destinatarios_correo=body.destinatarios_correo,
@@ -987,13 +991,57 @@ def _es_solo_cortador(user: CurrentUser) -> bool:
             and user.rol != "admin")
 
 
+def _norm_txt(s: Optional[str]) -> str:
+    """Mayúsculas, sin espacios de sobra ni dobles. ' BARRETO ' → 'BARRETO'."""
+    return " ".join((s or "").strip().upper().split())
+
+
+# Partículas de nombres compuestos: solas no identifican a nadie.
+_PARTICULAS_NOMBRE = {"DE", "DEL", "LA", "LAS", "LOS", "Y", "SAN", "SANTA", "MC"}
+
+
 def _corte_es_del_cortador(oc: dict, user: CurrentUser) -> bool:
-    """El corte le pertenece si el responsable coincide con su nombre."""
-    resp = (oc.get("responsable") or "").strip().upper()
-    nombre = (user.nombre or "").strip().upper()
-    if not resp or not nombre:
+    """¿Esta orden de corte es de este cortador?
+
+    LA IDENTIDAD MANDA SOBRE EL TEXTO. Orden de prioridad:
+
+    1. `responsable_email` — lo escribe el selector de cortadores al crear o
+       reasignar la orden. Es un usuario real del portal, no algo tecleado. Si
+       está, DECIDE: si no coincide, la orden no es suya y no se busca más.
+
+    2. Órdenes de antes del selector, donde `responsable` era texto libre: hay
+       que comparar el nombre. Se compara por PALABRAS COMPLETAS, no por
+       pedazos: con el `in` de antes, un cortador llamado "ANA" se quedaba con
+       las órdenes de "MARIANA".
+
+    3. Si en ese texto libre quedó un CORREO en vez del nombre, se compara
+       contra el correo. Pasó el 2026-08-06: la orden 2608-0001 salió con el
+       correo del cortador en el campo del nombre y quedó invisible para todos
+       —hubo que borrarla y crearla de nuevo—. Con esto, ese mismo error ya no
+       esconde una orden.
+    """
+    email_user = (user.email or "").strip().lower()
+
+    email_oc = (oc.get("responsable_email") or "").strip().lower()
+    if email_oc:
+        return bool(email_user) and email_oc == email_user
+
+    resp = _norm_txt(oc.get("responsable"))
+    if not resp:
         return False
-    return resp in nombre or nombre in resp
+    if "@" in resp:                      # el dato quedó mal puesto, pero se entiende
+        return bool(email_user) and resp.lower() == email_user
+
+    nombre = _norm_txt(user.nombre)
+    if not nombre:
+        return False
+    if resp == nombre:
+        return True
+    # Un apellido en común alcanza ('BARRETO' ↔ 'JHON JAIRO BARRETO'), pero
+    # tiene que ser la palabra entera y con cuerpo propio.
+    tokens_nombre = set(nombre.split())
+    return any(t in tokens_nombre for t in resp.split()
+               if len(t) >= 3 and t not in _PARTICULAS_NOMBRE)
 
 
 @router.get("/corte")
@@ -1030,6 +1078,46 @@ def usuarios_correo(
         out.append({"nombre": u.get("nombre") or email, "email": email, "es_cortador": es_cortador})
     out.sort(key=lambda x: (not x["es_cortador"], (x["nombre"] or "").upper()))
     return {"usuarios": out}
+
+
+@router.get("/cortadores")
+def listar_cortadores(
+    _: CurrentUser = Depends(require_permission("produccion_corte", "ver")),
+) -> dict:
+    """Cortadores con acceso al portal, para el selector de la orden de corte.
+
+    Sale de los PERMISOS: cuando entre un cortador nuevo basta con darle acceso a
+    la plataforma y aparece aquí solo, sin tocar código.
+    """
+    return {"cortadores": svc.cortadores_inscritos()}
+
+
+class ReasignarResponsableBody(BaseModel):
+    responsable_email: Optional[str] = None
+    # Solo se usa si NO viene correo (dejar un nombre a mano, como antes).
+    responsable:       Optional[str] = None
+
+
+@router.patch("/corte/{oc_id}/responsable")
+def reasignar_responsable(
+    oc_id: str,
+    body: ReasignarResponsableBody,
+    user: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
+) -> dict:
+    """Cambia el cortador de una orden que todavía no se cortó.
+
+    Antes esto no existía: una orden asignada al cortador equivocado había que
+    borrarla y volverla a crear con todo (curva, trazos, indicaciones).
+    """
+    try:
+        oc = svc.reasignar_responsable_corte(
+            oc_id, responsable_email=body.responsable_email,
+            responsable=body.responsable, usuario=user.email)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    return {"ok": True, "orden": oc}
 
 
 @router.get("/corte/{oc_id}")

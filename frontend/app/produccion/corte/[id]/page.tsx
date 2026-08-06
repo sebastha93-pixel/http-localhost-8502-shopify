@@ -14,6 +14,7 @@ import { api, API_BASE } from "@/lib/api";
 import { fmtFecha, hoyBogotaISO } from "@/lib/utils";
 import { TimelineNotas } from "@/components/timeline-notas";
 import { ReasignarConfeccionista } from "@/components/reasignar-confeccionista";
+import { SelectorCortador, type Cortador } from "@/components/selector-cortador";
 import { getToken, puedeAccionModulo } from "@/lib/auth";
 import { ordenarTallas, TALLAS_SUPERIOR } from "@/lib/espigas";
 import { useAuth } from "@/components/auth-provider";
@@ -84,6 +85,8 @@ interface OrdenCorte {
   fecha_entrega?: string;
   precio_corte?: number;
   responsable?: string;
+  /** Identidad real del cortador: es la que da el permiso. */
+  responsable_email?: string;
   fecha_limite?: string;
   fecha_envio?: string;
   indicaciones?: string;
@@ -582,6 +585,21 @@ export default function DetalleOrdenCortePage() {
     if (!actuales.includes(email)) setDestinatariosEdit([...actuales, email].join(", "));
   };
 
+  /** Cambiar el cortador de la orden. `null` = quitarlo. */
+  const reasignar = useMutation({
+    mutationFn: (c: Cortador | null) =>
+      api.patch(`/api/produccion/corte/${id}/responsable`, {
+        responsable_email: c?.email ?? null,
+        responsable: c?.nombre ?? null,
+      }),
+    onSuccess: (_r, c) => {
+      setErr("");
+      setMsg(c ? `Orden reasignada a ${c.nombre}.` : "Cortador quitado de la orden.");
+      qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
+    },
+    onError: (e: Error) => { setErr(e.message); setMsg(""); },
+  });
+
   const autorizar = useMutation({
     mutationFn: () => {
       const dest = destinatariosEdit
@@ -914,6 +932,35 @@ export default function DetalleOrdenCortePage() {
                 </>
                 ); })()}
               </div>
+
+              {/* Cortador responsable — se ELIGE de la lista, y se puede
+                  cambiar mientras la orden no esté cortada.
+
+                  El 2026-08-06 una orden quedó asignada mal y no había forma de
+                  corregirla: hubo que borrarla y volverla a crear con su curva,
+                  sus trazos y sus indicaciones. Un dato mal puesto no puede
+                  costar una orden entera. */}
+              {oc.estado !== "cortada" && (
+                <div>
+                  <SelectorCortador
+                    email={oc.responsable_email || ""}
+                    nombre={oc.responsable || ""}
+                    disabled={reasignar.isPending}
+                    onSelect={(c) => reasignar.mutate(c)}
+                  />
+                  {reasignar.isPending && (
+                    <p className="mt-1 flex items-center gap-1.5 text-[0.68rem] text-graphite">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Reasignando…
+                    </p>
+                  )}
+                  {!oc.responsable_email && oc.responsable && (
+                    <p className="mt-1 text-[0.68rem] text-amber-700 dark:text-amber-400">
+                      Este nombre está escrito a mano. Elige el cortador de la lista
+                      para ligarlo a su usuario — así se asegura que él vea la orden.
+                    </p>
+                  )}
+                </div>
+              )}
 
               {/* Autorizar */}
               <div>
