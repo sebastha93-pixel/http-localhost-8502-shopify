@@ -170,7 +170,7 @@ def test_una_pagina_fallida_pierde_el_barrido_entero(tmp_path, monkeypatch):
 
     Descartarlos es lo correcto —mejor viejo que mutilado— pero el costo de un
     solo fallo no debería ser el barrido completo. Eso es lo que arregla el
-    cursor: a partir de la Tarea 5 esas 2 páginas quedan fusionadas y el tick
+    cursor: a partir de la Tarea 6 esas 2 páginas quedan fusionadas y el tick
     siguiente reintenta solo la 2.
     """
     _aislar_disco(monkeypatch, tmp_path)
@@ -748,7 +748,178 @@ git commit -m "feat(logistica): fusion de un tramo sobre el cache, preservando l
 
 ---
 
-## Task 5: El tick del barrido
+## Task 5: Reconciliar las bajas
+
+**Files:**
+- Modify: `src/melonn_client.py` (después de `_fusionar_tramo`)
+- Modify: `tests/test_melonn_barrido.py`
+
+**Interfaces:**
+- Consumes: `_clave_pedido`.
+- Produces: `_reconciliar_bajas(vivos: list, vistas: set, ausencias: dict) -> tuple[list, dict, int]` — devuelve `(lista_sin_las_bajas, ausencias_actualizadas, cuantas_bajas)`. Constante `_AUSENCIAS_PARA_BAJA = 2`.
+
+- [ ] **Step 1: Escribir las pruebas que fallan**
+
+```python
+def test_una_sola_ausencia_no_da_de_baja():
+    """Puede ser un corrimiento del listado, no una baja real."""
+    vivos = [{"orden_melonn": "M1"}, {"orden_melonn": "M2"}]
+    out, aus, bajas = mc._reconciliar_bajas(vivos, {"M1"}, {})
+    assert len(out) == 2
+    assert bajas == 0
+    assert aus["M2"] == 1
+
+
+def test_dos_ausencias_seguidas_dan_de_baja():
+    vivos = [{"orden_melonn": "M1"}, {"orden_melonn": "M2"}]
+    _, aus, _ = mc._reconciliar_bajas(vivos, {"M1"}, {})
+    out, aus2, bajas = mc._reconciliar_bajas(vivos, {"M1"}, aus)
+    assert [p["orden_melonn"] for p in out] == ["M1"]
+    assert bajas == 1
+    assert "M2" not in aus2
+
+
+def test_reaparecer_limpia_el_contador():
+    vivos = [{"orden_melonn": "M1"}, {"orden_melonn": "M2"}]
+    _, aus, _ = mc._reconciliar_bajas(vivos, {"M1"}, {})
+    assert aus["M2"] == 1
+    _, aus2, bajas = mc._reconciliar_bajas(vivos, {"M1", "M2"}, aus)
+    assert "M2" not in aus2
+    assert bajas == 0
+
+
+def test_el_candado_bloquea_una_reconciliacion_que_vacia(tmp_path, monkeypatch):
+    """Si un barrido trae casi nada, la reconciliación NO puede vaciar el tablero."""
+    _aislar_disco(monkeypatch, tmp_path)
+    vivos = [{"orden_melonn": f"M{i}"} for i in range(200)]
+    mc._cache_guardar(vivos)
+    assert len(mc._cache_leer(ignorar_ttl=True)[0]) == 200
+
+    aus = {f"M{i}": 1 for i in range(200)}
+    out, _, bajas = mc._reconciliar_bajas(vivos, set(), aus)
+    assert bajas == 200
+    mc._cache_guardar(out)                       # el candado tiene que rechazarlo
+    assert len(mc._cache_leer(ignorar_ttl=True)[0]) == 200
+```
+
+- [ ] **Step 2: Correr y ver que fallan**
+
+```bash
+./.venv/bin/python -m pytest tests/test_melonn_barrido.py -v -k "ausencia or reaparecer or candado_bloquea"
+```
+
+Esperado: FAIL (el stub devuelve `bajas == 0` y no toca `ausencias`)
+
+- [ ] **Step 3: Arreglar el candado, que hoy solo protege si Supabase responde**
+
+`test_el_candado_bloquea_una_reconciliacion_que_vacia` falla por una razón que **no** es el stub, y es un hallazgo aparte: `_total_en_cache()` consulta únicamente Supabase y devuelve `0` en cualquier otro caso. Con `antes = 0`, la condición `antes >= _MINIMO_ABSOLUTO` es falsa y **el candado deja pasar cualquier vaciado**.
+
+En producción Supabase está y el candado funciona. Pero si Supabase se cae, si las credenciales fallan o si la consulta lanza, el candado se apaga **sin decir nada** — y el guardado que borre el tablero se ve exactamente igual que uno normal. Es el mismo patrón que dejó 37 semáforos verdes con una pregunta sin hacer.
+
+La reconciliación es la primera ruta nueva que puede encoger el caché legítimamente, así que el candado tiene que ser real antes de encenderla. Reemplazar `_total_en_cache` por:
+
+```python
+def _total_en_cache() -> int:
+    """Cuántos pedidos tiene el caché HOY. Lee solo el contador, no el blob.
+
+    Cae a SQLite si Supabase no responde. ANTES devolvía 0 en ese caso, y un 0
+    apaga el candado anti-vaciado entero: `antes >= _MINIMO_ABSOLUTO` es falso y
+    cualquier guardado pasa. O sea que el candado protegía solo mientras Supabase
+    estuviera bien — justo al revés de lo que uno querría de un candado.
+    """
+    try:
+        sb = _sb()
+        if sb:
+            rows = (sb.table(_SB_TABLA).select("total").eq("id", 1).execute()).data
+            if rows:
+                return int(rows[0].get("total") or 0)
+    except Exception as e:
+        log.warning(f"[candado] no pude leer el total desde Supabase: {e}")
+    try:
+        _init_tabla()
+        with _conn() as c:
+            row = c.execute(
+                "SELECT total FROM melonn_pedidos_cache WHERE id=1").fetchone()
+        if row:
+            return int(row["total"] or 0)
+    except Exception as e:
+        log.warning(f"[candado] no pude leer el total desde SQLite: {e}")
+    return 0
+```
+
+- [ ] **Step 4: Implementar la reconciliación**
+
+Reemplazar el stub por:
+
+```python
+# Cuántos barridos COMPLETOS seguidos sin ver un pedido antes de sacarlo.
+#
+# Dos, y no uno, porque paginar por offset sobre una lista que se mueve puede
+# saltarse un pedido (ver el traslape en _barrido_tick). Una ausencia puede ser un
+# corrimiento; dos seguidas es que de verdad no está. El costo es que un cancelado
+# tarda hasta 4 h en salir del tablero — y de eso normalmente se encarga el
+# webhook, no el barrido.
+_AUSENCIAS_PARA_BAJA = 2
+
+
+def _reconciliar_bajas(vivos: list, vistas: set, ausencias: dict) -> tuple[list, dict, int]:
+    """Saca del caché lo que el barrido COMPLETO no vio dos veces seguidas.
+
+    Solo se llama al cerrar un barrido: que un pedido no esté en las páginas de un
+    tramo no significa que no esté en Melonn.
+
+    `vistas` son las claves de los pedidos que PASARON EL FILTRO, no las de todos
+    los items crudos. Así un pedido que Melonn devuelve pero que el tablero
+    descarta (cancelado, B2B, estado fuera de la whitelist, viejo y ya cerrado)
+    cuenta como ausente y termina saliendo — igual que hacía el reemplazo completo
+    del caché.
+
+    Un pedido creado por un webhook durante el barrido tampoco está en `vistas`,
+    pero suma solo 1 ausencia y no se cae: el barrido siguiente ya lo verá.
+
+    Devuelve (lista_sin_las_bajas, ausencias_actualizadas, cuantas_bajas).
+    """
+    nuevas: dict = {}
+    salida: list = []
+    bajas = 0
+
+    for p in vivos:
+        k = _clave_pedido(p)
+        if k in vistas:
+            continue_count = 0
+        else:
+            continue_count = int(ausencias.get(k, 0)) + 1
+        if continue_count >= _AUSENCIAS_PARA_BAJA:
+            bajas += 1
+            continue
+        if continue_count:
+            nuevas[k] = continue_count
+        salida.append(p)
+
+    if bajas:
+        log.info(f"[barrido] {bajas} pedido(s) dados de baja tras "
+                 f"{_AUSENCIAS_PARA_BAJA} barridos sin verlos")
+    return salida, nuevas, bajas
+```
+
+- [ ] **Step 5: Correr las pruebas**
+
+```bash
+./.venv/bin/python -m pytest tests/test_melonn_barrido.py -v
+```
+
+Esperado: `22 passed`
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/melonn_client.py tests/test_melonn_barrido.py
+git commit -m "feat(logistica): bajas tras dos barridos sin ver el pedido + el candado ya no depende de Supabase"
+```
+
+---
+
+## Task 6: El tick del barrido
 
 El corazón del cambio: traer un tramo, fusionarlo, avanzar el cursor y no perder nada si una página falla.
 
@@ -1066,12 +1237,6 @@ def _barrido_tick(worker: str = "") -> dict:
             "paginas_traidas": traidas}
 ```
 
-> `_reconciliar_bajas` se implementa en la Tarea 6. Para que esta tarea corra sola, añadir **temporalmente** justo antes de `_barrido_tick` el siguiente stub, que la Tarea 6 reemplaza:
->
-> ```python
-> def _reconciliar_bajas(vivos: list, vistas: set, ausencias: dict) -> tuple[list, dict, int]:
->     return vivos, ausencias, 0
-> ```
 
 - [ ] **Step 4: Correr las pruebas**
 
@@ -1079,184 +1244,13 @@ def _barrido_tick(worker: str = "") -> dict:
 ./.venv/bin/python -m pytest tests/test_melonn_barrido.py -v
 ```
 
-Esperado: `26 passed`
+Esperado: `29 passed`
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/melonn_client.py tests/test_melonn_barrido.py
 git commit -m "feat(logistica): tick del barrido por tramos — un fallo de pagina ya no cuesta el barrido"
-```
-
----
-
-## Task 6: Reconciliar las bajas
-
-**Files:**
-- Modify: `src/melonn_client.py` (reemplazar el stub de la Tarea 5)
-- Modify: `tests/test_melonn_barrido.py`
-
-**Interfaces:**
-- Consumes: `_clave_pedido`.
-- Produces: `_reconciliar_bajas(vivos: list, vistas: set, ausencias: dict) -> tuple[list, dict, int]` — devuelve `(lista_sin_las_bajas, ausencias_actualizadas, cuantas_bajas)`. Constante `_AUSENCIAS_PARA_BAJA = 2`.
-
-- [ ] **Step 1: Escribir las pruebas que fallan**
-
-```python
-def test_una_sola_ausencia_no_da_de_baja():
-    """Puede ser un corrimiento del listado, no una baja real."""
-    vivos = [{"orden_melonn": "M1"}, {"orden_melonn": "M2"}]
-    out, aus, bajas = mc._reconciliar_bajas(vivos, {"M1"}, {})
-    assert len(out) == 2
-    assert bajas == 0
-    assert aus["M2"] == 1
-
-
-def test_dos_ausencias_seguidas_dan_de_baja():
-    vivos = [{"orden_melonn": "M1"}, {"orden_melonn": "M2"}]
-    _, aus, _ = mc._reconciliar_bajas(vivos, {"M1"}, {})
-    out, aus2, bajas = mc._reconciliar_bajas(vivos, {"M1"}, aus)
-    assert [p["orden_melonn"] for p in out] == ["M1"]
-    assert bajas == 1
-    assert "M2" not in aus2
-
-
-def test_reaparecer_limpia_el_contador():
-    vivos = [{"orden_melonn": "M1"}, {"orden_melonn": "M2"}]
-    _, aus, _ = mc._reconciliar_bajas(vivos, {"M1"}, {})
-    assert aus["M2"] == 1
-    _, aus2, bajas = mc._reconciliar_bajas(vivos, {"M1", "M2"}, aus)
-    assert "M2" not in aus2
-    assert bajas == 0
-
-
-def test_el_candado_bloquea_una_reconciliacion_que_vacia(tmp_path, monkeypatch):
-    """Si un barrido trae casi nada, la reconciliación NO puede vaciar el tablero."""
-    _aislar_disco(monkeypatch, tmp_path)
-    vivos = [{"orden_melonn": f"M{i}"} for i in range(200)]
-    mc._cache_guardar(vivos)
-    assert len(mc._cache_leer(ignorar_ttl=True)[0]) == 200
-
-    aus = {f"M{i}": 1 for i in range(200)}
-    out, _, bajas = mc._reconciliar_bajas(vivos, set(), aus)
-    assert bajas == 200
-    mc._cache_guardar(out)                       # el candado tiene que rechazarlo
-    assert len(mc._cache_leer(ignorar_ttl=True)[0]) == 200
-```
-
-- [ ] **Step 2: Correr y ver que fallan**
-
-```bash
-./.venv/bin/python -m pytest tests/test_melonn_barrido.py -v -k "ausencia or reaparecer or candado_bloquea"
-```
-
-Esperado: FAIL (el stub devuelve `bajas == 0` y no toca `ausencias`)
-
-- [ ] **Step 3: Arreglar el candado, que hoy solo protege si Supabase responde**
-
-`test_el_candado_bloquea_una_reconciliacion_que_vacia` falla por una razón que **no** es el stub, y es un hallazgo aparte: `_total_en_cache()` consulta únicamente Supabase y devuelve `0` en cualquier otro caso. Con `antes = 0`, la condición `antes >= _MINIMO_ABSOLUTO` es falsa y **el candado deja pasar cualquier vaciado**.
-
-En producción Supabase está y el candado funciona. Pero si Supabase se cae, si las credenciales fallan o si la consulta lanza, el candado se apaga **sin decir nada** — y el guardado que borre el tablero se ve exactamente igual que uno normal. Es el mismo patrón que dejó 37 semáforos verdes con una pregunta sin hacer.
-
-La reconciliación es la primera ruta nueva que puede encoger el caché legítimamente, así que el candado tiene que ser real antes de encenderla. Reemplazar `_total_en_cache` por:
-
-```python
-def _total_en_cache() -> int:
-    """Cuántos pedidos tiene el caché HOY. Lee solo el contador, no el blob.
-
-    Cae a SQLite si Supabase no responde. ANTES devolvía 0 en ese caso, y un 0
-    apaga el candado anti-vaciado entero: `antes >= _MINIMO_ABSOLUTO` es falso y
-    cualquier guardado pasa. O sea que el candado protegía solo mientras Supabase
-    estuviera bien — justo al revés de lo que uno querría de un candado.
-    """
-    try:
-        sb = _sb()
-        if sb:
-            rows = (sb.table(_SB_TABLA).select("total").eq("id", 1).execute()).data
-            if rows:
-                return int(rows[0].get("total") or 0)
-    except Exception as e:
-        log.warning(f"[candado] no pude leer el total desde Supabase: {e}")
-    try:
-        _init_tabla()
-        with _conn() as c:
-            row = c.execute(
-                "SELECT total FROM melonn_pedidos_cache WHERE id=1").fetchone()
-        if row:
-            return int(row["total"] or 0)
-    except Exception as e:
-        log.warning(f"[candado] no pude leer el total desde SQLite: {e}")
-    return 0
-```
-
-- [ ] **Step 4: Implementar la reconciliación**
-
-Reemplazar el stub por:
-
-```python
-# Cuántos barridos COMPLETOS seguidos sin ver un pedido antes de sacarlo.
-#
-# Dos, y no uno, porque paginar por offset sobre una lista que se mueve puede
-# saltarse un pedido (ver el traslape en _barrido_tick). Una ausencia puede ser un
-# corrimiento; dos seguidas es que de verdad no está. El costo es que un cancelado
-# tarda hasta 4 h en salir del tablero — y de eso normalmente se encarga el
-# webhook, no el barrido.
-_AUSENCIAS_PARA_BAJA = 2
-
-
-def _reconciliar_bajas(vivos: list, vistas: set, ausencias: dict) -> tuple[list, dict, int]:
-    """Saca del caché lo que el barrido COMPLETO no vio dos veces seguidas.
-
-    Solo se llama al cerrar un barrido: que un pedido no esté en las páginas de un
-    tramo no significa que no esté en Melonn.
-
-    `vistas` son las claves de los pedidos que PASARON EL FILTRO, no las de todos
-    los items crudos. Así un pedido que Melonn devuelve pero que el tablero
-    descarta (cancelado, B2B, estado fuera de la whitelist, viejo y ya cerrado)
-    cuenta como ausente y termina saliendo — igual que hacía el reemplazo completo
-    del caché.
-
-    Un pedido creado por un webhook durante el barrido tampoco está en `vistas`,
-    pero suma solo 1 ausencia y no se cae: el barrido siguiente ya lo verá.
-
-    Devuelve (lista_sin_las_bajas, ausencias_actualizadas, cuantas_bajas).
-    """
-    nuevas: dict = {}
-    salida: list = []
-    bajas = 0
-
-    for p in vivos:
-        k = _clave_pedido(p)
-        if k in vistas:
-            continue_count = 0
-        else:
-            continue_count = int(ausencias.get(k, 0)) + 1
-        if continue_count >= _AUSENCIAS_PARA_BAJA:
-            bajas += 1
-            continue
-        if continue_count:
-            nuevas[k] = continue_count
-        salida.append(p)
-
-    if bajas:
-        log.info(f"[barrido] {bajas} pedido(s) dados de baja tras "
-                 f"{_AUSENCIAS_PARA_BAJA} barridos sin verlos")
-    return salida, nuevas, bajas
-```
-
-- [ ] **Step 5: Correr las pruebas**
-
-```bash
-./.venv/bin/python -m pytest tests/test_melonn_barrido.py -v
-```
-
-Esperado: `30 passed`
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add src/melonn_client.py tests/test_melonn_barrido.py
-git commit -m "feat(logistica): bajas tras dos barridos sin ver el pedido + el candado ya no depende de Supabase"
 ```
 
 ---
@@ -1374,7 +1368,7 @@ Borrar el bloque `_ULTIMO_FETCH: dict = {...}` y la asignación `_ULTIMO_FETCH.u
 ./.venv/bin/python -m pytest tests/test_melonn_barrido.py -v
 ```
 
-Esperado: `33 passed`. **Las tres pruebas de la Tarea 1 que llaman a `mc.ultimo_fetch()` ahora fallarían**, porque esa función ya no describe a `_fetch_api_filtrado`. Ajustarlas para que lean el motivo desde el valor de retorno en vez de la radiografía: reemplazar en `test_barrido_completo_trae_todas_las_paginas` las dos aserciones sobre `ultimo_fetch()` por `assert len(res) == 210`, y en `test_una_pagina_fallida_pierde_el_barrido_entero` y `test_corte_por_fecha_para_al_salir_de_la_ventana` por `assert res == []` y `assert len(res) == 100` respectivamente. Añadir en cada una un comentario `# ultimo_fetch() describe el barrido por tramos desde la Tarea 7`.
+Esperado: `32 passed`. **Las tres pruebas de la Tarea 1 que llaman a `mc.ultimo_fetch()` ahora fallarían**, porque esa función ya no describe a `_fetch_api_filtrado`. Ajustarlas para que lean el motivo desde el valor de retorno en vez de la radiografía: reemplazar en `test_barrido_completo_trae_todas_las_paginas` las dos aserciones sobre `ultimo_fetch()` por `assert len(res) == 210`, y en `test_una_pagina_fallida_pierde_el_barrido_entero` y `test_corte_por_fecha_para_al_salir_de_la_ventana` por `assert res == []` y `assert len(res) == 100` respectivamente. Añadir en cada una un comentario `# ultimo_fetch() describe el barrido por tramos desde la Tarea 7`.
 
 - [ ] **Step 5: Commit**
 
@@ -1461,7 +1455,7 @@ Justo después de `omitidos = {"resuelto": 0, "sin_datos": 0}`:
 ./.venv/bin/python -m pytest tests/test_melonn_barrido.py -v
 ```
 
-Esperado: `34 passed`
+Esperado: `33 passed`
 
 - [ ] **Step 5: Que el scheduler use el modo tramo**
 
@@ -1713,7 +1707,7 @@ def _revisar_fetch(mc, marcar, medidas: dict) -> None:
 ./.venv/bin/python -m pytest tests/ -v -k "barrido or salud"
 ```
 
-Esperado: `39 passed`
+Esperado: `38 passed`
 
 - [ ] **Step 5: Actualizar el comentario de umbrales**
 
