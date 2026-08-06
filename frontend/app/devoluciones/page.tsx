@@ -30,7 +30,9 @@ export default function DevolucionesPage() {
       todas:    devs,
       activas:  devs.filter((p) => p.sub_estado_logistico === "novedad"),
       enRuta:   devs.filter((p) => p.sub_estado_logistico === "en_transito"),
-      resueltas:devs.filter((p) => p.sub_estado_logistico === "resuelto" || p.sub_estado_logistico === "entregado"),
+      // "entregado" es el único cierre que el carrier reporta — ver
+      // SubEstadoLogistico en lib/types.ts.
+      resueltas:devs.filter((p) => p.sub_estado_logistico === "entregado"),
     };
   }, [data]);
 
