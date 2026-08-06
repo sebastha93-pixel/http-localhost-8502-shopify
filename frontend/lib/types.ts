@@ -21,17 +21,19 @@ export interface ConfigCheck {
 // ── Melonn ──────────────────────────────────────────────────────────────────
 /**
  * Proyección del estado del carrier. Fuente única: _sub_estado_logistico()
- * en src/melonn_client.py — con "otro" de catch-all, así que el conjunto es
- * cerrado y ningún otro valor puede llegar por la API.
+ * en src/melonn_client.py (~1722) — con "otro" de catch-all, así que el
+ * conjunto es cerrado y ningún otro valor puede llegar por la API.
  *
- * OJO: no existe "resuelto" ni "devuelto". Resolver un caso es una decisión
- * interna, no un hecho del carrier: ese concepto vive en el `tipo` de las
- * acciones de auditoría ("resuelto", "devolucion"), no aquí.
+ * OJO: no existe "resuelto", ni "devuelto", ni "cancelado". Resolver o devolver
+ * un caso es una decisión interna, no un hecho que Melonn reporte: ese concepto
+ * vive en el `tipo` de las acciones de auditoría ("resuelto", "devolucion").
+ * Los cancelados se excluyen antes (CODIGOS_EXCLUIR) y nunca llegan al tablero.
  */
 export type SubEstadoLogistico =
   | "novedad"
   | "entregado"
   | "en_transito"
+  | "en_preparacion"
   | "pendiente_despacho"
   | "otro";
 
