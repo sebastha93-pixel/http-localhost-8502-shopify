@@ -2006,20 +2006,55 @@ def actualizar_curva_corte(oc_id: str, *, curva: dict,
     return obtener_orden_corte(oc_id) or {}
 
 
-def actualizar_indicaciones_corte(oc_id: str, indicaciones: Optional[str]) -> dict:
+def actualizar_indicaciones_corte(oc_id: str, indicaciones: Optional[str], *,
+                                  usuario: str = "") -> dict:
     """Edita las notas/indicaciones de una orden de corte (las escribe el
-    diseñador; el cortador solo las lee). Editable en cualquier estado."""
+    diseñador; el cortador solo las lee). Editable en cualquier estado.
+
+    SI LA ORDEN YA ESTABA AUTORIZADA Y LAS INDICACIONES CAMBIARON, se reenvía el
+    correo. Sin esto el cambio quedaría solo dentro de la app: el cortador ya
+    recibió su correo con la versión anterior y no tiene por qué volver a entrar a
+    mirar. Una indicación que llega tarde es igual de inútil que una que no llega.
+
+    No se reenvía si la orden ya está CORTADA (no hay nada que avisar) ni si el
+    texto quedó igual (evita un correo por cada guardado sin cambios).
+    """
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
+    previo = obtener_orden_corte(oc_id)
+    antes = ((previo or {}).get("indicaciones") or "").strip()
+    nuevo_txt = (indicaciones or "").strip()
     r = (sb.table("ordenes_corte")
-           .update({"indicaciones": (indicaciones or "").strip() or None,
+           .update({"indicaciones": nuevo_txt or None,
                     "updated_at": _now_iso()})
            .eq("id", oc_id).execute()).data
     if not r:
         raise ValueError("no_encontrado")
     _cache_invalidate_prefix("ordenes_corte")
-    return obtener_orden_corte(oc_id) or r[0]
+    oc = obtener_orden_corte(oc_id) or r[0]
+
+    reenviado = False
+    if (previo and previo.get("estado") == "autorizada"
+            and nuevo_txt != antes and (previo.get("destinatarios_correo") or [])):
+        try:
+            res = autorizar_orden_corte(
+                oc_id, usuario=usuario or (previo.get("autorizada_por") or ""),
+                mensaje_extra="(Indicaciones actualizadas por diseño)",
+                solo_reenviar=True)
+            # `enviado_por` va DENTRO de res["correo"], no al nivel de arriba
+            # (la función devuelve la orden con el correo anidado). Y solo cuenta
+            # como reenviado si salió por Resend: un `mailto_url` no envía nada,
+            # necesita que alguien abra su cliente de correo.
+            reenviado = ((res.get("correo") or {}).get("enviado_por") == "resend")
+            log.info(f"[corte] {previo.get('consecutivo')}: indicaciones cambiaron, "
+                     f"correo reenviado={reenviado}")
+        except Exception as e:
+            # Guardar la indicación es lo importante; el reenvío es la cortesía.
+            log.warning(f"[corte] no pude reenviar el correo de {oc_id}: {str(e)[:150]}")
+    oc = dict(oc)
+    oc["correo_reenviado"] = reenviado
+    return oc
 
 
 def listar_ordenes_corte(*, estado: Optional[str] = None,
@@ -2912,6 +2947,7 @@ def _trazos_texto(oc: dict) -> str:
 # ── Autorizar orden de corte y enviar correo ──────────────────────────
 def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = None,
                            mensaje_extra: Optional[str] = None,
+                           solo_reenviar: bool = False,
                            usuario: str) -> dict:
     """Marca la orden como 'autorizada' y prepara el correo para los destinatarios.
 
@@ -2930,7 +2966,16 @@ def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = No
         raise ValueError("orden_ya_cortada")
 
     # Guardar destinatarios si vinieron
-    update: dict = {"estado": "autorizada", "autorizada_por": usuario, "updated_at": _now_iso()}
+    # `fecha_autorizacion` existe en la tabla y NUNCA se llenaba: salía None en
+    # todas las órdenes autorizadas. Sin ella no se puede saber cuándo se autorizó.
+    #
+    # `solo_reenviar` manda el correo SIN volver a marcar la autorización: un
+    # reenvío por indicaciones nuevas no puede pisar la fecha en que se autorizó
+    # de verdad — sería borrar el dato que acabo de arreglar.
+    update: dict = {"updated_at": _now_iso()}
+    if not solo_reenviar:
+        update.update({"estado": "autorizada", "autorizada_por": usuario,
+                       "fecha_autorizacion": _now_iso()})
     if destinatarios is not None:
         update["destinatarios_correo"] = destinatarios
     try:
@@ -2946,12 +2991,30 @@ def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = No
     codigo_ref = ref.get("codigo_referencia") or ""
     asunto = f"Orden de corte referencia {codigo_ref}"
 
+    # LAS INDICACIONES DE DISEÑO VAN EN EL CORREO (2026-08-05, pedido de Sebastián).
+    # El diseñador las escribe en la misma pantalla donde adjunta los trazos y son
+    # lo que el cortador NECESITA leer —cómo ubicar el trazo, qué cuidar, qué
+    # cambió—, pero el correo solo llevaba el `mensaje_extra` del momento de
+    # autorizar. O sea que la nota más importante se quedaba dentro de la app.
+    #
+    # Van ARRIBA, antes de los datos técnicos: al final del cuerpo, después de la
+    # curva y los enlaces, nadie las lee. Y con el nombre de quién las escribió,
+    # porque una indicación sin autor no se puede preguntar.
+    indicaciones = (oc.get("indicaciones") or "").strip()
+    bloque_ind = ""
+    if indicaciones:
+        autor = oc.get("created_by") or "Diseño"
+        bloque_ind = (f"\n── INDICACIONES DE DISEÑO ({autor}) ──\n"
+                      f"{indicaciones}\n"
+                      f"────────────────────────────────────\n")
+
     # Cuerpo del correo
     filas_curva = "\n".join(f"  · Talla {t}: {n} und" for t, n in (oc.get("curva_trazo") or {}).items())
     body = (
         f"Orden de corte {oc.get('consecutivo')}\n"
         f"Referencia: {codigo_ref} · {ref.get('nombre','')}\n"
         f"Tela: {ref.get('tela','—')}\n"
+        + bloque_ind +
         f"Largo trazo: {oc.get('largo_trazo')} m\n"
         f"Número de capas: {oc.get('num_capas')}\n"
         f"Cantidad programada: {oc.get('cantidad_programada') or oc.get('prendas_estimadas') or ''}\n"

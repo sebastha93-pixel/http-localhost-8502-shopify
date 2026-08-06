@@ -1130,12 +1130,19 @@ class IndicacionesCorteBody(BaseModel):
 def editar_indicaciones_corte(
     oc_id: str,
     body: IndicacionesCorteBody,
-    _: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
+    user: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
 ) -> dict:
     """Notas del diseñador sobre la orden de corte. El cortador puro NO puede
-    editarlas (solo produccion_corte modificar = diseño/admin)."""
+    editarlas (solo produccion_corte modificar = diseño/admin).
+
+    Si la orden ya estaba autorizada y el texto cambió, se REENVÍA el correo al
+    cortador — devuelve `correo_reenviado` para que la pantalla lo diga.
+    """
     try:
-        return {"ok": True, "orden": svc.actualizar_indicaciones_corte(oc_id, body.indicaciones)}
+        orden = svc.actualizar_indicaciones_corte(
+            oc_id, body.indicaciones, usuario=user.email)
+        return {"ok": True, "orden": orden,
+                "correo_reenviado": bool(orden.get("correo_reenviado"))}
     except ValueError:
         raise HTTPException(404, "Orden de corte no encontrada")
 

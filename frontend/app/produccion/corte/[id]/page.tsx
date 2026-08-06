@@ -266,12 +266,19 @@ export default function DetalleOrdenCortePage() {
   const [editandoNotas, setEditandoNotas] = useState(false);
   const [notasDraft, setNotasDraft] = useState("");
   const guardarNotas = useMutation({
-    mutationFn: () => api.patch(`/api/produccion/corte/${id}/indicaciones`, {
-      indicaciones: notasDraft.trim() || null,
-    }),
-    onSuccess: () => {
+    mutationFn: () => api.patch<{ correo_reenviado?: boolean }>(
+      `/api/produccion/corte/${id}/indicaciones`,
+      { indicaciones: notasDraft.trim() || null },
+    ),
+    onSuccess: (r) => {
       setEditandoNotas(false);
-      setMsg("Indicaciones guardadas.");
+      // Si la orden ya estaba autorizada, el backend REENVÍA el correo con la
+      // nota nueva. Hay que decirlo: cambiar una indicación después de autorizar
+      // significa que al cortador le llegó otro correo — si la pantalla se queda
+      // callada, uno no sabe si el de la mesa ya se enteró o no.
+      setMsg(r?.correo_reenviado
+        ? "Indicaciones guardadas y reenviadas por correo al cortador."
+        : "Indicaciones guardadas.");
       setErr("");
       qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
     },
