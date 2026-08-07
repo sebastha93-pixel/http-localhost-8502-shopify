@@ -1201,15 +1201,31 @@ _MINIMO_ABSOLUTO = 50        # por debajo de esto no hay tablero que valga
 
 
 def _total_en_cache() -> int:
-    """Cuántos pedidos tiene el caché HOY. Lee solo el contador, no el blob."""
+    """Cuántos pedidos tiene el caché HOY. Lee solo el contador, no el blob.
+
+    Cae a SQLite si Supabase no responde. ANTES devolvía 0 en ese caso, y un 0
+    apaga el candado anti-vaciado entero: `antes >= _MINIMO_ABSOLUTO` es falso y
+    cualquier guardado pasa. O sea que el candado protegía solo mientras Supabase
+    estuviera bien — justo al revés de lo que uno querría de un candado. Medido:
+    guardar [] sobre un caché de 200 lo dejaba en 0 sin un solo aviso.
+    """
     try:
         sb = _sb()
         if sb:
             rows = (sb.table(_SB_TABLA).select("total").eq("id", 1).execute()).data
             if rows:
                 return int(rows[0].get("total") or 0)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"[candado] no pude leer el total desde Supabase: {e}")
+    try:
+        _init_tabla()
+        with _conn() as c:
+            row = c.execute(
+                "SELECT total FROM melonn_pedidos_cache WHERE id=1").fetchone()
+        if row:
+            return int(row["total"] or 0)
+    except Exception as e:
+        log.warning(f"[candado] no pude leer el total desde SQLite: {e}")
     return 0
 
 
@@ -2132,6 +2148,53 @@ def _fusionar_tramo(vivos: list, frescos: list) -> tuple[list, int]:
         log.info(f"[despacho] {despachos} pedido(s) pasaron a despachado en este "
                  f"tramo — fecha anotada por observación propia")
     return out, nuevos
+
+
+# Cuántos barridos COMPLETOS seguidos sin ver un pedido antes de sacarlo.
+#
+# Dos, y no uno, porque paginar por offset sobre una lista que se mueve puede
+# saltarse un pedido (ver el traslape en _barrido_tick). Una ausencia puede ser un
+# corrimiento; dos seguidas es que de verdad no está. El costo es que un cancelado
+# tarda hasta 4 h en salir del tablero — y de eso normalmente se encarga el
+# webhook, no el barrido.
+_AUSENCIAS_PARA_BAJA = 2
+
+
+def _reconciliar_bajas(vivos: list, vistas: set, ausencias: dict) -> tuple[list, dict, int]:
+    """Saca del caché lo que el barrido COMPLETO no vio dos veces seguidas.
+
+    Solo se llama al cerrar un barrido: que un pedido no esté en las páginas de un
+    tramo no significa que no esté en Melonn.
+
+    `vistas` son las claves de los pedidos que PASARON EL FILTRO, no las de todos
+    los items crudos. Así un pedido que Melonn devuelve pero que el tablero
+    descarta (cancelado, B2B, estado fuera de la whitelist, viejo y ya cerrado)
+    cuenta como ausente y termina saliendo — igual que hacía el reemplazo completo
+    del caché.
+
+    Un pedido creado por un webhook durante el barrido tampoco está en `vistas`,
+    pero suma solo 1 ausencia y no se cae: el barrido siguiente ya lo verá.
+
+    Devuelve (lista_sin_las_bajas, ausencias_actualizadas, cuantas_bajas).
+    """
+    nuevas: dict = {}
+    salida: list = []
+    bajas = 0
+
+    for p in vivos:
+        k = _clave_pedido(p)
+        seguidas = 0 if k in vistas else int(ausencias.get(k, 0)) + 1
+        if seguidas >= _AUSENCIAS_PARA_BAJA:
+            bajas += 1
+            continue
+        if seguidas:
+            nuevas[k] = seguidas
+        salida.append(p)
+
+    if bajas:
+        log.info(f"[barrido] {bajas} pedido(s) dados de baja tras "
+                 f"{_AUSENCIAS_PARA_BAJA} barridos sin verlos")
+    return salida, nuevas, bajas
 
 
 def _fetch_api_filtrado() -> list:

@@ -239,3 +239,44 @@ def test_fusionar_nunca_quita():
     vivos = [{"orden_melonn": f"M{i}"} for i in range(10)]
     out, _ = mc._fusionar_tramo(vivos, [{"orden_melonn": "M3"}])
     assert len(out) == 10
+
+
+def test_una_sola_ausencia_no_da_de_baja():
+    """Puede ser un corrimiento del listado, no una baja real."""
+    vivos = [{"orden_melonn": "M1"}, {"orden_melonn": "M2"}]
+    out, aus, bajas = mc._reconciliar_bajas(vivos, {"M1"}, {})
+    assert len(out) == 2
+    assert bajas == 0
+    assert aus["M2"] == 1
+
+
+def test_dos_ausencias_seguidas_dan_de_baja():
+    vivos = [{"orden_melonn": "M1"}, {"orden_melonn": "M2"}]
+    _, aus, _ = mc._reconciliar_bajas(vivos, {"M1"}, {})
+    out, aus2, bajas = mc._reconciliar_bajas(vivos, {"M1"}, aus)
+    assert [p["orden_melonn"] for p in out] == ["M1"]
+    assert bajas == 1
+    assert "M2" not in aus2
+
+
+def test_reaparecer_limpia_el_contador():
+    vivos = [{"orden_melonn": "M1"}, {"orden_melonn": "M2"}]
+    _, aus, _ = mc._reconciliar_bajas(vivos, {"M1"}, {})
+    assert aus["M2"] == 1
+    _, aus2, bajas = mc._reconciliar_bajas(vivos, {"M1", "M2"}, aus)
+    assert "M2" not in aus2
+    assert bajas == 0
+
+
+def test_el_candado_bloquea_una_reconciliacion_que_vacia(tmp_path, monkeypatch):
+    """Si un barrido trae casi nada, la reconciliación NO puede vaciar el tablero."""
+    _aislar_disco(monkeypatch, tmp_path)
+    vivos = [{"orden_melonn": f"M{i}"} for i in range(200)]
+    mc._cache_guardar(vivos)
+    assert len(mc._cache_leer(ignorar_ttl=True)[0]) == 200
+
+    aus = {f"M{i}": 1 for i in range(200)}
+    out, _, bajas = mc._reconciliar_bajas(vivos, set(), aus)
+    assert bajas == 200
+    mc._cache_guardar(out)                       # el candado tiene que rechazarlo
+    assert len(mc._cache_leer(ignorar_ttl=True)[0]) == 200
