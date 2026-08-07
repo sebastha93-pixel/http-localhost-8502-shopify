@@ -2032,18 +2032,46 @@ def _fetch_api_raw(max_pages: int = _MAX_PAGES) -> list:
     return out
 
 
-# Radiografía del último fetch al listado. La lee el chequeo de salud para poder
-# responder "¿el tablero está completo?" sin adivinar. Es de proceso, no
-# compartida entre workers: el chequeo la complementa con el reloj de Supabase.
-_ULTIMO_FETCH: dict = {
-    "ts": None, "paginas": 0, "pedidos_en_ventana": 0,
-    "motivo_fin": "nunca_corrio", "completo": False,
-}
-
-
+# Radiografía del barrido, para el chequeo de salud.
+#
+# ANTES era un dict de proceso (`_ULTIMO_FETCH`), así que se perdía en cada
+# reinicio y cada réplica de Railway veía la suya. Ahora sale del cursor, que es
+# compartido y persistente.
+#
+# DOS RELOJES, y la diferencia es el punto de todo esto:
+#   ultimo_tramo_en    → cuándo avanzamos algo. Dice si el barrido está vivo.
+#   ultimo_completo_en → cuándo cerró un barrido ENTERO. Es el único que dice si
+#                        el tablero es auditable, y el que sella _marcar_fetch_api.
 def ultimo_fetch() -> dict:
-    """Cómo terminó el último fetch del listado, para el chequeo de salud."""
-    return dict(_ULTIMO_FETCH)
+    """Cómo va el barrido del listado, para el chequeo de salud."""
+    e = _barrido_leer()
+    return {
+        "generacion":         e.get("generacion", 0),
+        "pagina":             e.get("pagina", 0),
+        "paginas_estimadas":  e.get("paginas_barrido_previo", 0),
+        "en_curso":           bool(e.get("iniciado_en")),
+        "motivo_fin":         e.get("motivo_ultimo_tramo", "nunca_corrio"),
+        "completo":           (not e.get("iniciado_en")
+                               and bool(e.get("ultimo_completo_en"))),
+        "ultimo_completo_en": e.get("ultimo_completo_en"),
+        "ultimo_tramo_en":    e.get("ultimo_tramo_en"),
+    }
+
+
+def _edad_tramo() -> Optional[float]:
+    """Segundos desde el último tramo, completo o no. None si nunca corrió.
+
+    Complementa a _edad_fetch_api(): un barrido puede llevar horas atascado a
+    mitad y el reloj del último COMPLETO seguir viéndose reciente.
+    """
+    e = _barrido_leer()
+    ts = e.get("ultimo_tramo_en")
+    if not ts:
+        return None
+    try:
+        return (datetime.utcnow() - _parse_iso_naive(ts)).total_seconds()
+    except Exception:
+        return None
 
 
 def _filtrar_ventana(items: list, corte: date) -> list:
@@ -2461,13 +2489,9 @@ def _fetch_api_filtrado() -> list:
     # datos buenos con datos parciales, que es justo lo que no se puede notar
     # a simple vista.
     completo = motivo_fin in ("ultima_pagina", "sin_mas_datos", "fuera_de_ventana")
-    _ULTIMO_FETCH.update({
-        "ts": datetime.now().isoformat(timespec="seconds"),
-        "paginas": page + 1,
-        "pedidos_en_ventana": len(pedidos_raw),
-        "motivo_fin": motivo_fin,
-        "completo": completo,
-    })
+    # Ya no alimenta la radiografía: `ultimo_fetch()` la lee del cursor, que
+    # sobrevive reinicios y es igual en todas las réplicas. Este camino (botón
+    # manual y hard-TTL de 24 h) no toca el cursor a propósito — no es un tramo.
     log.info(f"Melonn API: {len(pedidos_raw)} pedidos en ventana "
              f"({page + 1} página(s), fin={motivo_fin})")
 

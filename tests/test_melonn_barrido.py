@@ -60,10 +60,10 @@ def test_barrido_completo_trae_todas_las_paginas(tmp_path, monkeypatch):
 
     res = mc._fetch_api_filtrado()
 
+    # ultimo_fetch() describe el barrido por tramos desde la Tarea 7, así que ya
+    # no dice nada de esta función: se mide sobre lo que devuelve y lo que pidió.
     assert pedidas == [0, 1, 2]
     assert len(res) == 210
-    assert mc.ultimo_fetch()["motivo_fin"] == "ultima_pagina"
-    assert mc.ultimo_fetch()["completo"] is True
 
 
 def test_una_pagina_fallida_pierde_el_barrido_entero(tmp_path, monkeypatch):
@@ -79,13 +79,14 @@ def test_una_pagina_fallida_pierde_el_barrido_entero(tmp_path, monkeypatch):
         0: [_pedido(i) for i in range(100)],
         1: [_pedido(100 + i) for i in range(100)],
     }
-    _paginas_falsas(monkeypatch, paginas, fallan={2})
+    pedidas = _paginas_falsas(monkeypatch, paginas, fallan={2})
 
     res = mc._fetch_api_filtrado()
 
-    assert res == []
-    assert mc.ultimo_fetch()["completo"] is False
-    assert mc.ultimo_fetch()["motivo_fin"].startswith("fallo_get_pagina_2")
+    # ultimo_fetch() describe el barrido por tramos desde la Tarea 7, así que ya
+    # no dice nada de esta función: se mide sobre lo que devuelve y lo que pidió.
+    assert pedidas == [0, 1, 2]     # trajo dos páginas buenas y murió en la 2
+    assert res == []                # y las tiró todas
 
 
 def test_corte_por_fecha_para_al_salir_de_la_ventana(tmp_path, monkeypatch):
@@ -102,10 +103,10 @@ def test_corte_por_fecha_para_al_salir_de_la_ventana(tmp_path, monkeypatch):
 
     res = mc._fetch_api_filtrado()
 
+    # ultimo_fetch() describe el barrido por tramos desde la Tarea 7, así que ya
+    # no dice nada de esta función: se mide sobre lo que devuelve y lo que pidió.
     assert pedidas == [0, 1, 2]          # no pide la 3
     assert len(res) == 100
-    assert mc.ultimo_fetch()["motivo_fin"] == "fuera_de_ventana"
-    assert mc.ultimo_fetch()["completo"] is True
 
 
 def test_cursor_arranca_vacio(tmp_path, monkeypatch):
@@ -397,3 +398,38 @@ def test_una_generacion_atascada_se_abandona(tmp_path, monkeypatch):
     assert nuevo["generacion"] == 6
     assert nuevo["vistas"] != ["M1"]        # la foto vieja se descartó
     assert nuevo["pagina"] <= 1             # volvió a empezar, no siguió en la 30
+
+
+def test_ultimo_fetch_lee_del_cursor(tmp_path, monkeypatch):
+    _aislar_disco(monkeypatch, tmp_path)
+    monkeypatch.setattr(mc, "_TRAMO_DEFECTO", 2)
+    paginas = {0: [_pedido(i) for i in range(100)],
+               1: [_pedido(100 + i) for i in range(100)],
+               2: [_pedido(200 + i) for i in range(5)]}
+    _paginas_falsas(monkeypatch, paginas)
+
+    mc._barrido_tick(worker="w1")
+    uf = mc.ultimo_fetch()
+    assert uf["en_curso"] is True
+    assert uf["pagina"] == 2
+    assert uf["completo"] is False
+
+    mc._barrido_tick(worker="w1")
+    uf = mc.ultimo_fetch()
+    assert uf["en_curso"] is False
+    assert uf["completo"] is True
+    assert uf["ultimo_completo_en"]
+
+
+def test_edad_tramo_es_none_si_nunca_corrio(tmp_path, monkeypatch):
+    _aislar_disco(monkeypatch, tmp_path)
+    assert mc._edad_tramo() is None
+
+
+def test_edad_tramo_cuenta_desde_el_ultimo_tramo(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+    _aislar_disco(monkeypatch, tmp_path)
+    e = mc._barrido_leer()
+    e["ultimo_tramo_en"] = (datetime.utcnow() - timedelta(minutes=30)).isoformat()
+    mc._barrido_guardar(e)
+    assert 1700 < mc._edad_tramo() < 1900       # ~1800 s
