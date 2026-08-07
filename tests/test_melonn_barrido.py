@@ -433,3 +433,20 @@ def test_edad_tramo_cuenta_desde_el_ultimo_tramo(tmp_path, monkeypatch):
     e["ultimo_tramo_en"] = (datetime.utcnow() - timedelta(minutes=30)).isoformat()
     mc._barrido_guardar(e)
     assert 1700 < mc._edad_tramo() < 1900       # ~1800 s
+
+
+def test_modo_tramo_avanza_el_cursor_sin_barrer_todo(tmp_path, monkeypatch):
+    _aislar_disco(monkeypatch, tmp_path)
+    monkeypatch.setattr(mc, "_TRAMO_DEFECTO", 2)
+    paginas = {i: [_pedido(100 * i + j) for j in range(100)] for i in range(6)}
+    pedidas = _paginas_falsas(monkeypatch, paginas)
+
+    _pedidos, _om, meta = mc.obtener_pedidos_activos(forzar_refresh=True, modo="tramo")
+
+    assert pedidas == [0, 1]                  # UN tramo, no el barrido entero
+    assert meta["modo"] == "tramo"
+    assert meta["barrido"]["paginas_traidas"] == 2
+    # Se mide sobre el caché y no sobre lo devuelto: _enriquecer_y_filtrar
+    # deduplica por orden_tienda y re-deriva estados, así que su salida depende
+    # de reglas que no son las que esta prueba quiere fijar.
+    assert len(mc._cache_leer(ignorar_ttl=True)[0]) == 200

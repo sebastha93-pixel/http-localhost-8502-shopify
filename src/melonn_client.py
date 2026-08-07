@@ -3101,7 +3101,8 @@ def _bootstrap_json() -> list:
 
 
 # ── Punto de entrada ───────────────────────────────────────────────────────────
-def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tuple:
+def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False,
+                            modo: str = "completo") -> tuple:
     """
     Retorna (pedidos, omitidos, meta).
 
@@ -3119,6 +3120,24 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
     Esto evita esperas innecesarias cuando la cuota está agotada.
     """
     omitidos = {"resuelto": 0, "sin_datos": 0}
+
+    # modo="tramo": el scheduler. Avanza UN tramo del barrido y devuelve el caché.
+    #
+    # No pasa por el guard de _MIN_REFRESH_SECS a propósito: la cadencia la fija
+    # el cursor (_barrido_tick no arranca una generación nueva si el último
+    # barrido completo tiene menos de _CACHE_TTL). Ese guard de 60 s era lo único
+    # que frenaba el camino de forzar_refresh, y con tick horario NUNCA frenaba
+    # nada: se barría entero cada hora, ~1.056 peticiones/día contra las ~516 que
+    # se creían. Con el cursor son ~540.
+    if forzar_refresh and modo == "tramo":
+        r = _barrido_tick()
+        hit = _cache_leer(ignorar_ttl=True)
+        pedidos = _enriquecer_y_filtrar((hit[0] if hit else []) or [])
+        return pedidos, omitidos, {
+            "fuente": "api_live", "stale": False,
+            "fetched_at": (hit[1] if hit else datetime.now()),
+            "modo": "tramo", "barrido": r,
+        }
 
     if forzar_refresh:
         # Protección multi-usuario: si otro usuario ya sincronizó hace <5 min,
