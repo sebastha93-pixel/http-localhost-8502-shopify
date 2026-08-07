@@ -2030,6 +2030,63 @@ def ultimo_fetch() -> dict:
     return dict(_ULTIMO_FETCH)
 
 
+def _filtrar_ventana(items: list, corte: date) -> list:
+    """Los items crudos de una página que entran en la ventana de 90 días.
+
+    Un pedido viejo que sigue ABIERTO cuenta como dentro de ventana: es trabajo
+    pendiente, por antiguo que sea. La excepción NO puede ser `es_activo`, que
+    incluye entregado (6 y 8): con eso la ventana no cortaba ni un entregado y el
+    tablero se llenó con toda la historia de entregas (2.126 pedidos, 1.709 ya
+    entregados, contra los ~1.150 que debía tener).
+    """
+    dentro = []
+    for item in items:
+        fc       = _parsear_fecha(item.get("creation_date"))
+        estado_c = int((item.get("sell_order_state") or {}).get("code") or 0)
+        estado_n = str((item.get("sell_order_state") or {}).get("name") or "")
+        sigue_abierto = (estado_c in CODIGOS_ACTIVOS_OPERATIVO
+                         or estado_n in ESTADOS_NOVEDAD_EXTERNA)
+        if fc and fc < corte and not sigue_abierto:
+            continue
+        dentro.append(item)
+    return dentro
+
+
+def _normalizar_lote(crudos: list) -> list:
+    """Whitelist + normalización + descarte de B2B, sobre items ya en ventana."""
+    salida = []
+    for item in crudos:
+        estado_obj    = item.get("sell_order_state") or {}
+        estado_nombre = str(estado_obj.get("name") or "")
+        estado_codigo = int(estado_obj.get("code") or 0)
+
+        # Whitelist: código en CODIGOS_ACTIVOS O nombre en ESTADOS_NOVEDAD_EXTERNA.
+        # Las novedades externas no tienen código documentado → se ven por nombre.
+        if (estado_codigo not in CODIGOS_ACTIVOS
+                and estado_nombre not in ESTADOS_NOVEDAD_EXTERNA):
+            log.debug(f"Excluido código {estado_codigo} ({estado_nombre})")
+            continue
+        if estado_nombre in ESTADOS_EXCLUIR or estado_nombre in ESTADOS_PROCESO_INTERNO:
+            log.debug(f"Excluido por nombre: {estado_nombre}")
+            continue
+
+        try:
+            p = _normalizar(item)
+        except Exception:
+            continue
+
+        if p.get("es_b2b"):
+            log.debug(f"Excluido B2B: {p.get('orden_tienda')}")
+            continue
+
+        # OJO: si falta un estado acá, esos pedidos DESAPARECEN del tablero.
+        # Al separar "en_preparacion" de "en_transito" habrían quedado fuera 96.
+        if p["sub_estado_logistico"] in ("pendiente_despacho", "en_preparacion",
+                                         "en_transito", "novedad", "entregado"):
+            salida.append(p)
+    return salida
+
+
 def _fetch_api_filtrado() -> list:
     corte       = _fecha_corte()
     pedidos_raw = []
@@ -2045,7 +2102,6 @@ def _fetch_api_filtrado() -> list:
     tam_pagina = None
     # Se inicializa acá y no dentro del while: si la primera página falla (cuota
     # agotada), el loop no corre y el log de abajo la leería sin existir.
-    activos_en_pagina = 0
     en_ventana_en_pagina = 0
     # Páginas llenas seguidas sin un solo pedido dentro de la ventana de 90 días.
     paginas_fuera_ventana = 0
@@ -2074,31 +2130,9 @@ def _fetch_api_filtrado() -> list:
                     f"Melonn topó per_page: pedimos {_PAGE_SIZE}, devuelve {tam_pagina}"
                 )
 
-        activos_en_pagina = 0
-        en_ventana_en_pagina = 0
-        for item in items:
-            fc       = _parsear_fecha(item.get("creation_date"))
-            estado_c = int((item.get("sell_order_state") or {}).get("code") or 0)
-            estado_n = str((item.get("sell_order_state") or {}).get("name") or "")
-            # ¿Sigue ABIERTO? (pendiente, en preparación, en tránsito, novedad)
-            # Entregado NO cuenta: un pedido entregado está cerrado.
-            sigue_abierto = (estado_c in CODIGOS_ACTIVOS_OPERATIVO
-                             or estado_n in ESTADOS_NOVEDAD_EXTERNA)
-
-            # La ventana de 90 días solo se salta para los que siguen abiertos.
-            # ANTES la excepción era `es_activo`, que INCLUYE entregado (6 y 8),
-            # así que la ventana no cortaba ni un entregado por viejo que fuera.
-            # Con el corte anticipado de paginación eso no se notaba —la
-            # paginación moría antes de llegar al historial—; al quitarlo, el
-            # tablero se llenó con TODA la historia de entregas: 1.709 entregados
-            # y 2.126 pedidos en total, contra ~1.150 que debía tener.
-            if fc and fc < corte and not sigue_abierto:
-                continue
-
-            pedidos_raw.append(item)
-            en_ventana_en_pagina += 1
-            if sigue_abierto:
-                activos_en_pagina += 1
+        en_ventana = _filtrar_ventana(items, corte)
+        pedidos_raw.extend(en_ventana)
+        en_ventana_en_pagina = len(en_ventana)
 
         # ── Cortar cuando ya pasamos la ventana ──────────────────────────────
         #
@@ -2170,42 +2204,7 @@ def _fetch_api_filtrado() -> list:
     if pedidos_raw:
         _marcar_fetch_api()
 
-    resultado = []
-    for item in pedidos_raw:
-        estado_obj  = item.get("sell_order_state") or {}
-        estado_nombre = str(estado_obj.get("name") or "")
-        estado_codigo = int(estado_obj.get("code") or 0)
-
-        # ── Whitelist: código en CODIGOS_ACTIVOS O nombre en ESTADOS_NOVEDAD_EXTERNA
-        #    Las novedades externas no tienen código documentado → se detectan por nombre
-        if (estado_codigo not in CODIGOS_ACTIVOS
-                and estado_nombre not in ESTADOS_NOVEDAD_EXTERNA):
-            log.debug(f"Excluido código {estado_codigo} ({estado_nombre})")
-            continue
-
-        # Doble check por nombre — cancelados y proceso interno
-        if estado_nombre in ESTADOS_EXCLUIR or estado_nombre in ESTADOS_PROCESO_INTERNO:
-            log.debug(f"Excluido por nombre: {estado_nombre}")
-            continue
-
-        try:
-            p = _normalizar(item)
-        except Exception:
-            continue
-
-        # Excluir pedidos B2B — este dashboard es solo para D2C
-        if p.get("es_b2b"):
-            log.debug(f"Excluido B2B: {p.get('orden_tienda')}")
-            continue
-
-        sub = p["sub_estado_logistico"]
-
-        # Incluir todas las órdenes activas D2C
-        # OJO: si falta un estado acá, esos pedidos DESAPARECEN del tablero.
-        # Al separar "en_preparacion" de "en_transito" habrían quedado fuera 96.
-        if sub in ("pendiente_despacho", "en_preparacion", "en_transito",
-                   "novedad", "entregado"):
-            resultado.append(p)
+    resultado = _normalizar_lote(pedidos_raw)
 
     # Traer-y-guardar: heredar del caché anterior los campos ya enriquecidos
     # (cliente, ciudad, producto, guía) para NO volver a consultarlos en

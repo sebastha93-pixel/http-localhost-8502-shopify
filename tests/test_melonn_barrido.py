@@ -158,3 +158,34 @@ def test_un_lease_vencido_no_bloquea(tmp_path, monkeypatch):
     mc._barrido_guardar(e)
 
     assert mc._barrido_tomar_lease(mc._barrido_leer(), "worker-B") is True
+
+
+def test_filtrar_ventana_deja_pasar_lo_reciente(tmp_path, monkeypatch):
+    corte = mc._fecha_corte()
+    items = [_pedido(1, dias_atras=5), _pedido(2, dias_atras=200, code=8)]
+    assert len(mc._filtrar_ventana(items, corte)) == 1
+
+
+def test_filtrar_ventana_conserva_un_abierto_viejo():
+    """Un pedido de hace 200 días que sigue EN TRÁNSITO no se descarta: sigue
+    siendo trabajo pendiente."""
+    corte = mc._fecha_corte()
+    items = [_pedido(1, dias_atras=200, code=7)]   # 7 = en tránsito = abierto
+    assert len(mc._filtrar_ventana(items, corte)) == 1
+
+
+def test_normalizar_lote_descarta_b2b():
+    crudo = _pedido(1)
+    crudo["is_b2b"] = True
+    assert mc._normalizar_lote([crudo]) == []
+
+
+def test_normalizar_lote_descarta_estado_fuera_de_whitelist():
+    assert mc._normalizar_lote([_pedido(1, code=15)]) == []   # 15 = Canceled
+
+
+def test_normalizar_lote_normaliza_lo_valido():
+    out = mc._normalizar_lote([_pedido(1, code=7)])
+    assert len(out) == 1
+    assert out[0]["orden_tienda"] == "T1"
+    assert out[0]["sub_estado_logistico"] == "en_transito"
