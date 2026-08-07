@@ -862,10 +862,14 @@ def _sb_cache_guardar(pedidos: list, fuente: str = "api_live"):
 
 
 def _sb_limpiar():
+    # La fila 3 es el cursor del barrido: se va con las otras dos. Si sobrevive,
+    # sigue diciendo que hubo un barrido completo hace poco y el tick contesta
+    # "al_dia" sobre un tablero recién vaciado.
     try:
         sb = _sb()
         if sb:
-            sb.table(_SB_TABLA).delete().in_("id", [1, _SB_FILA_API]).execute()
+            sb.table(_SB_TABLA).delete().in_(
+                "id", [1, _SB_FILA_API, _SB_FILA_BARRIDO]).execute()
     except Exception as e:
         log.warning(f"Supabase limpiar error: {e}")
 
@@ -998,25 +1002,33 @@ def _edad_fetch_api_sq() -> Optional[float]:
 # esto se lee y escribe en cada tick.
 _SB_FILA_BARRIDO = 3
 
-_BARRIDO_VACIO: dict = {
-    "v": 1,
-    "generacion": 0,
-    "pagina": 0,
-    # Contador del corte por fecha. TIENE que persistir entre tramos: exige DOS
-    # páginas llenas seguidas sin pedidos en ventana, y si un tramo termina justo
-    # entre esas dos y el contador se reinicia, el barrido NO CORTA NUNCA. Eso es
-    # el `tope_paginas` que dejó el tablero pegado el 2026-08-01.
-    "paginas_fuera_ventana": 0,
-    "iniciado_en": None,
-    "vistas": [],           # claves vistas en la generación en curso
-    "ausencias": {},        # clave -> barridos consecutivos sin verla
-    "paginas_barrido_previo": 0,
-    "motivo_ultimo_tramo": "nunca_corrio",
-    "ultimo_tramo_en": None,
-    "ultimo_completo_en": None,
-    "lease_worker": "",
-    "lease_hasta": None,
-}
+def _barrido_vacio() -> dict:
+    """Cursor en blanco. Es una FÁBRICA y no una constante: `vistas` y
+    `ausencias` son mutables, y un dict de módulo compartido se envenenaría para
+    todo el proceso el día que alguien haga un `.append` en vez de reasignar."""
+    return {
+        "v": 1,
+        "generacion": 0,
+        "pagina": 0,
+        # Contador del corte por fecha. TIENE que persistir entre tramos: exige
+        # DOS páginas llenas seguidas sin pedidos en ventana, y si un tramo
+        # termina justo entre esas dos y el contador se reinicia, el barrido NO
+        # CORTA NUNCA. Eso es el `tope_paginas` que dejó el tablero pegado el
+        # 2026-08-01.
+        "paginas_fuera_ventana": 0,
+        # Tamaño de página EFECTIVO, aprendido de la primera respuesta de CADA
+        # generación. Se reinicia al cerrar: ver el comentario en _barrido_tick.
+        "tam_pagina": None,
+        "iniciado_en": None,
+        "vistas": [],           # claves vistas en la generación en curso
+        "ausencias": {},        # clave -> barridos consecutivos sin verla
+        "paginas_barrido_previo": 0,
+        "motivo_ultimo_tramo": "nunca_corrio",
+        "ultimo_tramo_en": None,
+        "ultimo_completo_en": None,
+        "lease_worker": "",
+        "lease_hasta": None,
+    }
 
 # Un tramo de 22 páginas son ~44 s. 90 da margen sin dejar el cursor tomado
 # demasiado tiempo si el worker muere a mitad.
@@ -1027,16 +1039,16 @@ def _barrido_leer() -> dict:
     """Estado del barrido. Supabase manda, SQLite es el respaldo.
 
     Siempre devuelve un dict completo: las claves que falten se rellenan con
-    _BARRIDO_VACIO, para que añadir un campo nuevo no rompa un cursor ya escrito.
+    _barrido_vacio(), para que añadir un campo nuevo no rompa un cursor ya escrito.
     """
     for leer in (_barrido_leer_sb, _barrido_leer_sq):
         try:
             v = leer()
             if v is not None:
-                return {**_BARRIDO_VACIO, **v}
+                return {**_barrido_vacio(), **v}
         except Exception as e:
             log.debug(f"[barrido] no pude leer el cursor ({leer.__name__}): {e}")
-    return dict(_BARRIDO_VACIO)
+    return _barrido_vacio()
 
 
 def _barrido_leer_sb() -> Optional[dict]:
@@ -1457,7 +1469,12 @@ def refrescar_un_pedido(identificador: str) -> dict:
 
 
 def limpiar_cache():
-    """Limpia ambas cachés."""
+    """Limpia ambas cachés Y el cursor del barrido.
+
+    El cursor tiene que irse con ellas: si se queda, sigue diciendo que hubo un
+    barrido completo hace poco y el tick responde "al_dia" hasta dos horas —
+    mirando un tablero que acabamos de dejar vacío.
+    """
     _sb_limpiar()
     try:
         _init_tabla()
@@ -1466,6 +1483,12 @@ def limpiar_cache():
             c.commit()
     except Exception as e:
         log.warning(f"SQLite limpiar error: {e}")
+    try:
+        with _conn() as c:
+            c.execute("DROP TABLE IF EXISTS melonn_barrido")
+            c.commit()
+    except Exception as e:
+        log.warning(f"SQLite limpiar cursor error: {e}")
 
 
 def cache_info() -> Optional[dict]:
@@ -2230,13 +2253,33 @@ def _reconciliar_bajas(vivos: list, vistas: set, ausencias: dict) -> tuple[list,
 # 2 h. Si el listado crece, el tramo crece solo; si la ventana se recorta, baja
 # solo. _TRAMO_DEFECTO es el arranque en frío (~44 páginas hoy).
 _TRAMO_DEFECTO = 22
-_TRAMO_MIN     = 4
+# El piso NO puede ser tan bajo que el barrido no alcance a cerrar antes de que
+# se abandone la generación. Con tick horario y abandono a las 6 h caben 6
+# tramos, así que 44 páginas exigen tramos de al menos 8. Se deja en 10 con
+# margen. Con un piso de 4, un cierre corto (p ≤ 8) fijaba el tramo en 4, el
+# barrido necesitaba 11 ticks, se abandonaba a las 6 h y como
+# `paginas_barrido_previo` solo se reescribe AL CERRAR, el estado se
+# autoalimentaba: reinicio permanente que solo se arregla editando el cursor.
+_TRAMO_MIN     = 10
 _TRAMO_MAX     = 30     # ~60 s de ráfaga, el techo que no queremos pasar
 
 # Un barrido que no cierra en 6 h lleva varios tramos fallando. Seguir acumulando
 # `vistas` de hace horas hace que la reconciliación mida contra una foto vieja, y
 # para entonces el centinela ya está en rojo (FETCH_ROJO_MIN = 360 min).
 _GENERACION_MAX_SEG = 6 * 3600
+
+# Cuándo ARRANCAR una generación nueva, contado desde el último cierre.
+#
+# No es _CACHE_TTL. Si se esperara el TTL completo, la generación arrancaría a
+# las 2 h y cerraría a las 3 (dos tramos más), y durante esa hora
+# `_caduco_vs_melonn()` sería cierto: cada lectura del tablero —incluidas las que
+# hace el propio scheduler justo después del tramo— dispararía
+# `_refresh_background()` y con él un `_fetch_api()` de las 44 páginas seguidas.
+# O sea, exactamente la fragilidad que este trabajo viene a quitar, corriendo
+# igual todos los ciclos y encima gastando el doble de cuota. Arrancando a la
+# mitad del TTL, el cierre cae en el borde de las 2 h y el caché nunca se ve
+# vencido entre cierres.
+_ARRANCAR_GENERACION_SEG = _CACHE_TTL // 2
 
 
 def _tam_tramo(estado: dict) -> int:
@@ -2281,7 +2324,7 @@ def _barrido_tick(worker: str = "") -> dict:
         ultimo = estado.get("ultimo_completo_en")
         if ultimo:
             try:
-                if (ahora - _parse_iso_naive(ultimo)).total_seconds() < _CACHE_TTL:
+                if (ahora - _parse_iso_naive(ultimo)).total_seconds() < _ARRANCAR_GENERACION_SEG:
                     estado["lease_hasta"] = None
                     _barrido_guardar(estado)
                     return {"ok": True, "motivo": "al_dia", "completo": False,
@@ -2289,8 +2332,10 @@ def _barrido_tick(worker: str = "") -> dict:
                             "pagina": 0, "paginas_traidas": 0}
             except Exception:
                 pass      # reloj ilegible → barrer, que es el lado seguro
+        # tam_pagina se re-aprende de la página 0 de cada generación: arrastrarlo
+        # haría que un tope de per_page más bajo cerrara el barrido en la primera.
         estado.update({"pagina": 0, "vistas": [], "paginas_fuera_ventana": 0,
-                       "iniciado_en": ahora.isoformat()})
+                       "tam_pagina": None, "iniciado_en": ahora.isoformat()})
 
     # ── Traer el tramo ────────────────────────────────────────────────────────
     corte      = _fecha_corte()
@@ -2359,9 +2404,39 @@ def _barrido_tick(worker: str = "") -> dict:
     vistas = set(estado.get("vistas") or [])
     vistas.update(_clave_pedido(f) for f in frescos)
     estado["vistas"] = sorted(vistas)
-    estado["pagina"] = p
+
+    # EL CURSOR NUNCA RETROCEDE dentro de una generación.
+    #
+    # Sin el max(), si la página de TRASLAPE es la que falla, el loop rompe con
+    # p = pagina - 1 y el cursor se iría hacia atrás. Esa página ya barrida se
+    # volvería a contar como nueva en el reintento —porque `p >= pagina` pasaría
+    # a ser cierto para ella— y `paginas_fuera_ventana` llegaría a 2 con UNA sola
+    # página fuera de ventana. El barrido cerraría como `fuera_de_ventana`
+    # habiendo leído 2 páginas de 44: reloj de completo sellado sobre un tablero
+    # truncado, y todos los pedidos no vistos sumando una ausencia. En silencio.
+    estado["pagina"] = max(pagina, p)
     estado["motivo_ultimo_tramo"] = motivo
-    estado["ultimo_tramo_en"] = ahora.isoformat()
+    # Solo se sella si de verdad AVANZAMOS. Si se sellara en cada tick, el
+    # hallazgo `barrido_atascado` del centinela no podría dispararse nunca: con
+    # tick horario la edad del tramo jamás pasaría de ~60 min contra un umbral de
+    # 180. La alarma existiría en el código y no en la realidad.
+    if traidas:
+        estado["ultimo_tramo_en"] = ahora.isoformat()
+
+    # Un barrido que no vio NI UN pedido NO es un barrido completo, por más que
+    # Melonn haya devuelto una página vacía o una corta. Antes esto se colaba: el
+    # guard era `if completo and fusionado`, y `fusionado` es caché + frescos, o
+    # sea que era cierto siempre que el caché no estuviera vacío. Bastaba un
+    # `200 {"data": []}` en la página 0 para sellar el reloj de auditabilidad
+    # sobre un barrido que no leyó nada, dejar el tick en "al_dia" dos horas, y
+    # darle una ausencia a TODOS los pedidos del tablero.
+    if completo and not vistas:
+        log.error(f"[barrido] cierre '{motivo}' sin un solo pedido en toda la "
+                  f"generación {estado['generacion']} — NO se cuenta como "
+                  f"completo. El reloj no se sella y el tablero se conserva.")
+        completo = False
+        motivo = f"{motivo}_sin_pedidos"
+        estado["motivo_ultimo_tramo"] = motivo
 
     # ── ¿Cerró el barrido? ────────────────────────────────────────────────────
     if completo:
@@ -2371,6 +2446,11 @@ def _barrido_tick(worker: str = "") -> dict:
             "paginas_barrido_previo": p,
             "generacion": int(estado["generacion"]) + 1,
             "pagina": 0, "vistas": [], "paginas_fuera_ventana": 0,
+            # Se vuelve a aprender en la página 0 de la generación siguiente. Si
+            # se arrastrara y Melonn bajara su tope de per_page, `len(items) <
+            # tam_pagina` se cumpliría en la primera página y el barrido cerraría
+            # con una sola, truncando el tablero sin un error.
+            "tam_pagina": None,
             "iniciado_en": None,
             "ultimo_completo_en": ahora.isoformat(),
         })
@@ -2381,10 +2461,8 @@ def _barrido_tick(worker: str = "") -> dict:
 
     _cache_guardar(fusionado)
 
-    # Solo se sella el reloj del barrido COMPLETO cuando de verdad cerró Y trajo
-    # algo. Si la cuota está agotada, `frescos` viene vacío y NO se sella: así el
-    # próximo tick vuelve a intentar en vez de esperar otras 2 h.
-    if completo and fusionado:
+    # Se sella contra lo que vio LA GENERACIÓN, no contra el tamaño del caché.
+    if completo and vistas:
         _marcar_fetch_api()
 
     estado["lease_hasta"] = None          # soltar el lease
