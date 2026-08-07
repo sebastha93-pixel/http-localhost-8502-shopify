@@ -2087,6 +2087,53 @@ def _normalizar_lote(crudos: list) -> list:
     return salida
 
 
+def _fusionar_tramo(vivos: list, frescos: list) -> tuple[list, int]:
+    """Fusiona los pedidos de UN TRAMO sobre el caché vivo.
+
+    Misma regla que _heredar_enriquecidos: el fresco manda en estado y logística,
+    y los campos enriquecidos solo se pisan si el fresco trae valor. NUNCA quita
+    nada — las bajas solo se deciden al cerrar un barrido completo, porque que un
+    pedido no esté en las páginas de ESTE tramo no significa que no esté en
+    Melonn. Ver _reconciliar_bajas.
+
+    Es idempotente a propósito: por el traslape entre tramos un pedido puede
+    llegar dos veces, y dos workers pueden barrer el mismo tramo si se cruzan los
+    leases.
+
+    Devuelve (lista_fusionada, cuantos_nuevos).
+    """
+    idx = {_clave_pedido(p): i for i, p in enumerate(vivos)}
+    out = list(vivos)
+    nuevos = 0
+    despachos = 0
+
+    for f in frescos:
+        k = _clave_pedido(f)
+        i = idx.get(k)
+        if i is None:
+            out.append(f)
+            idx[k] = len(out) - 1
+            nuevos += 1
+            continue
+
+        prev = out[i]
+        # OJO EL ORDEN, igual que en _heredar_enriquecidos: la transición se
+        # evalúa ANTES de heredar. Heredar primero copiaría la fecha vieja y el
+        # estado anterior dejaría de ser visible — y una fecha de despacho
+        # observada que se pierde NO SE PUEDE RECALCULAR.
+        if _marcar_despacho_observado(f, prev):
+            despachos += 1
+        for c in _CAMPOS_ENRIQUECIDOS:
+            if _campo_vacio(f.get(c)) and not _campo_vacio(prev.get(c)):
+                f[c] = prev[c]
+        out[i] = f
+
+    if despachos:
+        log.info(f"[despacho] {despachos} pedido(s) pasaron a despachado en este "
+                 f"tramo — fecha anotada por observación propia")
+    return out, nuevos
+
+
 def _fetch_api_filtrado() -> list:
     corte       = _fecha_corte()
     pedidos_raw = []

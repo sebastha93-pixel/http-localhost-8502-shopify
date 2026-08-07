@@ -189,3 +189,53 @@ def test_normalizar_lote_normaliza_lo_valido():
     assert len(out) == 1
     assert out[0]["orden_tienda"] == "T1"
     assert out[0]["sub_estado_logistico"] == "en_transito"
+
+
+def test_fusionar_agrega_los_nuevos():
+    vivos = [{"orden_melonn": "M1", "orden_tienda": "T1"}]
+    frescos = [{"orden_melonn": "M2", "orden_tienda": "T2"}]
+    out, nuevos = mc._fusionar_tramo(vivos, frescos)
+    assert len(out) == 2
+    assert nuevos == 1
+
+
+def test_fusionar_conserva_lo_enriquecido():
+    """El listado de Melonn NO trae cliente ni ciudad. Si el fresco los pisa con
+    vacío, se pierde el dato de Shopify y no vuelve hasta el próximo enrich."""
+    vivos = [{"orden_melonn": "M1", "nombre_comprador": "Ana",
+              "ciudad_destino": "Medellin", "guia_real": "GUIA-9"}]
+    frescos = [{"orden_melonn": "M1", "nombre_comprador": "",
+                "ciudad_destino": "", "guia_real": "",
+                "estado_melonn_code": 7}]
+    out, _ = mc._fusionar_tramo(vivos, frescos)
+    assert out[0]["nombre_comprador"] == "Ana"
+    assert out[0]["ciudad_destino"] == "Medellin"
+    assert out[0]["guia_real"] == "GUIA-9"
+    assert out[0]["estado_melonn_code"] == 7      # el fresco SÍ manda en estado
+
+
+def test_fusionar_detecta_el_despacho():
+    vivos = [{"orden_melonn": "M1", "sub_estado_logistico": "pendiente_despacho"}]
+    frescos = [{"orden_melonn": "M1", "sub_estado_logistico": "en_transito"}]
+    out, _ = mc._fusionar_tramo(vivos, frescos)
+    assert out[0]["fecha_despacho_observada"]
+    assert out[0]["fecha_despacho_confiable"] is True
+
+
+def test_fusionar_no_reanota_un_despacho_ya_visto():
+    """Idempotencia: un pedido puede venir en dos tramos por el traslape."""
+    vivos = [{"orden_melonn": "M1", "sub_estado_logistico": "pendiente_despacho"}]
+    frescos = [{"orden_melonn": "M1", "sub_estado_logistico": "en_transito"}]
+    out, _ = mc._fusionar_tramo(vivos, frescos)
+    fecha = out[0]["fecha_despacho_observada"]
+
+    out2, _ = mc._fusionar_tramo(out, [{"orden_melonn": "M1",
+                                        "sub_estado_logistico": "en_transito"}])
+    assert out2[0]["fecha_despacho_observada"] == fecha
+    assert len(out2) == 1
+
+
+def test_fusionar_nunca_quita():
+    vivos = [{"orden_melonn": f"M{i}"} for i in range(10)]
+    out, _ = mc._fusionar_tramo(vivos, [{"orden_melonn": "M3"}])
+    assert len(out) == 10
