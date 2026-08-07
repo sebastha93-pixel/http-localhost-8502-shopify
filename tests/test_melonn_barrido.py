@@ -280,3 +280,120 @@ def test_el_candado_bloquea_una_reconciliacion_que_vacia(tmp_path, monkeypatch):
     assert bajas == 200
     mc._cache_guardar(out)                       # el candado tiene que rechazarlo
     assert len(mc._cache_leer(ignorar_ttl=True)[0]) == 200
+
+
+def test_tam_tramo_parte_el_barrido_anterior_en_dos():
+    assert mc._tam_tramo({"paginas_barrido_previo": 44}) == 22
+    assert mc._tam_tramo({"paginas_barrido_previo": 0}) == mc._TRAMO_DEFECTO
+    assert mc._tam_tramo({"paginas_barrido_previo": 2}) == mc._TRAMO_MIN
+    assert mc._tam_tramo({"paginas_barrido_previo": 500}) == mc._TRAMO_MAX
+
+
+def test_el_tick_avanza_por_tramos_y_cierra(tmp_path, monkeypatch):
+    _aislar_disco(monkeypatch, tmp_path)
+    monkeypatch.setattr(mc, "_TRAMO_DEFECTO", 2)
+    paginas = {
+        0: [_pedido(i) for i in range(100)],
+        1: [_pedido(100 + i) for i in range(100)],
+        2: [_pedido(200 + i) for i in range(100)],
+        3: [_pedido(300 + i) for i in range(10)],     # última
+    }
+    pedidas = _paginas_falsas(monkeypatch, paginas)
+
+    r1 = mc._barrido_tick(worker="w1")
+    assert pedidas == [0, 1]
+    assert r1["completo"] is False
+    assert mc._barrido_leer()["pagina"] == 2
+
+    r2 = mc._barrido_tick(worker="w1")
+    assert r2["completo"] is True
+    assert mc._barrido_leer()["pagina"] == 0          # listo para la siguiente
+    assert mc._barrido_leer()["generacion"] == 1
+    assert len(mc._cache_leer(ignorar_ttl=True)[0]) == 310
+
+
+def test_una_pagina_fallida_NO_pierde_las_anteriores(tmp_path, monkeypatch):
+    """El arreglo. Comparar con test_una_pagina_fallida_pierde_el_barrido_entero."""
+    _aislar_disco(monkeypatch, tmp_path)
+    monkeypatch.setattr(mc, "_TRAMO_DEFECTO", 5)
+    paginas = {i: [_pedido(100 * i + j) for j in range(100)] for i in range(4)}
+    _paginas_falsas(monkeypatch, paginas, fallan={2})
+
+    mc._barrido_tick(worker="w1")
+
+    assert mc._barrido_leer()["pagina"] == 2          # reintenta ESA
+    assert len(mc._cache_leer(ignorar_ttl=True)[0]) == 200   # las 2 primeras, salvadas
+
+
+def test_el_tramo_siguiente_reintenta_la_pagina_que_fallo(tmp_path, monkeypatch):
+    _aislar_disco(monkeypatch, tmp_path)
+    monkeypatch.setattr(mc, "_TRAMO_DEFECTO", 5)
+    paginas = {0: [_pedido(j) for j in range(100)],
+               1: [_pedido(100 + j) for j in range(100)],
+               2: [_pedido(200 + j) for j in range(10)]}
+    fallan = {2}
+    pedidas = _paginas_falsas(monkeypatch, paginas, fallan=fallan)
+
+    mc._barrido_tick(worker="w1")
+    fallan.clear()                                   # Melonn se recupera
+    r2 = mc._barrido_tick(worker="w1")
+
+    assert pedidas[-1] == 2
+    assert r2["completo"] is True
+    assert len(mc._cache_leer(ignorar_ttl=True)[0]) == 210
+
+
+def test_el_contador_fuera_de_ventana_sobrevive_al_borde_del_tramo(tmp_path, monkeypatch):
+    """Si el contador se reiniciara acá, el barrido no cortaría NUNCA y volvería
+    el tope_paginas que dejó el tablero pegado el 2026-08-01."""
+    _aislar_disco(monkeypatch, tmp_path)
+    monkeypatch.setattr(mc, "_TRAMO_DEFECTO", 2)
+    viejo = lambda n: _pedido(n, dias_atras=200, code=8)
+    paginas = {
+        0: [_pedido(i) for i in range(100)],
+        1: [viejo(100 + i) for i in range(100)],      # 1a fuera de ventana
+        2: [viejo(200 + i) for i in range(100)],      # 2a → corta acá
+        3: [viejo(300 + i) for i in range(100)],
+    }
+    pedidas = _paginas_falsas(monkeypatch, paginas)
+
+    mc._barrido_tick(worker="w1")
+    assert mc._barrido_leer()["paginas_fuera_ventana"] == 1
+
+    r2 = mc._barrido_tick(worker="w1")
+    assert r2["completo"] is True
+    assert r2["motivo"] == "fuera_de_ventana"
+    assert 3 not in pedidas
+
+
+def test_el_tick_no_arranca_si_el_barrido_anterior_es_reciente(tmp_path, monkeypatch):
+    from datetime import datetime
+    _aislar_disco(monkeypatch, tmp_path)
+    e = mc._barrido_leer()
+    e["ultimo_completo_en"] = datetime.utcnow().isoformat()
+    mc._barrido_guardar(e)
+    pedidas = _paginas_falsas(monkeypatch, {0: []})
+
+    r = mc._barrido_tick(worker="w1")
+
+    assert r["motivo"] == "al_dia"
+    assert pedidas == []              # ni una petición a Melonn
+
+
+def test_una_generacion_atascada_se_abandona(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+    _aislar_disco(monkeypatch, tmp_path)
+    e = mc._barrido_leer()
+    e.update({"generacion": 5, "pagina": 30, "vistas": ["M1"],
+              "iniciado_en": (datetime.utcnow() - timedelta(hours=7)).isoformat()})
+    mc._barrido_guardar(e)
+    # La página 1 falla a propósito: así el barrido NO cierra en este mismo tick
+    # y se puede ver que la generación subió por el abandono, no por el cierre.
+    _paginas_falsas(monkeypatch, {0: [_pedido(i) for i in range(10)]}, fallan={1})
+
+    mc._barrido_tick(worker="w1")
+
+    nuevo = mc._barrido_leer()
+    assert nuevo["generacion"] == 6
+    assert nuevo["vistas"] != ["M1"]        # la foto vieja se descartó
+    assert nuevo["pagina"] <= 1             # volvió a empezar, no siguió en la 30

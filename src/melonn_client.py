@@ -2197,6 +2197,178 @@ def _reconciliar_bajas(vivos: list, vistas: set, ausencias: dict) -> tuple[list,
     return salida, nuevas, bajas
 
 
+# Páginas por tramo. Se autocalibra: parte el barrido anterior en dos, así el
+# barrido completo cierra en 2 ticks y —con el tick horario del scheduler— cada
+# 2 h. Si el listado crece, el tramo crece solo; si la ventana se recorta, baja
+# solo. _TRAMO_DEFECTO es el arranque en frío (~44 páginas hoy).
+_TRAMO_DEFECTO = 22
+_TRAMO_MIN     = 4
+_TRAMO_MAX     = 30     # ~60 s de ráfaga, el techo que no queremos pasar
+
+# Un barrido que no cierra en 6 h lleva varios tramos fallando. Seguir acumulando
+# `vistas` de hace horas hace que la reconciliación mida contra una foto vieja, y
+# para entonces el centinela ya está en rojo (FETCH_ROJO_MIN = 360 min).
+_GENERACION_MAX_SEG = 6 * 3600
+
+
+def _tam_tramo(estado: dict) -> int:
+    previo = int(estado.get("paginas_barrido_previo") or 0)
+    if previo <= 0:
+        return _TRAMO_DEFECTO
+    return max(_TRAMO_MIN, min(_TRAMO_MAX, -(-previo // 2)))   # ceil(previo/2)
+
+
+def _barrido_tick(worker: str = "") -> dict:
+    """Avanza UN TRAMO del barrido. Es lo que llama el scheduler en cada tick.
+
+    Devuelve {ok, motivo, generacion, pagina, completo, paginas_traidas}.
+    """
+    import os
+    worker = worker or f"{os.getpid()}"
+    estado = _barrido_leer()
+
+    if not _barrido_tomar_lease(estado, worker):
+        log.info(f"[barrido] otro worker tiene el cursor hasta {estado.get('lease_hasta')}")
+        return {"ok": False, "motivo": "lease_ajeno", "completo": False,
+                "generacion": estado["generacion"], "pagina": estado["pagina"],
+                "paginas_traidas": 0}
+
+    ahora = datetime.utcnow()
+    en_curso = bool(estado.get("iniciado_en"))
+
+    # ¿Hay que abandonar una generación atascada?
+    if en_curso:
+        try:
+            edad = (ahora - _parse_iso_naive(estado["iniciado_en"])).total_seconds()
+        except Exception:
+            edad = _GENERACION_MAX_SEG + 1
+        if edad > _GENERACION_MAX_SEG:
+            log.error(f"[barrido] generación {estado['generacion']} lleva "
+                      f"{edad / 3600:.1f} h sin cerrar — se abandona y empieza otra")
+            en_curso = False
+            estado["generacion"] = int(estado["generacion"]) + 1
+
+    # ¿Arrancar una generación nueva?
+    if not en_curso:
+        ultimo = estado.get("ultimo_completo_en")
+        if ultimo:
+            try:
+                if (ahora - _parse_iso_naive(ultimo)).total_seconds() < _CACHE_TTL:
+                    estado["lease_hasta"] = None
+                    _barrido_guardar(estado)
+                    return {"ok": True, "motivo": "al_dia", "completo": False,
+                            "generacion": estado["generacion"],
+                            "pagina": 0, "paginas_traidas": 0}
+            except Exception:
+                pass      # reloj ilegible → barrer, que es el lado seguro
+        estado.update({"pagina": 0, "vistas": [], "paginas_fuera_ventana": 0,
+                       "iniciado_en": ahora.isoformat()})
+
+    # ── Traer el tramo ────────────────────────────────────────────────────────
+    corte      = _fecha_corte()
+    tam        = _tam_tramo(estado)
+    pagina     = int(estado["pagina"])
+    # Traslape: se re-lee la última página ya barrida. Paginar por offset sobre
+    # una lista que se mueve puede SALTARSE un pedido —si se borran ítems por
+    # encima, todo sube de índice y un pedido pasa del rango no barrido al ya
+    # barrido, y desaparece sin dejar rastro. Una página (100 pedidos) cubre
+    # cualquier corrimiento realista en una hora. Cuesta 1 petición por tramo.
+    inicio     = max(0, pagina - 1) if pagina > 0 else 0
+    solo_fusion = pagina - inicio          # 1 si hay traslape, 0 si no
+
+    crudos: list = []
+    motivo = "tramo_ok"
+    completo = False
+    traidas = 0
+    tam_pagina = estado.get("tam_pagina")
+
+    p = inicio
+    while p < min(inicio + tam + solo_fusion, _MAX_PAGES):
+        resp = _get("sell-orders", params={"per_page": _PAGE_SIZE, "page": p})
+        if resp is None:
+            causa = (ultimo_fallo_get().get("motivo") or "sin_causa_registrada")
+            motivo = f"fallo_get_pagina_{p}:{causa}"
+            break
+        items = resp.get("data") or []
+        if not items:
+            motivo, completo = "sin_mas_datos", True
+            break
+        if tam_pagina is None:
+            tam_pagina = len(items)
+            estado["tam_pagina"] = tam_pagina
+
+        en_ventana = _filtrar_ventana(items, corte)
+        crudos.extend(en_ventana)
+        traidas += 1
+
+        # La página de traslape ya se contó en su tramo: no toca el contador ni
+        # el cursor. Solo se re-lee para fusionar lo que haya cambiado.
+        if p >= pagina:
+            if len(items) >= tam_pagina and not en_ventana:
+                estado["paginas_fuera_ventana"] = int(estado["paginas_fuera_ventana"]) + 1
+                if estado["paginas_fuera_ventana"] >= 2:
+                    motivo, completo = "fuera_de_ventana", True
+                    p += 1
+                    break
+            else:
+                estado["paginas_fuera_ventana"] = 0
+
+            if len(items) < tam_pagina:
+                motivo, completo = "ultima_pagina", True
+                p += 1
+                break
+        p += 1
+
+    if not completo and motivo == "tramo_ok" and p >= _MAX_PAGES:
+        motivo = "tope_paginas"
+
+    # ── Fusionar ──────────────────────────────────────────────────────────────
+    frescos = _normalizar_lote(crudos)
+    hit     = _cache_leer(ignorar_ttl=True)
+    vivos   = (hit[0] if hit else []) or []
+    fusionado, nuevos = _fusionar_tramo(vivos, frescos)
+
+    vistas = set(estado.get("vistas") or [])
+    vistas.update(_clave_pedido(f) for f in frescos)
+    estado["vistas"] = sorted(vistas)
+    estado["pagina"] = p
+    estado["motivo_ultimo_tramo"] = motivo
+    estado["ultimo_tramo_en"] = ahora.isoformat()
+
+    # ── ¿Cerró el barrido? ────────────────────────────────────────────────────
+    if completo:
+        fusionado, estado["ausencias"], bajas = _reconciliar_bajas(
+            fusionado, vistas, estado.get("ausencias") or {})
+        estado.update({
+            "paginas_barrido_previo": p,
+            "generacion": int(estado["generacion"]) + 1,
+            "pagina": 0, "vistas": [], "paginas_fuera_ventana": 0,
+            "iniciado_en": None,
+            "ultimo_completo_en": ahora.isoformat(),
+        })
+        log.info(f"[barrido] COMPLETO · {p} páginas · {len(fusionado)} pedidos "
+                 f"· {nuevos} nuevos · {bajas} bajas · fin={motivo}")
+    else:
+        log.info(f"[barrido] tramo {inicio}-{p - 1} · {nuevos} nuevos · fin={motivo}")
+
+    _cache_guardar(fusionado)
+
+    # Solo se sella el reloj del barrido COMPLETO cuando de verdad cerró Y trajo
+    # algo. Si la cuota está agotada, `frescos` viene vacío y NO se sella: así el
+    # próximo tick vuelve a intentar en vez de esperar otras 2 h.
+    if completo and fusionado:
+        _marcar_fetch_api()
+
+    estado["lease_hasta"] = None          # soltar el lease
+    _barrido_guardar(estado)
+
+    return {"ok": motivo in ("tramo_ok", "ultima_pagina", "sin_mas_datos",
+                             "fuera_de_ventana"),
+            "motivo": motivo, "completo": completo,
+            "generacion": estado["generacion"], "pagina": estado["pagina"],
+            "paginas_traidas": traidas}
+
+
 def _fetch_api_filtrado() -> list:
     corte       = _fecha_corte()
     pedidos_raw = []
