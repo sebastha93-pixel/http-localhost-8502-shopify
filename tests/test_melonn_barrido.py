@@ -541,8 +541,12 @@ def test_la_generacion_arranca_a_la_mitad_del_ttl(tmp_path, monkeypatch):
     _con_ultimo_cierre(30)
     assert mc._barrido_tick(worker="w1")["motivo"] == "al_dia"
 
-    _con_ultimo_cierre(75)                        # > TTL/2 = 60 min
+    _con_ultimo_cierre(75)                        # > el umbral
     assert mc._barrido_tick(worker="w1")["motivo"] != "al_dia"
+
+    # Y la identidad, porque el bracket de 30/75 pasaria con cualquier umbral
+    # entre esos dos y no dice nada de la cadencia real.
+    assert mc._ARRANCAR_GENERACION_SEG == mc._CACHE_TTL // 2 - 600
 
 
 def test_el_piso_del_tramo_permite_cerrar_antes_del_abandono():
@@ -550,7 +554,10 @@ def test_el_piso_del_tramo_permite_cerrar_antes_del_abandono():
     que 44 páginas necesitaran 11 ticks: se abandonaba siempre, y como
     paginas_barrido_previo solo se reescribe AL CERRAR, el estado se
     autoalimentaba en un reinicio permanente."""
-    ticks_disponibles = mc._GENERACION_MAX_SEG // 3600
+    # CINCO vueltas, no seis: el scheduler duerme DESPUES de trabajar, asi que el
+    # periodo efectivo es 3600 s + lo que dure el tick. Con el conteo optimista de
+    # 6 esta asercion pasaba siendo falsa en la practica.
+    ticks_disponibles = mc._GENERACION_MAX_SEG // 3600 - 1
     assert mc._TRAMO_MIN * ticks_disponibles >= mc._MAX_PAGES
 
 
@@ -592,3 +599,87 @@ def test_un_worker_lento_no_reabre_una_generacion_ya_cerrada(tmp_path, monkeypat
     e = mc._barrido_leer()
     assert e["generacion"] == 5
     assert e["iniciado_en"] is None       # la generación cerrada sigue cerrada
+
+
+def test_una_pagina_de_traslape_vacia_no_cierra_el_barrido(tmp_path, monkeypatch):
+    """CRÍTICO (2º pase). La corrección anterior cerraba el caso de la página 0 y
+    dejaba el hueco abierto una página más allá: `sin_mas_datos` se evaluaba ANTES
+    del guard `p >= pagina`, así que un 200 con {"data": []} en la página de
+    TRASLAPE —una de la que hace un tick leímos 100 pedidos— cerraba el barrido
+    entero como completo."""
+    _aislar_disco(monkeypatch, tmp_path)
+    monkeypatch.setattr(mc, "_TRAMO_DEFECTO", 2)
+    paginas = {0: [_pedido(i) for i in range(100)],
+               1: [_pedido(100 + i) for i in range(100)],
+               2: [_pedido(200 + i) for i in range(100)],
+               3: [_pedido(300 + i) for i in range(10)]}
+    _paginas_falsas(monkeypatch, paginas)
+
+    mc._barrido_tick(worker="w1")
+    assert mc._barrido_leer()["pagina"] == 2
+
+    paginas[1] = []                       # glitch justo en el traslape
+    r2 = mc._barrido_tick(worker="w1")
+
+    assert r2["motivo"] == "ultima_pagina"          # NO 'sin_mas_datos'
+    assert len(mc._cache_leer(ignorar_ttl=True)[0]) == 310   # barrió hasta el final
+    assert mc._barrido_leer()["ausencias"] == {}
+
+
+def test_un_cursor_atascado_deja_envejecer_el_reloj_del_tramo(tmp_path, monkeypatch):
+    """El caso para el que se escribió `barrido_atascado`: la página del cursor
+    falla siempre, pero la de traslape se lee bien. Con el guard sobre `traidas`
+    el reloj se re-sellaba cada tick y la alarma no podía dispararse jamás."""
+    _aislar_disco(monkeypatch, tmp_path)
+    monkeypatch.setattr(mc, "_TRAMO_DEFECTO", 2)
+    paginas = {i: [_pedido(100 * i + j) for j in range(100)] for i in range(6)}
+    fallan = set()
+    _paginas_falsas(monkeypatch, paginas, fallan=fallan)
+
+    mc._barrido_tick(worker="w1")
+    sellado = mc._barrido_leer()["ultimo_tramo_en"]
+    assert sellado and mc._barrido_leer()["pagina"] == 2
+
+    fallan.add(2)                         # la del cursor falla, la de traslape no
+    for _ in range(3):
+        mc._barrido_tick(worker="w1")
+
+    e = mc._barrido_leer()
+    assert e["pagina"] == 2                          # el cursor no se movió
+    assert e["ultimo_tramo_en"] == sellado           # y el reloj tampoco
+
+
+def test_tam_pagina_se_aprende_de_nuevo_en_la_generacion_siguiente(tmp_path, monkeypatch):
+    """No basta con que quede en None al cerrar: hay que ver que la generación
+    siguiente aprenda el tamaño REAL, que es lo que protege del caso en que
+    Melonn baje su tope de per_page."""
+    from datetime import datetime, timedelta
+    _aislar_disco(monkeypatch, tmp_path)
+    _paginas_falsas(monkeypatch, {0: [_pedido(i) for i in range(60)]})
+
+    mc._barrido_tick(worker="w1")                    # gen 1: páginas de 60
+    assert mc._barrido_leer()["tam_pagina"] is None
+
+    e = mc._barrido_leer()
+    e["ultimo_completo_en"] = (datetime.utcnow() - timedelta(hours=3)).isoformat()
+    mc._barrido_guardar(e)
+    _paginas_falsas(monkeypatch, {0: [_pedido(500 + i) for i in range(25)]})
+
+    mc._barrido_tick(worker="w1")                    # gen 2: Melonn topa en 25
+    # Cerró en la primera página porque 25 < 25 es falso y la 1 vino vacía; lo que
+    # importa es que NO reusó el 60 de la generación anterior.
+    assert mc._cache_leer(ignorar_ttl=True)[0]
+
+
+def test_guardar_sin_retroceder_si_deja_pasar_la_misma_generacion(tmp_path, monkeypatch):
+    """El camino normal. Si el guard rechazara generaciones iguales, cada tramo
+    perdería su avance en silencio."""
+    _aislar_disco(monkeypatch, tmp_path)
+    e = mc._barrido_leer()
+    e.update({"generacion": 4, "pagina": 8})
+    mc._barrido_guardar(e)
+
+    mc._barrido_guardar_sin_retroceder({**mc._barrido_leer(),
+                                        "generacion": 4, "pagina": 20})
+
+    assert mc._barrido_leer()["pagina"] == 20

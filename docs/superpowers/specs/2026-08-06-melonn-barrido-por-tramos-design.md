@@ -482,3 +482,35 @@ mayor.
 - Hueco conocido: una truncación de entre el 0 % y el 25 % del tablero, repetida
   en dos cierres seguidos, pasa la regla de dos ausencias, el candado del 40 % y
   el `caida_de_volumen` del 25 % sin que nada avise.
+
+### 8.10 Segundo pase: lo que la re-revisión encontró en las correcciones
+
+Las correcciones de §8 se revisaron aparte. Dos no cerraban lo que decían:
+
+- **§8.2 cerraba el caso de prueba y dejaba el hueco una página más allá.** El
+  corte por página vacía se evaluaba ANTES del guard `p >= pagina`, así que un
+  `200 {"data": []}` en la página de **traslape** —una de la que hacía un tick
+  habíamos leído 100 pedidos— cerraba el barrido entero como completo. Medido:
+  cierre "completo" tras confirmar 100 de 310 pedidos, 110 con ausencia, y al
+  ciclo siguiente un encogimiento del 65 % que el candado del 40 % **deja pasar**.
+  Ahora una página vacía solo cierra si es una página nueva.
+- **§8.4 no resucitaba la alarma.** El guard era `if traidas:`, y `traidas` cuenta
+  también la página de traslape. Con la página del cursor fallando siempre, cada
+  tick leía el traslape con éxito y re-sellaba el reloj: `barrido_atascado` seguía
+  sin poder dispararse, justo en el caso para el que se escribió. Ahora el guard
+  es `p > pagina` — avanzó el cursor, no "trajimos páginas".
+
+Y una aserción de prueba era **falsa**: el presupuesto de tramos antes del
+abandono son 5 vueltas, no 6, porque el scheduler duerme DESPUÉS de trabajar. Con
+6 la aserción pasaba siendo mentira; con 5, `_TRAMO_MIN` tiene que ser 12.
+
+Menores del segundo pase: el retorno `al_dia` también usa
+`_barrido_guardar_sin_retroceder`; `_ARRANCAR_GENERACION_SEG` lleva 10 min de
+margen para que una desviación de reloj entre réplicas no devuelva una al ciclo
+de 3 h.
+
+**Sigue abierto** (conocido, no corregido): un tablero cuyos pedidos estén todos
+fuera de la ventana de 90 días nunca cierra un barrido — `fuera_de_ventana` con
+`vistas` vacío da `_sin_pedidos` en cada tick hasta el abandono de las 6 h, y
+vuelve a empezar. Es estrictamente más seguro que la baja masiva anterior y el
+centinela lo marca en rojo por `fetch_viejo`, pero es un atasco, no un cierre.

@@ -2284,13 +2284,18 @@ def _reconciliar_bajas(vivos: list, vistas: set, ausencias: dict) -> tuple[list,
 # solo. _TRAMO_DEFECTO es el arranque en frío (~44 páginas hoy).
 _TRAMO_DEFECTO = 22
 # El piso NO puede ser tan bajo que el barrido no alcance a cerrar antes de que
-# se abandone la generación. Con tick horario y abandono a las 6 h caben 6
-# tramos, así que 44 páginas exigen tramos de al menos 8. Se deja en 10 con
-# margen. Con un piso de 4, un cierre corto (p ≤ 8) fijaba el tramo en 4, el
-# barrido necesitaba 11 ticks, se abandonaba a las 6 h y como
-# `paginas_barrido_previo` solo se reescribe AL CERRAR, el estado se
-# autoalimentaba: reinicio permanente que solo se arregla editando el cursor.
-_TRAMO_MIN     = 10
+# se abandone la generación.
+#
+# El presupuesto real son CINCO tramos, no seis: el scheduler duerme DESPUÉS de
+# trabajar (`_stop_event.wait` al final del loop), así que el período efectivo es
+# 3600 s + lo que dure el tick, y en 6 h caben 5 vueltas completas. Con
+# _MAX_PAGES = 60, el piso tiene que ser 12.
+#
+# Con el piso en 4, un cierre corto (p ≤ 8) fijaba el tramo en 4, el barrido
+# necesitaba 11 ticks, se abandonaba a las 6 h, y como `paginas_barrido_previo`
+# solo se reescribe AL CERRAR, el estado se autoalimentaba: reinicio permanente
+# que solo se arreglaba editando el cursor a mano.
+_TRAMO_MIN     = 12
 _TRAMO_MAX     = 30     # ~60 s de ráfaga, el techo que no queremos pasar
 
 # Un barrido que no cierra en 6 h lleva varios tramos fallando. Seguir acumulando
@@ -2309,7 +2314,13 @@ _GENERACION_MAX_SEG = 6 * 3600
 # igual todos los ciclos y encima gastando el doble de cuota. Arrancando a la
 # mitad del TTL, el cierre cae en el borde de las 2 h y el caché nunca se ve
 # vencido entre cierres.
-_ARRANCAR_GENERACION_SEG = _CACHE_TTL // 2
+#
+# Los 10 min de margen NO son decorativos. Sin ellos el colchón es lo que dure el
+# tick anterior (~1 min), y cada réplica de Railway corre su propio scheduler
+# contra un `ultimo_completo_en` compartido: un salto de reloj o una desviación
+# entre réplicas mayor que eso hace que un tick conteste `al_dia`, y esa réplica
+# vuelve al ciclo de 3 h con su hueco de una hora entero.
+_ARRANCAR_GENERACION_SEG = _CACHE_TTL // 2 - 600
 
 
 def _tam_tramo(estado: dict) -> int:
@@ -2356,7 +2367,7 @@ def _barrido_tick(worker: str = "") -> dict:
             try:
                 if (ahora - _parse_iso_naive(ultimo)).total_seconds() < _ARRANCAR_GENERACION_SEG:
                     estado["lease_hasta"] = None
-                    _barrido_guardar(estado)
+                    _barrido_guardar_sin_retroceder(estado)
                     return {"ok": True, "motivo": "al_dia", "completo": False,
                             "generacion": estado["generacion"],
                             "pagina": 0, "paginas_traidas": 0}
@@ -2394,8 +2405,19 @@ def _barrido_tick(worker: str = "") -> dict:
             break
         items = resp.get("data") or []
         if not items:
-            motivo, completo = "sin_mas_datos", True
-            break
+            # Una página vacía significa "se acabó el listado" — pero SOLO si es
+            # una página nueva. En la de TRASLAPE es un glitch: hace un tick
+            # leímos 100 pedidos de ahí. Cerrar el barrido por eso es la misma
+            # trampa que el guard que miraba el caché en vez del barrido: cierre
+            # "completo" sobre un tablero a medio leer, reloj de auditabilidad
+            # sellado, y una ausencia repartida a todo lo que no se alcanzó a ver.
+            if p >= pagina:
+                motivo, completo = "sin_mas_datos", True
+                break
+            log.warning(f"[barrido] la página de traslape {p} vino vacía y hace "
+                        f"un tick tenía datos — lo trato como glitch y sigo")
+            p += 1
+            continue
         if tam_pagina is None:
             tam_pagina = len(items)
             estado["tam_pagina"] = tam_pagina
@@ -2446,11 +2468,15 @@ def _barrido_tick(worker: str = "") -> dict:
     # truncado, y todos los pedidos no vistos sumando una ausencia. En silencio.
     estado["pagina"] = max(pagina, p)
     estado["motivo_ultimo_tramo"] = motivo
-    # Solo se sella si de verdad AVANZAMOS. Si se sellara en cada tick, el
-    # hallazgo `barrido_atascado` del centinela no podría dispararse nunca: con
-    # tick horario la edad del tramo jamás pasaría de ~60 min contra un umbral de
-    # 180. La alarma existiría en el código y no en la realidad.
-    if traidas:
+    # Solo se sella si el CURSOR avanzó — no si simplemente trajimos páginas.
+    #
+    # `traidas` no sirve: cuenta también la página de traslape. Con la página del
+    # cursor fallando siempre (un 500 persistente, una página que Melonn no
+    # digiere), cada tick lee el traslape con éxito, `traidas` vale 1, el reloj se
+    # re-sella y `barrido_atascado` no se dispara jamás — que es exactamente el
+    # caso para el que se escribió la alarma. Con tick horario la edad del tramo
+    # nunca pasaría de ~60 min contra un umbral de 180.
+    if p > pagina:
         estado["ultimo_tramo_en"] = ahora.isoformat()
 
     # Un barrido que no vio NI UN pedido NO es un barrido completo, por más que
@@ -3232,8 +3258,8 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False,
     # modo="tramo": el scheduler. Avanza UN tramo del barrido y devuelve el caché.
     #
     # No pasa por el guard de _MIN_REFRESH_SECS a propósito: la cadencia la fija
-    # el cursor (_barrido_tick no arranca una generación nueva si el último
-    # barrido completo tiene menos de _CACHE_TTL). Ese guard de 60 s era lo único
+    # el cursor (_barrido_tick no arranca una generación nueva antes de
+    # _ARRANCAR_GENERACION_SEG desde el último cierre). Ese guard de 60 s era lo único
     # que frenaba el camino de forzar_refresh, y con tick horario NUNCA frenaba
     # nada: se barría entero cada hora, ~1.056 peticiones/día contra las ~516 que
     # se creían. Con el cursor son ~540.
