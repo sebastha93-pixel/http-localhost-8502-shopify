@@ -568,3 +568,27 @@ def test_limpiar_cache_borra_tambien_el_cursor(tmp_path, monkeypatch):
 
     assert mc._barrido_leer()["ultimo_completo_en"] is None
     assert mc._barrido_leer()["generacion"] == 0
+
+
+def test_un_worker_lento_no_reabre_una_generacion_ya_cerrada(tmp_path, monkeypatch):
+    """El lease es leer-y-escribir, no un CAS atómico, así que dos réplicas pueden
+    barrer a la vez. La fusión es idempotente, pero el guardado del cursor era una
+    sobrescritura completa: el worker lento reponía `iniciado_en` y devolvía la
+    generación hacia atrás, reabriendo un barrido ya cerrado."""
+    from datetime import datetime
+    _aislar_disco(monkeypatch, tmp_path)
+
+    # El rápido ya cerró la generación 5.
+    rapido = mc._barrido_leer()
+    rapido.update({"generacion": 5, "iniciado_en": None, "pagina": 0,
+                   "ultimo_completo_en": datetime.utcnow().isoformat()})
+    mc._barrido_guardar(rapido)
+
+    # El lento venía con la generación 4 a medio barrer.
+    lento = {**mc._barrido_leer(), "generacion": 4, "pagina": 12,
+             "iniciado_en": datetime.utcnow().isoformat()}
+    mc._barrido_guardar_sin_retroceder(lento)
+
+    e = mc._barrido_leer()
+    assert e["generacion"] == 5
+    assert e["iniciado_en"] is None       # la generación cerrada sigue cerrada

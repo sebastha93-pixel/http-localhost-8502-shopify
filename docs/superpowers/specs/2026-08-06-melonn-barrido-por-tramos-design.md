@@ -385,3 +385,100 @@ desplegado:
   el centinela. Afecta inventario, no logística.
 - El 89 % de fechas de despacho estimadas sobre el histórico (medido en
   `f49b84a`). Es un problema de backfill, no del barrido.
+
+---
+
+## 8. Correcciones tras la revisión de rama (2026-08-07)
+
+La revisión final encontró siete defectos con escenarios reproducidos. Lo que
+sigue corrige este diseño donde estaba mal; el código implementado es lo
+corregido, no lo de arriba.
+
+### 8.1 El cursor tiene que ser monótono (§3.2 estaba incompleto)
+
+El ciclo del tick decía "página FALLA → NO avanzar el cursor". No basta: si la
+que falla es la página de **traslape**, el loop rompe en `pagina - 1` y el cursor
+**retrocede**. Esa página ya barrida se vuelve a contar como nueva, y con una
+sola página fuera de ventana `paginas_fuera_ventana` llega a 2 y el barrido
+cierra como completo habiendo leído casi nada.
+
+Medido en la revisión: cierre "completo" tras leer 2 páginas de 6, con 350 de 450
+pedidos sumando una ausencia y **cero hallazgos del centinela**.
+
+`estado["pagina"] = max(pagina, p)`.
+
+### 8.2 Un barrido que no vio nada no es un barrido completo (§3.2)
+
+El diseño decía "sellar solo si trajimos algo", pero la condición natural
+—`if completo and fusionado`— mira el **caché fusionado**, que es caché + frescos:
+es cierta siempre que el caché no esté vacío. Un `200 {"data": []}` en la página 0
+sellaba el reloj de auditabilidad sobre cero pedidos leídos.
+
+El guard correcto es el conjunto `vistas` de la generación. Y si un cierre no vio
+ni un pedido, **no es un cierre**: `completo = False`, motivo `..._sin_pedidos`.
+
+### 8.3 La generación arranca a la MITAD del TTL, no al TTL (§2, cadencia)
+
+Esperando el TTL completo, la generación arrancaba a las 2 h y cerraba a las 3.
+Durante esa hora `_caduco_vs_melonn()` era cierto, así que cada lectura del
+tablero —incluidas las que hace el propio scheduler justo después del tramo—
+disparaba `_refresh_background()` y con él un `_fetch_api()` de las 44 páginas
+seguidas.
+
+O sea: **la fragilidad que este trabajo viene a quitar seguía corriendo todos los
+ciclos**, y encima el gasto real rondaba las ~700 peticiones/día, no las ~540.
+
+`_ARRANCAR_GENERACION_SEG = _CACHE_TTL // 2`, para que el cierre caiga en el borde
+de las 2 h y el caché nunca se vea vencido entre cierres.
+
+### 8.4 `barrido_atascado` no podía dispararse nunca (§3.8)
+
+`ultimo_tramo_en` se sellaba en cada tick, incluso en uno que no trajo ni una
+página. Con tick horario la edad del tramo jamás pasaba de ~60 min contra un
+umbral de 180: la alarma existía en el código y no en la realidad — y el caso que
+el diseño escribió para ella era exactamente el que se perdía.
+
+Solo se sella si `traidas > 0`.
+
+### 8.5 El piso del tramo tiene que caber en la ventana de abandono (§3.3)
+
+Con `_TRAMO_MIN = 4`, un cierre corto fijaba el tramo en 4 páginas; 44 páginas
+exigían 11 ticks y la generación se abandonaba a las 6 h. Como
+`paginas_barrido_previo` solo se reescribe **al cerrar**, el estado se
+autoalimentaba: reinicio permanente que solo se arregla editando el cursor a mano.
+
+`_TRAMO_MIN = 10`, atado a `_GENERACION_MAX_SEG` por una aserción en las pruebas.
+
+### 8.6 `tam_pagina` se re-aprende en cada generación (§3.1)
+
+Arrastrarlo es peligroso: si Melonn bajara su tope de `per_page`, la primera
+página de la generación cumpliría `len(items) < tam_pagina` y cerraría el barrido
+con una sola, truncando el tablero sin un error.
+
+### 8.7 El lease: la idempotencia cubría solo la mitad (§3.1)
+
+Se aceptó el lease no atómico argumentando que un tramo barrido dos veces es
+benigno porque **la fusión** es idempotente. Lo es. Pero el guardado final del
+cursor era una sobrescritura del estado entero: un worker lento podía reponer
+`iniciado_en` y devolver `generacion` y `ultimo_completo_en` hacia atrás,
+reabriendo una generación ya cerrada.
+
+`_barrido_guardar_sin_retroceder` se niega a pisar un cursor cuya generación es
+mayor.
+
+### 8.8 Menores corregidos
+
+- `limpiar_cache` / `_sb_limpiar` borran también el cursor. Si sobrevivía, el tick
+  contestaba `al_dia` hasta dos horas sobre un tablero recién vaciado.
+- `_BARRIDO_VACIO` pasa a ser la fábrica `_barrido_vacio()`: tenía `vistas` y
+  `ausencias` mutables compartidos por todo el proceso.
+
+### 8.9 Lo que queda abierto
+
+- El gasto y la cadencia reales **no están medidos en producción**. El paso 3 de
+  la verificación (§6) es el que lo confirma, y es el que más importa: si
+  `minutos_desde_fetch` se resetea en cada tramo en vez de en cada cierre, el
+  centinela estaría dando verde sobre un tablero a medio barrer.
+- Hueco conocido: una truncación de entre el 0 % y el 25 % del tablero, repetida
+  en dos cierres seguidos, pasa la regla de dos ausencias, el candado del 40 % y
+  el `caida_de_volumen` del 25 % sin que nada avise.

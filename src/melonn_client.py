@@ -1101,6 +1101,36 @@ def _barrido_guardar(estado: dict) -> None:
         log.debug(f"[barrido] SQLite cursor: {e}")
 
 
+def _barrido_guardar_sin_retroceder(estado: dict) -> None:
+    """Guarda el cursor, pero nunca deja que la generación vuelva atrás.
+
+    POR QUÉ. El lease es leer-y-escribir, no un compare-and-set atómico, así que
+    dos réplicas de Railway pueden barrer el mismo tramo. Eso se aceptó porque la
+    FUSIÓN es idempotente — y lo es: `_fusionar_tramo` reconstruye su índice en
+    cada llamada, `_marcar_despacho_observado` no re-anota una fecha ya puesta y
+    nada se quita nunca; `_reconciliar_bajas` también da el mismo resultado dos
+    veces.
+
+    Lo que NO era idempotente es este guardado. Es una sobrescritura del estado
+    entero: un worker lento que empezó antes de un cierre podía escribir encima su
+    estado en vuelo, reponiendo `iniciado_en` y devolviendo `generacion` y
+    `ultimo_completo_en` hacia atrás. Es decir, reabrir una generación ya cerrada
+    y volver a barrer lo mismo, indefinidamente. El argumento de "la fusión es
+    idempotente" cubría la mitad del problema.
+    """
+    try:
+        actual = _barrido_leer()
+        if int(actual.get("generacion") or 0) > int(estado.get("generacion") or 0):
+            log.warning(
+                f"[barrido] otro worker ya cerró la generación "
+                f"{actual['generacion']} (yo traía {estado.get('generacion')}) — "
+                f"no piso su cursor")
+            return
+    except Exception as e:
+        log.debug(f"[barrido] no pude comparar generaciones antes de guardar: {e}")
+    _barrido_guardar(estado)
+
+
 def _barrido_tomar_lease(estado: dict, worker: str) -> bool:
     """True si este worker puede avanzar el cursor. Muta `estado` con el lease.
 
@@ -2466,7 +2496,7 @@ def _barrido_tick(worker: str = "") -> dict:
         _marcar_fetch_api()
 
     estado["lease_hasta"] = None          # soltar el lease
-    _barrido_guardar(estado)
+    _barrido_guardar_sin_retroceder(estado)
 
     return {"ok": motivo in ("tramo_ok", "ultima_pagina", "sin_mas_datos",
                              "fuera_de_ventana"),
