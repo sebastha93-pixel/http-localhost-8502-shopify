@@ -136,7 +136,10 @@ def _refresh_once(full: bool = False) -> dict:
 
         # 1) Fresh fetch desde Melonn API (siempre — barato)
         log.info(f"Scheduler [{last_run['type']}]: refresh Melonn...")
-        mc.obtener_pedidos_activos(forzar_refresh=True)
+        # modo="tramo": avanza un tramo del barrido en vez de barrer las ~44
+        # páginas de un tirón. Un fallo de página cuesta esa página, no el
+        # barrido. El botón "Sincronizar datos" sigue usando el barrido completo.
+        mc.obtener_pedidos_activos(forzar_refresh=True, modo="tramo")
 
         if not full:
             # Persistir datos del cliente en overrides para que SOBREVIVAN

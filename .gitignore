@@ -23,3 +23,6 @@ data/marca/*.jpg
 data/marca/*.pdf
 data/marca/*.jpg
 .gstack/
+
+# Entorno virtual local
+.venv/

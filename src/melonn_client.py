@@ -859,10 +859,14 @@ def _sb_cache_guardar(pedidos: list, fuente: str = "api_live"):
 
 
 def _sb_limpiar():
+    # La fila 3 es el cursor del barrido: se va con las otras dos. Si sobrevive,
+    # sigue diciendo que hubo un barrido completo hace poco y el tick contesta
+    # "al_dia" sobre un tablero recién vaciado.
     try:
         sb = _sb()
         if sb:
-            sb.table(_SB_TABLA).delete().in_("id", [1, _SB_FILA_API]).execute()
+            sb.table(_SB_TABLA).delete().in_(
+                "id", [1, _SB_FILA_API, _SB_FILA_BARRIDO]).execute()
     except Exception as e:
         log.warning(f"Supabase limpiar error: {e}")
 
@@ -983,6 +987,173 @@ def _edad_fetch_api_sq() -> Optional[float]:
     return (datetime.utcnow() - _parse_iso_naive(row["fetched_at"])).total_seconds()
 
 
+# ── Barrido por tramos: el cursor ─────────────────────────────────────────────
+#
+# POR QUÉ EXISTE: el barrido son ~44 páginas seguidas (~88 s, porque el limitador
+# deja 2 s entre GETs). Si UNA falla, `_fetch_api_filtrado` marca el fetch
+# incompleto y descarta todo lo traído. Descartarlo es correcto —mejor un tablero
+# viejo que uno mutilado— pero depender de 44 peticiones seguidas sin un fallo no
+# se puede garantizar. Con cursor, un fallo cuesta esa página.
+#
+# Fila propia (id=3) y no un campo del caché: el blob de pedidos son ~6,5 MB y
+# esto se lee y escribe en cada tick.
+_SB_FILA_BARRIDO = 3
+
+def _barrido_vacio() -> dict:
+    """Cursor en blanco. Es una FÁBRICA y no una constante: `vistas` y
+    `ausencias` son mutables, y un dict de módulo compartido se envenenaría para
+    todo el proceso el día que alguien haga un `.append` en vez de reasignar."""
+    return {
+        "v": 1,
+        "generacion": 0,
+        "pagina": 0,
+        # Contador del corte por fecha. TIENE que persistir entre tramos: exige
+        # DOS páginas llenas seguidas sin pedidos en ventana, y si un tramo
+        # termina justo entre esas dos y el contador se reinicia, el barrido NO
+        # CORTA NUNCA. Eso es el `tope_paginas` que dejó el tablero pegado el
+        # 2026-08-01.
+        "paginas_fuera_ventana": 0,
+        # Tamaño de página EFECTIVO, aprendido de la primera respuesta de CADA
+        # generación. Se reinicia al cerrar: ver el comentario en _barrido_tick.
+        "tam_pagina": None,
+        "iniciado_en": None,
+        "vistas": [],           # claves vistas en la generación en curso
+        "ausencias": {},        # clave -> barridos consecutivos sin verla
+        "paginas_barrido_previo": 0,
+        "motivo_ultimo_tramo": "nunca_corrio",
+        "ultimo_tramo_en": None,
+        "ultimo_completo_en": None,
+        "lease_worker": "",
+        "lease_hasta": None,
+    }
+
+# Un tramo de 22 páginas son ~44 s. 90 da margen sin dejar el cursor tomado
+# demasiado tiempo si el worker muere a mitad.
+_LEASE_SEG = 90
+
+
+def _barrido_leer() -> dict:
+    """Estado del barrido. Supabase manda, SQLite es el respaldo.
+
+    Siempre devuelve un dict completo: las claves que falten se rellenan con
+    _barrido_vacio(), para que añadir un campo nuevo no rompa un cursor ya escrito.
+    """
+    for leer in (_barrido_leer_sb, _barrido_leer_sq):
+        try:
+            v = leer()
+            if v is not None:
+                return {**_barrido_vacio(), **v}
+        except Exception as e:
+            log.debug(f"[barrido] no pude leer el cursor ({leer.__name__}): {e}")
+    return _barrido_vacio()
+
+
+def _barrido_leer_sb() -> Optional[dict]:
+    sb = _sb()
+    if not sb:
+        return None
+    rows = (sb.table(_SB_TABLA).select("pedidos_json")
+              .eq("id", _SB_FILA_BARRIDO).execute()).data
+    if not rows:
+        return None
+    e = json.loads(rows[0]["pedidos_json"])
+    return e if isinstance(e, dict) else None
+
+
+def _barrido_leer_sq() -> Optional[dict]:
+    with _conn() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS melonn_barrido ("
+                  "id INTEGER PRIMARY KEY CHECK (id = 1), estado_json TEXT NOT NULL)")
+        row = c.execute("SELECT estado_json FROM melonn_barrido WHERE id=1").fetchone()
+    if not row:
+        return None
+    e = json.loads(row["estado_json"])
+    return e if isinstance(e, dict) else None
+
+
+def _barrido_guardar(estado: dict) -> None:
+    """Escribe el cursor en Supabase Y en SQLite. Si Supabase falla, SQLite
+    conserva el avance dentro del contenedor: peor que nada es volver a barrer
+    desde la página 0."""
+    blob = json.dumps(estado, default=str)
+    try:
+        sb = _sb()
+        if sb:
+            sb.table(_SB_TABLA).upsert({
+                "id":           _SB_FILA_BARRIDO,
+                "fetched_at":   datetime.utcnow().isoformat(),
+                "pedidos_json": blob,
+                "total":        len(estado.get("vistas") or []),
+            }).execute()
+    except Exception as e:
+        log.warning(f"[barrido] no pude guardar el cursor en Supabase: {e}")
+    try:
+        with _conn() as c:
+            c.execute("CREATE TABLE IF NOT EXISTS melonn_barrido ("
+                      "id INTEGER PRIMARY KEY CHECK (id = 1), estado_json TEXT NOT NULL)")
+            c.execute("INSERT OR REPLACE INTO melonn_barrido (id, estado_json) "
+                      "VALUES (1, ?)", (blob,))
+            c.commit()
+    except Exception as e:
+        log.debug(f"[barrido] SQLite cursor: {e}")
+
+
+def _barrido_guardar_sin_retroceder(estado: dict) -> None:
+    """Guarda el cursor, pero nunca deja que la generación vuelva atrás.
+
+    POR QUÉ. El lease es leer-y-escribir, no un compare-and-set atómico, así que
+    dos réplicas de Railway pueden barrer el mismo tramo. Eso se aceptó porque la
+    FUSIÓN es idempotente — y lo es: `_fusionar_tramo` reconstruye su índice en
+    cada llamada, `_marcar_despacho_observado` no re-anota una fecha ya puesta y
+    nada se quita nunca; `_reconciliar_bajas` también da el mismo resultado dos
+    veces.
+
+    Lo que NO era idempotente es este guardado. Es una sobrescritura del estado
+    entero: un worker lento que empezó antes de un cierre podía escribir encima su
+    estado en vuelo, reponiendo `iniciado_en` y devolviendo `generacion` y
+    `ultimo_completo_en` hacia atrás. Es decir, reabrir una generación ya cerrada
+    y volver a barrer lo mismo, indefinidamente. El argumento de "la fusión es
+    idempotente" cubría la mitad del problema.
+    """
+    try:
+        actual = _barrido_leer()
+        if int(actual.get("generacion") or 0) > int(estado.get("generacion") or 0):
+            log.warning(
+                f"[barrido] otro worker ya cerró la generación "
+                f"{actual['generacion']} (yo traía {estado.get('generacion')}) — "
+                f"no piso su cursor")
+            return
+    except Exception as e:
+        log.debug(f"[barrido] no pude comparar generaciones antes de guardar: {e}")
+    _barrido_guardar(estado)
+
+
+def _barrido_tomar_lease(estado: dict, worker: str) -> bool:
+    """True si este worker puede avanzar el cursor. Muta `estado` con el lease.
+
+    LÍMITE CONOCIDO: es leer-y-escribir, no un compare-and-set atómico. Dos
+    workers que lean en el mismo instante pueden creer los dos que lo tomaron.
+    Se acepta porque la consecuencia es benigna: barrerían el mismo tramo dos
+    veces (fusión idempotente — ver _fusionar_tramo) y se gastarían ~22
+    peticiones de más sobre una cuota de 10.000. Lo que esto sí evita, que es lo
+    que importa, es que dos workers avancen el cursor a rangos DISTINTOS y entre
+    los dos se salten páginas.
+    """
+    hasta = estado.get("lease_hasta")
+    if hasta and estado.get("lease_worker") != worker:
+        try:
+            if _parse_iso_naive(hasta) > datetime.utcnow():
+                return False
+        except Exception:
+            pass          # lease ilegible → tratarlo como libre
+    from datetime import timedelta
+    estado["lease_worker"] = worker
+    estado["lease_hasta"] = (datetime.utcnow()
+                             + timedelta(seconds=_LEASE_SEG)).isoformat()
+    _barrido_guardar(estado)
+    return True
+
+
 # ── SQLite (caché local / fallback) ───────────────────────────────────────────
 
 def _init_tabla():
@@ -1069,15 +1240,31 @@ _MINIMO_ABSOLUTO = 50        # por debajo de esto no hay tablero que valga
 
 
 def _total_en_cache() -> int:
-    """Cuántos pedidos tiene el caché HOY. Lee solo el contador, no el blob."""
+    """Cuántos pedidos tiene el caché HOY. Lee solo el contador, no el blob.
+
+    Cae a SQLite si Supabase no responde. ANTES devolvía 0 en ese caso, y un 0
+    apaga el candado anti-vaciado entero: `antes >= _MINIMO_ABSOLUTO` es falso y
+    cualquier guardado pasa. O sea que el candado protegía solo mientras Supabase
+    estuviera bien — justo al revés de lo que uno querría de un candado. Medido:
+    guardar [] sobre un caché de 200 lo dejaba en 0 sin un solo aviso.
+    """
     try:
         sb = _sb()
         if sb:
             rows = (sb.table(_SB_TABLA).select("total").eq("id", 1).execute()).data
             if rows:
                 return int(rows[0].get("total") or 0)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"[candado] no pude leer el total desde Supabase: {e}")
+    try:
+        _init_tabla()
+        with _conn() as c:
+            row = c.execute(
+                "SELECT total FROM melonn_pedidos_cache WHERE id=1").fetchone()
+        if row:
+            return int(row["total"] or 0)
+    except Exception as e:
+        log.warning(f"[candado] no pude leer el total desde SQLite: {e}")
     return 0
 
 
@@ -1309,7 +1496,12 @@ def refrescar_un_pedido(identificador: str) -> dict:
 
 
 def limpiar_cache():
-    """Limpia ambas cachés."""
+    """Limpia ambas cachés Y el cursor del barrido.
+
+    El cursor tiene que irse con ellas: si se queda, sigue diciendo que hubo un
+    barrido completo hace poco y el tick responde "al_dia" hasta dos horas —
+    mirando un tablero que acabamos de dejar vacío.
+    """
     _sb_limpiar()
     try:
         _init_tabla()
@@ -1318,6 +1510,12 @@ def limpiar_cache():
             c.commit()
     except Exception as e:
         log.warning(f"SQLite limpiar error: {e}")
+    try:
+        with _conn() as c:
+            c.execute("DROP TABLE IF EXISTS melonn_barrido")
+            c.commit()
+    except Exception as e:
+        log.warning(f"SQLite limpiar cursor error: {e}")
 
 
 def cache_info() -> Optional[dict]:
@@ -1884,18 +2082,450 @@ def _fetch_api_raw(max_pages: int = _MAX_PAGES) -> list:
     return out
 
 
-# Radiografía del último fetch al listado. La lee el chequeo de salud para poder
-# responder "¿el tablero está completo?" sin adivinar. Es de proceso, no
-# compartida entre workers: el chequeo la complementa con el reloj de Supabase.
-_ULTIMO_FETCH: dict = {
-    "ts": None, "paginas": 0, "pedidos_en_ventana": 0,
-    "motivo_fin": "nunca_corrio", "completo": False,
-}
-
-
+# Radiografía del barrido, para el chequeo de salud.
+#
+# ANTES era un dict de proceso (`_ULTIMO_FETCH`), así que se perdía en cada
+# reinicio y cada réplica de Railway veía la suya. Ahora sale del cursor, que es
+# compartido y persistente.
+#
+# DOS RELOJES, y la diferencia es el punto de todo esto:
+#   ultimo_tramo_en    → cuándo avanzamos algo. Dice si el barrido está vivo.
+#   ultimo_completo_en → cuándo cerró un barrido ENTERO. Es el único que dice si
+#                        el tablero es auditable, y el que sella _marcar_fetch_api.
 def ultimo_fetch() -> dict:
-    """Cómo terminó el último fetch del listado, para el chequeo de salud."""
-    return dict(_ULTIMO_FETCH)
+    """Cómo va el barrido del listado, para el chequeo de salud."""
+    e = _barrido_leer()
+    return {
+        "generacion":         e.get("generacion", 0),
+        "pagina":             e.get("pagina", 0),
+        "paginas_estimadas":  e.get("paginas_barrido_previo", 0),
+        "en_curso":           bool(e.get("iniciado_en")),
+        "motivo_fin":         e.get("motivo_ultimo_tramo", "nunca_corrio"),
+        "completo":           (not e.get("iniciado_en")
+                               and bool(e.get("ultimo_completo_en"))),
+        "ultimo_completo_en": e.get("ultimo_completo_en"),
+        "ultimo_tramo_en":    e.get("ultimo_tramo_en"),
+    }
+
+
+def _edad_tramo() -> Optional[float]:
+    """Segundos desde el último tramo, completo o no. None si nunca corrió.
+
+    Complementa a _edad_fetch_api(): un barrido puede llevar horas atascado a
+    mitad y el reloj del último COMPLETO seguir viéndose reciente.
+    """
+    e = _barrido_leer()
+    ts = e.get("ultimo_tramo_en")
+    if not ts:
+        return None
+    try:
+        return (datetime.utcnow() - _parse_iso_naive(ts)).total_seconds()
+    except Exception:
+        return None
+
+
+def _filtrar_ventana(items: list, corte: date) -> list:
+    """Los items crudos de una página que entran en la ventana de 90 días.
+
+    Un pedido viejo que sigue ABIERTO cuenta como dentro de ventana: es trabajo
+    pendiente, por antiguo que sea. La excepción NO puede ser `es_activo`, que
+    incluye entregado (6 y 8): con eso la ventana no cortaba ni un entregado y el
+    tablero se llenó con toda la historia de entregas (2.126 pedidos, 1.709 ya
+    entregados, contra los ~1.150 que debía tener).
+    """
+    dentro = []
+    for item in items:
+        fc       = _parsear_fecha(item.get("creation_date"))
+        estado_c = int((item.get("sell_order_state") or {}).get("code") or 0)
+        estado_n = str((item.get("sell_order_state") or {}).get("name") or "")
+        sigue_abierto = (estado_c in CODIGOS_ACTIVOS_OPERATIVO
+                         or estado_n in ESTADOS_NOVEDAD_EXTERNA)
+        if fc and fc < corte and not sigue_abierto:
+            continue
+        dentro.append(item)
+    return dentro
+
+
+def _normalizar_lote(crudos: list) -> list:
+    """Whitelist + normalización + descarte de B2B, sobre items ya en ventana."""
+    salida = []
+    for item in crudos:
+        estado_obj    = item.get("sell_order_state") or {}
+        estado_nombre = str(estado_obj.get("name") or "")
+        estado_codigo = int(estado_obj.get("code") or 0)
+
+        # Whitelist: código en CODIGOS_ACTIVOS O nombre en ESTADOS_NOVEDAD_EXTERNA.
+        # Las novedades externas no tienen código documentado → se ven por nombre.
+        if (estado_codigo not in CODIGOS_ACTIVOS
+                and estado_nombre not in ESTADOS_NOVEDAD_EXTERNA):
+            log.debug(f"Excluido código {estado_codigo} ({estado_nombre})")
+            continue
+        if estado_nombre in ESTADOS_EXCLUIR or estado_nombre in ESTADOS_PROCESO_INTERNO:
+            log.debug(f"Excluido por nombre: {estado_nombre}")
+            continue
+
+        try:
+            p = _normalizar(item)
+        except Exception:
+            continue
+
+        if p.get("es_b2b"):
+            log.debug(f"Excluido B2B: {p.get('orden_tienda')}")
+            continue
+
+        # OJO: si falta un estado acá, esos pedidos DESAPARECEN del tablero.
+        # Al separar "en_preparacion" de "en_transito" habrían quedado fuera 96.
+        if p["sub_estado_logistico"] in ("pendiente_despacho", "en_preparacion",
+                                         "en_transito", "novedad", "entregado"):
+            salida.append(p)
+    return salida
+
+
+def _fusionar_tramo(vivos: list, frescos: list) -> tuple[list, int]:
+    """Fusiona los pedidos de UN TRAMO sobre el caché vivo.
+
+    Misma regla que _heredar_enriquecidos: el fresco manda en estado y logística,
+    y los campos enriquecidos solo se pisan si el fresco trae valor. NUNCA quita
+    nada — las bajas solo se deciden al cerrar un barrido completo, porque que un
+    pedido no esté en las páginas de ESTE tramo no significa que no esté en
+    Melonn. Ver _reconciliar_bajas.
+
+    Es idempotente a propósito: por el traslape entre tramos un pedido puede
+    llegar dos veces, y dos workers pueden barrer el mismo tramo si se cruzan los
+    leases.
+
+    Devuelve (lista_fusionada, cuantos_nuevos).
+    """
+    idx = {_clave_pedido(p): i for i, p in enumerate(vivos)}
+    out = list(vivos)
+    nuevos = 0
+    despachos = 0
+
+    for f in frescos:
+        k = _clave_pedido(f)
+        i = idx.get(k)
+        if i is None:
+            out.append(f)
+            idx[k] = len(out) - 1
+            nuevos += 1
+            continue
+
+        prev = out[i]
+        # OJO EL ORDEN, igual que en _heredar_enriquecidos: la transición se
+        # evalúa ANTES de heredar. Heredar primero copiaría la fecha vieja y el
+        # estado anterior dejaría de ser visible — y una fecha de despacho
+        # observada que se pierde NO SE PUEDE RECALCULAR.
+        if _marcar_despacho_observado(f, prev):
+            despachos += 1
+        for c in _CAMPOS_ENRIQUECIDOS:
+            if _campo_vacio(f.get(c)) and not _campo_vacio(prev.get(c)):
+                f[c] = prev[c]
+        out[i] = f
+
+    if despachos:
+        log.info(f"[despacho] {despachos} pedido(s) pasaron a despachado en este "
+                 f"tramo — fecha anotada por observación propia")
+    return out, nuevos
+
+
+# Cuántos barridos COMPLETOS seguidos sin ver un pedido antes de sacarlo.
+#
+# Dos, y no uno, porque paginar por offset sobre una lista que se mueve puede
+# saltarse un pedido (ver el traslape en _barrido_tick). Una ausencia puede ser un
+# corrimiento; dos seguidas es que de verdad no está. El costo es que un cancelado
+# tarda hasta 4 h en salir del tablero — y de eso normalmente se encarga el
+# webhook, no el barrido.
+_AUSENCIAS_PARA_BAJA = 2
+
+
+def _reconciliar_bajas(vivos: list, vistas: set, ausencias: dict) -> tuple[list, dict, int]:
+    """Saca del caché lo que el barrido COMPLETO no vio dos veces seguidas.
+
+    Solo se llama al cerrar un barrido: que un pedido no esté en las páginas de un
+    tramo no significa que no esté en Melonn.
+
+    `vistas` son las claves de los pedidos que PASARON EL FILTRO, no las de todos
+    los items crudos. Así un pedido que Melonn devuelve pero que el tablero
+    descarta (cancelado, B2B, estado fuera de la whitelist, viejo y ya cerrado)
+    cuenta como ausente y termina saliendo — igual que hacía el reemplazo completo
+    del caché.
+
+    Un pedido creado por un webhook durante el barrido tampoco está en `vistas`,
+    pero suma solo 1 ausencia y no se cae: el barrido siguiente ya lo verá.
+
+    Devuelve (lista_sin_las_bajas, ausencias_actualizadas, cuantas_bajas).
+    """
+    nuevas: dict = {}
+    salida: list = []
+    bajas = 0
+
+    for p in vivos:
+        k = _clave_pedido(p)
+        seguidas = 0 if k in vistas else int(ausencias.get(k, 0)) + 1
+        if seguidas >= _AUSENCIAS_PARA_BAJA:
+            bajas += 1
+            continue
+        if seguidas:
+            nuevas[k] = seguidas
+        salida.append(p)
+
+    if bajas:
+        log.info(f"[barrido] {bajas} pedido(s) dados de baja tras "
+                 f"{_AUSENCIAS_PARA_BAJA} barridos sin verlos")
+    return salida, nuevas, bajas
+
+
+# Páginas por tramo. Se autocalibra: parte el barrido anterior en dos, así el
+# barrido completo cierra en 2 ticks y —con el tick horario del scheduler— cada
+# 2 h. Si el listado crece, el tramo crece solo; si la ventana se recorta, baja
+# solo. _TRAMO_DEFECTO es el arranque en frío (~44 páginas hoy).
+_TRAMO_DEFECTO = 22
+# El piso NO puede ser tan bajo que el barrido no alcance a cerrar antes de que
+# se abandone la generación.
+#
+# El presupuesto real son CINCO tramos, no seis: el scheduler duerme DESPUÉS de
+# trabajar (`_stop_event.wait` al final del loop), así que el período efectivo es
+# 3600 s + lo que dure el tick, y en 6 h caben 5 vueltas completas. Con
+# _MAX_PAGES = 60, el piso tiene que ser 12.
+#
+# Con el piso en 4, un cierre corto (p ≤ 8) fijaba el tramo en 4, el barrido
+# necesitaba 11 ticks, se abandonaba a las 6 h, y como `paginas_barrido_previo`
+# solo se reescribe AL CERRAR, el estado se autoalimentaba: reinicio permanente
+# que solo se arreglaba editando el cursor a mano.
+_TRAMO_MIN     = 12
+_TRAMO_MAX     = 30     # ~60 s de ráfaga, el techo que no queremos pasar
+
+# Un barrido que no cierra en 6 h lleva varios tramos fallando. Seguir acumulando
+# `vistas` de hace horas hace que la reconciliación mida contra una foto vieja, y
+# para entonces el centinela ya está en rojo (FETCH_ROJO_MIN = 360 min).
+_GENERACION_MAX_SEG = 6 * 3600
+
+# Cuándo ARRANCAR una generación nueva, contado desde el último cierre.
+#
+# No es _CACHE_TTL. Si se esperara el TTL completo, la generación arrancaría a
+# las 2 h y cerraría a las 3 (dos tramos más), y durante esa hora
+# `_caduco_vs_melonn()` sería cierto: cada lectura del tablero —incluidas las que
+# hace el propio scheduler justo después del tramo— dispararía
+# `_refresh_background()` y con él un `_fetch_api()` de las 44 páginas seguidas.
+# O sea, exactamente la fragilidad que este trabajo viene a quitar, corriendo
+# igual todos los ciclos y encima gastando el doble de cuota. Arrancando a la
+# mitad del TTL, el cierre cae en el borde de las 2 h y el caché nunca se ve
+# vencido entre cierres.
+#
+# Los 10 min de margen NO son decorativos. Sin ellos el colchón es lo que dure el
+# tick anterior (~1 min), y cada réplica de Railway corre su propio scheduler
+# contra un `ultimo_completo_en` compartido: un salto de reloj o una desviación
+# entre réplicas mayor que eso hace que un tick conteste `al_dia`, y esa réplica
+# vuelve al ciclo de 3 h con su hueco de una hora entero.
+_ARRANCAR_GENERACION_SEG = _CACHE_TTL // 2 - 600
+
+
+def _tam_tramo(estado: dict) -> int:
+    previo = int(estado.get("paginas_barrido_previo") or 0)
+    if previo <= 0:
+        return _TRAMO_DEFECTO
+    return max(_TRAMO_MIN, min(_TRAMO_MAX, -(-previo // 2)))   # ceil(previo/2)
+
+
+def _barrido_tick(worker: str = "") -> dict:
+    """Avanza UN TRAMO del barrido. Es lo que llama el scheduler en cada tick.
+
+    Devuelve {ok, motivo, generacion, pagina, completo, paginas_traidas}.
+    """
+    import os
+    worker = worker or f"{os.getpid()}"
+    estado = _barrido_leer()
+
+    if not _barrido_tomar_lease(estado, worker):
+        log.info(f"[barrido] otro worker tiene el cursor hasta {estado.get('lease_hasta')}")
+        return {"ok": False, "motivo": "lease_ajeno", "completo": False,
+                "generacion": estado["generacion"], "pagina": estado["pagina"],
+                "paginas_traidas": 0}
+
+    ahora = datetime.utcnow()
+    en_curso = bool(estado.get("iniciado_en"))
+
+    # ¿Hay que abandonar una generación atascada?
+    if en_curso:
+        try:
+            edad = (ahora - _parse_iso_naive(estado["iniciado_en"])).total_seconds()
+        except Exception:
+            edad = _GENERACION_MAX_SEG + 1
+        if edad > _GENERACION_MAX_SEG:
+            log.error(f"[barrido] generación {estado['generacion']} lleva "
+                      f"{edad / 3600:.1f} h sin cerrar — se abandona y empieza otra")
+            en_curso = False
+            estado["generacion"] = int(estado["generacion"]) + 1
+
+    # ¿Arrancar una generación nueva?
+    if not en_curso:
+        ultimo = estado.get("ultimo_completo_en")
+        if ultimo:
+            try:
+                if (ahora - _parse_iso_naive(ultimo)).total_seconds() < _ARRANCAR_GENERACION_SEG:
+                    estado["lease_hasta"] = None
+                    _barrido_guardar_sin_retroceder(estado)
+                    return {"ok": True, "motivo": "al_dia", "completo": False,
+                            "generacion": estado["generacion"],
+                            "pagina": 0, "paginas_traidas": 0}
+            except Exception:
+                pass      # reloj ilegible → barrer, que es el lado seguro
+        # tam_pagina se re-aprende de la página 0 de cada generación: arrastrarlo
+        # haría que un tope de per_page más bajo cerrara el barrido en la primera.
+        estado.update({"pagina": 0, "vistas": [], "paginas_fuera_ventana": 0,
+                       "tam_pagina": None, "iniciado_en": ahora.isoformat()})
+
+    # ── Traer el tramo ────────────────────────────────────────────────────────
+    corte      = _fecha_corte()
+    tam        = _tam_tramo(estado)
+    pagina     = int(estado["pagina"])
+    # Traslape: se re-lee la última página ya barrida. Paginar por offset sobre
+    # una lista que se mueve puede SALTARSE un pedido —si se borran ítems por
+    # encima, todo sube de índice y un pedido pasa del rango no barrido al ya
+    # barrido, y desaparece sin dejar rastro. Una página (100 pedidos) cubre
+    # cualquier corrimiento realista en una hora. Cuesta 1 petición por tramo.
+    inicio     = max(0, pagina - 1) if pagina > 0 else 0
+    solo_fusion = pagina - inicio          # 1 si hay traslape, 0 si no
+
+    crudos: list = []
+    motivo = "tramo_ok"
+    completo = False
+    traidas = 0
+    tam_pagina = estado.get("tam_pagina")
+
+    p = inicio
+    while p < min(inicio + tam + solo_fusion, _MAX_PAGES):
+        resp = _get("sell-orders", params={"per_page": _PAGE_SIZE, "page": p})
+        if resp is None:
+            causa = (ultimo_fallo_get().get("motivo") or "sin_causa_registrada")
+            motivo = f"fallo_get_pagina_{p}:{causa}"
+            break
+        items = resp.get("data") or []
+        if not items:
+            # Una página vacía significa "se acabó el listado" — pero SOLO si es
+            # una página nueva. En la de TRASLAPE es un glitch: hace un tick
+            # leímos 100 pedidos de ahí. Cerrar el barrido por eso es la misma
+            # trampa que el guard que miraba el caché en vez del barrido: cierre
+            # "completo" sobre un tablero a medio leer, reloj de auditabilidad
+            # sellado, y una ausencia repartida a todo lo que no se alcanzó a ver.
+            if p >= pagina:
+                motivo, completo = "sin_mas_datos", True
+                break
+            log.warning(f"[barrido] la página de traslape {p} vino vacía y hace "
+                        f"un tick tenía datos — lo trato como glitch y sigo")
+            p += 1
+            continue
+        if tam_pagina is None:
+            tam_pagina = len(items)
+            estado["tam_pagina"] = tam_pagina
+
+        en_ventana = _filtrar_ventana(items, corte)
+        crudos.extend(en_ventana)
+        traidas += 1
+
+        # La página de traslape ya se contó en su tramo: no toca el contador ni
+        # el cursor. Solo se re-lee para fusionar lo que haya cambiado.
+        if p >= pagina:
+            if len(items) >= tam_pagina and not en_ventana:
+                estado["paginas_fuera_ventana"] = int(estado["paginas_fuera_ventana"]) + 1
+                if estado["paginas_fuera_ventana"] >= 2:
+                    motivo, completo = "fuera_de_ventana", True
+                    p += 1
+                    break
+            else:
+                estado["paginas_fuera_ventana"] = 0
+
+            if len(items) < tam_pagina:
+                motivo, completo = "ultima_pagina", True
+                p += 1
+                break
+        p += 1
+
+    if not completo and motivo == "tramo_ok" and p >= _MAX_PAGES:
+        motivo = "tope_paginas"
+
+    # ── Fusionar ──────────────────────────────────────────────────────────────
+    frescos = _normalizar_lote(crudos)
+    hit     = _cache_leer(ignorar_ttl=True)
+    vivos   = (hit[0] if hit else []) or []
+    fusionado, nuevos = _fusionar_tramo(vivos, frescos)
+
+    vistas = set(estado.get("vistas") or [])
+    vistas.update(_clave_pedido(f) for f in frescos)
+    estado["vistas"] = sorted(vistas)
+
+    # EL CURSOR NUNCA RETROCEDE dentro de una generación.
+    #
+    # Sin el max(), si la página de TRASLAPE es la que falla, el loop rompe con
+    # p = pagina - 1 y el cursor se iría hacia atrás. Esa página ya barrida se
+    # volvería a contar como nueva en el reintento —porque `p >= pagina` pasaría
+    # a ser cierto para ella— y `paginas_fuera_ventana` llegaría a 2 con UNA sola
+    # página fuera de ventana. El barrido cerraría como `fuera_de_ventana`
+    # habiendo leído 2 páginas de 44: reloj de completo sellado sobre un tablero
+    # truncado, y todos los pedidos no vistos sumando una ausencia. En silencio.
+    estado["pagina"] = max(pagina, p)
+    estado["motivo_ultimo_tramo"] = motivo
+    # Solo se sella si el CURSOR avanzó — no si simplemente trajimos páginas.
+    #
+    # `traidas` no sirve: cuenta también la página de traslape. Con la página del
+    # cursor fallando siempre (un 500 persistente, una página que Melonn no
+    # digiere), cada tick lee el traslape con éxito, `traidas` vale 1, el reloj se
+    # re-sella y `barrido_atascado` no se dispara jamás — que es exactamente el
+    # caso para el que se escribió la alarma. Con tick horario la edad del tramo
+    # nunca pasaría de ~60 min contra un umbral de 180.
+    if p > pagina:
+        estado["ultimo_tramo_en"] = ahora.isoformat()
+
+    # Un barrido que no vio NI UN pedido NO es un barrido completo, por más que
+    # Melonn haya devuelto una página vacía o una corta. Antes esto se colaba: el
+    # guard era `if completo and fusionado`, y `fusionado` es caché + frescos, o
+    # sea que era cierto siempre que el caché no estuviera vacío. Bastaba un
+    # `200 {"data": []}` en la página 0 para sellar el reloj de auditabilidad
+    # sobre un barrido que no leyó nada, dejar el tick en "al_dia" dos horas, y
+    # darle una ausencia a TODOS los pedidos del tablero.
+    if completo and not vistas:
+        log.error(f"[barrido] cierre '{motivo}' sin un solo pedido en toda la "
+                  f"generación {estado['generacion']} — NO se cuenta como "
+                  f"completo. El reloj no se sella y el tablero se conserva.")
+        completo = False
+        motivo = f"{motivo}_sin_pedidos"
+        estado["motivo_ultimo_tramo"] = motivo
+
+    # ── ¿Cerró el barrido? ────────────────────────────────────────────────────
+    if completo:
+        fusionado, estado["ausencias"], bajas = _reconciliar_bajas(
+            fusionado, vistas, estado.get("ausencias") or {})
+        estado.update({
+            "paginas_barrido_previo": p,
+            "generacion": int(estado["generacion"]) + 1,
+            "pagina": 0, "vistas": [], "paginas_fuera_ventana": 0,
+            # Se vuelve a aprender en la página 0 de la generación siguiente. Si
+            # se arrastrara y Melonn bajara su tope de per_page, `len(items) <
+            # tam_pagina` se cumpliría en la primera página y el barrido cerraría
+            # con una sola, truncando el tablero sin un error.
+            "tam_pagina": None,
+            "iniciado_en": None,
+            "ultimo_completo_en": ahora.isoformat(),
+        })
+        log.info(f"[barrido] COMPLETO · {p} páginas · {len(fusionado)} pedidos "
+                 f"· {nuevos} nuevos · {bajas} bajas · fin={motivo}")
+    else:
+        log.info(f"[barrido] tramo {inicio}-{p - 1} · {nuevos} nuevos · fin={motivo}")
+
+    _cache_guardar(fusionado)
+
+    # Se sella contra lo que vio LA GENERACIÓN, no contra el tamaño del caché.
+    if completo and vistas:
+        _marcar_fetch_api()
+
+    estado["lease_hasta"] = None          # soltar el lease
+    _barrido_guardar_sin_retroceder(estado)
+
+    return {"ok": motivo in ("tramo_ok", "ultima_pagina", "sin_mas_datos",
+                             "fuera_de_ventana"),
+            "motivo": motivo, "completo": completo,
+            "generacion": estado["generacion"], "pagina": estado["pagina"],
+            "paginas_traidas": traidas}
 
 
 def _fetch_api_filtrado() -> list:
@@ -1913,7 +2543,6 @@ def _fetch_api_filtrado() -> list:
     tam_pagina = None
     # Se inicializa acá y no dentro del while: si la primera página falla (cuota
     # agotada), el loop no corre y el log de abajo la leería sin existir.
-    activos_en_pagina = 0
     en_ventana_en_pagina = 0
     # Páginas llenas seguidas sin un solo pedido dentro de la ventana de 90 días.
     paginas_fuera_ventana = 0
@@ -1942,31 +2571,9 @@ def _fetch_api_filtrado() -> list:
                     f"Melonn topó per_page: pedimos {_PAGE_SIZE}, devuelve {tam_pagina}"
                 )
 
-        activos_en_pagina = 0
-        en_ventana_en_pagina = 0
-        for item in items:
-            fc       = _parsear_fecha(item.get("creation_date"))
-            estado_c = int((item.get("sell_order_state") or {}).get("code") or 0)
-            estado_n = str((item.get("sell_order_state") or {}).get("name") or "")
-            # ¿Sigue ABIERTO? (pendiente, en preparación, en tránsito, novedad)
-            # Entregado NO cuenta: un pedido entregado está cerrado.
-            sigue_abierto = (estado_c in CODIGOS_ACTIVOS_OPERATIVO
-                             or estado_n in ESTADOS_NOVEDAD_EXTERNA)
-
-            # La ventana de 90 días solo se salta para los que siguen abiertos.
-            # ANTES la excepción era `es_activo`, que INCLUYE entregado (6 y 8),
-            # así que la ventana no cortaba ni un entregado por viejo que fuera.
-            # Con el corte anticipado de paginación eso no se notaba —la
-            # paginación moría antes de llegar al historial—; al quitarlo, el
-            # tablero se llenó con TODA la historia de entregas: 1.709 entregados
-            # y 2.126 pedidos en total, contra ~1.150 que debía tener.
-            if fc and fc < corte and not sigue_abierto:
-                continue
-
-            pedidos_raw.append(item)
-            en_ventana_en_pagina += 1
-            if sigue_abierto:
-                activos_en_pagina += 1
+        en_ventana = _filtrar_ventana(items, corte)
+        pedidos_raw.extend(en_ventana)
+        en_ventana_en_pagina = len(en_ventana)
 
         # ── Cortar cuando ya pasamos la ventana ──────────────────────────────
         #
@@ -2013,13 +2620,9 @@ def _fetch_api_filtrado() -> list:
     # datos buenos con datos parciales, que es justo lo que no se puede notar
     # a simple vista.
     completo = motivo_fin in ("ultima_pagina", "sin_mas_datos", "fuera_de_ventana")
-    _ULTIMO_FETCH.update({
-        "ts": datetime.now().isoformat(timespec="seconds"),
-        "paginas": page + 1,
-        "pedidos_en_ventana": len(pedidos_raw),
-        "motivo_fin": motivo_fin,
-        "completo": completo,
-    })
+    # Ya no alimenta la radiografía: `ultimo_fetch()` la lee del cursor, que
+    # sobrevive reinicios y es igual en todas las réplicas. Este camino (botón
+    # manual y hard-TTL de 24 h) no toca el cursor a propósito — no es un tramo.
     log.info(f"Melonn API: {len(pedidos_raw)} pedidos en ventana "
              f"({page + 1} página(s), fin={motivo_fin})")
 
@@ -2038,42 +2641,7 @@ def _fetch_api_filtrado() -> list:
     if pedidos_raw:
         _marcar_fetch_api()
 
-    resultado = []
-    for item in pedidos_raw:
-        estado_obj  = item.get("sell_order_state") or {}
-        estado_nombre = str(estado_obj.get("name") or "")
-        estado_codigo = int(estado_obj.get("code") or 0)
-
-        # ── Whitelist: código en CODIGOS_ACTIVOS O nombre en ESTADOS_NOVEDAD_EXTERNA
-        #    Las novedades externas no tienen código documentado → se detectan por nombre
-        if (estado_codigo not in CODIGOS_ACTIVOS
-                and estado_nombre not in ESTADOS_NOVEDAD_EXTERNA):
-            log.debug(f"Excluido código {estado_codigo} ({estado_nombre})")
-            continue
-
-        # Doble check por nombre — cancelados y proceso interno
-        if estado_nombre in ESTADOS_EXCLUIR or estado_nombre in ESTADOS_PROCESO_INTERNO:
-            log.debug(f"Excluido por nombre: {estado_nombre}")
-            continue
-
-        try:
-            p = _normalizar(item)
-        except Exception:
-            continue
-
-        # Excluir pedidos B2B — este dashboard es solo para D2C
-        if p.get("es_b2b"):
-            log.debug(f"Excluido B2B: {p.get('orden_tienda')}")
-            continue
-
-        sub = p["sub_estado_logistico"]
-
-        # Incluir todas las órdenes activas D2C
-        # OJO: si falta un estado acá, esos pedidos DESAPARECEN del tablero.
-        # Al separar "en_preparacion" de "en_transito" habrían quedado fuera 96.
-        if sub in ("pendiente_despacho", "en_preparacion", "en_transito",
-                   "novedad", "entregado"):
-            resultado.append(p)
+    resultado = _normalizar_lote(pedidos_raw)
 
     # Traer-y-guardar: heredar del caché anterior los campos ya enriquecidos
     # (cliente, ciudad, producto, guía) para NO volver a consultarlos en
@@ -2664,7 +3232,8 @@ def _bootstrap_json() -> list:
 
 
 # ── Punto de entrada ───────────────────────────────────────────────────────────
-def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tuple:
+def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False,
+                            modo: str = "completo") -> tuple:
     """
     Retorna (pedidos, omitidos, meta).
 
@@ -2682,6 +3251,24 @@ def obtener_pedidos_activos(dias: int = 30, forzar_refresh: bool = False) -> tup
     Esto evita esperas innecesarias cuando la cuota está agotada.
     """
     omitidos = {"resuelto": 0, "sin_datos": 0}
+
+    # modo="tramo": el scheduler. Avanza UN tramo del barrido y devuelve el caché.
+    #
+    # No pasa por el guard de _MIN_REFRESH_SECS a propósito: la cadencia la fija
+    # el cursor (_barrido_tick no arranca una generación nueva antes de
+    # _ARRANCAR_GENERACION_SEG desde el último cierre). Ese guard de 60 s era lo único
+    # que frenaba el camino de forzar_refresh, y con tick horario NUNCA frenaba
+    # nada: se barría entero cada hora, ~1.056 peticiones/día contra las ~516 que
+    # se creían. Con el cursor son ~540.
+    if forzar_refresh and modo == "tramo":
+        r = _barrido_tick()
+        hit = _cache_leer(ignorar_ttl=True)
+        pedidos = _enriquecer_y_filtrar((hit[0] if hit else []) or [])
+        return pedidos, omitidos, {
+            "fuente": "api_live", "stale": False,
+            "fetched_at": (hit[1] if hit else datetime.now()),
+            "modo": "tramo", "barrido": r,
+        }
 
     if forzar_refresh:
         # Protección multi-usuario: si otro usuario ya sincronizó hace <5 min,
