@@ -149,6 +149,7 @@ _CONCEPTOS = (
     ("lavanderia",  ("LAVAND", "LAVADO", "TEÑID", "TENID", "STONE")),
     ("terminacion", ("TERMINA", "ARREGLO", "SATINA", "PULID", "PLANCHAD")),
     ("bordado",     ("BORDAD", "ESTAMPAD")),
+    ("corte",       ("CORTE",)),
 )
 
 
@@ -229,6 +230,65 @@ def key_edad(hit) -> str:
     return f"hace {mins} min"
 
 
+def _fetch_soporte(desde: Optional[str]) -> list[dict]:
+    """Documentos soporte, del endpoint que SÍ los expone.
+
+    `/purchases` no devuelve ni uno —se verificó: 3.964 documentos, todos FC—.
+    Los DS viven en `/v1/purchase-support-documents`, que no aparece en la
+    documentación pública junto a los demás listados. Sin esto, la confección de
+    los lotes de la app era invisible: el DS 1525 del 2026-07-29 (LUIS FERNANDO
+    BARRERA, 230 × $12.300 por la REF 95629-1) existía y el OS no lo veía.
+
+    OJO CON LA DESCRIPCIÓN: para los DS la API devuelve el NOMBRE DEL PRODUCTO
+    del catálogo, no el texto escrito en la línea. Se revisaron los 610 items de
+    los 1.422 DS: ni uno trae texto propio. O sea que la "REF 95629-1" que sale
+    impresa en el PDF no llega por API, y estos documentos hay que casarlos por
+    huella (NIT + concepto + cantidad), no por REF. Ver `_match_por_huella`.
+    """
+    docs: list[dict] = []
+    page = 1
+    while page <= 40:
+        data = siigo_get("/purchase-support-documents",
+                         {"page": page, "page_size": 100})
+        results = data.get("results") or []
+        if not results:
+            break
+        for p in results:
+            fecha = (p.get("date") or "")[:10]
+            if desde and fecha and fecha < desde:
+                continue
+            sup = p.get("supplier") or {}
+            items = []
+            for it in (p.get("items") or []):
+                desc = it.get("description") or ""
+                cant = float(it.get("quantity") or 0)
+                precio = float(it.get("price") or 0)
+                items.append({
+                    "descripcion":    desc,
+                    "ref":            _extraer_ref(desc),   # casi siempre None
+                    "concepto":       clasificar_concepto(desc),
+                    "cantidad":       cant,
+                    "valor_unitario": precio,
+                    "total_sin_iva":  round(cant * precio, 2),
+                })
+            docs.append({
+                "id":               p.get("id"),
+                "ds":               p.get("name"),
+                "fecha":            fecha,
+                "origen":           "DS",
+                "proveedor_id":     sup.get("identification"),
+                "supplier_uuid":    sup.get("id"),
+                "proveedor_nombre": "",
+                "total":            float(p.get("total") or 0),
+                "balance":          float(p.get("balance") or 0),
+                "items":            items,
+            })
+        if len(results) < 100:
+            break
+        page += 1
+    return docs
+
+
 def _fetch_ds(desde: Optional[str]) -> list[dict]:
     """Fetch real contra Siigo (paginación + detalle de items)."""
     def _parse_items(raw: list) -> list[dict]:
@@ -272,6 +332,7 @@ def _fetch_ds(desde: Optional[str]) -> list[dict]:
                 # reventaría el rate limit.
                 "supplier_uuid":    sup.get("id"),
                 "proveedor_nombre": "",
+                "origen":           "FC",
                 "total":            float(p.get("total") or 0),
                 "balance":          float(p.get("balance") or 0),
                 "items":            _parse_items(p.get("items")),
@@ -295,6 +356,17 @@ def _fetch_ds(desde: Optional[str]) -> list[dict]:
             time.sleep(0.4)
         except Exception as e:
             log.warning(f"[siigo] detalle {d['ds']} fallo: {e}")
+
+    # Los DOCUMENTOS SOPORTE van por su propio endpoint. Si esa consulta falla,
+    # se sigue con las facturas: media verdad es mejor que ninguna, pero se
+    # registra fuerte porque la confección de los lotes nuevos vive ahí.
+    try:
+        soporte = _fetch_soporte(desde)
+        docs += soporte
+        log.info(f"[siigo] {len(soporte)} documentos soporte leídos")
+    except Exception as e:
+        log.error(f"[siigo] FALLO al leer documentos soporte: {str(e)[:140]}. "
+                  f"El cruce va a quedar incompleto (la confección va por DS).")
 
     # Nombre del proveedor: una llamada por proveedor DISTINTO de los que
     # quedaron en ventana (no por documento), con cache de proceso.

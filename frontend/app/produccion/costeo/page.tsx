@@ -37,6 +37,9 @@ interface Lote {
   ds?: DsInfo | null;
   estado: string; // ok | sin_ds | sin_asignar | precio_distinto | cantidad_distinta
   desviacion?: number;
+  /** El margen real va a medias: faltan facturas de algún proceso. */
+  margen_real_parcial?: boolean;
+  conceptos_faltantes?: string[];
   // Margen planeado vs real (llega del backend cuando el precosteo tiene precio de venta).
   precio_venta_final?: number;
   costo_planeado_prenda?: number;
@@ -230,8 +233,18 @@ export default function CosteoRealPage() {
                         <td className="px-4 py-2 text-right tabular">{pct(l.margen_planeado)}</td>
                         <td className="px-4 py-2 text-right tabular font-semibold">
                           {l.margen_real == null ? <span className="text-graphite">—</span> : (
-                            <span className={l.margen_real < 0 ? "text-terracotta" : l.margen_real < 50 ? "text-amber-600" : "text-sage"}>
+                            <span
+                              className={l.margen_real_parcial
+                                ? "text-graphite"
+                                : (l.margen_real < 0 ? "text-terracotta" : l.margen_real < 50 ? "text-amber-600" : "text-sage")}
+                              title={l.margen_real_parcial
+                                ? `Provisional: faltan facturas de ${(l.conceptos_faltantes || []).join(", ")}. Mientras falten, el margen sale mejor de lo real.`
+                                : undefined}
+                            >
                               {l.margen_real.toFixed(1)}%
+                              {l.margen_real_parcial && (
+                                <span className="ml-1 text-[0.6rem] uppercase tracking-wider">prov.</span>
+                              )}
                             </span>
                           )}
                         </td>

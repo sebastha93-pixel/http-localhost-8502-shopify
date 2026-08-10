@@ -5350,7 +5350,9 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
         rutas = (sb.table("hoja_ruta_lote")
                    .select("orden_corte_id,precio_confeccion,precio_terminacion,etapa,"
                            "lavanderia_at,"
-                           "confeccionista:confeccionista_id(nombre,documento)")
+                           "confeccionista:confeccionista_id(nombre,documento),"
+                           "terminador:terminacion_id(nombre,documento),"
+                           "lavador:lavanderia_id(nombre,documento)")
                    .limit(500).execute()).data or []
     except Exception:
         # Compat si la columna documento aún no existe
@@ -5390,10 +5392,26 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             "referencia":     (oc.get("referencia") or {}).get("codigo_referencia"),
             "confeccionista": ((ruta or {}).get("confeccionista") or {}).get("nombre"),
             "documento":      _norm_doc(((ruta or {}).get("confeccionista") or {}).get("documento")),
+            # Un lote pasa por VARIOS proveedores y cada concepto se factura por
+            # el suyo. Para casar un documento soporte —que no trae REF— hace
+            # falta saber qué NIT corresponde a qué proceso.
+            # Qué procesos espera este lote según su ruta. Sirve para saber si el
+            # margen real ya es comparable o si todavía va a medias.
+            "conceptos_esperados": [c for c, hay in (
+                ("confeccion",  bool((ruta or {}).get("confeccionista"))),
+                ("terminacion", bool((ruta or {}).get("terminador"))),
+                ("lavanderia",  bool((ruta or {}).get("lavador"))),
+            ) if hay],
+            "documentos_por_concepto": {
+                "confeccion":  _norm_doc(((ruta or {}).get("confeccionista") or {}).get("documento")),
+                "terminacion": _norm_doc(((ruta or {}).get("terminador") or {}).get("documento")),
+                "lavanderia":  _norm_doc(((ruta or {}).get("lavador") or {}).get("documento")),
+            },
             # El DS se vuelve exigible cuando el confeccionista ENTREGÓ
             # (lote pasó a lavandería). Antes de eso no se alerta.
             "entregado_at":   (ruta or {}).get("lavanderia_at"),
             "unidades":       unidades,
+            "creada_at":      oc.get("created_at"),
             "precio_teorico": precio,          # confección (el cruce principal)
             "precio_terminacion": float((ruta or {}).get("precio_terminacion") or 0),
             "total_teorico":  round(unidades * precio, 2),
@@ -5435,17 +5453,50 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                 return lote_c
         return None
 
-    def _match_por_documento(doc_prov: str):
-        """Nivel 3: anclar por cédula/NIT del proveedor. Si el DS viene de
-        un proveedor con documento registrado y ese proveedor tiene UN solo
-        lote pendiente de DS, la factura llega aunque la REF esté mal
-        digitada o falte. Con varios lotes no se adivina."""
-        if not doc_prov:
+    def _match_por_huella(doc_prov: str, it: dict, doc: Optional[dict] = None):
+        """Nivel 4 — HUELLA, para los DOCUMENTOS SOPORTE.
+
+        La API de Siigo no devuelve la descripción escrita en las líneas de un
+        DS: devuelve el nombre del producto del catálogo. Se revisaron los 610
+        items de los 1.422 DS de la cuenta y NI UNO trae texto propio, así que la
+        "REF 95629-1" que sale impresa en el PDF no llega por API. Sin REF, el
+        lote se identifica por lo que sí llega:
+
+            NIT del proveedor + concepto del item + cantidad exacta de unidades
+
+        Y tiene que señalar a UN solo lote. Con dos candidatos no se adivina: un
+        cruce equivocado ensucia el costo de dos referencias a la vez y nadie lo
+        nota mirando la pantalla.
+
+        El precio NO entra en la huella a propósito: que el precio no cuadre es
+        justo lo que este cruce existe para detectar.
+        """
+        concepto = it.get("concepto") or "otro"
+        cantidad = float(it.get("cantidad") or 0)
+        if not doc_prov or cantidad <= 0 or concepto == "otro":
             return None
-        candidatos = [l for l in lotes
-                      if l.get("documento") and _doc_match(l["documento"], doc_prov)
-                      and l["estado"] == "sin_ds"]
-        return candidatos[0] if len(candidatos) == 1 else None
+        fecha_doc = (doc or {}).get("fecha") or ""
+        candidatos = []
+        for l in lotes:
+            esperado = (l.get("documentos_por_concepto") or {}).get(concepto)
+            if not esperado or not _doc_match(esperado, doc_prov):
+                continue
+            if int(l.get("unidades") or 0) != int(cantidad):
+                continue
+            # Una factura de proceso no puede ser ANTERIOR a la orden de corte.
+            # Sin este piso, un documento viejo del mismo proveedor con la misma
+            # cantidad se pegaba a un lote nuevo.
+            nacida = (l.get("creada_at") or "")[:10]
+            if fecha_doc and nacida and fecha_doc < nacida:
+                continue
+            candidatos.append(l)
+        if len(candidatos) == 1:
+            return candidatos[0]
+        if len(candidatos) > 1:
+            log.info(f"[cruce] huella ambigua: {doc_prov} {concepto} "
+                     f"{cantidad:.0f}u coincide con "
+                     f"{[c['consecutivo'] for c in candidatos]}; no se cruza")
+        return None
 
     ds_sin_lote = []
     matches: dict[str, list] = {}   # orden_corte_id → [(doc, item)]
@@ -5462,10 +5513,27 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             ref = _norm_ref(it.get("ref"))
             lote = lotes_por_ref.get(ref) if ref else None
             if not lote:
+                # Busca una referencia del OS DENTRO del texto (digitación sin la
+                # palabra REF). Es evidencia, no adivinanza: aparece el código.
                 lote = _match_fallback(it.get("descripcion") or "")
             via_documento = False
-            if not lote:
-                lote = _match_por_documento(doc_prov)
+            if not lote and not ref:
+                # SOLO cuando el documento no dice a qué referencia pertenece.
+                #
+                # Antes aquí había un nivel que emparejaba por NIT a secas —
+                # "si este proveedor tiene un solo lote pendiente, es este"—.
+                # Era inofensivo mientras el lector devolvía lista vacía; al
+                # empezar a llegar documentos de verdad produjo dos cruces
+                # falsos en la primera corrida: el DS-1-1518 (2×230u a $13.300
+                # y $14.500) se pegó a un lote de 336u y generó una alerta de
+                # precio que no existía.
+                #
+                # Y si el documento SÍ trae su REF pero esa referencia no es de
+                # ningún lote del OS, la respuesta correcta es "no cruza" —son
+                # las referencias anteriores al sistema, que siguen
+                # facturándose—. Adivinar ensucia el costo de dos referencias a
+                # la vez y no se nota mirando la pantalla.
+                lote = _match_por_huella(doc_prov, it, doc)
                 via_documento = lote is not None
             if not lote:
                 ds_sin_lote.append({
@@ -5708,9 +5776,21 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             l["procesos_real_prenda"] = round(procesos_real_prenda, 2)
             l["costo_real_prenda"] = costo_real
             l["margen_real"] = round((precio_sin - costo_real) / precio_sin * 100, 1)
+            # ¿ESTÁ COMPLETO? Cambiar el bloque entero de procesos por lo que
+            # llegó hasta ahora infla el margen mientras falten facturas: con
+            # solo la confección del lote 2607-0001 daba 72,5% real contra 62,9%
+            # planeado, que se lee como una ganancia que no existe. Se marca
+            # como parcial y se dice qué falta.
+            llegaron = set((ds.get("conceptos") or []))
+            faltan = [c for c in (l.get("conceptos_esperados") or [])
+                      if c not in llegaron]
+            l["conceptos_faltantes"] = faltan
+            l["margen_real_parcial"] = bool(faltan)
         else:
             l["costo_real_prenda"] = None
             l["margen_real"] = None
+            l["margen_real_parcial"] = False
+            l["conceptos_faltantes"] = []
 
     # DESVIACIÓN SOLO SOBRE LO YA FACTURADO. Sumar el teórico de los lotes que
     # todavía no tienen factura y llamar a eso "desviación" da un número enorme
