@@ -16,8 +16,9 @@ Si la cajera lo llama turno, en el código se llama turno.
 | **Caja** | El punto de cobro físico. Florida tiene dos. | No es la tienda |
 | **Tienda** | El local. Tiene una bodega de Siigo y un centro de costo. | No es la caja |
 | **Ubicación** | Cualquier lugar donde hay stock: tienda, bodega central, Melonn | No es sólo la tienda |
-| **Variante** | Referencia + color + talla. Es lo que se vende. SKU `93634-1T12`. | No es la referencia |
-| **Referencia** | El modelo (`93634`). Agrupa variantes. | No se vende directamente |
+| **Variante** | Lo que se vende: una talla concreta de una referencia. SKU `92611-1T10`. | No es la referencia |
+| **Referencia** | El modelo con su variante de color (`92611-1`). Agrupa tallas. | No se vende directamente |
+| **Referencia base** | El modelo sin color (`92611`). Agrupa colores. | — |
 | **Arqueo** | El conteo físico del dinero al cerrar el turno | No es el cierre |
 | **Base** | El efectivo con el que empieza el turno | No es venta |
 | **Descuadre** | Diferencia entre lo contado y lo esperado | — |
@@ -465,8 +466,16 @@ Variante
 **INV-CAT1** — `precio_base` se guarda **siempre sin IVA**. Siigo declara en `tax_included`
 si su valor lo lleva; normalizar al revés parte o duplica el precio y nada avisa. Ya pasó.
 
-**VO `Sku`** — parsea `93634-1T12` → `referencia=93634`, `talla=1T12`. Es la llave que ya usa
-el análisis de venta por colección. El VO valida el formato y falla temprano.
+**VO `Sku`** — parsea `92611-1T10` → `referencia=92611-1`, `talla=10`.
+
+⚠️ **El `-1` es parte de la referencia, no de la talla.** La talla es el número final. Así lo
+hace `siigo._parse_ref_talla`, que ya alimenta el inventario por bodega y el análisis de venta
+por colección; si el POS parseara distinto, la misma prenda tendría dos identidades dentro del
+mismo sistema y ningún informe cuadraría. Hay una **prueba de contrato** entre los dos que
+falla si alguno cambia sin el otro.
+
+El VO expone además `referencia_base` (`92611`) para agrupar colores en la rejilla del POS, y
+`orden_talla()` para que las tallas se ordenen 4, 6, 8, 10, 12 y no 10, 12, 4, 6.
 
 ### `Cliente`
 

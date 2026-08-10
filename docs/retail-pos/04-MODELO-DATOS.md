@@ -354,9 +354,12 @@ CREATE INDEX ix_cliente_busqueda ON retail.clientes
 ```sql
 CREATE TABLE retail.variantes (
     id                  retail.ulid PRIMARY KEY,
-    sku                 text NOT NULL,                 -- '93634-1T12'
-    referencia          text NOT NULL,                 -- '93634'
-    talla               text NOT NULL,                 -- '1T12'
+    -- Formato MALE'DENIM: <referencia>T<talla>. El '-1' es de la REFERENCIA,
+    -- no de la talla. Es lo que ya hace siigo._parse_ref_talla, y desviarse
+    -- le daría a la misma prenda dos identidades dentro del mismo sistema.
+    sku                 text NOT NULL,                 -- '92611-1T10'
+    referencia          text NOT NULL,                 -- '92611-1'
+    talla               text NOT NULL,                 -- '10'
     color               text NOT NULL DEFAULT '',
     nombre              text NOT NULL,
     codigo_barras       text,                          -- Code128 que ya imprime Producción

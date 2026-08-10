@@ -3,6 +3,26 @@
 Siete fases. Cada una tiene **criterio de salida verificable**: no se avanza a la siguiente
 hasta que la anterior esté demostrada, no hasta que "esté lista".
 
+> ## ⚠️ Orden vigente (decidido 2026-08-05): la facturación va de último
+>
+> **1 → 2 → 4 → 5 → 3 → 6 → 7.** La Fase 3 (fiscal) se corre al final, justo antes del
+> piloto.
+>
+> **Por qué se puede.** El emisor fiscal está detrás de un puerto (ADR-001) y la venta se
+> cierra sin esperar a Siigo (ADR-002). El dominio, la pantalla de venta, el inventario, el
+> modo offline y la caja **no saben que Siigo existe**. Nada de eso se bloquea.
+>
+> **Lo que hay que tener presente.** El POS no puede abrir en una tienda sin facturación:
+> "de último" significa *lo último antes de salir a producción*, no opcional. Y mover el
+> riesgo mayor al final invierte el consejo habitual de atacar primero lo desconocido — lo
+> que lo hace aceptable aquí es que la incógnita ya no es técnica sino administrativa, y se
+> resuelve en paralelo sin ocupar tiempo de desarrollo.
+>
+> **La única precaución:** hacer el diagnóstico de la Fase 0 en algún momento antes de llegar
+> a la Fase 3 (son cuatro clics en Swagger y no cuesta nada). Si `automatic_number` viene en
+> `false`, son ~2 días más en la Fase 3, y es mejor saberlo con semanas de anticipación que
+> la semana que toca.
+
 Estimación en semanas de un desarrollador dedicado. Con dos personas, las fases 2 y 3 se
 solapan parcialmente (backend / frontend).
 
