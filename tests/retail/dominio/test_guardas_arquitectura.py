@@ -103,6 +103,31 @@ def test_no_hay_float_en_el_dominio():
     )
 
 
+def test_el_dominio_no_lee_el_reloj_por_su_cuenta():
+    """La hora entra como argumento, nunca se consulta desde el dominio.
+
+    Dos razones. La primera es que una regla que llama a `datetime.now()` no se
+    puede probar: el resultado cambia cada vez que corre. La segunda es
+    operativa — la hora de una venta la pone el SERVIDOR, no el dispositivo
+    (riesgo R7: una tablet con el reloj corrido tres horas manda ventas al
+    turno que no es).
+    """
+    prohibidos = {"now", "utcnow", "today", "time", "monotonic"}
+    infracciones = []
+    for archivo in _archivos(DOMINIO):
+        arbol = ast.parse(archivo.read_text(encoding="utf-8"))
+        for nodo in ast.walk(arbol):
+            if isinstance(nodo, ast.Call) and isinstance(nodo.func, ast.Attribute) \
+                    and nodo.func.attr in prohibidos:
+                infracciones.append(
+                    f"{archivo.relative_to(RAIZ)}:{nodo.lineno} "
+                    f"llama a .{nodo.func.attr}()")
+
+    assert not infracciones, (
+        "El dominio está leyendo el reloj. Recibe la hora como argumento:\n  "
+        + "\n  ".join(infracciones))
+
+
 def test_el_modulo_compila_en_la_version_de_produccion():
     """Railway corre Python 3.10. En local hay uno más nuevo, así que la
     sintaxis moderna pasa aquí y revienta allá — con la tienda abierta."""
