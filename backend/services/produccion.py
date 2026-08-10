@@ -5376,6 +5376,20 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             return False
         return a == b or a == b[:-1] or b == a[:-1]
 
+    # Referencias que el OS conoce (tengan lote cortado o no). Sirve para saber
+    # si una factura que no cruzó es NUESTRA —y entonces hay algo que revisar— o
+    # es de la producción anterior al sistema, que sigue facturándose y no tiene
+    # por qué aparecer.
+    refs_del_os: set[str] = set()
+    try:
+        for _r in ((sb.table("referencias_precosteo")
+                      .select("codigo_referencia").limit(2000).execute()).data or []):
+            cod = _norm_ref(_r.get("codigo_referencia"))
+            if cod:
+                refs_del_os.add(cod)
+    except Exception as e:
+        log.warning(f"[cruce] no pude leer el catálogo de referencias: {e}")
+
     lotes = []
     lotes_por_ref: dict[str, dict] = {}
     for oc in ocs:
@@ -5499,6 +5513,7 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
         return None
 
     ds_sin_lote = []
+    ajenos = {"n": 0, "total": 0.0}   # de referencias que el OS no maneja
     matches: dict[str, list] = {}   # orden_corte_id → [(doc, item)]
     for doc in docs:
         doc_prov = _norm_doc(doc.get("proveedor_id"))
@@ -5536,6 +5551,33 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                 lote = _match_por_huella(doc_prov, it, doc)
                 via_documento = lote is not None
             if not lote:
+                # SOLO LO QUE PUEDE SER NUESTRO (2026-08-10, pedido de Sebastián:
+                # "solo debes traer los documentos de las referencias que tenemos
+                # aquí"). La lista traía 64 filas y 34 eran de referencias que el
+                # OS nunca conoció —producción anterior al sistema, que sigue
+                # facturándose—. Una lista así no se revisa: se ignora.
+                #
+                #   · trae REF y es del OS      → sí: debió cruzar, hay algo que ver
+                #   · trae REF y NO es del OS   → no: es producción vieja
+                #   · sin REF (los DS)          → solo si ese proveedor tiene algún
+                #                                 lote del OS esperando ese proceso
+                #
+                # Lo que se oculta se CUENTA y se reporta. Una lista que se poda en
+                # silencio se lee como "no hay nada más", que es peor que la
+                # lista larga.
+                if ref:
+                    nuestro = ref in refs_del_os
+                    motivo = "ref_del_os_sin_lote"
+                else:
+                    nuestro = any(
+                        _doc_match((l.get("documentos_por_concepto") or {}).get(
+                            it.get("concepto") or "") or "", doc_prov)
+                        for l in lotes)
+                    motivo = "sin_referencia_legible"
+                if not nuestro:
+                    ajenos["n"] += 1
+                    ajenos["total"] += it["total_sin_iva"]
+                    continue
                 ds_sin_lote.append({
                     "ds":         doc["ds"],
                     "fecha":      doc["fecha"],
@@ -5543,6 +5585,7 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                     "descripcion": it["descripcion"],
                     "concepto":   it.get("concepto"),
                     "ref":        it.get("ref"),
+                    "motivo":     motivo,
                     "total":      it["total_sin_iva"],
                 })
                 continue
@@ -5700,15 +5743,29 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
     # OS (la producción vieja sigue facturándose), así que veinte alertas rojas
     # cada mañana entrenarían a ignorar el tablero. El detalle completo va en
     # `ds_sin_lote` para quien lo quiera revisar.
-    if ds_sin_lote:
-        monto = sum(d["total"] for d in ds_sin_lote)
-        muestra = ", ".join(d["ds"] for d in ds_sin_lote[:4])
+    sin_ref = [d for d in ds_sin_lote if d.get("motivo") == "sin_referencia_legible"]
+    con_ref = [d for d in ds_sin_lote if d.get("motivo") == "ref_del_os_sin_lote"]
+    if sin_ref:
+        # El caso REAL de hoy: los documentos soporte no traen referencia legible
+        # (la API de Siigo devuelve el nombre del producto, no el texto de la
+        # línea), así que solo se pueden atribuir cuando proveedor + concepto +
+        # cantidad señalan un único lote. Estos son de talleres que SÍ están
+        # trabajando lotes del OS, pero la cantidad no cuadra con ninguno.
         alertas.append({
-            "tipo": "ds_sin_lote", "severidad": "baja",
-            "mensaje": f"{len(ds_sin_lote)} factura(s) de proceso por "
-                       f"${monto:,.0f} no cruzan con ningún lote del OS "
-                       f"({muestra}{'…' if len(ds_sin_lote) > 4 else ''}). "
-                       f"Normalmente son referencias anteriores al sistema.",
+            "tipo": "ds_sin_referencia", "severidad": "media",
+            "mensaje": f"{len(sin_ref)} documento(s) soporte por "
+                       f"${sum(d['total'] for d in sin_ref):,.0f} son de talleres que "
+                       f"trabajan lotes del OS, pero no se pueden atribuir: no traen "
+                       f"referencia legible y la cantidad facturada no coincide con "
+                       f"ningún lote. Revísalos en Siigo.",
+        })
+    if con_ref:
+        alertas.append({
+            "tipo": "ds_sin_lote", "severidad": "media",
+            "mensaje": f"{len(con_ref)} factura(s) por "
+                       f"${sum(d['total'] for d in con_ref):,.0f} traen una referencia "
+                       f"del OS que no tiene lote cortado "
+                       f"({', '.join(dict.fromkeys(str(d.get('ref')) for d in con_ref))[:60]}).",
         })
 
     # ── Margen PLANEADO vs REAL por lote ─────────────────────────
@@ -5824,6 +5881,9 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
         },
         "lotes":       lotes,
         "ds_sin_lote": ds_sin_lote,
+        # Lo que se dejó fuera de esa lista, contado. Nunca se poda en silencio.
+        "ajenos":      {"documentos": ajenos["n"],
+                        "total": round(ajenos["total"], 2)},
         "alertas":     alertas,
     }
 

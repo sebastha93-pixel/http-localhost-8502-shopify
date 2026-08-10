@@ -59,7 +59,9 @@ interface Respuesta {
   };
   lotes?: Lote[];
   ds_sin_lote?: { ds: string; fecha: string; proveedor?: string; descripcion: string;
-                  concepto?: string; ref?: string; total: number }[];
+                  concepto?: string; ref?: string; motivo?: string; total: number }[];
+  /** Documentos que quedaron FUERA de la lista: referencias que el OS no maneja. */
+  ajenos?: { documentos: number; total: number };
   alertas?: { tipo: string; severidad: string; mensaje: string }[];
 }
 
@@ -134,6 +136,7 @@ export default function CosteoRealPage() {
   const lotes = data.lotes || [];
   const alertas = data.alertas || [];
   const dsSinLote = data.ds_sin_lote || [];
+  const ajenos = data.ajenos;
 
   return (
     <PageShell title="Costeo real" subtitle="Precosteo vs Documentos Soporte de Siigo (confección)">
@@ -267,7 +270,11 @@ export default function CosteoRealPage() {
       {dsSinLote.length > 0 && (
         <Card>
           <CardContent className="p-5 space-y-2">
-            <p className="section-label">Documentos soporte sin lote en el OS ({dsSinLote.length})</p>
+            <p className="section-label">Facturas de proceso sin cruzar ({dsSinLote.length})</p>
+            <p className="text-[0.68rem] leading-snug text-graphite">
+              Solo documentos que pueden ser de tus referencias. Los de producción
+              anterior al OS no se listan.
+            </p>
             <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <tbody>
@@ -276,16 +283,29 @@ export default function CosteoRealPage() {
                     <td className="py-1.5 font-semibold tabular text-navy-600">{d.ds}</td>
                     <td className="py-1.5 tabular text-graphite">{d.fecha}</td>
                     <td className="py-1.5 text-ink-900">{d.proveedor || "—"}</td>
-                    <td className="py-1.5 text-graphite truncate max-w-[300px]">{d.descripcion}</td>
+                    <td className="py-1.5 text-graphite truncate max-w-[280px]">{d.descripcion}</td>
+                    <td className="py-1.5 text-[0.65rem] uppercase tracking-wider text-graphite">
+                      {d.motivo === "sin_referencia_legible"
+                        ? <span title="La API de Siigo no devuelve la referencia escrita en los documentos soporte. Solo se puede atribuir si proveedor + proceso + cantidad señalan un único lote.">sin referencia</span>
+                        : d.motivo === "ref_del_os_sin_lote"
+                          ? <span title="La referencia existe en el OS pero no tiene lote cortado.">ref sin lote</span>
+                          : ""}
+                    </td>
                     <td className="py-1.5 text-right tabular font-semibold">{money(d.total)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
             </div>
-            <p className="text-[0.65rem] text-graphite">
-              Pueden ser lotes viejos (antes del OS), REF mal escrita en Siigo, o pagos de terminación/lavandería.
-            </p>
+            {/* Lo que se dejó fuera, contado. Una lista podada en silencio se lee
+                como "no hay nada más", que es peor que la lista larga. */}
+            {!!ajenos?.documentos && (
+              <p className="text-[0.65rem] text-graphite">
+                Además hay {ajenos.documentos} documento(s) por {money(ajenos.total)} de
+                referencias que el OS no maneja (producción anterior al sistema): no se
+                listan aquí a propósito.
+              </p>
+            )}
           </CardContent>
         </Card>
       )}
