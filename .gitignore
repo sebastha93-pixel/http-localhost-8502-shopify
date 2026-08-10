@@ -5,6 +5,10 @@
 # Base de datos local
 data/db/
 
+# Entorno virtual local (pruebas del modulo retail)
+.venv/
+venv/
+
 # Archivos temporales Python
 __pycache__/
 *.pyc
