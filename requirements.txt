@@ -31,5 +31,14 @@ pypdfium2>=4.30
 # PDF de etiquetas Zebra 10×10 con Code128 (produccion.ingreso).
 reportlab>=4.0
 
+# Modulo retail (POS) — habla con Postgres DIRECTO, no por PostgREST.
+# Motivo: una venta escribe venta + stock + caja + auditoria en UNA
+# transaccion, y supabase-py no da transacciones ni SELECT ... FOR UPDATE.
+# Ver docs/retail-pos/01-ARQUITECTURA.md (ADR-004). Aislado al modulo:
+# ningun servicio del ERP importa SQLAlchemy.
+sqlalchemy[asyncio]>=2.0
+psycopg[binary]>=3.1
+alembic>=1.13
+
 # Tests
 pytest>=8.0
