@@ -22,6 +22,37 @@
 
 ---
 
+## 0. Cómo correr las pruebas
+
+La primera vez, para dejar el entorno listo:
+
+```bash
+cd ~/Proyectos/MALE-DENIM-OS/codigo
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt pytest
+createdb retail_pos_test
+```
+
+Y de ahí en adelante:
+
+```bash
+RETAIL_TEST_DATABASE_URL="postgresql+psycopg://localhost/retail_pos_test" .venv/bin/pytest tests/retail -q
+```
+
+**Sin la variable, las pruebas de integración se saltan enteras** y sólo corren las de
+dominio. Es deliberado: no hay valor por defecto para la base, porque un default apuntando a
+la equivocada es la clase de error que se descubre después de haber borrado algo.
+
+| | Cuántas | Necesita | Tarda |
+|---|---|---|---|
+| Dominio (`tests/retail/dominio`) | 135 | nada — ni base, ni red, ni FastAPI | 0,1 s |
+| Integración (`tests/retail/integracion`) | 16 | PostgreSQL | 0,9 s |
+
+Que las 135 del dominio corran sin base de datos no es una curiosidad: es la razón entera
+de la arquitectura hexagonal en este módulo (ADR-001).
+
+---
+
 ## 1. Resumen ejecutivo
 
 El POS de MALE'DENIM **no es una app de punto de venta**. Es el módulo que convierte a
