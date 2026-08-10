@@ -52,6 +52,7 @@ interface Respuesta {
   resumen?: {
     lotes: number; con_ds: number; ok: number; con_alerta: number;
     total_teorico: number; total_real: number; total_procesos?: number; desviacion: number;
+    pendiente_facturar?: number; lotes_facturados?: number;
   };
   lotes?: Lote[];
   ds_sin_lote?: { ds: string; fecha: string; proveedor?: string; descripcion: string;
@@ -140,6 +141,10 @@ export default function CosteoRealPage() {
         <KpiCard label="Real confección" value={money(r.total_real)} accent="teal" />
         <KpiCard label="Otros procesos facturados"
           value={money(Math.max((r.total_procesos ?? r.total_real) - r.total_real, 0))} />
+        {/* Lo que falta por facturar NO es desviación: es plata que todavía no
+            llega. Mezclarlas mostraba un "ahorro" de millones que no existe. */}
+        <KpiCard label="Confección pendiente por facturar"
+          value={money(r.pendiente_facturar ?? 0)} />
         <KpiCard label="Desviación" value={money(r.desviacion)}
           variant={Math.abs(r.desviacion) > 0.01 * Math.max(r.total_teorico, 1) ? "danger" : "success"} />
         <KpiCard label="Alertas" value={alertas.length}

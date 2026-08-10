@@ -5452,6 +5452,13 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
     for doc in docs:
         doc_prov = _norm_doc(doc.get("proveedor_id"))
         for it in doc["items"]:
+            # SOLO items de proceso productivo. Al abrir la lectura a las
+            # facturas de compra entran TODAS: Apple, Shopify, el celular, la
+            # ferretería. Reportar eso como "no cruza con ningún lote" no es
+            # información, es ruido —121 documentos en la primera corrida—.
+            # Un item cuenta si trae REF o si su descripción nombra un proceso.
+            if not it.get("ref") and (it.get("concepto") or "otro") == "otro":
+                continue
             ref = _norm_ref(it.get("ref"))
             lote = lotes_por_ref.get(ref) if ref else None
             if not lote:
@@ -5705,13 +5712,21 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             l["costo_real_prenda"] = None
             l["margen_real"] = None
 
-    total_teorico = round(sum(l["total_teorico"] for l in lotes), 2)
-    # `total_real` es lo COMPARABLE con el teórico: solo confección. El total de
-    # todos los procesos va aparte — sumar peras (lavandería) con manzanas
-    # (confección) y restarle el teórico de confección daba una desviación falsa
-    # de millones en cuanto entrara la primera factura de lavandería.
-    total_real = round(sum((l.get("ds") or {}).get("total_confeccion", 0) for l in lotes), 2)
+    # DESVIACIÓN SOLO SOBRE LO YA FACTURADO. Sumar el teórico de los lotes que
+    # todavía no tienen factura y llamar a eso "desviación" da un número enorme
+    # y negativo que se lee como un ahorro —en la primera corrida: −$54,5 M—
+    # cuando en realidad es plata que falta por facturar. Son dos cosas
+    # distintas y ahora se muestran como dos cosas distintas.
+    #
+    # `total_real` es lo comparable con el teórico: solo confección. Mezclar
+    # lavandería con confección y restarle el teórico de confección daba una
+    # desviación falsa en cuanto entrara la primera factura de lavandería.
+    facturados = [l for l in lotes if (l.get("ds") or {}).get("total_confeccion")]
+    total_teorico = round(sum(l["total_teorico"] for l in facturados), 2)
+    total_real = round(sum((l.get("ds") or {}).get("total_confeccion", 0) for l in facturados), 2)
     total_procesos = round(sum(l.get("total_procesos_real", 0) for l in lotes), 2)
+    pendiente_facturar = round(sum(l["total_teorico"] for l in lotes
+                                   if l not in facturados), 2)
 
     return {
         "ok": True,
@@ -5724,6 +5739,8 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             "total_real":     total_real,
             "total_procesos": total_procesos,
             "desviacion":     round(total_real - total_teorico, 2),
+            "pendiente_facturar": pendiente_facturar,
+            "lotes_facturados":   len(facturados),
         },
         "lotes":       lotes,
         "ds_sin_lote": ds_sin_lote,
