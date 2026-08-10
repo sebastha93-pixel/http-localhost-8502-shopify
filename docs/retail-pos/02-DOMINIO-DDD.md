@@ -205,6 +205,13 @@ frontend ni en un trigger de base de datos.
 | **INV-V11** | Anular exige motivo no vacío + autorización, y **sólo** aplica a ventas cerradas del turno en curso | Anular ventas de ayer es reescribir la historia contable |
 | **INV-V12** | El IVA se calcula **por línea** y se suma; nunca sobre el total | Distintas líneas pueden tener distinta tarifa; calcular sobre el total introduce error de redondeo |
 
+> **Dónde se hace cumplir cada una.** Diez de las doce viven dentro del agregado y se prueban
+> sin base de datos. Las otras dos no pueden: **INV-V8** (la venta pertenece a un turno
+> abierto) necesita cargar la `SesionCaja`, así que la verifica el caso de uso; **INV-V10**
+> (idempotencia) es un índice único en la base — una regla que se comprueba en Python tiene
+> una ventana de carrera, el índice no. Ambas están anotadas en el docstring de `venta.py`
+> para que nadie las busque donde no están.
+
 ### Máquina de estados de `Venta`
 
 ```mermaid
