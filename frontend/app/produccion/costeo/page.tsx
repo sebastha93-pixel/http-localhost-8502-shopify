@@ -18,8 +18,10 @@ interface DsInfo {
   fecha: string;
   proveedor?: string;
   cantidad: number;
-  valor_unitario: number;
-  total_real: number;
+  valor_unitario: number;      // solo CONFECCIÓN: es lo comparable con el precosteo
+  total_confeccion?: number;
+  total_real: number;          // TODOS los procesos facturados del lote
+  conceptos?: string[];
   saldo_por_pagar: number;
 }
 
@@ -49,10 +51,11 @@ interface Respuesta {
   mensaje?: string;
   resumen?: {
     lotes: number; con_ds: number; ok: number; con_alerta: number;
-    total_teorico: number; total_real: number; desviacion: number;
+    total_teorico: number; total_real: number; total_procesos?: number; desviacion: number;
   };
   lotes?: Lote[];
-  ds_sin_lote?: { ds: string; fecha: string; proveedor?: string; descripcion: string; total: number }[];
+  ds_sin_lote?: { ds: string; fecha: string; proveedor?: string; descripcion: string;
+                  concepto?: string; ref?: string; total: number }[];
   alertas?: { tipo: string; severidad: string; mensaje: string }[];
 }
 
@@ -134,7 +137,9 @@ export default function CosteoRealPage() {
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <KpiCard label="Lotes cruzados" value={`${r.con_ds}/${r.lotes}`} meta="con documento soporte" accent="navy" />
         <KpiCard label="Costo teórico" value={money(r.total_teorico)} accent="steel" />
-        <KpiCard label="Costo real (DS)" value={money(r.total_real)} accent="teal" />
+        <KpiCard label="Real confección" value={money(r.total_real)} accent="teal" />
+        <KpiCard label="Otros procesos facturados"
+          value={money(Math.max((r.total_procesos ?? r.total_real) - r.total_real, 0))} />
         <KpiCard label="Desviación" value={money(r.desviacion)}
           variant={Math.abs(r.desviacion) > 0.01 * Math.max(r.total_teorico, 1) ? "danger" : "success"} />
         <KpiCard label="Alertas" value={alertas.length}
@@ -179,7 +184,8 @@ export default function CosteoRealPage() {
                     <th className="px-4 py-2 text-right">Total teórico</th>
                     <th className="px-4 py-2">DS Siigo</th>
                     <th className="px-4 py-2 text-right">$ Pagado</th>
-                    <th className="px-4 py-2 text-right">Total real</th>
+                    <th className="px-4 py-2 text-right">Real confección</th>
+                    <th className="px-4 py-2 text-right">Otros procesos</th>
                     <th className="px-4 py-2 text-right">Desviación</th>
                     <th className="px-4 py-2 text-right">Margen plan.</th>
                     <th className="px-4 py-2 text-right">Margen real</th>
@@ -203,7 +209,16 @@ export default function CosteoRealPage() {
                         <td className="px-4 py-2 text-right tabular font-semibold">{money(l.total_teorico)}</td>
                         <td className="px-4 py-2 tabular text-graphite">{l.ds?.ds || "—"}</td>
                         <td className="px-4 py-2 text-right tabular">{l.ds ? money(l.ds.valor_unitario) : "—"}</td>
-                        <td className="px-4 py-2 text-right tabular font-semibold">{l.ds ? money(l.ds.total_real) : "—"}</td>
+                        <td className="px-4 py-2 text-right tabular font-semibold">
+                          {l.ds ? money(l.ds.total_confeccion ?? 0) : "—"}
+                        </td>
+                        <td className="px-4 py-2 text-right tabular text-graphite">
+                          {l.ds
+                            ? <span title={(l.ds.conceptos || []).join(", ")}>
+                                {money(l.ds.total_real - (l.ds.total_confeccion ?? 0))}
+                              </span>
+                            : "—"}
+                        </td>
                         <td className={`px-4 py-2 text-right tabular font-bold ${(l.desviacion || 0) > 0 ? "text-terracotta" : (l.desviacion || 0) < 0 ? "text-sage" : "text-graphite"}`}>
                           {l.desviacion != null ? money(l.desviacion) : "—"}
                         </td>

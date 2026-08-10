@@ -5348,13 +5348,15 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
     ocs = listar_ordenes_corte(estado="cortada", limit=500)
     try:
         rutas = (sb.table("hoja_ruta_lote")
-                   .select("orden_corte_id,precio_confeccion,etapa,lavanderia_at,"
+                   .select("orden_corte_id,precio_confeccion,precio_terminacion,etapa,"
+                           "lavanderia_at,"
                            "confeccionista:confeccionista_id(nombre,documento)")
                    .limit(500).execute()).data or []
     except Exception:
         # Compat si la columna documento aún no existe
         rutas = (sb.table("hoja_ruta_lote")
-                   .select("orden_corte_id,precio_confeccion,etapa,lavanderia_at,"
+                   .select("orden_corte_id,precio_confeccion,precio_terminacion,etapa,"
+                           "lavanderia_at,"
                            "confeccionista:confeccionista_id(nombre)")
                    .limit(500).execute()).data or []
     ruta_por_oc = {r["orden_corte_id"]: r for r in rutas if r.get("orden_corte_id")}
@@ -5392,7 +5394,8 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             # (lote pasó a lavandería). Antes de eso no se alerta.
             "entregado_at":   (ruta or {}).get("lavanderia_at"),
             "unidades":       unidades,
-            "precio_teorico": precio,
+            "precio_teorico": precio,          # confección (el cruce principal)
+            "precio_terminacion": float((ruta or {}).get("precio_terminacion") or 0),
             "total_teorico":  round(unidades * precio, 2),
             "tiene_ruta":     bool(ruta),
             "ds":             None,
@@ -5463,6 +5466,8 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                     "fecha":      doc["fecha"],
                     "proveedor":  doc.get("proveedor_nombre") or doc.get("proveedor_id"),
                     "descripcion": it["descripcion"],
+                    "concepto":   it.get("concepto"),
+                    "ref":        it.get("ref"),
                     "total":      it["total_sin_iva"],
                 })
                 continue
@@ -5477,36 +5482,81 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                 }
             matches.setdefault(lote["orden_corte_id"], []).append((doc, it))
 
-    # PASO 2 — Evaluar cada lote contra la SUMA de sus DS.
+    # PASO 2 — Evaluar cada lote, CONCEPTO POR CONCEPTO.
+    #
+    # Un lote recibe facturas de confección, lavandería y terminación, y cada
+    # proceso tiene su propio precio pactado. Antes se sumaba todo junto y se
+    # comparaba contra el precio de CONFECCIÓN: apenas entrara la factura de
+    # lavandería, el lote gritaba "precio distinto" siendo que todo estaba bien.
+    #
+    # Así que se separan dos cosas que antes eran una:
+    #   · el TOTAL de procesos (todos los conceptos) → alimenta el margen real
+    #   · la COMPARACIÓN → cada concepto contra SU precio, y solo si hay precio
+    #     pactado. Lavandería no lo tiene en la ruta: se registra y no se juzga.
     for lote in lotes:
         pares = matches.get(lote["orden_corte_id"]) or []
         if not pares:
             continue
-        cantidad_total = sum(it["cantidad"] for _, it in pares)
-        total_real = round(sum(it["total_sin_iva"] for _, it in pares), 2)
-        valor_unit = round(total_real / cantidad_total, 2) if cantidad_total > 0 else 0
+
+        por_concepto: dict = {}
+        for doc, it in pares:
+            c = it.get("concepto") or "otro"
+            b = por_concepto.setdefault(
+                c, {"cantidad": 0.0, "total": 0.0, "docs": [], "proveedores": []})
+            b["cantidad"] += it["cantidad"]
+            b["total"] = round(b["total"] + it["total_sin_iva"], 2)
+            if doc["ds"] not in b["docs"]:
+                b["docs"].append(doc["ds"])
+            prov = doc.get("proveedor_nombre") or doc.get("proveedor_id")
+            if prov and prov not in b["proveedores"]:
+                b["proveedores"].append(prov)
+        for b in por_concepto.values():
+            b["valor_unitario"] = (round(b["total"] / b["cantidad"], 2)
+                                   if b["cantidad"] > 0 else 0)
+
+        total_procesos = round(sum(b["total"] for b in por_concepto.values()), 2)
+        conf = por_concepto.get("confeccion") or {}
+
+        lote["por_concepto"] = por_concepto
         lote["ds"] = {
-            "ds":              " + ".join(d["ds"] for d, _ in pares),
+            # dict.fromkeys en vez de set: conserva el orden de llegada.
+            "ds":              " + ".join(dict.fromkeys(d["ds"] for d, _ in pares)),
             "fecha":           max(d["fecha"] for d, _ in pares),
             "proveedor":       (pares[0][0].get("proveedor_nombre")
                                 or pares[0][0].get("proveedor_id")),
-            "cantidad":        cantidad_total,
-            "valor_unitario":  valor_unit,
-            "total_real":      total_real,
+            # cantidad y valor unitario son los de CONFECCIÓN: son los que se
+            # comparan contra el precosteo. `total_real` sí es todo.
+            "cantidad":        conf.get("cantidad", 0.0),
+            "valor_unitario":  conf.get("valor_unitario", 0),
+            "total_confeccion": conf.get("total", 0.0),
+            "total_real":      total_procesos,
+            "conceptos":       sorted(por_concepto.keys()),
             "saldo_por_pagar": round(sum(
                 d["balance"] for d in {d["ds"]: d for d, _ in pares}.values()), 2),
         }
-        dif_precio_pct = (
-            abs(valor_unit - lote["precio_teorico"]) / lote["precio_teorico"] * 100
-            if lote["precio_teorico"] > 0 else 0
-        )
-        if lote["precio_teorico"] > 0 and dif_precio_pct > TOLERANCIA_PRECIO_PCT:
-            lote["estado"] = "precio_distinto"
-        elif lote["unidades"] > 0 and abs(cantidad_total - lote["unidades"]) > TOLERANCIA_CANTIDAD:
-            lote["estado"] = "cantidad_distinta"
-        else:
-            lote["estado"] = "ok"
-        lote["desviacion"] = round(total_real - lote["total_teorico"], 2)
+
+        problemas = []
+        for concepto, precio_pactado in (("confeccion", lote["precio_teorico"]),
+                                         ("terminacion", lote["precio_terminacion"])):
+            b = por_concepto.get(concepto)
+            if not b or precio_pactado <= 0:
+                continue
+            dif_pct = abs(b["valor_unitario"] - precio_pactado) / precio_pactado * 100
+            if dif_pct > TOLERANCIA_PRECIO_PCT:
+                problemas.append({"tipo": "precio_distinto", "concepto": concepto,
+                                  "pactado": precio_pactado,
+                                  "facturado": b["valor_unitario"],
+                                  "docs": b["docs"]})
+            elif (lote["unidades"] > 0
+                  and abs(b["cantidad"] - lote["unidades"]) > TOLERANCIA_CANTIDAD):
+                problemas.append({"tipo": "cantidad_distinta", "concepto": concepto,
+                                  "facturado": b["cantidad"], "docs": b["docs"]})
+        lote["problemas"] = problemas
+        lote["estado"] = problemas[0]["tipo"] if problemas else "ok"
+        # Desviación comparable: confección real contra confección teórica. Antes
+        # restaba el total de TODOS los conceptos menos solo el de confección.
+        lote["desviacion"] = round(conf.get("total", 0.0) - lote["total_teorico"], 2)
+        lote["total_procesos_real"] = total_procesos
 
     # ── Alertas ──────────────────────────────────────────────────
     alertas = []
@@ -5529,23 +5579,28 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                 "tipo": "sin_ds", "severidad": "media",
                 "mensaje": f"Lote {l['consecutivo']} (REF {l['referencia']}) — "
                            f"{l['confeccionista'] or 'confección'} entregó hace {dias} día(s) "
-                           f"y aún no tiene documento soporte en Siigo.",
+                           f"y aún no tiene factura de confección en Siigo.",
             })
-        elif l["estado"] == "precio_distinto":
-            ds = l["ds"]
-            alertas.append({
-                "tipo": "precio_distinto", "severidad": "alta",
-                "mensaje": f"Lote {l['consecutivo']}: DS {ds['ds']} pagó "
-                           f"${ds['valor_unitario']:,.0f}/prenda pero el precosteo dice "
-                           f"${l['precio_teorico']:,.0f} (desviación ${l['desviacion']:,.0f}).",
-            })
-        elif l["estado"] == "cantidad_distinta":
-            ds = l["ds"]
-            alertas.append({
-                "tipo": "cantidad_distinta", "severidad": "alta",
-                "mensaje": f"Lote {l['consecutivo']}: DS {ds['ds']} contabilizó "
-                           f"{ds['cantidad']:.0f} unidades pero se cortaron {l['unidades']}.",
-            })
+        else:
+            # Una alerta por PROBLEMA, diciendo de qué proceso se trata. Sin el
+            # concepto en el mensaje, "el precio no cuadra" no dice a quién
+            # llamar: al taller de confección o al de terminación.
+            for pr in (l.get("problemas") or []):
+                docs = " + ".join(pr.get("docs") or []) or "—"
+                if pr["tipo"] == "precio_distinto":
+                    alertas.append({
+                        "tipo": "precio_distinto", "severidad": "alta",
+                        "mensaje": f"Lote {l['consecutivo']} · {pr['concepto']}: "
+                                   f"{docs} facturó ${pr['facturado']:,.0f}/prenda "
+                                   f"pero lo pactado es ${pr['pactado']:,.0f}.",
+                    })
+                elif pr["tipo"] == "cantidad_distinta":
+                    alertas.append({
+                        "tipo": "cantidad_distinta", "severidad": "alta",
+                        "mensaje": f"Lote {l['consecutivo']} · {pr['concepto']}: "
+                                   f"{docs} facturó {pr['facturado']:.0f} unidades "
+                                   f"pero se cortaron {l['unidades']}.",
+                    })
     # Proveedores de lotes activos SIN documento registrado — el ancla del
     # cruce. Aviso una sola vez por proveedor.
     sin_doc = sorted({l["confeccionista"] for l in lotes
@@ -5565,11 +5620,20 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                            f"viene de {pd['proveedor_ds']}, que NO es el proveedor asignado "
                            f"({l['confeccionista']}). Verifica en Siigo.",
             })
-    for d in ds_sin_lote:
+    # Facturas de proceso que no cruzan con ningún lote: UNA alerta con el
+    # total, no una por documento. La mayoría son de referencias anteriores al
+    # OS (la producción vieja sigue facturándose), así que veinte alertas rojas
+    # cada mañana entrenarían a ignorar el tablero. El detalle completo va en
+    # `ds_sin_lote` para quien lo quiera revisar.
+    if ds_sin_lote:
+        monto = sum(d["total"] for d in ds_sin_lote)
+        muestra = ", ".join(d["ds"] for d in ds_sin_lote[:4])
         alertas.append({
-            "tipo": "ds_sin_lote", "severidad": "media",
-            "mensaje": f"DS {d['ds']} de {d['proveedor']} (\"{d['descripcion'][:60]}\") "
-                       f"por ${d['total']:,.0f} no corresponde a ningún lote del OS.",
+            "tipo": "ds_sin_lote", "severidad": "baja",
+            "mensaje": f"{len(ds_sin_lote)} factura(s) de proceso por "
+                       f"${monto:,.0f} no cruzan con ningún lote del OS "
+                       f"({muestra}{'…' if len(ds_sin_lote) > 4 else ''}). "
+                       f"Normalmente son referencias anteriores al sistema.",
         })
 
     # ── Margen PLANEADO vs REAL por lote ─────────────────────────
@@ -5642,7 +5706,12 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             l["margen_real"] = None
 
     total_teorico = round(sum(l["total_teorico"] for l in lotes), 2)
-    total_real = round(sum((l.get("ds") or {}).get("total_real", 0) for l in lotes), 2)
+    # `total_real` es lo COMPARABLE con el teórico: solo confección. El total de
+    # todos los procesos va aparte — sumar peras (lavandería) con manzanas
+    # (confección) y restarle el teórico de confección daba una desviación falsa
+    # de millones en cuanto entrara la primera factura de lavandería.
+    total_real = round(sum((l.get("ds") or {}).get("total_confeccion", 0) for l in lotes), 2)
+    total_procesos = round(sum(l.get("total_procesos_real", 0) for l in lotes), 2)
 
     return {
         "ok": True,
@@ -5653,6 +5722,7 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             "con_alerta":     len(alertas),
             "total_teorico":  total_teorico,
             "total_real":     total_real,
+            "total_procesos": total_procesos,
             "desviacion":     round(total_real - total_teorico, 2),
         },
         "lotes":       lotes,
