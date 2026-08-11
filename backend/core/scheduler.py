@@ -149,6 +149,7 @@ def _refresh_once(full: bool = False) -> dict:
             except Exception as e:
                 log.debug(f"Persist overrides: {e}")
             _chequear_salud()
+            _chequear_cartera()
             last_run["ok"] = True
             log.info("Scheduler light: ✓")
             return {"ok": True, "type": "light"}
@@ -159,6 +160,7 @@ def _refresh_once(full: bool = False) -> dict:
         _last_full_at = time.time()
 
         _chequear_salud()
+        _chequear_cartera()
 
         last_run["ok"] = bool(result.get("ok"))
         last_run["completados"] = result.get("completados", 0)
@@ -219,6 +221,35 @@ def start() -> threading.Thread:
 def stop():
     """Detiene el scheduler (al apagar el servidor)."""
     _stop_event.set()
+
+
+def _chequear_cartera() -> None:
+    """Cartera de contraentrega: avisa si hay plata vieja sin consignar.
+
+    Va en el mismo tick que el centinela porque necesita los mismos pedidos ya
+    cargados, y porque el cruce contra Siigo está cacheado 2 h: correrlo cada
+    hora no cuesta llamadas de más.
+
+    El aviso se manda a lo sumo una vez al día por problema (ver
+    `cartera_cod.RECORDAR_CADA_H`) y solo si algo NUEVO se venció. Una alerta que
+    suena cada hora por lo mismo enseña a ignorarla.
+
+    Nunca revienta el tick: si Siigo no contesta, se registra y se sigue.
+    """
+    try:
+        from backend.services import cartera_cod, melonn as mlsvc, metricas
+        data = mlsvc.obtener_pedidos(forzar_refresh=False)
+        pedidos = [metricas.clasificar(x) for x in (data.get("pedidos") or [])]
+        if not pedidos:
+            return
+        r = cartera_cod.revisar_y_avisar(pedidos)
+        if r.get("avisos"):
+            log.warning(f"[cartera] avisos enviados: {r['avisos']}")
+        else:
+            log.info(f"[cartera] sin novedades · vencidas={r.get('vencidas')} "
+                     f"sin_facturar={r.get('sin_facturar_viejos')}")
+    except Exception as e:
+        log.warning(f"[cartera] la revisión falló (no afecta el refresh): {str(e)[:180]}")
 
 
 def _chequear_salud() -> None:

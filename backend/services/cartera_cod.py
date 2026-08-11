@@ -272,3 +272,140 @@ def cruzar(pedidos: list[dict], *, desde: Optional[str] = None) -> dict:
         "abiertas":          abiertas[:300],
         "sin_factura":       sorted(sin_facturar, key=lambda x: x["entrega"])[:300],
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ALERTA POR ANTIGÜEDAD
+# ═══════════════════════════════════════════════════════════════════════
+#
+# POR QUÉ (2026-08-10): al cruzar por primera vez aparecieron saldos de MAYO
+# todavía abiertos — la FV-1-60544 con 88 días, de un pedido entregado el 23 de
+# mayo. Nadie lo sabía porque el tablero mostraba un solo número gigante que
+# crecía. El ciclo normal de Melonn es de días: pasados 30, eso no es demora, es
+# plata perdida de vista.
+#
+# UMBRAL EN 30 DÍAS y no en 15: el 86% de la cartera vive en la franja 0-15, que
+# es el ciclo sano. Avisar a los 15 sería avisar por lo normal, y una alerta que
+# suena por lo normal enseña a ignorarla.
+
+UMBRAL_DIAS_VENCIDA = 30
+UMBRAL_DIAS_SIN_FACTURAR = 15
+RECORDAR_CADA_H = 24          # un recordatorio al día, no uno por tick
+
+
+def _ultimo_aviso(tipo: str) -> Optional[dict]:
+    """La última notificación de ese tipo. La tabla de avisos ES la memoria:
+    así no hace falta una tabla nueva ni estado en el proceso —que con 4 workers
+    y reinicios no serviría de nada—."""
+    try:
+        from backend.services import notificaciones
+        sb = notificaciones._sb()
+        if sb is None:
+            return None
+        r = (sb.table("notificaciones").select("creado_en,meta")
+               .eq("tipo", tipo).order("creado_en", desc=True)
+               .limit(1).execute()).data
+        return r[0] if r else None
+    except Exception as e:
+        log.warning(f"[cartera_cod] no pude leer el último aviso: {str(e)[:120]}")
+        return None
+
+
+def _debe_avisar(tipo: str, claves: list[str]) -> bool:
+    """Avisar si el problema CAMBIÓ, o si ya pasaron las horas del recordatorio.
+
+    'Cambió' significa que apareció algo nuevo, no que desapareció: si una
+    factura se cobró, la lista se achica y eso no merece una alerta.
+    """
+    prev = _ultimo_aviso(tipo)
+    if not prev:
+        return True
+    antes = set((prev.get("meta") or {}).get("claves") or [])
+    if set(claves) - antes:
+        return True               # hay algo nuevo vencido
+    try:
+        cuando = datetime.fromisoformat(str(prev.get("creado_en")).replace("Z", "+00:00"))
+        if cuando.tzinfo is None:
+            cuando = cuando.replace(tzinfo=timezone.utc)
+        horas = (datetime.now(timezone.utc) - cuando).total_seconds() / 3600
+        return horas >= RECORDAR_CADA_H
+    except (TypeError, ValueError):
+        return True               # fecha ilegible: mejor avisar que callarse
+
+
+def revisar_y_avisar(pedidos: list[dict]) -> dict:
+    """Revisa la cartera y avisa a la campanita de finanzas si hay plata vieja.
+
+    Manda hasta DOS avisos, con tipos distintos a propósito: uno se le reclama a
+    Melonn y el otro lo cierra contabilidad. Mezclarlos en un solo mensaje haría
+    que nadie sepa a quién le toca.
+    """
+    res = cruzar(pedidos)
+    if not res.get("disponible"):
+        return {"ok": False, "motivo": res.get("motivo")}
+
+    from backend.services import notificaciones
+    salida = {"ok": True, "avisos": []}
+
+    # ── 1. Facturas entregadas con saldo viejo → se le reclama a Melonn ──
+    vencidas = [f for f in (res.get("abiertas") or [])
+                if (f.get("dias") or 0) > UMBRAL_DIAS_VENCIDA]
+    if vencidas:
+        claves = sorted(f["factura"] for f in vencidas)
+        monto = sum(f["saldo"] for f in vencidas)
+        if _debe_avisar("cartera_cod_vencida", claves):
+            vieja = max(vencidas, key=lambda f: f.get("dias") or 0)
+            n = notificaciones.crear_para_modulo(
+                modulo="finanzas",
+                tipo="cartera_cod_vencida",
+                titulo=(f"Contraentrega: {len(vencidas)} factura(s) con más de "
+                        f"{UMBRAL_DIAS_VENCIDA} días sin consignar"),
+                mensaje=(f"${monto:,.0f} sin consignar. La más vieja es la "
+                         f"{vieja['factura']} con {vieja['dias']} días "
+                         f"(pedido #{vieja['orden']}, entregado {vieja['entrega']}). "
+                         f"El ciclo normal de Melonn es de días."),
+                enlace="/finanzas",
+                meta={"claves": claves, "monto": round(monto, 2),
+                      "umbral_dias": UMBRAL_DIAS_VENCIDA},
+                creado_por="centinela",
+            )
+            log.warning(f"[cartera_cod] {len(vencidas)} facturas vencidas "
+                        f"(${monto:,.0f}); avisé a {n} persona(s)")
+            salida["avisos"].append({"tipo": "cartera_cod_vencida",
+                                     "facturas": len(vencidas),
+                                     "monto": round(monto, 2), "destinatarios": n})
+
+    # ── 2. Entregado y sin factura → lo cierra contabilidad ──────────────
+    hoy = datetime.now(timezone.utc).date()
+    def _dias_entrega(s):
+        try:
+            return (hoy - date.fromisoformat(s)).days
+        except (TypeError, ValueError):
+            return None
+    sin_fac = [s for s in (res.get("sin_factura") or [])
+               if (_dias_entrega(s.get("entrega")) or 0) > UMBRAL_DIAS_SIN_FACTURAR]
+    if sin_fac:
+        claves = sorted(str(s["orden"]) for s in sin_fac)
+        monto = sum(s["valor"] for s in sin_fac)
+        if _debe_avisar("cod_sin_facturar", claves):
+            n = notificaciones.crear_para_modulo(
+                modulo="finanzas",
+                tipo="cod_sin_facturar",
+                titulo=f"{len(sin_fac)} pedido(s) entregados sin factura de venta",
+                mensaje=(f"${monto:,.0f} en pedidos de contraentrega entregados hace "
+                         f"más de {UMBRAL_DIAS_SIN_FACTURAR} días que no tienen "
+                         f"factura en Siigo. Salió mercancía y el cliente pagó. "
+                         f"Esto no lo debe Melonn: lo cierra contabilidad."),
+                enlace="/finanzas",
+                meta={"claves": claves, "monto": round(monto, 2)},
+                creado_por="centinela",
+            )
+            log.warning(f"[cartera_cod] {len(sin_fac)} entregados sin factura "
+                        f"(${monto:,.0f}); avisé a {n} persona(s)")
+            salida["avisos"].append({"tipo": "cod_sin_facturar",
+                                     "pedidos": len(sin_fac),
+                                     "monto": round(monto, 2), "destinatarios": n})
+
+    salida["vencidas"] = len(vencidas)
+    salida["sin_facturar_viejos"] = len(sin_fac)
+    return salida
