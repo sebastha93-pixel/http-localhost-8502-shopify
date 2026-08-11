@@ -80,14 +80,21 @@ class ResumenFinanzas(BaseModel):
     # que Melonn ya consignó: el 2026-08-10 mostraba $168.388.033 cuando la
     # deuda real era $36.552.345. Se dejan las dos: la bruta sirve de operación,
     # la real es la que se le reclama a Melonn. Ver services/cartera_cod.py.
-    cartera_disponible:  bool = False   # False = Siigo no respondió; NO es cero
-    cartera_motivo:      Optional[str] = None
-    cod_melonn_debe:     float = 0.0
-    n_cod_melonn_debe:   int = 0
-    cod_ya_cobrado:      float = 0.0
-    cod_sin_facturar:    float = 0.0
-    n_cod_sin_facturar:  int = 0
-    cod_cartera_transito: float = 0.0
+    # OJO CON LOS NOMBRES: la primera versión decía `cod_melonn_debe` usando el
+    # `balance` de la factura como señal de cobro. Está mal: 1.328 de 1.329
+    # facturas COD se cierran contra la cuenta "CONTRA ENTREGA CREDITO 10 DIAS",
+    # así que saldo 0 = venta a crédito registrada, NO plata recibida. Cuánto
+    # consignó Melonn se mide en la conciliación. Ver services/cartera_cod.py.
+    cartera_disponible:   bool = False   # False = Siigo no respondió; NO es cero
+    cartera_motivo:       Optional[str] = None
+    cod_facturado_credito:   float = 0.0   # facturado contra la cuenta de COD
+    n_cod_facturado_credito: int = 0
+    cod_cobrado_directo:  float = 0.0      # facturado y pagado por otro medio
+    n_cod_cobrado_directo: int = 0
+    cod_sin_facturar:     float = 0.0      # SIN ninguna factura (cualquier medio)
+    n_cod_sin_facturar:   int = 0
+    cod_recaudo_medible:  bool = False
+    cod_nota_recaudo:     Optional[str] = None
     n_cod_total:        int
     n_cod_pendientes:   int
     n_cod_transito:     int
@@ -155,12 +162,14 @@ def resumen(_: CurrentUser = Depends(get_current_user)) -> ResumenFinanzas:
     return ResumenFinanzas(
         cartera_disponible=bool(cart.get("disponible")),
         cartera_motivo=cart.get("motivo"),
-        cod_melonn_debe=cart.get("melonn_debe", 0.0),
-        n_cod_melonn_debe=cart.get("n_melonn_debe", 0),
-        cod_ya_cobrado=cart.get("ya_cobrado", 0.0),
+        cod_facturado_credito=cart.get("facturado_credito", 0.0),
+        n_cod_facturado_credito=cart.get("n_facturado_credito", 0),
+        cod_cobrado_directo=cart.get("cobrado_directo", 0.0),
+        n_cod_cobrado_directo=cart.get("n_cobrado_directo", 0),
         cod_sin_facturar=cart.get("sin_facturar", 0.0),
         n_cod_sin_facturar=cart.get("n_sin_facturar", 0),
-        cod_cartera_transito=cart.get("en_transito", 0.0),
+        cod_recaudo_medible=bool(cart.get("recaudo_medible")),
+        cod_nota_recaudo=cart.get("nota_recaudo"),
         cod_total=sum(p.get("valor_num", 0) for p in cods),
         cod_pendientes=sum(p.get("valor_num", 0) for p in cod_pend),
         cod_transito=sum(p.get("valor_num", 0) for p in cod_tran),

@@ -1,34 +1,35 @@
 """
-CARTERA CONTRAENTREGA — lo que Melonn nos debe DE VERDAD.
+CARTERA CONTRAENTREGA — qué está facturado y qué falta por recaudar.
 ═══════════════════════════════════════════════════════════════════════════
 
-EL PROBLEMA (2026-08-10, pedido de Sebastián): el tablero mostraba
-$168.388.033 de "COD entregado". Ese número es la suma de TODO lo entregado en
-la ventana de 90 días y solo crece, porque nunca descuenta lo que Melonn ya
-consignó. Medido contra producción ese mismo día:
+CORRECCIÓN IMPORTANTE (2026-08-11). La primera versión de este módulo usaba el
+`balance` de la factura como señal de "Melonn ya pagó". ESO ESTÁ MAL, y Sebastián
+lo cazó: "hay muchos que están facturados y ya marcados como pagados en Siigo".
 
-    tablero              $168.388.033   (936 pedidos entregados)
-    deuda real            $36.552.345   (210 facturas con saldo abierto)
-    ya cobrado           $124.064.381   (689 facturas en saldo 0)
+Lo que se midió después, contra producción:
 
-Inflado 4,6 veces. Con un número así no se puede reclamar nada ni proyectar
-caja: no se sabe qué parte ya entró.
+  · 1.328 de las 1.329 facturas de contraentrega registran su pago contra la
+    cuenta "CONTRA ENTREGA CREDITO 10 DIAS" (13050501), NO contra un banco.
+    O sea que `balance = 0` significa "venta a crédito registrada", no "la plata
+    llegó". La consignación de Melonn es un movimiento contable APARTE, que no
+    se ve en la factura.
+  · De 44 pedidos que reporté como "entregados sin facturar", 41 SÍ tenían
+    factura — con otro medio de pago: 31 MANUAL, 6 ADDI PAYMENT, y unos pocos
+    BANCOLOMBIA / EFECTIVO / MERCADO PAGO. El medio de ENVÍO (contraentrega) y
+    el medio de PAGO de la factura no son lo mismo: un envío COD puede acabar
+    cobrado por transferencia. Solo 3 no tenían ninguna factura.
 
-LA SOLUCIÓN: no calcularlo, LEERLO. Cada factura de venta en Siigo trae
+POR ESO ESTE MÓDULO YA NO DICE "MELONN NOS DEBE". Desde Siigo solo se puede
+saber qué se facturó y contra qué cuenta; cuánto consignó Melonn se mide en el
+módulo de conciliación, que tiene los recaudos pedido por pedido (tabla
+`recon.gateway_transactions`, gateway `melonn_cod`). El backend del OS todavía no
+puede leer eso —llega a `recon` solo por HTTP y ese servicio no expone el detalle
+por pedido—, así que acá se muestra lo que SÍ se puede probar y se dice
+explícitamente lo que falta. Medido a mano el 2026-08-11: de 943 entregados, 750
+con recaudo reportado por Melonn y 193 sin reporte ($34,9 M).
 
-    observations = "Orden Nº: 62098 - Medio de Pago: CASH ON DELIVERY (COD)"
-
-y trae su `balance`. Ese saldo ES la cartera viva: si está en 0, el dinero
-llegó; si no, Melonn lo tiene. La contadora ya hace ese registro, así que la
-app no tiene que interpretar nada — solo cruzar el número de orden.
-
-DOS COSAS QUE APARECIERON AL CRUZAR y que el tablero tapaba:
-
-  · 44 pedidos ENTREGADOS ($8.391.900) sin factura de venta en Siigo.
-    Mercancía que salió, el cliente pagó, y no hay factura. Ese hueco es más
-    grave que el número inflado, y antes era invisible.
-  · Saldos de mayo y junio todavía abiertos (FV-1-60544, orden entregada el
-    23 de mayo). Plata para reclamar, no para esperar.
+Preferir un dato incompleto y rotulado antes que un número redondo y falso: el
+número falso se usa para tomar decisiones.
 """
 from __future__ import annotations
 
@@ -112,14 +113,26 @@ def _fetch_facturas_cod(desde: str) -> dict[str, list[dict]]:
             if not m:
                 continue
             con_patron += 1
-            if not _es_cod(m.group(2)):
-                continue
-            cod += 1
+            # TODAS las facturas, no solo las marcadas COD: 41 de 44 pedidos
+            # que parecían "sin facturar" estaban facturados con otro medio de
+            # pago. El medio de envío no determina el medio de pago.
+            es_cod = _es_cod(m.group(2))
+            if es_cod:
+                cod += 1
+            # La cuenta contra la que se registró el pago es la que dice si es
+            # venta a crédito (la plata NO llegó) o cobro efectivo.
+            cuentas = [(pg.get("name") or "").strip().upper()
+                       for pg in (f.get("payments") or [])]
+            a_credito = any("CONTRA ENTREGA" in c for c in cuentas)
             por_orden.setdefault(m.group(1), []).append({
                 "factura":  f.get("name"),
                 "fecha":    (f.get("date") or "")[:10],
                 "total":    float(f.get("total") or 0),
                 "saldo":    float(f.get("balance") or 0),
+                "medio":    m.group(2).strip().upper(),
+                "es_cod":   es_cod,
+                "a_credito": a_credito,
+                "cuentas":  cuentas,
                 "cliente":  (f.get("customer") or {}).get("identification"),
                 "url":      f.get("public_url"),
             })
@@ -204,9 +217,9 @@ def cruzar(pedidos: list[dict], *, desde: Optional[str] = None) -> dict:
             entregados.setdefault(n, p)
 
     hoy = datetime.now(timezone.utc).date()
-    abiertas: list[dict] = []
-    cobrado = 0.0
-    n_cobrado = 0
+    a_credito: list[dict] = []      # facturado contra "CONTRA ENTREGA CREDITO 10 DIAS"
+    cobrado_directo = 0.0           # facturado y pagado por otro medio (banco, ADDI…)
+    n_directo = 0
     vistas: set = set()
 
     for n, p in entregados.items():
@@ -214,18 +227,18 @@ def cruzar(pedidos: list[dict], *, desde: Optional[str] = None) -> dict:
             if f["factura"] in vistas:
                 continue          # una factura puede cubrir dos órdenes
             vistas.add(f["factura"])
-            if f["saldo"] > 0:
+            if f["a_credito"]:
                 try:
                     dias = (hoy - date.fromisoformat(f["fecha"])).days
                 except (TypeError, ValueError):
                     dias = None
-                abiertas.append({**f, "orden": n, "dias": dias,
-                                 "entrega": (p.get("fecha_entrega") or "")[:10],
-                                 "ciudad": p.get("ciudad_destino"),
-                                 "valor_melonn": p.get("valor_num")})
+                a_credito.append({**f, "orden": n, "dias": dias,
+                                  "entrega": (p.get("fecha_entrega") or "")[:10],
+                                  "ciudad": p.get("ciudad_destino"),
+                                  "valor_melonn": p.get("valor_num")})
             else:
-                cobrado += f["total"]
-                n_cobrado += 1
+                cobrado_directo += f["total"]
+                n_directo += 1
 
     sin_facturar = [{"orden": n,
                      "valor": p.get("valor_num") or 0,
@@ -233,44 +246,42 @@ def cruzar(pedidos: list[dict], *, desde: Optional[str] = None) -> dict:
                      "ciudad": p.get("ciudad_destino")}
                     for n, p in entregados.items() if n not in fv]
 
-    # Facturado con saldo pero el pedido no está entregado: es cartera futura,
-    # no deuda exigible. Se muestra aparte para que no se confunda con lo uno.
-    en_transito = 0.0
-    n_transito = 0
-    for n, fs in fv.items():
-        if n in entregados:
-            continue
-        for f in fs:
-            if f["saldo"] > 0:
-                en_transito += f["saldo"]
-                n_transito += 1
+    a_credito.sort(key=lambda x: (x["dias"] is None, -(x["dias"] or 0)))
+    total_credito = round(sum(f["total"] for f in a_credito), 2)
 
-    abiertas.sort(key=lambda x: (x["dias"] is None, -(x["dias"] or 0)))
-    deuda = round(sum(f["saldo"] for f in abiertas), 2)
-
-    # Antigüedad: una deuda de 90 días no se cobra igual que una de 5.
+    # Antigüedad contra el plazo pactado: la cuenta se llama "CRÉDITO 10 DÍAS",
+    # así que a los 30 ya no es demora normal. Sirva o no como deuda exigible
+    # —eso lo confirma la conciliación—, una factura a crédito de 88 días hay
+    # que mirarla.
     tramos = {"0-15": 0.0, "16-30": 0.0, "31-60": 0.0, "60+": 0.0, "sin_fecha": 0.0}
-    for f in abiertas:
+    for f in a_credito:
         d = f["dias"]
         k = ("sin_fecha" if d is None else
              "0-15" if d <= 15 else "16-30" if d <= 30 else
              "31-60" if d <= 60 else "60+")
-        tramos[k] = round(tramos[k] + f["saldo"], 2)
+        tramos[k] = round(tramos[k] + f["total"], 2)
 
     return {
-        "disponible":        True,
-        "melonn_debe":       deuda,
-        "n_melonn_debe":     len(abiertas),
-        "ya_cobrado":        round(cobrado, 2),
-        "n_ya_cobrado":      n_cobrado,
-        "sin_facturar":      round(sum(x["valor"] for x in sin_facturar), 2),
-        "n_sin_facturar":    len(sin_facturar),
-        "en_transito":       round(en_transito, 2),
-        "n_en_transito":     n_transito,
-        "entregados_total":  len(entregados),
-        "antiguedad":        tramos,
-        "abiertas":          abiertas[:300],
-        "sin_factura":       sorted(sin_facturar, key=lambda x: x["entrega"])[:300],
+        "disponible":         True,
+        # Lo que Siigo SÍ puede probar
+        "facturado_credito":  total_credito,
+        "n_facturado_credito": len(a_credito),
+        "cobrado_directo":    round(cobrado_directo, 2),
+        "n_cobrado_directo":  n_directo,
+        "sin_facturar":       round(sum(x["valor"] for x in sin_facturar), 2),
+        "n_sin_facturar":     len(sin_facturar),
+        "entregados_total":   len(entregados),
+        "antiguedad":         tramos,
+        "abiertas":           a_credito[:300],
+        "sin_factura":        sorted(sin_facturar, key=lambda x: x["entrega"])[:300],
+        # Lo que NO se puede saber desde Siigo, dicho explícitamente para que la
+        # pantalla no invente: cuánto de `facturado_credito` ya consignó Melonn
+        # vive en el módulo de conciliación (recon.gateway_transactions).
+        "recaudo_medible":    False,
+        "nota_recaudo": ("Siigo no dice cuánto consignó Melonn: las facturas de "
+                         "contraentrega se cierran contra la cuenta de crédito a "
+                         "10 días, no contra un banco. El recaudo real se mide en "
+                         "la conciliación bancaria."),
     }
 
 
@@ -347,23 +358,28 @@ def revisar_y_avisar(pedidos: list[dict]) -> dict:
     from backend.services import notificaciones
     salida = {"ok": True, "avisos": []}
 
-    # ── 1. Facturas entregadas con saldo viejo → se le reclama a Melonn ──
+    # ── 1. Facturado a crédito contraentrega y ya viejo ─────────────────
+    # NO dice "Melonn no ha consignado": eso no se sabe desde Siigo. Dice que la
+    # factura lleva N días abierta contra una cuenta cuyo plazo pactado es 10.
+    # Quien lo revise cruza con la conciliación y decide si reclamar.
     vencidas = [f for f in (res.get("abiertas") or [])
                 if (f.get("dias") or 0) > UMBRAL_DIAS_VENCIDA]
     if vencidas:
         claves = sorted(f["factura"] for f in vencidas)
-        monto = sum(f["saldo"] for f in vencidas)
+        monto = sum(f["total"] for f in vencidas)
         if _debe_avisar("cartera_cod_vencida", claves):
             vieja = max(vencidas, key=lambda f: f.get("dias") or 0)
             n = notificaciones.crear_para_modulo(
                 modulo="finanzas",
                 tipo="cartera_cod_vencida",
-                titulo=(f"Contraentrega: {len(vencidas)} factura(s) con más de "
-                        f"{UMBRAL_DIAS_VENCIDA} días sin consignar"),
-                mensaje=(f"${monto:,.0f} sin consignar. La más vieja es la "
+                titulo=(f"Contraentrega: {len(vencidas)} factura(s) a crédito con "
+                        f"más de {UMBRAL_DIAS_VENCIDA} días"),
+                mensaje=(f"${monto:,.0f} facturados contra la cuenta de "
+                         f"contraentrega a 10 días que llevan más de "
+                         f"{UMBRAL_DIAS_VENCIDA}. La más vieja es la "
                          f"{vieja['factura']} con {vieja['dias']} días "
                          f"(pedido #{vieja['orden']}, entregado {vieja['entrega']}). "
-                         f"El ciclo normal de Melonn es de días."),
+                         f"Verifica en la conciliación si Melonn ya consignó."),
                 enlace="/finanzas",
                 meta={"claves": claves, "monto": round(monto, 2),
                       "umbral_dias": UMBRAL_DIAS_VENCIDA},
@@ -392,10 +408,11 @@ def revisar_y_avisar(pedidos: list[dict]) -> dict:
                 modulo="finanzas",
                 tipo="cod_sin_facturar",
                 titulo=f"{len(sin_fac)} pedido(s) entregados sin factura de venta",
-                mensaje=(f"${monto:,.0f} en pedidos de contraentrega entregados hace "
-                         f"más de {UMBRAL_DIAS_SIN_FACTURAR} días que no tienen "
-                         f"factura en Siigo. Salió mercancía y el cliente pagó. "
-                         f"Esto no lo debe Melonn: lo cierra contabilidad."),
+                mensaje=(f"${monto:,.0f} en pedidos entregados hace más de "
+                         f"{UMBRAL_DIAS_SIN_FACTURAR} días sin NINGUNA factura en "
+                         f"Siigo —se buscó con cualquier medio de pago, no solo "
+                         f"contraentrega—. Salió mercancía y el cliente pagó. "
+                         f"Esto lo cierra contabilidad."),
                 enlace="/finanzas",
                 meta={"claves": claves, "monto": round(monto, 2)},
                 creado_por="centinela",

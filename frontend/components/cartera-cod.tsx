@@ -38,17 +38,19 @@ import { formatMoney, formatMoneyShort } from "@/lib/utils";
 interface ResumenCartera {
   cartera_disponible?: boolean;
   cartera_motivo?: string | null;
-  cod_melonn_debe?: number;
-  n_cod_melonn_debe?: number;
-  cod_ya_cobrado?: number;
+  cod_facturado_credito?: number;
+  n_cod_facturado_credito?: number;
+  cod_cobrado_directo?: number;
+  n_cod_cobrado_directo?: number;
   cod_sin_facturar?: number;
   n_cod_sin_facturar?: number;
-  cod_cartera_transito?: number;
+  cod_recaudo_medible?: boolean;
+  cod_nota_recaudo?: string | null;
   cod_entregados?: number;
 }
 
 interface Abierta {
-  factura: string; fecha: string; orden: string; saldo: number;
+  factura: string; fecha: string; orden: string; saldo: number; total: number;
   dias: number | null; entrega: string; ciudad?: string | null; url?: string | null;
 }
 interface SinFactura {
@@ -72,12 +74,13 @@ export function CarteraCod() {
 
   const disponible     = res?.cartera_disponible;
   const motivo         = res?.cartera_motivo;
-  const melonnDebe     = res?.cod_melonn_debe ?? 0;
-  const nMelonnDebe    = res?.n_cod_melonn_debe ?? 0;
-  const yaCobrado      = res?.cod_ya_cobrado ?? 0;
+  const credito        = res?.cod_facturado_credito ?? 0;
+  const nCredito       = res?.n_cod_facturado_credito ?? 0;
+  const directo        = res?.cod_cobrado_directo ?? 0;
+  const nDirecto       = res?.n_cod_cobrado_directo ?? 0;
   const sinFacturar    = res?.cod_sin_facturar ?? 0;
   const nSinFacturar   = res?.n_cod_sin_facturar ?? 0;
-  const enTransito     = res?.cod_cartera_transito ?? 0;
+  const nota           = res?.cod_nota_recaudo;
   const brutoEntregado = res?.cod_entregados ?? 0;
 
   // El detalle solo se pide cuando se despliega: son ~90 páginas de Siigo del
@@ -126,56 +129,62 @@ export function CarteraCod() {
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="flex items-center gap-2 font-display text-lg font-medium text-ink-900 dark:text-foreground">
           <Wallet className="h-4 w-4 text-graphite" aria-hidden />
-          Cartera contraentrega · cruzada con Siigo
+          Contraentrega · qué está facturado
         </h2>
         <span className="text-[0.68rem] text-graphite">
-          saldo de cada factura, no el bruto entregado
+          cruzado por número de orden contra Siigo
         </span>
       </div>
 
       <Card>
         <CardContent className="space-y-4 py-4">
-          <div className="grid gap-4 sm:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-3">
             <div>
               <p className="text-[0.68rem] uppercase tracking-widest text-graphite">
-                Melonn nos debe
+                Facturado a crédito COD
               </p>
               <p className="mt-0.5 font-display text-2xl tabular-nums text-ink-900 dark:text-foreground">
-                {formatMoney(melonnDebe)}
-              </p>
-              <p className="text-[0.68rem] text-graphite">{nMelonnDebe} facturas con saldo</p>
-            </div>
-            <div>
-              <p className="text-[0.68rem] uppercase tracking-widest text-graphite">
-                Ya consignado
-              </p>
-              <p className="mt-0.5 font-display text-xl tabular-nums text-sage">
-                {formatMoney(yaCobrado)}
+                {formatMoney(credito)}
               </p>
               <p className="text-[0.68rem] text-graphite">
-                de {formatMoneyShort(brutoEntregado)} entregado
+                {nCredito} facturas · cuenta «contraentrega 10 días»
               </p>
             </div>
             <div>
               <p className="text-[0.68rem] uppercase tracking-widest text-graphite">
-                Entregado sin facturar
+                Cobrado por otro medio
+              </p>
+              <p className="mt-0.5 font-display text-xl tabular-nums text-sage">
+                {formatMoney(directo)}
+              </p>
+              <p className="text-[0.68rem] text-graphite">
+                {nDirecto} facturas · banco, ADDI, efectivo…
+              </p>
+            </div>
+            <div>
+              <p className="text-[0.68rem] uppercase tracking-widest text-graphite">
+                Entregado sin factura
               </p>
               <p className={`mt-0.5 flex items-center gap-1.5 font-display text-xl tabular-nums ${nSinFacturar > 0 ? "text-terracotta" : "text-ink-900 dark:text-foreground"}`}>
                 {nSinFacturar > 0 && <FileWarning className="h-4 w-4" aria-hidden />}
                 {formatMoney(sinFacturar)}
               </p>
-              <p className="text-[0.68rem] text-graphite">{nSinFacturar} pedidos sin factura</p>
-            </div>
-            <div>
-              <p className="text-[0.68rem] uppercase tracking-widest text-graphite">
-                Aún en tránsito
+              <p className="text-[0.68rem] text-graphite">
+                {nSinFacturar} pedidos · de {formatMoneyShort(brutoEntregado)} entregado
               </p>
-              <p className="mt-0.5 font-display text-xl tabular-nums text-graphite">
-                {formatMoney(enTransito)}
-              </p>
-              <p className="text-[0.68rem] text-graphite">facturado, no entregado</p>
             </div>
           </div>
+
+          {/* LO QUE ESTA PANTALLA NO SABE, DICHO. La primera versión afirmaba
+              "Melonn nos debe X" usando el saldo de la factura, y estaba mal:
+              esas facturas se cierran contra la cuenta de crédito a 10 días, no
+              contra un banco. Un número redondo y falso se usa para decidir. */}
+          {nota && (
+            <p className="flex items-start gap-2 rounded-sm border border-border/60 bg-cloud/40 px-3 py-2 text-[0.7rem] leading-snug text-graphite dark:bg-ink-800/40">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />
+              {nota}
+            </p>
+          )}
 
           <button
             type="button"
@@ -213,8 +222,9 @@ export function CarteraCod() {
                 {viejo > 0 && (
                   <p className="mt-1.5 flex items-center gap-1.5 text-[0.7rem] text-terracotta">
                     <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
-                    {formatMoney(viejo)} llevan más de 30 días. El ciclo normal de
-                    Melonn es de días, no de meses.
+                    {formatMoney(viejo)} llevan más de 30 días facturados contra una
+                    cuenta cuyo plazo pactado es 10. Verifica en la conciliación si
+                    Melonn ya consignó.
                   </p>
                 )}
               </div>
@@ -222,7 +232,7 @@ export function CarteraCod() {
               {!!det.abiertas?.length && (
                 <div>
                   <p className="mb-2 text-[0.68rem] uppercase tracking-widest text-graphite">
-                    Facturas con saldo, de la más vieja ({det.abiertas.length})
+                    Facturas a crédito COD, de la más vieja ({det.abiertas.length})
                   </p>
                   <div className="max-h-72 overflow-y-auto">
                     <table className="w-full text-xs">
@@ -237,7 +247,7 @@ export function CarteraCod() {
                             <td className="py-1.5 pr-3 tabular-nums text-graphite">#{f.orden}</td>
                             <td className="py-1.5 pr-3 truncate text-graphite">{f.ciudad || "—"}</td>
                             <td className="py-1.5 text-right tabular-nums font-semibold text-ink-900 dark:text-foreground">
-                              {formatMoney(f.saldo)}
+                              {formatMoney(f.total)}
                             </td>
                           </tr>
                         ))}
