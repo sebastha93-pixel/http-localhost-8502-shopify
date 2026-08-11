@@ -50,11 +50,24 @@ _lock:           threading.Lock  = threading.Lock()
 
 # ── Credenciales ───────────────────────────────────────────────────────────────
 def _credenciales_ok() -> bool:
-    token = os.environ.get("SHOPIFY_ACCESS_TOKEN", "")
+    """¿Hay con qué hablarle a Shopify?
+
+    Sirven dos modelos: el de 2026 (CLIENT_ID + SECRET, que shopify_auth canjea
+    por un token de 24h) o el legacy (SHOPIFY_ACCESS_TOKEN). Mirar sólo el
+    legacy — como se hacía antes — dejaba el scheduler mudo en cuanto ese token
+    se revocaba o se borraba de Railway: sin sync y sin una sola línea de error.
+    """
     store = os.environ.get("SHOPIFY_STORE", "")
-    return bool(store and token
-                and "xxxx" not in token.lower()
-                and "tu-tienda" not in store.lower())
+    if not store or "tu-tienda" in store.lower():
+        return False
+
+    client_id = os.environ.get("SHOPIFY_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("SHOPIFY_CLIENT_SECRET", "").strip()
+    if client_id and client_secret:
+        return True
+
+    token = os.environ.get("SHOPIFY_ACCESS_TOKEN", "")
+    return bool(token and "xxxx" not in token.lower())
 
 
 # ── Última sync desde la DB (persiste aunque el proceso se haya reiniciado) ───
