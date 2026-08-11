@@ -24,16 +24,27 @@ import { formatMoney, formatMoneyShort } from "@/lib/utils";
  *   · los entregados sin factura → lo arregla contabilidad, no Melonn
  */
 
-interface Props {
-  disponible?: boolean;
-  motivo?: string | null;
-  melonnDebe?: number;
-  nMelonnDebe?: number;
-  yaCobrado?: number;
-  sinFacturar?: number;
-  nSinFacturar?: number;
-  enTransito?: number;
-  brutoEntregado?: number;
+/**
+ * NO RECIBE PROPS. Se trae sus propios datos.
+ *
+ * La primera versión los recibía del resumen de /finanzas, y el resultado fue
+ * que arreglé una pantalla y dejé la de Contraentrega —que es LA pantalla del
+ * COD— mostrando el bruto de siempre. Un bloque que solo funciona donde le
+ * pasan los props se olvida en la siguiente pantalla.
+ *
+ * Usa el mismo queryKey que la página de Finanzas, así que cuando conviven no
+ * se pide dos veces: React Query comparte la respuesta.
+ */
+interface ResumenCartera {
+  cartera_disponible?: boolean;
+  cartera_motivo?: string | null;
+  cod_melonn_debe?: number;
+  n_cod_melonn_debe?: number;
+  cod_ya_cobrado?: number;
+  cod_sin_facturar?: number;
+  n_cod_sin_facturar?: number;
+  cod_cartera_transito?: number;
+  cod_entregados?: number;
 }
 
 interface Abierta {
@@ -50,11 +61,24 @@ interface Detalle {
   sin_factura?: SinFactura[];
 }
 
-export function CarteraCod({
-  disponible, motivo, melonnDebe = 0, nMelonnDebe = 0, yaCobrado = 0,
-  sinFacturar = 0, nSinFacturar = 0, enTransito = 0, brutoEntregado = 0,
-}: Props) {
+export function CarteraCod() {
   const [abierto, setAbierto] = useState(false);
+
+  const { data: res, isLoading } = useQuery<ResumenCartera>({
+    queryKey: ["finanzas", "resumen"],
+    queryFn: () => api.get<ResumenCartera>("/api/finanzas/resumen"),
+    staleTime: 5 * 60_000,
+  });
+
+  const disponible     = res?.cartera_disponible;
+  const motivo         = res?.cartera_motivo;
+  const melonnDebe     = res?.cod_melonn_debe ?? 0;
+  const nMelonnDebe    = res?.n_cod_melonn_debe ?? 0;
+  const yaCobrado      = res?.cod_ya_cobrado ?? 0;
+  const sinFacturar    = res?.cod_sin_facturar ?? 0;
+  const nSinFacturar   = res?.n_cod_sin_facturar ?? 0;
+  const enTransito     = res?.cod_cartera_transito ?? 0;
+  const brutoEntregado = res?.cod_entregados ?? 0;
 
   // El detalle solo se pide cuando se despliega: son ~90 páginas de Siigo del
   // lado del backend y no tiene sentido pagarlas si nadie va a mirar la lista.
@@ -64,6 +88,12 @@ export function CarteraCod({
     enabled: abierto,
     staleTime: 10 * 60_000,
   });
+
+  // Los dos `useQuery` van ANTES de cualquier return: un hook detrás de un
+  // `if` cambia el orden de hooks entre renders y React revienta con
+  // "Rendered more hooks than during the previous render". El build no lo
+  // marca; el navegador sí, en cuanto llegan los datos.
+  if (isLoading || !res) return null;
 
   // Siigo no respondió: se dice. NO se pintan ceros — un tablero de plata en
   // cero se lee como "no nos deben nada", que es la peor mentira que puede

@@ -74,17 +74,7 @@ export default function FinanzasPage() {
           saldo de cada factura en Siigo, que es donde la contadora registra la
           plata cuando entra. */}
       <section>
-        <CarteraCod
-          disponible={data.cartera_disponible}
-          motivo={data.cartera_motivo}
-          melonnDebe={data.cod_melonn_debe}
-          nMelonnDebe={data.n_cod_melonn_debe}
-          yaCobrado={data.cod_ya_cobrado}
-          sinFacturar={data.cod_sin_facturar}
-          nSinFacturar={data.n_cod_sin_facturar}
-          enTransito={data.cod_cartera_transito}
-          brutoEntregado={data.cod_entregados}
-        />
+        <CarteraCod />
       </section>
 
       <section>
