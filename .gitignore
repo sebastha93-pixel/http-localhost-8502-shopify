@@ -1,5 +1,9 @@
 # Credenciales — NUNCA al repositorio
 .env
+# Copias y variantes (.env.bak, .env.local, .env.produccion…): un respaldo
+# hecho a la carrera antes de rotar un token trae los secretos intactos.
+.env.*
+!.env.example
 .streamlit/secrets.toml
 
 # Base de datos local
