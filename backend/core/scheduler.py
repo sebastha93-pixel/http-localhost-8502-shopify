@@ -238,6 +238,11 @@ def _chequear_cartera() -> None:
     """
     try:
         from backend.services import cartera_cod, melonn as mlsvc, metricas
+        # Sincronizar el espejo de facturas ANTES de cruzar. Es incremental (2-3
+        # páginas en régimen) y es lo único que habla con Siigo: las pantallas
+        # leen de la tabla, así nunca esperan 112 páginas ni chocan con el
+        # rate limit.
+        cartera_cod.sincronizar()
         data = mlsvc.obtener_pedidos(forzar_refresh=False)
         pedidos = [metricas.clasificar(x) for x in (data.get("pedidos") or [])]
         if not pedidos:

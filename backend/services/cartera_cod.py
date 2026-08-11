@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import logging
 import re
-import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
@@ -61,14 +60,11 @@ _CODES_ENTREGADO = (6, 8)
 # entregado: pedir más es pagar páginas de Siigo para nada. 120 da margen.
 DIAS_VENTANA = 120
 
-# Cache: el fetch son ~80 páginas de Siigo. Sin cache, cada carga del tablero
-# reventaría el rate limit. Stale-while-revalidate: se sirve el dato viejo y se
-# refresca atrás, para que la pantalla nunca espere 80 llamadas.
-# 2 h: son ~90 páginas de Siigo por refresco y una cartera no cambia por minuto.
-_TTL = 7200
-_cache: dict = {}
-_refresh_en_curso: set = set()
-_lock = threading.Lock()
+# Ya NO hay caché en proceso. Lo hubo, y fue un error: el backend corre con
+# cuatro workers de Uvicorn, así que un caché en memoria significaba cuatro
+# recorridos de 112 páginas contra una API que aguanta ~1 req/s. Ahora el espejo
+# vive en la tabla `siigo_facturas_cod`, que los cuatro comparten, y solo el
+# scheduler la sincroniza.
 
 
 def _norm(s: Optional[str]) -> str:
@@ -94,85 +90,149 @@ def _numeros_orden(valor) -> list[str]:
 # Facturas COD de Siigo
 # ═══════════════════════════════════════════════════════════════════════
 
-def _fetch_facturas_cod(desde: str) -> dict[str, list[dict]]:
-    """{numero_de_orden: [factura, …]} solo de las facturas de contraentrega."""
+def _sb():
+    from backend.services import notificaciones
+    return notificaciones._sb()
+
+
+PAUSA_PAGINA = 1.1     # Siigo aguanta ~1 req/s; sin esto son 429 garantizados
+
+
+def _pedir_a_siigo(desde: str) -> list[dict]:
+    """Recorre /invoices desde una fecha y devuelve las filas a guardar.
+
+    LA PAUSA ENTRE PÁGINAS NO ES OPCIONAL. Siigo aguanta cerca de una petición
+    por segundo y el backoff de `siigo_get` se rinde a los ~23 s. Sin pausa, el
+    recorrido moría en «429 intento 5» y el tablero mostraba el aviso de que no
+    se pudo consultar.
+    """
     from backend.services import siigo
 
-    por_orden: dict[str, list[dict]] = {}
-    total = con_patron = cod = 0
-    page = 1
+    filas, page, leidas = [], 1, 0
     while page <= 200:
         data = siigo.siigo_get("/invoices", {"created_start": desde,
                                              "page": page, "page_size": 100})
         res = data.get("results") or []
         if not res:
             break
+        leidas += len(res)
         for f in res:
-            total += 1
             m = _RE_OBS.search((f.get("observations") or "").strip())
             if not m:
-                continue
-            con_patron += 1
-            # TODAS las facturas, no solo las marcadas COD: 41 de 44 pedidos
-            # que parecían "sin facturar" estaban facturados con otro medio de
-            # pago. El medio de envío no determina el medio de pago.
-            es_cod = _es_cod(m.group(2))
-            if es_cod:
-                cod += 1
-            # La cuenta contra la que se registró el pago es la que dice si es
-            # venta a crédito (la plata NO llegó) o cobro efectivo.
+                continue          # sin número de orden no sirve para cruzar
             cuentas = [(pg.get("name") or "").strip().upper()
                        for pg in (f.get("payments") or [])]
-            a_credito = any("CONTRA ENTREGA" in c for c in cuentas)
-            por_orden.setdefault(m.group(1), []).append({
-                "factura":  f.get("name"),
-                "fecha":    (f.get("date") or "")[:10],
-                "total":    float(f.get("total") or 0),
-                "saldo":    float(f.get("balance") or 0),
-                "medio":    m.group(2).strip().upper(),
-                "es_cod":   es_cod,
-                "a_credito": a_credito,
-                "cuentas":  cuentas,
-                "cliente":  (f.get("customer") or {}).get("identification"),
-                "url":      f.get("public_url"),
+            filas.append({
+                "factura":   f.get("name"),
+                "orden":     m.group(1),
+                "fecha":     (f.get("date") or "")[:10] or None,
+                "total":     float(f.get("total") or 0),
+                "saldo":     float(f.get("balance") or 0),
+                "medio":     m.group(2).strip().upper()[:80],
+                "a_credito": any("CONTRA ENTREGA" in c for c in cuentas),
+                "cuentas":   cuentas,
             })
         if len(res) < 100:
             break
         page += 1
-    log.info(f"[cartera_cod] {total} facturas desde {desde}; {con_patron} con "
-             f"'Orden Nº'; {cod} de contraentrega en {len(por_orden)} órdenes")
-    return por_orden
+        time.sleep(PAUSA_PAGINA)
+    log.info(f"[cartera_cod] Siigo: {leidas} facturas leídas desde {desde}, "
+             f"{len(filas)} con número de orden ({page} páginas)")
+    return filas
 
 
-def _refrescar_atras(desde: str) -> None:
-    with _lock:
-        if desde in _refresh_en_curso:
-            return
-        _refresh_en_curso.add(desde)
+def sincronizar(*, completa: bool = False) -> dict:
+    """Trae de Siigo lo que falte y lo guarda en la tabla espejo.
 
-    def _run():
+    Incremental por defecto: arranca desde la fecha más nueva que ya está
+    guardada, menos dos días de traslape (una factura puede entrar con fecha
+    atrasada). En régimen son 2 o 3 páginas en vez de 112.
+
+    `completa=True` rehace la ventana entera. Se usa la primera vez y si hay
+    sospecha de huecos.
+    """
+    sb = _sb()
+    if sb is None:
+        return {"ok": False, "motivo": "Supabase no configurado"}
+
+    piso = (date.today() - timedelta(days=DIAS_VENTANA)).isoformat()
+    desde = piso
+    if not completa:
         try:
-            _cache[desde] = (time.time(), _fetch_facturas_cod(desde))
-            log.info(f"[cartera_cod] cache refrescado ({desde})")
+            r = (sb.table("siigo_facturas_cod").select("fecha")
+                   .order("fecha", desc=True).limit(1).execute()).data
+            if r and r[0].get("fecha"):
+                ultima = date.fromisoformat(str(r[0]["fecha"])[:10])
+                desde = max(piso, (ultima - timedelta(days=2)).isoformat())
         except Exception as e:
-            log.warning(f"[cartera_cod] refresh atrás falló: {str(e)[:140]}")
-        finally:
-            with _lock:
-                _refresh_en_curso.discard(desde)
+            log.warning(f"[cartera_cod] no pude leer la última fecha: {str(e)[:120]}")
 
-    threading.Thread(target=_run, daemon=True).start()
+    filas = _pedir_a_siigo(desde)
+    if not filas:
+        return {"ok": True, "guardadas": 0, "desde": desde}
+
+    guardadas = 0
+    for i in range(0, len(filas), 300):
+        lote = filas[i:i + 300]
+        try:
+            sb.table("siigo_facturas_cod").upsert(
+                lote, on_conflict="factura").execute()
+            guardadas += len(lote)
+        except Exception as e:
+            log.error(f"[cartera_cod] fallo guardando lote: {str(e)[:160]}")
+            break
+    log.info(f"[cartera_cod] sincronizadas {guardadas} facturas desde {desde}")
+    return {"ok": True, "guardadas": guardadas, "desde": desde,
+            "completa": completa}
 
 
 def facturas_cod(*, desde: Optional[str] = None, force: bool = False) -> dict:
-    desde = desde or (date.today() - timedelta(days=DIAS_VENTANA)).isoformat()
-    hit = _cache.get(desde)
-    if hit and not force:
-        if time.time() - hit[0] >= _TTL:
-            _refrescar_atras(desde)
-        return hit[1]
-    datos = _fetch_facturas_cod(desde)
-    _cache[desde] = (time.time(), datos)
-    return datos
+    """{numero_de_orden: [factura, …]} leído de la tabla espejo.
+
+    NO llama a Siigo: eso lo hace `sincronizar()` desde el scheduler. Si la
+    tabla está vacía —primer arranque o migración recién corrida— sí dispara una
+    sincronización, porque servir un mapa vacío haría ver todos los pedidos como
+    «sin factura», que es exactamente la mentira que este módulo vino a corregir.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+
+    piso = desde or (date.today() - timedelta(days=DIAS_VENTANA)).isoformat()
+    def _leer() -> list[dict]:
+        out, inicio = [], 0
+        while inicio < 20000:            # tope de seguridad
+            r = (sb.table("siigo_facturas_cod")
+                   .select("factura,orden,fecha,total,saldo,medio,a_credito,cuentas")
+                   .gte("fecha", piso)
+                   .range(inicio, inicio + 999).execute()).data or []
+            out += r
+            if len(r) < 1000:
+                break
+            inicio += 1000
+        return out
+
+    filas = _leer()
+    if not filas or force:
+        log.warning("[cartera_cod] tabla espejo vacía; sincronizando contra Siigo")
+        sincronizar(completa=not filas)
+        filas = _leer()
+    if not filas:
+        raise RuntimeError("no hay facturas en la tabla espejo y Siigo no respondió")
+
+    por_orden: dict[str, list[dict]] = {}
+    for f in filas:
+        por_orden.setdefault(str(f["orden"]), []).append({
+            "factura":   f["factura"],
+            "fecha":     str(f.get("fecha") or "")[:10],
+            "total":     float(f.get("total") or 0),
+            "saldo":     float(f.get("saldo") or 0),
+            "medio":     f.get("medio"),
+            "es_cod":    _es_cod(f.get("medio") or ""),
+            "a_credito": bool(f.get("a_credito")),
+            "cuentas":   f.get("cuentas") or [],
+        })
+    return por_orden
 
 
 # ═══════════════════════════════════════════════════════════════════════
