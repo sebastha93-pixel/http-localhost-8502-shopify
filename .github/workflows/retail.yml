@@ -1,0 +1,94 @@
+# Pruebas del modulo retail (POS).
+#
+# Acotada al modulo a proposito: el resto del repo todavia no tiene sus
+# pruebas verdes en un entorno limpio, y exigirlas aqui bloquearia trabajo
+# que no tiene nada que ver con el POS.
+#
+# Corre en Python 3.10 porque es lo que corre Railway (Dockerfile: jammy).
+# Probar en 3.12 y desplegar en 3.10 es como no probar: la sintaxis moderna
+# pasa en local y revienta en el despliegue, con la tienda abierta.
+name: retail
+
+on:
+  push:
+    branches: ["main", "feat/retail-**", "docs/retail-**"]
+    paths:
+      - "backend/modules/retail/**"
+      - "tests/retail/**"
+      - "requirements-retail.txt"
+      - ".github/workflows/retail.yml"
+  pull_request:
+    paths:
+      - "backend/modules/retail/**"
+      - "tests/retail/**"
+      - "requirements-retail.txt"
+      - ".github/workflows/retail.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: retail-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pruebas:
+    name: dominio + integracion
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: retail_pos_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      RETAIL_TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/retail_pos_test
+      # Para pytest lo resuelve tests/conftest.py, pero el paso de la
+      # migracion corre un script suelto y no pasa por ahi.
+      PYTHONPATH: ${{ github.workspace }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python 3.10 (el de Railway)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements-retail.txt
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-retail.txt
+
+      # Primero el dominio SOLO, sin la variable de la base. Si estas 135
+      # necesitaran Postgres para pasar, la arquitectura hexagonal no estaria
+      # haciendo su trabajo y quiero que se note aqui, no dentro de dos anos.
+      - name: Dominio — sin base de datos, sin red
+        env:
+          RETAIL_TEST_DATABASE_URL: ""
+        run: pytest tests/retail/dominio -q
+
+      - name: Integracion — contra PostgreSQL
+        run: pytest tests/retail/integracion -q
+
+      # Que el downgrade funcione no es un lujo: una migracion que no se puede
+      # revertir es una que nadie se atreve a desplegar un viernes.
+      - name: La migracion va y vuelve
+        run: |
+          python - <<'PY'
+          import os
+          from backend.modules.retail.migraciones.runner import aplicar, revertir
+          url = os.environ["RETAIL_TEST_DATABASE_URL"]
+          revertir(url); aplicar(url); revertir(url); aplicar(url)
+          print("upgrade → downgrade → upgrade: OK")
+          PY

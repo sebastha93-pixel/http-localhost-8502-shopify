@@ -1,0 +1,15 @@
+# Dependencias del modulo retail (POS), para la CI.
+#
+# NO es el requirements.txt completo a proposito: ese trae streamlit,
+# playwright, anthropic y reportlab, que este modulo no usa y que suman
+# minutos de instalacion a cada corrida. Instalarlos aqui haria que la CI
+# tardara mas en instalar que en probar.
+#
+# OJO: estas lineas tambien viven en requirements.txt. Si cambias una version
+# aqui, cambiala alla. Son cinco lineas; un mecanismo para sincronizarlas
+# automaticamente costaria mas de lo que ahorra.
+sqlalchemy[asyncio]>=2.0
+psycopg[binary]>=3.1
+alembic>=1.13
+pytest>=8.0
+pytest-asyncio>=0.24
