@@ -57,9 +57,19 @@ class UnidadDeTrabajoSQL:
         from backend.modules.retail.infrastructure.persistencia.repo_inventario import (
             RepositorioInventarioSQL,
         )
+        from backend.modules.retail.infrastructure.persistencia.repo_caja import (
+            RepositorioCajaSQL,
+        )
+        from backend.modules.retail.infrastructure.persistencia.repo_auditoria import (
+            RepositorioAuditoriaSQL,
+            RepositorioOutboxSQL,
+        )
 
         self.ventas = RepositorioVentasSQL(self.sesion)
         self.inventario = RepositorioInventarioSQL(self.sesion)
+        self.caja = RepositorioCajaSQL(self.sesion)
+        self.auditoria = RepositorioAuditoriaSQL(self.sesion)
+        self.outbox = RepositorioOutboxSQL(self.sesion)
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
