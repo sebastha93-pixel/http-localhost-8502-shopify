@@ -7,6 +7,7 @@ import { KpiStrip } from "@/components/kpi-card";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatMoney, formatMoneyShort, fmtDateTime } from "@/lib/utils";
 import { ConciliacionBancaria } from "@/components/conciliacion-bancaria";
+import { CarteraCod } from "@/components/cartera-cod";
 
 interface ResumenFinanzas {
   cod_total: number;
@@ -19,6 +20,16 @@ interface ResumenFinanzas {
   n_cod_transito: number;
   n_cod_novedades: number;
   n_cod_entregados: number;
+  // Cartera real cruzada contra Siigo. `cod_entregados` es el BRUTO entregado y
+  // solo crece; esto es lo que Melonn efectivamente debe.
+  cartera_disponible?: boolean;
+  cartera_motivo?: string | null;
+  cod_melonn_debe?: number;
+  n_cod_melonn_debe?: number;
+  cod_ya_cobrado?: number;
+  cod_sin_facturar?: number;
+  n_cod_sin_facturar?: number;
+  cod_cartera_transito?: number;
   mp_total: number;
   mp_neto: number;
   mp_comisiones: number;
@@ -53,6 +64,26 @@ export default function FinanzasPage() {
             { label: "Novedades",   value: formatMoneyShort(data.cod_novedades),  tone: data.n_cod_novedades > 0 ? "danger" : "default" },
             { label: "Entregados",  value: formatMoneyShort(data.cod_entregados), tone: "success" },
           ]}
+        />
+      </section>
+
+      {/* LO QUE MELONN DEBE DE VERDAD.
+          "Entregados" de arriba suma todo lo entregado en 90 días y nunca
+          descuenta lo consignado: el 2026-08-10 marcaba $168.388.033 cuando la
+          deuda real era $36.552.345 — inflado 4,6 veces. Estas cifras salen del
+          saldo de cada factura en Siigo, que es donde la contadora registra la
+          plata cuando entra. */}
+      <section>
+        <CarteraCod
+          disponible={data.cartera_disponible}
+          motivo={data.cartera_motivo}
+          melonnDebe={data.cod_melonn_debe}
+          nMelonnDebe={data.n_cod_melonn_debe}
+          yaCobrado={data.cod_ya_cobrado}
+          sinFacturar={data.cod_sin_facturar}
+          nSinFacturar={data.n_cod_sin_facturar}
+          enTransito={data.cod_cartera_transito}
+          brutoEntregado={data.cod_entregados}
         />
       </section>
 
