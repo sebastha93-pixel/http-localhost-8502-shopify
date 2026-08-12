@@ -21,6 +21,30 @@ export interface Variante {
   es_escaneo: boolean;
 }
 
+export interface Talla {
+  variante_id: string;
+  sku: string;
+  talla: string;
+  disponible: number;
+}
+
+/** Una referencia con sus tallas — la forma que pide la rejilla del diseño. */
+export interface Referencia {
+  referencia: string;
+  nombre: string;
+  color: string;
+  categoria: string;
+  precio_base_centavos: number;
+  precio_con_iva_centavos: number;
+  tasa_iva: string;
+  tallas: Talla[];
+}
+
+export interface Catalogo {
+  categorias: string[];
+  referencias: Referencia[];
+}
+
 export interface LineaEnvio {
   sku: string;
   cantidad: number;
@@ -95,6 +119,17 @@ function traducir(e: unknown): never {
 export async function buscar(q: string, ubicacionId: string): Promise<Variante[]> {
   const p = new URLSearchParams({ q, ubicacion_id: ubicacionId });
   return api.get<Variante[]>(`/api/retail/catalogo/buscar?${p}`);
+}
+
+export async function listarCatalogo(
+  ubicacionId: string,
+  q = "",
+  categoria = "",
+): Promise<Catalogo> {
+  const p = new URLSearchParams({ ubicacion_id: ubicacionId });
+  if (q) p.set("q", q);
+  if (categoria && categoria !== "Todo") p.set("categoria", categoria);
+  return api.get<Catalogo>(`/api/retail/catalogo/referencias?${p}`);
 }
 
 export async function cerrarVenta(cuerpo: unknown): Promise<Ticket> {

@@ -37,7 +37,7 @@ export function DialogoDescuento({
 
   return (
     <Marco titulo="APLICAR DESCUENTO" onCancelar={onCancelar}>
-      <p className="font-mono text-[11px] text-[#6F92A6]">
+      <p className="tabular text-[11px] text-[var(--pos-600)]">
         {sku} · {formatear(base)}
       </p>
 
@@ -46,10 +46,10 @@ export function DialogoDescuento({
           <button
             key={p}
             onClick={() => setPct(p)}
-            className={`border py-2.5 font-mono text-[13px] ${
+            className={`border py-2.5 tabular text-[13px] ${
               pct === p
-                ? "border-[#C8412B] bg-[#C8412B]/15 text-[#F4F3F0]"
-                : "border-[#243036] bg-[#1A242A] text-[#A6BECC]"
+                ? "border-[var(--pos-accent)] bg-[var(--pos-accent)]/15 text-[var(--pos-text)]"
+                : "border-[var(--pos-divider)] bg-[var(--pos-100)] text-[var(--pos-700)]"
             }`}
           >
             {p}%
@@ -60,25 +60,25 @@ export function DialogoDescuento({
         ))}
       </div>
 
-      <label className="mt-4 block font-display text-[10.5px] tracking-[0.12em] text-[#6F92A6]">
+      <label className="mt-4 block titular text-[10.5px] tracking-[0.12em] text-[var(--pos-600)]">
         MOTIVO (OBLIGATORIO)
       </label>
       <input
         value={motivo}
         onChange={(e) => setMotivo(e.target.value)}
         placeholder="Prenda con defecto menor"
-        className="mt-1 w-full border border-[#243036] bg-[#1A242A] px-3 py-2.5 text-[13px] text-[#F4F3F0] outline-none focus:border-[#C8412B]"
+        className="mt-1 w-full border border-[var(--pos-divider)] bg-[var(--pos-100)] px-3 py-2.5 text-[13px] text-[var(--pos-text)] outline-none focus:border-[var(--pos-accent)]"
       />
 
-      <div className="mt-4 flex items-baseline justify-between font-mono text-[12px]">
-        <span className="text-[#6F92A6]">Tu tope: {tope}%</span>
-        <span className="text-[#F4F3F0]">
+      <div className="mt-4 flex items-baseline justify-between tabular text-[12px]">
+        <span className="text-[var(--pos-600)]">Tu tope: {tope}%</span>
+        <span className="text-[var(--pos-text)]">
           −{formatear(monto)} → {formatear(base - monto)}
         </span>
       </div>
 
       {sobreTope && (
-        <p className="mt-3 border border-[#B08C2E] bg-[#B08C2E]/10 p-2.5 text-[11.5px] leading-snug text-[#C6A047]">
+        <p className="mt-3 border border-[var(--pos-700)] bg-[var(--pos-700)]/10 p-2.5 text-[11.5px] leading-snug text-[var(--pos-800)]">
           🔒 Supera tu tope. Al aplicarlo se pedirá el PIN de un supervisor, y
           su nombre queda registrado.
         </p>
@@ -87,12 +87,12 @@ export function DialogoDescuento({
       <button
         disabled={!motivoValido}
         onClick={() => onAplicar(pct, motivo.trim())}
-        className="mt-4 w-full bg-[#C8412B] py-3 font-display text-[13px] font-semibold tracking-[0.12em] text-white disabled:bg-[#243036] disabled:text-[#4A5C66]"
+        className="mt-4 w-full bg-[var(--pos-accent)] py-3 titular text-[13px] font-semibold tracking-[0.12em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-500)]"
       >
         {sobreTope ? "APLICAR CON AUTORIZACIÓN" : "APLICAR"}
       </button>
       {!motivoValido && (
-        <p className="mt-2 text-center font-mono text-[10.5px] text-[#6F92A6]">
+        <p className="mt-2 text-center tabular text-[10.5px] text-[var(--pos-600)]">
           Escribe el motivo (mínimo 4 letras).
         </p>
       )}
@@ -121,14 +121,14 @@ export function DialogoPin({
 
   return (
     <Marco titulo="🔒 AUTORIZACIÓN REQUERIDA" onCancelar={onCancelar}>
-      <p className="text-[13px] leading-relaxed text-[#A6BECC]">{motivo}</p>
+      <p className="text-[13px] leading-relaxed text-[var(--pos-700)]">{motivo}</p>
 
       <div className="my-6 flex justify-center gap-3">
         {[0, 1, 2, 3, 4, 5].map((i) => (
           <span
             key={i}
             className={`h-3 w-3 rounded-full ${
-              i < pin.length ? "bg-[#C8412B]" : "bg-[#243036]"
+              i < pin.length ? "bg-[var(--pos-accent)]" : "bg-[var(--pos-divider)]"
             }`}
           />
         ))}
@@ -143,7 +143,7 @@ export function DialogoPin({
               else if (t === "✕") setPin("");
               else if (pin.length < 6) setPin((p) => p + t);
             }}
-            className="h-14 border border-[#243036] bg-[#1A242A] font-mono text-lg text-[#F4F3F0] active:bg-[#243036]"
+            className="h-14 border border-[var(--pos-divider)] bg-[var(--pos-100)] tabular text-lg text-[var(--pos-text)] active:bg-[var(--pos-divider)]"
           >
             {t}
           </button>
@@ -151,19 +151,19 @@ export function DialogoPin({
       </div>
 
       {error && (
-        <p className="mt-4 border border-[#B4543F] bg-[#B4543F]/10 p-2.5 text-center text-[12px] text-[#D4785E]">
+        <p className="mt-4 border border-[var(--pos-800)] bg-[var(--pos-800)]/10 p-2.5 text-center text-[12px] text-[var(--pos-900)]">
           {error}
         </p>
       )}
 
-      <p className="mt-5 text-center font-mono text-[10.5px] leading-relaxed text-[#6F92A6]">
+      <p className="mt-5 text-center tabular text-[10.5px] leading-relaxed text-[var(--pos-600)]">
         Esta autorización queda registrada con el nombre de quien la aprueba.
       </p>
 
       <button
         disabled={pin.length < 4}
         onClick={() => onFirmar(pin)}
-        className="mt-4 w-full bg-[#C8412B] py-3 font-display text-[13px] font-semibold tracking-[0.12em] text-white disabled:bg-[#243036] disabled:text-[#4A5C66]"
+        className="mt-4 w-full bg-[var(--pos-accent)] py-3 titular text-[13px] font-semibold tracking-[0.12em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-500)]"
       >
         AUTORIZAR
       </button>
@@ -186,16 +186,16 @@ function Marco({
         role="dialog"
         aria-modal="true"
         aria-label={titulo}
-        className="w-full max-w-md border border-[#243036] bg-[#131B1F] p-6 shadow-2xl"
+        className="w-full max-w-md border border-[var(--pos-divider)] bg-[var(--pos-surface)] p-6 shadow-2xl"
       >
         <div className="mb-4 flex items-start justify-between">
-          <h2 className="font-display text-[15px] tracking-[0.1em] text-[#F4F3F0]">
+          <h2 className="titular text-[15px] tracking-[0.1em] text-[var(--pos-text)]">
             {titulo}
           </h2>
           <button
             onClick={onCancelar}
             aria-label="Cerrar"
-            className="text-[#6F92A6] hover:text-[#F4F3F0]"
+            className="text-[var(--pos-600)] hover:text-[var(--pos-text)]"
           >
             ✕
           </button>

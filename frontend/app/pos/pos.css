@@ -1,0 +1,134 @@
+/**
+ * Sistema de diseño del POS — "Industry" retemado a MALE'DENIM.
+ *
+ * Los tokens salen tal cual del handoff (`docs/retail-pos/handoff/styles.css`),
+ * que es la fuente de verdad del estilo. No se copia la hoja completa: sus
+ * clases de componente chocarían con Tailwind, que es lo que usa este
+ * codebase. Se traen los tokens y lo único que Tailwind no puede expresar —
+ * las marcas de registro de `.blueprint`.
+ *
+ * Van bajo `.pos-raiz` a propósito: el ERP tiene su propia paleta (Selvedge) y
+ * dos sistemas sueltos en el mismo `:root` se pisan.
+ */
+
+.pos-raiz {
+  --pos-bg: #f7f7f8;
+  --pos-surface: #ededee;
+  --pos-text: #1a1c1f;
+  --pos-accent: #23262b;
+  --pos-divider: color-mix(in srgb, #1d1f20 16%, transparent);
+
+  --pos-100: #f1f2f5;
+  --pos-200: #e3e5ea;
+  --pos-300: #ccd0d8;
+  --pos-400: #a9afbb;
+  --pos-500: #7f8794;
+  --pos-600: #5e6571;
+  --pos-700: #444a54;
+  --pos-800: #2e333b;
+  --pos-900: #1b1e24;
+
+  /* Escala 0.85× del sistema. */
+  --pos-1: 3.4px;
+  --pos-2: 6.8px;
+  --pos-3: 10.2px;
+  --pos-4: 13.6px;
+  --pos-6: 20.4px;
+  --pos-8: 27.2px;
+
+  /* Nunca más redondo que esto. */
+  --pos-r-sm: 2px;
+  --pos-r-md: 4px;
+  --pos-r-lg: 7px;
+
+  background: var(--pos-bg);
+  color: var(--pos-text);
+  font-family: var(--font-barlow), system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.pos-raiz .titular {
+  font-family: var(--font-barlow-condensed), system-ui, sans-serif;
+  font-weight: 600;
+  line-height: 1.12;
+  letter-spacing: -0.015em;
+}
+
+/* Kickers y etiquetas: 10–11px, versalitas espaciadas. */
+.pos-raiz .kicker {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  line-height: 1.2;
+}
+
+/**
+ * Marcas de registro en las esquinas — la firma del sistema.
+ *
+ * Van FUERA del borde (offset −6px), así que el contenedor no puede recortar:
+ * cualquier `overflow:hidden` en un ancestro se las come.
+ */
+.pos-raiz .blueprint {
+  position: relative;
+  border: 1px solid var(--pos-divider);
+  border-radius: var(--pos-r-md);
+}
+.pos-raiz .blueprint > .corner {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  pointer-events: none;
+}
+.pos-raiz .blueprint > .corner::before,
+.pos-raiz .blueprint > .corner::after {
+  content: "";
+  position: absolute;
+  background: var(--pos-400);
+}
+.pos-raiz .blueprint > .corner::before { left: 5px; top: 0; width: 1px; height: 100%; }
+.pos-raiz .blueprint > .corner::after  { top: 5px; left: 0; width: 100%; height: 1px; }
+.pos-raiz .blueprint > .corner.tl { top: -6px; left: -6px; }
+.pos-raiz .blueprint > .corner.tr { top: -6px; right: -6px; }
+.pos-raiz .blueprint > .corner.bl { bottom: -6px; left: -6px; }
+.pos-raiz .blueprint > .corner.br { bottom: -6px; right: -6px; }
+
+/* Foco visible del sistema. En una pantalla táctil casi no se ve, pero el POS
+   también se opera con teclado y ahí es lo único que dice dónde estás. */
+.pos-raiz :focus-visible {
+  outline: 2px solid var(--pos-accent);
+  outline-offset: 2px;
+}
+
+/* Los números se alinean en columna: precios, cantidades, totales. */
+.pos-raiz .tabular { font-variant-numeric: tabular-nums; }
+
+.pos-raiz [disabled],
+.pos-raiz .desactivado {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/**
+ * Ancho de trabajo.
+ *
+ * El POS está pensado para la pantalla de una caja — tablet u ordenador de
+ * mostrador, 1024px o más. Ahí el layout del handoff cabe entero: rail 92 +
+ * catálogo + carrito 360.
+ *
+ * Por debajo de eso no se rompe: el carrito se estrecha y las tarjetas
+ * reflowean. No es una app móvil y no pretende serlo, pero desbordar
+ * horizontalmente en la pantalla de alguien es peor que apretarse.
+ */
+.pos-raiz .pos-cuerpo {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+}
+.pos-raiz .pos-rejilla {
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+}
+
+@media (max-width: 1100px) {
+  .pos-raiz .pos-cuerpo { grid-template-columns: minmax(0, 1fr) 300px; }
+  .pos-raiz .pos-rejilla { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+}

@@ -7,6 +7,8 @@
 export interface LineaCarrito {
   sku: string;
   descripcion: string;
+  /** El diseno la muestra aparte: «Talla 24 · $189.900». */
+  talla: string;
   cantidad: number;
   /** Sin IVA, igual que el catálogo (INV-CAT1). */
   precioUnitarioSinIva: number;

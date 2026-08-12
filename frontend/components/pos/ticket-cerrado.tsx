@@ -28,25 +28,25 @@ export function TicketCerrado({ ticket, onNueva }: { ticket: Ticket; onNueva: ()
   return (
     <div className="flex min-h-screen flex-col items-center justify-center p-8 text-center">
       <div aria-hidden className="text-5xl">✅</div>
-      <h1 className="mt-4 font-display text-2xl tracking-wide">VENTA CERRADA</h1>
-      <p className="mt-1 font-mono text-sm text-[#A6BECC]">{ticket.numero}</p>
+      <h1 className="mt-4 titular text-2xl tracking-wide">VENTA CERRADA</h1>
+      <p className="mt-1 tabular text-sm text-[var(--pos-700)]">{ticket.numero}</p>
 
-      <div className="mt-6 font-mono text-[40px] font-semibold tabular-nums">
+      <div className="mt-6 tabular text-[40px] font-semibold tabular-nums">
         {formatear(ticket.total_centavos)}
       </div>
 
       {ticket.vuelto_centavos > 0 && (
         <div className="mt-4">
-          <div className="font-display text-[11px] tracking-[0.14em] text-[#6F92A6]">
+          <div className="titular text-[11px] tracking-[0.14em] text-[var(--pos-600)]">
             VUELTO
           </div>
-          <div className="font-mono text-[34px] font-semibold tabular-nums text-[#6E9169]">
+          <div className="tabular text-[34px] font-semibold tabular-nums text-[var(--pos-800)]">
             {formatear(ticket.vuelto_centavos)}
           </div>
         </div>
       )}
 
-      <div className="mt-6 space-y-1 font-mono text-[11.5px] text-[#6F92A6]">
+      <div className="mt-6 space-y-1 tabular text-[11.5px] text-[var(--pos-600)]">
         <div>🧾 Ticket impreso</div>
         <div>
           {ticket.estado_fiscal === "emitido"
@@ -58,11 +58,11 @@ export function TicketCerrado({ ticket, onNueva }: { ticket: Ticket; onNueva: ()
 
       <button
         onClick={onNueva}
-        className="mt-8 bg-[#C8412B] px-10 py-3.5 font-display text-[13.5px] font-semibold tracking-[0.12em] text-white"
+        className="mt-8 bg-[var(--pos-accent)] px-10 py-3.5 titular text-[13.5px] font-semibold tracking-[0.12em] text-white"
       >
         NUEVA VENTA · Enter
       </button>
-      <p className="mt-3 font-mono text-[10.5px] text-[#4A5C66]">
+      <p className="mt-3 tabular text-[10.5px] text-[var(--pos-500)]">
         Vuelve solo en {restan} s
       </p>
     </div>

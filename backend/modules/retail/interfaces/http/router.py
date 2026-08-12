@@ -29,6 +29,9 @@ from backend.modules.retail.application.comandos.autorizar import (
     ValidarPin,
 )
 from backend.modules.retail.application.consultas.buscar_producto import BuscarProducto
+from backend.modules.retail.application.consultas.listar_referencias import (
+    ListarReferencias,
+)
 from backend.modules.retail.domain.shared.dinero import Dinero
 from backend.modules.retail.domain.shared.sku import Sku
 from backend.modules.retail.domain.venta.descuento import Descuento
@@ -315,4 +318,66 @@ async def autorizar(
     return AutorizacionSalida(
         autorizado_por=a.usuario_id, nombre=a.nombre,
         tope_descuento_pct=str(a.tope_descuento_pct),
+    )
+
+
+# ── Catálogo agrupado por referencia (la rejilla del diseño) ────────────────
+
+class TallaSalida(BaseModel):
+    variante_id: str
+    sku: str
+    talla: str
+    disponible: int
+
+
+class ReferenciaSalida(BaseModel):
+    referencia: str
+    nombre: str
+    color: str
+    categoria: str
+    precio_base_centavos: int
+    precio_con_iva_centavos: int
+    tasa_iva: str
+    tallas: List[TallaSalida]
+
+
+class CatalogoSalida(BaseModel):
+    categorias: List[str]
+    referencias: List[ReferenciaSalida]
+
+
+@router.get("/catalogo/referencias", response_model=CatalogoSalida)
+async def listar_referencias(
+    ubicacion_id: str = Query(),
+    q: str = Query(default=""),
+    categoria: str = Query(default=""),
+    limite: int = Query(default=60, le=120),
+    sesion=Depends(sesion_lectura),
+    _: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Una fila por REFERENCIA con sus tallas — la forma que pide la rejilla.
+
+    Las categorías se devuelven en la misma respuesta para que los chips no
+    necesiten una segunda petición: la pantalla los pinta al arrancar.
+    """
+    consulta = ListarReferencias(sesion)
+    refs = await consulta.ejecutar(
+        ubicacion_id=ubicacion_id, texto=q, categoria=categoria, limite=limite)
+    return CatalogoSalida(
+        categorias=await consulta.categorias(),
+        referencias=[
+            ReferenciaSalida(
+                referencia=r.referencia, nombre=r.nombre, color=r.color,
+                categoria=r.categoria,
+                precio_base_centavos=r.precio_base_centavos,
+                precio_con_iva_centavos=_con_iva(r.precio_base_centavos, r.tasa_iva),
+                tasa_iva=r.tasa_iva,
+                tallas=[
+                    TallaSalida(variante_id=t.variante_id, sku=t.sku,
+                                talla=t.talla, disponible=t.disponible)
+                    for t in r.tallas
+                ],
+            )
+            for r in refs
+        ],
     )

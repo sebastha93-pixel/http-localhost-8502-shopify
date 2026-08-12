@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+html, body { height: 100%; }
+body { margin: 0; background: var(--color-bg); color: var(--color-text); }
+a { color: var(--color-accent); text-underline-offset: 3px; }
+a:hover { color: var(--color-accent-700); }
+button { -webkit-tap-highlight-color: transparent; }
+</style>
+</helmet>
+<div style="display:flex; height:100vh; font-family:var(--font-body); background:var(--color-bg); color:var(--color-text); overflow:hidden">
+
+<sc-if value="{{ isLogin }}" hint-placeholder-val="{{ true }}">
+<div data-screen-label="Login" style="flex:1; display:grid; place-items:center; background:var(--color-bg)">
+  <div class="blueprint" style="width:420px; padding:var(--space-8); display:flex; flex-direction:column; gap:var(--space-6)">
+    <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+    <div style="text-align:center">
+      <div style="font-family:var(--font-heading); font-weight:700; font-size:30px; letter-spacing:0.04em">MALE'DENIM</div>
+      <div style="font-size:11px; letter-spacing:0.18em; text-transform:uppercase; color:var(--color-accent-700); margin-top:4px">Punto de venta · Tienda Principal</div>
+    </div>
+    <sc-if value="{{ noCajera }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex; flex-direction:column; gap:var(--space-3)">
+        <div style="font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:color-mix(in srgb, var(--color-text) 60%, transparent)">Selecciona tu usuaria</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:var(--space-3)">
+          <sc-for list="{{ cajeras }}" as="c" hint-placeholder-count="3">
+            <button onClick="{{ c.pick }}" style="display:flex; flex-direction:column; align-items:center; gap:var(--space-2); padding:var(--space-4) var(--space-2); min-height:96px; background:transparent; border:1px solid var(--color-divider); border-radius:var(--radius-md); cursor:pointer; font-family:var(--font-body)" style-hover="border-color: var(--color-accent); background: var(--color-accent-100)">
+              <span style="width:44px; height:44px; display:grid; place-items:center; background:var(--color-accent-100); color:var(--color-accent-800); font-family:var(--font-heading); font-weight:600; font-size:18px; border-radius:var(--radius-sm)">{{ c.ini }}</span>
+              <span style="font-size:13px; font-weight:500">{{ c.name }}</span>
+              <span style="font-size:10px; letter-spacing:0.08em; text-transform:uppercase; color:color-mix(in srgb, var(--color-text) 50%, transparent)">{{ c.rol }}</span>
+            </button>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+    <sc-if value="{{ hasCajera }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex; flex-direction:column; gap:var(--space-4); align-items:center">
+        <div style="font-size:13px">PIN de <strong>{{ cajeraName }}</strong> · <a href="#" onClick="{{ resetCajera }}">cambiar</a></div>
+        <div style="display:flex; gap:10px">
+          <sc-for list="{{ pinDots }}" as="d" hint-placeholder-count="4">
+            <span style="width:12px; height:12px; border-radius:50%; border:1px solid var(--color-accent-700); background:{{ d.bg }}"></span>
+          </sc-for>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(3, 72px); gap:var(--space-2); justify-content:center">
+          <sc-for list="{{ keypad }}" as="k" hint-placeholder-count="12">
+            <button onClick="{{ k.press }}" style="height:56px; font-family:var(--font-heading); font-weight:600; font-size:20px; background:transparent; border:1px solid var(--color-divider); border-radius:var(--radius-md); cursor:pointer; color:var(--color-text)" style-hover="background: var(--color-accent-100); border-color: var(--color-accent)" style-active="background: var(--color-accent-200)">{{ k.label }}</button>
+          </sc-for>
+        </div>
+        <div style="font-size:11px; color:color-mix(in srgb, var(--color-text) 50%, transparent)">Ingresa 4 dígitos para abrir turno</div>
+      </div>
+    </sc-if>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isApp }}" hint-placeholder-val="{{ false }}">
+  <nav style="width:92px; display:flex; flex-direction:column; align-items:stretch; gap:var(--space-1); padding:var(--space-3) var(--space-2); border-right:1px solid var(--color-divider); background:var(--color-bg)">
+    <div style="font-family:var(--font-heading); font-weight:700; font-size:15px; text-align:center; letter-spacing:0.03em; padding:var(--space-2) 0 var(--space-4)">M'D</div>
+    <sc-for list="{{ navItems }}" as="n" hint-placeholder-count="5">
+      <button onClick="{{ n.go }}" style="display:flex; flex-direction:column; align-items:center; gap:6px; padding:12px 4px; min-height:64px; border:none; border-radius:var(--radius-md); cursor:pointer; font-family:var(--font-body); background:{{ n.bg }}; color:{{ n.fg }}" style-hover="background: var(--color-accent-100)">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="{{ n.d }}"></path></svg>
+        <span style="font-size:10px; letter-spacing:0.06em; text-transform:uppercase">{{ n.label }}</span>
+      </button>
+    </sc-for>
+    <div style="margin-top:auto; display:flex; flex-direction:column; gap:var(--space-2); align-items:center">
+      <div style="width:40px; height:40px; display:grid; place-items:center; background:var(--color-accent-100); color:var(--color-accent-800); font-family:var(--font-heading); font-weight:600; border-radius:var(--radius-sm)">{{ cajeraIni }}</div>
+      <button onClick="{{ logout }}" title="Cerrar sesión" style="width:44px; height:44px; display:grid; place-items:center; background:transparent; border:1px solid var(--color-divider); border-radius:var(--radius-md); cursor:pointer; color:var(--color-text)" style-hover="border-color: var(--color-accent); color: var(--color-accent-700)">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4H5v16h4 M13 8l4 4-4 4 M17 12H8"></path></svg>
+      </button>
+    </div>
+  </nav>
+
+  <div style="flex:1; display:flex; flex-direction:column; min-width:0">
+    <header style="display:flex; align-items:center; gap:var(--space-4); padding:var(--space-3) var(--space-6); border-bottom:1px solid var(--color-divider)">
+      <div style="font-family:var(--font-heading); font-weight:600; font-size:20px; letter-spacing:0.02em">{{ screenTitle }}</div>
+      <div style="margin-left:auto; display:flex; align-items:center; gap:var(--space-4); font-size:12px; color:color-mix(in srgb, var(--color-text) 60%, transparent)">
+        <span>Tienda Principal</span>
+        <span>Caja 01 · {{ cajeraName }}</span>
+        <span>{{ fecha }}</span>
+      </div>
+    </header>
+
+    <sc-if value="{{ isVenta }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Venta" style="flex:1; display:flex; min-height:0">
+      <div style="flex:1; display:flex; flex-direction:column; min-width:0; padding:var(--space-4) var(--space-6); gap:var(--space-4)">
+        <div style="display:flex; gap:var(--space-3); align-items:center; flex-wrap:wrap; min-width:0">
+          <div style="position:relative; flex:1; min-width:220px; max-width:420px">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="position:absolute; left:12px; top:13px; opacity:0.5"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4-4"></path></svg>
+            <input class="input" value="{{ query }}" onChange="{{ setQuery }}" placeholder="Buscar por nombre o referencia" style="width:100%; height:44px; padding-left:38px; box-sizing:border-box">
+          </div>
+          <div style="display:flex; gap:var(--space-1); flex-wrap:wrap; min-width:0">
+            <sc-for list="{{ cats }}" as="ct" hint-placeholder-count="5">
+              <button onClick="{{ ct.pick }}" style="height:44px; padding:0 14px; font-family:var(--font-heading); font-weight:600; font-size:13px; letter-spacing:0.04em; text-transform:uppercase; border:1px solid {{ ct.bd }}; background:{{ ct.bg }}; color:{{ ct.fg }}; border-radius:var(--radius-md); cursor:pointer" style-hover="border-color: var(--color-accent)">{{ ct.label }}</button>
+            </sc-for>
+          </div>
+        </div>
+        <div style="flex:1; overflow-y:auto; min-height:0">
+          <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); gap:var(--space-3); padding-bottom:var(--space-6)">
+            <sc-for list="{{ products }}" as="p" hint-placeholder-count="8">
+              <div style="display:flex; flex-direction:column; gap:var(--space-2); padding:var(--space-4); background:transparent; border:1px solid color-mix(in srgb, var(--color-text) 10%, transparent); border-radius:var(--radius-md)">
+                <div style="display:flex; justify-content:space-between; gap:var(--space-2); align-items:baseline; min-height:36px">
+                  <div style="font-family:var(--font-heading); font-weight:600; font-size:15px; line-height:1.15">{{ p.name }}</div>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:11px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">
+                  <span style="font-family:ui-monospace, monospace">{{ p.ref }}</span>
+                  <span style="font-weight:600; font-size:13px; color:var(--color-text)">{{ p.priceFmt }}</span>
+                </div>
+                <div style="display:flex; gap:5px; margin-top:2px">
+                  <sc-for list="{{ p.sizeOpts }}" as="s" hint-placeholder-count="5">
+                    <button onClick="{{ s.add }}" disabled="{{ s.out }}" title="{{ s.tip }}" style="flex:1; height:40px; font-size:12px; font-weight:500; border:1px solid var(--color-divider); background:transparent; border-radius:var(--radius-sm); cursor:pointer; color:var(--color-text); opacity:{{ s.op }}" style-hover="background: var(--color-accent-100); border-color: var(--color-accent)" style-active="background: var(--color-accent-200)">{{ s.label }}</button>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+
+      <aside class="blueprint" style="width:360px; display:flex; flex-direction:column; margin:var(--space-4) var(--space-6) var(--space-4) 0; background:var(--color-surface)">
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--color-divider)">
+          <div style="font-family:var(--font-heading); font-weight:600; font-size:17px">Venta actual</div>
+          <span class="tag tag-accent">{{ cartCount }} art.</span>
+        </div>
+        <div style="padding:var(--space-2) var(--space-4)">
+          <sc-if value="{{ noCliente }}" hint-placeholder-val="{{ true }}">
+            <button onClick="{{ openCliente }}" style="width:100%; height:44px; display:flex; align-items:center; gap:8px; justify-content:center; border:1px dashed var(--color-divider); background:transparent; border-radius:var(--radius-md); cursor:pointer; font-size:13px; color:var(--color-accent-700)" style-hover="border-color: var(--color-accent); background: var(--color-accent-100)">+ Asignar clienta</button>
+          </sc-if>
+          <sc-if value="{{ hasCliente }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; align-items:center; justify-content:space-between; height:44px; font-size:13px">
+              <span><strong>{{ clienteName }}</strong> · {{ clienteTel }}</span>
+              <a href="#" onClick="{{ clearCliente }}" style="font-size:12px">quitar</a>
+            </div>
+          </sc-if>
+        </div>
+        <div style="flex:1; overflow-y:auto; min-height:0; padding:0 var(--space-4)">
+          <sc-if value="{{ cartEmpty }}" hint-placeholder-val="{{ true }}">
+            <div style="padding:var(--space-8) 0; text-align:center; font-size:13px; color:color-mix(in srgb, var(--color-text) 45%, transparent)">Toca una talla para agregar<br>artículos a la venta</div>
+          </sc-if>
+          <sc-for list="{{ cart }}" as="it" hint-placeholder-count="0">
+            <div style="display:flex; align-items:center; gap:var(--space-2); padding:var(--space-2) 0; border-bottom:1px solid color-mix(in srgb, var(--color-text) 7%, transparent)">
+              <div style="flex:1; min-width:0">
+                <div style="font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">{{ it.name }}</div>
+                <div style="font-size:11px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">Talla {{ it.size }} · {{ it.priceFmt }}</div>
+              </div>
+              <div style="display:flex; align-items:center; gap:4px">
+                <button onClick="{{ it.dec }}" style="width:32px; height:32px; border:1px solid var(--color-divider); background:transparent; border-radius:var(--radius-sm); cursor:pointer; font-size:15px; color:var(--color-text)" style-hover="background: var(--color-accent-100)">−</button>
+                <span style="width:22px; text-align:center; font-size:13px; font-weight:600">{{ it.qty }}</span>
+                <button onClick="{{ it.inc }}" style="width:32px; height:32px; border:1px solid var(--color-divider); background:transparent; border-radius:var(--radius-sm); cursor:pointer; font-size:15px; color:var(--color-text)" style-hover="background: var(--color-accent-100)">+</button>
+              </div>
+              <div style="width:76px; text-align:right; font-size:13px; font-weight:600">{{ it.totalFmt }}</div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="padding:var(--space-3) var(--space-4); border-top:1px solid var(--color-divider); display:flex; flex-direction:column; gap:var(--space-2)">
+          <div style="display:flex; align-items:center; justify-content:space-between; font-size:13px">
+            <span>Subtotal</span><span>{{ subtotalFmt }}</span>
+          </div>
+          <div style="display:flex; align-items:center; justify-content:space-between; font-size:13px">
+            <span style="display:flex; align-items:center; gap:8px">Descuento
+              <span style="display:inline-flex; gap:3px">
+                <sc-for list="{{ discOpts }}" as="d" hint-placeholder-count="3">
+                  <button onClick="{{ d.pick }}" style="height:28px; padding:0 8px; font-size:11px; border:1px solid {{ d.bd }}; background:{{ d.bg }}; color:{{ d.fg }}; border-radius:var(--radius-sm); cursor:pointer">{{ d.label }}</button>
+                </sc-for>
+              </span>
+            </span>
+            <span style="color:var(--color-accent-700)">−{{ discountFmt }}</span>
+          </div>
+          <sc-if value="{{ showIva }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex; justify-content:space-between; font-size:11px; color:color-mix(in srgb, var(--color-text) 50%, transparent)">
+              <span>IVA incluido (19%)</span><span>{{ ivaFmt }}</span>
+            </div>
+          </sc-if>
+          <div style="display:flex; justify-content:space-between; align-items:baseline; margin-top:var(--space-1)">
+            <span style="font-family:var(--font-heading); font-weight:600; font-size:17px">Total</span>
+            <span style="font-family:var(--font-heading); font-weight:700; font-size:26px">{{ totalFmt }}</span>
+          </div>
+          <button class="btn btn-primary blueprint" onClick="{{ openPay }}" disabled="{{ cartEmptyFlag }}" style="height:56px; font-size:17px; letter-spacing:0.06em; margin-top:var(--space-1)">
+            <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            COBRAR {{ totalFmt }}
+          </button>
+        </div>
+      </aside>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ isDev }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Devoluciones" style="flex:1; overflow-y:auto; padding:var(--space-6); display:flex; flex-direction:column; gap:var(--space-4); max-width:860px">
+      <sc-if value="{{ devNotDone }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex; gap:var(--space-2); align-items:center">
+          <input class="input" value="{{ devQuery }}" onChange="{{ setDevQuery }}" placeholder="Número de ticket, ej. T-10471" style="width:320px; height:44px; box-sizing:border-box">
+          <button class="btn btn-secondary" onClick="{{ devSearch }}" style="height:44px">Buscar ticket</button>
+        </div>
+        <sc-if value="{{ hasDevSale }}" hint-placeholder-val="{{ false }}">
+          <div class="blueprint" style="padding:var(--space-4); display:flex; flex-direction:column; gap:var(--space-3)">
+            <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            <div style="display:flex; justify-content:space-between; align-items:baseline">
+              <div style="font-family:var(--font-heading); font-weight:600; font-size:17px">Ticket {{ devTicket }}</div>
+              <div style="font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">{{ devFecha }} · {{ devCajera }}</div>
+            </div>
+            <div style="font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:color-mix(in srgb, var(--color-text) 55%, transparent)">Selecciona los artículos a devolver</div>
+            <sc-for list="{{ devItems }}" as="di" hint-placeholder-count="2">
+              <button onClick="{{ di.toggle }}" style="display:flex; align-items:center; gap:var(--space-3); padding:var(--space-3); min-height:56px; text-align:left; border:1px solid {{ di.bd }}; background:{{ di.bg }}; border-radius:var(--radius-md); cursor:pointer; font-family:var(--font-body); color:var(--color-text)" style-hover="border-color: var(--color-accent)">
+                <span style="width:20px; height:20px; display:grid; place-items:center; border:1px solid var(--color-accent-700); border-radius:var(--radius-sm); background:{{ di.ckBg }}; color:var(--color-accent-800); font-size:12px; font-weight:700">{{ di.ck }}</span>
+                <span style="flex:1"><span style="font-weight:500; font-size:14px">{{ di.name }}</span><br><span style="font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">Talla {{ di.size }} · {{ di.ref }}</span></span>
+                <span style="font-weight:600; font-size:14px">{{ di.priceFmt }}</span>
+              </button>
+            </sc-for>
+            <div style="display:flex; gap:var(--space-6); flex-wrap:wrap; margin-top:var(--space-2)">
+              <div style="display:flex; flex-direction:column; gap:var(--space-2)">
+                <div style="font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:color-mix(in srgb, var(--color-text) 55%, transparent)">Motivo</div>
+                <div style="display:flex; gap:var(--space-1); flex-wrap:wrap">
+                  <sc-for list="{{ motivos }}" as="m" hint-placeholder-count="4">
+                    <button onClick="{{ m.pick }}" style="height:40px; padding:0 14px; font-size:13px; border:1px solid {{ m.bd }}; background:{{ m.bg }}; color:{{ m.fg }}; border-radius:var(--radius-md); cursor:pointer" style-hover="border-color: var(--color-accent)">{{ m.label }}</button>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="display:flex; flex-direction:column; gap:var(--space-2)">
+                <div style="font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:color-mix(in srgb, var(--color-text) 55%, transparent)">Reembolso</div>
+                <div style="display:flex; gap:var(--space-1)">
+                  <sc-for list="{{ refundOpts }}" as="r" hint-placeholder-count="3">
+                    <button onClick="{{ r.pick }}" style="height:40px; padding:0 14px; font-size:13px; border:1px solid {{ r.bd }}; background:{{ r.bg }}; color:{{ r.fg }}; border-radius:var(--radius-md); cursor:pointer" style-hover="border-color: var(--color-accent)">{{ r.label }}</button>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--color-divider); padding-top:var(--space-3); margin-top:var(--space-2)">
+              <div style="font-size:14px">Total a devolver: <strong style="font-family:var(--font-heading); font-size:20px">{{ devTotalFmt }}</strong></div>
+              <button class="btn btn-primary" onClick="{{ devConfirm }}" disabled="{{ devDisabled }}" style="height:48px; padding:0 24px">Procesar devolución</button>
+            </div>
+          </div>
+        </sc-if>
+        <sc-if value="{{ devNoSale }}" hint-placeholder-val="{{ false }}">
+          <div style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">Busca un ticket para iniciar la devolución. Prueba con <strong>T-10471</strong>.</div>
+        </sc-if>
+      </sc-if>
+      <sc-if value="{{ devDone }}" hint-placeholder-val="{{ false }}">
+        <div class="blueprint" style="padding:var(--space-8); display:flex; flex-direction:column; align-items:center; gap:var(--space-3); max-width:480px">
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <span style="width:56px; height:56px; display:grid; place-items:center; background:var(--color-accent); color:#fff; border-radius:var(--radius-sm)">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"></path></svg>
+          </span>
+          <div style="font-family:var(--font-heading); font-weight:600; font-size:22px">Devolución procesada</div>
+          <div style="font-size:14px; text-align:center">{{ devDoneMsg }}</div>
+          <button class="btn btn-secondary" onClick="{{ devReset }}" style="height:44px">Nueva devolución</button>
+        </div>
+      </sc-if>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ isInv }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Inventario" style="flex:1; overflow-y:auto; padding:var(--space-6); display:flex; flex-direction:column; gap:var(--space-4)">
+      <div style="display:flex; gap:var(--space-3); align-items:center">
+        <input class="input" value="{{ invQuery }}" onChange="{{ setInvQuery }}" placeholder="Filtrar por nombre o referencia" style="width:320px; height:44px; box-sizing:border-box">
+        <span class="tag tag-neutral">{{ invCount }} referencias</span>
+        <span class="tag tag-accent">{{ invLow }} con stock bajo</span>
+      </div>
+      <table class="table" style="width:100%; border-collapse:collapse; font-size:13px">
+        <thead><tr><th>Ref</th><th>Producto</th><th>Categoría</th><th style="text-align:right">Precio</th><th style="text-align:center">T24</th><th style="text-align:center">T26</th><th style="text-align:center">T28</th><th style="text-align:center">T30</th><th style="text-align:center">T32</th><th style="text-align:center">Total</th><th>Estado</th></tr></thead>
+        <tbody>
+          <sc-for list="{{ invRows }}" as="r" hint-placeholder-count="8">
+            <tr>
+              <td style="font-family:ui-monospace, monospace; font-size:12px">{{ r.ref }}</td>
+              <td style="font-weight:500">{{ r.name }}</td>
+              <td>{{ r.cat }}</td>
+              <td style="text-align:right">{{ r.priceFmt }}</td>
+              <td style="text-align:center">{{ r.s0 }}</td>
+              <td style="text-align:center">{{ r.s1 }}</td>
+              <td style="text-align:center">{{ r.s2 }}</td>
+              <td style="text-align:center">{{ r.s3 }}</td>
+              <td style="text-align:center">{{ r.s4 }}</td>
+              <td style="text-align:center; font-weight:600">{{ r.tot }}</td>
+              <td><span class="{{ r.tagCls }}">{{ r.estado }}</span></td>
+            </tr>
+          </sc-for>
+        </tbody>
+      </table>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ isCierre }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Cierre de caja" style="flex:1; overflow-y:auto; padding:var(--space-6)">
+      <sc-if value="{{ notClosed }}" hint-placeholder-val="{{ true }}">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:var(--space-4); max-width:900px">
+        <div class="blueprint" style="padding:var(--space-4); display:flex; flex-direction:column; gap:var(--space-3)">
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <div style="font-family:var(--font-heading); font-weight:600; font-size:17px">Resumen del turno</div>
+          <div style="display:flex; justify-content:space-between; font-size:13px"><span>Transacciones</span><strong>{{ cxTrans }}</strong></div>
+          <div style="display:flex; justify-content:space-between; font-size:13px"><span>Ventas brutas</span><strong>{{ cxBrutasFmt }}</strong></div>
+          <div style="display:flex; justify-content:space-between; gap:var(--space-2); font-size:13px"><span>Devoluciones</span><strong style="color:var(--color-accent-700); white-space:nowrap">−{{ cxDevsFmt }}</strong></div>
+          <div style="display:flex; justify-content:space-between; font-size:14px; border-top:1px solid var(--color-divider); padding-top:var(--space-2)"><span>Ventas netas</span><strong style="font-family:var(--font-heading); font-size:18px">{{ cxNetasFmt }}</strong></div>
+          <div style="font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:color-mix(in srgb, var(--color-text) 55%, transparent); margin-top:var(--space-2)">Por método de pago</div>
+          <sc-for list="{{ cxMetodos }}" as="mm" hint-placeholder-count="4">
+            <div style="display:flex; justify-content:space-between; font-size:13px; padding:6px 0; border-bottom:1px solid color-mix(in srgb, var(--color-text) 7%, transparent)"><span>{{ mm.label }}</span><span style="font-weight:600">{{ mm.valFmt }}</span></div>
+          </sc-for>
+        </div>
+        <div class="blueprint" style="padding:var(--space-4); display:flex; flex-direction:column; gap:var(--space-3); align-self:start">
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <div style="font-family:var(--font-heading); font-weight:600; font-size:17px">Arqueo de efectivo</div>
+          <div style="display:flex; justify-content:space-between; font-size:13px"><span>Base de caja</span><span>{{ cxBaseFmt }}</span></div>
+          <div style="display:flex; justify-content:space-between; font-size:13px"><span>Efectivo en ventas</span><span>{{ cxEfectivoFmt }}</span></div>
+          <div style="display:flex; justify-content:space-between; font-size:14px; border-top:1px solid var(--color-divider); padding-top:var(--space-2)"><span>Efectivo esperado</span><strong>{{ cxEsperadoFmt }}</strong></div>
+          <div class="field" style="margin-top:var(--space-2)">
+            <label style="font-size:11px; letter-spacing:0.1em; text-transform:uppercase">Efectivo contado</label>
+            <input class="input" value="{{ cxContado }}" onChange="{{ setCxContado }}" inputMode="numeric" placeholder="0" style="height:48px; font-size:18px; font-family:var(--font-heading); box-sizing:border-box; width:100%">
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:14px"><span>Diferencia</span><strong style="color:{{ cxDifColor }}">{{ cxDifFmt }}</strong></div>
+          <button class="btn btn-primary blueprint" onClick="{{ cerrarCaja }}" disabled="{{ cxDisabled }}" style="height:52px; font-size:15px; letter-spacing:0.05em">
+            <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            CERRAR CAJA
+          </button>
+        </div>
+      </div>
+      </sc-if>
+      <sc-if value="{{ isClosed }}" hint-placeholder-val="{{ false }}">
+        <div class="blueprint" style="padding:var(--space-8); display:flex; flex-direction:column; align-items:center; gap:var(--space-3); max-width:480px">
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <span style="width:56px; height:56px; display:grid; place-items:center; background:var(--color-accent); color:#fff; border-radius:var(--radius-sm)">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 11h12v9H6v-9Z M9 11V8a3 3 0 0 1 6 0v3"></path></svg>
+          </span>
+          <div style="font-family:var(--font-heading); font-weight:600; font-size:22px">Caja cerrada</div>
+          <div style="font-size:14px; text-align:center">Turno de {{ cajeraName }} cerrado con {{ cxNetasFmt }} en ventas netas.<br>Se envió el reporte Z al correo de administración.</div>
+          <button class="btn btn-secondary" onClick="{{ reabrirCaja }}" style="height:44px">Reabrir turno (demo)</button>
+        </div>
+      </sc-if>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ isDash }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Dashboard" style="flex:1; overflow-y:auto; padding:var(--space-6); display:flex; flex-direction:column; gap:var(--space-4)">
+      <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:var(--space-3)">
+        <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="4">
+          <div class="blueprint" style="padding:var(--space-4); display:flex; flex-direction:column; gap:var(--space-1)">
+            <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            <div style="font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:var(--color-accent-700)">{{ k.label }}</div>
+            <div style="font-family:var(--font-heading); font-weight:700; font-size:28px">{{ k.value }}</div>
+            <div style="font-size:11px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">{{ k.sub }}</div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="display:grid; grid-template-columns:1.6fr 1fr; gap:var(--space-3)">
+        <div class="blueprint" style="padding:var(--space-4); display:flex; flex-direction:column; gap:var(--space-3)">
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <div style="font-family:var(--font-heading); font-weight:600; font-size:17px">Ventas por hora</div>
+          <div style="display:flex; align-items:flex-end; gap:var(--space-2); height:180px; padding-top:var(--space-2)">
+            <sc-for list="{{ horas }}" as="h" hint-placeholder-count="11">
+              <div style="flex:1; display:flex; flex-direction:column; align-items:center; gap:6px; height:100%; justify-content:flex-end">
+                <div title="{{ h.tip }}" style="width:100%; max-width:38px; height:{{ h.pct }}; background:{{ h.bg }}; border-radius:var(--radius-sm) var(--radius-sm) 0 0"></div>
+                <span style="font-size:10px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">{{ h.label }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        <div class="blueprint" style="padding:var(--space-4); display:flex; flex-direction:column; gap:var(--space-2)">
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <div style="font-family:var(--font-heading); font-weight:600; font-size:17px">Más vendidos hoy</div>
+          <sc-for list="{{ tops }}" as="t" hint-placeholder-count="5">
+            <div style="display:flex; align-items:center; gap:var(--space-2); padding:8px 0; border-bottom:1px solid color-mix(in srgb, var(--color-text) 7%, transparent)">
+              <span style="width:24px; font-family:var(--font-heading); font-weight:600; color:var(--color-accent-700)">{{ t.pos }}</span>
+              <span style="flex:1; font-size:13px; font-weight:500">{{ t.name }}</span>
+              <span style="font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">{{ t.uds }} uds</span>
+              <span style="font-size:13px; font-weight:600; width:88px; text-align:right">{{ t.valFmt }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+  </div>
+</sc-if>
+
+<sc-if value="{{ payOpen }}" hint-placeholder-val="{{ false }}">
+  <div class="dialog-backdrop" style="z-index:50">
+    <div class="dialog blueprint" style="background:var(--color-surface); width:min(520px, 100%); border-radius:var(--radius-md)">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <sc-if value="{{ payMethodStep }}" hint-placeholder-val="{{ true }}">
+        <div class="dialog-title">Cobrar {{ totalFmt }}</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:var(--space-2)">
+          <sc-for list="{{ payMethods }}" as="pm" hint-placeholder-count="5">
+            <button onClick="{{ pm.pick }}" style="height:64px; display:flex; align-items:center; gap:var(--space-3); padding:0 var(--space-4); border:1px solid var(--color-divider); background:transparent; border-radius:var(--radius-md); cursor:pointer; font-family:var(--font-heading); font-weight:600; font-size:15px; color:var(--color-text); text-align:left" style-hover="border-color: var(--color-accent); background: var(--color-accent-100)">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-accent-700)"><path d="{{ pm.d }}"></path></svg>
+              {{ pm.label }}
+            </button>
+          </sc-for>
+        </div>
+        <div class="dialog-actions"><button class="btn btn-ghost" onClick="{{ closePay }}">Cancelar</button></div>
+      </sc-if>
+      <sc-if value="{{ payCashStep }}" hint-placeholder-val="{{ false }}">
+        <div class="dialog-title">Efectivo · {{ totalFmt }}</div>
+        <div style="display:flex; flex-direction:column; gap:var(--space-3)">
+          <div style="display:flex; gap:var(--space-2); flex-wrap:wrap">
+            <sc-for list="{{ cashQuick }}" as="cq" hint-placeholder-count="4">
+              <button onClick="{{ cq.pick }}" style="height:48px; padding:0 var(--space-4); border:1px solid {{ cq.bd }}; background:{{ cq.bg }}; color:{{ cq.fg }}; border-radius:var(--radius-md); cursor:pointer; font-family:var(--font-heading); font-weight:600; font-size:15px" style-hover="border-color: var(--color-accent)">{{ cq.label }}</button>
+            </sc-for>
+          </div>
+          <div class="field">
+            <label style="font-size:11px; letter-spacing:0.1em; text-transform:uppercase">Recibido</label>
+            <input class="input" value="{{ cashInput }}" onChange="{{ setCashInput }}" inputMode="numeric" placeholder="0" style="height:52px; font-size:20px; font-family:var(--font-heading); box-sizing:border-box; width:100%">
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:15px"><span>Cambio</span><strong style="font-family:var(--font-heading); font-size:22px">{{ cambioFmt }}</strong></div>
+        </div>
+        <div class="dialog-actions">
+          <button class="btn btn-ghost" onClick="{{ backToMethods }}">Atrás</button>
+          <button class="btn btn-primary" onClick="{{ confirmCash }}" disabled="{{ cashDisabled }}" style="height:48px; padding:0 24px">Confirmar pago</button>
+        </div>
+      </sc-if>
+      <sc-if value="{{ payMixStep }}" hint-placeholder-val="{{ false }}">
+        <div class="dialog-title">Pago mixto · {{ totalFmt }}</div>
+        <div style="display:flex; flex-direction:column; gap:var(--space-3)">
+          <sc-for list="{{ mixPays }}" as="mp" hint-placeholder-count="0">
+            <div style="display:flex; justify-content:space-between; align-items:center; font-size:14px; padding:8px 0; border-bottom:1px solid color-mix(in srgb, var(--color-text) 8%, transparent)">
+              <span>{{ mp.label }}</span>
+              <span style="display:flex; align-items:center; gap:var(--space-3)"><strong>{{ mp.amtFmt }}</strong><a href="#" onClick="{{ mp.remove }}" style="font-size:12px">quitar</a></span>
+            </div>
+          </sc-for>
+          <div style="display:flex; gap:var(--space-2); align-items:flex-end">
+            <div style="display:flex; gap:4px">
+              <sc-for list="{{ mixMethods }}" as="mx" hint-placeholder-count="4">
+                <button onClick="{{ mx.pick }}" style="height:44px; padding:0 12px; font-size:12px; border:1px solid {{ mx.bd }}; background:{{ mx.bg }}; color:{{ mx.fg }}; border-radius:var(--radius-md); cursor:pointer" style-hover="border-color: var(--color-accent)">{{ mx.label }}</button>
+              </sc-for>
+            </div>
+            <input class="input" value="{{ mixInput }}" onChange="{{ setMixInput }}" inputMode="numeric" placeholder="Monto" style="height:44px; width:120px; box-sizing:border-box">
+            <button class="btn btn-secondary" onClick="{{ mixAdd }}" style="height:44px">Agregar</button>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:15px"><span>Restante</span><strong style="font-family:var(--font-heading); font-size:20px; color:{{ mixRestColor }}">{{ mixRestFmt }}</strong></div>
+        </div>
+        <div class="dialog-actions">
+          <button class="btn btn-ghost" onClick="{{ backToMethods }}">Atrás</button>
+          <button class="btn btn-primary" onClick="{{ confirmMix }}" disabled="{{ mixDisabled }}" style="height:48px; padding:0 24px">Confirmar pago</button>
+        </div>
+      </sc-if>
+      <sc-if value="{{ paySuccessStep }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex; flex-direction:column; align-items:center; gap:var(--space-3); padding:var(--space-4) 0">
+          <span style="width:56px; height:56px; display:grid; place-items:center; background:var(--color-accent); color:#fff; border-radius:var(--radius-sm)">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"></path></svg>
+          </span>
+          <div style="font-family:var(--font-heading); font-weight:600; font-size:24px">Venta registrada</div>
+          <div style="font-size:14px; text-align:center">Ticket <strong>{{ lastTicket }}</strong> · {{ lastTotalFmt }} · {{ lastMethod }}</div>
+          <sc-if value="{{ hasCambio }}" hint-placeholder-val="{{ false }}">
+            <div style="font-size:15px">Cambio a entregar: <strong style="font-family:var(--font-heading); font-size:20px">{{ lastCambioFmt }}</strong></div>
+          </sc-if>
+          <div style="display:flex; gap:var(--space-2); margin-top:var(--space-2)">
+            <button class="btn btn-secondary" onClick="{{ newSale }}" style="height:48px">Imprimir ticket</button>
+            <button class="btn btn-primary" onClick="{{ newSale }}" style="height:48px; padding:0 24px">Nueva venta</button>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+</sc-if>
+
+<sc-if value="{{ clienteOpen }}" hint-placeholder-val="{{ false }}">
+  <div class="dialog-backdrop" style="z-index:50">
+    <div class="dialog blueprint" style="background:var(--color-surface); border-radius:var(--radius-md)">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div class="dialog-title">Asignar clienta</div>
+      <sc-if value="{{ noNuevaClienta }}" hint-placeholder-val="{{ true }}">
+        <input class="input" value="{{ cliQuery }}" onChange="{{ setCliQuery }}" inputMode="numeric" placeholder="Buscar por número de identificación" style="height:44px; box-sizing:border-box; width:100%">
+        <div style="display:flex; flex-direction:column; gap:var(--space-1)">
+          <sc-for list="{{ clientas }}" as="cl" hint-placeholder-count="4">
+            <button onClick="{{ cl.pick }}" style="display:flex; justify-content:space-between; align-items:center; min-height:48px; padding:0 var(--space-3); border:1px solid var(--color-divider); background:transparent; border-radius:var(--radius-md); cursor:pointer; font-family:var(--font-body); font-size:14px; color:var(--color-text)" style-hover="border-color: var(--color-accent); background: var(--color-accent-100)">
+              <span style="font-weight:500">{{ cl.name }}</span>
+              <span style="font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">{{ cl.doc }} · {{ cl.compras }} compras</span>
+            </button>
+          </sc-for>
+        </div>
+        <sc-if value="{{ cliSinResultados }}" hint-placeholder-val="{{ false }}">
+          <div style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent); padding:var(--space-2) 0">Sin resultados para esa identificación. Crea la clienta abajo.</div>
+        </sc-if>
+      </sc-if>
+      <sc-if value="{{ nuevaClienta }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex; flex-direction:column; gap:var(--space-2); border-top:1px solid var(--color-divider); padding-top:var(--space-3)">
+          <div style="font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:color-mix(in srgb, var(--color-text) 55%, transparent)">Nueva clienta</div>
+          <div style="display:grid; grid-template-columns:180px 1fr; gap:var(--space-2)">
+            <select class="input" value="{{ ncTipoDoc }}" onChange="{{ setNcTipoDoc }}" style="height:44px; box-sizing:border-box; width:100%; font-family:var(--font-body); font-size:14px">
+              <option value="CC">Cédula de ciudadanía</option>
+              <option value="PA">Pasaporte</option>
+              <option value="CE">Cédula de extranjería</option>
+            </select>
+            <input class="input" value="{{ ncDoc }}" onChange="{{ setNcDoc }}" inputMode="numeric" placeholder="Número de identificación" style="height:44px; box-sizing:border-box; width:100%">
+          </div>
+          <input class="input" value="{{ ncNombre }}" onChange="{{ setNcNombre }}" placeholder="Nombre completo" style="height:44px; box-sizing:border-box; width:100%">
+          <input class="input" value="{{ ncTel }}" onChange="{{ setNcTel }}" inputMode="tel" placeholder="Teléfono" style="height:44px; box-sizing:border-box; width:100%">
+          <div style="display:flex; flex-direction:column; gap:4px">
+            <input class="input" value="{{ ncEmail }}" onChange="{{ setNcEmail }}" inputMode="email" placeholder="Correo electrónico" style="height:44px; box-sizing:border-box; width:100%">
+            <span style="font-size:11px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">A este correo llega la factura electrónica</span>
+          </div>
+          <button class="btn btn-primary" onClick="{{ ncGuardar }}" disabled="{{ ncDisabled }}" style="height:44px">Guardar y asignar</button>
+        </div>
+      </sc-if>
+      <div class="dialog-actions" style="justify-content:space-between">
+        <sc-if value="{{ noNuevaClienta }}" hint-placeholder-val="{{ true }}">
+          <button class="btn btn-secondary" onClick="{{ openNuevaClienta }}">+ Crear clienta</button>
+        </sc-if>
+        <sc-if value="{{ nuevaClienta }}" hint-placeholder-val="{{ false }}">
+          <button class="btn btn-ghost" onClick="{{ cancelNuevaClienta }}">Volver a la lista</button>
+        </sc-if>
+        <button class="btn btn-ghost" onClick="{{ closeCliente }}">Venta sin registrar</button>
+      </div>
+    </div>
+  </div>
+</sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;mostrarIva&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Ventas&quot;}, &quot;baseCaja&quot;: {&quot;editor&quot;: &quot;int&quot;, &quot;default&quot;: 400000, &quot;min&quot;: 0, &quot;max&quot;: 2000000, &quot;step&quot;: 50000, &quot;unit&quot;: &quot;COP&quot;, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;Caja&quot;}}">
+class Component extends DCLogic {
+  state = {
+    screen: 'login', cajera: null, pin: '',
+    query: '', cat: 'Todo',
+    cart: [], discount: 0, cliente: null, clienteOpen: false, cliQuery: '',
+    payStep: null, cashInput: '', mixPays: [], mixMethod: 'Tarjeta', mixInput: '',
+    nuevaClienta: false, ncNombre: '', ncTel: '', ncTipoDoc: 'CC', ncDoc: '', ncEmail: '', clientasExtra: [],
+    last: null, ticketN: 10484,
+    devQuery: '', devSale: null, devSel: {}, devMotivo: null, devRefund: null, devDone: null,
+    invQuery: '', cxContado: '', closed: false,
+    sessionSales: 0, sessionCash: 0
+  };
+
+  money(n) { return '$' + Math.round(n).toLocaleString('es-CO'); }
+
+  catalog() {
+    const S = ['24','26','28','30','32'];
+    const raw = [
+      ['MD-1042','Jean Valentina High Rise','Jeans',189900,[4,6,8,5,2]],
+      ['MD-1043','Jean Carolina Wide Leg','Jeans',199900,[2,5,7,6,3]],
+      ['MD-1051','Jean Manuela Skinny','Jeans',169900,[0,3,4,2,1]],
+      ['MD-1060','Jean Amelia Straight','Jeans',184900,[3,4,4,4,3]],
+      ['MD-1071','Jean Renata Baggy','Jeans',209900,[1,2,6,5,4]],
+      ['MD-2011','Short Luna Denim','Shorts',119900,[5,7,6,3,0]],
+      ['MD-2014','Short Sara Destroyed','Shorts',129900,[2,3,1,0,0]],
+      ['MD-3005','Falda Emma Midi','Faldas',149900,[3,4,5,4,2]],
+      ['MD-3008','Falda Mia Mini','Faldas',134900,[4,4,3,2,1]],
+      ['MD-4002','Chaqueta Nora Oversize','Chaquetas',249900,[2,3,3,2,2]],
+      ['MD-4005','Chaqueta Isa Crop','Chaquetas',239900,[1,1,2,2,0]],
+      ['MD-5001','Top Alma Denim','Tops',99900,[6,8,7,4,3]]
+    ];
+    return raw.map(([ref,name,cat,price,stock]) => ({ ref, name, cat, price, sizes: S, stock }));
+  }
+
+  addToCart(p, size) {
+    this.setState(s => {
+      const key = p.ref + '-' + size;
+      const cart = s.cart.slice();
+      const i = cart.findIndex(it => it.key === key);
+      if (i >= 0) cart[i] = { ...cart[i], qty: cart[i].qty + 1 };
+      else cart.push({ key, ref: p.ref, name: p.name, size, price: p.price, qty: 1 });
+      return { cart };
+    });
+  }
+  chQty(key, d) {
+    this.setState(s => ({ cart: s.cart.map(it => it.key === key ? { ...it, qty: it.qty + d } : it).filter(it => it.qty > 0) }));
+  }
+  totals() {
+    const sub = this.state.cart.reduce((a, it) => a + it.price * it.qty, 0);
+    const disc = sub * this.state.discount / 100;
+    const total = sub - disc;
+    return { sub, disc, total, iva: total - total / 1.19 };
+  }
+  finishSale(methodLabel, cambio) {
+    this.setState(s => {
+      const t = this.totals();
+      const isCash = methodLabel.indexOf('Efectivo') >= 0;
+      return {
+        payStep: 'success',
+        last: { ticket: 'T-' + s.ticketN, total: t.total, method: methodLabel, cambio: cambio || 0 },
+        ticketN: s.ticketN + 1,
+        sessionSales: s.sessionSales + t.total,
+        sessionCash: s.sessionCash + (isCash ? t.total : 0)
+      };
+    });
+  }
+
+  renderVals() {
+    const st = this.state;
+    const money = this.money.bind(this);
+    const t = this.totals();
+    const cajeras = [
+      { name: 'Sebastián', rol: 'Admin', ini: 'S' },
+      { name: 'Camila', rol: 'Asesora', ini: 'C' },
+      { name: 'Daniela', rol: 'Asesora', ini: 'D' }
+    ].map(c => ({ ...c, pick: () => this.setState({ cajera: c, pin: '' }) }));
+
+    const keys = ['1','2','3','4','5','6','7','8','9','C','0','⌫'];
+    const keypad = keys.map(k => ({
+      label: k,
+      press: () => {
+        if (k === 'C') return this.setState({ pin: '' });
+        if (k === '⌫') return this.setState(s => ({ pin: s.pin.slice(0, -1) }));
+        this.setState(s => {
+          const pin = (s.pin + k).slice(0, 4);
+          if (pin.length === 4) setTimeout(() => this.setState({ screen: 'venta', pin: '' }), 180);
+          return { pin };
+        });
+      }
+    }));
+    const pinDots = [0,1,2,3].map(i => ({ bg: i < st.pin.length ? 'var(--color-accent-100)' : 'transparent' }));
+
+    const NAV = [
+      ['venta','Venta','M6 7h12l1 13H5L6 7Z M9 7a3 3 0 0 1 6 0'],
+      ['dev','Cambios','M3 5v6h6 M20.5 13a8.5 8.5 0 1 1-2.6-7L21 9'],
+      ['inv','Stock','M4 8l8-4 8 4v8l-8 4-8-4V8Z M4 8l8 4 8-4 M12 12v8'],
+      ['cierre','Cierre','M6 11h12v9H6v-9Z M9 11V8a3 3 0 0 1 6 0v3'],
+      ['dash','Panel','M4 20h16 M7 20v-7 M12 20V6 M17 20v-10']
+    ];
+    const navItems = NAV.map(([id,label,d]) => ({
+      label, d,
+      bg: st.screen === id ? 'var(--color-accent-100)' : 'transparent',
+      fg: st.screen === id ? 'var(--color-accent-800)' : 'var(--color-text)',
+      go: () => this.setState({ screen: id })
+    }));
+    const titles = { venta: 'Venta', dev: 'Devoluciones y cambios', inv: 'Inventario', cierre: 'Cierre de caja', dash: 'Panel de ventas' };
+
+    const all = this.catalog();
+    const catNames = ['Todo','Jeans','Shorts','Faldas','Chaquetas','Tops'];
+    const cats = catNames.map(c => ({
+      label: c,
+      bg: st.cat === c ? 'var(--color-accent-100)' : 'transparent',
+      fg: st.cat === c ? 'var(--color-accent-800)' : 'var(--color-text)',
+      bd: st.cat === c ? 'var(--color-accent)' : 'var(--color-divider)',
+      pick: () => this.setState({ cat: c })
+    }));
+    const q = st.query.trim().toLowerCase();
+    const products = all
+      .filter(p => (st.cat === 'Todo' || p.cat === st.cat) && (!q || p.name.toLowerCase().includes(q) || p.ref.toLowerCase().includes(q)))
+      .map(p => ({
+        ...p, priceFmt: money(p.price),
+        sizeOpts: p.sizes.map((sz, i) => ({
+          label: sz, out: p.stock[i] <= 0, op: p.stock[i] <= 0 ? 0.35 : 1,
+          tip: p.stock[i] <= 0 ? 'Agotada' : p.stock[i] + ' en stock',
+          add: () => this.addToCart(p, sz)
+        }))
+      }));
+
+    const cart = st.cart.map(it => ({
+      ...it, priceFmt: money(it.price), totalFmt: money(it.price * it.qty),
+      inc: () => this.chQty(it.key, 1), dec: () => this.chQty(it.key, -1)
+    }));
+    const discOpts = [0,10,20].map(d => ({
+      label: d + '%',
+      bg: st.discount === d ? 'var(--color-accent-100)' : 'transparent',
+      fg: st.discount === d ? 'var(--color-accent-800)' : 'var(--color-text)',
+      bd: st.discount === d ? 'var(--color-accent)' : 'var(--color-divider)',
+      pick: () => this.setState({ discount: d })
+    }));
+
+    const clientasData = [
+      { name: 'Laura Gómez', tel: '311 402 8871', doc: 'CC 1.037.601.884', compras: 12 },
+      { name: 'María Restrepo', tel: '300 218 4453', doc: 'CC 43.912.207', compras: 8 },
+      { name: 'Ana Cardona', tel: '315 990 1204', doc: 'CE 512.334', compras: 5 },
+      { name: 'Juliana Pérez', tel: '312 664 7080', doc: 'CC 1.020.455.318', compras: 3 }
+    ];
+    const cq2 = st.cliQuery.replace(/\D/g, '');
+    const clientas = [...st.clientasExtra, ...clientasData]
+      .filter(c => !cq2 || (c.doc || '').replace(/\D/g, '').includes(cq2))
+      .map(c => ({ ...c, pick: () => this.setState({ cliente: c, clienteOpen: false, cliQuery: '' }) }));
+
+    const PM = [
+      ['Efectivo','M3 7h18v10H3V7Z M12 12m-2.5 0a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0'],
+      ['Tarjeta','M3 6h18v12H3V6Z M3 10h18'],
+      ['Transferencia / QR','M4 4h6v6H4V4Z M14 4h6v6h-6V4Z M4 14h6v6H4v-6Z M14 14h3v3h-3v-3Z M20 17v3h-3'],
+      ['Giftcard','M3 8h18v12H3V8Z M3 12h18 M12 8v12 M12 8c-1.5-3-6-3-6-1s4 1 6 1c2 0 6 0 6-1s-4.5-2-6 1'],
+      ['Pago mixto','M4 12h16 M12 4v16']
+    ];
+    const payMethods = PM.map(([label,d]) => ({
+      label, d,
+      pick: () => {
+        if (label === 'Efectivo') this.setState({ payStep: 'cash', cashInput: '' });
+        else if (label === 'Pago mixto') this.setState({ payStep: 'mix', mixPays: [], mixInput: '' });
+        else this.finishSale(label, 0);
+      }
+    }));
+    const cashVal = parseInt(String(st.cashInput).replace(/\D/g,'') || '0', 10);
+    const cambio = Math.max(0, cashVal - t.total);
+    const quicks = [t.total, 50000, 100000, 200000].filter((v,i,a) => a.indexOf(v) === i && v >= t.total);
+    const cashQuick = quicks.map((v,i) => ({
+      label: i === 0 && v === t.total ? 'Exacto' : money(v),
+      bg: cashVal === v ? 'var(--color-accent-100)' : 'transparent',
+      fg: cashVal === v ? 'var(--color-accent-800)' : 'var(--color-text)',
+      bd: cashVal === v ? 'var(--color-accent)' : 'var(--color-divider)',
+      pick: () => this.setState({ cashInput: String(v) })
+    }));
+    const mixPaid = st.mixPays.reduce((a,p) => a + p.amt, 0);
+    const mixRest = t.total - mixPaid;
+    const mixPays = st.mixPays.map((p,i) => ({
+      label: p.method, amtFmt: money(p.amt),
+      remove: (e) => { e.preventDefault(); this.setState(s => ({ mixPays: s.mixPays.filter((_,j) => j !== i) })); }
+    }));
+    const mixMethods = ['Efectivo','Tarjeta','QR','Giftcard'].map(m => ({
+      label: m,
+      bg: st.mixMethod === m ? 'var(--color-accent-100)' : 'transparent',
+      fg: st.mixMethod === m ? 'var(--color-accent-800)' : 'var(--color-text)',
+      bd: st.mixMethod === m ? 'var(--color-accent)' : 'var(--color-divider)',
+      pick: () => this.setState({ mixMethod: m })
+    }));
+
+    const devTicketData = {
+      ticket: 'T-10471', fecha: '09 ago 2026', cajera: 'Camila',
+      items: [
+        { ref: 'MD-1042', name: 'Jean Valentina High Rise', size: '28', price: 189900 },
+        { ref: 'MD-5001', name: 'Top Alma Denim', size: '26', price: 99900 }
+      ]
+    };
+    const devItems = (st.devSale ? st.devSale.items : []).map((it,i) => {
+      const on = !!st.devSel[i];
+      return { ...it, priceFmt: money(it.price), ck: on ? '✓' : '', ckBg: on ? 'var(--color-accent-100)' : 'transparent',
+        bd: on ? 'var(--color-accent)' : 'var(--color-divider)', bg: on ? 'var(--color-accent-100)' : 'transparent',
+        toggle: () => this.setState(s => ({ devSel: { ...s.devSel, [i]: !s.devSel[i] } })) };
+    });
+    const devTotal = devItems.filter((_,i) => st.devSel[i]).reduce((a,it) => a + it.price, 0);
+    const mkOpt = (list, cur, key) => list.map(o => ({
+      label: o,
+      bg: cur === o ? 'var(--color-accent-100)' : 'transparent',
+      fg: cur === o ? 'var(--color-accent-800)' : 'var(--color-text)',
+      bd: cur === o ? 'var(--color-accent)' : 'var(--color-divider)',
+      pick: () => this.setState({ [key]: o })
+    }));
+    const motivos = mkOpt(['Talla','Defecto','No le gustó','Cambio de modelo'], st.devMotivo, 'devMotivo');
+    const refundOpts = mkOpt(['Efectivo','Método original','Crédito tienda'], st.devRefund, 'devRefund');
+
+    const iq = st.invQuery.trim().toLowerCase();
+    const invAll = all.map(p => {
+      const tot = p.stock.reduce((a,b) => a + b, 0);
+      const estado = tot === 0 ? 'Agotado' : tot <= 8 ? 'Stock bajo' : 'OK';
+      return { ref: p.ref, name: p.name, cat: p.cat, priceFmt: money(p.price),
+        s0: p.stock[0], s1: p.stock[1], s2: p.stock[2], s3: p.stock[3], s4: p.stock[4], tot,
+        estado, tagCls: estado === 'OK' ? 'tag tag-neutral' : 'tag tag-accent' };
+    });
+    const invRows = invAll.filter(r => !iq || r.name.toLowerCase().includes(iq) || r.ref.toLowerCase().includes(iq));
+
+    const base = this.props.baseCaja ?? 400000;
+    const mockCash = 965400, mockCard = 1284700, mockQR = 445300, mockGift = 149900;
+    const brutas = mockCash + mockCard + mockQR + mockGift + st.sessionSales;
+    const devs = 189900;
+    const netas = brutas - devs;
+    const efectivoVentas = mockCash + st.sessionCash;
+    const esperado = base + efectivoVentas;
+    const contado = parseInt(String(st.cxContado).replace(/\D/g,'') || '0', 10);
+    const dif = contado - esperado;
+    const cxMetodos = [
+      ['Efectivo', efectivoVentas], ['Tarjeta (datáfono)', mockCard + st.sessionSales - st.sessionCash],
+      ['Transferencia / QR', mockQR], ['Giftcard / crédito', mockGift]
+    ].map(([label,v]) => ({ label, valFmt: money(v) }));
+
+    const trans = 17 + (st.ticketN - 10484);
+    const kpis = [
+      { label: 'Ventas hoy', value: money(netas), sub: '+12% vs. lunes pasado' },
+      { label: 'Transacciones', value: String(trans), sub: 'Ticket promedio ' + money(netas / Math.max(1, trans)) },
+      { label: 'Unidades', value: '31', sub: '1,8 uds por ticket' },
+      { label: 'Devoluciones', value: '1', sub: money(devs) + ' reembolsado' }
+    ];
+    const horasData = [['10',18],['11',34],['12',58],['13',72],['14',49],['15',41],['16',63],['17',88],['18',100],['19',76],['20',37]];
+    const horas = horasData.map(([h,pct]) => ({
+      label: h + 'h', pct: pct + '%', tip: Math.round(pct * 4200) .toLocaleString('es-CO') + ' aprox.',
+      bg: pct === 100 ? 'var(--color-accent-400)' : 'var(--color-accent-200)'
+    }));
+    const tops = [
+      ['Jean Valentina High Rise', 6, 1139400], ['Jean Renata Baggy', 4, 839600],
+      ['Top Alma Denim', 4, 399600], ['Short Luna Denim', 3, 359700], ['Falda Emma Midi', 2, 299800]
+    ].map(([name,uds,val],i) => ({ pos: '0' + (i+1), name, uds, valFmt: money(val) }));
+
+    return {
+      isLogin: st.screen === 'login', isApp: st.screen !== 'login',
+      isVenta: st.screen === 'venta', isDev: st.screen === 'dev', isInv: st.screen === 'inv',
+      isCierre: st.screen === 'cierre', isDash: st.screen === 'dash',
+      noCajera: !st.cajera, hasCajera: !!st.cajera,
+      cajeraName: st.cajera ? st.cajera.name : '', cajeraIni: st.cajera ? st.cajera.ini : '',
+      resetCajera: (e) => { e.preventDefault(); this.setState({ cajera: null, pin: '' }); },
+      logout: () => this.setState({ screen: 'login', cajera: null, pin: '' }),
+      cajeras, keypad, pinDots,
+      navItems, screenTitle: titles[st.screen] || '', fecha: 'Mar 11 ago 2026',
+      query: st.query, setQuery: (e) => this.setState({ query: e.target.value }),
+      cats, products,
+      cart, cartCount: st.cart.reduce((a,it) => a + it.qty, 0),
+      cartEmpty: st.cart.length === 0, cartEmptyFlag: st.cart.length === 0,
+      subtotalFmt: money(t.sub), discountFmt: money(t.disc), totalFmt: money(t.total),
+      ivaFmt: money(t.iva), showIva: this.props.mostrarIva ?? true,
+      discOpts,
+      noCliente: !st.cliente, hasCliente: !!st.cliente,
+      clienteName: st.cliente ? st.cliente.name : '', clienteTel: st.cliente ? st.cliente.tel : '',
+      openCliente: () => this.setState({ clienteOpen: true }),
+      closeCliente: () => this.setState({ clienteOpen: false, nuevaClienta: false, ncNombre: '', ncTel: '' }),
+      clearCliente: (e) => { e.preventDefault(); this.setState({ cliente: null }); },
+      clienteOpen: st.clienteOpen, clientas, cliSinResultados: clientas.length === 0,
+      cliQuery: st.cliQuery, setCliQuery: (e) => this.setState({ cliQuery: e.target.value }),
+      nuevaClienta: st.nuevaClienta, noNuevaClienta: !st.nuevaClienta,
+      openNuevaClienta: () => this.setState({ nuevaClienta: true }),
+      cancelNuevaClienta: () => this.setState({ nuevaClienta: false, ncNombre: '', ncTel: '' }),
+      ncNombre: st.ncNombre, setNcNombre: (e) => this.setState({ ncNombre: e.target.value }),
+      ncTel: st.ncTel, setNcTel: (e) => this.setState({ ncTel: e.target.value }),
+      ncTipoDoc: st.ncTipoDoc, setNcTipoDoc: (e) => this.setState({ ncTipoDoc: e.target.value }),
+      ncDoc: st.ncDoc, setNcDoc: (e) => this.setState({ ncDoc: e.target.value }),
+      ncEmail: st.ncEmail, setNcEmail: (e) => this.setState({ ncEmail: e.target.value }),
+      ncDisabled: !st.ncNombre.trim() || !st.ncTel.trim() || !st.ncDoc.trim() || !st.ncEmail.trim(),
+      ncGuardar: () => this.setState(s => {
+        const c = { name: s.ncNombre.trim(), tel: s.ncTel.trim(), doc: s.ncTipoDoc + ' ' + s.ncDoc.trim(), email: s.ncEmail.trim(), compras: 0 };
+        return { clientasExtra: [c, ...s.clientasExtra], cliente: c, clienteOpen: false, nuevaClienta: false, ncNombre: '', ncTel: '', ncDoc: '', ncEmail: '', ncTipoDoc: 'CC', cliQuery: '' };
+      }),
+      payOpen: !!st.payStep,
+      payMethodStep: st.payStep === 'method', payCashStep: st.payStep === 'cash',
+      payMixStep: st.payStep === 'mix', paySuccessStep: st.payStep === 'success',
+      openPay: () => this.setState({ payStep: 'method' }),
+      closePay: () => this.setState({ payStep: null }),
+      backToMethods: () => this.setState({ payStep: 'method' }),
+      payMethods,
+      cashInput: st.cashInput, setCashInput: (e) => this.setState({ cashInput: e.target.value }),
+      cashQuick, cambioFmt: money(cambio), cashDisabled: cashVal < t.total,
+      confirmCash: () => this.finishSale('Efectivo', cambio),
+      mixPays, mixMethods, mixInput: st.mixInput,
+      setMixInput: (e) => this.setState({ mixInput: e.target.value }),
+      mixAdd: () => {
+        const v = parseInt(String(st.mixInput).replace(/\D/g,'') || '0', 10);
+        if (v <= 0) return;
+        this.setState(s => ({ mixPays: [...s.mixPays, { method: s.mixMethod, amt: Math.min(v, t.total - s.mixPays.reduce((a,p) => a + p.amt, 0)) }], mixInput: '' }));
+      },
+      mixRestFmt: money(Math.max(0, mixRest)),
+      mixRestColor: mixRest <= 0 ? 'var(--color-accent-700)' : 'var(--color-text)',
+      mixDisabled: mixRest > 0,
+      confirmMix: () => this.finishSale('Pago mixto (' + st.mixPays.map(p => p.method).join(' + ') + ')', 0),
+      lastTicket: st.last ? st.last.ticket : '', lastTotalFmt: st.last ? money(st.last.total) : '',
+      lastMethod: st.last ? st.last.method : '', hasCambio: !!(st.last && st.last.cambio > 0),
+      lastCambioFmt: st.last ? money(st.last.cambio) : '',
+      newSale: () => this.setState({ payStep: null, cart: [], discount: 0, cliente: null, cashInput: '', mixPays: [] }),
+      devQuery: st.devQuery, setDevQuery: (e) => this.setState({ devQuery: e.target.value }),
+      devSearch: () => this.setState({ devSale: devTicketData, devSel: {}, devMotivo: null, devRefund: null }),
+      hasDevSale: !!st.devSale && !st.devDone, devNoSale: !st.devSale && !st.devDone,
+      devNotDone: !st.devDone, devDone: !!st.devDone,
+      devTicket: st.devSale ? st.devSale.ticket : '', devFecha: st.devSale ? st.devSale.fecha : '',
+      devCajera: st.devSale ? st.devSale.cajera : '', devItems, motivos, refundOpts,
+      devTotalFmt: money(devTotal),
+      devDisabled: devTotal === 0 || !st.devMotivo || !st.devRefund,
+      devConfirm: () => this.setState({ devDone: money(devTotal) + ' reembolsado vía ' + st.devRefund.toLowerCase() + '. Motivo: ' + st.devMotivo.toLowerCase() + '.' }),
+      devDoneMsg: st.devDone || '',
+      devReset: () => this.setState({ devDone: null, devSale: null, devQuery: '', devSel: {} }),
+      invQuery: st.invQuery, setInvQuery: (e) => this.setState({ invQuery: e.target.value }),
+      invRows, invCount: invAll.length, invLow: invAll.filter(r => r.estado !== 'OK').length,
+      notClosed: !st.closed, isClosed: st.closed,
+      cxTrans: trans, cxBrutasFmt: money(brutas), cxDevsFmt: money(devs), cxNetasFmt: money(netas),
+      cxMetodos, cxBaseFmt: money(base), cxEfectivoFmt: money(efectivoVentas), cxEsperadoFmt: money(esperado),
+      cxContado: st.cxContado, setCxContado: (e) => this.setState({ cxContado: e.target.value }),
+      cxDifFmt: (dif < 0 ? '−' : dif > 0 ? '+' : '') + money(Math.abs(dif)),
+      cxDifColor: dif === 0 ? 'var(--color-accent-700)' : dif < 0 ? 'var(--color-accent-900)' : 'var(--color-text)',
+      cxDisabled: contado === 0,
+      cerrarCaja: () => this.setState({ closed: true }),
+      reabrirCaja: () => this.setState({ closed: false, cxContado: '' }),
+      kpis, horas, tops
+    };
+  }
+}
+</script>
+</body>
+</html>
