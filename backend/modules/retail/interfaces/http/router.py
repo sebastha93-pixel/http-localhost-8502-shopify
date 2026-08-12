@@ -838,3 +838,73 @@ async def consultar_inventario(
         referencias=inv.referencias, con_stock_bajo=inv.con_stock_bajo,
         categorias=categorias,
     )
+
+
+# ── Panel de ventas del día (vista 8 del handoff) ───────────────────────────
+
+class BarraHoraSalida(BaseModel):
+    hora: int
+    etiqueta: str
+    ventas_centavos: int
+    transacciones: int
+
+
+class MasVendidoSalida(BaseModel):
+    posicion: int
+    referencia: str
+    nombre: str
+    color: str
+    unidades: int
+    valor_centavos: int
+
+
+class PanelSalida(BaseModel):
+    # La fecha viaja porque es la de LA TIENDA, no la del navegador. Un panel
+    # que no dice de qué día habla es una cifra sin contexto — y el corte del
+    # día en UTC−5 no coincide con el del servidor.
+    fecha: str
+    tienda_nombre: str
+    ventas_centavos: int
+    transacciones: int
+    ticket_promedio_centavos: int
+    unidades: int
+    anuladas: int
+    monto_anulado_centavos: int
+    descuentos_centavos: int
+    horas: List[BarraHoraSalida]
+    mas_vendidos: List[MasVendidoSalida]
+
+
+@router.get("/panel", response_model=PanelSalida)
+async def panel_del_dia(
+    tienda_id: str = Query(),
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Cómo va el día en ESTA tienda."""
+    from backend.modules.retail.application.consultas.panel_ventas import (
+        PanelVentas,
+    )
+
+    try:
+        async with uow as t:
+            p = await PanelVentas(t.sesion).ejecutar(tienda_id=tienda_id)
+    except ReglaDeNegocio as e:
+        raise HTTPException(400, {"error": "regla_de_negocio",
+                                  "mensaje": str(e)})
+
+    return PanelSalida(
+        fecha=p.fecha, tienda_nombre=p.tienda_nombre,
+        ventas_centavos=p.ventas_centavos, transacciones=p.transacciones,
+        ticket_promedio_centavos=p.ticket_promedio_centavos,
+        unidades=p.unidades, anuladas=p.anuladas,
+        monto_anulado_centavos=p.monto_anulado_centavos,
+        descuentos_centavos=p.descuentos_centavos,
+        horas=[BarraHoraSalida(hora=h.hora, etiqueta=h.etiqueta,
+                               ventas_centavos=h.ventas_centavos,
+                               transacciones=h.transacciones) for h in p.horas],
+        mas_vendidos=[MasVendidoSalida(
+            posicion=m.posicion, referencia=m.referencia, nombre=m.nombre,
+            color=m.color, unidades=m.unidades,
+            valor_centavos=m.valor_centavos) for m in p.mas_vendidos],
+    )

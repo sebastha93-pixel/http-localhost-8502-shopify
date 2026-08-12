@@ -342,3 +342,42 @@ export async function consultarInventario(opciones: {
   if (opciones.soloBajos) p.set("solo_bajos", "true");
   return api.get<Inventario>(`/api/retail/inventario?${p}`);
 }
+
+// ── Panel de ventas ─────────────────────────────────────────────────────────
+
+export interface BarraHora {
+  hora: number;
+  etiqueta: string;
+  ventas_centavos: number;
+  transacciones: number;
+}
+
+export interface MasVendido {
+  posicion: number;
+  referencia: string;
+  nombre: string;
+  color: string;
+  unidades: number;
+  valor_centavos: number;
+}
+
+export interface Panel {
+  /** La fecha DE LA TIENDA. En UTC−5 el corte del día no es el del servidor,
+   *  y un panel que no dice de qué día habla es una cifra sin contexto. */
+  fecha: string;
+  tienda_nombre: string;
+  ventas_centavos: number;
+  transacciones: number;
+  ticket_promedio_centavos: number;
+  unidades: number;
+  anuladas: number;
+  monto_anulado_centavos: number;
+  descuentos_centavos: number;
+  horas: BarraHora[];
+  mas_vendidos: MasVendido[];
+}
+
+export async function panelDelDia(tiendaId: string): Promise<Panel> {
+  const p = new URLSearchParams({ tienda_id: tiendaId });
+  return api.get<Panel>(`/api/retail/panel?${p}`);
+}
