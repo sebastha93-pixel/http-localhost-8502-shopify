@@ -4,10 +4,18 @@ Los datos del producto se **congelan** al agregar la línea: descripción, preci
 y tarifa de IVA. Si mañana cambia el catálogo, esta línea no cambia. Es lo que
 hace que una factura de ayer siga diciendo lo que decía (INV-F5).
 
-El precio se guarda SIN IVA, igual que en el catálogo (INV-CAT1). El precio de
-vitrina —el que ve la clienta— se obtiene sumándole el impuesto. Guardarlo al
-revés es exactamente cómo un cambio salió facturado por 67.960 en vez de
-169.900.
+EL PRECIO ES EL DE VITRINA, con IVA incluido. El impuesto se DERIVA del
+total, no al revés.
+
+Lo tuve al revés y costó encontrarlo. Guardando la base sin IVA, la rejilla
+mostraba «$139.900,01» en una prenda de $139.900 — y resultó que ninguna base
+da ese total exacto: con IVA del 19% el importe salta de 13.989.999 a
+13.990.001. Uno de cada seis precios redondos es inalcanzable así.
+
+Con este modelo eso no puede pasar: el total sale de multiplicar el precio de
+la etiqueta, que es exacto por definición, y la base es una LECTURA de ese
+total (`separar_iva`). Es lo que hace el comercio colombiano y lo que decía el
+handoff desde el principio: «IVA incluido, calculado como total − total/1,19».
 """
 from __future__ import annotations
 
@@ -15,6 +23,7 @@ from decimal import Decimal
 from typing import Optional
 
 from backend.modules.retail.domain.shared.dinero import Dinero
+from backend.modules.retail.domain.shared.impuestos import separar_iva
 from backend.modules.retail.domain.shared.sku import Sku
 from backend.modules.retail.domain.venta.descuento import Descuento
 from backend.modules.retail.domain.venta.errores import ReglaDeNegocio
@@ -88,7 +97,11 @@ class LineaVenta:
     # ── Cálculo ─────────────────────────────────────────────────────────────
 
     def subtotal(self) -> Dinero:
-        """Precio × cantidad, sin IVA y sin descuento."""
+        """Precio de vitrina × cantidad. CON IVA, sin descuento.
+
+        Exacto por construcción: multiplicar un número redondo por un entero
+        no puede producir un centavo fantasma.
+        """
         return self.precio_unitario * self.cantidad
 
     def descuento_monto(self) -> Dinero:
@@ -98,23 +111,31 @@ class LineaVenta:
             return Dinero.cero(self.precio_unitario.moneda)
         return self.descuento.calcular_sobre(self.subtotal())
 
-    def base_gravable(self) -> Dinero:
+    def total(self) -> Dinero:
+        """Lo que se cobra por esta línea. El número que manda.
+
+        Todo lo demás —base e IVA— se lee DE AQUÍ, no al contrario.
+        """
         return self.subtotal() - self.descuento_monto()
 
-    def iva(self) -> Dinero:
-        """INV-V12: el IVA se calcula sobre ESTA línea.
+    def base_gravable(self) -> Dinero:
+        """La parte del total que no es impuesto."""
+        base, _ = separar_iva(self.total().centavos, self.tasa_iva)
+        return Dinero(base, self.precio_unitario.moneda)
 
-        Calcularlo sobre el total de la venta da otro número en cuanto hay dos
+    def iva(self) -> Dinero:
+        """INV-V12: el IVA se lee de ESTA línea.
+
+        Derivarlo del total de la venta daría otro número en cuanto haya dos
         tarifas distintas, y ese error no revienta: sale en la factura.
         """
-        return self.base_gravable().porcentaje(self.tasa_iva)
-
-    def total(self) -> Dinero:
-        return self.base_gravable() + self.iva()
+        _, iva = separar_iva(self.total().centavos, self.tasa_iva)
+        return Dinero(iva, self.precio_unitario.moneda)
 
     def precio_unitario_con_iva(self) -> Dinero:
-        """El precio de vitrina, que es el que la clienta reconoce."""
-        return self.precio_unitario + self.precio_unitario.porcentaje(self.tasa_iva)
+        """El precio de vitrina. YA es el precio unitario: se conserva el
+        nombre para no romper a quien lo llame."""
+        return self.precio_unitario
 
     def __repr__(self) -> str:
         return (f"LineaVenta(#{self.numero} {self.sku.codigo} ×{self.cantidad} "

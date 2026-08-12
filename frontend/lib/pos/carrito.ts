@@ -10,8 +10,12 @@ export interface LineaCarrito {
   /** El diseno la muestra aparte: «Talla 24 · $189.900». */
   talla: string;
   cantidad: number;
-  /** Sin IVA, igual que el catálogo (INV-CAT1). */
-  precioUnitarioSinIva: number;
+  /** El precio de la ETIQUETA, con IVA incluido.
+   *
+   *  Antes se guardaba la base sin IVA y la pantalla se lo volvía a sumar.
+   *  Ese viaje no siempre regresa: $139.900 salía como $139.900,01. Ahora el
+   *  precio ES el de vitrina y el impuesto se lee de él. */
+  precioConIva: number;
   tasaIva: number;
   /** Lo que había al agregarla. Se muestra, no se impone: la prenda física
    *  que la clienta tiene en la mano existe aunque el dato diga que no. */

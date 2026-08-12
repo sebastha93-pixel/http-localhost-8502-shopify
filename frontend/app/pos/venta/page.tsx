@@ -47,6 +47,7 @@ import {
   type Ticket,
 } from "@/lib/pos/api";
 import { nuevoUlid } from "@/lib/pos/ulid";
+import { ivaDe } from "@/lib/pos/dinero";
 import type { LineaCarrito } from "@/lib/pos/carrito";
 
 const TIENDA = process.env.NEXT_PUBLIC_POS_TIENDA || "";
@@ -136,7 +137,7 @@ export default function PantallaVenta() {
           descripcion: r.nombre,
           talla: t.talla,
           cantidad: 1,
-          precioUnitarioSinIva: r.precio_base_centavos,
+          precioConIva: r.precio_con_iva_centavos,
           tasaIva: Number(r.tasa_iva),
           disponible: t.disponible,
         },
@@ -261,19 +262,21 @@ export default function PantallaVenta() {
 
   // ── Totales ────────────────────────────────────────────────────────────
   const totales = useMemo(() => {
-    let base = 0;
+    let total = 0;
     let iva = 0;
     let descuento = 0;
     for (const l of lineas) {
-      const sub = l.precioUnitarioSinIva * l.cantidad;
+      const sub = l.precioConIva * l.cantidad;
       const desc = l.descuentoPct ? Math.round((sub * l.descuentoPct) / 100) : 0;
-      const gravable = sub - desc;
-      base += gravable;
+      const totalLinea = sub - desc;
+      total += totalLinea;
       descuento += desc;
-      // El IVA se calcula POR LÍNEA sobre la base ya descontada (INV-V12).
-      iva += Math.round((gravable * l.tasaIva) / 100);
+      // El IVA se LEE de cada línea (INV-V12). Por línea y no del total de la
+      // venta: con dos tarifas distintas, derivarlo del total haría que la
+      // exenta también pagara.
+      iva += ivaDe(totalLinea, l.tasaIva);
     }
-    return { base, iva, descuento, total: base + iva };
+    return { base: total - iva, iva, descuento, total };
   }, [lineas]);
 
   // ── Cierre ─────────────────────────────────────────────────────────────
@@ -294,7 +297,7 @@ export default function PantallaVenta() {
         lineas: lineas.map((l) => ({
           sku: l.sku,
           cantidad: l.cantidad,
-          precio_unitario_centavos: l.precioUnitarioSinIva,
+          precio_unitario_centavos: l.precioConIva,
           tasa_iva: String(l.tasaIva),
           descripcion: `${l.descripcion} · Talla ${l.talla}`,
           ...(l.descuentoPct
@@ -487,7 +490,7 @@ export default function PantallaVenta() {
         <DialogoDescuento
           sku={descontando}
           base={
-            (lineas.find((l) => l.sku === descontando)?.precioUnitarioSinIva ?? 0) *
+            (lineas.find((l) => l.sku === descontando)?.precioConIva ?? 0) *
             (lineas.find((l) => l.sku === descontando)?.cantidad ?? 1)
           }
           tope={TOPE}

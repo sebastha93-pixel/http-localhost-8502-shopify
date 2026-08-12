@@ -51,8 +51,8 @@ async def cliente():
          "VALUES (:u,'tienda','Florida','florida')", {"u": UBICACION}),
         ("INSERT INTO retail.medios_pago (id,nombre,tipo,siigo_forma_pago_id) "
          "VALUES ('efectivo','Efectivo','efectivo',12243)", {}),
-        ("INSERT INTO retail.variantes (id,sku,referencia,talla,nombre,precio_base) "
-         "VALUES (:v,'92611-1T10','92611-1','10','Jean',14277311)", {"v": VARIANTE}),
+        ("INSERT INTO retail.variantes (id,sku,referencia,talla,nombre,precio_con_iva) "
+         "VALUES (:v,'92611-1T10','92611-1','10','Jean',16990000)", {"v": VARIANTE}),
         ("INSERT INTO retail.stock_ubicacion (ubicacion_id,variante_id,cantidad) "
          "VALUES (:u,:v,5)", {"u": UBICACION, "v": VARIANTE}),
         ("INSERT INTO retail.sesiones_caja "
@@ -88,7 +88,7 @@ async def cliente():
 
 def _venta_con_descuento(pct: str, autorizado_por=None):
     linea = {"sku": "92611-1T10", "cantidad": 2,
-             "precio_unitario_centavos": 14277311,
+             "precio_unitario_centavos": 16990000,
              "descripcion": "Jean · 10",
              "descuento_porcentaje": pct,
              "descuento_motivo": "clienta insistió"}
@@ -184,7 +184,7 @@ def test_con_la_firma_pasa_y_queda_en_la_auditoria(cliente):
     r = c.post("/api/retail/ventas/cerrar",
                json=_venta_con_descuento("30", firma["autorizado_por"]))
     assert r.status_code == 200, r.text
-    assert r.json()["descuento_centavos"] == 8566387
+    assert r.json()["descuento_centavos"] == 10194000
 
     import asyncio
 

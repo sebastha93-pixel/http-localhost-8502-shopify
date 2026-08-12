@@ -41,7 +41,7 @@ class Resultado:
     talla: str
     color: str
     nombre: str
-    precio_base_centavos: int
+    precio_con_iva_centavos: int
     tasa_iva: str
     codigo_barras: Optional[str]
     disponible: int
@@ -76,7 +76,7 @@ class BuscarProducto:
 
         filas = (await self._s.execute(text(f"""
             SELECT v.variante_id, x.sku, x.referencia, x.talla, x.color,
-                   x.nombre, x.precio_base, x.tasa_iva, x.codigo_barras,
+                   x.nombre, x.precio_con_iva, x.tasa_iva, x.codigo_barras,
                    coalesce(s.cantidad - s.reservado, 0) AS disponible
               FROM retail.catalogo_busqueda v
               JOIN retail.variantes x ON x.id = v.variante_id
@@ -105,7 +105,7 @@ class BuscarProducto:
                                     ubicacion_id: str) -> Optional[Resultado]:
         fila = (await self._s.execute(text("""
             SELECT x.id AS variante_id, x.sku, x.referencia, x.talla, x.color,
-                   x.nombre, x.precio_base, x.tasa_iva, x.codigo_barras,
+                   x.nombre, x.precio_con_iva, x.tasa_iva, x.codigo_barras,
                    coalesce(s.cantidad - s.reservado, 0) AS disponible
               FROM retail.variantes x
               LEFT JOIN retail.stock_ubicacion s
@@ -122,7 +122,7 @@ class BuscarProducto:
         return Resultado(
             variante_id=f["variante_id"], sku=f["sku"],
             referencia=f["referencia"], talla=f["talla"], color=f["color"],
-            nombre=f["nombre"], precio_base_centavos=int(f["precio_base"]),
+            nombre=f["nombre"], precio_con_iva_centavos=int(f["precio_con_iva"]),
             tasa_iva=str(f["tasa_iva"]), codigo_barras=f["codigo_barras"],
             disponible=int(f["disponible"]), es_escaneo=es_escaneo,
         )
@@ -144,11 +144,11 @@ class ReconstruirCatalogoBusqueda:
         r = await self._s.execute(text(f"""
             INSERT INTO retail.catalogo_busqueda
                 (variante_id, texto_busqueda, referencia, talla, color,
-                 precio_base, actualizado_en)
+                 precio_con_iva, actualizado_en)
             SELECT v.id,
                    retail.norm(concat_ws(' ', v.sku, v.referencia, v.nombre,
                                          v.color, v.talla, v.codigo_barras)),
-                   v.referencia, v.talla, v.color, v.precio_base, now()
+                   v.referencia, v.talla, v.color, v.precio_con_iva, now()
               FROM retail.variantes v
               {filtro}
             ON CONFLICT (variante_id) DO UPDATE
@@ -156,7 +156,7 @@ class ReconstruirCatalogoBusqueda:
                     referencia     = EXCLUDED.referencia,
                     talla          = EXCLUDED.talla,
                     color          = EXCLUDED.color,
-                    precio_base    = EXCLUDED.precio_base,
+                    precio_con_iva = EXCLUDED.precio_con_iva,
                     actualizado_en = now()
         """), {"desde": desde} if desde else {})
         return r.rowcount

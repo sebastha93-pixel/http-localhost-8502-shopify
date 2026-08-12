@@ -64,8 +64,8 @@ async def uow():
          "VALUES (:ubi,'tienda','Florida','florida')", {"ubi": UBICACION}),
         ("INSERT INTO retail.medios_pago (id,nombre,tipo,siigo_forma_pago_id) "
          "VALUES ('efectivo','Efectivo','efectivo',12243)", {}),
-        ("INSERT INTO retail.variantes (id,sku,referencia,talla,nombre,precio_base) "
-         "VALUES (:var,'92611-1T10','92611-1','10','Jean',14277311)",
+        ("INSERT INTO retail.variantes (id,sku,referencia,talla,nombre,precio_con_iva) "
+         "VALUES (:var,'92611-1T10','92611-1','10','Jean',16990000)",
          {"var": VARIANTE}),
         ("INSERT INTO retail.stock_ubicacion (ubicacion_id,variante_id,cantidad) "
          "VALUES (:ubi,:var,5)", {"ubi": UBICACION, "var": VARIANTE}),
@@ -89,7 +89,7 @@ def _venta_lista() -> Venta:
                     caja_id="florida_caja1", sesion_id=SESION,
                     cajera_id="maria", moneda=COP)
     v.agregar_linea(sku=Sku.parsear("92611-1T10"), descripcion="Jean · 10",
-                    cantidad=2, precio_unitario=Dinero.desde_pesos("142773.11", COP),
+                    cantidad=2, precio_unitario=Dinero.desde_pesos("169900", COP),
                     tasa_iva=Decimal("19"))
     v.registrar_pago("efectivo", Dinero.desde_pesos("400000", COP),
                      es_efectivo=True)

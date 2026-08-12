@@ -87,8 +87,8 @@ def _sembrar(c):
         VALUES ('efectivo', 'Efectivo', 'efectivo', 12243, true)
     """))
     c.execute(text(f"""
-        INSERT INTO retail.variantes (id, sku, referencia, talla, nombre, precio_base)
-        VALUES ('{ULID_D}', '92611-1T10', '92611-1', '10', 'Jean Skinny Azul', 14277311)
+        INSERT INTO retail.variantes (id, sku, referencia, talla, nombre, precio_con_iva)
+        VALUES ('{ULID_D}', '92611-1T10', '92611-1', '10', 'Jean Skinny Azul', 16990000)
     """))
 
 
@@ -217,7 +217,7 @@ def test_un_descuento_sin_motivo_no_se_guarda(conn):
                 (id, venta_id, orden, variante_id, sku, descripcion, cantidad,
                  precio_unitario, descuento_monto)
             VALUES ('{ULID_B}', '{ULID_C}', 1, '{ULID_D}', '92611-1T10',
-                    'Jean', 1, 14277311, 899000)
+                    'Jean', 1, 16990000, 899000)
         """))
         conn.commit()
 

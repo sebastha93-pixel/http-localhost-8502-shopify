@@ -65,8 +65,8 @@ async def entorno():
          "VALUES (:u,'tienda','Florida','florida')", {"u": UBICACION}),
         ("INSERT INTO retail.medios_pago (id,nombre,tipo,siigo_forma_pago_id) "
          "VALUES ('efectivo','Efectivo','efectivo',12243)", {}),
-        ("INSERT INTO retail.variantes (id,sku,referencia,talla,nombre,precio_base) "
-         "VALUES (:v,'92611-1T10','92611-1','10','Jean',14277311)", {"v": VARIANTE}),
+        ("INSERT INTO retail.variantes (id,sku,referencia,talla,nombre,precio_con_iva) "
+         "VALUES (:v,'92611-1T10','92611-1','10','Jean',16990000)", {"v": VARIANTE}),
         ("INSERT INTO retail.stock_ubicacion (ubicacion_id,variante_id,cantidad) "
          "VALUES (:u,:v,5)", {"u": UBICACION, "v": VARIANTE}),
         ("INSERT INTO retail.sesiones_caja "
@@ -89,7 +89,7 @@ def _venta(con_descuento=False) -> Venta:
                     cajera_id="maria", moneda=COP)
     v.agregar_linea(sku=Sku.parsear("92611-1T10"), descripcion="Jean · 10",
                     cantidad=2,
-                    precio_unitario=Dinero.desde_pesos("142773.11", COP),
+                    precio_unitario=Dinero.desde_pesos("169900", COP),
                     tasa_iva=Decimal("19"))
     if con_descuento:
         v.aplicar_descuento_linea(
@@ -180,8 +180,10 @@ async def test_un_descuento_autorizado_queda_como_critico(entorno):
     p = criticos[0]["payload"]
     assert p["autorizado_por"] == "laura"
     assert p["motivo"] == "clienta insistió"
-    # 2 x $142.773,11 = $285.546,22 de base; el 30% son $85.663,87.
-    assert p["monto"] == 8566387
+    # 2 x $169.900 = $339.800 de etiqueta; el 30% son $101.940 exactos.
+    # Con el modelo anterior daba $85.663,87 — el descuento se calculaba sobre
+    # la base sin IVA, que no es el número que la clienta ve rebajado.
+    assert p["monto"] == 10194000
 
 
 async def test_la_cadena_de_auditoria_se_encadena(entorno):
@@ -256,7 +258,7 @@ async def test_no_se_cierra_una_venta_a_la_que_le_falta_plata(entorno):
                         cajera_id="maria", moneda=COP)
     venta.agregar_linea(sku=Sku.parsear("92611-1T10"), descripcion="Jean",
                         cantidad=2,
-                        precio_unitario=Dinero.desde_pesos("142773.11", COP),
+                        precio_unitario=Dinero.desde_pesos("169900", COP),
                         tasa_iva=Decimal("19"))
     venta.registrar_pago("efectivo", Dinero.desde_pesos("100000", COP),
                          es_efectivo=True)

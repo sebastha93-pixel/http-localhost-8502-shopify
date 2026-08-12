@@ -51,11 +51,11 @@ def nueva_venta(**kw) -> Venta:
     return Venta.abrir(**base)
 
 
-def con_una_linea(venta: Venta, precio="142773.11", cantidad=1, iva="19"):
-    """Una prenda cuyo precio de vitrina es $169.900 CON IVA.
+def con_una_linea(venta: Venta, precio="169900", cantidad=1, iva="19"):
+    """Una prenda de $169.900 — el precio de la etiqueta, CON IVA.
 
-    El catálogo guarda el precio SIN IVA (INV-CAT1), y $142.773,11 × 1,19 da
-    exactamente $169.900.
+    Ya no hace falta escribir 142.773,11 y confiar en que al multiplicar
+    regrese: el precio ES el de vitrina y el impuesto se lee de él.
     """
     return venta.agregar_linea(
         sku=Sku.parsear("92611-1T10"),
@@ -159,19 +159,35 @@ def test_marcar_obsequio_exige_autorizacion():
 
 # ── Cálculo · INV-V12: el IVA se calcula POR LÍNEA ─────────────────────────
 
-def test_el_total_de_una_prenda_da_el_precio_de_vitrina_exacto():
-    """$142.773,11 sin IVA × 1,19 = $169.900 clavados.
+def test_el_total_es_el_precio_de_la_etiqueta_y_el_iva_se_lee_de_ahi():
+    """El total NO se calcula: es el precio de vitrina, exacto por definición.
 
-    Es la prueba de que la cadena entera (centavos enteros + redondeo medio
-    hacia arriba) devuelve el número redondo que la clienta ve en la etiqueta.
-    Un centavo de diferencia aquí es una factura que no cuadra con el arqueo.
+    Base e IVA son una lectura de ese número, y siempre suman de vuelta. Con
+    el modelo anterior —guardando la base— había precios que no regresaban y
+    la pantalla mostraba centavos que no existen.
     """
     v = nueva_venta()
     con_una_linea(v)
-    assert v.base_gravable() == pesos("142773.11")
-    assert v.iva_total() == pesos("27126.89")
     assert v.total() == pesos("169900")
     assert v.total().formateado() == "$169.900"
+    assert v.base_gravable() == pesos("142773.11")
+    assert v.iva_total() == pesos("27126.89")
+    # Lo que hace que el modelo cierre: siempre suman el total.
+    assert v.base_gravable() + v.iva_total() == v.total()
+
+
+def test_ningun_precio_produce_centavos_fantasma():
+    """El caso que destapó el error: $139.900 en la etiqueta.
+
+    Con el modelo anterior salía $139.900,01 porque ninguna base daba ese
+    total. Ahora el total ES la etiqueta, así que no hay nada que redondear.
+    """
+    for etiqueta in ["139900", "169900", "189900", "109900", "79900", "249900"]:
+        v = nueva_venta()
+        con_una_linea(v, precio=etiqueta)
+        assert v.total() == pesos(etiqueta)
+        assert v.total().centavos % 100 == 0, f"{etiqueta} dejó centavos"
+        assert v.base_gravable() + v.iva_total() == v.total()
 
 
 def test_el_iva_se_calcula_por_linea_y_no_sobre_el_total():
@@ -179,15 +195,17 @@ def test_el_iva_se_calcula_por_linea_y_no_sobre_el_total():
     v = nueva_venta()
     con_una_linea(v, precio="100000", iva="19")
     con_una_linea(v, precio="100000", iva="0")   # exenta
-    assert v.base_gravable() == pesos("200000")
-    assert v.iva_total() == pesos("19000")
-    assert v.total() == pesos("219000")
+    assert v.total() == pesos("200000")
+    # La gravada aporta IVA; la exenta no. Si se derivara del total de la
+    # venta, la exenta también pagaría.
+    assert v.iva_total() == pesos("15966.39")
+    assert v.base_gravable() + v.iva_total() == v.total()
 
 
 def test_multiplica_por_cantidad():
     v = nueva_venta()
     con_una_linea(v, cantidad=3)
-    assert v.total() == pesos("509700")
+    assert v.total() == pesos("509700")   # 3 × $169.900, exacto
 
 
 def test_no_se_pueden_mezclar_monedas():
@@ -210,7 +228,7 @@ def test_descuento_dentro_del_tope_se_aplica_sin_autorizacion():
         tope_de_quien_aplica=TOPE_CAJERA,
     )
     assert v.descuento_total() == pesos("10000")
-    assert v.base_gravable() == pesos("90000")
+    assert v.total() == pesos("90000")
 
 
 def test_descuento_sobre_el_tope_exige_autorizacion():
@@ -263,15 +281,16 @@ def test_un_descuento_en_valor_se_evalua_como_porcentaje_efectivo():
         )
 
 
-def test_el_descuento_baja_la_base_y_por_lo_tanto_el_iva():
+def test_el_descuento_baja_el_total_y_por_lo_tanto_el_iva():
     v = nueva_venta()
     con_una_linea(v, precio="100000")
     v.aplicar_descuento_linea(
         1, Descuento.porcentaje(10, motivo="defecto menor"),
         tope_de_quien_aplica=TOPE_CAJERA)
-    assert v.base_gravable() == pesos("90000")
-    assert v.iva_total() == pesos("17100")
-    assert v.total() == pesos("107100")
+    assert v.total() == pesos("90000")
+    assert v.base_gravable() == pesos("75630.25")
+    assert v.iva_total() == pesos("14369.75")
+    assert v.base_gravable() + v.iva_total() == v.total()
 
 
 # ── Pagos · INV-V3 ──────────────────────────────────────────────────────────

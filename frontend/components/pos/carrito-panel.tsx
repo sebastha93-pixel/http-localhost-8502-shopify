@@ -146,7 +146,11 @@ export function CarritoPanel({
       )}
 
       <div style={{ borderTop: "1px solid var(--pos-divider)" }} className="pt-3">
-        <Fila etiqueta="Subtotal" valor={totales.base + totales.descuento} />
+        {/* Subtotal = suma de las ETIQUETAS, antes de descuento. El IVA va
+            debajo como línea informativa, no como algo que se suma: ya está
+            dentro. Mostrar aquí la base sin IVA se lee como si el impuesto se
+            estuviera agregando, que es justo lo contrario. */}
+        <Fila etiqueta="Subtotal" valor={totales.total + totales.descuento} />
         {totales.descuento > 0 && (
           <Fila etiqueta="Descuento" valor={-totales.descuento} />
         )}
@@ -178,14 +182,13 @@ export function CarritoPanel({
   );
 }
 
-const conIvaUnidad = (l: LineaCarrito) =>
-  l.precioUnitarioSinIva + Math.round((l.precioUnitarioSinIva * l.tasaIva) / 100);
+/** Ya es el precio de la etiqueta: no hay nada que sumar. */
+const conIvaUnidad = (l: LineaCarrito) => l.precioConIva;
 
 function totalLinea(l: LineaCarrito) {
-  const sub = l.precioUnitarioSinIva * l.cantidad;
+  const sub = l.precioConIva * l.cantidad;
   const desc = l.descuentoPct ? Math.round((sub * l.descuentoPct) / 100) : 0;
-  const gravable = sub - desc;
-  return gravable + Math.round((gravable * l.tasaIva) / 100);
+  return sub - desc;
 }
 
 function Fila({ etiqueta, valor, tenue }: { etiqueta: string; valor: number; tenue?: boolean }) {

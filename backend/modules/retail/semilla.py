@@ -24,9 +24,9 @@ SESION = "01JQ8X4T5N6P7R8S9V0W1X2Y3Z"
 PIN_SUPERVISORA = "4821"
 PIN_CAJERA = "1234"
 
-# Catálogo de muestra. Los precios son los de VITRINA (con IVA); en la base se
-# guardan sin IVA (INV-CAT1) y la pantalla vuelve a sumarlo — que es justo la
-# ida y vuelta donde un redondeo mal hecho se notaría.
+# Catálogo de muestra. Los precios son los de VITRINA, con IVA, y así se
+# guardan: el impuesto se deriva de ellos. Guardar la base y volver a sumar
+# hacía que $139.900 saliera como $139.900,01 en la rejilla.
 CATALOGO = [
     ("92611-1", "Jean Skinny Azul",     "Azul",    "Jeans",     16990000),
     ("92611-2", "Jean Skinny Negro",    "Negro",   "Jeans",     16990000),
@@ -37,16 +37,6 @@ CATALOGO = [
     ("97220-1", "Top Blanco Algodón",   "Blanco",  "Tops",       7990000),
 ]
 TALLAS = ["4", "6", "8", "10", "12"]
-
-
-def _sin_iva(precio_vitrina: int, tasa: int = 19) -> int:
-    """El catálogo guarda SIN IVA, y la base tiene que REGRESAR al precio.
-
-    La división a secas no siempre vuelve: $139.900 salía como $139.900,01 en
-    la rejilla. `base_desde_vitrina` elige la base que sí regresa.
-    """
-    from backend.modules.retail.domain.shared.impuestos import base_desde_vitrina
-    return base_desde_vitrina(precio_vitrina, tasa)
 
 
 def sembrar(url: str) -> dict:
@@ -142,11 +132,11 @@ def sembrar(url: str) -> dict:
                 c.execute(text("""
                     INSERT INTO retail.variantes
                         (id, sku, referencia, talla, color, nombre, categoria,
-                         precio_base, codigo_barras)
+                         precio_con_iva, codigo_barras)
                     VALUES (:id, :sku, :ref, :talla, :color, :nom, :cat, :p, :cb)
                 """), {"id": vid, "sku": f"{ref}T{talla}", "ref": ref,
                        "talla": talla, "color": color, "nom": nombre,
-                       "cat": categoria, "p": _sin_iva(con_iva),
+                       "cat": categoria, "p": con_iva,
                        "cb": f"770{n:010d}"})
                 # Stock variado a propósito: hace falta ver el chip agotado y
                 # el «último» en la pantalla, no sólo el caso feliz.
@@ -160,12 +150,12 @@ def sembrar(url: str) -> dict:
         c.execute(text("""
             INSERT INTO retail.catalogo_busqueda
                 (variante_id, texto_busqueda, referencia, talla, color,
-                 categoria, precio_base)
+                 categoria, precio_con_iva)
             SELECT v.id,
                    retail.norm(concat_ws(' ', v.sku, v.referencia, v.nombre,
                                          v.color, v.talla, v.codigo_barras,
                                          v.categoria)),
-                   v.referencia, v.talla, v.color, v.categoria, v.precio_base
+                   v.referencia, v.talla, v.color, v.categoria, v.precio_con_iva
               FROM retail.variantes v
         """))
 

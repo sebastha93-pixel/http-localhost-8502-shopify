@@ -110,7 +110,6 @@ class ResultadoBusqueda(BaseModel):
     talla: str
     color: str
     nombre: str
-    precio_base_centavos: int
     precio_con_iva_centavos: int
     disponible: int
     es_escaneo: bool
@@ -134,20 +133,14 @@ async def buscar(
         ResultadoBusqueda(
             **{k: v for k, v in r.__dict__.items()
                if k not in ("tasa_iva", "codigo_barras")},
-            precio_con_iva_centavos=_con_iva(r.precio_base_centavos, r.tasa_iva),
         )
         for r in resultados
     ]
 
 
-def _con_iva(base_centavos: int, tasa: str) -> int:
-    """El precio de vitrina, que es el que la clienta reconoce.
-
-    El catálogo guarda SIN IVA (INV-CAT1); la pantalla muestra CON IVA. La
-    conversión ocurre aquí, en el borde, nunca en el dominio.
-    """
-    return Dinero(base_centavos, "COP").centavos + Dinero(
-        base_centavos, "COP").porcentaje(Decimal(tasa)).centavos
+# El catálogo YA guarda el precio de vitrina: no hay nada que convertir. Antes
+# aquí se sumaba el IVA a una base, y ese viaje no siempre regresaba — de ahí
+# salían los «$139.900,01» de la rejilla.
 
 
 # ── Ventas ──────────────────────────────────────────────────────────────────
@@ -339,7 +332,6 @@ class ReferenciaSalida(BaseModel):
     nombre: str
     color: str
     categoria: str
-    precio_base_centavos: int
     precio_con_iva_centavos: int
     tasa_iva: str
     tallas: List[TallaSalida]
@@ -373,8 +365,7 @@ async def listar_referencias(
             ReferenciaSalida(
                 referencia=r.referencia, nombre=r.nombre, color=r.color,
                 categoria=r.categoria,
-                precio_base_centavos=r.precio_base_centavos,
-                precio_con_iva_centavos=_con_iva(r.precio_base_centavos, r.tasa_iva),
+                precio_con_iva_centavos=r.precio_con_iva_centavos,
                 tasa_iva=r.tasa_iva,
                 tallas=[
                     TallaSalida(variante_id=t.variante_id, sku=t.sku,

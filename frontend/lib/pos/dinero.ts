@@ -30,10 +30,17 @@ export function porcentaje(base: Centavos, tasa: number): Centavos {
   return medioArriba((base * tasa) / 100);
 }
 
-/** El precio de vitrina: lo que la clienta reconoce.
- *  El catálogo guarda SIN IVA; la pantalla muestra CON IVA. */
-export function conIva(baseSinIva: Centavos, tasaIva: number): Centavos {
-  return baseSinIva + porcentaje(baseSinIva, tasaIva);
+/**
+ * El IVA contenido en un precio de vitrina.
+ *
+ * Espejo de `separar_iva` del backend. El precio ES el número redondo de la
+ * etiqueta y el impuesto se LEE de él — no al revés. Guardando la base, la
+ * rejilla mostraba $139.900,01 en una prenda de $139.900, porque ninguna base
+ * da ese total exacto.
+ */
+export function ivaDe(precioConIva: Centavos, tasaIva: number): Centavos {
+  if (!tasaIva) return 0;
+  return precioConIva - Math.round(precioConIva / (1 + tasaIva / 100));
 }
 
 /** Reparte conservando hasta el último centavo.

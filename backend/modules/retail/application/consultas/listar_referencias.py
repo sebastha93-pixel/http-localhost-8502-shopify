@@ -37,7 +37,7 @@ class TallaDisponible:
     sku: str
     talla: str
     disponible: int
-    precio_base_centavos: int
+    precio_con_iva_centavos: int
     tasa_iva: str
 
 
@@ -47,7 +47,7 @@ class Referencia:
     nombre: str
     color: str
     categoria: str
-    precio_base_centavos: int
+    precio_con_iva_centavos: int
     tasa_iva: str
     tallas: List[TallaDisponible]
 
@@ -71,7 +71,7 @@ class ListarReferencias:
 
         filas = (await self._s.execute(text(f"""
             SELECT v.referencia, v.nombre, v.color, v.categoria, v.sku, v.id,
-                   v.talla, v.precio_base, v.tasa_iva,
+                   v.talla, v.precio_con_iva, v.tasa_iva,
                    coalesce(s.cantidad - s.reservado, 0) AS disponible
               FROM retail.catalogo_busqueda c
               JOIN retail.variantes v ON v.id = c.variante_id
@@ -99,13 +99,13 @@ class ListarReferencias:
                 agrupadas[ref] = Referencia(
                     referencia=ref, nombre=f["nombre"], color=f["color"],
                     categoria=f["categoria"],
-                    precio_base_centavos=int(f["precio_base"]),
+                    precio_con_iva_centavos=int(f["precio_con_iva"]),
                     tasa_iva=str(f["tasa_iva"]), tallas=[],
                 )
             agrupadas[ref].tallas.append(TallaDisponible(
                 variante_id=f["id"], sku=f["sku"], talla=f["talla"],
                 disponible=int(f["disponible"]),
-                precio_base_centavos=int(f["precio_base"]),
+                precio_con_iva_centavos=int(f["precio_con_iva"]),
                 tasa_iva=str(f["tasa_iva"]),
             ))
         return [agrupadas[r] for r in orden]

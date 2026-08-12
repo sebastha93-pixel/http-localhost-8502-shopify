@@ -15,7 +15,7 @@ export interface Variante {
   talla: string;
   color: string;
   nombre: string;
-  precio_base_centavos: number;
+  /** El precio de la ETIQUETA, con IVA. El impuesto se deriva de aquí. */
   precio_con_iva_centavos: number;
   disponible: number;
   es_escaneo: boolean;
@@ -44,7 +44,7 @@ export interface Referencia {
   nombre: string;
   color: string;
   categoria: string;
-  precio_base_centavos: number;
+  /** El precio de la ETIQUETA, con IVA. El impuesto se deriva de aquí. */
   precio_con_iva_centavos: number;
   tasa_iva: string;
   tallas: Talla[];

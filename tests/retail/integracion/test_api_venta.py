@@ -53,12 +53,12 @@ async def cliente():
         ("INSERT INTO retail.medios_pago (id,nombre,tipo,siigo_forma_pago_id) "
          "VALUES ('efectivo','Efectivo','efectivo',12243)", {}),
         ("INSERT INTO retail.variantes "
-         "(id,sku,referencia,talla,nombre,color,precio_base,codigo_barras) "
+         "(id,sku,referencia,talla,nombre,color,precio_con_iva,codigo_barras) "
          "VALUES (:v,'92611-1T10','92611-1','10','Jean Skinny','Azul',"
-         "14277311,'7701234567890')", {"v": VARIANTE}),
+         "16990000,'7701234567890')", {"v": VARIANTE}),
         ("INSERT INTO retail.variantes "
-         "(id,sku,referencia,talla,nombre,color,precio_base) "
-         "VALUES (:v,'92611-1T4','92611-1','4','Jean Skinny','Azul',14277311)",
+         "(id,sku,referencia,talla,nombre,color,precio_con_iva) "
+         "VALUES (:v,'92611-1T4','92611-1','4','Jean Skinny','Azul',16990000)",
          {"v": VARIANTE_2}),
         ("INSERT INTO retail.stock_ubicacion (ubicacion_id,variante_id,cantidad) "
          "VALUES (:u,:v,5)", {"u": UBICACION, "v": VARIANTE}),
@@ -74,11 +74,11 @@ async def cliente():
         # Alimentar el read model del buscador.
         await c.execute(text("""
             INSERT INTO retail.catalogo_busqueda
-                (variante_id, texto_busqueda, referencia, talla, color, precio_base)
+                (variante_id, texto_busqueda, referencia, talla, color, precio_con_iva)
             SELECT v.id,
                    retail.norm(concat_ws(' ', v.sku, v.referencia, v.nombre,
                                          v.color, v.talla, v.codigo_barras)),
-                   v.referencia, v.talla, v.color, v.precio_base
+                   v.referencia, v.talla, v.color, v.precio_con_iva
               FROM retail.variantes v
         """))
 
@@ -108,7 +108,7 @@ def _venta(venta_id=VENTA, cantidad=2, pago=400000_00):
         "caja_id": "florida_caja1", "sesion_id": SESION,
         "ubicacion_id": UBICACION, "tope_descuento": "10",
         "lineas": [{"sku": "92611-1T10", "cantidad": cantidad,
-                    "precio_unitario_centavos": 14277311,
+                    "precio_unitario_centavos": 16990000,
                     "descripcion": "Jean Skinny Azul · 10"}],
         "pagos": [{"medio_pago_id": "efectivo", "monto_centavos": pago,
                    "es_efectivo": True}],
@@ -173,7 +173,7 @@ def test_con_la_firma_del_supervisor_el_descuento_pasa(cliente):
                                 "autorizado_por": "laura"})
     r = cliente.post("/api/retail/ventas/cerrar", json=cuerpo)
     assert r.status_code == 200, r.text
-    assert r.json()["descuento_centavos"] == 8566387
+    assert r.json()["descuento_centavos"] == 10194000
 
 
 def test_un_sku_que_no_existe_lo_dice_claro(cliente):
@@ -217,12 +217,12 @@ def test_buscar_por_varias_palabras_las_exige_todas(cliente):
 
 
 def test_el_buscador_muestra_el_precio_de_vitrina(cliente):
-    """El catálogo guarda SIN IVA; la clienta reconoce el precio CON IVA."""
+    """El catálogo guarda el precio de la ETIQUETA. No hay conversión que
+    pueda dejar centavos fantasma."""
     r = cliente.get("/api/retail/catalogo/buscar",
                     params={"q": "7701234567890", "ubicacion_id": UBICACION})
     d = r.json()[0]
-    assert d["precio_base_centavos"] == 14277311     # $142.773,11 sin IVA
-    assert d["precio_con_iva_centavos"] == 16990000  # $169.900 clavados
+    assert d["precio_con_iva_centavos"] == 16990000  # $169.900, la etiqueta
 
 
 def test_el_buscador_dice_cuanto_hay_en_ESA_tienda(cliente):
