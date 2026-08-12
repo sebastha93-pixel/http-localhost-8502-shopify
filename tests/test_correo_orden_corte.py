@@ -59,6 +59,34 @@ class _RespuestaFalsa:
         return self._payload
 
 
+class _SupabaseFalso:
+    """Traga cualquier .table(...).update(...).eq(...).execute() sin hacer nada."""
+
+    def table(self, _nombre):
+        return self
+
+    def update(self, *_a, **_k):
+        return self
+
+    def insert(self, *_a, **_k):
+        return self
+
+    def select(self, *_a, **_k):
+        return self
+
+    def eq(self, *_a, **_k):
+        return self
+
+    def order(self, *_a, **_k):
+        return self
+
+    def limit(self, *_a, **_k):
+        return self
+
+    def execute(self):
+        return type("R", (), {"data": []})()
+
+
 def test_envio_exitoso_devuelve_el_id_de_resend(monkeypatch):
     import httpx
     monkeypatch.setenv("RESEND_API_KEY", "re_falsa")
@@ -119,3 +147,34 @@ def test_sin_destinatarios_es_error(monkeypatch):
     r = svc._enviar_por_resend([], "Asunto", "Cuerpo")
     assert r["estado"] == "error_envio"
     assert r["error"] == "sin_destinatarios"
+
+
+# ── Registro del intento ──────────────────────────────────────────────
+
+def test_autorizar_registra_el_intento_incluso_cuando_falla(monkeypatch):
+    """Autorizar SIEMPRE deja rastro: salga o no salga el correo.
+
+    Sin esto no hay forma de auditar. Es el Defecto 2: hoy el resultado del
+    envío solo viaja en la respuesta HTTP y se pierde ahí.
+    """
+    filas = []
+
+    monkeypatch.setattr(svc, "_enviar_por_resend", lambda *a, **k: {
+        "resend_id": None, "estado": "error_envio", "error": "resend 403: nope"})
+    monkeypatch.setattr(svc, "_registrar_correo_corte",
+                        lambda oc_id, **kw: filas.append({"oc_id": oc_id, **kw}))
+    monkeypatch.setattr(svc, "_sb", lambda: _SupabaseFalso())
+    monkeypatch.setattr(svc, "obtener_orden_corte", lambda _id: {
+        "id": "oc-1", "consecutivo": "2608-0009", "estado": "autorizada",
+        "destinatarios_correo": ["malo@ejemplo.com"], "indicaciones": "",
+        "curva_trazo": {}, "referencia": {"codigo_referencia": "93634"},
+    })
+
+    res = svc.autorizar_orden_corte("oc-1", destinatarios=["malo@ejemplo.com"],
+                                    usuario="diseno@maledenim.com")
+
+    assert len(filas) == 1, "el intento fallido tiene que quedar registrado"
+    assert filas[0]["resultado"]["estado"] == "error_envio"
+    assert res["correo"]["estado"] == "error_envio"
+    assert res["correo"]["enviado_por"] is None, \
+        "un fallo NO puede reportarse como enviado"

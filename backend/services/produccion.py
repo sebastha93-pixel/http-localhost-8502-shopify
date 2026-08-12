@@ -2174,12 +2174,13 @@ def actualizar_indicaciones_corte(oc_id: str, indicaciones: Optional[str], *,
             res = autorizar_orden_corte(
                 oc_id, usuario=usuario or (previo.get("autorizada_por") or ""),
                 mensaje_extra="(Indicaciones actualizadas por diseño)",
+                motivo="reenvio_indicaciones",
                 solo_reenviar=True)
-            # `enviado_por` va DENTRO de res["correo"], no al nivel de arriba
-            # (la función devuelve la orden con el correo anidado). Y solo cuenta
-            # como reenviado si salió por Resend: un `mailto_url` no envía nada,
+            # El resultado va DENTRO de res["correo"], no al nivel de arriba
+            # (la función devuelve la orden con el correo anidado). Solo cuenta
+            # como reenviado si Resend lo aceptó: un `mailto_url` no envía nada,
             # necesita que alguien abra su cliente de correo.
-            reenviado = ((res.get("correo") or {}).get("enviado_por") == "resend")
+            reenviado = ((res.get("correo") or {}).get("estado") == "enviado")
             log.info(f"[corte] {previo.get('consecutivo')}: indicaciones cambiaron, "
                      f"correo reenviado={reenviado}")
         except Exception as e:
@@ -3153,10 +3154,41 @@ def _enviar_por_resend(dest: list[str], asunto: str, body: str) -> dict:
                 "error": f"{type(e).__name__}: {str(e)[:300]}"}
 
 
+def _registrar_correo_corte(oc_id: str, *, destinatarios: list[str], asunto: str,
+                            motivo: str, resultado: dict,
+                            usuario: str) -> Optional[dict]:
+    """Deja una fila en `correos_orden_corte` por cada intento de envío.
+
+    No lanza: si el registro falla, el correo ya salió y perder la bitácora no
+    puede tumbar la autorización de la orden.
+    """
+    sb = _sb()
+    if sb is None:
+        return None
+    fila = {
+        "orden_corte_id": oc_id,
+        "destinatarios": destinatarios,
+        "asunto": asunto,
+        "motivo": motivo,
+        "resend_id": resultado.get("resend_id"),
+        "estado": resultado.get("estado") or "error_envio",
+        "error": resultado.get("error"),
+        "enviado_por": usuario,
+        "estado_actualizado_at": _now_iso(),
+    }
+    try:
+        r = (sb.table("correos_orden_corte").insert(fila).execute()).data
+        return (r or [None])[0]
+    except Exception as e:
+        log.warning(f"[corte.correo] no pude registrar el envío de {oc_id}: {str(e)[:200]}")
+        return None
+
+
 # ── Autorizar orden de corte y enviar correo ──────────────────────────
 def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = None,
                            mensaje_extra: Optional[str] = None,
                            solo_reenviar: bool = False,
+                           motivo: str = "autorizacion",
                            usuario: str) -> dict:
     """Marca la orden como 'autorizada' y prepara el correo para los destinatarios.
 
@@ -3238,49 +3270,27 @@ def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = No
     body += f"\nAutorizada por: {usuario}\n"
 
     dest = destinatarios if destinatarios is not None else (oc.get("destinatarios_correo") or [])
+
+    envio = _enviar_por_resend(dest, asunto, body)
+    _registrar_correo_corte(oc_id, destinatarios=dest, asunto=asunto,
+                            motivo=motivo, resultado=envio, usuario=usuario)
+
+    # El `mailto` deja de ser un redirect automático que aparenta funcionar:
+    # ahora es una salida manual que el frontend ofrece SOLO si el envío falló.
+    from urllib.parse import quote
+    mailto_url = (f"mailto:{','.join(dest) if dest else ''}"
+                  f"?subject={quote(asunto)}&body={quote(body)}")
+
     resultado = {
         "asunto": asunto,
         "body": body,
         "destinatarios": dest,
-        "enviado_por": None,   # 'resend' | 'mailto'
-        "mailto_url": None,
+        "estado": envio["estado"],            # 'enviado' | 'error_envio'
+        "error": envio["error"],
+        "resend_id": envio["resend_id"],
+        "enviado_por": "resend" if envio["estado"] == "enviado" else None,
+        "mailto_url": mailto_url,
     }
-
-    # Envío via Resend si hay API key
-    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
-    if resend_key and dest:
-        try:
-            import httpx
-            from_email = os.environ.get("RESEND_FROM", "orden-corte@maledenim.com").strip()
-            r = httpx.post(
-                "https://api.resend.com/emails",
-                headers={"Authorization": f"Bearer {resend_key}",
-                         "Content-Type": "application/json"},
-                json={
-                    "from": from_email,
-                    "to": dest,
-                    "subject": asunto,
-                    "text": body,
-                },
-                timeout=15.0,
-            )
-            if r.status_code >= 400:
-                raise RuntimeError(f"resend_error: {r.status_code} {r.text[:200]}")
-            resultado["enviado_por"] = "resend"
-        except Exception as e:
-            print(f"[corte.autorizar] Resend falló, fallback a mailto: {e}")
-
-    # Fallback mailto
-    if resultado["enviado_por"] is None:
-        from urllib.parse import quote
-        to_str = ",".join(dest) if dest else ""
-        resultado["mailto_url"] = (
-            f"mailto:{to_str}"
-            f"?subject={quote(asunto)}"
-            f"&body={quote(body)}"
-        )
-        resultado["enviado_por"] = "mailto"
-
     return {**obtener_orden_corte(oc_id), "correo": resultado}
 
 
