@@ -3240,6 +3240,42 @@ def refrescar_estados_correo(correos: list[dict]) -> list[dict]:
     return salida
 
 
+def listar_correos_corte(oc_id: str) -> list[dict]:
+    """Historial de envíos de la orden, más reciente primero, ya refrescado."""
+    sb = _sb()
+    if sb is None:
+        return []
+    try:
+        r = (sb.table("correos_orden_corte")
+               .select("*")
+               .eq("orden_corte_id", oc_id)
+               .order("created_at", desc=True)
+               .execute()).data or []
+    except Exception as e:
+        log.warning(f"[corte.correo] no pude listar los correos de {oc_id}: {str(e)[:150]}")
+        return []
+    return refrescar_estados_correo(r)
+
+
+def reenviar_correo_corte(oc_id: str, *, destinatarios: Optional[list[str]],
+                          mensaje_extra: Optional[str],
+                          usuario: str) -> dict:
+    """Reenvía el correo, típicamente a OTRA dirección porque la primera estaba mal.
+
+    Va por `solo_reenviar=True` para no pisar `fecha_autorizacion`, pero sí
+    actualiza `destinatarios_correo`: la corrección queda guardada y el
+    siguiente reenvío ya sale bien por defecto.
+    """
+    return autorizar_orden_corte(
+        oc_id,
+        destinatarios=destinatarios,
+        mensaje_extra=mensaje_extra,
+        solo_reenviar=True,
+        motivo="reenvio_manual",
+        usuario=usuario,
+    )
+
+
 # ── Autorizar orden de corte y enviar correo ──────────────────────────
 def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = None,
                            mensaje_extra: Optional[str] = None,

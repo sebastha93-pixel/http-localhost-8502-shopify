@@ -230,3 +230,27 @@ def test_si_resend_no_responde_conserva_el_estado(monkeypatch):
     r = svc.refrescar_estados_correo(correos)
 
     assert r[0]["estado"] == "enviado"
+
+
+# ── Reenvío manual ────────────────────────────────────────────────────
+
+def test_reenviar_no_toca_la_autorizacion(monkeypatch):
+    """Reenviar corrige el destinatario; NO re-autoriza la orden.
+
+    `fecha_autorizacion` costó trabajo arreglarla (antes salía siempre None).
+    Un reenvío por dedazo no puede pisar la fecha en que se autorizó de verdad.
+    """
+    llamada = {}
+
+    def _fake_autorizar(oc_id, **kw):
+        llamada.update(kw)
+        return {"id": oc_id, "correo": {"estado": "enviado"}}
+
+    monkeypatch.setattr(svc, "autorizar_orden_corte", _fake_autorizar)
+
+    svc.reenviar_correo_corte("oc-1", destinatarios=["bueno@ejemplo.com"],
+                              mensaje_extra=None, usuario="diseno@maledenim.com")
+
+    assert llamada["solo_reenviar"] is True
+    assert llamada["motivo"] == "reenvio_manual"
+    assert llamada["destinatarios"] == ["bueno@ejemplo.com"]

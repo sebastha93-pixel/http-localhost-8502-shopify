@@ -939,6 +939,36 @@ def autorizar_corte(
         raise HTTPException(500, f"autorizar_corte: {str(e)[:200]}")
 
 
+class ReenviarCorreoBody(BaseModel):
+    destinatarios: Optional[list[str]] = None
+    mensaje_extra: Optional[str] = None
+
+
+@router.post("/corte/{oc_id}/reenviar-correo")
+def reenviar_correo_corte(
+    oc_id: str,
+    body: ReenviarCorreoBody,
+    user: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
+) -> dict:
+    """Reenvía el correo de la orden, normalmente a una dirección corregida.
+
+    No re-autoriza: `fecha_autorizacion` y `autorizada_por` quedan intactas.
+    """
+    try:
+        oc = svc.reenviar_correo_corte(
+            oc_id,
+            destinatarios=body.destinatarios,
+            mensaje_extra=body.mensaje_extra,
+            usuario=user.email,
+        )
+        return {"ok": True, **oc}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"reenviar_correo: {str(e)[:200]}")
+
+
 @router.post("/corte/{oc_id}/trazos")
 async def subir_trazos_corte(
     oc_id: str,
@@ -1130,6 +1160,10 @@ def detalle_corte(
         raise HTTPException(404, "Orden de corte no encontrada")
     if _es_solo_cortador(user) and not _corte_es_del_cortador(oc, user):
         raise HTTPException(403, "Este corte no está asignado a ti")
+    # El historial de correos solo lo necesita esta pantalla. Va aquí y no en
+    # obtener_orden_corte, que se llama en 33 sitios (uno dentro de un bucle):
+    # ahí haría que cerrar un corte o avanzar un lote consultaran a Resend.
+    oc["correos"] = svc.listar_correos_corte(oc_id)
     return oc
 
 
