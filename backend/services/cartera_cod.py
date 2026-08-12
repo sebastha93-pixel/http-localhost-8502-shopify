@@ -309,6 +309,43 @@ def cruzar(pedidos: list[dict], *, desde: Optional[str] = None) -> dict:
     a_credito.sort(key=lambda x: (x["dias"] is None, -(x["dias"] or 0)))
     total_credito = round(sum(f["total"] for f in a_credito), 2)
 
+    # ── LO QUE MELONN DEBE, de verdad ────────────────────────────────────
+    # Se resta de lo entregado lo que Melonn REPORTA haber recaudado. Ese dato
+    # solo existe en el módulo de conciliación (gateway melonn_cod); Siigo no lo
+    # tiene. Si el servicio no responde, `recaudo` queda no disponible y NO se
+    # inventa una deuda: un mapa vacío haría ver los 943 entregados como
+    # impagos.
+    from backend.services import recon_client
+    rec = recon_client.recaudos_cod()
+    recaudo_ok = bool(rec.get("disponible")) and not rec.get("truncado")
+    melonn_debe = 0.0
+    sin_recaudo: list[dict] = []
+    con_recaudo = 0
+    monto_recaudado = 0.0
+    if recaudo_ok:
+        por_orden = rec.get("por_orden") or {}
+        for n, p in entregados.items():
+            r = por_orden.get(n)
+            if r:
+                con_recaudo += 1
+                monto_recaudado += r["monto"]
+            else:
+                valor = float(p.get("valor_num") or 0)
+                melonn_debe += valor
+                try:
+                    dias_e = (hoy - date.fromisoformat(
+                        (p.get("fecha_entrega") or "")[:10])).days
+                except (TypeError, ValueError):
+                    dias_e = None
+                sin_recaudo.append({
+                    "orden":   n,
+                    "valor":   valor,
+                    "entrega": (p.get("fecha_entrega") or "")[:10],
+                    "dias":    dias_e,
+                    "ciudad":  p.get("ciudad_destino"),
+                })
+        sin_recaudo.sort(key=lambda x: (x["dias"] is None, -(x["dias"] or 0)))
+
     # Antigüedad contra el plazo pactado: la cuenta se llama "CRÉDITO 10 DÍAS",
     # así que a los 30 ya no es demora normal. Sirva o no como deuda exigible
     # —eso lo confirma la conciliación—, una factura a crédito de 88 días hay
@@ -334,14 +371,22 @@ def cruzar(pedidos: list[dict], *, desde: Optional[str] = None) -> dict:
         "antiguedad":         tramos,
         "abiertas":           a_credito[:300],
         "sin_factura":        sorted(sin_facturar, key=lambda x: x["entrega"])[:300],
-        # Lo que NO se puede saber desde Siigo, dicho explícitamente para que la
-        # pantalla no invente: cuánto de `facturado_credito` ya consignó Melonn
-        # vive en el módulo de conciliación (recon.gateway_transactions).
-        "recaudo_medible":    False,
-        "nota_recaudo": ("Siigo no dice cuánto consignó Melonn: las facturas de "
-                         "contraentrega se cierran contra la cuenta de crédito a "
-                         "10 días, no contra un banco. El recaudo real se mide en "
-                         "la conciliación bancaria."),
+        # ── La deuda real, de la conciliación ────────────────────────────
+        "recaudo_medible":    recaudo_ok,
+        "melonn_debe":        round(melonn_debe, 2),
+        "n_melonn_debe":      len(sin_recaudo),
+        "melonn_recaudado":   round(monto_recaudado, 2),
+        "n_melonn_recaudado": con_recaudo,
+        "sin_recaudo":        sin_recaudo[:300],
+        "nota_recaudo": (None if recaudo_ok else
+                         ("No se pudo consultar los recaudos de Melonn en la "
+                          "conciliación" +
+                          (" (la lista vino truncada, la deuda saldría inflada)"
+                           if rec.get("truncado") else
+                           f": {str(rec.get('motivo') or '')[:120]}") +
+                          ". Siigo no sirve para esto: las facturas de "
+                          "contraentrega se cierran contra la cuenta de crédito "
+                          "a 10 días, no contra un banco.")),
     }
 
 

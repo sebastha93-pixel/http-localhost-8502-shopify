@@ -46,6 +46,10 @@ interface ResumenCartera {
   n_cod_sin_facturar?: number;
   cod_recaudo_medible?: boolean;
   cod_nota_recaudo?: string | null;
+  cod_melonn_debe?: number;
+  n_cod_melonn_debe?: number;
+  cod_melonn_recaudado?: number;
+  n_cod_melonn_recaudado?: number;
   cod_entregados?: number;
 }
 
@@ -81,6 +85,11 @@ export function CarteraCod() {
   const sinFacturar    = res?.cod_sin_facturar ?? 0;
   const nSinFacturar   = res?.n_cod_sin_facturar ?? 0;
   const nota           = res?.cod_nota_recaudo;
+  const medible        = res?.cod_recaudo_medible ?? false;
+  const debe           = res?.cod_melonn_debe ?? 0;
+  const nDebe          = res?.n_cod_melonn_debe ?? 0;
+  const recaudado      = res?.cod_melonn_recaudado ?? 0;
+  const nRecaudado     = res?.n_cod_melonn_recaudado ?? 0;
   const brutoEntregado = res?.cod_entregados ?? 0;
 
   // El detalle solo se pide cuando se despliega: son ~90 páginas de Siigo del
@@ -129,15 +138,46 @@ export function CarteraCod() {
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="flex items-center gap-2 font-display text-lg font-medium text-ink-900 dark:text-foreground">
           <Wallet className="h-4 w-4 text-graphite" aria-hidden />
-          Contraentrega · qué está facturado
+          Cartera contraentrega
         </h2>
         <span className="text-[0.68rem] text-graphite">
-          cruzado por número de orden contra Siigo
+          Melonn + Siigo, cruzados por número de orden
         </span>
       </div>
 
       <Card>
         <CardContent className="space-y-4 py-4">
+          {/* LA DEUDA REAL, primero y grande. Sale de restarle a lo entregado
+              lo que Melonn REPORTA haber recaudado (módulo de conciliación).
+              Siigo no sirve para esto: sus facturas COD se cierran contra la
+              cuenta de crédito a 10 días, no contra un banco. */}
+          {medible && (
+            <div className="grid gap-4 border-b border-border/60 pb-4 sm:grid-cols-2">
+              <div>
+                <p className="text-[0.68rem] uppercase tracking-widest text-graphite">
+                  Melonn no ha reportado recaudo
+                </p>
+                <p className={`mt-0.5 font-display text-3xl tabular-nums ${debe > 0 ? "text-terracotta" : "text-sage"}`}>
+                  {formatMoney(debe)}
+                </p>
+                <p className="text-[0.68rem] text-graphite">
+                  {nDebe} pedidos entregados · esto es lo que se reclama
+                </p>
+              </div>
+              <div>
+                <p className="text-[0.68rem] uppercase tracking-widest text-graphite">
+                  Recaudo reportado
+                </p>
+                <p className="mt-0.5 font-display text-2xl tabular-nums text-sage">
+                  {formatMoney(recaudado)}
+                </p>
+                <p className="text-[0.68rem] text-graphite">
+                  {nRecaudado} pedidos · Melonn confirma haber cobrado
+                </p>
+              </div>
+            </div>
+          )}
+
           <div className="grid gap-4 sm:grid-cols-3">
             <div>
               <p className="text-[0.68rem] uppercase tracking-widest text-graphite">

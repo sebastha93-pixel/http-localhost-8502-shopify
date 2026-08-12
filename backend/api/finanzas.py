@@ -95,6 +95,12 @@ class ResumenFinanzas(BaseModel):
     n_cod_sin_facturar:   int = 0
     cod_recaudo_medible:  bool = False
     cod_nota_recaudo:     Optional[str] = None
+    # La deuda REAL: entregado menos lo que Melonn reporta haber recaudado.
+    # Sale del módulo de conciliación; Siigo no tiene este dato.
+    cod_melonn_debe:      float = 0.0
+    n_cod_melonn_debe:    int = 0
+    cod_melonn_recaudado: float = 0.0
+    n_cod_melonn_recaudado: int = 0
     n_cod_total:        int
     n_cod_pendientes:   int
     n_cod_transito:     int
@@ -170,6 +176,10 @@ def resumen(_: CurrentUser = Depends(get_current_user)) -> ResumenFinanzas:
         n_cod_sin_facturar=cart.get("n_sin_facturar", 0),
         cod_recaudo_medible=bool(cart.get("recaudo_medible")),
         cod_nota_recaudo=cart.get("nota_recaudo"),
+        cod_melonn_debe=cart.get("melonn_debe", 0.0),
+        n_cod_melonn_debe=cart.get("n_melonn_debe", 0),
+        cod_melonn_recaudado=cart.get("melonn_recaudado", 0.0),
+        n_cod_melonn_recaudado=cart.get("n_melonn_recaudado", 0),
         cod_total=sum(p.get("valor_num", 0) for p in cods),
         cod_pendientes=sum(p.get("valor_num", 0) for p in cod_pend),
         cod_transito=sum(p.get("valor_num", 0) for p in cod_tran),
