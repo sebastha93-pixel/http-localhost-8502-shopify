@@ -113,10 +113,18 @@ class CerrarVenta:
 
             for linea in venta.lineas:
                 if linea.autorizado_por:
+                    # DOS SEVERIDADES, no una. Antes este bloque sólo se
+                    # disparaba con la firma de un supervisor, así que todo lo
+                    # que entraba era excepcional y CRÍTICO estaba bien. Sin
+                    # PIN, el nombre de quien aplica va SIEMPRE — y marcar
+                    # crítico cada descuento del 5 % llena el log a diario
+                    # hasta que nadie lo mira. Regalar una prenda sigue siendo
+                    # crítico: es el 100 % y no lo justifica ninguna promoción.
                     await t.auditoria.registrar(
-                        evento="descuento.autorizado" if not linea.obsequio
+                        evento="descuento.aplicado" if not linea.obsequio
                                else "linea.obsequiada",
-                        ocurrido_en=ahora, severidad="critico",
+                        ocurrido_en=ahora,
+                        severidad="critico" if linea.obsequio else "aviso",
                         tienda_id=venta.tienda_id, caja_id=venta.caja_id,
                         sesion_id=venta.sesion_id, usuario_id=usuario_id,
                         agregado_tipo="venta", agregado_id=venta.id,
@@ -126,7 +134,7 @@ class CerrarVenta:
                             "monto": linea.descuento_monto().centavos,
                             "motivo": (linea.descuento.motivo if linea.descuento
                                        else "obsequio"),
-                            "autorizado_por": linea.autorizado_por,
+                            "aplicado_por": linea.autorizado_por,
                         })
 
             # 6

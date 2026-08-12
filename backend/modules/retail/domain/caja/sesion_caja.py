@@ -298,7 +298,18 @@ class SesionCaja:
 
     def cerrar(self, *, usuario_id: str, ahora: datetime,
                justificacion: Optional[str] = None,
-               autorizado_por: Optional[str] = None) -> SesionCajaCerrada:
+               puede_cerrar_con_descuadre: bool = False) -> SesionCajaCerrada:
+        """Cierra el turno.
+
+        LA FIRMA ES DE QUIEN CIERRA. Antes, un descuadre grande pedía el PIN de
+        un supervisor y quedaban dos nombres: quien contó y quien aprobó. El
+        PIN se quitó por decisión del negocio —una sola credencial, correo y
+        contraseña—, así que el permiso lo trae el usuario que tiene la sesión
+        abierta: o puede cerrar con descuadre, o no puede.
+
+        La justificación escrita SE QUEDA. Es lo que convierte un faltante en
+        algo revisable; sin ella el descuadre es un número sin historia.
+        """
         self._exigir_abierta_o_en_arqueo()
         if self.estado is not EstadoSesion.EN_ARQUEO:
             raise ReglaDeNegocio("Primero hay que arquear la caja.")
@@ -319,17 +330,19 @@ class SesionCaja:
                     f"de {self.umbral_descuadre.formateado()}. "
                     f"Escribe la justificación."
                 )
-            if not autorizado_por:
+            if not puede_cerrar_con_descuadre:
                 raise RequiereAutorizacion(
-                    "Cerrar con una diferencia de este tamaño necesita "
-                    "autorización de un supervisor."
+                    "Cerrar con una diferencia de este tamaño necesita un "
+                    "usuario con permiso para hacerlo. Pide que entre un "
+                    "supervisor con su correo y contraseña."
                 )
 
         self.estado = EstadoSesion.CERRADA
         self.cerrada_por = usuario_id
         self.cerrada_en = ahora
         self.justificacion = (justificacion or "").strip() or None
-        self.autorizada_por = autorizado_por
+        # Quien cierra ES quien firma: no hay un segundo nombre que registrar.
+        self.autorizada_por = usuario_id if excede else None
 
         return SesionCajaCerrada(
             ocurrido_en=ahora,
@@ -342,7 +355,7 @@ class SesionCaja:
             diferencia_por_medio=dict(self.diferencia_por_medio()),
             cuadro=diferencia.es_cero(),
             justificacion=self.justificacion,
-            autorizado_por=autorizado_por,
+            autorizado_por=self.autorizada_por,
         )
 
     def _excede_umbral(self, diferencia: Dinero) -> bool:

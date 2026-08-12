@@ -28,14 +28,13 @@ import { RejillaReferencias } from "@/components/pos/rejilla-referencias";
 import { CarritoPanel } from "@/components/pos/carrito-panel";
 import { PanelCobro } from "@/components/pos/panel-cobro";
 import { TicketCerrado } from "@/components/pos/ticket-cerrado";
-import { DialogoDescuento, DialogoPin } from "@/components/pos/dialogo-descuento";
+import { DialogoDescuento } from "@/components/pos/dialogo-descuento";
 import { DialogoCliente } from "@/components/pos/dialogo-cliente";
 import { AbrirTurno } from "@/components/pos/abrir-turno";
 import {
   cerrarVenta,
   listarCatalogo,
-  pedirAutorizacion,
-  RequiereAutorizacion,
+  SobreElTope,
   abrirTurno,
   contextoCaja,
   turnoActual,
@@ -68,10 +67,6 @@ export default function PantallaVenta() {
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
   const [descontando, setDescontando] = useState<string | null>(null);
-  const [pidiendoPin, setPidiendoPin] = useState<
-    { sku: string; pct: number; motivo: string; mensaje: string } | null
-  >(null);
-  const [errorPin, setErrorPin] = useState<string | null>(null);
   const [cliente, setCliente] = useState<Cliente | null>(null);
   const [asignandoCliente, setAsignandoCliente] = useState(false);
   const [turno, setTurno] = useState<Turno | null>(null);
@@ -120,7 +115,7 @@ export default function PantallaVenta() {
       setAbriendo(false);
     }
   }
-  const hayDialogo = Boolean(descontando || pidiendoPin || asignandoCliente);
+  const hayDialogo = Boolean(descontando || asignandoCliente);
 
   const agregar = useCallback((r: Referencia, t: Talla) => {
     setLineas((prev) => {
@@ -205,59 +200,32 @@ export default function PantallaVenta() {
     );
 
   // ── Descuentos ─────────────────────────────────────────────────────────
+  //
+  // YA NO HAY FIRMA DE TERCEROS. Aquí vivía el diálogo del PIN: por encima del
+  // tope, un supervisor tecleaba cuatro dígitos y el descuento pasaba. Se
+  // quitó por decisión del negocio — una sola credencial, correo y contraseña.
+  //
+  // El tope pasa a ser un NO, no un «pide permiso». Se avisa antes de que la
+  // cajera se comprometa con la clienta, y se dice cuál es la salida: que
+  // entre alguien con más tope. El servidor lo comprueba igual contra la base
+  // (el tope ya no viaja en la petición), así que esto es cortesía, no la
+  // barrera.
   function aplicarDescuento(sku: string, pct: number, motivo: string) {
     setDescontando(null);
     if (pct > TOPE) {
-      setPidiendoPin({
-        sku,
-        pct,
-        motivo,
-        mensaje: `Un descuento del ${pct}% supera tu tope (${TOPE}%). Pide a un supervisor que ingrese su PIN.`,
-      });
+      setAviso(
+        `Un descuento del ${pct}% supera tu tope (${TOPE}%). Para aplicarlo tiene que entrar alguien con un tope mayor.`,
+      );
       return;
     }
-    ponerDescuento(sku, pct, motivo, null);
-  }
-
-  function ponerDescuento(
-    sku: string,
-    pct: number,
-    motivo: string,
-    firma: string | null,
-  ) {
+    setAviso(null);
     setLineas((prev) =>
       prev.map((l) =>
         l.sku === sku
-          ? { ...l, descuentoPct: pct, descuentoMotivo: motivo, autorizadoPor: firma }
+          ? { ...l, descuentoPct: pct, descuentoMotivo: motivo, autorizadoPor: null }
           : l,
       ),
     );
-  }
-
-  async function firmar(pin: string) {
-    if (!pidiendoPin) return;
-    setErrorPin(null);
-    try {
-      const firma = await pedirAutorizacion(pin, TIENDA);
-      if (pidiendoPin.pct > Number(firma.tope_descuento_pct)) {
-        // Autorizar no es un cheque en blanco: pasarse del tope de quien firma
-        // es un NO definitivo, no otro «pide autorización» — eso dejaría a la
-        // cajera en un bucle pidiendo una firma imposible.
-        setErrorPin(
-          `${firma.nombre} puede autorizar hasta ${firma.tope_descuento_pct}%. Este descuento necesita a alguien con más tope.`,
-        );
-        return;
-      }
-      ponerDescuento(
-        pidiendoPin.sku,
-        pidiendoPin.pct,
-        pidiendoPin.motivo,
-        firma.autorizado_por,
-      );
-      setPidiendoPin(null);
-    } catch (e) {
-      setErrorPin(e instanceof Error ? e.message : "PIN incorrecto.");
-    }
   }
 
   // ── Totales ────────────────────────────────────────────────────────────
@@ -293,7 +261,6 @@ export default function PantallaVenta() {
         sesion_id: SESION,
         ubicacion_id: UBICACION,
         cliente_id: cliente?.id ?? null,
-        tope_descuento: String(TOPE),
         lineas: lineas.map((l) => ({
           sku: l.sku,
           cantidad: l.cantidad,
@@ -304,7 +271,6 @@ export default function PantallaVenta() {
             ? {
                 descuento_porcentaje: String(l.descuentoPct),
                 descuento_motivo: l.descuentoMotivo,
-                autorizado_por: l.autorizadoPor ?? undefined,
               }
             : {}),
         })),
@@ -314,7 +280,7 @@ export default function PantallaVenta() {
       setFase("cerrada");
     } catch (e) {
       setAviso(
-        e instanceof RequiereAutorizacion
+        e instanceof SobreElTope
           ? e.mensaje
           : e instanceof Error
             ? e.message
@@ -496,18 +462,6 @@ export default function PantallaVenta() {
           tope={TOPE}
           onCancelar={() => setDescontando(null)}
           onAplicar={(pct, motivo) => aplicarDescuento(descontando, pct, motivo)}
-        />
-      )}
-
-      {pidiendoPin && (
-        <DialogoPin
-          motivo={pidiendoPin.mensaje}
-          error={errorPin}
-          onCancelar={() => {
-            setPidiendoPin(null);
-            setErrorPin(null);
-          }}
-          onFirmar={firmar}
         />
       )}
     </div>

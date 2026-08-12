@@ -11,7 +11,7 @@ gobiernan este archivo:
   INV-V2  no se cierra sin al menos una prenda
   INV-V3  no se cierra con menos plata de la debida, y el excedente sólo
           puede venir de efectivo
-  INV-V6  un descuento sobre el tope del rol exige firma de quien autoriza
+  INV-V6  un descuento no puede pasar del tope de quien lo aplica
   INV-V7  precio en cero sólo como obsequio autorizado
   INV-V9  cantidad mayor que cero
   INV-V11 anular exige motivo y autorización
@@ -183,14 +183,25 @@ class Venta:
         descuento: Descuento,
         *,
         tope_de_quien_aplica: Decimal,
-        autorizado_por: Optional[str] = None,
-        tope_de_quien_autoriza: Optional[Decimal] = None,
+        aplicado_por: Optional[str] = None,
     ) -> None:
-        """Aplica un descuento, exigiendo firma si supera el tope del rol.
+        """Aplica un descuento hasta el tope de quien lo está aplicando.
 
-        Autorizar no es un cheque en blanco: si se pasa `tope_de_quien_autoriza`
-        y el descuento también lo supera, se rechaza. Sin eso, cualquier
-        supervisor podría aprobar el 100%.
+        SIN FIRMA DE TERCEROS. Aquí había un flujo de autorización por PIN:
+        por encima del tope, un supervisor tecleaba su PIN y su nombre quedaba
+        en la línea. Se quitó por decisión del negocio — a la plataforma se
+        entra con correo y contraseña, y no va a haber una segunda credencial.
+
+        Lo que queda no es «sin control»: el tope sigue existiendo y es el del
+        usuario que tiene la sesión abierta. Por encima, el descuento no pasa,
+        y la vía es que entre alguien con un tope mayor. Eso hace que el tope
+        deje de ser una sugerencia y pase a ser el límite de verdad — con la
+        contrapartida de que ya no se puede desbloquear en el mostrador en
+        cinco segundos.
+
+        El nombre de quien lo aplica igual viaja hasta la auditoría: un
+        descuento sin rastro sigue siendo la vía para sacar mercancía, aunque
+        esté dentro del tope.
         """
         self._exigir_borrador()
         linea = self._linea(numero)
@@ -199,21 +210,11 @@ class Venta:
         decision = PoliticaDescuento.evaluar(descuento, base, tope_de_quien_aplica)
 
         if decision is Decision.REQUIERE_AUTORIZACION:
-            if not autorizado_por:
-                raise RequiereAutorizacion(
-                    PoliticaDescuento.explicar(descuento, base, tope_de_quien_aplica)
-                )
-            if tope_de_quien_autoriza is not None:
-                if PoliticaDescuento.evaluar(
-                    descuento, base, tope_de_quien_autoriza
-                ) is Decision.REQUIERE_AUTORIZACION:
-                    raise ReglaDeNegocio(
-                        f"{PoliticaDescuento.explicar(descuento, base, tope_de_quien_autoriza)} "
-                        f"Este descuento está por encima de lo que puede aprobar "
-                        f"quien lo autorizó."
-                    )
+            raise RequiereAutorizacion(
+                PoliticaDescuento.explicar(descuento, base, tope_de_quien_aplica)
+            )
 
-        linea.aplicar_descuento(descuento, autorizado_por)
+        linea.aplicar_descuento(descuento, aplicado_por)
 
     def quitar_descuento_linea(self, numero: int) -> None:
         self._exigir_borrador()

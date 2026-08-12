@@ -66,5 +66,5 @@ class PoliticaDescuento:
         return (
             f"Un descuento del {format(efectivo.normalize(), 'f')}% supera tu tope "
             f"({format(Decimal(tope).normalize(), 'f')}%). "
-            f"Pide a un supervisor que lo autorice."
+            f"Para aplicarlo tiene que entrar alguien con un tope mayor."
         )

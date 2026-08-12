@@ -231,8 +231,13 @@ def test_descuento_dentro_del_tope_se_aplica_sin_autorizacion():
     assert v.total() == pesos("90000")
 
 
-def test_descuento_sobre_el_tope_exige_autorizacion():
-    """El control anti-fraude más rentable de un POS."""
+def test_el_tope_de_quien_aplica_es_el_limite():
+    """El control anti-fraude más rentable de un POS.
+
+    Ya no admite firma de un tercero: el PIN se quitó porque el negocio
+    decidió que sólo haya una credencial. Por encima del tope el descuento no
+    entra, y la vía es que lo haga alguien con más tope desde su propia sesión.
+    """
     v = nueva_venta()
     con_una_linea(v, precio="100000")
     d = Descuento.porcentaje(30, motivo="clienta insistió")
@@ -240,30 +245,39 @@ def test_descuento_sobre_el_tope_exige_autorizacion():
     with pytest.raises(RequiereAutorizacion) as e:
         v.aplicar_descuento_linea(1, d, tope_de_quien_aplica=TOPE_CAJERA)
     assert "30" in str(e.value) and "10" in str(e.value)
+    assert v.descuento_total() == Dinero.cero(COP)  # no quedó a medias
 
-    v.aplicar_descuento_linea(1, d, tope_de_quien_aplica=TOPE_CAJERA,
-                              autorizado_por="laura")
+    # Con el tope del supervisor —o sea, cuando lo aplica el supervisor— pasa.
+    v.aplicar_descuento_linea(1, d, tope_de_quien_aplica=TOPE_SUPERVISOR,
+                              aplicado_por="laura")
     assert v.lineas[0].autorizado_por == "laura"
     assert v.descuento_total() == pesos("30000")
 
 
-def test_quien_autoriza_tampoco_puede_pasarse_de_su_propio_tope():
-    """Autorizar no es un cheque en blanco: el supervisor tiene su tope.
+def test_ya_no_hay_forma_de_firmar_por_encima_del_tope():
+    """La puerta que cerró quitar el PIN.
 
-    Y el rechazo tiene que ser DEFINITIVO, no otro «pide autorización»: si
-    saliera `RequiereAutorizacion`, la pantalla abriría el diálogo del PIN otra
-    vez y la cajera quedaría en un bucle pidiéndole la firma a alguien que
-    tampoco puede darla.
+    Mientras `autorizado_por` desbloqueaba el descuento, bastaba con que ese
+    nombre llegara desde fuera —y llegaba en el cuerpo de la petición—. Ahora
+    quien aplica sólo puede hasta lo suyo, y el nombre es rastro, no llave.
     """
     v = nueva_venta()
     con_una_linea(v, precio="100000")
-    with pytest.raises(ReglaDeNegocio) as e:
+    with pytest.raises(RequiereAutorizacion):
+        v.aplicar_descuento_linea(
+            1, Descuento.porcentaje(30, motivo="clienta insistió"),
+            tope_de_quien_aplica=TOPE_CAJERA, aplicado_por="laura")
+    assert v.descuento_total() == Dinero.cero(COP)
+
+
+def test_nadie_tiene_tope_infinito():
+    """Ni el supervisor. Un 50 % no lo aplica nadie con tope de 35 %."""
+    v = nueva_venta()
+    con_una_linea(v, precio="100000")
+    with pytest.raises(RequiereAutorizacion):
         v.aplicar_descuento_linea(
             1, Descuento.porcentaje(50, motivo="fuera de todo tope"),
-            tope_de_quien_aplica=TOPE_CAJERA,
-            autorizado_por="laura", tope_de_quien_autoriza=TOPE_SUPERVISOR,
-        )
-    assert not isinstance(e.value, RequiereAutorizacion)
+            tope_de_quien_aplica=TOPE_SUPERVISOR, aplicado_por="laura")
     assert v.descuento_total() == Dinero.cero(COP)  # no quedó aplicado a medias
 
 

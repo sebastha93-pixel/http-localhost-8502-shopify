@@ -67,6 +67,10 @@ async def cliente():
         ("INSERT INTO retail.sesiones_caja "
          "(id,tienda_id,caja_id,numero_turno,base_inicial,abierta_por) "
          "VALUES (:s,'florida','florida_caja1',1,20000000,'maria')", {"s": SESION}),
+        # El tope sale de AQUÍ, no del cuerpo de la petición.
+        ("INSERT INTO retail.permisos_pos "
+         "(usuario_id,nombre,tiendas,tope_descuento_pct) "
+         "VALUES ('maria','María R.','{florida}',10)", {}),
     ]
     async with motor.begin() as c:
         for sql, p in semillas:
@@ -106,7 +110,7 @@ def _venta(venta_id=VENTA, cantidad=2, pago=400000_00):
     return {
         "venta_id": venta_id, "numero": "FV-20-1334", "tienda_id": "florida",
         "caja_id": "florida_caja1", "sesion_id": SESION,
-        "ubicacion_id": UBICACION, "tope_descuento": "10",
+        "ubicacion_id": UBICACION,
         "lineas": [{"sku": "92611-1T10", "cantidad": cantidad,
                     "precio_unitario_centavos": 16990000,
                     "descripcion": "Jean Skinny Azul · 10"}],
@@ -151,9 +155,12 @@ def test_una_venta_a_la_que_le_falta_plata_se_rechaza_con_un_mensaje_util(client
     assert "$239.800" in detalle["mensaje"]
 
 
-def test_un_descuento_sobre_el_tope_pide_autorizacion_no_da_error(cliente):
-    """403 con `accion_sugerida` para que la pantalla abra el diálogo del PIN
-    en vez de mostrar un error rojo: la operación es posible, falta firma."""
+def test_un_descuento_sobre_el_tope_no_pasa(cliente):
+    """403 con `accion_sugerida` para que la pantalla diga cuál es la salida
+    —que entre alguien con más tope— en vez de pintar un error sin remedio.
+
+    Ya no hay diálogo de PIN que abrir: el tope es un no, no un «pide permiso».
+    """
     cuerpo = _venta()
     cuerpo["lineas"][0].update({"descuento_porcentaje": "30",
                                 "descuento_motivo": "clienta insistió"})
@@ -161,19 +168,20 @@ def test_un_descuento_sobre_el_tope_pide_autorizacion_no_da_error(cliente):
 
     assert r.status_code == 403
     detalle = r.json()["detail"]
-    assert detalle["error"] == "requiere_autorizacion"
-    assert detalle["accion_sugerida"] == "pedir_autorizacion"
+    assert detalle["error"] == "sobre_el_tope"
+    assert detalle["accion_sugerida"] == "entrar_con_otro_usuario"
     assert "30" in detalle["mensaje"] and "10" in detalle["mensaje"]
 
 
-def test_con_la_firma_del_supervisor_el_descuento_pasa(cliente):
+def test_mandar_una_firma_en_la_linea_ya_no_desbloquea_nada(cliente):
+    """`autorizado_por` era la llave del PIN y llegaba en el cuerpo. Si el
+    agregado todavía la respetara, bastaría con inventarse un nombre."""
     cuerpo = _venta()
     cuerpo["lineas"][0].update({"descuento_porcentaje": "30",
                                 "descuento_motivo": "clienta insistió",
                                 "autorizado_por": "laura"})
     r = cliente.post("/api/retail/ventas/cerrar", json=cuerpo)
-    assert r.status_code == 200, r.text
-    assert r.json()["descuento_centavos"] == 10194000
+    assert r.status_code == 403, r.text
 
 
 def test_un_sku_que_no_existe_lo_dice_claro(cliente):

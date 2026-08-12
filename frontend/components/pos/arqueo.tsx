@@ -206,9 +206,17 @@ function Fila({
   );
 }
 
-/** El descuadre que no se puede cerrar solo (INV-C5): justificación escrita
- *  más la firma de alguien que pueda darla. Escribir «me equivoqué» no es un
- *  control; el nombre de quien lo aprueba, sí. */
+/**
+ * El descuadre que no se puede cerrar sin explicación (INV-C5).
+ *
+ * Aquí había también un PIN de supervisor. Se quitó: a la plataforma se entra
+ * con correo y contraseña y no hay una segunda credencial. El permiso lo trae
+ * ahora el usuario que tiene la sesión abierta —o puede cerrar con descuadre,
+ * o tiene que entrar quien pueda—, y quien cierra es quien firma.
+ *
+ * La justificación escrita se queda. Es lo que convierte un faltante en algo
+ * revisable; sin ella el descuadre es un número sin historia.
+ */
 export function DialogoDescuadre({
   mensaje,
   onCancelar,
@@ -217,11 +225,10 @@ export function DialogoDescuadre({
 }: {
   mensaje: string;
   onCancelar: () => void;
-  onFirmar: (justificacion: string, pin: string) => void;
+  onFirmar: (justificacion: string) => void;
   error: string | null;
 }) {
   const [justificacion, setJustificacion] = useState("");
-  const [pin, setPin] = useState("");
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -250,17 +257,6 @@ export function DialogoDescuadre({
           />
         </label>
 
-        <label className="mt-4 block">
-          <span className="kicker text-[var(--pos-600)]">PIN de quien autoriza</span>
-          <input
-            type="password"
-            inputMode="numeric"
-            autoComplete="off"
-            value={pin}
-            onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 6))}
-            className="mt-1.5 h-12 w-full border border-[var(--pos-divider)] bg-white px-3 titular text-[18px] tabular tracking-[0.4em] text-[var(--pos-text)] outline-none focus:border-[var(--pos-accent)]"
-          />
-        </label>
 
         {error && (
           <p className="mt-4 border border-[var(--pos-800)] bg-[var(--pos-800)]/10 p-2.5 text-[12px] text-[var(--pos-900)]">
@@ -269,8 +265,8 @@ export function DialogoDescuadre({
         )}
 
         <p className="mt-4 tabular text-[10.5px] leading-relaxed text-[var(--pos-600)]">
-          El cierre queda marcado como crítico en la auditoría, con el nombre de
-          quien lo aprueba.
+          El cierre queda marcado como crítico en la auditoría, con tu nombre y
+          lo que escribas aquí.
         </p>
 
         <div className="mt-5 flex gap-3">
@@ -281,11 +277,11 @@ export function DialogoDescuadre({
             VOLVER A CONTAR
           </button>
           <button
-            disabled={justificacion.trim().length < 5 || pin.length < 4}
-            onClick={() => onFirmar(justificacion.trim(), pin)}
+            disabled={justificacion.trim().length < 5}
+            onClick={() => onFirmar(justificacion.trim())}
             className="h-12 flex-1 bg-[var(--pos-accent)] titular text-[13px] font-semibold tracking-[0.08em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-500)]"
           >
-            AUTORIZAR Y CERRAR
+            CERRAR CON DIFERENCIA
           </button>
         </div>
       </Panel>

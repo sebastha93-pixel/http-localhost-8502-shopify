@@ -7,7 +7,8 @@ Tres cosas tienen que ser ciertas o el arqueo no mide nada:
    «deberían ser $1.240.000», eso es lo que se teclea, y la diferencia siempre
    da cero.
 2. **Una diferencia grande no se cierra sola** (INV-C5). Necesita justificación
-   escrita y la firma de alguien que pueda darla.
+   escrita, y que quien cierra tenga permiso para hacerlo. La firma por PIN de
+   un tercero se quitó: una sola credencial, correo y contraseña.
 3. **Cerrado es cerrado.** Después no se toca.
 
 Y una cuarta que no es una regla sino la razón de todo: el turno tiene que
@@ -24,7 +25,6 @@ import pytest_asyncio
 pytest.importorskip("sqlalchemy")
 pytest.importorskip("fastapi")
 
-import bcrypt  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import text  # noqa: E402
@@ -53,7 +53,6 @@ async def cliente():
     dependencias.reiniciar()
 
     motor = create_async_engine(URL)
-    hash_laura = bcrypt.hashpw(b"4821", bcrypt.gensalt()).decode()
     semillas = [
         ("INSERT INTO retail.tiendas (id,nombre,base_caja,umbral_descuadre) "
          "VALUES ('florida','Florida',:b,:u)", {"b": BASE, "u": UMBRAL}),
@@ -71,11 +70,11 @@ async def cliente():
          {"v": VARIANTE}),
         ("INSERT INTO retail.stock_ubicacion (ubicacion_id,variante_id,cantidad) "
          "VALUES (:u,:v,50)", {"u": UBICACION, "v": VARIANTE}),
+        # Laura puede cerrar con descuadre y ver el esperado. María no.
         ("INSERT INTO retail.permisos_pos "
-         "(usuario_id,nombre,pin_hash,tiendas,tope_descuento_pct,"
-         " puede_autorizar_descuento,puede_ver_esperado) "
-         "VALUES ('laura','Laura M.',:h,'{florida}',35,true,true)",
-         {"h": hash_laura}),
+         "(usuario_id,nombre,tiendas,tope_descuento_pct,"
+         " puede_cerrar_con_descuadre,puede_ver_esperado) "
+         "VALUES ('laura','Laura M.','{florida}',35,true,true)", {}),
         ("INSERT INTO retail.permisos_pos (usuario_id,nombre,tiendas) "
          "VALUES ('maria','María R.','{florida}')", {}),
     ]
@@ -256,8 +255,14 @@ def test_un_sobrante_grande_tambien(cliente):
     assert r.status_code == 400
 
 
-def test_con_justificacion_pero_sin_firma_tampoco_cierra(cliente):
-    """Escribir «me equivoqué» no es un control. Tiene que firmarlo alguien."""
+def test_con_justificacion_pero_sin_permiso_tampoco_cierra(cliente):
+    """Escribir «me equivoqué» no es un control.
+
+    María cuenta, pero no tiene `puede_cerrar_con_descuadre`. Antes esto se
+    resolvía con el PIN de un supervisor en el mostrador; ahora la salida es
+    que ese supervisor entre con su correo. Es más lento a propósito: la
+    alternativa era que la cajera firmara su propio faltante.
+    """
     c, _ = cliente
     _vender(c, 1, medio="efectivo", monto=16990000)
 
@@ -268,17 +273,24 @@ def test_con_justificacion_pero_sin_firma_tampoco_cierra(cliente):
                      "contado_centavos": BASE + 16990000 - 8000000}],
     })
     assert r.status_code == 403
-    assert r.json()["detail"]["accion_sugerida"] == "pedir_autorizacion"
+    d = r.json()["detail"]
+    assert d["error"] == "sin_permiso_descuadre"
+    assert d["accion_sugerida"] == "entrar_con_otro_usuario"
 
 
-def test_con_justificacion_y_firma_cierra_y_queda_como_critico(cliente):
+def test_con_permiso_y_justificacion_cierra_y_queda_como_critico(cliente):
+    """Laura entra con SU sesión y cierra. Quien cierra es quien firma."""
     c, motor = cliente
     _vender(c, 1, medio="efectivo", monto=16990000)
+
+    from backend.core.security import CurrentUser, get_current_user
+    c.app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        id="laura", email="l@male.com", nombre="Laura", rol="admin",
+        permisos={"retail": ["ver", "modificar"]})
 
     r = c.post("/api/retail/caja/cierre", json={
         "sesion_id": SESION,
         "justificacion": "faltante detectado, se descuenta de nómina",
-        "pin_autorizacion": "4821",
         "conteos": [{"medio_pago_id": "efectivo",
                      "contado_centavos": BASE + 16990000 - 8000000}],
     })
@@ -302,36 +314,9 @@ def test_con_justificacion_y_firma_cierra_y_queda_como_critico(cliente):
     assert filas[0]["severidad"] == "critico", (
         "un cierre descuadrado que no sale como crítico no lo revisa nadie"
     )
-    assert filas[0]["payload"]["autorizado_por"] == "laura"
+    assert filas[0]["payload"]["cerrada_por"] == "laura"
     assert filas[0]["payload"]["justificacion"]
 
-
-def test_un_pin_equivocado_no_cierra_pero_cuenta_el_intento(cliente):
-    c, motor = cliente
-    _vender(c, 1, medio="efectivo", monto=16990000)
-
-    r = c.post("/api/retail/caja/cierre", json={
-        "sesion_id": SESION, "justificacion": "faltante",
-        "pin_autorizacion": "0000",
-        "conteos": [{"medio_pago_id": "efectivo",
-                     "contado_centavos": BASE + 16990000 - 8000000}],
-    })
-    assert r.status_code == 403
-    assert r.json()["detail"]["error"] == "pin_invalido"
-
-    # El intento fallido SOBREVIVE al rechazo. Es lo que se rompió una vez:
-    # el error salía por una vía que revertía la transacción, así que el
-    # contador volvía a cero y el bloqueo a los 5 intentos no existía.
-    import asyncio
-
-    async def leer():
-        async with motor.connect() as cn:
-            return (await cn.execute(text("""
-                SELECT intentos_fallidos FROM retail.permisos_pos
-                 WHERE usuario_id = 'laura'
-            """))).scalar()
-
-    assert asyncio.get_event_loop().run_until_complete(leer()) == 1
 
 
 # ── INV-C2: no se arquea con ventas a medias ────────────────────────────────

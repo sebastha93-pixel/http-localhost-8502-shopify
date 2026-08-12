@@ -77,21 +77,25 @@ export function DialogoDescuento({
         </span>
       </div>
 
+      {/* El tope dejó de ser «pide permiso» y pasó a ser un NO. Se avisa AQUÍ,
+          con el botón ya deshabilitado, y no después de aplicarlo: enterarse
+          de que no se puede cuando ya se lo dijiste a la clienta es peor que
+          no haberlo ofrecido. */}
       {sobreTope && (
         <p className="mt-3 border border-[var(--pos-700)] bg-[var(--pos-700)]/10 p-2.5 text-[11.5px] leading-snug text-[var(--pos-800)]">
-          🔒 Supera tu tope. Al aplicarlo se pedirá el PIN de un supervisor, y
-          su nombre queda registrado.
+          Supera tu tope ({tope}%). Para aplicarlo tiene que entrar alguien con
+          un tope mayor, con su correo y contraseña.
         </p>
       )}
 
       <button
-        disabled={!motivoValido}
+        disabled={!motivoValido || sobreTope}
         onClick={() => onAplicar(pct, motivo.trim())}
         className="mt-4 w-full bg-[var(--pos-accent)] py-3 titular text-[13px] font-semibold tracking-[0.12em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-500)]"
       >
-        {sobreTope ? "APLICAR CON AUTORIZACIÓN" : "APLICAR"}
+        APLICAR
       </button>
-      {!motivoValido && (
+      {!motivoValido && !sobreTope && (
         <p className="mt-2 text-center tabular text-[10.5px] text-[var(--pos-600)]">
           Escribe el motivo (mínimo 4 letras).
         </p>
@@ -99,78 +103,6 @@ export function DialogoDescuento({
     </Marco>
   );
 }
-
-/**
- * PIN del supervisor.
- *
- * El texto dice explícitamente que el nombre queda registrado. No es un
- * aviso legal: es la mitad del control. Quien firma tiene que saberlo.
- */
-export function DialogoPin({
-  motivo,
-  onCancelar,
-  onFirmar,
-  error,
-}: {
-  motivo: string;
-  onCancelar: () => void;
-  onFirmar: (pin: string) => void;
-  error?: string | null;
-}) {
-  const [pin, setPin] = useState("");
-
-  return (
-    <Marco titulo="🔒 AUTORIZACIÓN REQUERIDA" onCancelar={onCancelar}>
-      <p className="text-[13px] leading-relaxed text-[var(--pos-700)]">{motivo}</p>
-
-      <div className="my-6 flex justify-center gap-3">
-        {[0, 1, 2, 3, 4, 5].map((i) => (
-          <span
-            key={i}
-            className={`h-3 w-3 rounded-full ${
-              i < pin.length ? "bg-[var(--pos-accent)]" : "bg-[var(--pos-divider)]"
-            }`}
-          />
-        ))}
-      </div>
-
-      <div className="mx-auto grid max-w-[220px] grid-cols-3 gap-2">
-        {["1", "2", "3", "4", "5", "6", "7", "8", "9", "✕", "0", "⌫"].map((t) => (
-          <button
-            key={t}
-            onClick={() => {
-              if (t === "⌫") setPin((p) => p.slice(0, -1));
-              else if (t === "✕") setPin("");
-              else if (pin.length < 6) setPin((p) => p + t);
-            }}
-            className="h-14 border border-[var(--pos-divider)] bg-[var(--pos-100)] tabular text-lg text-[var(--pos-text)] active:bg-[var(--pos-divider)]"
-          >
-            {t}
-          </button>
-        ))}
-      </div>
-
-      {error && (
-        <p className="mt-4 border border-[var(--pos-800)] bg-[var(--pos-800)]/10 p-2.5 text-center text-[12px] text-[var(--pos-900)]">
-          {error}
-        </p>
-      )}
-
-      <p className="mt-5 text-center tabular text-[10.5px] leading-relaxed text-[var(--pos-600)]">
-        Esta autorización queda registrada con el nombre de quien la aprueba.
-      </p>
-
-      <button
-        disabled={pin.length < 4}
-        onClick={() => onFirmar(pin)}
-        className="mt-4 w-full bg-[var(--pos-accent)] py-3 titular text-[13px] font-semibold tracking-[0.12em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-500)]"
-      >
-        AUTORIZAR
-      </button>
-    </Marco>
-  );
-}
-
 function Marco({
   titulo,
   onCancelar,

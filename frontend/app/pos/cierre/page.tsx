@@ -60,7 +60,7 @@ export default function PantallaCierre() {
   }, []);
 
   const enviar = useCallback(
-    async (justificacion?: string, pin?: string) => {
+    async (justificacion?: string) => {
       if (!resumen) return;
       setCerrando(true);
       setError(null);
@@ -81,7 +81,6 @@ export default function PantallaCierre() {
             sesion_id: resumen.sesion_id,
             conteos,
             ...(justificacion ? { justificacion } : {}),
-            ...(pin ? { pin_autorizacion: pin } : {}),
           }),
         );
         setDescuadre(null);
@@ -89,11 +88,16 @@ export default function PantallaCierre() {
         const msg = e instanceof Error ? e.message : "No se pudo cerrar la caja.";
         // El backend distingue «falta la firma» de «hay un error». Un descuadre
         // grande no es un fallo: es una operación que necesita autorización.
-        const necesitaFirma =
-          e instanceof Error && e.name === "RequiereAutorizacion";
+        const necesitaFirma = e instanceof Error && e.name === "SobreElTope";
         const pideJustificacion = /justificaci/i.test(msg);
 
-        if (necesitaFirma || pideJustificacion) {
+        // Falta la justificación → se abre el diálogo para escribirla.
+        // Falta el PERMISO → no hay diálogo que ayude: tiene que entrar otra
+        // persona, y eso se dice donde ya está mirando.
+        if (necesitaFirma) {
+          if (descuadre) setErrorPin(msg);
+          else setError(msg);
+        } else if (pideJustificacion) {
           if (descuadre) setErrorPin(msg);
           else setDescuadre(msg);
         } else if (descuadre) {
@@ -167,7 +171,7 @@ export default function PantallaCierre() {
             setDescuadre(null);
             setErrorPin(null);
           }}
-          onFirmar={(j, p) => enviar(j, p)}
+          onFirmar={(j) => enviar(j)}
         />
       )}
     </div>

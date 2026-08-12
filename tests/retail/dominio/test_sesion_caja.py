@@ -255,8 +255,12 @@ def test_una_diferencia_pequena_no_necesita_supervisor():
     assert s.diferencia_total() == pesos("-1000")
 
 
-def test_un_descuadre_grande_exige_justificacion_y_firma():
-    """INV-C5. Un faltante sin explicación no se puede cerrar solo."""
+def test_un_descuadre_grande_exige_justificacion_y_permiso():
+    """INV-C5. Un faltante sin explicación no se puede cerrar solo.
+
+    Ya no hay firma de un tercero por PIN: el permiso lo trae quien tiene la
+    sesión abierta, y quien cierra es quien queda firmando.
+    """
     s = nueva_sesion()
     vender(s, EFECTIVO, "800000")
     s.iniciar_arqueo(ventas_en_borrador=0)
@@ -269,12 +273,25 @@ def test_un_descuadre_grande_exige_justificacion_y_firma():
         s.cerrar(usuario_id="maria", ahora=CERRADA,
                  justificacion="faltante de vuelto en el turno de la tarde")
 
-    evento = s.cerrar(usuario_id="maria", ahora=CERRADA,
+    evento = s.cerrar(usuario_id="laura", ahora=CERRADA,
                       justificacion="faltante de vuelto en el turno de la tarde",
-                      autorizado_por="laura")
+                      puede_cerrar_con_descuadre=True)
     assert evento.cuadro is False
     assert evento.diferencia == pesos("-15000")
     assert s.autorizada_por == "laura"
+
+
+def test_un_cierre_cuadrado_no_deja_firma_de_descuadre():
+    """`autorizada_por` sólo tiene sentido cuando hubo algo que autorizar.
+    Rellenarlo siempre haría que un informe de descuadres los listara todos."""
+    s = nueva_sesion()
+    vender(s, EFECTIVO, "800000")
+    s.iniciar_arqueo(ventas_en_borrador=0)
+    s.declarar_conteo(EFECTIVO, pesos("1000000"), usuario_id="maria")
+
+    evento = s.cerrar(usuario_id="maria", ahora=CERRADA)
+    assert evento.cuadro is True
+    assert s.autorizada_por is None
 
 
 def test_un_sobrante_grande_tambien_exige_explicacion():

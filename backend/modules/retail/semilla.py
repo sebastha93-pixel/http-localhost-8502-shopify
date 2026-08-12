@@ -21,8 +21,6 @@ TIENDA = "florida"
 CAJA = "florida_caja1"
 UBICACION = "tienda:florida"
 SESION = "01JQ8X4T5N6P7R8S9V0W1X2Y3Z"
-PIN_SUPERVISORA = "4821"
-PIN_CAJERA = "1234"
 
 # Catálogo de muestra. Los precios son los de VITRINA, con IVA, y así se
 # guardan: el impuesto se deriva de ellos. Guardar la base y volver a sumar
@@ -46,7 +44,6 @@ def sembrar(url: str) -> dict:
             f"Recibió: {url[:50]}…"
         )
 
-    import bcrypt
 
     # Aplica las migraciones primero. Las pruebas dejan el esquema BORRADO al
     # terminar, así que sembrar sin esto falla con «relation does not exist» —
@@ -94,32 +91,30 @@ def sembrar(url: str) -> dict:
                 VALUES (:i, :n, :tp, :s, :v)
             """), {"i": mid, "n": nombre, "tp": tipo, "s": siigo, "v": vuelto})
 
-        # El turno NO se abre aquí: se abre desde el login con PIN, que es
-        # justo el flujo que hay que poder probar. Dejarlo abierto haría que
-        # la pantalla de acceso siempre lo reanudara y nunca se ejercitara.
+        # El turno NO se abre aquí: se abre desde la pantalla, que es justo el
+        # flujo que hay que poder probar. Dejarlo abierto haría que la pantalla
+        # de acceso siempre lo reanudara y nunca se ejercitara.
 
+        # Ya no hay PIN. Lo que cada quien puede hacer sale de SU fila, y la
+        # identidad viene del login del ERP con correo y contraseña.
         c.execute(text("""
             INSERT INTO retail.permisos_pos
-                (usuario_id, nombre, pin_hash, tiendas, tope_descuento_pct,
-                 puede_autorizar_descuento, puede_anular_venta,
-                 puede_cerrar_con_descuadre, puede_ver_esperado)
-            VALUES ('laura', 'Laura M.', :h, ARRAY[:t], 35, true, true, true, true)
-        """), {"h": bcrypt.hashpw(PIN_SUPERVISORA.encode(),
-                                  bcrypt.gensalt()).decode(), "t": TIENDA})
-        c.execute(text("UPDATE retail.permisos_pos SET rol='Supervisora' "
-                       "WHERE usuario_id='laura'"))
+                (usuario_id, nombre, rol, tiendas, tope_descuento_pct,
+                 puede_anular_venta, puede_cerrar_con_descuadre,
+                 puede_ver_esperado)
+            VALUES ('laura', 'Laura M.', 'Supervisora', ARRAY[:t], 35,
+                    true, true, true)
+        """), {"t": TIENDA})
         c.execute(text("""
             INSERT INTO retail.permisos_pos
-                (usuario_id, nombre, pin_hash, tiendas, tope_descuento_pct, rol)
-            VALUES ('maria', 'María R.', :h, ARRAY[:t], 10, 'Cajera')
-        """), {"h": bcrypt.hashpw(PIN_CAJERA.encode(),
-                                  bcrypt.gensalt()).decode(), "t": TIENDA})
+                (usuario_id, nombre, rol, tiendas, tope_descuento_pct)
+            VALUES ('maria', 'María R.', 'Cajera', ARRAY[:t], 10)
+        """), {"t": TIENDA})
         c.execute(text("""
             INSERT INTO retail.permisos_pos
-                (usuario_id, nombre, pin_hash, tiendas, tope_descuento_pct, rol)
-            VALUES ('sofia', 'Sofía L.', :h, ARRAY[:t], 10, 'Cajera')
-        """), {"h": bcrypt.hashpw(PIN_CAJERA.encode(),
-                                  bcrypt.gensalt()).decode(), "t": TIENDA})
+                (usuario_id, nombre, rol, tiendas, tope_descuento_pct)
+            VALUES ('sofia', 'Sofía L.', 'Cajera', ARRAY[:t], 10)
+        """), {"t": TIENDA})
 
         n = 0
         for ref, nombre, color, categoria, con_iva in CATALOGO:
@@ -177,5 +172,5 @@ if __name__ == "__main__":
     r = sembrar(url)
     print(f"✅ {r['refs']} referencias · {r['variantes']} variantes · "
           f"{r['cats']} categorías · {r['unidades']} unidades")
-    print(f"   PIN cajeras {PIN_CAJERA}  ·  PIN supervisora {PIN_SUPERVISORA}")
+    print("   maria/sofia: tope 10 %  ·  laura: tope 35 %, cierra con descuadre")
     print("   sin turno abierto: se abre desde /pos/acceso")

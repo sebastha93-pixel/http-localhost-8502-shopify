@@ -78,11 +78,18 @@ export interface Ticket {
   duplicada: boolean;
 }
 
-/** El error que NO es un error: la operación es posible, falta una firma. */
-export class RequiereAutorizacion extends Error {
+/**
+ * El descuento —o el cierre— se pasa del tope del usuario que está en la caja.
+ *
+ * Se distingue de un error normal porque tiene una salida concreta: que entre
+ * alguien con más permiso. Antes esa salida era un PIN; ahora es volver a
+ * entrar con otro correo, porque el negocio decidió que sólo haya una
+ * credencial.
+ */
+export class SobreElTope extends Error {
   constructor(public mensaje: string) {
     super(mensaje);
-    this.name = "RequiereAutorizacion";
+    this.name = "SobreElTope";
   }
 }
 
@@ -117,8 +124,9 @@ function detalleDe(e: ApiError): DetalleError | undefined {
 function traducir(e: unknown): never {
   if (e instanceof ApiError) {
     const d = detalleDe(e);
-    if (e.status === 403 && d?.error === "requiere_autorizacion") {
-      throw new RequiereAutorizacion(d.mensaje || "Necesita autorización.");
+    if (e.status === 403 &&
+        (d?.error === "sobre_el_tope" || d?.error === "sin_permiso_descuadre")) {
+      throw new SobreElTope(d.mensaje || "Está por encima de tu tope.");
     }
     // El mensaje del backend está escrito para la CAJERA. Se muestra tal cual.
     if (d?.mensaje) throw new Error(d.mensaje);
@@ -150,24 +158,6 @@ export async function cerrarVenta(cuerpo: unknown): Promise<Ticket> {
   }
 }
 
-export interface Firma {
-  autorizado_por: string;
-  nombre: string;
-  tope_descuento_pct: string;
-}
-
-/** Valida el PIN de un supervisor. NO abre una sesión: dice quién firma ESTA
- *  operación, y ese nombre viaja con la venta hasta la auditoría. */
-export async function pedirAutorizacion(pin: string, tiendaId: string): Promise<Firma> {
-  try {
-    return await api.post<Firma>("/api/retail/autorizacion", {
-      pin,
-      tienda_id: tiendaId,
-    });
-  } catch (e) {
-    return traducir(e);
-  }
-}
 
 /** Sólo por número de identificación: buscar por nombre en un mostrador
  *  devuelve seis «María González» y la cajera tiene que adivinar. */
@@ -292,7 +282,6 @@ export async function cerrarCaja(cuerpo: {
   sesion_id: string;
   conteos: { medio_pago_id: string; contado_centavos: number }[];
   justificacion?: string;
-  pin_autorizacion?: string;
 }): Promise<Cierre> {
   try {
     return await api.post<Cierre>("/api/retail/caja/cierre", cuerpo);

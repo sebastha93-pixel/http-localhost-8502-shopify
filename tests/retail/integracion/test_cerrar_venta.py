@@ -94,7 +94,7 @@ def _venta(con_descuento=False) -> Venta:
     if con_descuento:
         v.aplicar_descuento_linea(
             1, Descuento.porcentaje(30, motivo="clienta insistió"),
-            tope_de_quien_aplica=Decimal("10"), autorizado_por="laura")
+            tope_de_quien_aplica=Decimal("35"), aplicado_por="laura")
     v.registrar_pago("efectivo", Dinero.desde_pesos("400000", COP),
                      es_efectivo=True)
     return v
@@ -172,13 +172,16 @@ async def test_un_descuento_autorizado_queda_como_critico(entorno):
         _venta(con_descuento=True), variante_por_sku=MAPA,
         ubicacion_id=UBICACION, usuario_id="maria")
 
-    criticos = await _filas(motor, """
-        SELECT evento, payload FROM retail.auditoria WHERE severidad='critico'
+    # AVISO, no crítico: sin PIN, el nombre de quien aplica va en todos los
+    # descuentos, y un log donde todo es crítico deja de señalar nada. Lo que
+    # sigue siendo crítico es regalar la prenda.
+    avisos = await _filas(motor, """
+        SELECT evento, payload FROM retail.auditoria WHERE severidad='aviso'
     """)
-    assert len(criticos) == 1
-    assert criticos[0]["evento"] == "descuento.autorizado"
-    p = criticos[0]["payload"]
-    assert p["autorizado_por"] == "laura"
+    assert len(avisos) == 1
+    assert avisos[0]["evento"] == "descuento.aplicado"
+    p = avisos[0]["payload"]
+    assert p["aplicado_por"] == "laura"
     assert p["motivo"] == "clienta insistió"
     # 2 x $169.900 = $339.800 de etiqueta; el 30% son $101.940 exactos.
     # Con el modelo anterior daba $85.663,87 — el descuento se calculaba sobre
@@ -216,12 +219,12 @@ async def test_alterar_un_evento_del_pasado_rompe_la_cadena(entorno):
         _venta(con_descuento=True), variante_por_sku=MAPA,
         ubicacion_id=UBICACION, usuario_id="maria")
 
-    # Alguien entra a la base y le baja el monto al descuento indebido.
+    # Alguien entra a la base y le baja el monto al descuento.
     async with motor.begin() as c:
         await c.execute(text("""
             UPDATE retail.auditoria
                SET payload = jsonb_set(payload, '{monto}', '1')
-             WHERE severidad = 'critico'
+             WHERE evento = 'descuento.aplicado'
         """))
 
     async with UnidadDeTrabajoSQL(fabrica) as t:
@@ -229,7 +232,7 @@ async def test_alterar_un_evento_del_pasado_rompe_la_cadena(entorno):
 
     assert veredicto["integra"] is False
     assert veredicto["motivo"] == "payload_alterado"
-    assert veredicto["evento"] == "descuento.autorizado"
+    assert veredicto["evento"] == "descuento.aplicado"
 
 
 

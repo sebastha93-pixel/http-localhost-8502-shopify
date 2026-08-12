@@ -27,11 +27,6 @@ from backend.modules.retail.application.comandos.clientes import (
     BuscarClientes,
     CrearCliente,
 )
-from backend.modules.retail.application.comandos.autorizar import (
-    PinBloqueado,
-    PinInvalido,
-    ValidarPin,
-)
 from backend.modules.retail.application.consultas.buscar_producto import BuscarProducto
 from backend.modules.retail.application.consultas.listar_referencias import (
     ListarReferencias,
@@ -63,7 +58,6 @@ class LineaEntrada(BaseModel):
     descuento_porcentaje: Optional[str] = None
     descuento_valor_centavos: Optional[int] = None
     descuento_motivo: Optional[str] = None
-    autorizado_por: Optional[str] = None
     obsequio: bool = False
 
 
@@ -86,7 +80,6 @@ class VentaEntrada(BaseModel):
     cliente_id: Optional[str] = None
     dispositivo_id: Optional[str] = None
     moneda: str = "COP"
-    tope_descuento: str = "0"
     lineas: List[LineaEntrada]
     pagos: List[PagoEntrada]
 
@@ -174,17 +167,17 @@ async def cerrar_venta(
         )
 
     try:
-        venta, variante_por_sku = await _armar(entrada, uow)
+        venta, variante_por_sku = await _armar(entrada, uow, usuario.id)
         resultado = await CerrarVenta(uow, reloj=RelojDelSistema()).ejecutar(
             venta, variante_por_sku=variante_por_sku,
             ubicacion_id=entrada.ubicacion_id, usuario_id=usuario.id)
     except RequiereAutorizacion as e:
-        # 403 con una bandera para que la pantalla abra el diálogo del PIN en
-        # vez de mostrar un error rojo: la operación es posible, sólo falta
-        # que alguien la firme.
-        raise HTTPException(403, {"error": "requiere_autorizacion",
+        # Ya no hay diálogo de PIN que abrir: la vía es que entre alguien con
+        # un tope mayor. La bandera se conserva para que la pantalla lo diga
+        # así en vez de pintar un error rojo sin salida.
+        raise HTTPException(403, {"error": "sobre_el_tope",
                                   "mensaje": str(e),
-                                  "accion_sugerida": "pedir_autorizacion"})
+                                  "accion_sugerida": "entrar_con_otro_usuario"})
     except ReglaDeNegocio as e:
         raise HTTPException(400, {"error": "regla_de_negocio",
                                   "mensaje": str(e)})
@@ -200,7 +193,7 @@ async def cerrar_venta(
     )
 
 
-async def _armar(entrada: VentaEntrada, uow) -> tuple:
+async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
     """Reconstruye el agregado desde el cuerpo de la petición.
 
     Los precios los manda el dispositivo porque los congeló al agregar la
@@ -210,7 +203,7 @@ async def _armar(entrada: VentaEntrada, uow) -> tuple:
     venta = Venta.abrir(
         id=entrada.venta_id, numero=entrada.numero, tienda_id=entrada.tienda_id,
         caja_id=entrada.caja_id, sesion_id=entrada.sesion_id,
-        cajera_id="", moneda=entrada.moneda,
+        cajera_id=usuario_id, moneda=entrada.moneda,
         dispositivo_id=entrada.dispositivo_id)
     if entrada.cliente_id:
         venta.asignar_cliente(entrada.cliente_id)
@@ -221,6 +214,15 @@ async def _armar(entrada: VentaEntrada, uow) -> tuple:
         filas = (await t.sesion.execute(_t("""
             SELECT id, sku FROM retail.variantes WHERE sku = ANY(:skus)
         """), {"skus": skus})).mappings().all()
+        # EL TOPE SE LEE AQUÍ, no llega en el cuerpo. Antes viajaba como
+        # `tope_descuento` desde el navegador: un cliente modificado que
+        # mandara "100" aprobaba cualquier descuento solo. Con el PIN eso
+        # quedaba tapado —hacía falta la firma igual—; sin PIN, el tope es EL
+        # control, y un control que el cliente se autoasigna no es un control.
+        tope = Decimal(str((await t.sesion.execute(_t("""
+            SELECT coalesce(tope_descuento_pct, 0) FROM retail.permisos_pos
+             WHERE usuario_id = :u AND activo
+        """), {"u": usuario_id})).scalar() or 0))
     variante_por_sku = {f["sku"]: f["id"] for f in filas}
 
     faltan = [s for s in skus if s not in variante_por_sku]
@@ -228,7 +230,6 @@ async def _armar(entrada: VentaEntrada, uow) -> tuple:
         raise ReglaDeNegocio(
             f"Estas referencias no están en el catálogo: {', '.join(faltan)}")
 
-    tope = Decimal(entrada.tope_descuento)
     for entrada_linea in entrada.lineas:
         linea = venta.agregar_linea(
             sku=Sku.parsear(entrada_linea.sku),
@@ -239,13 +240,11 @@ async def _armar(entrada: VentaEntrada, uow) -> tuple:
             tasa_iva=Decimal(entrada_linea.tasa_iva),
         )
         if entrada_linea.obsequio:
-            venta.marcar_obsequio(linea.numero,
-                                  autorizado_por=entrada_linea.autorizado_por)
+            venta.marcar_obsequio(linea.numero, autorizado_por=usuario_id)
         elif entrada_linea.descuento_porcentaje or entrada_linea.descuento_valor_centavos:
             venta.aplicar_descuento_linea(
                 linea.numero, _descuento(entrada_linea, entrada.moneda),
-                tope_de_quien_aplica=tope,
-                autorizado_por=entrada_linea.autorizado_por)
+                tope_de_quien_aplica=tope, aplicado_por=usuario_id)
 
     for p in entrada.pagos:
         venta.registrar_pago(p.medio_pago_id,
@@ -264,59 +263,6 @@ def _descuento(l: LineaEntrada, moneda: str) -> Descuento:
 
 
 # ── Autorización ────────────────────────────────────────────────────────────
-
-class PinEntrada(BaseModel):
-    pin: str = Field(min_length=4, max_length=6)
-    tienda_id: str
-
-
-class AutorizacionSalida(BaseModel):
-    autorizado_por: str
-    nombre: str
-    tope_descuento_pct: str
-
-
-@router.post("/autorizacion", response_model=AutorizacionSalida)
-async def autorizar(
-    entrada: PinEntrada,
-    uow=Depends(unidad_de_trabajo),
-    _: CurrentUser = Depends(require_permission("retail", "ver")),
-):
-    """Valida el PIN de un supervisor y devuelve quién firma.
-
-    NO devuelve un token ni abre una sesión: sólo dice quién autorizó ESTA
-    operación, y ese nombre viaja con la venta hasta la auditoría. Una firma
-    que sirviera para varias operaciones dejaría de ser una firma.
-
-    VA SOBRE LA UNIDAD DE TRABAJO, no sobre una sesión de lectura, porque
-    escribe: pone el contador de intentos en cero al acertar y lo sube al
-    fallar. Con una sesión sin commit esos incrementos se revertían al cerrar
-    —o sea que el bloqueo por intentos no existía y el PIN se podía adivinar
-    sin límite. Lo encontró una prueba, no la operación.
-
-    El commit ocurre TAMBIÉN en el camino de error: si se revirtiera al
-    rechazar, cada intento fallido borraría la cuenta del anterior.
-    """
-    from datetime import datetime, timezone
-
-    async with uow as t:
-        try:
-            a = await ValidarPin(t.sesion).ejecutar(
-                pin=entrada.pin, tienda_id=entrada.tienda_id,
-                ahora=datetime.now(timezone.utc))
-        except (PinBloqueado, PinInvalido) as e:
-            await t.commit()          # ← conserva el intento fallido
-            if isinstance(e, PinBloqueado):
-                raise HTTPException(429, {"error": "pin_bloqueado",
-                                          "mensaje": str(e)})
-            raise HTTPException(403, {"error": "pin_invalido", "mensaje": str(e)})
-        await t.commit()
-
-    return AutorizacionSalida(
-        autorizado_por=a.usuario_id, nombre=a.nombre,
-        tope_descuento_pct=str(a.tope_descuento_pct),
-    )
-
 
 # ── Catálogo agrupado por referencia (la rejilla del diseño) ────────────────
 
@@ -646,7 +592,6 @@ class CerrarCajaEntrada(BaseModel):
     sesion_id: str
     conteos: List[ConteoEntrada]
     justificacion: Optional[str] = None
-    pin_autorizacion: Optional[str] = None
 
 
 class CierreSalida(BaseModel):
@@ -732,10 +677,7 @@ async def cerrar_caja(
     un supervisor — un faltante sin explicación no se puede cerrar solo.
     """
     from datetime import datetime, timezone
-    from backend.modules.retail.application.comandos.autorizar import (
-        PinInvalido,
-        ValidarPin,
-    )
+    from sqlalchemy import text as _t
     from backend.modules.retail.domain.shared.dinero import Dinero
 
     ahora = datetime.now(timezone.utc)
@@ -745,19 +687,16 @@ async def cerrar_caja(
         borradores = await t.turnos.ventas_en_borrador(entrada.sesion_id)
         pendientes = await t.turnos.documentos_pendientes(entrada.sesion_id)
 
-        autorizado_por = None
-        autorizado_nombre = None
-        if entrada.pin_autorizacion:
-            try:
-                firma = await ValidarPin(t.sesion).ejecutar(
-                    pin=entrada.pin_autorizacion, tienda_id=sesion.tienda_id,
-                    ahora=ahora)
-                autorizado_por = firma.usuario_id
-                autorizado_nombre = firma.nombre
-            except PinInvalido as e:
-                await t.commit()      # conserva el intento fallido
-                raise HTTPException(403, {"error": "pin_invalido",
-                                          "mensaje": str(e)})
+        # El permiso lo trae quien tiene la sesión abierta. Ya no hay un PIN
+        # que un tercero teclee: o este usuario puede cerrar con descuadre, o
+        # tiene que entrar alguien que pueda, con su correo y contraseña.
+        fila_permiso = (await t.sesion.execute(_t("""
+            SELECT coalesce(puede_cerrar_con_descuadre, false) AS puede,
+                   coalesce(nombre, usuario_id) AS nombre
+              FROM retail.permisos_pos WHERE usuario_id = :u AND activo
+        """), {"u": usuario.id})).mappings().first()
+        puede_descuadre = bool(fila_permiso and fila_permiso["puede"])
+        quien = fila_permiso["nombre"] if fila_permiso else usuario.nombre
 
         try:
             # `confirmado=True` porque la pantalla ya mostró los pendientes y
@@ -773,21 +712,22 @@ async def cerrar_caja(
                                        usuario_id=usuario.id)
                 conteos[c.medio_pago_id] = monto
 
-            evento = sesion.cerrar(usuario_id=usuario.id, ahora=ahora,
-                                   justificacion=entrada.justificacion,
-                                   autorizado_por=autorizado_por)
+            evento = sesion.cerrar(
+                usuario_id=usuario.id, ahora=ahora,
+                justificacion=entrada.justificacion,
+                puede_cerrar_con_descuadre=puede_descuadre)
         except RequiereAutorizacion as e:
-            raise HTTPException(403, {"error": "requiere_autorizacion",
+            raise HTTPException(403, {"error": "sin_permiso_descuadre",
                                       "mensaje": str(e),
-                                      "accion_sugerida": "pedir_autorizacion"})
+                                      "accion_sugerida": "entrar_con_otro_usuario"})
         except ReglaDeNegocio as e:
             raise HTTPException(400, {"error": "regla_de_negocio",
                                       "mensaje": str(e)})
 
         await t.turnos.cerrar(
             sesion=sesion, conteos=conteos, usuario_id=usuario.id,
-            justificacion=entrada.justificacion, autorizado_por=autorizado_por,
-            ahora=ahora)
+            justificacion=entrada.justificacion,
+            autorizado_por=evento.autorizado_por, ahora=ahora)
         # Tres niveles, no dos. Marcar CRÍTICO cualquier diferencia —incluso
         # $100 de vuelto mal dado— llena el log de críticos todos los días, y
         # un log que siempre tiene críticos no lo revisa nadie: el descuadre
@@ -810,14 +750,14 @@ async def cerrar_caja(
                      "diferencia": evento.diferencia.centavos,
                      "cuadro": evento.cuadro,
                      "justificacion": entrada.justificacion,
-                     "autorizado_por": autorizado_por})
+                     "cerrada_por": usuario.id})
         await t.commit()
 
     return CierreSalida(
         sesion_id=sesion.id, numero_turno=sesion.numero_turno,
         diferencia_centavos=evento.diferencia.centavos,
-        cuadro=evento.cuadro, autorizado_por=autorizado_por,
-        autorizado_por_nombre=autorizado_nombre,
+        cuadro=evento.cuadro, autorizado_por=evento.autorizado_por,
+        autorizado_por_nombre=quien if evento.autorizado_por else None,
     )
 
 
