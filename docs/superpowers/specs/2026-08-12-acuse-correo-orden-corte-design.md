@@ -20,7 +20,7 @@ fallo de correo— sea invisible:
 
 ### Defecto 1 · El fallo de Resend se traga en silencio
 
-En `autorizar_orden_corte()` (`backend/services/produccion.py:3061`):
+En `autorizar_orden_corte()` (`backend/services/produccion.py:3195`):
 
 ```python
 except Exception as e:
@@ -29,7 +29,7 @@ except Exception as e:
 
 Cuando Resend rechaza el envío, el error se imprime a stdout y la función cae al
 fallback `mailto`. El frontend entonces hace
-(`frontend/app/produccion/corte/[id]/page.tsx:602`):
+(`frontend/app/produccion/corte/[id]/page.tsx:620`):
 
 ```js
 setMsg("Orden autorizada. Abriendo tu cliente de correo…");
@@ -69,7 +69,7 @@ y que pueda reenviarlo a otra dirección cuando se equivocó.
 Tabla nueva **`correos_orden_corte`**, una fila por intento de envío.
 
 Se descartó agregar columnas planas a `ordenes_corte`: el reenvío ya existe hoy
-(`actualizar_indicaciones_corte`, `produccion.py:2038`, remanda el correo cuando
+(`actualizar_indicaciones_corte`, `produccion.py:2172`, remanda el correo cuando
 cambian las indicaciones), así que columnas planas se pisarían en el segundo envío y
 perderían justo la historia que hace falta.
 
@@ -159,7 +159,7 @@ botón explícito ("abrir en mi correo") disponible cuando el envío falló.
 ```
 
 Reusa `autorizar_orden_corte(..., solo_reenviar=True)`, que ya existe
-(`produccion.py:2950`). Eso garantiza que el reenvío:
+(`produccion.py:3081`). Eso garantiza que el reenvío:
 
 - **No** toca `estado`, `autorizada_por` ni `fecha_autorizacion`.
 - **Sí** actualiza `destinatarios_correo` — la corrección queda guardada.
