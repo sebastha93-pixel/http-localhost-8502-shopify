@@ -1,12 +1,16 @@
 # Credenciales — NUNCA al repositorio
 .env
+# Copias y variantes (.env.bak, .env.local, .env.produccion…): un respaldo
+# hecho a la carrera antes de rotar un token trae los secretos intactos.
+.env.*
+!.env.example
 .streamlit/secrets.toml
 
 # Base de datos local
 data/db/
 
-# Entorno virtual local (pruebas del modulo retail)
-.venv/
+# Entorno virtual local (pruebas del modulo retail).
+# .venv/ ya lo ignora el bloque de mas abajo; aqui solo falta venv/.
 venv/
 
 # Archivos temporales Python
@@ -27,3 +31,9 @@ data/marca/*.jpg
 data/marca/*.pdf
 data/marca/*.jpg
 .gstack/
+
+# Entorno virtual local
+.venv/
+
+# Config local del POS (apunta a la base de pruebas, no va al repo)
+frontend/.env.local
