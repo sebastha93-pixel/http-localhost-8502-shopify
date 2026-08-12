@@ -381,3 +381,62 @@ export async function panelDelDia(tiendaId: string): Promise<Panel> {
   const p = new URLSearchParams({ tienda_id: tiendaId });
   return api.get<Panel>(`/api/retail/panel?${p}`);
 }
+
+// ── La tirilla ──────────────────────────────────────────────────────────────
+
+export interface LineaTirilla {
+  sku: string;
+  descripcion: string;
+  cantidad: number;
+  precio_unitario_centavos: number;
+  descuento_centavos: number;
+  descuento_motivo: string | null;
+  total_centavos: number;
+}
+
+export interface PagoTirilla {
+  nombre: string;
+  monto_centavos: number;
+  referencia: string | null;
+}
+
+export interface Tirilla {
+  razon_social: string;
+  nit: string;
+  direccion: string;
+  telefono: string;
+  tienda_nombre: string;
+  resolucion_dian: string | null;
+  mensaje: string | null;
+  numero: string;
+  fecha: string;
+  caja_nombre: string;
+  cajera_nombre: string;
+  cliente_nombre: string | null;
+  cliente_documento: string | null;
+  lineas: LineaTirilla[];
+  pagos: PagoTirilla[];
+  subtotal_centavos: number;
+  descuento_centavos: number;
+  total_centavos: number;
+  base_gravable_centavos: number;
+  iva_centavos: number;
+  pagado_centavos: number;
+  vuelto_centavos: number;
+  unidades: number;
+  estado_fiscal: string;
+  documento_fiscal: string | null;
+  cufe: string | null;
+  anulada: boolean;
+  /** Decide el encabezado del papel. Si es `false` se imprime como
+   *  COMPROBANTE y lo dice: un papel con pinta de factura que no lo es es
+   *  peor que no imprimir. */
+  es_documento_fiscal: boolean;
+}
+
+/** Lo que se imprime, LEÍDO DE LA BASE — no del carrito que la pantalla
+ *  todavía tiene en memoria. Es el comprobante de lo que quedó registrado, y
+ *  es lo que permite reimprimir tres días después. */
+export async function pedirTirilla(ventaId: string): Promise<Tirilla> {
+  return api.get<Tirilla>(`/api/retail/ventas/${ventaId}/tirilla`);
+}

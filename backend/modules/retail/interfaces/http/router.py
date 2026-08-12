@@ -908,3 +908,106 @@ async def panel_del_dia(
             color=m.color, unidades=m.unidades,
             valor_centavos=m.valor_centavos) for m in p.mas_vendidos],
     )
+
+
+# ── La tirilla ──────────────────────────────────────────────────────────────
+
+class LineaTirillaSalida(BaseModel):
+    sku: str
+    descripcion: str
+    cantidad: int
+    precio_unitario_centavos: int
+    descuento_centavos: int
+    descuento_motivo: Optional[str] = None
+    total_centavos: int
+
+
+class PagoTirillaSalida(BaseModel):
+    nombre: str
+    monto_centavos: int
+    referencia: Optional[str] = None
+
+
+class TirillaSalida(BaseModel):
+    razon_social: str
+    nit: str
+    direccion: str
+    telefono: str
+    tienda_nombre: str
+    resolucion_dian: Optional[str] = None
+    mensaje: Optional[str] = None
+    numero: str
+    fecha: str
+    caja_nombre: str
+    cajera_nombre: str
+    cliente_nombre: Optional[str] = None
+    cliente_documento: Optional[str] = None
+    lineas: List[LineaTirillaSalida]
+    pagos: List[PagoTirillaSalida]
+    subtotal_centavos: int
+    descuento_centavos: int
+    total_centavos: int
+    base_gravable_centavos: int
+    iva_centavos: int
+    pagado_centavos: int
+    vuelto_centavos: int
+    unidades: int
+    estado_fiscal: str
+    documento_fiscal: Optional[str] = None
+    cufe: Optional[str] = None
+    anulada: bool
+    # Decide el encabezado del papel. Si es False, la tirilla se imprime como
+    # COMPROBANTE INTERNO y lo dice: un papel con pinta de documento fiscal
+    # que no lo es convierte un problema de software en uno con la DIAN.
+    es_documento_fiscal: bool
+
+
+@router.get("/ventas/{venta_id}/tirilla", response_model=TirillaSalida)
+async def tirilla(
+    venta_id: str,
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Lo que se imprime, LEÍDO DE LA BASE.
+
+    No se arma desde el carrito que la pantalla todavía tiene en memoria: la
+    tirilla es el comprobante de lo que quedó registrado. Si el servidor guardó
+    algo distinto —un redondeo, una línea que no entró—, el papel tiene que
+    decir lo que quedó, no lo que la pantalla creía.
+
+    Es también lo que permite reimprimir tres días después, que es cuando la
+    clienta vuelve a cambiar la prenda.
+    """
+    from backend.modules.retail.application.consultas.tirilla import ArmarTirilla
+
+    try:
+        async with uow as t:
+            d = await ArmarTirilla(t.sesion).ejecutar(venta_id)
+    except ReglaDeNegocio as e:
+        raise HTTPException(404, {"error": "no_encontrada", "mensaje": str(e)})
+
+    return TirillaSalida(
+        razon_social=d.razon_social, nit=d.nit, direccion=d.direccion,
+        telefono=d.telefono, tienda_nombre=d.tienda_nombre,
+        resolucion_dian=d.resolucion_dian, mensaje=d.mensaje,
+        numero=d.numero, fecha=d.fecha, caja_nombre=d.caja_nombre,
+        cajera_nombre=d.cajera_nombre, cliente_nombre=d.cliente_nombre,
+        cliente_documento=d.cliente_documento,
+        lineas=[LineaTirillaSalida(
+            sku=l.sku, descripcion=l.descripcion, cantidad=l.cantidad,
+            precio_unitario_centavos=l.precio_unitario_centavos,
+            descuento_centavos=l.descuento_centavos,
+            descuento_motivo=l.descuento_motivo,
+            total_centavos=l.total_centavos) for l in d.lineas],
+        pagos=[PagoTirillaSalida(nombre=p.nombre, monto_centavos=p.monto_centavos,
+                                 referencia=p.referencia) for p in d.pagos],
+        subtotal_centavos=d.subtotal_centavos,
+        descuento_centavos=d.descuento_centavos,
+        total_centavos=d.total_centavos,
+        base_gravable_centavos=d.base_gravable_centavos,
+        iva_centavos=d.iva_centavos, pagado_centavos=d.pagado_centavos,
+        vuelto_centavos=d.vuelto_centavos, unidades=d.unidades,
+        estado_fiscal=d.estado_fiscal, documento_fiscal=d.documento_fiscal,
+        cufe=d.cufe, anulada=d.anulada,
+        es_documento_fiscal=d.es_documento_fiscal,
+    )

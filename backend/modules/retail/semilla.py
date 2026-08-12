@@ -67,9 +67,17 @@ def sembrar(url: str) -> dict:
 
         c.execute(text("""
             INSERT INTO retail.tiendas
-                (id, nombre, siigo_bodega_id, siigo_centro_costo_id)
-            VALUES (:t, 'Tienda Principal', 48, 774)
+                (id, nombre, siigo_bodega_id, siigo_centro_costo_id,
+                 razon_social, nit, direccion, telefono, mensaje_tirilla)
+            VALUES (:t, 'Tienda Principal', 48, 774,
+                    'Dirty Jeans S.A.S.', '900000000-0',
+                    'Direccion pendiente', '(604) 000 0000',
+                    'Cambios dentro de 30 dias presentando esta tirilla.')
         """), {"t": TIENDA})
+        # NIT y direccion de RELLENO a proposito: los reales van en la
+        # configuracion de la tienda, no en una semilla de desarrollo. Y
+        # `resolucion_dian` queda NULL: sin ella la tirilla se imprime como
+        # comprobante interno y lo dice, que es lo correcto hasta la Fase 3.
         c.execute(text("""
             INSERT INTO retail.cajas (id, tienda_id, nombre, prefijo_factura)
             VALUES (:c, :t, 'Caja 01', 'FV-20')
