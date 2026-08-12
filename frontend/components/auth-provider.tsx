@@ -23,14 +23,6 @@ export const useAuth = () => useContext(AuthCtx);
 // /terminacion/[token] es la vista del proveedor de terminación.
 const PUBLIC_PATHS = ["/login"];
 const PUBLIC_PREFIXES = ["/lote/", "/terminacion/"];
-// El POS no usa el login del ERP: la cajera entra con un PIN sobre un
-// dispositivo registrado (ADR-006), y nadie va a escribir un correo y una
-// contrasena larga entre clientas. Ese flujo es de la Fase 5.
-//
-// MIENTRAS TANTO la ruta renderiza sin sesion del ERP, pero el API SIGUE
-// PROTEGIDO: /api/retail/* exige permiso `retail`. Sin token se ve el
-// cascaron y ninguna peticion devuelve datos.
-const PROPIA_AUTENTICACION = ["/pos"];
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -59,8 +51,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   });
 
   const isPublic = PUBLIC_PATHS.includes(pathname) ||
-                   PUBLIC_PREFIXES.some((p) => pathname.startsWith(p)) ||
-                   PROPIA_AUTENTICACION.some((p) => pathname.startsWith(p));
+                   PUBLIC_PREFIXES.some((p) => pathname.startsWith(p));
   const loading = !hydrated || (!!token && meQ.isLoading);
 
   // Redirige a /login si no hay token y no es ruta pública.

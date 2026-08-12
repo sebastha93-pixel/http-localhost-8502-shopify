@@ -16,11 +16,10 @@ import { NotificacionesBell } from "@/components/notificaciones-bell";
 const PUBLIC_PATHS = ["/login"];
 const PUBLIC_PREFIXES = ["/lote/", "/terminacion/"];
 
-// El POS trae su PROPIO cascaron: sin sidebar, sin campanita, sin
-// paleta de comandos. No es "publico" —tiene su propia autenticacion
-// (token de dispositivo + PIN de cajera)— pero no puede compartir la
-// navegacion del ERP: cada enlace es una forma de salirse de la venta,
-// y una cajera no tiene por que poder llegar a Produccion.
+// El POS entra por el login del ERP (correo + contrasena) como todo lo
+// demas, pero NO comparte su navegacion: trae su propio rail. Cada enlace
+// ajeno es una forma de salirse de la venta, y una cajera con una clienta
+// enfrente no tiene por que poder llegar a Produccion.
 const SIN_CHROME_ERP = ["/pos"];
 
 export function AuthShell({ children }: { children: React.ReactNode }) {

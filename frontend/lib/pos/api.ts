@@ -190,3 +190,53 @@ export async function crearCliente(cuerpo: {
     return traducir(e);
   }
 }
+
+export interface Turno {
+  sesion_id: string;
+  numero_turno: number;
+  tienda_id: string;
+  caja_id: string;
+  cajera_id: string;
+  cajera_nombre: string;
+  tope_descuento_pct: string;
+  base_inicial_centavos: number;
+  reanudado: boolean;
+}
+
+/** El turno abierto de esta caja, o null. Recargar la pantalla a media mañana
+ *  no puede costar volver a entrar. */
+export async function turnoActual(cajaId: string): Promise<Turno | null> {
+  const p = new URLSearchParams({ caja_id: cajaId });
+  return api.get<Turno | null>(`/api/retail/caja/turno-actual?${p}`);
+}
+
+/** Abre turno para el usuario AUTENTICADO. No pide credenciales: ya entró con
+ *  su correo y contraseña por el login del ERP. */
+export async function abrirTurno(cuerpo: {
+  sesion_id: string;
+  tienda_id: string;
+  caja_id: string;
+}): Promise<Turno> {
+  try {
+    return await api.post<Turno>("/api/retail/caja/turno", cuerpo);
+  } catch (e) {
+    return traducir(e);
+  }
+}
+
+export interface ContextoCaja {
+  tienda_id: string;
+  tienda_nombre: string;
+  caja_id: string;
+  caja_nombre: string;
+  base_caja_centavos: number;
+  ubicacion_id: string | null;
+}
+
+/** Nombres de tienda y caja, y la base configurada. La pantalla de apertura
+ *  los necesita ANTES de que exista un turno: mostrar `florida_caja1` en vez
+ *  de «Caja 01» delata que nadie miró esa pantalla. */
+export async function contextoCaja(cajaId: string): Promise<ContextoCaja> {
+  const p = new URLSearchParams({ caja_id: cajaId });
+  return api.get<ContextoCaja>(`/api/retail/caja/contexto?${p}`);
+}

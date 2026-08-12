@@ -450,3 +450,164 @@ async def crear_cliente(
         await t.commit()
 
     return ClienteSalida(**c.__dict__)
+
+
+# ── Turno de caja (vista 1 del handoff) ─────────────────────────────────────
+
+
+class TurnoSalida(BaseModel):
+    sesion_id: str
+    numero_turno: int
+    tienda_id: str
+    caja_id: str
+    cajera_id: str
+    cajera_nombre: str
+    tope_descuento_pct: str
+    base_inicial_centavos: int
+    reanudado: bool = False
+
+
+class AbrirTurnoEntrada(BaseModel):
+    """Sin PIN: quién abre el turno sale del JWT, y ese JWT viene del login del
+    ERP con correo y contraseña."""
+
+    sesion_id: str = Field(description="ULID generado en el dispositivo")
+    tienda_id: str
+    caja_id: str
+
+
+@router.get("/caja/turno-actual", response_model=Optional[TurnoSalida])
+async def turno_actual(
+    caja_id: str = Query(),
+    uow=Depends(unidad_de_trabajo),
+    _: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Si la caja ya tiene turno abierto, se REANUDA. Recargar la pantalla a
+    media mañana no puede costar volver a entrar."""
+    from sqlalchemy import text as _t
+
+    async with uow as t:
+        abierta = await t.turnos.abierta_de(caja_id)
+        if abierta is None:
+            return None
+        tope = (await t.sesion.execute(_t(
+            "SELECT tope_descuento_pct FROM retail.permisos_pos WHERE usuario_id=:u"
+        ), {"u": abierta["abierta_por"]})).scalar()
+
+    return TurnoSalida(
+        sesion_id=abierta["id"], numero_turno=abierta["numero_turno"],
+        tienda_id=abierta["tienda_id"], caja_id=caja_id,
+        cajera_id=abierta["abierta_por"],
+        cajera_nombre=abierta["cajera_nombre"],
+        tope_descuento_pct=str(tope or 0),
+        base_inicial_centavos=int(abierta["base_inicial"]), reanudado=True,
+    )
+
+
+@router.post("/caja/turno", response_model=TurnoSalida)
+async def abrir_turno(
+    entrada: AbrirTurnoEntrada,
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Abre el turno para el usuario AUTENTICADO.
+
+    No pide PIN: quien está en la caja ya entró con su correo y contraseña por
+    el login del ERP, y volver a pedirle una credencial para abrir su propio
+    turno es un paso que no protege nada.
+
+    La base tampoco se digita: sale de la configuración de la tienda, como
+    decidió el diseño. Pedirla a diario es un paso que se responde en
+    automático hasta que un día se responde mal.
+    """
+    from datetime import datetime, timezone
+    from sqlalchemy import text as _t
+
+    ahora = datetime.now(timezone.utc)
+
+    async with uow as t:
+        ya = await t.turnos.abierta_de(entrada.caja_id)
+        if ya is not None:
+            # Otra persona con el turno abierto NO se sobreescribe: el arqueo
+            # es suyo y cerrarlo es su responsabilidad (o la de un supervisor).
+            tope = (await t.sesion.execute(_t(
+                "SELECT tope_descuento_pct FROM retail.permisos_pos WHERE usuario_id=:u"
+            ), {"u": ya["abierta_por"]})).scalar()
+            return TurnoSalida(
+                sesion_id=ya["id"], numero_turno=ya["numero_turno"],
+                tienda_id=ya["tienda_id"], caja_id=entrada.caja_id,
+                cajera_id=ya["abierta_por"], cajera_nombre=ya["cajera_nombre"],
+                tope_descuento_pct=str(tope or 0),
+                base_inicial_centavos=int(ya["base_inicial"]), reanudado=True,
+            )
+
+        try:
+            base = await t.turnos.base_de_tienda(entrada.tienda_id)
+            turno = await t.turnos.abrir(
+                sesion_id=entrada.sesion_id, tienda_id=entrada.tienda_id,
+                caja_id=entrada.caja_id, usuario_id=usuario.id,
+                base_inicial=base, ahora=ahora)
+            await t.auditoria.registrar(
+                evento="caja.abierta", ocurrido_en=ahora,
+                tienda_id=entrada.tienda_id, caja_id=entrada.caja_id,
+                sesion_id=entrada.sesion_id, usuario_id=usuario.id,
+                agregado_tipo="sesion_caja", agregado_id=entrada.sesion_id,
+                payload={"numero_turno": turno["numero_turno"],
+                         "base_inicial": base})
+            await t.commit()
+        except ReglaDeNegocio as e:
+            raise HTTPException(400, {"error": "regla_de_negocio",
+                                      "mensaje": str(e)})
+
+        tope = (await t.sesion.execute(_t(
+            "SELECT coalesce(tope_descuento_pct, 0) FROM retail.permisos_pos "
+            "WHERE usuario_id = :u"), {"u": usuario.id})).scalar()
+
+    return TurnoSalida(
+        sesion_id=entrada.sesion_id, numero_turno=turno["numero_turno"],
+        tienda_id=entrada.tienda_id, caja_id=entrada.caja_id,
+        cajera_id=usuario.id, cajera_nombre=usuario.nombre,
+        tope_descuento_pct=str(tope or 0), base_inicial_centavos=base,
+    )
+
+
+class ContextoCaja(BaseModel):
+    tienda_id: str
+    tienda_nombre: str
+    caja_id: str
+    caja_nombre: str
+    base_caja_centavos: int
+    ubicacion_id: Optional[str] = None
+
+
+@router.get("/caja/contexto", response_model=ContextoCaja)
+async def contexto_caja(
+    caja_id: str = Query(),
+    sesion=Depends(sesion_lectura),
+    _: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Los nombres de la tienda y la caja, y la base configurada.
+
+    La pantalla de apertura los necesita ANTES de que exista un turno. Mostrar
+    `florida_caja1` en vez de «Caja 01» delata que nadie miró esa pantalla.
+    """
+    from sqlalchemy import text as _t
+    fila = (await sesion.execute(_t("""
+        SELECT c.id AS caja_id, c.nombre AS caja_nombre,
+               t.id AS tienda_id, t.nombre AS tienda_nombre, t.base_caja,
+               (SELECT u.id FROM retail.ubicaciones u
+                 WHERE u.tienda_id = t.id AND u.tipo = 'tienda' LIMIT 1) AS ubicacion
+          FROM retail.cajas c JOIN retail.tiendas t ON t.id = c.tienda_id
+         WHERE c.id = :c
+    """), {"c": caja_id})).mappings().first()
+
+    if fila is None:
+        raise HTTPException(404, {"error": "caja_desconocida",
+                                  "mensaje": f"No existe la caja {caja_id}."})
+
+    return ContextoCaja(
+        tienda_id=fila["tienda_id"], tienda_nombre=fila["tienda_nombre"],
+        caja_id=fila["caja_id"], caja_nombre=fila["caja_nombre"],
+        base_caja_centavos=int(fila["base_caja"]),
+        ubicacion_id=fila["ubicacion"],
+    )

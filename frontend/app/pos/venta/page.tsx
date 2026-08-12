@@ -21,6 +21,7 @@
  * no tenía por qué saberlo — es una regla de negocio, no una decisión visual.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "@/components/auth-provider";
 import { Panel } from "@/components/pos/marco";
 import { Rail } from "@/components/pos/rail";
 import { RejillaReferencias } from "@/components/pos/rejilla-referencias";
@@ -29,13 +30,19 @@ import { PanelCobro } from "@/components/pos/panel-cobro";
 import { TicketCerrado } from "@/components/pos/ticket-cerrado";
 import { DialogoDescuento, DialogoPin } from "@/components/pos/dialogo-descuento";
 import { DialogoCliente } from "@/components/pos/dialogo-cliente";
+import { AbrirTurno } from "@/components/pos/abrir-turno";
 import {
   cerrarVenta,
   listarCatalogo,
   pedirAutorizacion,
   RequiereAutorizacion,
+  abrirTurno,
+  contextoCaja,
+  turnoActual,
+  type ContextoCaja,
   type Cliente,
   type Referencia,
+  type Turno,
   type Talla,
   type Ticket,
 } from "@/lib/pos/api";
@@ -45,9 +52,8 @@ import type { LineaCarrito } from "@/lib/pos/carrito";
 const TIENDA = process.env.NEXT_PUBLIC_POS_TIENDA || "";
 const CAJA = process.env.NEXT_PUBLIC_POS_CAJA || "";
 const UBICACION = process.env.NEXT_PUBLIC_POS_UBICACION || "";
-const SESION = process.env.NEXT_PUBLIC_POS_SESION || "";
-const TOPE = Number(process.env.NEXT_PUBLIC_POS_TOPE || 10);
-const CAJERA = process.env.NEXT_PUBLIC_POS_CAJERA || "María R.";
+// El turno YA NO se cablea en una variable: se abre (o se reanuda) contra el
+// backend, con el usuario que entró por el login del ERP.
 
 type Fase = "vendiendo" | "cobrando" | "cerrada";
 
@@ -67,10 +73,52 @@ export default function PantallaVenta() {
   const [errorPin, setErrorPin] = useState<string | null>(null);
   const [cliente, setCliente] = useState<Cliente | null>(null);
   const [asignandoCliente, setAsignandoCliente] = useState(false);
+  const [turno, setTurno] = useState<Turno | null>(null);
+  const [cargandoTurno, setCargandoTurno] = useState(true);
+  const [abriendo, setAbriendo] = useState(false);
+  const [errorTurno, setErrorTurno] = useState<string | null>(null);
+  const [contexto, setContexto] = useState<ContextoCaja | null>(null);
+  const { user } = useAuth();
   const ventaId = useRef<string>(nuevoUlid());
   const buscadorRef = useRef<HTMLInputElement>(null);
 
-  const configurado = Boolean(TIENDA && CAJA && UBICACION && SESION);
+  const configurado = Boolean(TIENDA && CAJA && UBICACION);
+  const SESION = turno?.sesion_id ?? "";
+  const TOPE = Number(turno?.tope_descuento_pct ?? 0);
+  const CAJERA = turno?.cajera_nombre ?? "";
+
+  // Al entrar, reanudar el turno abierto de esta caja si lo hay.
+  useEffect(() => {
+    if (!configurado) return;
+    let vigente = true;
+    (async () => {
+      try {
+        const [t, ctx] = await Promise.all([turnoActual(CAJA), contextoCaja(CAJA)]);
+        if (!vigente) return;
+        setTurno(t);
+        setContexto(ctx);
+      } catch (e) {
+        if (vigente) setErrorTurno(e instanceof Error ? e.message : "No se pudo leer el turno.");
+      } finally {
+        if (vigente) setCargandoTurno(false);
+      }
+    })();
+    return () => { vigente = false; };
+  }, [configurado]);
+
+  async function abrir() {
+    setAbriendo(true);
+    setErrorTurno(null);
+    try {
+      setTurno(await abrirTurno({
+        sesion_id: nuevoUlid(), tienda_id: TIENDA, caja_id: CAJA,
+      }));
+    } catch (e) {
+      setErrorTurno(e instanceof Error ? e.message : "No se pudo abrir el turno.");
+    } finally {
+      setAbriendo(false);
+    }
+  }
   const hayDialogo = Boolean(descontando || pidiendoPin || asignandoCliente);
 
   const agregar = useCallback((r: Referencia, t: Talla) => {
@@ -98,7 +146,7 @@ export default function PantallaVenta() {
 
   // ── Catálogo ───────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!configurado) return;
+    if (!configurado || !turno) return;
     let vigente = true;
     const temporizador = setTimeout(async () => {
       try {
@@ -130,7 +178,7 @@ export default function PantallaVenta() {
       vigente = false;
       clearTimeout(temporizador);
     };
-  }, [consulta, categoria, configurado, agregar]);
+  }, [consulta, categoria, configurado, turno, agregar]);
 
   // El foco vive en el buscador para que el lector escriba sin un clic — pero
   // lo SUELTA cuando hay un diálogo encima, o el motivo del descuento termina
@@ -297,6 +345,34 @@ export default function PantallaVenta() {
   });
 
   if (!configurado) return <SinConfigurar />;
+
+  if (cargandoTurno) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <p className="text-[13px]" style={{ color: "var(--pos-600)" }}>
+          Buscando el turno de esta caja…
+        </p>
+      </div>
+    );
+  }
+
+  // Sin turno abierto no se puede vender: toda venta pertenece a un turno
+  // (INV-V8), y es lo que hace que el arqueo cuadre al final del día.
+  if (!turno) {
+    return (
+      <AbrirTurno
+        tienda={contexto?.tienda_nombre ?? TIENDA}
+        caja={contexto?.caja_nombre ?? CAJA}
+        cajera={user?.nombre ?? "…"}
+        base={contexto?.base_caja_centavos ?? null}
+        ocupadoPor={null}
+        abriendo={abriendo}
+        error={errorTurno}
+        onAbrir={abrir}
+      />
+    );
+  }
+
   if (fase === "cerrada" && ticket) {
     return <TicketCerrado ticket={ticket} onNueva={nuevaVenta} />;
   }
@@ -319,7 +395,7 @@ export default function PantallaVenta() {
         >
           <h1 className="titular text-[20px]">Venta</h1>
           <p className="text-[12px]" style={{ color: "var(--pos-600)" }}>
-            Tienda Principal · Caja 01 · {CAJERA} · {hoy}
+            {contexto?.tienda_nombre ?? TIENDA} · {contexto?.caja_nombre ?? CAJA} · {CAJERA} · {hoy}
           </p>
         </header>
 
@@ -451,8 +527,7 @@ function SinConfigurar() {
         >
 {`NEXT_PUBLIC_POS_TIENDA=florida
 NEXT_PUBLIC_POS_CAJA=florida_caja1
-NEXT_PUBLIC_POS_UBICACION=tienda:florida
-NEXT_PUBLIC_POS_SESION=<ulid del turno abierto>`}
+NEXT_PUBLIC_POS_UBICACION=tienda:florida`}
         </pre>
       </Panel>
     </div>

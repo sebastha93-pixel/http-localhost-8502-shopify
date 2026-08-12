@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import os
 import sys
-from decimal import ROUND_HALF_UP, Decimal
-
 from sqlalchemy import create_engine, text
 
 TIENDA = "florida"
@@ -24,6 +22,7 @@ CAJA = "florida_caja1"
 UBICACION = "tienda:florida"
 SESION = "01JQ8X4T5N6P7R8S9V0W1X2Y3Z"
 PIN_SUPERVISORA = "4821"
+PIN_CAJERA = "1234"
 
 # Catálogo de muestra. Los precios son los de VITRINA (con IVA); en la base se
 # guardan sin IVA (INV-CAT1) y la pantalla vuelve a sumarlo — que es justo la
@@ -40,11 +39,14 @@ CATALOGO = [
 TALLAS = ["4", "6", "8", "10", "12"]
 
 
-def _sin_iva(con_iva: int, tasa: int = 19) -> int:
-    """El catálogo guarda SIN IVA. Normalizarlo al revés duplica o parte el
-    precio y nada avisa — ya pasó una vez en este repositorio."""
-    return int((Decimal(con_iva) / (1 + Decimal(tasa) / 100)).quantize(
-        Decimal("1"), rounding=ROUND_HALF_UP))
+def _sin_iva(precio_vitrina: int, tasa: int = 19) -> int:
+    """El catálogo guarda SIN IVA, y la base tiene que REGRESAR al precio.
+
+    La división a secas no siempre vuelve: $139.900 salía como $139.900,01 en
+    la rejilla. `base_desde_vitrina` elige la base que sí regresa.
+    """
+    from backend.modules.retail.domain.shared.impuestos import base_desde_vitrina
+    return base_desde_vitrina(precio_vitrina, tasa)
 
 
 def sembrar(url: str) -> dict:
@@ -102,11 +104,9 @@ def sembrar(url: str) -> dict:
                 VALUES (:i, :n, :tp, :s, :v)
             """), {"i": mid, "n": nombre, "tp": tipo, "s": siigo, "v": vuelto})
 
-        c.execute(text("""
-            INSERT INTO retail.sesiones_caja
-                (id, tienda_id, caja_id, numero_turno, base_inicial, abierta_por)
-            VALUES (:s, :t, :c, 1284, 20000000, 'maria')
-        """), {"s": SESION, "t": TIENDA, "c": CAJA})
+        # El turno NO se abre aquí: se abre desde el login con PIN, que es
+        # justo el flujo que hay que poder probar. Dejarlo abierto haría que
+        # la pantalla de acceso siempre lo reanudara y nunca se ejercitara.
 
         c.execute(text("""
             INSERT INTO retail.permisos_pos
@@ -116,11 +116,20 @@ def sembrar(url: str) -> dict:
             VALUES ('laura', 'Laura M.', :h, ARRAY[:t], 35, true, true, true, true)
         """), {"h": bcrypt.hashpw(PIN_SUPERVISORA.encode(),
                                   bcrypt.gensalt()).decode(), "t": TIENDA})
+        c.execute(text("UPDATE retail.permisos_pos SET rol='Supervisora' "
+                       "WHERE usuario_id='laura'"))
         c.execute(text("""
             INSERT INTO retail.permisos_pos
-                (usuario_id, nombre, tiendas, tope_descuento_pct)
-            VALUES ('maria', 'María R.', ARRAY[:t], 10)
-        """), {"t": TIENDA})
+                (usuario_id, nombre, pin_hash, tiendas, tope_descuento_pct, rol)
+            VALUES ('maria', 'María R.', :h, ARRAY[:t], 10, 'Cajera')
+        """), {"h": bcrypt.hashpw(PIN_CAJERA.encode(),
+                                  bcrypt.gensalt()).decode(), "t": TIENDA})
+        c.execute(text("""
+            INSERT INTO retail.permisos_pos
+                (usuario_id, nombre, pin_hash, tiendas, tope_descuento_pct, rol)
+            VALUES ('sofia', 'Sofía L.', :h, ARRAY[:t], 10, 'Cajera')
+        """), {"h": bcrypt.hashpw(PIN_CAJERA.encode(),
+                                  bcrypt.gensalt()).decode(), "t": TIENDA})
 
         n = 0
         for ref, nombre, color, categoria, con_iva in CATALOGO:
@@ -178,4 +187,5 @@ if __name__ == "__main__":
     r = sembrar(url)
     print(f"✅ {r['refs']} referencias · {r['variantes']} variantes · "
           f"{r['cats']} categorías · {r['unidades']} unidades")
-    print(f"   turno abierto {SESION}  ·  PIN supervisora {PIN_SUPERVISORA}")
+    print(f"   PIN cajeras {PIN_CAJERA}  ·  PIN supervisora {PIN_SUPERVISORA}")
+    print("   sin turno abierto: se abre desde /pos/acceso")
