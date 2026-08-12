@@ -1,0 +1,258 @@
+"""API HTTP del módulo retail.
+
+FORMA DE LA API. Una venta llega **completa** en una sola petición, no
+construida línea por línea desde el servidor. No es una simplificación: es lo
+que exige el diseño offline-first (ADR-005). El carrito vive en el
+dispositivo, en IndexedDB, y sobrevive a que se caiga internet a mitad de la
+venta. Un carrito que viviera en el servidor obligaría a estar conectado para
+poder vender, que es justo lo que este POS no puede permitirse.
+
+De ahí sale la otra propiedad: el `venta_id` lo genera el dispositivo, así que
+esta petición es idempotente. Reintentarla veinte veces produce una venta.
+"""
+from __future__ import annotations
+
+from decimal import Decimal
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+
+from backend.core.security import CurrentUser, require_permission
+from backend.modules.retail.application.comandos.cerrar_venta import (
+    CerrarVenta,
+    RelojDelSistema,
+)
+from backend.modules.retail.application.consultas.buscar_producto import BuscarProducto
+from backend.modules.retail.domain.shared.dinero import Dinero
+from backend.modules.retail.domain.shared.sku import Sku
+from backend.modules.retail.domain.venta.descuento import Descuento
+from backend.modules.retail.domain.venta.errores import (
+    ReglaDeNegocio,
+    RequiereAutorizacion,
+)
+from backend.modules.retail.domain.venta.venta import Venta
+from backend.modules.retail.interfaces.http.dependencias import (
+    unidad_de_trabajo,
+    sesion_lectura,
+)
+
+router = APIRouter(prefix="/api/retail", tags=["retail"])
+
+
+# ── Contratos ───────────────────────────────────────────────────────────────
+
+class LineaEntrada(BaseModel):
+    sku: str
+    cantidad: int = Field(gt=0)
+    precio_unitario_centavos: int = Field(ge=0)
+    tasa_iva: str = "19"
+    descripcion: str = ""
+    descuento_porcentaje: Optional[str] = None
+    descuento_valor_centavos: Optional[int] = None
+    descuento_motivo: Optional[str] = None
+    autorizado_por: Optional[str] = None
+    obsequio: bool = False
+
+
+class PagoEntrada(BaseModel):
+    medio_pago_id: str
+    monto_centavos: int = Field(gt=0)
+    es_efectivo: bool = False
+    referencia: Optional[str] = None
+
+
+class VentaEntrada(BaseModel):
+    """La venta completa, tal como la armó el dispositivo."""
+
+    venta_id: str = Field(description="ULID generado en el dispositivo")
+    numero: str
+    tienda_id: str
+    caja_id: str
+    sesion_id: str
+    ubicacion_id: str
+    cliente_id: Optional[str] = None
+    dispositivo_id: Optional[str] = None
+    moneda: str = "COP"
+    tope_descuento: str = "0"
+    lineas: List[LineaEntrada]
+    pagos: List[PagoEntrada]
+
+
+class TicketSalida(BaseModel):
+    venta_id: str
+    numero: str
+    total_centavos: int
+    pagado_centavos: int
+    vuelto_centavos: int
+    iva_centavos: int
+    descuento_centavos: int
+    estado_fiscal: str
+    duplicada: bool = False
+
+
+class ResultadoBusqueda(BaseModel):
+    variante_id: str
+    sku: str
+    referencia: str
+    talla: str
+    color: str
+    nombre: str
+    precio_base_centavos: int
+    precio_con_iva_centavos: int
+    disponible: int
+    es_escaneo: bool
+
+
+# ── Catálogo ────────────────────────────────────────────────────────────────
+
+@router.get("/catalogo/buscar", response_model=List[ResultadoBusqueda])
+async def buscar(
+    q: str = Query(min_length=1),
+    ubicacion_id: str = Query(),
+    limite: int = Query(default=24, le=60),
+    sesion=Depends(sesion_lectura),
+    _: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Respaldo del buscador. En operación normal esto no se llama: el
+    dispositivo busca en su copia local y no viaja a la red (ADR-009)."""
+    resultados = await BuscarProducto(sesion).ejecutar(
+        q, ubicacion_id=ubicacion_id, limite=limite)
+    return [
+        ResultadoBusqueda(
+            **{k: v for k, v in r.__dict__.items()
+               if k not in ("tasa_iva", "codigo_barras")},
+            precio_con_iva_centavos=_con_iva(r.precio_base_centavos, r.tasa_iva),
+        )
+        for r in resultados
+    ]
+
+
+def _con_iva(base_centavos: int, tasa: str) -> int:
+    """El precio de vitrina, que es el que la clienta reconoce.
+
+    El catálogo guarda SIN IVA (INV-CAT1); la pantalla muestra CON IVA. La
+    conversión ocurre aquí, en el borde, nunca en el dominio.
+    """
+    return Dinero(base_centavos, "COP").centavos + Dinero(
+        base_centavos, "COP").porcentaje(Decimal(tasa)).centavos
+
+
+# ── Ventas ──────────────────────────────────────────────────────────────────
+
+@router.post("/ventas/cerrar", response_model=TicketSalida)
+async def cerrar_venta(
+    entrada: VentaEntrada,
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Cierra una venta completa. Idempotente por `venta_id`.
+
+    Devuelve el ticket de inmediato: el documento fiscal queda encolado y lo
+    emite el worker (ADR-002). Esperar a Siigo aquí convertiría 800 ms en lo
+    que Siigo quiera ese día.
+    """
+    # Idempotencia: si esta venta ya se cerró, se devuelve su ticket en vez de
+    # un error. El dispositivo reintenta por diseño y no puede distinguir
+    # «no llegó» de «llegó y se perdió la respuesta».
+    async with uow as t:
+        ya = await t.ventas.obtener(entrada.venta_id)
+    if ya is not None and ya.estado.value != "borrador":
+        return TicketSalida(
+            venta_id=ya.id, numero=ya.numero,
+            total_centavos=ya.total().centavos,
+            pagado_centavos=ya.pagado().centavos,
+            vuelto_centavos=ya.vuelto().centavos,
+            iva_centavos=ya.iva_total().centavos,
+            descuento_centavos=ya.descuento_total().centavos,
+            estado_fiscal=ya.estado_fiscal.value, duplicada=True,
+        )
+
+    try:
+        venta, variante_por_sku = await _armar(entrada, uow)
+        resultado = await CerrarVenta(uow, reloj=RelojDelSistema()).ejecutar(
+            venta, variante_por_sku=variante_por_sku,
+            ubicacion_id=entrada.ubicacion_id, usuario_id=usuario.id)
+    except RequiereAutorizacion as e:
+        # 403 con una bandera para que la pantalla abra el diálogo del PIN en
+        # vez de mostrar un error rojo: la operación es posible, sólo falta
+        # que alguien la firme.
+        raise HTTPException(403, {"error": "requiere_autorizacion",
+                                  "mensaje": str(e),
+                                  "accion_sugerida": "pedir_autorizacion"})
+    except ReglaDeNegocio as e:
+        raise HTTPException(400, {"error": "regla_de_negocio",
+                                  "mensaje": str(e)})
+
+    return TicketSalida(
+        venta_id=resultado.venta_id, numero=resultado.numero,
+        total_centavos=resultado.total_centavos,
+        pagado_centavos=venta.pagado().centavos,
+        vuelto_centavos=resultado.vuelto_centavos,
+        iva_centavos=venta.iva_total().centavos,
+        descuento_centavos=venta.descuento_total().centavos,
+        estado_fiscal=resultado.estado_fiscal,
+    )
+
+
+async def _armar(entrada: VentaEntrada, uow) -> tuple:
+    """Reconstruye el agregado desde el cuerpo de la petición.
+
+    Los precios los manda el dispositivo porque los congeló al agregar la
+    prenda al carrito. Cambiar el precio del catálogo a mitad de una venta no
+    puede cambiar lo que la cajera ya le dijo a la clienta.
+    """
+    venta = Venta.abrir(
+        id=entrada.venta_id, numero=entrada.numero, tienda_id=entrada.tienda_id,
+        caja_id=entrada.caja_id, sesion_id=entrada.sesion_id,
+        cajera_id="", moneda=entrada.moneda,
+        dispositivo_id=entrada.dispositivo_id)
+    if entrada.cliente_id:
+        venta.asignar_cliente(entrada.cliente_id)
+
+    skus = [l.sku for l in entrada.lineas]
+    async with uow as t:
+        from sqlalchemy import text as _t
+        filas = (await t.sesion.execute(_t("""
+            SELECT id, sku FROM retail.variantes WHERE sku = ANY(:skus)
+        """), {"skus": skus})).mappings().all()
+    variante_por_sku = {f["sku"]: f["id"] for f in filas}
+
+    faltan = [s for s in skus if s not in variante_por_sku]
+    if faltan:
+        raise ReglaDeNegocio(
+            f"Estas referencias no están en el catálogo: {', '.join(faltan)}")
+
+    tope = Decimal(entrada.tope_descuento)
+    for entrada_linea in entrada.lineas:
+        linea = venta.agregar_linea(
+            sku=Sku.parsear(entrada_linea.sku),
+            descripcion=entrada_linea.descripcion or entrada_linea.sku,
+            cantidad=entrada_linea.cantidad,
+            precio_unitario=Dinero(entrada_linea.precio_unitario_centavos,
+                                   entrada.moneda),
+            tasa_iva=Decimal(entrada_linea.tasa_iva),
+        )
+        if entrada_linea.obsequio:
+            venta.marcar_obsequio(linea.numero,
+                                  autorizado_por=entrada_linea.autorizado_por)
+        elif entrada_linea.descuento_porcentaje or entrada_linea.descuento_valor_centavos:
+            venta.aplicar_descuento_linea(
+                linea.numero, _descuento(entrada_linea, entrada.moneda),
+                tope_de_quien_aplica=tope,
+                autorizado_por=entrada_linea.autorizado_por)
+
+    for p in entrada.pagos:
+        venta.registrar_pago(p.medio_pago_id,
+                             Dinero(p.monto_centavos, entrada.moneda),
+                             es_efectivo=p.es_efectivo, referencia=p.referencia)
+
+    return venta, variante_por_sku
+
+
+def _descuento(l: LineaEntrada, moneda: str) -> Descuento:
+    motivo = l.descuento_motivo or ""
+    if l.descuento_porcentaje:
+        return Descuento.porcentaje(Decimal(l.descuento_porcentaje), motivo=motivo)
+    return Descuento.valor(Dinero(l.descuento_valor_centavos or 0, moneda),
+                           motivo=motivo)

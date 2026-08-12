@@ -314,6 +314,21 @@ app.include_router(metricas.router)
 app.include_router(pedidos.router)
 app.include_router(finanzas.router)
 app.include_router(auditoria.router)
+
+# ── Modulo retail (POS) ───────────────────────────────────────────────────────
+# Se monta SOLO si RETAIL_DATABASE_URL esta configurada. El modulo habla con
+# Postgres directo (ADR-004) y no comparte la conexion de supabase-py; sin esa
+# variable no tiene con que trabajar, y montarlo igual haria que el ERP entero
+# no arranque por un modulo que todavia no se usa. Un modulo nuevo no puede
+# tumbar el que ya funciona.
+try:
+    from backend.modules.retail.interfaces.http import dependencias as _retail_dep
+    if _retail_dep.configurado():
+        from backend.modules.retail.interfaces.http.router import router as _retail
+        app.include_router(_retail)
+        print("   \U0001f6d2 Modulo retail (POS) montado en /api/retail")
+except Exception as _e:  # noqa: BLE001
+    print(f"   \u26a0\ufe0f  Modulo retail no montado: {_e}")
 app.include_router(conciliacion.router)
 app.include_router(dashboard.router)
 app.include_router(bot.router)

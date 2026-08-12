@@ -66,6 +66,10 @@ MODULOS_GRUPOS = {
                        "produccion_cortador"],
     "produccion_costos": ["produccion_costos"],
     "configuracion":  ["configuracion", "usuarios", "auditoria"],
+    # Modulo POS. Los permisos finos (tope de descuento, anular,
+    # cerrar con descuadre) van en columnas de la fila del usuario.
+    "retail":         ["retail", "retail_venta", "retail_caja",
+                       "retail_inventario", "retail_admin"],
 }
 
 # Lista de grupos (lo que se expone en el formulario de permisos).
