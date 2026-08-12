@@ -240,3 +240,63 @@ export async function contextoCaja(cajaId: string): Promise<ContextoCaja> {
   const p = new URLSearchParams({ caja_id: cajaId });
   return api.get<ContextoCaja>(`/api/retail/caja/contexto?${p}`);
 }
+
+// ── Cierre de caja ──────────────────────────────────────────────────────────
+
+export interface MedioResumen {
+  medio_pago_id: string;
+  nombre: string;
+  es_efectivo: boolean;
+  /** Un medio que no entra al arqueo (crédito) igual hay que declararlo, pero
+   *  no hay nada físico que contar: se prellena y se bloquea. */
+  entra_al_arqueo: boolean;
+  total_centavos: number;
+}
+
+export interface ResumenCierre {
+  sesion_id: string;
+  numero_turno: number;
+  cajera_nombre: string;
+  abierta_en: string;
+  transacciones: number;
+  ventas_brutas_centavos: number;
+  descuentos_centavos: number;
+  anuladas: number;
+  monto_anulado_centavos: number;
+  medios: MedioResumen[];
+  base_inicial_centavos: number;
+  ventas_en_borrador: number;
+  documentos_pendientes: number;
+  cierre_ciego: boolean;
+  umbral_descuadre_centavos: number;
+  /** `null` en cierre ciego: el backend se NIEGA a mandarlo hasta que se
+   *  declare el conteo. No es un dato que falte, es el control funcionando. */
+  esperado_por_medio: Record<string, number> | null;
+}
+
+export interface Cierre {
+  sesion_id: string;
+  numero_turno: number;
+  diferencia_centavos: number;
+  cuadro: boolean;
+  autorizado_por: string | null;
+  autorizado_por_nombre: string | null;
+}
+
+export async function resumenCierre(sesionId: string): Promise<ResumenCierre> {
+  const p = new URLSearchParams({ sesion_id: sesionId });
+  return api.get<ResumenCierre>(`/api/retail/caja/cierre/resumen?${p}`);
+}
+
+export async function cerrarCaja(cuerpo: {
+  sesion_id: string;
+  conteos: { medio_pago_id: string; contado_centavos: number }[];
+  justificacion?: string;
+  pin_autorizacion?: string;
+}): Promise<Cierre> {
+  try {
+    return await api.post<Cierre>("/api/retail/caja/cierre", cuerpo);
+  } catch (e) {
+    return traducir(e);
+  }
+}

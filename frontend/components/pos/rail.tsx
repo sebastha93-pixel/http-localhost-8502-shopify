@@ -16,7 +16,7 @@ import { usePathname } from "next/navigation";
 const SECCIONES = [
   { href: "/pos/venta", label: "Venta", icono: BolsaIcono, listo: true },
   { href: "/pos/inventario", label: "Stock", icono: CajaIcono, listo: false },
-  { href: "/pos/cierre", label: "Cierre", icono: CandadoIcono, listo: false },
+  { href: "/pos/cierre", label: "Cierre", icono: CandadoIcono, listo: true },
   { href: "/pos/panel", label: "Panel", icono: BarrasIcono, listo: false },
 ];
 

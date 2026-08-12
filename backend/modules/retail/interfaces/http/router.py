@@ -602,3 +602,220 @@ async def contexto_caja(
         base_caja_centavos=int(fila["base_caja"]),
         ubicacion_id=fila["ubicacion"],
     )
+
+
+# ── Cierre de caja (vista 7 del handoff) ────────────────────────────────────
+
+class MedioResumen(BaseModel):
+    medio_pago_id: str
+    nombre: str
+    es_efectivo: bool
+    # Un medio que NO entra al arqueo (crédito a 30 días) igual hay que
+    # declararlo, pero no se cuenta: no hay nada físico. La pantalla lo
+    # prellena con el total del sistema y lo deja de sólo lectura.
+    entra_al_arqueo: bool
+    total_centavos: int
+
+
+class ResumenCierre(BaseModel):
+    sesion_id: str
+    numero_turno: int
+    cajera_nombre: str
+    abierta_en: str
+    transacciones: int
+    ventas_brutas_centavos: int
+    descuentos_centavos: int
+    anuladas: int
+    monto_anulado_centavos: int
+    medios: List[MedioResumen]
+    base_inicial_centavos: int
+    ventas_en_borrador: int
+    documentos_pendientes: int
+    cierre_ciego: bool
+    umbral_descuadre_centavos: int
+    # Sólo viene si NO es ciego o si quien mira tiene permiso de verlo.
+    esperado_por_medio: Optional[dict] = None
+
+
+class ConteoEntrada(BaseModel):
+    medio_pago_id: str
+    contado_centavos: int = Field(ge=0)
+
+
+class CerrarCajaEntrada(BaseModel):
+    sesion_id: str
+    conteos: List[ConteoEntrada]
+    justificacion: Optional[str] = None
+    pin_autorizacion: Optional[str] = None
+
+
+class CierreSalida(BaseModel):
+    sesion_id: str
+    numero_turno: int
+    diferencia_centavos: int
+    cuadro: bool
+    autorizado_por: Optional[str] = None
+    # El id sirve para la auditoría; a la pantalla hay que darle el NOMBRE.
+    # «autorizado por laura» delata que nadie miró esa frase.
+    autorizado_por_nombre: Optional[str] = None
+
+
+@router.get("/caja/cierre/resumen", response_model=ResumenCierre)
+async def resumen_cierre(
+    sesion_id: str = Query(),
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Lo que se ve antes de contar.
+
+    EN CIERRE CIEGO NO VIENE EL ESPERADO. No es un olvido: si la cajera ve
+    cuánto debería haber, escribe cuánto debería haber, y el arqueo deja de
+    medir nada. Se revela al declarar el conteo, o antes si quien mira tiene
+    permiso para verlo (un supervisor).
+    """
+    from sqlalchemy import text as _t
+
+    async with uow as t:
+        sesion = await t.turnos.cargar(sesion_id)
+        datos = await t.turnos.resumen(sesion_id)
+        borradores = await t.turnos.ventas_en_borrador(sesion_id)
+        pendientes = await t.turnos.documentos_pendientes(sesion_id)
+        cab = (await t.sesion.execute(_t("""
+            SELECT s.numero_turno, s.abierta_en, s.base_inicial,
+                   coalesce(p.nombre, s.abierta_por) AS cajera,
+                   coalesce(pp.puede_ver_esperado, false) AS puede_ver
+              FROM retail.sesiones_caja s
+              LEFT JOIN retail.permisos_pos p ON p.usuario_id = s.abierta_por
+              LEFT JOIN retail.permisos_pos pp ON pp.usuario_id = :quien
+             WHERE s.id = :i
+        """), {"i": sesion_id, "quien": usuario.id})).mappings().one()
+
+    puede_ver = bool(cab["puede_ver"]) or not sesion.cierre_ciego
+    esperado = None
+    if puede_ver:
+        esperado = {
+            m: sesion.esperado_de(m, autorizado_a_ver=True).centavos
+            for m in sesion.medios_movidos()
+        }
+
+    return ResumenCierre(
+        sesion_id=sesion_id, numero_turno=cab["numero_turno"],
+        cajera_nombre=cab["cajera"], abierta_en=cab["abierta_en"].isoformat(),
+        transacciones=datos["transacciones"],
+        ventas_brutas_centavos=datos["ventas_brutas"],
+        descuentos_centavos=datos["descuentos"],
+        anuladas=datos["anuladas"],
+        monto_anulado_centavos=datos["monto_anulado"],
+        medios=[MedioResumen(medio_pago_id=m["medio_pago_id"],
+                             nombre=m["nombre"], es_efectivo=m["es_efectivo"],
+                             entra_al_arqueo=m["entra_al_arqueo"],
+                             total_centavos=int(m["total"]))
+                for m in datos["medios"]],
+        base_inicial_centavos=int(cab["base_inicial"]),
+        ventas_en_borrador=borradores,
+        documentos_pendientes=pendientes,
+        cierre_ciego=sesion.cierre_ciego,
+        umbral_descuadre_centavos=sesion.umbral_descuadre.centavos,
+        esperado_por_medio=esperado,
+    )
+
+
+@router.post("/caja/cierre", response_model=CierreSalida)
+async def cerrar_caja(
+    entrada: CerrarCajaEntrada,
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Cierra el turno. Las reglas las pone el AGREGADO, no este endpoint.
+
+    Si la diferencia supera el umbral exige justificación escrita y firma de
+    un supervisor — un faltante sin explicación no se puede cerrar solo.
+    """
+    from datetime import datetime, timezone
+    from backend.modules.retail.application.comandos.autorizar import (
+        PinInvalido,
+        ValidarPin,
+    )
+    from backend.modules.retail.domain.shared.dinero import Dinero
+
+    ahora = datetime.now(timezone.utc)
+
+    async with uow as t:
+        sesion = await t.turnos.cargar(entrada.sesion_id)
+        borradores = await t.turnos.ventas_en_borrador(entrada.sesion_id)
+        pendientes = await t.turnos.documentos_pendientes(entrada.sesion_id)
+
+        autorizado_por = None
+        autorizado_nombre = None
+        if entrada.pin_autorizacion:
+            try:
+                firma = await ValidarPin(t.sesion).ejecutar(
+                    pin=entrada.pin_autorizacion, tienda_id=sesion.tienda_id,
+                    ahora=ahora)
+                autorizado_por = firma.usuario_id
+                autorizado_nombre = firma.nombre
+            except PinInvalido as e:
+                await t.commit()      # conserva el intento fallido
+                raise HTTPException(403, {"error": "pin_invalido",
+                                          "mensaje": str(e)})
+
+        try:
+            # `confirmado=True` porque la pantalla ya mostró los pendientes y
+            # la cajera siguió: bloquear el cierre por una caída de Siigo
+            # dejaría a la tienda sin poder cerrar.
+            sesion.iniciar_arqueo(ventas_en_borrador=borradores,
+                                  documentos_fiscales_pendientes=pendientes,
+                                  confirmado=True)
+            conteos = {}
+            for c in entrada.conteos:
+                monto = Dinero(c.contado_centavos, sesion.moneda)
+                sesion.declarar_conteo(c.medio_pago_id, monto,
+                                       usuario_id=usuario.id)
+                conteos[c.medio_pago_id] = monto
+
+            evento = sesion.cerrar(usuario_id=usuario.id, ahora=ahora,
+                                   justificacion=entrada.justificacion,
+                                   autorizado_por=autorizado_por)
+        except RequiereAutorizacion as e:
+            raise HTTPException(403, {"error": "requiere_autorizacion",
+                                      "mensaje": str(e),
+                                      "accion_sugerida": "pedir_autorizacion"})
+        except ReglaDeNegocio as e:
+            raise HTTPException(400, {"error": "regla_de_negocio",
+                                      "mensaje": str(e)})
+
+        await t.turnos.cerrar(
+            sesion=sesion, conteos=conteos, usuario_id=usuario.id,
+            justificacion=entrada.justificacion, autorizado_por=autorizado_por,
+            ahora=ahora)
+        # Tres niveles, no dos. Marcar CRÍTICO cualquier diferencia —incluso
+        # $100 de vuelto mal dado— llena el log de críticos todos los días, y
+        # un log que siempre tiene críticos no lo revisa nadie: el descuadre
+        # que sí importa se pierde entre el ruido. El umbral de la tienda ya
+        # define cuál es «el que importa»; se usa ese mismo.
+        if evento.cuadro:
+            severidad = "info"
+        elif abs(evento.diferencia.centavos) > sesion.umbral_descuadre.centavos:
+            severidad = "critico"
+        else:
+            severidad = "aviso"
+
+        await t.auditoria.registrar(
+            evento="caja.cerrada", ocurrido_en=ahora,
+            severidad=severidad,
+            tienda_id=sesion.tienda_id, caja_id=sesion.caja_id,
+            sesion_id=sesion.id, usuario_id=usuario.id,
+            agregado_tipo="sesion_caja", agregado_id=sesion.id,
+            payload={"numero_turno": sesion.numero_turno,
+                     "diferencia": evento.diferencia.centavos,
+                     "cuadro": evento.cuadro,
+                     "justificacion": entrada.justificacion,
+                     "autorizado_por": autorizado_por})
+        await t.commit()
+
+    return CierreSalida(
+        sesion_id=sesion.id, numero_turno=sesion.numero_turno,
+        diferencia_centavos=evento.diferencia.centavos,
+        cuadro=evento.cuadro, autorizado_por=autorizado_por,
+        autorizado_por_nombre=autorizado_nombre,
+    )
