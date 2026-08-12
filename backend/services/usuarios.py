@@ -40,48 +40,20 @@ def _sb() -> Optional[Client]:
         return None
 
 
-# ── Roles principales ───────────────────────────────────────────────────────
-# admin   = acceso total (owner)
-# lector  = solo lectura en todos los módulos
-# user    = permisos granulares por módulo+acción definidos en el campo `permisos`
-ROLES = ("admin", "lector", "user")
-
-# Aliases de retro-compat (usuarios viejos).
-# operador → user (permisos amplios por default)
-# lectura  → lector
-ROLES_LEGACY = {"operador": "user", "lectura": "lector"}
-
-# Grupos de permisos — agrupados por afinidad operativa para que el
-# administrador no tenga que dar permiso uno por uno a cada módulo.
-# El permiso se asigna al GRUPO, y el helper resuelve módulo→grupo.
-MODULOS_GRUPOS = {
-    "centro_control": ["centro_control"],
-    "operaciones":    ["logistica", "envios", "devoluciones", "incidencias",
-                       "historico", "b2b", "contraentrega", "inventario"],
-    "postventa":      ["postventa"],
-    "finanzas":       ["finanzas"],
-    "comercial":      ["comercial", "revenue", "inteligencia"],
-    "produccion":     ["produccion", "produccion_ingreso", "produccion_corte",
-                       "produccion_remisiones", "produccion_proveedores",
-                       "produccion_cortador"],
-    "produccion_costos": ["produccion_costos"],
-    "configuracion":  ["configuracion", "usuarios", "auditoria"],
-    # Modulo POS. Los permisos finos (tope de descuento, anular,
-    # cerrar con descuadre) van en columnas de la fila del usuario.
-    "retail":         ["retail", "retail_venta", "retail_caja",
-                       "retail_inventario", "retail_admin"],
-}
-
-# Lista de grupos (lo que se expone en el formulario de permisos).
-GRUPOS = tuple(MODULOS_GRUPOS.keys())
-
-# Lista plana de todos los módulos individuales (retro-compat).
-MODULOS = tuple(m for grupo in MODULOS_GRUPOS.values() for m in grupo)
-
-# Mapping inverso: módulo → grupo, para resolver permisos al chequear.
-_MODULO_A_GRUPO = {m: g for g, mods in MODULOS_GRUPOS.items() for m in mods}
-
-ACCIONES = ("ver", "modificar", "borrar")
+# ── Roles y grupos de permisos ──────────────────────────────────────────────
+# Viven en core.permisos (sin dependencias) porque core.security los necesita
+# para chequear permisos, y leerlos desde aqui arrastraba el import de
+# supabase a cualquier endpoint que comprobara uno. Se re-exportan para que el
+# codigo que ya los importaba de aqui siga funcionando.
+from backend.core.permisos import (  # noqa: F401
+    ACCIONES,
+    GRUPOS,
+    MODULOS,
+    MODULOS_GRUPOS,
+    MODULO_A_GRUPO as _MODULO_A_GRUPO,
+    ROLES,
+    ROLES_LEGACY,
+)
 
 # Columnas que SELECT siempre debe pedir (incluye cargo + permisos nuevos).
 _COLS = ("id,email,nombre,cargo,rol,permisos,activo,creado_en,"

@@ -262,8 +262,9 @@ def _check_permiso(user: CurrentUser, modulo: str, accion: str) -> bool:
     if rol == "lector":
         return accion == "ver"
     if rol == "user":
-        # Importación local para evitar ciclo con services.
-        from backend.services.usuarios import MODULOS_GRUPOS
+        # core.permisos no importa nada: chequear un permiso no puede
+        # depender del cliente de base de datos del ERP entero.
+        from backend.core.permisos import MODULOS_GRUPOS
         permisos = user.permisos or {}
         # Resolver modulo → grupo, chequear ambos.
         modulo_a_grupo = {m: g for g, mods in MODULOS_GRUPOS.items() for m in mods}
