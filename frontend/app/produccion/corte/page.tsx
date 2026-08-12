@@ -10,6 +10,7 @@ import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Scissors } from "lucide-react";
+import { presentacionCorreo, necesitaAtencion } from "@/lib/correo-estado";
 
 interface OrdenCorte {
   id: string;
@@ -24,6 +25,8 @@ interface OrdenCorte {
   responsable?: string;
   fecha_limite?: string;
   estado: string;
+  /** Estado del ÚLTIMO correo enviado. null = sin registro (orden vieja). */
+  correo_estado?: string | null;
   created_at: string;
   referencia?: {
     codigo_referencia: string;
@@ -105,7 +108,19 @@ export default function CortesPage() {
                     </td>
                     <td className="px-4 py-2 text-graphite">{o.responsable || "—"}</td>
                     <td className="px-4 py-2">
-                      <Badge tone={tonoBadge(o.estado)}>{o.estado}</Badge>
+                      <div className="flex items-center gap-1.5">
+                        <Badge tone={tonoBadge(o.estado)}>{o.estado}</Badge>
+                        {/* El correo rebotado se ve desde aquí: sin esto habría
+                            que entrar orden por orden para descubrirlo. */}
+                        {o.correo_estado && (
+                          <span
+                            title={`Correo: ${presentacionCorreo(o.correo_estado).texto}`}
+                            aria-label={`Correo: ${presentacionCorreo(o.correo_estado).texto}`}
+                            className={necesitaAtencion(o.correo_estado) ? "" : "opacity-60"}>
+                            {presentacionCorreo(o.correo_estado).icono}
+                          </span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

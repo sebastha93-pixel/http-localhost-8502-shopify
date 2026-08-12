@@ -2225,8 +2225,37 @@ def listar_ordenes_corte(*, estado: Optional[str] = None,
         for oc in out:
             oc["tiene_remision_confeccion"] = oc["id"] in con_conf
             oc["tiene_remision_terminacion"] = oc["id"] in con_term
+    _anotar_estado_correo(out)
     _cache_set(cache_key, out, ttl_seg=20)
     return out
+
+
+def _anotar_estado_correo(ordenes: list[dict]) -> None:
+    """Marca cada orden con el estado de su ÚLTIMO correo, en una sola consulta.
+
+    Aquí NO se consulta a Resend: sería una llamada HTTP por orden. Se muestra
+    el último estado persistido; al abrir la orden, el detalle lo refresca.
+    """
+    ids = [o["id"] for o in ordenes if o.get("id")]
+    if not ids:
+        return
+    sb = _sb()
+    if sb is None:
+        return
+    ultimo: dict[str, str] = {}
+    try:
+        filas = (sb.table("correos_orden_corte")
+                   .select("orden_corte_id,estado,created_at")
+                   .in_("orden_corte_id", ids)
+                   .order("created_at", desc=True)
+                   .execute()).data or []
+        for f in filas:                      # ordenadas desc: la 1ª es la última
+            ultimo.setdefault(f["orden_corte_id"], f["estado"])
+    except Exception as e:
+        log.warning(f"[corte] no pude traer los estados de correo: {str(e)[:150]}")
+        return
+    for o in ordenes:
+        o["correo_estado"] = ultimo.get(o.get("id"))
 
 
 def reset_datos_produccion() -> dict:
