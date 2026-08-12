@@ -819,3 +819,82 @@ async def cerrar_caja(
         cuadro=evento.cuadro, autorizado_por=autorizado_por,
         autorizado_por_nombre=autorizado_nombre,
     )
+
+
+# ── Inventario (vista 6 del handoff) ────────────────────────────────────────
+
+class CeldaTallaSalida(BaseModel):
+    talla: str
+    disponible: int
+    minimo: int
+    es_bajo: bool
+
+
+class FilaInventarioSalida(BaseModel):
+    referencia: str
+    nombre: str
+    color: str
+    categoria: str
+    precio_con_iva_centavos: int
+    tallas: List[CeldaTallaSalida]
+    total: int
+    en_otras_ubicaciones: int
+    estado: str
+
+
+class InventarioSalida(BaseModel):
+    # Las columnas de talla VIENEN CON LOS DATOS. El handoff dibuja T24…T32
+    # (tallaje americano); los SKU de MALE parsean a 4, 6, 8, 10, 12. Fijarlas
+    # en la pantalla haría que una talla nueva no apareciera nunca.
+    columnas_talla: List[str]
+    filas: List[FilaInventarioSalida]
+    umbral_tienda: int
+    referencias: int
+    con_stock_bajo: int
+    categorias: List[str]
+
+
+@router.get("/inventario", response_model=InventarioSalida)
+async def consultar_inventario(
+    ubicacion_id: str = Query(),
+    tienda_id: str = Query(),
+    q: str = Query("", max_length=120),
+    categoria: str = Query(""),
+    solo_bajos: bool = Query(False),
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Stock por referencia y talla en ESTA ubicación.
+
+    Es una consulta, no un comando: no reserva ni mueve nada. El número que
+    devuelve ya descuenta lo reservado por otras cajas.
+    """
+    from backend.modules.retail.application.consultas.consultar_inventario import (
+        ConsultarInventario,
+    )
+    from backend.modules.retail.application.consultas.listar_referencias import (
+        ListarReferencias,
+    )
+
+    async with uow as t:
+        inv = await ConsultarInventario(t.sesion).ejecutar(
+            ubicacion_id=ubicacion_id, tienda_id=tienda_id, texto=q,
+            categoria=categoria, solo_bajos=solo_bajos)
+        categorias = await ListarReferencias(t.sesion).categorias()
+
+    return InventarioSalida(
+        columnas_talla=inv.columnas_talla,
+        filas=[FilaInventarioSalida(
+            referencia=f.referencia, nombre=f.nombre, color=f.color,
+            categoria=f.categoria,
+            precio_con_iva_centavos=f.precio_con_iva_centavos,
+            tallas=[CeldaTallaSalida(talla=c.talla, disponible=c.disponible,
+                                     minimo=c.minimo, es_bajo=c.es_bajo)
+                    for c in f.tallas],
+            total=f.total, en_otras_ubicaciones=f.en_otras_ubicaciones,
+            estado=f.estado,
+        ) for f in inv.filas],
+        umbral_tienda=inv.umbral_tienda,
+        referencias=inv.referencias, con_stock_bajo=inv.con_stock_bajo,
+        categorias=categorias,
+    )

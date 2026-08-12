@@ -134,6 +134,13 @@ class ReconstruirCatalogoBusqueda:
     El texto se normaliza UNA vez al escribir, no en cada búsqueda: es lo que
     permite que la consulta sea un LIKE sobre una columna indexada en vez de
     una función sobre cada fila.
+
+    OJO CON LAS COLUMNAS QUE SE COPIAN. Este INSERT es la ÚNICA vía por la que
+    el read model se entera de un cambio del catálogo. `categoria` faltaba: la
+    semilla la escribía a mano, así que en local todo se veía bien, pero la
+    primera sincronización real habría dejado cada prenda en 'Otros' —el
+    default de la columna— y los chips de categoría de la pantalla de venta
+    habrían colapsado en uno solo, sin ningún error.
     """
 
     def __init__(self, sesion: AsyncSession) -> None:
@@ -144,11 +151,12 @@ class ReconstruirCatalogoBusqueda:
         r = await self._s.execute(text(f"""
             INSERT INTO retail.catalogo_busqueda
                 (variante_id, texto_busqueda, referencia, talla, color,
-                 precio_con_iva, actualizado_en)
+                 categoria, precio_con_iva, actualizado_en)
             SELECT v.id,
                    retail.norm(concat_ws(' ', v.sku, v.referencia, v.nombre,
                                          v.color, v.talla, v.codigo_barras)),
-                   v.referencia, v.talla, v.color, v.precio_con_iva, now()
+                   v.referencia, v.talla, v.color, v.categoria,
+                   v.precio_con_iva, now()
               FROM retail.variantes v
               {filtro}
             ON CONFLICT (variante_id) DO UPDATE
@@ -156,6 +164,7 @@ class ReconstruirCatalogoBusqueda:
                     referencia     = EXCLUDED.referencia,
                     talla          = EXCLUDED.talla,
                     color          = EXCLUDED.color,
+                    categoria      = EXCLUDED.categoria,
                     precio_con_iva = EXCLUDED.precio_con_iva,
                     actualizado_en = now()
         """), {"desde": desde} if desde else {})

@@ -300,3 +300,56 @@ export async function cerrarCaja(cuerpo: {
     return traducir(e);
   }
 }
+
+// ── Inventario ──────────────────────────────────────────────────────────────
+
+export interface CeldaTalla {
+  talla: string;
+  disponible: number;
+  /** El mínimo que rige esta celda: el de la prenda si está afinado, si no el
+   *  de la tienda. Viaja para que la pantalla pueda explicar por qué avisa. */
+  minimo: number;
+  es_bajo: boolean;
+}
+
+export interface FilaInventario {
+  referencia: string;
+  nombre: string;
+  color: string;
+  categoria: string;
+  precio_con_iva_centavos: number;
+  tallas: CeldaTalla[];
+  total: number;
+  en_otras_ubicaciones: number;
+  estado: "ok" | "bajo" | "agotado";
+}
+
+export interface Inventario {
+  /** Las columnas VIENEN CON LOS DATOS. El handoff dibuja T24…T32; los SKU de
+   *  MALE parsean a 4, 6, 8, 10, 12. Fijarlas aquí haría que una talla nueva
+   *  no apareciera nunca. */
+  columnas_talla: string[];
+  filas: FilaInventario[];
+  umbral_tienda: number;
+  referencias: number;
+  con_stock_bajo: number;
+  categorias: string[];
+}
+
+export async function consultarInventario(opciones: {
+  ubicacionId: string;
+  tiendaId: string;
+  q?: string;
+  categoria?: string;
+  soloBajos?: boolean;
+}): Promise<Inventario> {
+  const p = new URLSearchParams({
+    ubicacion_id: opciones.ubicacionId,
+    tienda_id: opciones.tiendaId,
+  });
+  if (opciones.q) p.set("q", opciones.q);
+  if (opciones.categoria && opciones.categoria !== "Todo")
+    p.set("categoria", opciones.categoria);
+  if (opciones.soloBajos) p.set("solo_bajos", "true");
+  return api.get<Inventario>(`/api/retail/inventario?${p}`);
+}
