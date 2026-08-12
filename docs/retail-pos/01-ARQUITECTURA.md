@@ -346,7 +346,7 @@ frontend/
 │   └── pos/                         # ══ EL POS ══  layout propio, sin sidebar del ERP
 │       ├── layout.tsx               # tema oscuro forzado, sin scroll, full-screen
 │       ├── page.tsx                 # → redirige según estado del turno
-│       ├── acceso/page.tsx          # PIN de cajera
+│       ├── (sin pantalla de acceso propia — se entra por el login del ERP)
 │       ├── apertura/page.tsx        # apertura de caja
 │       ├── venta/page.tsx           # ⭐ pantalla principal
 │       ├── clientes/page.tsx
@@ -364,7 +364,7 @@ frontend/
 │   ├── panel-cobro.tsx
 │   ├── selector-medio-pago.tsx
 │   ├── dialogo-descuento.tsx
-│   ├── dialogo-autorizacion.tsx     # supervisor aprueba con su PIN
+│   ├── (sin diálogo de autorización — el tope del usuario es el límite)
 │   ├── ficha-cliente.tsx
 │   ├── indicador-conexion.tsx       # ⭐ estado offline / cola pendiente
 │   ├── ticket-preview.tsx
@@ -451,21 +451,39 @@ y el ajuste se hace en el conteo.
 enorme para un problema que aquí es de una sola dirección: el dispositivo escribe, el
 servidor confirma.
 
-### ADR-006 · Sesión de dispositivo + PIN de cajera
+### ADR-006 · Una sola credencial: el login del ERP
 
-**Contexto.** JWT actual es sesión deslizante por usuario (`security.py:76`). En una tienda,
-tres cajeras comparten un equipo y nadie va a escribir un email y una contraseña larga entre
-clientas.
-**Decisión.** Dos credenciales:
-1. **Dispositivo** — se registra una vez con credenciales de administradora. Recibe un token
-   de dispositivo de larga vida, atado a `dispositivo_id` + tienda + caja. Revocable desde el
-   panel (robo/pérdida).
-2. **Cajera** — PIN de 4-6 dígitos que abre el turno. El JWT del turno es corto y se renueva
-   con la sesión deslizante que ya existe.
-**Consecuencias.** ➕ Rápido y trazable: toda venta lleva `cajera_id` **y** `dispositivo_id`.
-➕ Robo del equipo = revocar un token. ➖ El PIN es débil por sí solo: por eso **sólo** vale
-combinado con el token de dispositivo, tiene bloqueo tras 5 intentos y jamás sirve para el
-ERP.
+> **REVISADO.** La primera versión de este ADR proponía dos credenciales —token de
+> dispositivo + PIN de cajera— con el argumento de que nadie escribe un correo entre
+> clientas. El negocio lo descartó: **a la plataforma se entra con correo y contraseña, y
+> punto.** Lo que sigue es la decisión vigente; abajo queda lo que se descartó y por qué,
+> porque el argumento de velocidad no era falso y va a volver.
+
+**Contexto.** El JWT del ERP ya es una sesión deslizante por usuario (`security.py:76`). El
+POS vive en el mismo dominio de identidad.
+**Decisión.** El POS **no tiene login propio**. Se entra por `/login` del ERP con correo y
+contraseña; el turno se abre para el usuario del JWT sin pedir nada más. Lo que cada quien
+puede hacer sale de su fila en `permisos_pos`:
+
+| Necesidad | Antes (PIN) | Ahora |
+|---|---|---|
+| Descuento sobre el tope | supervisor teclea su PIN | no pasa; entra alguien con más tope |
+| Cierre con descuadre | PIN de supervisor | `puede_cerrar_con_descuadre` del que cierra |
+| Ver el esperado del arqueo | — | `puede_ver_esperado` |
+
+**Consecuencias.** ➕ Una sola credencial que rotar, revocar y auditar; ningún hash de PIN en
+la base ni en los respaldos. ➕ El tope deja de ser una sugerencia: pasa a ser el límite real,
+porque ya no hay forma de saltárselo en el mostrador. ➖ **Un descuento excepcional ya no se
+desbloquea en cinco segundos** — hay que cambiar de sesión. Es más lento a propósito: la
+alternativa era que la cajera firmara sus propios descuentos. ➖ Tres cajeras compartiendo un
+equipo tienen que escribir su correo al relevarse.
+
+**Lo que se descartó, para cuando vuelva la conversación.** El token de dispositivo por
+separado seguía siendo buena idea —toda venta llevaría `dispositivo_id` además de
+`cajera_id`, y un robo se resolvería revocando un token—. Eso no depende del PIN y se puede
+retomar solo. Si el relevo entre cajeras resulta ser el cuello de botella real, el camino
+razonable no es volver al PIN sino un segundo factor corto **sobre** una sesión ya
+autenticada, que es una cosa distinta de una credencial paralela.
 
 ### ADR-007 · Redis para locks distribuidos y pub/sub de WebSockets
 

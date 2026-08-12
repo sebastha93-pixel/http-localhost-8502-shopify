@@ -28,19 +28,19 @@ Formato: `Comando(entrada) → resultado · invariantes · eventos · errores`
 
 #### `AbrirSesionCaja`
 ```
-entrada:   tienda_id, caja_id, base_inicial: Dinero, pin_cajera
+entrada:   tienda_id, caja_id  (la base sale de la tienda; quién abre, del JWT)
 salida:    SesionCajaId, numero_turno
 verifica:  INV-C1 (una sola abierta por caja)
            el usuario tiene permiso retail.abrir_caja en esa tienda
            el dispositivo está registrado y activo
            hay bloque de consecutivos disponible (arrienda uno si no)
 eventos:   SesionCajaAbierta
-errores:   SesionYaAbierta · PinInvalido · DispositivoNoAutorizado · SinConsecutivos
+errores:   SesionYaAbierta · SinConsecutivos
 ```
 
 #### `RegistrarMovimientoCaja`
 ```
-entrada:   sesion_id, tipo (retiro|ingreso|gasto), monto, motivo, autorizacion?
+entrada:   sesion_id, tipo (retiro|ingreso|gasto), monto, motivo
 verifica:  INV-C6 (retiro no deja efectivo negativo)
            retiro y gasto exigen permiso retail.movimiento_caja
 eventos:   MovimientoCajaRegistrado
@@ -50,7 +50,8 @@ eventos:   MovimientoCajaRegistrado
 ```
 IniciarArqueo    → verifica INV-C2 (sin borradores) e INV-C3 (avisa fiscal pendiente)
 DeclararConteo   → entrada: medio_pago_id, monto_contado.  En cierre ciego no devuelve esperado.
-CerrarSesionCaja → calcula diferencias; INV-C5 exige justificación + autorización si excede
+CerrarSesionCaja → calcula diferencias; INV-C5 exige justificación escrita si excede el
+                  umbral, y que quien cierra tenga `puede_cerrar_con_descuadre`
                    el umbral. Devuelve el informe completo y lo manda a imprimir.
 eventos:         SesionCajaCerrada, DescuadreDetectado?
 ```
@@ -87,13 +88,14 @@ Ajustan la reserva de stock en consecuencia. Cantidad 0 ⇒ elimina (INV-V9).
 
 #### `AplicarDescuento`
 ```
-entrada:   venta_id, linea_id?, tipo (porcentaje|valor), valor, motivo, token_autorizacion?
-hace:      PoliticaDescuento(rol_usuario, tipo, valor) → PERMITIDO | REQUIERE_AUTORIZACION | PROHIBIDO
-           REQUIERE_AUTORIZACION sin token ⇒ error 403 con `requiere_autorizacion: true`
-           (el frontend abre el diálogo de PIN de supervisor)
+entrada:   venta_id, linea_id?, tipo (porcentaje|valor), valor, motivo
+hace:      PoliticaDescuento(tope_del_usuario, tipo, valor) → PERMITIDO | SOBRE_EL_TOPE
+           El tope se LEE de `permisos_pos` con el id del JWT — no llega en la
+           petición. Sobre el tope ⇒ 403 `sobre_el_tope`, accion_sugerida
+           `entrar_con_otro_usuario`. No hay firma de terceros (ADR-006 revisado).
 verifica:  INV-V6
-eventos:   DescuentoAutorizado (⚠️ auditoría prioritaria)
-errores:   RequiereAutorizacion · DescuentoProhibido · AutorizacionInvalida
+eventos:   DescuentoAplicado (auditoría: AVISO; el obsequio sí es CRÍTICO)
+errores:   RequiereAutorizacion (= sobre el tope) · DescuentoProhibido
 ```
 
 #### `AsignarCliente` · `RegistrarPago` · `EliminarPago`
@@ -131,8 +133,8 @@ tiempo:    ≤ 800 ms p95 — NO incluye Siigo (ADR-002)
 
 #### `AnularVenta`
 ```
-entrada:   venta_id, motivo, token_autorizacion
-verifica:  INV-V11 — sólo ventas del turno en curso, con autorización
+entrada:   venta_id, motivo
+verifica:  INV-V11 — sólo ventas del turno en curso, y `puede_anular_venta`
 hace:      reingresa stock · resta de caja · si ya hay documento fiscal emitido,
            marca el caso para nota crédito (Fase 2) en vez de emitirla
 eventos:   VentaAnulada

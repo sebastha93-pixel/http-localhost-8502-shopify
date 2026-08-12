@@ -507,7 +507,7 @@ CREATE TABLE retail.auditoria (
     sesion_id           retail.ulid,
     usuario_id          text,
     dispositivo_id      retail.ulid,
-    evento              text NOT NULL,    -- 'venta.cerrada','descuento.autorizado',...
+    evento              text NOT NULL,    -- 'venta.cerrada','descuento.aplicado',...
     severidad           text NOT NULL DEFAULT 'info'
         CHECK (severidad IN ('info','aviso','critico')),
     agregado_tipo       text,
@@ -562,18 +562,26 @@ CREATE UNIQUE INDEX ux_venta_resumen ON retail.venta_resumen (id);
 ```sql
 -- Permisos finos del POS sobre la tabla de usuarios existente
 ALTER TABLE public.usuarios
-    ADD COLUMN IF NOT EXISTS pin_hash            text,
     ADD COLUMN IF NOT EXISTS tiendas_asignadas   text[] DEFAULT '{}',
     ADD COLUMN IF NOT EXISTS tope_descuento_pct  numeric(5,2) DEFAULT 0,
-    ADD COLUMN IF NOT EXISTS puede_autorizar_descuento boolean DEFAULT false,
     ADD COLUMN IF NOT EXISTS puede_anular_venta  boolean DEFAULT false,
     ADD COLUMN IF NOT EXISTS puede_cerrar_con_descuadre boolean DEFAULT false,
-    ADD COLUMN IF NOT EXISTS pin_intentos_fallidos integer DEFAULT 0,
-    ADD COLUMN IF NOT EXISTS pin_bloqueado_hasta timestamptz;
+    ADD COLUMN IF NOT EXISTS puede_ver_esperado  boolean DEFAULT false;
 ```
 
 Sigue el patrón ya existente de `puede_autorizar_precosteo` / `puede_autorizar_corte`
 (`usuarios.py:83`).
+
+> **Sin columnas de PIN.** La primera versión llevaba `pin_hash`,
+> `pin_intentos_fallidos`, `pin_bloqueado_hasta` y `puede_autorizar_descuento`. El PIN se
+> descartó (ADR-006 revisado) y esas columnas se fueron con él en la migración 0007. Un hash
+> de credencial olvidado en una tabla es algo que nadie rota y que sigue estando en cada
+> respaldo. `tope_descuento_pct` pasa a ser el límite real, no una sugerencia: ya no hay
+> forma de saltárselo.
+
+**El tope se lee del servidor, siempre.** En la implementación viajaba en el cuerpo de la
+petición porque la pantalla ya lo conocía; mientras existió el PIN eso no bastaba para
+colarse, pero sin PIN un cliente modificado se aprobaba los descuentos solo.
 
 ---
 

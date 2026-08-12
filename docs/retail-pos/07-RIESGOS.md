@@ -172,7 +172,7 @@ recupera al volver.
 
 ### R12 · Robo o pérdida del dispositivo
 
-**Mitigación:** token de dispositivo revocable (ADR-006), PIN con bloqueo a los 5 intentos,
+**Mitigación:** una sola credencial —el login del ERP— con sesión deslizante (ADR-006 revisado),
 IndexedDB sin datos de tarjetas (nunca se almacenan), y la revocación invalida el token en la
 siguiente petición.
 

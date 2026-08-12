@@ -245,7 +245,7 @@ stateDiagram-v2
 | Ver stock | ⚠️ | Último snapshot, con marca de antigüedad visible |
 | Agregar/quitar/modificar líneas | ✅ | Todo local |
 | Descuento dentro del tope de la cajera | ✅ | La política se evalúa local |
-| Descuento que exige autorización | ❌ | Requiere validar el PIN del supervisor contra el servidor |
+| Descuento sobre el tope de la cajera | ❌ | No hay a quién pedírselo: la vía es otra sesión, y eso necesita red |
 | Buscar cliente existente | ✅ | Los clientes de la tienda se replican |
 | Crear cliente | ✅ | Se crea local, se sincroniza después |
 | Cobrar con cualquier medio | ✅ | — |
@@ -302,7 +302,7 @@ ejecutarlo una vez. Es lo que permite reintentar sin miedo.
 |---|---|---|
 | Máximo tiempo offline antes de advertir | 4 h | Después, el riesgo de descuadre e inconsistencia crece rápido |
 | Máximo tiempo offline antes de bloquear ventas nuevas | 24 h (configurable) | Un dispositivo desconectado una semana no debería seguir emitiendo |
-| Descuentos que exigen autorización | Bloqueados offline | No se puede validar el PIN del supervisor |
+| Descuentos sobre el tope | Bloqueados offline | La única vía es entrar con otro usuario, y eso necesita red |
 | Ventas offline sin sincronizar antes de cerrar turno | 0 | El arqueo tiene que ser sobre datos completos |
 
 ---
@@ -311,7 +311,7 @@ ejecutarlo una vez. Es lo que permite reintentar sin miedo.
 
 ```mermaid
 flowchart TD
-    A[Cajera llega] --> B[PIN en el dispositivo]
+    A[Cajera llega] --> B[Entra con su correo y contraseña]
     B --> C{¿Turno abierto<br/>en esta caja?}
     C -->|Sí, de otra cajera| D[⚠️ Debe cerrarlo ella<br/>o un supervisor lo fuerza]
     C -->|No| E[Apertura: declara la base]
@@ -340,7 +340,7 @@ flowchart TD
     T --> U{¿Diferencia ><br/>umbral?}
     U -->|No| V[✅ Cierra]
     U -->|Sí| W[Exige justificación escrita]
-    W --> X[Exige autorización de supervisor<br/>INV-C5]
+    W --> X[Exige justificación escrita +<br/>puede_cerrar_con_descuadre · INV-C5]
     X --> V
     V --> Y[Imprime informe de cierre]
     Y --> Z[🔴 Turno cerrado · inmutable]
@@ -382,7 +382,7 @@ Datáfono esperado    $ 6.630.000
 Datáfono declarado   $ 6.630.000    ✅
 
 Descuentos aplicados: 6 · $312.000
-  De los cuales autorizados por supervisor: 2 · $180.000
+  De los cuales aplicados por un supervisor: 2 · $180.000
 Anulaciones: 1 (ticket FV-11-1301)
 Documentos fiscales pendientes: 0 ✅
 Ventas offline sincronizadas: 3
