@@ -21,6 +21,16 @@ export interface Variante {
   es_escaneo: boolean;
 }
 
+export interface Cliente {
+  id: string;
+  tipo_documento: string;
+  numero_documento: string;
+  nombre: string;
+  telefono?: string | null;
+  correo?: string | null;
+  compras: number;
+}
+
 export interface Talla {
   variante_id: string;
   sku: string;
@@ -154,6 +164,28 @@ export async function pedirAutorizacion(pin: string, tiendaId: string): Promise<
       pin,
       tienda_id: tiendaId,
     });
+  } catch (e) {
+    return traducir(e);
+  }
+}
+
+/** Sólo por número de identificación: buscar por nombre en un mostrador
+ *  devuelve seis «María González» y la cajera tiene que adivinar. */
+export async function buscarClientes(documento: string): Promise<Cliente[]> {
+  const p = new URLSearchParams({ documento });
+  return api.get<Cliente[]>(`/api/retail/clientes/buscar?${p}`);
+}
+
+export async function crearCliente(cuerpo: {
+  cliente_id: string;
+  tipo_documento: string;
+  numero_documento: string;
+  nombre: string;
+  telefono: string;
+  correo: string;
+}): Promise<Cliente> {
+  try {
+    return await api.post<Cliente>("/api/retail/clientes", cuerpo);
   } catch (e) {
     return traducir(e);
   }

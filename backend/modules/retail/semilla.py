@@ -56,6 +56,13 @@ def sembrar(url: str) -> dict:
 
     import bcrypt
 
+    # Aplica las migraciones primero. Las pruebas dejan el esquema BORRADO al
+    # terminar, así que sembrar sin esto falla con «relation does not exist» —
+    # y obliga a recordar dos comandos en vez de uno. Si ya está al día, no
+    # hace nada.
+    from backend.modules.retail.migraciones.runner import aplicar
+    aplicar(url)
+
     motor = create_engine(url, future=True)
     with motor.begin() as c:
         c.execute(text("""

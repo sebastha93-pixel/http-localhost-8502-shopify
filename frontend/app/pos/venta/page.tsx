@@ -28,11 +28,13 @@ import { CarritoPanel } from "@/components/pos/carrito-panel";
 import { PanelCobro } from "@/components/pos/panel-cobro";
 import { TicketCerrado } from "@/components/pos/ticket-cerrado";
 import { DialogoDescuento, DialogoPin } from "@/components/pos/dialogo-descuento";
+import { DialogoCliente } from "@/components/pos/dialogo-cliente";
 import {
   cerrarVenta,
   listarCatalogo,
   pedirAutorizacion,
   RequiereAutorizacion,
+  type Cliente,
   type Referencia,
   type Talla,
   type Ticket,
@@ -63,11 +65,13 @@ export default function PantallaVenta() {
     { sku: string; pct: number; motivo: string; mensaje: string } | null
   >(null);
   const [errorPin, setErrorPin] = useState<string | null>(null);
+  const [cliente, setCliente] = useState<Cliente | null>(null);
+  const [asignandoCliente, setAsignandoCliente] = useState(false);
   const ventaId = useRef<string>(nuevoUlid());
   const buscadorRef = useRef<HTMLInputElement>(null);
 
   const configurado = Boolean(TIENDA && CAJA && UBICACION && SESION);
-  const hayDialogo = Boolean(descontando || pidiendoPin);
+  const hayDialogo = Boolean(descontando || pidiendoPin || asignandoCliente);
 
   const agregar = useCallback((r: Referencia, t: Talla) => {
     setLineas((prev) => {
@@ -237,6 +241,7 @@ export default function PantallaVenta() {
         caja_id: CAJA,
         sesion_id: SESION,
         ubicacion_id: UBICACION,
+        cliente_id: cliente?.id ?? null,
         tope_descuento: String(TOPE),
         lineas: lineas.map((l) => ({
           sku: l.sku,
@@ -273,6 +278,7 @@ export default function PantallaVenta() {
     setTicket(null);
     setConsulta("");
     setAviso(null);
+    setCliente(null);
     ventaId.current = nuevoUlid();
     setFase("vendiendo");
   }
@@ -381,12 +387,25 @@ export default function PantallaVenta() {
                   onCantidad={cambiarCantidad}
                   onDescuento={setDescontando}
                   onCobrar={() => setFase("cobrando")}
+                  cliente={cliente}
+                  onAsignarCliente={() => setAsignandoCliente(true)}
+                  onQuitarCliente={() => setCliente(null)}
                 />
               )}
             </Panel>
           </aside>
         </div>
       </div>
+
+      {asignandoCliente && (
+        <DialogoCliente
+          onCerrar={() => setAsignandoCliente(false)}
+          onAsignar={(c) => {
+            setCliente(c);
+            setAsignandoCliente(false);
+          }}
+        />
+      )}
 
       {descontando && (
         <DialogoDescuento

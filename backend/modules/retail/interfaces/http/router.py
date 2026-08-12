@@ -23,6 +23,10 @@ from backend.modules.retail.application.comandos.cerrar_venta import (
     CerrarVenta,
     RelojDelSistema,
 )
+from backend.modules.retail.application.comandos.clientes import (
+    BuscarClientes,
+    CrearCliente,
+)
 from backend.modules.retail.application.comandos.autorizar import (
     PinBloqueado,
     PinInvalido,
@@ -381,3 +385,68 @@ async def listar_referencias(
             for r in refs
         ],
     )
+
+
+# ── Clientas ────────────────────────────────────────────────────────────────
+
+class ClienteSalida(BaseModel):
+    id: str
+    tipo_documento: str
+    numero_documento: str
+    nombre: str
+    telefono: Optional[str] = None
+    correo: Optional[str] = None
+    compras: int
+
+
+class ClienteNuevo(BaseModel):
+    cliente_id: str = Field(description="ULID generado en el dispositivo")
+    tipo_documento: str
+    numero_documento: str
+    nombre: str
+    telefono: str
+    correo: str
+
+
+@router.get("/clientes/buscar", response_model=List[ClienteSalida])
+async def buscar_clientes(
+    documento: str = Query(min_length=3),
+    sesion=Depends(sesion_lectura),
+    _: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Sólo por número de identificación, por decisión del diseño — y es la
+    correcta: buscar por nombre en un mostrador devuelve seis «María González»
+    y la cajera tiene que adivinar."""
+    encontradas = await BuscarClientes(sesion).ejecutar(documento)
+    return [ClienteSalida(**c.__dict__) for c in encontradas]
+
+
+@router.post("/clientes", response_model=ClienteSalida)
+async def crear_cliente(
+    entrada: ClienteNuevo,
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Crea la clienta y la devuelve lista para asignar a la venta.
+
+    NO toca Siigo: el registro fiscal se crea perezosamente al emitir su
+    primer documento. Ir a Siigo aquí pondría a la clienta a esperar a un
+    tercero en pleno mostrador.
+    """
+    from datetime import datetime, timezone
+
+    async with uow as t:
+        try:
+            c = await CrearCliente(t.sesion).ejecutar(
+                cliente_id=entrada.cliente_id,
+                tipo_documento=entrada.tipo_documento,
+                numero_documento=entrada.numero_documento,
+                nombre=entrada.nombre, telefono=entrada.telefono,
+                correo=entrada.correo, creado_por=usuario.id,
+                ahora=datetime.now(timezone.utc))
+        except ReglaDeNegocio as e:
+            raise HTTPException(400, {"error": "regla_de_negocio",
+                                      "mensaje": str(e)})
+        await t.commit()
+
+    return ClienteSalida(**c.__dict__)
