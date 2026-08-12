@@ -3077,6 +3077,46 @@ def _trazos_texto(oc: dict) -> str:
     return "\n".join(f"  · {t.get('filename') or 'archivo'}: {t.get('url')}" for t in lista)
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# CORREO DE LA ORDEN DE CORTE — envío, registro y acuse de entrega
+# ═══════════════════════════════════════════════════════════════════════
+
+# `last_event` de Resend → estado interno.
+# Fuente: https://resend.com/docs/dashboard/webhooks/event-types
+#
+# `opened` y `clicked` no se muestran (dependen de que el cliente de correo
+# cargue imágenes y no son fiables), pero implican que el correo llegó: se
+# tratan como entregado. Mapearlos a 'enviado' dejaría la orden reconsultando
+# a Resend para siempre.
+_ESTADO_POR_EVENTO = {
+    "sent": "enviado",
+    "delivered": "entregado",
+    "opened": "entregado",
+    "clicked": "entregado",
+    "bounced": "rebotado",
+    "complained": "spam",
+    "delivery_delayed": "demorado",
+    "failed": "fallido",
+    "suppressed": "suprimido",
+}
+
+# Estados que ya no cambian: no se vuelve a consultar a Resend.
+# 'error_envio' es nuestro, no de Resend: la petición se rechazó y nunca
+# llegó a existir un correo que consultar.
+_ESTADOS_DEFINITIVOS = frozenset({
+    "entregado", "rebotado", "spam", "suprimido", "fallido", "error_envio",
+})
+
+
+def _estado_desde_last_event(last_event: Optional[str]) -> str:
+    """Traduce el `last_event` de Resend al estado interno.
+
+    Un evento desconocido queda como 'enviado' (en curso): nunca inventamos
+    una entrega que Resend no confirmó.
+    """
+    return _ESTADO_POR_EVENTO.get((last_event or "").strip().lower(), "enviado")
+
+
 # ── Autorizar orden de corte y enviar correo ──────────────────────────
 def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = None,
                            mensaje_extra: Optional[str] = None,
