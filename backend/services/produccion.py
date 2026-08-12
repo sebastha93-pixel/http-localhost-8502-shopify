@@ -3184,6 +3184,62 @@ def _registrar_correo_corte(oc_id: str, *, destinatarios: list[str], asunto: str
         return None
 
 
+def _consultar_estado_resend(resend_id: str) -> Optional[str]:
+    """`last_event` del correo según Resend, o None si no se pudo saber.
+
+    GET /emails/{id} — https://resend.com/docs/api-reference/emails/retrieve-email
+    """
+    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
+    if not resend_key or not resend_id:
+        return None
+    try:
+        import httpx
+        r = httpx.get(f"https://api.resend.com/emails/{resend_id}",
+                      headers={"Authorization": f"Bearer {resend_key}"},
+                      timeout=10.0)
+        if r.status_code >= 400:
+            return None
+        return ((r.json() or {}).get("last_event"))
+    except Exception as e:
+        log.warning(f"[corte.correo] no pude consultar {resend_id}: {str(e)[:150]}")
+        return None
+
+
+def _guardar_estado_correo(correo_id: str, estado: str) -> None:
+    """Persiste el estado nuevo. No lanza: es caché, no es la verdad."""
+    sb = _sb()
+    if sb is None:
+        return
+    try:
+        (sb.table("correos_orden_corte")
+           .update({"estado": estado, "estado_actualizado_at": _now_iso()})
+           .eq("id", correo_id).execute())
+    except Exception as e:
+        log.warning(f"[corte.correo] no pude guardar el estado de {correo_id}: {str(e)[:150]}")
+
+
+def refrescar_estados_correo(correos: list[dict]) -> list[dict]:
+    """Actualiza contra Resend solo los envíos que todavía pueden cambiar.
+
+    Los definitivos no se consultan, y sin `resend_id` no hay nada que
+    consultar (un `error_envio` nunca llegó a crear un correo en Resend).
+    """
+    salida = []
+    for c in correos or []:
+        c = dict(c)
+        estado = c.get("estado") or "enviado"
+        rid = c.get("resend_id")
+        if rid and estado not in _ESTADOS_DEFINITIVOS:
+            evento = _consultar_estado_resend(rid)
+            if evento:
+                nuevo = _estado_desde_last_event(evento)
+                if nuevo != estado:
+                    _guardar_estado_correo(c["id"], nuevo)
+                    c["estado"] = nuevo
+        salida.append(c)
+    return salida
+
+
 # ── Autorizar orden de corte y enviar correo ──────────────────────────
 def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = None,
                            mensaje_extra: Optional[str] = None,

@@ -178,3 +178,55 @@ def test_autorizar_registra_el_intento_incluso_cuando_falla(monkeypatch):
     assert res["correo"]["estado"] == "error_envio"
     assert res["correo"]["enviado_por"] is None, \
         "un fallo NO puede reportarse como enviado"
+
+
+# ── Consulta del estado de entrega ────────────────────────────────────
+
+def test_no_reconsulta_un_correo_ya_entregado(monkeypatch):
+    """Un estado definitivo no cambia: consultarlo otra vez es gasto puro."""
+    llamadas = []
+    monkeypatch.setattr(svc, "_consultar_estado_resend",
+                        lambda rid: llamadas.append(rid))
+
+    correos = [{"id": "c1", "resend_id": "abc", "estado": "entregado"}]
+    r = svc.refrescar_estados_correo(correos)
+
+    assert llamadas == [], "no debió llamar a Resend"
+    assert r[0]["estado"] == "entregado"
+
+
+def test_reconsulta_un_correo_en_curso_y_persiste(monkeypatch):
+    """'enviado' todavía puede volverse 'rebotado': hay que preguntar."""
+    guardado = {}
+    monkeypatch.setattr(svc, "_consultar_estado_resend", lambda rid: "bounced")
+    monkeypatch.setattr(svc, "_guardar_estado_correo",
+                        lambda cid, estado: guardado.update({cid: estado}))
+
+    correos = [{"id": "c1", "resend_id": "abc", "estado": "enviado"}]
+    r = svc.refrescar_estados_correo(correos)
+
+    assert r[0]["estado"] == "rebotado"
+    assert guardado == {"c1": "rebotado"}
+
+
+def test_sin_resend_id_no_consulta(monkeypatch):
+    """Un error_envio nunca creó un correo en Resend: no hay qué consultar."""
+    llamadas = []
+    monkeypatch.setattr(svc, "_consultar_estado_resend",
+                        lambda rid: llamadas.append(rid))
+
+    correos = [{"id": "c1", "resend_id": None, "estado": "error_envio"}]
+    r = svc.refrescar_estados_correo(correos)
+
+    assert llamadas == []
+    assert r[0]["estado"] == "error_envio"
+
+
+def test_si_resend_no_responde_conserva_el_estado(monkeypatch):
+    """Que Resend esté caído no puede borrar lo que ya sabíamos."""
+    monkeypatch.setattr(svc, "_consultar_estado_resend", lambda rid: None)
+
+    correos = [{"id": "c1", "resend_id": "abc", "estado": "enviado"}]
+    r = svc.refrescar_estados_correo(correos)
+
+    assert r[0]["estado"] == "enviado"
