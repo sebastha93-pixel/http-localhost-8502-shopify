@@ -14,13 +14,15 @@ export function Carrito({
   onCantidad,
   onQuitar,
   onCobrar,
+  onDescuento,
 }: {
   lineas: LineaCarrito[];
-  totales: { base: number; iva: number; total: number };
+  totales: { base: number; iva: number; descuento: number; total: number };
   aviso: string | null;
   onCantidad: (sku: string, cantidad: number) => void;
   onQuitar: (sku: string) => void;
   onCobrar: () => void;
+  onDescuento: (sku: string) => void;
 }) {
   return (
     <div className="flex h-full flex-col">
@@ -46,6 +48,13 @@ export function Carrito({
                   <span className="w-5 text-center tabular-nums">{l.cantidad}</span>
                   <Boton onClick={() => onCantidad(l.sku, l.cantidad + 1)} etiqueta={`Agregar una unidad de ${l.sku}`}>+</Boton>
                   <button
+                    onClick={() => onDescuento(l.sku)}
+                    aria-label={`Aplicar descuento a ${l.sku}`}
+                    className="ml-1 px-1 text-[#6F92A6] hover:text-[#C8412B]"
+                  >
+                    %
+                  </button>
+                  <button
                     onClick={() => onQuitar(l.sku)}
                     aria-label={`Eliminar ${l.sku} del ticket`}
                     className="ml-1 px-1 text-[#6F92A6] hover:text-[#C8412B]"
@@ -60,6 +69,12 @@ export function Carrito({
                   )}
                 </span>
               </div>
+              {l.descuentoPct ? (
+                <div className="mt-1.5 font-mono text-[10.5px] text-[#B08C2E]">
+                  ↳ −{l.descuentoPct}% · {l.descuentoMotivo}
+                  {l.autorizadoPor && ` · firmó ${l.autorizadoPor}`}
+                </div>
+              ) : null}
               {l.disponible <= 0 && (
                 <div className="mt-1.5 font-mono text-[10px] text-[#B08C2E]">
                   ⚠ El sistema no la tiene en esta tienda. Se vende igual y queda alertado.
@@ -78,6 +93,9 @@ export function Carrito({
 
       <div className="pt-2">
         <Fila etiqueta="Base" valor={totales.base} />
+        {totales.descuento > 0 && (
+          <Fila etiqueta="Descuentos" valor={-totales.descuento} />
+        )}
         <Fila etiqueta="IVA" valor={totales.iva} />
         <div className="mt-2 flex items-baseline justify-between border-t-[1.5px] border-dashed border-[#C8412B]/60 pt-2">
           <span className="font-display text-[11px] tracking-[0.14em] text-[#6F92A6]">

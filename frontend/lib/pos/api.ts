@@ -52,9 +52,37 @@ export class RequiereAutorizacion extends Error {
   }
 }
 
+interface DetalleError {
+  error?: string;
+  mensaje?: string;
+  accion_sugerida?: string;
+}
+
+/**
+ * Saca el detalle real del error.
+ *
+ * FastAPI envuelve todo en `{detail: ...}`, y el cliente del ERP guarda ese
+ * SOBRE completo en `ApiError.detail` — no su contenido. Cuando el detalle es
+ * un objeto (como aquí, que lleva `error` y `mensaje`) tambien termina como
+ * `message`, y la pantalla mostraba «[object Object]» en vez del texto escrito
+ * para la cajera. Lo vi en el diálogo del PIN.
+ *
+ * Se desenvuelve aquí y no en `lib/api.ts` porque ese cliente lo comparten
+ * todas las pantallas del ERP y sus errores son strings.
+ */
+function detalleDe(e: ApiError): DetalleError | undefined {
+  const bruto = e.detail as { detail?: unknown } | undefined;
+  const interno = bruto && typeof bruto === "object" && "detail" in bruto
+    ? bruto.detail
+    : bruto;
+  return interno && typeof interno === "object"
+    ? (interno as DetalleError)
+    : undefined;
+}
+
 function traducir(e: unknown): never {
   if (e instanceof ApiError) {
-    const d = e.detail as { error?: string; mensaje?: string } | undefined;
+    const d = detalleDe(e);
     if (e.status === 403 && d?.error === "requiere_autorizacion") {
       throw new RequiereAutorizacion(d.mensaje || "Necesita autorización.");
     }
@@ -72,6 +100,25 @@ export async function buscar(q: string, ubicacionId: string): Promise<Variante[]
 export async function cerrarVenta(cuerpo: unknown): Promise<Ticket> {
   try {
     return await api.post<Ticket>("/api/retail/ventas/cerrar", cuerpo);
+  } catch (e) {
+    return traducir(e);
+  }
+}
+
+export interface Firma {
+  autorizado_por: string;
+  nombre: string;
+  tope_descuento_pct: string;
+}
+
+/** Valida el PIN de un supervisor. NO abre una sesión: dice quién firma ESTA
+ *  operación, y ese nombre viaja con la venta hasta la auditoría. */
+export async function pedirAutorizacion(pin: string, tiendaId: string): Promise<Firma> {
+  try {
+    return await api.post<Firma>("/api/retail/autorizacion", {
+      pin,
+      tienda_id: tiendaId,
+    });
   } catch (e) {
     return traducir(e);
   }

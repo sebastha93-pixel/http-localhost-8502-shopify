@@ -23,7 +23,15 @@ import { RejillaProductos } from "@/components/pos/rejilla-productos";
 import { Carrito } from "@/components/pos/carrito";
 import { PanelCobro } from "@/components/pos/panel-cobro";
 import { TicketCerrado } from "@/components/pos/ticket-cerrado";
-import { buscar, cerrarVenta, RequiereAutorizacion, type Variante, type Ticket } from "@/lib/pos/api";
+import { DialogoDescuento, DialogoPin } from "@/components/pos/dialogo-descuento";
+import {
+  buscar,
+  cerrarVenta,
+  pedirAutorizacion,
+  RequiereAutorizacion,
+  type Variante,
+  type Ticket,
+} from "@/lib/pos/api";
 import { nuevoUlid } from "@/lib/pos/ulid";
 import { conIva, formatear } from "@/lib/pos/dinero";
 import type { LineaCarrito } from "@/lib/pos/carrito";
@@ -35,6 +43,9 @@ const TIENDA = process.env.NEXT_PUBLIC_POS_TIENDA || "";
 const CAJA = process.env.NEXT_PUBLIC_POS_CAJA || "";
 const UBICACION = process.env.NEXT_PUBLIC_POS_UBICACION || "";
 const SESION = process.env.NEXT_PUBLIC_POS_SESION || "";
+// Tope de descuento de quien está en la caja. Fase 5: lo trae la apertura de
+// turno desde `retail.permisos_pos`. Hasta entonces, el de una cajera.
+const TOPE = Number(process.env.NEXT_PUBLIC_POS_TOPE || 10);
 
 type Fase = "vendiendo" | "cobrando" | "cerrada";
 
@@ -46,6 +57,11 @@ export default function PantallaVenta() {
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
   const [buscando, setBuscando] = useState(false);
+  const [descontando, setDescontando] = useState<string | null>(null);
+  const [pidiendoPin, setPidiendoPin] = useState<
+    { sku: string; pct: number; motivo: string; mensaje: string } | null
+  >(null);
+  const [errorPin, setErrorPin] = useState<string | null>(null);
   const ventaId = useRef<string>(nuevoUlid());
   const buscadorRef = useRef<HTMLInputElement>(null);
 
@@ -117,17 +133,70 @@ export default function PantallaVenta() {
 
   const quitar = (sku: string) => setLineas((prev) => prev.filter((l) => l.sku !== sku));
 
+  /** Dentro del tope se aplica y ya. Por encima, se pide la firma ANTES de
+   *  tocar el carrito: aplicarlo y deshacerlo si el PIN falla dejaría el total
+   *  bailando delante de la clienta. */
+  function aplicarDescuento(sku: string, pct: number, motivo: string) {
+    setDescontando(null);
+    if (pct > TOPE) {
+      setPidiendoPin({
+        sku,
+        pct,
+        motivo,
+        mensaje: `Un descuento del ${pct}% supera tu tope (${TOPE}%). Pide a un supervisor que ingrese su PIN.`,
+      });
+      return;
+    }
+    ponerDescuento(sku, pct, motivo, null);
+  }
+
+  function ponerDescuento(sku: string, pct: number, motivo: string, firma: string | null) {
+    setLineas((prev) =>
+      prev.map((l) =>
+        l.sku === sku
+          ? { ...l, descuentoPct: pct, descuentoMotivo: motivo, autorizadoPor: firma }
+          : l,
+      ),
+    );
+  }
+
+  async function firmar(pin: string) {
+    if (!pidiendoPin) return;
+    setErrorPin(null);
+    try {
+      const firma = await pedirAutorizacion(pin, TIENDA);
+      if (pidiendoPin.pct > Number(firma.tope_descuento_pct)) {
+        // Autorizar no es un cheque en blanco: quien firma tiene su propio
+        // tope, y pasarse es un NO definitivo — no otro «pide autorización»,
+        // que dejaría a la cajera en un bucle pidiendo una firma imposible.
+        setErrorPin(
+          `${firma.nombre} puede autorizar hasta ${firma.tope_descuento_pct}%. Este descuento necesita a alguien con más tope.`,
+        );
+        return;
+      }
+      ponerDescuento(pidiendoPin.sku, pidiendoPin.pct, pidiendoPin.motivo, firma.autorizado_por);
+      setPidiendoPin(null);
+    } catch (e) {
+      setErrorPin(e instanceof Error ? e.message : "PIN incorrecto.");
+    }
+  }
+
   // ── Totales ───────────────────────────────────────────────────────────
   const totales = useMemo(() => {
     let base = 0;
     let iva = 0;
+    let descuento = 0;
     for (const l of lineas) {
       const sub = l.precioUnitarioSinIva * l.cantidad;
-      base += sub;
-      // El IVA se calcula POR LÍNEA, igual que en el dominio (INV-V12).
-      iva += Math.round((sub * l.tasaIva) / 100);
+      const desc = l.descuentoPct ? Math.round((sub * l.descuentoPct) / 100) : 0;
+      const gravable = sub - desc;
+      base += gravable;
+      descuento += desc;
+      // El IVA se calcula POR LÍNEA sobre la base YA descontada, igual que en
+      // el dominio (INV-V12). Calcularlo sobre el total da otro número.
+      iva += Math.round((gravable * l.tasaIva) / 100);
     }
-    return { base, iva, total: base + iva };
+    return { base, iva, descuento, total: base + iva };
   }, [lineas]);
 
   // ── Cierre ────────────────────────────────────────────────────────────
@@ -142,13 +211,20 @@ export default function PantallaVenta() {
         caja_id: CAJA,
         sesion_id: SESION,
         ubicacion_id: UBICACION,
-        tope_descuento: "10",
+        tope_descuento: String(TOPE),
         lineas: lineas.map((l) => ({
           sku: l.sku,
           cantidad: l.cantidad,
           precio_unitario_centavos: l.precioUnitarioSinIva,
           tasa_iva: String(l.tasaIva),
           descripcion: l.descripcion,
+          ...(l.descuentoPct
+            ? {
+                descuento_porcentaje: String(l.descuentoPct),
+                descuento_motivo: l.descuentoMotivo,
+                autorizado_por: l.autorizadoPor ?? undefined,
+              }
+            : {}),
         })),
         pagos,
       });
@@ -227,6 +303,7 @@ NEXT_PUBLIC_POS_SESION=<ulid del turno abierto>`}
             valor={consulta}
             onCambio={setConsulta}
             buscando={buscando}
+            pausado={Boolean(descontando || pidiendoPin)}
           />
           <RejillaProductos
             resultados={resultados}
@@ -251,10 +328,36 @@ NEXT_PUBLIC_POS_SESION=<ulid del turno abierto>`}
               onCantidad={cambiarCantidad}
               onQuitar={quitar}
               onCobrar={() => setFase("cobrando")}
+              onDescuento={setDescontando}
             />
           )}
         </section>
       </div>
+
+      {descontando && (
+        <DialogoDescuento
+          sku={descontando}
+          base={
+            (lineas.find((l) => l.sku === descontando)?.precioUnitarioSinIva ?? 0) *
+            (lineas.find((l) => l.sku === descontando)?.cantidad ?? 1)
+          }
+          tope={TOPE}
+          onCancelar={() => setDescontando(null)}
+          onAplicar={(pct, motivo) => aplicarDescuento(descontando, pct, motivo)}
+        />
+      )}
+
+      {pidiendoPin && (
+        <DialogoPin
+          motivo={pidiendoPin.mensaje}
+          error={errorPin}
+          onCancelar={() => {
+            setPidiendoPin(null);
+            setErrorPin(null);
+          }}
+          onFirmar={firmar}
+        />
+      )}
     </div>
   );
 }

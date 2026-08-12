@@ -23,6 +23,11 @@ from backend.modules.retail.application.comandos.cerrar_venta import (
     CerrarVenta,
     RelojDelSistema,
 )
+from backend.modules.retail.application.comandos.autorizar import (
+    PinBloqueado,
+    PinInvalido,
+    ValidarPin,
+)
 from backend.modules.retail.application.consultas.buscar_producto import BuscarProducto
 from backend.modules.retail.domain.shared.dinero import Dinero
 from backend.modules.retail.domain.shared.sku import Sku
@@ -256,3 +261,58 @@ def _descuento(l: LineaEntrada, moneda: str) -> Descuento:
         return Descuento.porcentaje(Decimal(l.descuento_porcentaje), motivo=motivo)
     return Descuento.valor(Dinero(l.descuento_valor_centavos or 0, moneda),
                            motivo=motivo)
+
+
+# ── Autorización ────────────────────────────────────────────────────────────
+
+class PinEntrada(BaseModel):
+    pin: str = Field(min_length=4, max_length=6)
+    tienda_id: str
+
+
+class AutorizacionSalida(BaseModel):
+    autorizado_por: str
+    nombre: str
+    tope_descuento_pct: str
+
+
+@router.post("/autorizacion", response_model=AutorizacionSalida)
+async def autorizar(
+    entrada: PinEntrada,
+    uow=Depends(unidad_de_trabajo),
+    _: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Valida el PIN de un supervisor y devuelve quién firma.
+
+    NO devuelve un token ni abre una sesión: sólo dice quién autorizó ESTA
+    operación, y ese nombre viaja con la venta hasta la auditoría. Una firma
+    que sirviera para varias operaciones dejaría de ser una firma.
+
+    VA SOBRE LA UNIDAD DE TRABAJO, no sobre una sesión de lectura, porque
+    escribe: pone el contador de intentos en cero al acertar y lo sube al
+    fallar. Con una sesión sin commit esos incrementos se revertían al cerrar
+    —o sea que el bloqueo por intentos no existía y el PIN se podía adivinar
+    sin límite. Lo encontró una prueba, no la operación.
+
+    El commit ocurre TAMBIÉN en el camino de error: si se revirtiera al
+    rechazar, cada intento fallido borraría la cuenta del anterior.
+    """
+    from datetime import datetime, timezone
+
+    async with uow as t:
+        try:
+            a = await ValidarPin(t.sesion).ejecutar(
+                pin=entrada.pin, tienda_id=entrada.tienda_id,
+                ahora=datetime.now(timezone.utc))
+        except (PinBloqueado, PinInvalido) as e:
+            await t.commit()          # ← conserva el intento fallido
+            if isinstance(e, PinBloqueado):
+                raise HTTPException(429, {"error": "pin_bloqueado",
+                                          "mensaje": str(e)})
+            raise HTTPException(403, {"error": "pin_invalido", "mensaje": str(e)})
+        await t.commit()
+
+    return AutorizacionSalida(
+        autorizado_por=a.usuario_id, nombre=a.nombre,
+        tope_descuento_pct=str(a.tope_descuento_pct),
+    )

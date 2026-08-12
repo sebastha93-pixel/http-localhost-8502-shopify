@@ -14,4 +14,9 @@ export interface LineaCarrito {
   /** Lo que había al agregarla. Se muestra, no se impone: la prenda física
    *  que la clienta tiene en la mano existe aunque el dato diga que no. */
   disponible: number;
+  /** Descuento aplicado, si lo hay. `autorizadoPor` sólo existe cuando superó
+   *  el tope de quien lo aplicó — y ese nombre llega hasta la auditoría. */
+  descuentoPct?: number;
+  descuentoMotivo?: string;
+  autorizadoPor?: string | null;
 }
