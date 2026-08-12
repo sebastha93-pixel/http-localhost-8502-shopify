@@ -3117,6 +3117,42 @@ def _estado_desde_last_event(last_event: Optional[str]) -> str:
     return _ESTADO_POR_EVENTO.get((last_event or "").strip().lower(), "enviado")
 
 
+def _enviar_por_resend(dest: list[str], asunto: str, body: str) -> dict:
+    """Manda el correo por Resend. NUNCA lanza: devuelve qué pasó.
+
+    Antes esto vivía dentro de `autorizar_orden_corte` en un `try/except` que
+    imprimía el error y caía a `mailto`. Como el frontend hacía
+    `window.location.href = mailto_url` y en Chrome con Gmail web eso no hace
+    nada, un fallo de Resend se veía exactamente igual que un envío exitoso.
+    """
+    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
+    if not resend_key:
+        return {"resend_id": None, "estado": "error_envio",
+                "error": "sin_RESEND_API_KEY"}
+    if not dest:
+        return {"resend_id": None, "estado": "error_envio",
+                "error": "sin_destinatarios"}
+    try:
+        import httpx
+        from_email = os.environ.get("RESEND_FROM", "orden-corte@maledenim.com").strip()
+        r = httpx.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {resend_key}",
+                     "Content-Type": "application/json"},
+            json={"from": from_email, "to": dest, "subject": asunto, "text": body},
+            timeout=15.0,
+        )
+        if r.status_code >= 400:
+            return {"resend_id": None, "estado": "error_envio",
+                    "error": f"resend {r.status_code}: {r.text[:300]}"}
+        return {"resend_id": ((r.json() or {}).get("id")),
+                "estado": "enviado", "error": None}
+    except Exception as e:
+        log.warning(f"[corte.correo] Resend falló: {type(e).__name__}: {str(e)[:200]}")
+        return {"resend_id": None, "estado": "error_envio",
+                "error": f"{type(e).__name__}: {str(e)[:300]}"}
+
+
 # ── Autorizar orden de corte y enviar correo ──────────────────────────
 def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = None,
                            mensaje_extra: Optional[str] = None,
