@@ -109,9 +109,9 @@ def sembrar(url: str) -> dict:
             INSERT INTO retail.permisos_pos
                 (usuario_id, nombre, rol, tiendas, tope_descuento_pct,
                  puede_anular_venta, puede_cerrar_con_descuadre,
-                 puede_ver_esperado, puede_mover_caja)
+                 puede_ver_esperado, puede_mover_caja, puede_ver_auditoria)
             VALUES ('laura', 'Laura M.', 'Supervisora', ARRAY[:t], 35,
-                    true, true, true, true)
+                    true, true, true, true, true)
         """), {"t": TIENDA})
         c.execute(text("""
             INSERT INTO retail.permisos_pos

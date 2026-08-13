@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { Panel as Marco } from "@/components/pos/marco";
+import { Auditoria } from "@/components/pos/auditoria";
 import { Rail } from "@/components/pos/rail";
 import { formatear } from "@/lib/pos/dinero";
 import { panelDelDia, type Panel as Datos } from "@/lib/pos/api";
@@ -86,7 +87,7 @@ export default function PantallaPanel() {
 
         {datos && (
           <>
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <div className="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4">
               <Tarjeta
                 titulo="Ventas hoy"
                 valor={formatear(datos.ventas_centavos)}
@@ -129,7 +130,12 @@ export default function PantallaPanel() {
               />
             </div>
 
-            <div className="grid min-h-0 grid-cols-1 gap-3 lg:grid-cols-[1.6fr_1fr]">
+            {/* `shrink-0`: en una columna flex los hijos se encogen por defecto, y
+                con `min-h-0` pueden bajar de su contenido. Mientras esta fue la
+                última sección no se notó; al añadir la auditoría debajo, el
+                grid cedió espacio y el gráfico se salió por encima de ella.
+                La columna ya tiene `overflow-y-auto`: que scrollee la página. */}
+            <div className="grid shrink-0 grid-cols-1 gap-3 lg:grid-cols-[1.6fr_1fr]">
               <Marco className="flex min-w-0 flex-col gap-3 p-6">
                 <h2 className="titular text-[17px] font-semibold">
                   Ventas por hora
@@ -223,6 +229,13 @@ export default function PantallaPanel() {
                   </p>
                 )}
               </Marco>
+            </div>
+
+            {/* La auditoría vive AQUÍ y no en el rail: no es una pantalla de
+                cajera. Quien la abre ya está mirando cómo va el día, y la
+                consulta justo cuando algo de arriba no cuadra. */}
+            <div className="shrink-0">
+              <Auditoria tiendaId={TIENDA} />
             </div>
           </>
         )}

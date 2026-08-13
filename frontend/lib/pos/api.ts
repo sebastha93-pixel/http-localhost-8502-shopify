@@ -584,3 +584,46 @@ export async function anularVenta(
     return traducir(e);
   }
 }
+
+// ── Auditoría ───────────────────────────────────────────────────────────────
+
+export interface EventoAuditoria {
+  id: number;
+  cuando: string;
+  evento: string;
+  severidad: "info" | "aviso" | "critico";
+  quien: string;
+  caja: string | null;
+  /** Una línea en español, armada en el SERVIDOR. Aquí no se interpreta el
+   *  payload: un `switch` por tipo de evento en la pantalla se desincroniza
+   *  del backend en cuanto alguien agrega uno nuevo. */
+  resumen: string;
+  payload: Record<string, unknown>;
+}
+
+export interface PaginaAuditoria {
+  eventos: EventoAuditoria[];
+  total: number;
+  /** Si la cadena de hash aguanta. Viaja JUNTO a los eventos: una lista sin
+   *  decir si está íntegra invita a creérsela, y son justo los eventos que
+   *  alguien querría alterar. */
+  integra: boolean;
+  motivo_ruptura: string | null;
+  evento_roto: string | null;
+  eventos_verificados: number;
+}
+
+export async function leerAuditoria(opciones: {
+  tiendaId: string;
+  severidad?: string;
+  limite?: number;
+}): Promise<PaginaAuditoria> {
+  const p = new URLSearchParams({ tienda_id: opciones.tiendaId });
+  if (opciones.severidad) p.set("severidad", opciones.severidad);
+  if (opciones.limite) p.set("limite", String(opciones.limite));
+  try {
+    return await api.get<PaginaAuditoria>(`/api/retail/auditoria?${p}`);
+  } catch (e) {
+    return traducir(e);
+  }
+}

@@ -1439,3 +1439,142 @@ async def anular_venta(
         unidades_devueltas=r.unidades_devueltas,
         exige_nota_credito=r.exige_nota_credito,
     )
+
+
+# ── Auditoría ───────────────────────────────────────────────────────────────
+
+class EventoAuditoria(BaseModel):
+    # `bigserial`, no ULID: la auditoría es append-only y su orden ES el de
+    # inserción. Un id secuencial hace que un hueco se vea a simple vista.
+    id: int
+    cuando: str
+    evento: str
+    severidad: str
+    quien: str
+    caja: Optional[str] = None
+    resumen: str
+    payload: dict
+
+
+class PaginaAuditoria(BaseModel):
+    eventos: List[EventoAuditoria]
+    total: int
+    # El veredicto de la cadena. Va JUNTO a los eventos y no en otra pantalla:
+    # una lista de eventos sin decir si la cadena está íntegra invita a
+    # creérselos, y son justo los que alguien querría alterar.
+    integra: bool
+    motivo_ruptura: Optional[str] = None
+    evento_roto: Optional[str] = None
+    eventos_verificados: int = 0
+
+
+@router.get("/auditoria", response_model=PaginaAuditoria)
+async def leer_auditoria(
+    tienda_id: str = Query(),
+    severidad: str = Query("", pattern="^(info|aviso|critico)?$"),
+    desde: Optional[str] = Query(None, description="ISO; por omisión, hoy"),
+    limite: int = Query(100, ge=1, le=500),
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Lo que pasó en esta tienda, y si la cadena aguanta.
+
+    La cadena de hash existe desde el primer día y NADIE PODÍA LEERLA: el
+    verificador sólo lo llamaba una prueba. Un control que no se puede
+    consultar no es un control, es un archivo.
+    """
+    from sqlalchemy import text as _t
+
+    async with uow as t:
+        puede = bool((await t.sesion.execute(_t("""
+            SELECT coalesce(puede_ver_auditoria, false) FROM retail.permisos_pos
+             WHERE usuario_id = :u AND activo
+        """), {"u": usuario.id})).scalar())
+        if not puede:
+            raise HTTPException(403, {
+                "error": "sin_permiso_auditoria",
+                "mensaje": "Ver la auditoría necesita permiso: dice quién "
+                           "descontó, quién anuló y quién sacó plata.",
+                "accion_sugerida": "entrar_con_otro_usuario"})
+
+        condiciones = ["a.tienda_id = :t"]
+        params: dict = {"t": tienda_id, "n": limite}
+        if severidad:
+            condiciones.append("a.severidad = :sev")
+            params["sev"] = severidad
+        if desde:
+            condiciones.append("a.ocurrido_en >= :desde")
+            params["desde"] = desde
+
+        filas = (await t.sesion.execute(_t(f"""
+            SELECT a.id, a.evento, a.severidad, a.payload, a.ocurrido_en,
+                   coalesce(p.nombre, a.usuario_id, 'sistema') AS quien,
+                   coalesce(c.nombre, a.caja_id)               AS caja,
+                   to_char(a.ocurrido_en AT TIME ZONE
+                           coalesce(ti.zona_horaria, 'America/Bogota'),
+                           'DD/MM HH24:MI') AS cuando
+              FROM retail.auditoria a
+              LEFT JOIN retail.tiendas ti ON ti.id = a.tienda_id
+              LEFT JOIN retail.permisos_pos p ON p.usuario_id = a.usuario_id
+              LEFT JOIN retail.cajas c ON c.id = a.caja_id
+             WHERE {' AND '.join(condiciones)}
+             ORDER BY a.ocurrido_en DESC, a.id DESC
+             LIMIT :n
+        """), params)).mappings().all()
+
+        total = (await t.sesion.execute(_t(f"""
+            SELECT count(*) FROM retail.auditoria a
+             WHERE {' AND '.join(condiciones)}
+        """), {k: v for k, v in params.items() if k != "n"})).scalar() or 0
+
+        veredicto = await t.auditoria.verificar_cadena(tienda_id=tienda_id)
+
+    return PaginaAuditoria(
+        eventos=[EventoAuditoria(
+            id=f["id"], cuando=f["cuando"], evento=f["evento"],
+            severidad=f["severidad"], quien=f["quien"], caja=f["caja"],
+            resumen=_resumir(f["evento"], f["payload"] or {}),
+            payload=f["payload"] or {}) for f in filas],
+        total=int(total),
+        integra=bool(veredicto["integra"]),
+        motivo_ruptura=veredicto.get("motivo"),
+        evento_roto=veredicto.get("evento"),
+        eventos_verificados=int(veredicto.get("eventos", 0)),
+    )
+
+
+def _resumir(evento: str, p: dict) -> str:
+    """Una línea en español por evento.
+
+    Se arma en el servidor y no en la pantalla porque el payload cambia con
+    cada tipo: dejarlo al frontend obliga a un `switch` que se desincroniza
+    del backend en cuanto alguien agrega un evento nuevo.
+    """
+    def pesos(c) -> str:
+        try:
+            c = int(c)
+        except (TypeError, ValueError):
+            return "—"
+        return f"${c // 100:,}".replace(",", ".")
+
+    if evento == "venta.cerrada":
+        return f"{p.get('numero','')} · {pesos(p.get('total'))} · {p.get('unidades','?')} u"
+    if evento == "venta.anulada":
+        aviso = " · falta nota crédito" if p.get("exige_nota_credito") else ""
+        return f"{p.get('numero','')} · {pesos(p.get('total'))} · {p.get('motivo','')}{aviso}"
+    if evento == "descuento.aplicado":
+        return f"{p.get('numero','')} · −{pesos(p.get('monto'))} · {p.get('motivo','')}"
+    if evento == "linea.obsequiada":
+        return f"{p.get('numero','')} · obsequio {p.get('sku','')} · {p.get('motivo','')}"
+    if evento in ("caja.retiro", "caja.gasto", "caja.ingreso"):
+        return f"{pesos(abs(int(p.get('monto', 0))))} · {p.get('motivo','')}"
+    if evento == "caja.abierta":
+        return f"turno #{p.get('numero_turno','?')} · base {pesos(p.get('base_inicial'))}"
+    if evento == "caja.cerrada":
+        dif = int(p.get("diferencia", 0))
+        if dif == 0:
+            return f"turno #{p.get('numero_turno','?')} · cuadró"
+        signo = "sobrante" if dif > 0 else "faltante"
+        return (f"turno #{p.get('numero_turno','?')} · {signo} {pesos(abs(dif))}"
+                f"{' · ' + p.get('justificacion') if p.get('justificacion') else ''}")
+    return ", ".join(f"{k}={v}" for k, v in list(p.items())[:3])
