@@ -259,3 +259,54 @@ La Fase 3 (fiscal) no arranca hasta que esto esté en verde:
 | `cost_center_mandatory: true` | Ninguno. 774 y 677 ya están cargados. |
 
 Cuando esto esté, el riesgo R1 —el único bloqueante del proyecto— queda cerrado.
+
+---
+
+## 6. Qué documento se emite: **factura electrónica** (decidido)
+
+Esta pregunta estaba abierta sin que nadie la hubiera nombrado. El esquema deja elegir por
+tienda —`tiendas.tipo_documento_fiscal IN ('factura_electronica','pos_electronico')`— y todo
+el runbook de arriba asumía factura electrónica sin decirlo. **Se confirma: factura
+electrónica.**
+
+No es un detalle de configuración; cambia qué se imprime en el mostrador.
+
+| | Factura electrónica ✅ | Documento POS electrónico |
+|---|---|---|
+| Datos de la clienta | Obligatorios (NIT/cédula) | No los pide |
+| Ritmo del mostrador | Frena: hay que pedirlos | Pensado para la caja |
+| El papel que se entrega | Comprobante; la factura va aparte | **ES el documento fiscal** |
+| Dependencia de Siigo al vender | Ninguna (ADR-002) | El CUFE tiene que estar YA |
+
+**La consecuencia que importa.** Con documento POS, el papel del momento de la venta tiene
+que llevar CUFE y QR — o sea, la venta tendría que esperar a que Siigo responda, que es
+exactamente lo que ADR-002 evita y lo que hace que el POS siga vendiendo sin señal. Con
+factura electrónica ese conflicto no existe: la tirilla sale en el mostrador como
+comprobante y la factura llega después.
+
+### Cómo se comporta la tirilla con esta decisión
+
+El encabezado del papel **cambia solo**, y sólo cuando hay algo real que amparar:
+
+- Sin resolución DIAN o sin documento emitido → `COMPROBANTE DE VENTA · Documento interno ·
+  no válido como factura`. Sin QR: un código en un papel que todavía no ampara nada lo haría
+  parecer fiscal a simple vista.
+- Con resolución **y** documento emitido → `FACTURA ELECTRÓNICA DE VENTA`, con su número, su
+  CUFE y el QR de verificación.
+
+Hacen falta las dos condiciones. Con resolución pero sin emitir, el papel todavía no ampara
+nada.
+
+### Lo que falta para cerrar el círculo (Fase 3)
+
+1. **La cadena del QR.** La construye Siigo, no nosotros. Se guarda tal cual en
+   `documentos_fiscales.qr_datos` (migración 0009). Mientras esté vacía, la tirilla arma la
+   URL estándar del catálogo con el CUFE — es un respaldo razonable, pero si Siigo usa otro
+   formato y no lo guardamos, el QR se sigue imprimiendo, sigue pareciendo correcto y no
+   lleva a ninguna parte.
+2. **La entrega de la factura.** `documentos_fiscales.pdf_url` existe desde el diseño y nadie
+   la llena. Con factura electrónica, la clienta que dio sus datos tiene que recibirla — por
+   correo desde Siigo o desde aquí, y eso hay que decidirlo.
+3. **Qué pasa con quien NO da sus datos.** Es la mayoría en un mostrador. Hay que confirmar
+   con el contador cómo se resuelve: consumidor final con un NIT genérico, o factura sólo a
+   quien la pida. Esto no lo resuelve el software.
