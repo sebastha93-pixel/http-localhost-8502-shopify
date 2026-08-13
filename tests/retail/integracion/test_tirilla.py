@@ -515,3 +515,51 @@ def test_la_ruta_svg_reproduce_EXACTAMENTE_la_matriz_del_qr(cliente):
         assert reconstruida[y] == list(esperada[y]), (
             f"la fila {y} no coincide: el QR se imprimiría ilegible"
         )
+
+
+# ── El papel de sin-red tiene que cuadrar con el registro ───────────────────
+
+def test_los_numeros_se_separan_POR_LINEA_no_sobre_el_total(cliente):
+    """El contrato que la tirilla local del dispositivo tiene que respetar.
+
+    Sin red el papel se arma en el navegador, y si allá el IVA se separa sobre
+    el TOTAL mientras aquí se separa línea a línea, el papel y el registro
+    difieren en centavos. Una tirilla que no cuadra con el sistema es peor que
+    no imprimir: la clienta la trae de vuelta y nadie sabe cuál manda.
+
+    Esta prueba fija la regla del servidor con un caso donde las dos formas
+    dan resultados distintos.
+    """
+    from backend.modules.retail.domain.shared.impuestos import separar_iva
+
+    c, _ = cliente
+    # Dos líneas cuyos totales, sumados, se separan distinto que por separado.
+    r = c.post("/api/retail/ventas/cerrar", json={
+        "venta_id": "01JQ8X4T5N6P010R8S9V0W1X2Y", "numero": "FV-20-1350",
+        "tienda_id": "florida", "caja_id": "florida_caja1",
+        "sesion_id": SESION, "ubicacion_id": UBICACION,
+        "lineas": [
+            {"sku": "92611-1T10", "cantidad": 1,
+             "precio_unitario_centavos": 999901, "descripcion": "A"},
+            {"sku": "92611-1T10", "cantidad": 1,
+             "precio_unitario_centavos": 999901, "descripcion": "B"},
+        ],
+        "pagos": [{"medio_pago_id": "efectivo", "monto_centavos": 1999802,
+                   "es_efectivo": True}],
+    })
+    assert r.status_code == 200, r.text
+    d = c.get("/api/retail/ventas/01JQ8X4T5N6P010R8S9V0W1X2Y/tirilla").json()
+
+    por_linea = sum(separar_iva(999901, 19)[1] for _ in range(2))
+    sobre_total = separar_iva(1999802, 19)[1]
+
+    assert d["iva_centavos"] == por_linea, (
+        "el servidor dejó de separar el IVA por línea"
+    )
+    if por_linea != sobre_total:
+        assert d["iva_centavos"] != sobre_total, (
+            "coincide con separar sobre el total: la prueba dejó de distinguir"
+        )
+    # Y el total sigue siendo el de la etiqueta, sin centavos fantasma.
+    assert d["base_gravable_centavos"] + d["iva_centavos"] == d["total_centavos"]
+    assert d["total_centavos"] == 1999802

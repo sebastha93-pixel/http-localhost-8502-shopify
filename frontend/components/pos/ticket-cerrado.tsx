@@ -19,7 +19,18 @@ import { Tirilla } from "@/components/pos/tirilla";
  * daba la venta por terminada y la clienta se iba sin papel. Ahora se pide al
  * servidor y se manda a imprimir; si falla, se dice que falló y queda el botón.
  */
-export function TicketCerrado({ ticket, onNueva }: { ticket: Ticket; onNueva: () => void }) {
+export function TicketCerrado({
+  ticket,
+  onNueva,
+  tirillaLocal,
+}: {
+  ticket: Ticket;
+  onNueva: () => void;
+  /** Armada en el dispositivo cuando no hubo red. Si viene, NO se le pregunta
+   *  al servidor: preguntar sin conexión sólo gasta el tiempo del timeout y
+   *  acaba en el mismo sitio, con la clienta esperando el papel. */
+  tirillaLocal?: DatosTirilla | null;
+}) {
   const [restan, setRestan] = useState(8);
   const [tirilla, setTirilla] = useState<DatosTirilla | null>(null);
   const [errorImpresion, setErrorImpresion] = useState<string | null>(null);
@@ -30,7 +41,7 @@ export function TicketCerrado({ ticket, onNueva }: { ticket: Ticket; onNueva: ()
     setImprimiendo(true);
     setErrorImpresion(null);
     try {
-      const d = await pedirTirilla(ticket.venta_id);
+      const d = tirillaLocal ?? (await pedirTirilla(ticket.venta_id));
       setTirilla(d);
       // Una pausa para que React pinte la tirilla antes de abrir el diálogo:
       // sin ella el navegador manda una hoja en blanco.
@@ -49,7 +60,7 @@ export function TicketCerrado({ ticket, onNueva }: { ticket: Ticket; onNueva: ()
     } finally {
       setImprimiendo(false);
     }
-  }, [ticket.venta_id]);
+  }, [ticket.venta_id, tirillaLocal]);
 
   useEffect(() => {
     if (yaImprimio.current) return;

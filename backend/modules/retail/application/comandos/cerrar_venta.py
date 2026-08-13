@@ -78,6 +78,15 @@ class CerrarVenta:
             # 2
             await t.ventas.guardar(venta, variante_por_sku=variante_por_sku)
 
+            # El bloque de la caja avanza CON la venta, en la misma
+            # transacción. Sin esto el contador del servidor se queda quieto y
+            # cada recarga de la pantalla reinicia la numeración desde el
+            # principio del bloque: la venta siguiente choca con una ya hecha y
+            # la clienta se va con un papel de algo que nunca se registró.
+            # (Lo encontré así, con dos ventas distintas numeradas FV-20-1.)
+            await t.consecutivos.marcar_consumido(
+                caja_id=venta.caja_id, consecutivo=venta.consecutivo)
+
             # 3
             for linea in venta.lineas:
                 variante_id = variante_por_sku[linea.sku.codigo]

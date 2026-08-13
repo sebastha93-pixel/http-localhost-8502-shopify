@@ -252,6 +252,15 @@ export interface ContextoCaja {
   caja_nombre: string;
   base_caja_centavos: number;
   ubicacion_id: string | null;
+  /** El encabezado de la tirilla. Viaja aquí para que el dispositivo lo tenga
+   *  guardado ANTES de quedarse sin red: sin esto, una venta offline se cierra
+   *  pero no se puede imprimir. */
+  razon_social: string;
+  nit: string;
+  direccion: string;
+  telefono: string;
+  mensaje_tirilla: string | null;
+  tiene_resolucion: boolean;
 }
 
 /** Nombres de tienda y caja, y la base configurada. La pantalla de apertura

@@ -588,6 +588,19 @@ class ContextoCaja(BaseModel):
     caja_nombre: str
     base_caja_centavos: int
     ubicacion_id: Optional[str] = None
+    # EL ENCABEZADO DE LA TIRILLA. Viaja aquí —y no sólo en el endpoint de la
+    # tirilla— para que el dispositivo lo tenga guardado ANTES de quedarse sin
+    # red. Sin esto, una venta offline se cierra pero no se puede imprimir: la
+    # clienta se va sin papel justo cuando más falta hace un comprobante.
+    razon_social: str = ""
+    nit: str = ""
+    direccion: str = ""
+    telefono: str = ""
+    mensaje_tirilla: Optional[str] = None
+    # Si la tienda ya tiene resolución. Offline nunca se imprime como factura
+    # —no hay documento emitido— pero el dato viaja para no tener que
+    # adivinarlo al reconectar.
+    tiene_resolucion: bool = False
 
 
 @router.get("/caja/contexto", response_model=ContextoCaja)
@@ -605,6 +618,12 @@ async def contexto_caja(
     fila = (await sesion.execute(_t("""
         SELECT c.id AS caja_id, c.nombre AS caja_nombre,
                t.id AS tienda_id, t.nombre AS tienda_nombre, t.base_caja,
+               coalesce(t.razon_social, t.nombre) AS razon_social,
+               coalesce(t.nit, '')        AS nit,
+               coalesce(t.direccion, '')  AS direccion,
+               coalesce(t.telefono, '')   AS telefono,
+               t.mensaje_tirilla,
+               (t.resolucion_dian IS NOT NULL) AS tiene_resolucion,
                (SELECT u.id FROM retail.ubicaciones u
                  WHERE u.tienda_id = t.id AND u.tipo = 'tienda' LIMIT 1) AS ubicacion
           FROM retail.cajas c JOIN retail.tiendas t ON t.id = c.tienda_id
@@ -620,6 +639,10 @@ async def contexto_caja(
         caja_id=fila["caja_id"], caja_nombre=fila["caja_nombre"],
         base_caja_centavos=int(fila["base_caja"]),
         ubicacion_id=fila["ubicacion"],
+        razon_social=fila["razon_social"], nit=fila["nit"],
+        direccion=fila["direccion"], telefono=fila["telefono"],
+        mensaje_tirilla=fila["mensaje_tirilla"],
+        tiene_resolucion=bool(fila["tiene_resolucion"]),
     )
 
 

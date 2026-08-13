@@ -278,3 +278,70 @@ def test_el_prefijo_se_parte_por_el_ULTIMO_guion(entorno):
                     moneda="COP")
     assert v.prefijo == "FV-20"
     assert v.consecutivo == 1334
+
+
+# ── El contador del servidor tiene que AVANZAR ──────────────────────────────
+
+def test_vender_adelanta_el_contador_del_bloque(entorno):
+    """El bug que se me escapó y encontré verificando en el navegador.
+
+    Escribí `marcar_consumido` y nunca lo llamé. El contador del servidor se
+    quedaba en el primer número del bloque, así que **cada recarga de la
+    pantalla reiniciaba la numeración**: la venta siguiente chocaba con una ya
+    hecha. La cola lo atrapaba y la marcaba rechazada —no se perdía en
+    silencio— pero la clienta ya se había ido con un papel impreso de algo que
+    nunca se registró, que es el peor final posible para un POS.
+    """
+    c, motor = entorno
+    t = _abrir(c, "florida_caja1", "001")
+    n = t["consecutivo_siguiente"]
+    assert _vender(c, caja="florida_caja1", sesion=t["sesion_id"],
+                   numero=f"FV-20-{n}", n=20).status_code == 200
+
+    async def contador():
+        async with motor.connect() as cn:
+            return (await cn.execute(text("""
+                SELECT siguiente FROM retail.bloques_consecutivo
+                 WHERE caja_id = 'florida_caja1' AND NOT agotado
+            """))).scalar()
+
+    assert asyncio.get_event_loop().run_until_complete(contador()) == n + 1
+
+
+def test_recargar_la_pantalla_NO_reinicia_la_numeracion(entorno):
+    """Reanudar tiene que devolver el número SIGUIENTE, no el primero del
+    bloque. La cajera recarga; si eso reinicia la cuenta, la segunda venta del
+    día choca con la primera."""
+    c, _ = entorno
+    t = _abrir(c, "florida_caja1", "001")
+    n = t["consecutivo_siguiente"]
+    _vender(c, caja="florida_caja1", sesion=t["sesion_id"],
+            numero=f"FV-20-{n}", n=21)
+
+    reanudado = c.get("/api/retail/caja/turno-actual",
+                      params={"caja_id": "florida_caja1"}).json()
+    assert reanudado["consecutivo_siguiente"] == n + 1, (
+        "recargar la pantalla devuelve un número ya usado"
+    )
+
+
+def test_una_venta_que_llega_TARDE_no_retrocede_el_contador(entorno):
+    """Sincronizar una venta offline vieja no puede devolver el contador atrás:
+    los números que se repartieron mientras tanto ya están en tiquetes."""
+    c, motor = entorno
+    t = _abrir(c, "florida_caja1", "001")
+    base = t["consecutivo_siguiente"]
+
+    _vender(c, caja="florida_caja1", sesion=t["sesion_id"],
+            numero=f"FV-20-{base + 5}", n=22)      # una moderna
+    _vender(c, caja="florida_caja1", sesion=t["sesion_id"],
+            numero=f"FV-20-{base}", n=23)          # la que venía sin red
+
+    async def contador():
+        async with motor.connect() as cn:
+            return (await cn.execute(text("""
+                SELECT siguiente FROM retail.bloques_consecutivo
+                 WHERE caja_id = 'florida_caja1' AND NOT agotado
+            """))).scalar()
+
+    assert asyncio.get_event_loop().run_until_complete(contador()) == base + 6

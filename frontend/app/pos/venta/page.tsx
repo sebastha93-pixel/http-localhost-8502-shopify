@@ -46,9 +46,11 @@ import {
   type Turno,
   type Talla,
   type Ticket,
+  type Tirilla as TirillaDatos,
 } from "@/lib/pos/api";
 import { nuevoUlid } from "@/lib/pos/ulid";
 import { confirmada, encolar } from "@/lib/pos/almacen";
+import { armarTirillaLocal } from "@/lib/pos/tirilla-local";
 import { arrancarCola, sincronizar } from "@/lib/pos/sincronizacion";
 import { ivaDe } from "@/lib/pos/dinero";
 import type { LineaCarrito } from "@/lib/pos/carrito";
@@ -69,6 +71,9 @@ export default function PantallaVenta() {
   const [lineas, setLineas] = useState<LineaCarrito[]>([]);
   const [fase, setFase] = useState<Fase>("vendiendo");
   const [ticket, setTicket] = useState<Ticket | null>(null);
+  // Sólo se llena cuando la venta se cerró SIN RED: es la tirilla armada aquí,
+  // porque la del servidor no se puede pedir.
+  const [tirillaLocal, setTirillaLocal] = useState<TirillaDatos | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
   const [descontando, setDescontando] = useState<string | null>(null);
   const [cliente, setCliente] = useState<Cliente | null>(null);
@@ -265,6 +270,15 @@ export default function PantallaVenta() {
     return { base: total - iva, iva, descuento, total };
   }, [lineas]);
 
+  /** `datafono` es un identificador; en el papel va «Tarjeta». Sin red no se
+   *  puede consultar la tabla de medios, así que se traduce con lo que la
+   *  pantalla de cobro ya conoce. */
+  function nombreDelMedio(id: string): string {
+    return ({ efectivo: "Efectivo", datafono: "Tarjeta",
+              transferencia: "Transferencia" } as Record<string, string>)[id]
+           ?? id;
+  }
+
   // ── Numeración ─────────────────────────────────────────────────────────
   //
   // El dispositivo numera DENTRO de su bloque, sin preguntar. Es lo que va a
@@ -374,6 +388,21 @@ export default function PantallaVenta() {
       // Falló la RED. La venta ya está en disco y sale sola: no se pierde y
       // la clienta no tiene que esperar a que vuelva internet.
       void sincronizar();
+      // Y el papel se arma aquí: pedírselo al servidor sin conexión sólo gasta
+      // el tiempo del timeout y acaba igual, con la clienta esperando.
+      if (contexto) {
+        setTirillaLocal(armarTirillaLocal({
+          contexto, numero, cajera: CAJERA, lineas,
+          pagos: pagos.map((p) => ({
+            nombre: nombreDelMedio(p.medio_pago_id),
+            monto_centavos: p.monto_centavos,
+          })),
+          clienteNombre: cliente ? cliente.nombre : null,
+          clienteDocumento: cliente
+            ? `${cliente.tipo_documento} ${cliente.numero_documento}`
+            : null,
+        }));
+      }
       setTicket({
         venta_id: ventaId.current, numero,
         total_centavos: totales.total, pagado_centavos: totales.total,
@@ -392,6 +421,7 @@ export default function PantallaVenta() {
     setConsulta("");
     setAviso(null);
     setCliente(null);
+    setTirillaLocal(null);
     ventaId.current = nuevoUlid();
     setFase("vendiendo");
   }
@@ -439,7 +469,10 @@ export default function PantallaVenta() {
   }
 
   if (fase === "cerrada" && ticket) {
-    return <TicketCerrado ticket={ticket} onNueva={nuevaVenta} />;
+    return (
+      <TicketCerrado ticket={ticket} onNueva={nuevaVenta}
+                     tirillaLocal={tirillaLocal} />
+    );
   }
 
   const hoy = new Date().toLocaleDateString("es-CO", {
