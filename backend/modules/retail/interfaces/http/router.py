@@ -956,6 +956,13 @@ class TirillaSalida(BaseModel):
     documento_fiscal: Optional[str] = None
     cufe: Optional[str] = None
     anulada: bool
+    # El QR ya dibujado: `qr_ruta` es el atributo `d` de un <path> SVG. Se
+    # genera en el servidor, junto a los datos fiscales — un QR mal codificado
+    # en un papel fiscal es peor que no tenerlo, y nadie lo descubre hasta que
+    # alguien lo escanea. Viene vacío mientras no haya documento emitido.
+    qr_contenido: Optional[str] = None
+    qr_ruta: Optional[str] = None
+    qr_modulos: int = 0
     # Decide el encabezado del papel. Si es False, la tirilla se imprime como
     # COMPROBANTE INTERNO y lo dice: un papel con pinta de documento fiscal
     # que no lo es convierte un problema de software en uno con la DIAN.
@@ -1009,5 +1016,7 @@ async def tirilla(
         vuelto_centavos=d.vuelto_centavos, unidades=d.unidades,
         estado_fiscal=d.estado_fiscal, documento_fiscal=d.documento_fiscal,
         cufe=d.cufe, anulada=d.anulada,
+        qr_contenido=d.qr_contenido, qr_ruta=d.qr_ruta,
+        qr_modulos=d.qr_modulos,
         es_documento_fiscal=d.es_documento_fiscal,
     )

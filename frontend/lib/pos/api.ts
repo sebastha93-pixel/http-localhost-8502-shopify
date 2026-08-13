@@ -428,6 +428,12 @@ export interface Tirilla {
   documento_fiscal: string | null;
   cufe: string | null;
   anulada: boolean;
+  /** El QR ya dibujado en el servidor: `qr_ruta` es el atributo `d` de un
+   *  <path> SVG. Viene vacío mientras no haya documento fiscal emitido — sin
+   *  nada que verificar, un QR sólo haría que el papel pareciera fiscal. */
+  qr_contenido: string | null;
+  qr_ruta: string | null;
+  qr_modulos: number;
   /** Decide el encabezado del papel. Si es `false` se imprime como
    *  COMPROBANTE y lo dice: un papel con pinta de factura que no lo es es
    *  peor que no imprimir. */

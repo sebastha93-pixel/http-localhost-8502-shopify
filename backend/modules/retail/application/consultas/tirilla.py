@@ -84,6 +84,14 @@ class Tirilla:
     cufe: Optional[str] = None
     anulada: bool = False
 
+    # El QR se dibuja en el servidor, junto a los datos fiscales. `qr_ruta` es
+    # el atributo `d` de un <path> SVG: se pinta nítido a cualquier tamaño, no
+    # engorda la respuesta como un PNG en base64, y al no ser marcado no hay
+    # que inyectarlo como HTML crudo en la pantalla.
+    qr_contenido: Optional[str] = None
+    qr_ruta: Optional[str] = None
+    qr_modulos: int = 0
+
     @property
     def es_documento_fiscal(self) -> bool:
         """Sólo cuando existe de verdad: hay resolución Y el documento salió.
@@ -153,12 +161,12 @@ class ArmarTirilla:
             """), {"i": v["cliente_id"]})).mappings().first()
 
         doc = (await self._s.execute(text("""
-            SELECT numero, cufe FROM retail.documentos_fiscales
+            SELECT numero, cufe, qr_datos FROM retail.documentos_fiscales
              WHERE venta_id = :i AND estado = 'emitido'
              ORDER BY emitido_en DESC LIMIT 1
         """), {"i": venta_id})).mappings().first()
 
-        return Tirilla(
+        tirilla = Tirilla(
             razon_social=v["razon_social"], nit=v["nit"],
             direccion=v["direccion"], telefono=v["telefono"],
             tienda_nombre=v["tienda_nombre"],
@@ -192,3 +200,56 @@ class ArmarTirilla:
             cufe=doc["cufe"] if doc else None,
             anulada=v["estado"] == "anulada",
         )
+        _poner_qr(tirilla, doc, con_resolucion=bool(v["resolucion_dian"]))
+        return tirilla
+
+
+# ── El QR ───────────────────────────────────────────────────────────────────
+
+# El catálogo público de la DIAN. Es el respaldo, NO la fuente de verdad: si el
+# documento trae `qr_datos` del proveedor, manda ese. Ver migración 0009.
+_CATALOGO_DIAN = "https://catalogo-vpfe.dian.gov.co/document/searchqr?documentkey="
+
+
+def _poner_qr(tirilla: Tirilla, doc, *, con_resolucion: bool) -> None:
+    """Dibuja el QR, y SÓLO cuando hay algo real que verificar.
+
+    Sin documento emitido no hay nada que escanear. Imprimir un QR igualmente
+    —aunque llevara a una página de error— haría que el papel pareciera fiscal
+    a simple vista, que es exactamente lo que esta tirilla evita mientras no lo
+    sea.
+    """
+    if not doc or not con_resolucion:
+        return
+    contenido = (doc["qr_datos"] or "").strip()
+    if not contenido:
+        if not doc["cufe"]:
+            return
+        contenido = f"{_CATALOGO_DIAN}{doc['cufe']}"
+
+    import segno
+
+    # Corrección M (~15 %). En papel térmico, que se borra con el calor y el
+    # roce del bolsillo, L deja el código ilegible en semanas; Q y H lo hacen
+    # más grande y en 72 mm de ancho el tamaño es el recurso escaso.
+    codigo = segno.make(contenido, error="m")
+    matriz = list(codigo.matrix)
+
+    trozos = []
+    for y, fila in enumerate(matriz):
+        x = 0
+        while x < len(fila):
+            if fila[x]:
+                inicio = x
+                while x < len(fila) and fila[x]:
+                    x += 1
+                # Un rectángulo por RACHA de módulos encendidos, no uno por
+                # módulo: baja la ruta de ~1.400 tramos a ~300 en un QR de
+                # versión 9, y el navegador la pinta sin pensarlo.
+                trozos.append(f"M{inicio} {y}h{x - inicio}v1h-{x - inicio}z")
+            else:
+                x += 1
+
+    tirilla.qr_contenido = contenido
+    tirilla.qr_ruta = "".join(trozos)
+    tirilla.qr_modulos = len(matriz)

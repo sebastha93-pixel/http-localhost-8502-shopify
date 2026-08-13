@@ -366,3 +366,147 @@ def test_una_venta_anulada_se_imprime_PERO_marcada(cliente):
     d = _tirilla(c)
     assert d["anulada"] is True
     assert d["total_centavos"] == 33980000   # los números siguen siendo los que fueron
+
+
+# ── El QR ───────────────────────────────────────────────────────────────────
+
+def _emitir(motor, *, qr_datos=None, cufe="a" * 96):
+    """Deja la venta con documento fiscal emitido y resolución en la tienda."""
+    import asyncio
+
+    async def hacer():
+        async with motor.begin() as cn:
+            await cn.execute(text(
+                "UPDATE retail.tiendas SET resolucion_dian='Res. DIAN 18764' "
+                " WHERE id='florida'"))
+            await cn.execute(text(
+                "UPDATE retail.ventas SET estado_fiscal='emitido' WHERE id=:i"),
+                {"i": VENTA})
+            await cn.execute(text("""
+                INSERT INTO retail.documentos_fiscales
+                    (id, venta_id, tipo, proveedor, estado, numero, cufe,
+                     qr_datos, payload_snapshot, emitido_en)
+                VALUES (:d, :v, 'factura_electronica', 'siigo', 'emitido',
+                        'FV-20-1334', :cufe, :qr, '{}'::jsonb, now())
+            """), {"d": "01JQ8X4T5N6P900R8S9V0W1X2Y", "v": VENTA,
+                   "cufe": cufe, "qr": qr_datos})
+
+    asyncio.get_event_loop().run_until_complete(hacer())
+
+
+def test_sin_documento_emitido_NO_hay_qr(cliente):
+    """Un QR en un papel que todavía no ampara nada lo haría parecer fiscal a
+    simple vista — que es justo lo que esta tirilla evita mientras no lo sea.
+    Y llevaría a una página de error de la DIAN."""
+    c, _ = cliente
+    _vender(c)
+    d = _tirilla(c)
+    assert d["qr_ruta"] is None
+    assert d["qr_contenido"] is None
+    assert d["qr_modulos"] == 0
+
+
+def test_con_documento_emitido_el_qr_apunta_al_catalogo_de_la_dian(cliente):
+    """El respaldo: mientras Siigo no mande su cadena, se arma la URL estándar
+    del catálogo con el CUFE. Es lo que llevan casi todas las facturas
+    electrónicas del país."""
+    c, motor = cliente
+    _vender(c)
+    _emitir(motor)
+    d = _tirilla(c)
+    assert d["qr_contenido"] == (
+        "https://catalogo-vpfe.dian.gov.co/document/searchqr?documentkey="
+        + "a" * 96)
+    assert d["qr_modulos"] > 0
+    assert d["qr_ruta"].startswith("M")
+
+
+def test_si_siigo_manda_su_cadena_MANDA_LA_SUYA(cliente):
+    """La DIAN define el formato y el proveedor lo construye. Si lo tuviéramos
+    escrito a mano y cambiara, el QR seguiría imprimiéndose, seguiría pareciendo
+    correcto, y llevaría a ninguna parte. Nadie lo descubre hasta que alguien
+    lo escanea."""
+    c, motor = cliente
+    _vender(c)
+    _emitir(motor, qr_datos="NumFac=FV1334&FecFac=2026-08-12&ValFac=339800")
+    d = _tirilla(c)
+    assert d["qr_contenido"] == "NumFac=FV1334&FecFac=2026-08-12&ValFac=339800"
+    assert "catalogo-vpfe" not in d["qr_contenido"]
+
+
+def test_el_qr_es_una_ruta_svg_no_marcado(cliente):
+    """Se manda el atributo `d` de un <path>, no un <svg> armado. Así la
+    pantalla no tiene que inyectar HTML crudo para pintarlo."""
+    c, motor = cliente
+    _vender(c)
+    _emitir(motor)
+    d = _tirilla(c)
+    ruta = d["qr_ruta"]
+    assert "<" not in ruta and ">" not in ruta
+
+    # Rachas horizontales, no un rectángulo por módulo. Se compara contra los
+    # módulos encendidos de verdad en vez de contra un número inventado: la
+    # afirmación es «agrupar comprime», no «pesa menos de tanto».
+    import segno
+    encendidos = sum(sum(f) for f in segno.make(d["qr_contenido"], error="m").matrix)
+    assert ruta.count("M") < encendidos, "no está agrupando: un tramo por módulo"
+    assert ruta.count("M") <= encendidos * 0.7
+
+
+def test_un_documento_emitido_sin_cufe_ni_qr_no_inventa_nada(cliente):
+    """Dato incompleto del proveedor. Un QR armado con un CUFE vacío apuntaría
+    al catálogo sin documento: peor que no imprimirlo."""
+    c, motor = cliente
+    _vender(c)
+    _emitir(motor, cufe=None)
+    d = _tirilla(c)
+    assert d["qr_ruta"] is None
+
+
+def test_el_cufe_en_texto_sigue_estando(cliente):
+    """El papel térmico se borra con el calor y el roce del bolsillo. Cuando el
+    QR deje de leerse, el CUFE escrito es lo único que queda."""
+    c, motor = cliente
+    _vender(c)
+    _emitir(motor)
+    d = _tirilla(c)
+    assert d["cufe"] == "a" * 96
+    assert d["qr_ruta"] is not None
+
+
+def test_la_ruta_svg_reproduce_EXACTAMENTE_la_matriz_del_qr(cliente):
+    """La prueba que impide un QR bonito e ilegible.
+
+    Convertir la matriz a una ruta SVG puede salir transpuesta, desplazada un
+    módulo o con las rachas mal cerradas, y el resultado SIGUE PARECIENDO un
+    código QR: cuadrado, con sus tres esquinas, con su ruido. Nadie lo nota
+    mirándolo. Se descubre cuando una clienta intenta verificar su factura y no
+    pasa nada.
+
+    Así que se deshace: se parsea la ruta de vuelta a una matriz y se compara
+    módulo por módulo con la que produjo la librería.
+    """
+    import re
+    import segno
+
+    c, motor = cliente
+    _vender(c)
+    _emitir(motor)
+    d = _tirilla(c)
+
+    esperada = [list(f) for f in segno.make(d["qr_contenido"], error="m").matrix]
+    n = len(esperada)
+    assert d["qr_modulos"] == n
+
+    reconstruida = [[0] * n for _ in range(n)]
+    tramos = re.findall(r"M(\d+) (\d+)h(\d+)v1h-\d+z", d["qr_ruta"])
+    assert tramos, "la ruta no tiene el formato esperado"
+    for x0, y, ancho in tramos:
+        x0, y, ancho = int(x0), int(y), int(ancho)
+        for x in range(x0, x0 + ancho):
+            reconstruida[y][x] = 1
+
+    for y in range(n):
+        assert reconstruida[y] == list(esperada[y]), (
+            f"la fila {y} no coincide: el QR se imprimiría ilegible"
+        )

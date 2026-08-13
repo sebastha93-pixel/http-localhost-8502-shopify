@@ -171,6 +171,25 @@ export function Tirilla({ datos }: { datos: Datos }) {
           {datos.documento_fiscal && (
             <div className="t-centro t-chico">DIAN {datos.documento_fiscal}</div>
           )}
+          {datos.qr_ruta && (
+            // El QR es lo que la gente escanea; el CUFE en texto es el
+            // respaldo para cuando el papel térmico se borra y el código deja
+            // de leerse, que en un bolsillo pasa en semanas.
+            <div className="t-qr">
+              <svg
+                viewBox={`0 0 ${datos.qr_modulos} ${datos.qr_modulos}`}
+                width="30mm"
+                height="30mm"
+                shapeRendering="crispEdges"
+                role="img"
+                aria-label="Código QR para verificar el documento ante la DIAN"
+              >
+                <rect width={datos.qr_modulos} height={datos.qr_modulos} fill="#fff" />
+                <path d={datos.qr_ruta} fill="#000" />
+              </svg>
+              <div className="t-chico">Verifique este documento ante la DIAN</div>
+            </div>
+          )}
           {datos.cufe && (
             // El CUFE va partido: son 96 caracteres y en 72 mm no cabe de
             // corrido. Cortarlo con overflow lo dejaría ilegible justo cuando
@@ -239,6 +258,11 @@ const ESTILOS = `
 .tirilla .t-anulada  { margin: 1.5mm 0; letter-spacing: .1em; }
 .tirilla .t-cufe     { font-size: 8px; word-break: break-all; text-align: center;
                        margin-top: 1mm; }
+/* 30 mm de QR. Una térmica de 203 dpi da 8 puntos por mm: con 53 módulos salen
+   ~4,5 puntos por módulo, por encima del mínimo para que un lector lo agarre.
+   Más pequeño deja de escanearse; más grande se come el papel. */
+.tirilla .t-qr       { text-align: center; margin: 2mm 0 1mm; }
+.tirilla .t-qr svg   { display: block; margin: 0 auto 1mm; }
 .tirilla .t-pie      { margin-top: 2mm; }
 .tirilla .t-avance   { height: 12mm; }
 
