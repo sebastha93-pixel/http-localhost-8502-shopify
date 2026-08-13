@@ -250,3 +250,56 @@ def test_lo_que_no_existe_devuelve_vacio_no_un_error(cliente):
                     params={"q": "zzzzz", "ubicacion_id": UBICACION})
     assert r.status_code == 200
     assert r.json() == []
+
+
+def test_una_venta_hecha_SIN_RED_queda_marcada_como_tal(cliente):
+    """`origen` estaba fijo en «en línea» dentro del repositorio, así que TODAS
+    las ventas parecían hechas con conexión — incluidas las que se cobraron a
+    ciegas y llegaron por la cola horas después.
+
+    Esa distinción es la que permite saber, al cuadrar el turno, cuáles se
+    hicieron sin poder comprobar el stock: son justo las que pueden haber
+    vendido algo que ya no estaba.
+    """
+    import asyncio
+    from sqlalchemy import text as _t
+
+    cuerpo = _venta()
+    cuerpo["origen"] = "fuera_de_linea"
+    assert cliente.post("/api/retail/ventas/cerrar", json=cuerpo).status_code == 200
+
+    async def leer():
+        m = create_async_engine(URL)
+        try:
+            async with m.connect() as cn:
+                return (await cn.execute(_t(
+                    "SELECT origen FROM retail.ventas WHERE id = :i"),
+                    {"i": cuerpo["venta_id"]})).scalar()
+        finally:
+            await m.dispose()
+
+    assert asyncio.get_event_loop().run_until_complete(leer()) == "fuera_de_linea"
+
+
+def test_por_omision_la_venta_es_en_linea(cliente):
+    """Un cliente que no manda `origen` no puede quedar marcado como offline:
+    ensuciaría el informe justo al revés."""
+    import asyncio
+    from sqlalchemy import text as _t
+
+    cuerpo = _venta()
+    cuerpo["venta_id"] = "01JQ8X4T5N6P090R8S9V0W1X2Y"
+    cuerpo["numero"] = "FV-20-1390"
+    assert cliente.post("/api/retail/ventas/cerrar", json=cuerpo).status_code == 200
+
+    async def leer():
+        m = create_async_engine(URL)
+        try:
+            async with m.connect() as cn:
+                return (await cn.execute(_t(
+                    "SELECT origen FROM retail.ventas WHERE id = :i"),
+                    {"i": cuerpo["venta_id"]})).scalar()
+        finally:
+            await m.dispose()
+
+    assert asyncio.get_event_loop().run_until_complete(leer()) == "en_linea"

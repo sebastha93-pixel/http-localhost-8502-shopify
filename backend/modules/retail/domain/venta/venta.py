@@ -68,6 +68,7 @@ class Venta:
         sesion_id: str,
         cajera_id: str,
         moneda: str,
+        origen: str = "en_linea",
         dispositivo_id: Optional[str] = None,
         creada_en: Optional[datetime] = None,
     ) -> None:
@@ -78,6 +79,12 @@ class Venta:
         self.sesion_id = sesion_id
         self.cajera_id = cajera_id
         self.moneda = moneda
+        # `en_linea` o `fuera_de_linea`. Estaba fijo en «en línea» dentro del
+        # repositorio, así que TODAS las ventas parecían hechas con red —
+        # incluidas las que se cobraron a ciegas y se sincronizaron después.
+        # Esa distinción es la que permite saber, al cuadrar el turno, cuáles
+        # se hicieron sin poder comprobar el stock.
+        self.origen = origen
         self.dispositivo_id = dispositivo_id
         self.creada_en = creada_en
 

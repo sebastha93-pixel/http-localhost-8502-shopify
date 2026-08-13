@@ -49,7 +49,13 @@ import {
   type Tirilla as TirillaDatos,
 } from "@/lib/pos/api";
 import { nuevoUlid } from "@/lib/pos/ulid";
-import { confirmada, encolar, idDelEquipo } from "@/lib/pos/almacen";
+import {
+  confirmada,
+  encolar,
+  guardarCatalogo,
+  idDelEquipo,
+  leerCatalogo,
+} from "@/lib/pos/almacen";
 import { armarTirillaLocal } from "@/lib/pos/tirilla-local";
 import { arrancarCola, sincronizar, usarNumerador } from "@/lib/pos/sincronizacion";
 import { ivaDe } from "@/lib/pos/dinero";
@@ -62,6 +68,37 @@ const UBICACION = process.env.NEXT_PUBLIC_POS_UBICACION || "";
 // backend, con el usuario que entró por el login del ERP.
 
 type Fase = "vendiendo" | "cobrando" | "cerrada";
+
+/**
+ * El filtro que sin red hace el dispositivo.
+ *
+ * Es el mismo que el servidor resuelve con SQL: tokens que tienen que estar
+ * TODOS, no la frase literal — nadie escribe el nombre exacto del catálogo.
+ * Se busca sobre referencia, nombre, color y SKU, igual que `texto_busqueda`.
+ */
+/** «5 min», «2 h». Sin decimales: lo que importa es el orden de magnitud —si
+ *  la foto es de hace cinco minutos se confía, si es de hace tres horas no. */
+function antiguedad(desde: number): string {
+  const min = Math.max(1, Math.round((Date.now() - desde) / 60000));
+  if (min < 60) return `${min} min`;
+  const h = Math.round(min / 60);
+  return h < 24 ? `${h} h` : `${Math.round(h / 24)} d`;
+}
+
+function filtrar(
+  referencias: Referencia[],
+  consulta: string,
+  categoria: string,
+): Referencia[] {
+  const tokens = consulta.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return referencias.filter((r) => {
+    if (categoria && categoria !== "Todo" && r.categoria !== categoria) return false;
+    if (!tokens.length) return true;
+    const texto = [r.referencia, r.nombre, r.color,
+                   ...r.tallas.map((t) => t.sku)].join(" ").toLowerCase();
+    return tokens.every((t) => texto.includes(t));
+  });
+}
 
 export default function PantallaVenta() {
   const [consulta, setConsulta] = useState("");
@@ -89,6 +126,11 @@ export default function PantallaVenta() {
   // Quién es este equipo. Sin esto, dos tabletas en la misma caja reciben el
   // MISMO bloque vigente y numeran desde el mismo punto.
   const equipo = useRef<string | null>(null);
+  // De cuándo es el catálogo que se está mostrando. `null` = del servidor,
+  // recién traído. Con valor = es la copia local y hay que decirlo: el stock
+  // que se ve es una foto, y ofrecer lo que ya se vendió en la otra caja es la
+  // peor conversación posible en el mostrador.
+  const [catalogoDe, setCatalogoDe] = useState<number | null>(null);
   const [cargandoTurno, setCargandoTurno] = useState(true);
   const [abriendo, setAbriendo] = useState(false);
   const [errorTurno, setErrorTurno] = useState<string | null>(null);
@@ -192,9 +234,33 @@ export default function PantallaVenta() {
     if (!configurado || !turno) return;
     let vigente = true;
     const temporizador = setTimeout(async () => {
+      let d: { referencias: Referencia[]; categorias: string[] };
       try {
-        const d = await listarCatalogo(UBICACION, consulta.trim(), categoria);
+        d = await listarCatalogo(UBICACION, consulta.trim(), categoria);
         if (!vigente) return;
+        setCatalogoDe(null);
+        // Se guarda la copia SIN filtros: es la que sirve cuando no hay red, y
+        // guardar lo filtrado dejaría a la cajera viendo tres referencias
+        // porque justo antes de la caída había buscado «falda».
+        if (!consulta.trim() && (!categoria || categoria === "Todo")) {
+          void guardarCatalogo(d).catch(() => {});
+        }
+      } catch (e) {
+        if (!vigente) return;
+        // SIN RED: la copia local. Sin esto, recargar sin conexión deja la
+        // rejilla vacía y la caja no puede ni empezar una venta.
+        const local = await leerCatalogo<Referencia>();
+        if (!local) {
+          setAviso(e instanceof Error ? e.message : "No se pudo leer el catálogo.");
+          return;
+        }
+        setCatalogoDe(local.guardado_en);
+        d = { referencias: filtrar(local.referencias, consulta, categoria),
+              categorias: local.categorias };
+      }
+
+      if (!vigente) return;
+      {
         setCategorias(d.categorias);
         setReferencias(d.referencias);
 
@@ -210,10 +276,6 @@ export default function PantallaVenta() {
               break;
             }
           }
-        }
-      } catch (e) {
-        if (vigente) {
-          setAviso(e instanceof Error ? e.message : "No se pudo leer el catálogo.");
         }
       }
     }, 120);
@@ -411,6 +473,15 @@ export default function PantallaVenta() {
       }
       // Falló la RED. La venta ya está en disco y sale sola: no se pierde y
       // la clienta no tiene que esperar a que vuelva internet.
+      //
+      // Y queda MARCADA como hecha sin conexión. Es la única forma de saber,
+      // al cuadrar el turno, cuáles se cobraron sin poder comprobar el stock —
+      // que son justo las que pueden haber vendido algo que ya no estaba.
+      const cuerpoOffline = { ...cuerpo, origen: "fuera_de_linea" };
+      await encolar({
+        venta_id: ventaId.current, numero, cuerpo: cuerpoOffline,
+        creada_en: Date.now(), intentos: 1, estado: "en_cola",
+      }).catch(() => {});
       void sincronizar();
       // Y el papel se arma aquí: pedírselo al servidor sin conexión sólo gasta
       // el tiempo del timeout y acaba igual, con la clienta esperando.
@@ -517,6 +588,17 @@ export default function PantallaVenta() {
         >
           <h1 className="titular text-[20px]">Venta</h1>
           <div className="flex items-center gap-3">
+            {catalogoDe !== null && (
+              // El stock de aquí es de hace un rato. Decir CUÁNTO es lo que
+              // permite a la cajera decidir si confía o va a mirar la percha.
+              <span
+                role="status"
+                className="border border-[var(--pos-800)]/30 bg-[var(--pos-800)]/10 px-2.5 py-1 text-[11px] text-[var(--pos-900)]"
+                title="Sin conexión: el stock puede haber cambiado"
+              >
+                Stock de hace {antiguedad(catalogoDe)}
+              </span>
+            )}
             <EstadoConexion />
             <p className="text-[12px]" style={{ color: "var(--pos-600)" }}>
               {contexto?.tienda_nombre ?? TIENDA} · {contexto?.caja_nombre ?? CAJA} · {CAJERA} · {hoy}

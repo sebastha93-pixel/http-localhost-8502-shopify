@@ -20,10 +20,11 @@
  */
 
 const BASE = "pos-male";
-const VERSION = 1;
+const VERSION = 2;
 
 const PENDIENTES = "ventas_pendientes";
 const CARRITO = "carrito";
+const CATALOGO = "catalogo";
 
 export type EstadoPendiente = "en_cola" | "enviando" | "rechazada";
 
@@ -61,6 +62,9 @@ function abrir(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(CARRITO)) {
         db.createObjectStore(CARRITO);
+      }
+      if (!db.objectStoreNames.contains(CATALOGO)) {
+        db.createObjectStore(CATALOGO);
       }
     };
     peticion.onsuccess = () => resolver(peticion.result);
@@ -160,4 +164,35 @@ export async function idDelEquipo(nuevoId: () => string): Promise<string> {
   const id = nuevoId();
   await conStore(CARRITO, "readwrite", (s) => s.put(id, EQUIPO));
   return id;
+}
+
+
+// ── El catálogo ─────────────────────────────────────────────────────────────
+//
+// Se guarda una COPIA COMPLETA, sin filtro de búsqueda ni de categoría: sin
+// red no se puede volver a preguntar, así que hay que tener todo y filtrar
+// aquí. Guardar sólo lo último consultado dejaría a la cajera viendo tres
+// referencias porque justo antes de la caída había buscado «falda».
+//
+// EL STOCK QUE SE GUARDA ES UNA FOTO, y envejece. Por eso viaja `guardado_en`:
+// la pantalla tiene que poder decir de cuándo es. Ofrecer como disponible algo
+// que se vendió hace tres horas en la otra caja produce la peor conversación
+// posible en el mostrador.
+
+export interface CatalogoGuardado<R> {
+  referencias: R[];
+  categorias: string[];
+  guardado_en: number;
+}
+
+export async function guardarCatalogo<R>(
+  datos: { referencias: R[]; categorias: string[] },
+): Promise<void> {
+  await conStore(CATALOGO, "readwrite", (s) =>
+    s.put({ ...datos, guardado_en: Date.now() }, "completo"));
+}
+
+export async function leerCatalogo<R>(): Promise<CatalogoGuardado<R> | undefined> {
+  return conStore<CatalogoGuardado<R> | undefined>(
+    CATALOGO, "readonly", (s) => s.get("completo"));
 }

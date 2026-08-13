@@ -82,6 +82,11 @@ class VentaEntrada(BaseModel):
     cliente_id: Optional[str] = None
     dispositivo_id: Optional[str] = None
     moneda: str = "COP"
+    # `fuera_de_linea` cuando la venta se cobró sin red y llegó por la cola.
+    # Lo dice el dispositivo porque es el único que lo sabe: al servidor le
+    # llega igual en los dos casos, y sin esto TODAS las ventas parecen hechas
+    # con conexión — incluidas las que se cobraron sin poder ver el stock.
+    origen: str = "en_linea"
     lineas: List[LineaEntrada]
     pagos: List[PagoEntrada]
 
@@ -243,7 +248,9 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
         id=entrada.venta_id, numero=entrada.numero, tienda_id=entrada.tienda_id,
         caja_id=entrada.caja_id, sesion_id=entrada.sesion_id,
         cajera_id=usuario_id, moneda=entrada.moneda,
-        dispositivo_id=entrada.dispositivo_id)
+        dispositivo_id=entrada.dispositivo_id,
+        origen=("fuera_de_linea" if entrada.origen == "fuera_de_linea"
+                else "en_linea"))
     if entrada.cliente_id:
         venta.asignar_cliente(entrada.cliente_id)
 

@@ -84,7 +84,7 @@ class RepositorioVentasSQL:
             "cliente_id": v.cliente_id,
             "estado": v.estado.value,
             "estado_fiscal": v.estado_fiscal.value,
-            "origen": "en_linea",
+            "origen": v.origen,
             "subtotal": v.subtotal().centavos,
             "descuento_total": v.descuento_total().centavos,
             "base_gravable": v.base_gravable().centavos,
