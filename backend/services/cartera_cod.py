@@ -22,11 +22,12 @@ Lo que se midió después, contra producción:
 POR ESO ESTE MÓDULO YA NO DICE "MELONN NOS DEBE". Desde Siigo solo se puede
 saber qué se facturó y contra qué cuenta; cuánto consignó Melonn se mide en el
 módulo de conciliación, que tiene los recaudos pedido por pedido (tabla
-`recon.gateway_transactions`, gateway `melonn_cod`). El backend del OS todavía no
-puede leer eso —llega a `recon` solo por HTTP y ese servicio no expone el detalle
-por pedido—, así que acá se muestra lo que SÍ se puede probar y se dice
-explícitamente lo que falta. Medido a mano el 2026-08-11: de 943 entregados, 750
-con recaudo reportado por Melonn y 193 sin reporte ($34,9 M).
+`recon.gateway_transactions`, gateway `melonn_cod`). Desde el 2026-08-12 el OS SÍ
+lo lee: se le agregó a ese servicio el endpoint GET /api/cod-collections y acá se
+consume por `recon_client.recaudos_cod()`. Con eso `melonn_debe` es la deuda real
+—entregado menos lo que Melonn reporta haber recaudado—; si la conciliación no
+responde, `recaudo_medible` sale en False y la pantalla NO muestra la cifra,
+porque un mapa de recaudos vacío haría ver todos los entregados como impagos.
 
 Preferir un dato incompleto y rotulado antes que un número redondo y falso: el
 número falso se usa para tomar decisiones.
