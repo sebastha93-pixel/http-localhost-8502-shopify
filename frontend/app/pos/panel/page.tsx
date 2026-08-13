@@ -59,6 +59,14 @@ export default function PantallaPanel() {
           <h1 className="titular text-[22px] font-semibold tracking-tight">
             Panel de ventas
           </h1>
+          {/* Los permisos no van en el rail: no es pantalla de cajera. Pero
+              tienen que ser alcanzables sin teclear la URL a mano. */}
+          <a
+            href="/pos/permisos"
+            className="ml-auto border border-[var(--pos-divider)] px-2.5 py-1 text-[11px] text-[var(--pos-700)] hover:bg-[var(--pos-100)]"
+          >
+            Permisos
+          </a>
           {datos && (
             <p className="tabular text-[12px] text-[var(--pos-600)]">
               {datos.tienda_nombre} · {fechaLarga(datos.fecha)}

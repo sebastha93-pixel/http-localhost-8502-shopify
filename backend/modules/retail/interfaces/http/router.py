@@ -1578,3 +1578,182 @@ def _resumir(evento: str, p: dict) -> str:
         return (f"turno #{p.get('numero_turno','?')} · {signo} {pesos(abs(dif))}"
                 f"{' · ' + p.get('justificacion') if p.get('justificacion') else ''}")
     return ", ".join(f"{k}={v}" for k, v in list(p.items())[:3])
+
+
+# ── Administración de permisos del POS ──────────────────────────────────────
+
+class PermisosUsuario(BaseModel):
+    usuario_id: str
+    nombre: str
+    rol: Optional[str] = None
+    tiendas: List[str] = []
+    tope_descuento_pct: str = "0"
+    puede_anular_venta: bool = False
+    puede_cerrar_con_descuadre: bool = False
+    puede_ver_esperado: bool = False
+    puede_mover_caja: bool = False
+    puede_ver_auditoria: bool = False
+    activo: bool = True
+
+
+class GuardarPermisos(BaseModel):
+    nombre: str = Field(min_length=2, max_length=80)
+    rol: Optional[str] = Field(None, max_length=40)
+    tiendas: List[str] = []
+    tope_descuento_pct: str = "0"
+    puede_anular_venta: bool = False
+    puede_cerrar_con_descuadre: bool = False
+    puede_ver_esperado: bool = False
+    puede_mover_caja: bool = False
+    puede_ver_auditoria: bool = False
+    activo: bool = True
+
+
+def _exigir_admin(usuario: CurrentUser) -> None:
+    """Conceder permisos es un acto sobre PERSONAS, no una operación de tienda.
+
+    No basta con `retail: modificar` —eso lo tiene toda cajera— ni con los
+    permisos del POS: quien puede anular ventas no tiene por qué poder darse a
+    sí mismo el permiso de ver la auditoría. Se exige el rol de administrador
+    del ERP, que es donde vive la gestión de usuarios.
+    """
+    if usuario.rol != "admin":
+        raise HTTPException(403, {
+            "error": "solo_administrador",
+            "mensaje": "Cambiar permisos del POS es cosa de un administrador "
+                       "del sistema, no de la caja."})
+
+
+@router.get("/admin/permisos", response_model=List[PermisosUsuario])
+async def listar_permisos(
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Quién puede hacer qué en el POS.
+
+    Hasta ahora esto se editaba con `psql`. Dar de alta una cajera —o quitarle
+    el permiso a alguien que se fue— dependía de que alguien con acceso a la
+    base lo hiciera a mano, que es lo que no puede pasar en una tienda.
+    """
+    from sqlalchemy import text as _t
+    _exigir_admin(usuario)
+
+    async with uow as t:
+        filas = (await t.sesion.execute(_t("""
+            SELECT usuario_id, nombre, rol, tiendas, tope_descuento_pct,
+                   puede_anular_venta, puede_cerrar_con_descuadre,
+                   puede_ver_esperado, puede_mover_caja, puede_ver_auditoria,
+                   activo
+              FROM retail.permisos_pos ORDER BY nombre
+        """))).mappings().all()
+
+    return [PermisosUsuario(
+        usuario_id=f["usuario_id"], nombre=f["nombre"], rol=f["rol"],
+        tiendas=list(f["tiendas"] or []),
+        tope_descuento_pct=str(f["tope_descuento_pct"] or 0),
+        puede_anular_venta=f["puede_anular_venta"],
+        puede_cerrar_con_descuadre=f["puede_cerrar_con_descuadre"],
+        puede_ver_esperado=f["puede_ver_esperado"],
+        puede_mover_caja=f["puede_mover_caja"],
+        puede_ver_auditoria=f["puede_ver_auditoria"],
+        activo=f["activo"]) for f in filas]
+
+
+# PATCH y no PUT aunque el cuerpo sea COMPLETO: el cliente compartido del ERP
+# —del que dependen todas sus pantallas— no expone `put`, y agregárselo por una
+# pantalla del POS es tocar código del que cuelga el resto del sistema.
+@router.patch("/admin/permisos/{usuario_id}", response_model=PermisosUsuario)
+async def guardar_permisos(
+    usuario_id: str,
+    entrada: GuardarPermisos,
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Crea o actualiza los permisos de una persona en el POS.
+
+    QUEDA EN LA AUDITORÍA como crítico, con el antes y el después. Conceder
+    permisos es la operación que habilita todas las demás: sin rastro, alguien
+    puede darse el permiso de anular, anular una venta y quitárselo.
+    """
+    from datetime import datetime, timezone
+    from decimal import Decimal, InvalidOperation
+    from sqlalchemy import text as _t
+
+    _exigir_admin(usuario)
+
+    try:
+        # Se cuantiza a dos decimales, que es como lo guarda la columna
+        # `numeric(5,2)`. Sin esto el PUT devuelve «15» y el GET siguiente
+        # «15.00»: un cliente que los compare ve un cambio que no existe.
+        tope = Decimal(entrada.tope_descuento_pct).quantize(Decimal("0.01"))
+    except InvalidOperation:
+        raise HTTPException(400, {"error": "regla_de_negocio",
+                                  "mensaje": "El tope no es un número."})
+    if not (0 <= tope <= 100):
+        raise HTTPException(400, {
+            "error": "regla_de_negocio",
+            "mensaje": "El tope de descuento va entre 0 y 100."})
+
+    ahora = datetime.now(timezone.utc)
+    async with uow as t:
+        antes = (await t.sesion.execute(_t("""
+            SELECT tope_descuento_pct, puede_anular_venta,
+                   puede_cerrar_con_descuadre, puede_ver_esperado,
+                   puede_mover_caja, puede_ver_auditoria, activo
+              FROM retail.permisos_pos WHERE usuario_id = :u
+        """), {"u": usuario_id})).mappings().first()
+
+        await t.sesion.execute(_t("""
+            INSERT INTO retail.permisos_pos
+                (usuario_id, nombre, rol, tiendas, tope_descuento_pct,
+                 puede_anular_venta, puede_cerrar_con_descuadre,
+                 puede_ver_esperado, puede_mover_caja, puede_ver_auditoria,
+                 activo, actualizado_en)
+            VALUES (:u, :n, :r, :t, :tope, :anular, :descuadre, :esperado,
+                    :caja, :auditoria, :activo, :ts)
+            ON CONFLICT (usuario_id) DO UPDATE SET
+                nombre = EXCLUDED.nombre, rol = EXCLUDED.rol,
+                tiendas = EXCLUDED.tiendas,
+                tope_descuento_pct = EXCLUDED.tope_descuento_pct,
+                puede_anular_venta = EXCLUDED.puede_anular_venta,
+                puede_cerrar_con_descuadre = EXCLUDED.puede_cerrar_con_descuadre,
+                puede_ver_esperado = EXCLUDED.puede_ver_esperado,
+                puede_mover_caja = EXCLUDED.puede_mover_caja,
+                puede_ver_auditoria = EXCLUDED.puede_ver_auditoria,
+                activo = EXCLUDED.activo, actualizado_en = EXCLUDED.actualizado_en
+        """), {"u": usuario_id, "n": entrada.nombre, "r": entrada.rol,
+               "t": entrada.tiendas, "tope": tope,
+               "anular": entrada.puede_anular_venta,
+               "descuadre": entrada.puede_cerrar_con_descuadre,
+               "esperado": entrada.puede_ver_esperado,
+               "caja": entrada.puede_mover_caja,
+               "auditoria": entrada.puede_ver_auditoria,
+               "activo": entrada.activo, "ts": ahora})
+
+        await t.auditoria.registrar(
+            evento="permisos.cambiados", ocurrido_en=ahora, severidad="critico",
+            tienda_id=(entrada.tiendas[0] if entrada.tiendas else None),
+            usuario_id=usuario.id,
+            agregado_tipo="permisos_pos", agregado_id=usuario_id,
+            payload={"sobre": usuario_id, "nombre": entrada.nombre,
+                     "antes": {k: str(v) for k, v in dict(antes).items()}
+                              if antes else None,
+                     "despues": {"tope": str(tope),
+                                 "anular": entrada.puede_anular_venta,
+                                 "descuadre": entrada.puede_cerrar_con_descuadre,
+                                 "esperado": entrada.puede_ver_esperado,
+                                 "caja": entrada.puede_mover_caja,
+                                 "auditoria": entrada.puede_ver_auditoria,
+                                 "activo": entrada.activo}})
+        await t.commit()
+
+    return PermisosUsuario(
+        usuario_id=usuario_id, nombre=entrada.nombre, rol=entrada.rol,
+        tiendas=entrada.tiendas, tope_descuento_pct=str(tope),
+        puede_anular_venta=entrada.puede_anular_venta,
+        puede_cerrar_con_descuadre=entrada.puede_cerrar_con_descuadre,
+        puede_ver_esperado=entrada.puede_ver_esperado,
+        puede_mover_caja=entrada.puede_mover_caja,
+        puede_ver_auditoria=entrada.puede_ver_auditoria,
+        activo=entrada.activo,
+    )

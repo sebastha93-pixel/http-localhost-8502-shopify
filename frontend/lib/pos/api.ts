@@ -627,3 +627,43 @@ export async function leerAuditoria(opciones: {
     return traducir(e);
   }
 }
+
+// ── Administración de permisos ──────────────────────────────────────────────
+
+export interface PermisosUsuario {
+  usuario_id: string;
+  nombre: string;
+  rol: string | null;
+  tiendas: string[];
+  tope_descuento_pct: string;
+  puede_anular_venta: boolean;
+  puede_cerrar_con_descuadre: boolean;
+  puede_ver_esperado: boolean;
+  puede_mover_caja: boolean;
+  puede_ver_auditoria: boolean;
+  activo: boolean;
+}
+
+export async function listarPermisos(): Promise<PermisosUsuario[]> {
+  try {
+    return await api.get<PermisosUsuario[]>("/api/retail/admin/permisos");
+  } catch (e) {
+    return traducir(e);
+  }
+}
+
+/** Crea o actualiza. Queda como CRÍTICO en la auditoría con el antes y el
+ *  después: conceder permisos es la operación que habilita todas las demás. */
+export async function guardarPermisos(
+  usuarioId: string,
+  datos: Omit<PermisosUsuario, "usuario_id">,
+): Promise<PermisosUsuario> {
+  try {
+    // PATCH, aunque el cuerpo va completo: el cliente compartido del ERP no
+    // expone `put` y no vale la pena tocarlo por esto.
+    return await api.patch<PermisosUsuario>(
+      `/api/retail/admin/permisos/${usuarioId}`, datos);
+  } catch (e) {
+    return traducir(e);
+  }
+}
