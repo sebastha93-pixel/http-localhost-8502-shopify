@@ -72,8 +72,10 @@ class RepositorioVentasSQL:
         return {
             "id": v.id,
             "numero": v.numero,
-            "prefijo": v.numero.rsplit("-", 1)[0] if "-" in v.numero else v.numero,
-            "consecutivo": int(v.numero.rsplit("-", 1)[-1]) if "-" in v.numero else 0,
+            # Del AGREGADO, no partido aquí otra vez: el endpoint valida el
+            # consecutivo contra el bloque arrendado con la misma definición.
+            "prefijo": v.prefijo,
+            "consecutivo": v.consecutivo,
             "tienda_id": v.tienda_id,
             "caja_id": v.caja_id,
             "sesion_id": v.sesion_id,

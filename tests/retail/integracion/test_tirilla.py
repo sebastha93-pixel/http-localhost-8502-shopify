@@ -54,8 +54,13 @@ async def cliente():
          "VALUES ('florida','Florida','Dirty Jeans S.A.S.','900123456-7',"
          "'Cra 43A #1-50, Medellín','(604) 444 5566',"
          "'Cambios dentro de 30 días con esta tirilla.')", {}),
-        ("INSERT INTO retail.cajas (id,tienda_id,nombre) "
-         "VALUES ('florida_caja1','florida','Caja 01')", {}),
+        ("INSERT INTO retail.cajas (id,tienda_id,nombre,prefijo_factura) "
+         "VALUES ('florida_caja1','florida','Caja 01','FV-20')", {}),
+        # Bloque de consecutivos: en produccion lo arrienda la apertura de
+        # turno. Sin el, ninguna venta pasa la validacion de numeracion.
+        ("INSERT INTO retail.bloques_consecutivo "
+         "(caja_id,prefijo,desde,hasta,siguiente) "
+         "VALUES ('florida_caja1','FV-20',1,99999,1)", {}),
         ("INSERT INTO retail.ubicaciones (id,tipo,nombre,tienda_id) "
          "VALUES (:u,'tienda','Florida','florida')", {"u": UBICACION}),
         ("INSERT INTO retail.medios_pago (id,nombre,tipo,siigo_forma_pago_id) "

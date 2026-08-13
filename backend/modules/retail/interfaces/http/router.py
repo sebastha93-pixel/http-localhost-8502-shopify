@@ -13,6 +13,8 @@ esta petición es idempotente. Reintentarla veinte veces produce una venta.
 from __future__ import annotations
 
 from decimal import Decimal
+
+from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -168,6 +170,7 @@ async def cerrar_venta(
 
     try:
         venta, variante_por_sku = await _armar(entrada, uow, usuario.id)
+        await _exigir_numero_arrendado(uow, venta)
         resultado = await CerrarVenta(uow, reloj=RelojDelSistema()).ejecutar(
             venta, variante_por_sku=variante_por_sku,
             ubicacion_id=entrada.ubicacion_id, usuario_id=usuario.id)
@@ -181,6 +184,18 @@ async def cerrar_venta(
     except ReglaDeNegocio as e:
         raise HTTPException(400, {"error": "regla_de_negocio",
                                   "mensaje": str(e)})
+    except IntegrityError as e:
+        # El índice único del número es la última red, y saltaba como un 500
+        # sin explicación. Que llegue aquí significa que dos ventas DISTINTAS
+        # traen el mismo número: un dispositivo con el bloque desincronizado.
+        if "ux_venta_numero" not in str(e):
+            raise
+        raise HTTPException(409, {
+            "error": "numero_repetido",
+            "mensaje": f"El número {entrada.numero} ya está usado por otra "
+                       f"venta. Vuelve a abrir el turno para pedir numeración "
+                       f"nueva; la venta no se registró.",
+            "accion_sugerida": "reabrir_turno"})
 
     return TicketSalida(
         venta_id=resultado.venta_id, numero=resultado.numero,
@@ -191,6 +206,30 @@ async def cerrar_venta(
         descuento_centavos=venta.descuento_total().centavos,
         estado_fiscal=resultado.estado_fiscal,
     )
+
+
+async def _exigir_numero_arrendado(uow, venta) -> None:
+    """El número llega en la petición; hay que comprobar de dónde salió.
+
+    El dispositivo numera sin red dentro del bloque que arrendó — ese es todo
+    el punto del diseño offline. Pero aceptar cualquier número deja que un
+    cliente con un error (o modificado) numere encima de la otra caja o fuera
+    de todo rango, y eso no se descubre hasta que alguien cuadra la numeración
+    meses después.
+
+    NO se exige que sea el bloque VIGENTE: una venta hecha sin red puede llegar
+    cuando la caja ya renovó, y rechazarla ahí sería perder justo la venta que
+    todo esto existe para no perder.
+    """
+    async with uow as t:
+        ok = await t.consecutivos.pertenece_a_un_bloque(
+            caja_id=venta.caja_id, prefijo=venta.prefijo,
+            consecutivo=venta.consecutivo)
+    if not ok:
+        raise ReglaDeNegocio(
+            f"El número {venta.numero} no sale de ningún bloque arrendado por "
+            f"esta caja. Vuelve a abrir el turno para pedir uno."
+        )
 
 
 async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
@@ -402,6 +441,14 @@ class TurnoSalida(BaseModel):
     tope_descuento_pct: str
     base_inicial_centavos: int
     reanudado: bool = False
+    # EL BLOQUE DE CONSECUTIVOS. Es lo que permite numerar sin red: el
+    # dispositivo asigna dentro de su rango sin volver a preguntar. Antes la
+    # pantalla numeraba con `Date.now() % 100000`, que se repite cada 100 s y
+    # choca contra `ux_venta_numero`.
+    prefijo: str = ""
+    consecutivo_desde: int = 0
+    consecutivo_hasta: int = 0
+    consecutivo_siguiente: int = 0
 
 
 class AbrirTurnoEntrada(BaseModel):
@@ -430,6 +477,12 @@ async def turno_actual(
         tope = (await t.sesion.execute(_t(
             "SELECT tope_descuento_pct FROM retail.permisos_pos WHERE usuario_id=:u"
         ), {"u": abierta["abierta_por"]})).scalar()
+        # Reanudar NO arrienda: recargar la pantalla a media mañana dejaría un
+        # hueco de 500 números cada vez.
+        prefijo = await _prefijo_de(t, caja_id)
+        bloque = await t.consecutivos.vigente_o_arrendar(
+            caja_id=caja_id, prefijo=prefijo)
+        await t.commit()
 
     return TurnoSalida(
         sesion_id=abierta["id"], numero_turno=abierta["numero_turno"],
@@ -438,6 +491,9 @@ async def turno_actual(
         cajera_nombre=abierta["cajera_nombre"],
         tope_descuento_pct=str(tope or 0),
         base_inicial_centavos=int(abierta["base_inicial"]), reanudado=True,
+        prefijo=bloque["prefijo"], consecutivo_desde=bloque["desde"],
+        consecutivo_hasta=bloque["hasta"],
+        consecutivo_siguiente=bloque["siguiente"],
     )
 
 
@@ -470,12 +526,19 @@ async def abrir_turno(
             tope = (await t.sesion.execute(_t(
                 "SELECT tope_descuento_pct FROM retail.permisos_pos WHERE usuario_id=:u"
             ), {"u": ya["abierta_por"]})).scalar()
+            prefijo = await _prefijo_de(t, entrada.caja_id)
+            bloque = await t.consecutivos.vigente_o_arrendar(
+                caja_id=entrada.caja_id, prefijo=prefijo)
+            await t.commit()
             return TurnoSalida(
                 sesion_id=ya["id"], numero_turno=ya["numero_turno"],
                 tienda_id=ya["tienda_id"], caja_id=entrada.caja_id,
                 cajera_id=ya["abierta_por"], cajera_nombre=ya["cajera_nombre"],
                 tope_descuento_pct=str(tope or 0),
                 base_inicial_centavos=int(ya["base_inicial"]), reanudado=True,
+                prefijo=bloque["prefijo"], consecutivo_desde=bloque["desde"],
+                consecutivo_hasta=bloque["hasta"],
+                consecutivo_siguiente=bloque["siguiente"],
             )
 
         try:
@@ -484,13 +547,20 @@ async def abrir_turno(
                 sesion_id=entrada.sesion_id, tienda_id=entrada.tienda_id,
                 caja_id=entrada.caja_id, usuario_id=usuario.id,
                 base_inicial=base, ahora=ahora)
+            # El bloque se arrienda EN LA MISMA TRANSACCIÓN que el turno: un
+            # turno abierto sin bloque es una caja que no puede numerar, y una
+            # caja que no puede numerar no puede vender.
+            prefijo = await _prefijo_de(t, entrada.caja_id)
+            bloque = await t.consecutivos.vigente_o_arrendar(
+                caja_id=entrada.caja_id, prefijo=prefijo)
             await t.auditoria.registrar(
                 evento="caja.abierta", ocurrido_en=ahora,
                 tienda_id=entrada.tienda_id, caja_id=entrada.caja_id,
                 sesion_id=entrada.sesion_id, usuario_id=usuario.id,
                 agregado_tipo="sesion_caja", agregado_id=entrada.sesion_id,
                 payload={"numero_turno": turno["numero_turno"],
-                         "base_inicial": base})
+                         "base_inicial": base,
+                         "consecutivos": f"{bloque['desde']}-{bloque['hasta']}"})
             await t.commit()
         except ReglaDeNegocio as e:
             raise HTTPException(400, {"error": "regla_de_negocio",
@@ -505,6 +575,9 @@ async def abrir_turno(
         tienda_id=entrada.tienda_id, caja_id=entrada.caja_id,
         cajera_id=usuario.id, cajera_nombre=usuario.nombre,
         tope_descuento_pct=str(tope or 0), base_inicial_centavos=base,
+        prefijo=bloque["prefijo"], consecutivo_desde=bloque["desde"],
+        consecutivo_hasta=bloque["hasta"],
+        consecutivo_siguiente=bloque["siguiente"],
     )
 
 
@@ -1020,3 +1093,49 @@ async def tirilla(
         qr_modulos=d.qr_modulos,
         es_documento_fiscal=d.es_documento_fiscal,
     )
+
+
+# ── Consecutivos ────────────────────────────────────────────────────────────
+
+class BloqueSalida(BaseModel):
+    prefijo: str
+    desde: int
+    hasta: int
+    siguiente: int
+
+
+@router.post("/caja/consecutivos", response_model=BloqueSalida)
+async def arrendar_bloque(
+    caja_id: str = Query(),
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Arrienda el bloque siguiente. Lo pide el dispositivo al 80 % consumido.
+
+    Al 80 % y no al agotarse: si se espera al último número, la petición cae
+    justo cuando ya no quedan, y si en ese momento no hay red la caja se queda
+    sin poder vender.
+    """
+    async with uow as t:
+        prefijo = await _prefijo_de(t, caja_id)
+        bloque = await t.consecutivos.arrendar(caja_id=caja_id, prefijo=prefijo)
+        await t.commit()
+
+    return BloqueSalida(prefijo=bloque["prefijo"], desde=bloque["desde"],
+                        hasta=bloque["hasta"], siguiente=bloque["siguiente"])
+
+
+async def _prefijo_de(t, caja_id: str) -> str:
+    """El de Siigo si ya está confirmado; si no, uno local.
+
+    `cajas.prefijo_factura` nace NULL a propósito: el sistema se niega a
+    facturar con un prefijo adivinado. Pero el número del TIQUETE no es el
+    fiscal —ese lo asigna Siigo al emitir— así que la caja puede numerar desde
+    el primer día con un prefijo propio. El día que Siigo quede configurado, el
+    prefijo cambia y la numeración simplemente arranca de nuevo bajo el nuevo:
+    el índice único es por (caja, prefijo, consecutivo).
+    """
+    from sqlalchemy import text as _t
+    return (await t.sesion.execute(_t("""
+        SELECT coalesce(prefijo_factura, 'POS') FROM retail.cajas WHERE id = :c
+    """), {"c": caja_id})).scalar() or "POS"

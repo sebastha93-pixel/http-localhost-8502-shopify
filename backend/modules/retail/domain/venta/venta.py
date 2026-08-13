@@ -175,6 +175,30 @@ class Venta:
         self._exigir_borrador()
         self.lineas.remove(self._linea(numero))
 
+    # ── El número del tiquete ───────────────────────────────────────────────
+
+    @property
+    def prefijo(self) -> str:
+        """`FV-20-1334` → `FV-20`.
+
+        Se parte por el ÚLTIMO guion, no por el primero: los prefijos de Siigo
+        llevan guion dentro (`FV-20`) y partir por el primero daría `FV` con un
+        consecutivo de `20-1334`, que no es un entero y revienta al guardar.
+
+        Vive aquí y no en el repositorio porque el índice único de la base es
+        sobre (caja, prefijo, consecutivo) y el endpoint valida el consecutivo
+        contra el bloque arrendado: tres sitios que tienen que estar de acuerdo
+        sobre dónde termina el prefijo.
+        """
+        return self.numero.rsplit("-", 1)[0] if "-" in self.numero else self.numero
+
+    @property
+    def consecutivo(self) -> int:
+        if "-" not in self.numero:
+            return 0
+        cola = self.numero.rsplit("-", 1)[-1]
+        return int(cola) if cola.isdigit() else 0
+
     # ── Descuentos · INV-V6 ─────────────────────────────────────────────────
 
     def aplicar_descuento_linea(

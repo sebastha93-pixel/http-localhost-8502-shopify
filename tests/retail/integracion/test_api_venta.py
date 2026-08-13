@@ -46,8 +46,13 @@ async def cliente():
     motor = create_async_engine(URL)
     semillas = [
         ("INSERT INTO retail.tiendas (id,nombre) VALUES ('florida','Florida')", {}),
-        ("INSERT INTO retail.cajas (id,tienda_id,nombre) "
-         "VALUES ('florida_caja1','florida','Caja 1')", {}),
+        ("INSERT INTO retail.cajas (id,tienda_id,nombre,prefijo_factura) "
+         "VALUES ('florida_caja1','florida','Caja 1','FV-20')", {}),
+        # Bloque de consecutivos: en produccion lo arrienda la apertura de
+        # turno. Sin el, ninguna venta pasa la validacion de numeracion.
+        ("INSERT INTO retail.bloques_consecutivo "
+         "(caja_id,prefijo,desde,hasta,siguiente) "
+         "VALUES ('florida_caja1','FV-20',1,99999,1)", {}),
         ("INSERT INTO retail.ubicaciones (id,tipo,nombre,tienda_id) "
          "VALUES (:u,'tienda','Florida','florida')", {"u": UBICACION}),
         ("INSERT INTO retail.medios_pago (id,nombre,tipo,siigo_forma_pago_id) "

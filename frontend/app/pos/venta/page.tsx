@@ -36,6 +36,7 @@ import {
   listarCatalogo,
   SobreElTope,
   abrirTurno,
+  arrendarBloque,
   contextoCaja,
   turnoActual,
   type ContextoCaja,
@@ -70,6 +71,13 @@ export default function PantallaVenta() {
   const [cliente, setCliente] = useState<Cliente | null>(null);
   const [asignandoCliente, setAsignandoCliente] = useState(false);
   const [turno, setTurno] = useState<Turno | null>(null);
+  // El siguiente número del bloque. En una `ref` y no en `useState` porque se
+  // consume DENTRO de `cobrar`: con estado, dos cobros seguidos leerían el
+  // mismo valor antes de que React repinte, y las dos ventas saldrían con el
+  // mismo número.
+  const siguienteNumero = useRef<number | null>(null);
+  const bloque = useRef<{ prefijo: string; hasta: number; desde: number } | null>(null);
+  const pidiendoBloque = useRef(false);
   const [cargandoTurno, setCargandoTurno] = useState(true);
   const [abriendo, setAbriendo] = useState(false);
   const [errorTurno, setErrorTurno] = useState<string | null>(null);
@@ -92,6 +100,7 @@ export default function PantallaVenta() {
         const [t, ctx] = await Promise.all([turnoActual(CAJA), contextoCaja(CAJA)]);
         if (!vigente) return;
         setTurno(t);
+        if (t) cargarBloque(t);
         setContexto(ctx);
       } catch (e) {
         if (vigente) setErrorTurno(e instanceof Error ? e.message : "No se pudo leer el turno.");
@@ -106,9 +115,11 @@ export default function PantallaVenta() {
     setAbriendo(true);
     setErrorTurno(null);
     try {
-      setTurno(await abrirTurno({
+      const abierto = await abrirTurno({
         sesion_id: nuevoUlid(), tienda_id: TIENDA, caja_id: CAJA,
-      }));
+      });
+      setTurno(abierto);
+      cargarBloque(abierto);
     } catch (e) {
       setErrorTurno(e instanceof Error ? e.message : "No se pudo abrir el turno.");
     } finally {
@@ -247,6 +258,44 @@ export default function PantallaVenta() {
     return { base: total - iva, iva, descuento, total };
   }, [lineas]);
 
+  // ── Numeración ─────────────────────────────────────────────────────────
+  //
+  // El dispositivo numera DENTRO de su bloque, sin preguntar. Es lo que va a
+  // permitir vender sin red; hoy ya evita el choque que producía
+  // `Date.now() % 100000`, que se repite cada 100 segundos.
+  function cargarBloque(t: Turno) {
+    bloque.current = { prefijo: t.prefijo, desde: t.consecutivo_desde,
+                       hasta: t.consecutivo_hasta };
+    siguienteNumero.current = t.consecutivo_siguiente;
+  }
+
+  /** Toma el siguiente número y pide bloque nuevo al 80 %. */
+  function tomarNumero(): string {
+    const b = bloque.current;
+    const n = siguienteNumero.current;
+    if (!b || n === null) throw new Error("Esta caja no tiene numeración asignada.");
+    if (n > b.hasta) {
+      throw new Error("Se acabaron los números de esta caja. Vuelve a abrir el turno.");
+    }
+    siguienteNumero.current = n + 1;
+
+    const consumido = (n - b.desde) / Math.max(1, b.hasta - b.desde);
+    if (consumido >= 0.8 && !pidiendoBloque.current) {
+      pidiendoBloque.current = true;
+      // Sin `await`: pedir el bloque siguiente no puede meterse en los 30
+      // segundos de la venta en curso. Si falla, se reintenta en la próxima.
+      arrendarBloque(CAJA)
+        .then((nuevo) => {
+          bloque.current = { prefijo: nuevo.prefijo, desde: nuevo.desde,
+                             hasta: nuevo.hasta };
+          siguienteNumero.current = nuevo.siguiente;
+        })
+        .catch(() => {})
+        .finally(() => { pidiendoBloque.current = false; });
+    }
+    return `${b.prefijo}-${n}`;
+  }
+
   // ── Cierre ─────────────────────────────────────────────────────────────
   async function cobrar(
     pagos: { medio_pago_id: string; monto_centavos: number; es_efectivo: boolean }[],
@@ -255,7 +304,7 @@ export default function PantallaVenta() {
     try {
       const t = await cerrarVenta({
         venta_id: ventaId.current,
-        numero: `FV-20-${Date.now() % 100000}`,
+        numero: tomarNumero(),
         tienda_id: TIENDA,
         caja_id: CAJA,
         sesion_id: SESION,

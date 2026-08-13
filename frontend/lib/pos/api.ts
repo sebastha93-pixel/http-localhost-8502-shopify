@@ -191,6 +191,33 @@ export interface Turno {
   tope_descuento_pct: string;
   base_inicial_centavos: number;
   reanudado: boolean;
+  /** EL BLOQUE DE CONSECUTIVOS. Es lo que permite numerar sin red: el
+   *  dispositivo asigna dentro de su rango sin volver a preguntar. Antes esta
+   *  pantalla numeraba con `Date.now() % 100000`, que se repite cada 100
+   *  segundos y choca contra el índice único (caja, prefijo, consecutivo). */
+  prefijo: string;
+  consecutivo_desde: number;
+  consecutivo_hasta: number;
+  consecutivo_siguiente: number;
+}
+
+export interface Bloque {
+  prefijo: string;
+  desde: number;
+  hasta: number;
+  siguiente: number;
+}
+
+/** Pide el bloque siguiente. Se llama al 80 % consumido, no al agotarse: si se
+ *  espera al último número, la petición cae justo cuando ya no quedan, y sin
+ *  red en ese momento la caja se queda sin poder vender. */
+export async function arrendarBloque(cajaId: string): Promise<Bloque> {
+  const p = new URLSearchParams({ caja_id: cajaId });
+  try {
+    return await api.post<Bloque>(`/api/retail/caja/consecutivos?${p}`, {});
+  } catch (e) {
+    return traducir(e);
+  }
 }
 
 /** El turno abierto de esta caja, o null. Recargar la pantalla a media mañana

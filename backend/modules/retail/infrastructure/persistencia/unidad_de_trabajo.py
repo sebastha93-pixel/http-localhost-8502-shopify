@@ -64,6 +64,9 @@ class UnidadDeTrabajoSQL:
             RepositorioAuditoriaSQL,
             RepositorioOutboxSQL,
         )
+        from backend.modules.retail.infrastructure.persistencia.repo_consecutivos import (
+            RepositorioConsecutivosSQL,
+        )
         from backend.modules.retail.infrastructure.persistencia.repo_sesion_caja import (
             RepositorioSesionCajaSQL,
         )
@@ -74,6 +77,7 @@ class UnidadDeTrabajoSQL:
         self.auditoria = RepositorioAuditoriaSQL(self.sesion)
         self.outbox = RepositorioOutboxSQL(self.sesion)
         self.turnos = RepositorioSesionCajaSQL(self.sesion)
+        self.consecutivos = RepositorioConsecutivosSQL(self.sesion)
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
