@@ -19,6 +19,13 @@ on:
       - "frontend/app/pos/**"
       - "frontend/components/pos/**"
       - "frontend/lib/pos/**"
+      # La configuracion del build. Sin estas, un cambio en `next.config.mjs`
+      # —justo lo que mas puede romper la compilacion— no dispara nada: me
+      # paso con el commit del `distDir`, que se subio sin verificar.
+      - "frontend/next.config.*"
+      - "frontend/tsconfig.json"
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
       - ".github/workflows/retail.yml"
   pull_request:
     paths:
@@ -28,6 +35,13 @@ on:
       - "frontend/app/pos/**"
       - "frontend/components/pos/**"
       - "frontend/lib/pos/**"
+      # La configuracion del build. Sin estas, un cambio en `next.config.mjs`
+      # —justo lo que mas puede romper la compilacion— no dispara nada: me
+      # paso con el commit del `distDir`, que se subio sin verificar.
+      - "frontend/next.config.*"
+      - "frontend/tsconfig.json"
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
       - ".github/workflows/retail.yml"
   workflow_dispatch:
 
