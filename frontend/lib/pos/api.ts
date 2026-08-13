@@ -76,6 +76,10 @@ export interface Ticket {
   descuento_centavos: number;
   estado_fiscal: string;
   duplicada: boolean;
+  /** Sólo lo pone la pantalla cuando la venta se cerró SIN RED y quedó en la
+   *  cola local. El servidor nunca lo manda: allá no existe el concepto de
+   *  «pendiente de llegar». */
+  pendiente_de_envio?: boolean;
 }
 
 /**

@@ -31,6 +31,7 @@ import { TicketCerrado } from "@/components/pos/ticket-cerrado";
 import { DialogoDescuento } from "@/components/pos/dialogo-descuento";
 import { DialogoCliente } from "@/components/pos/dialogo-cliente";
 import { AbrirTurno } from "@/components/pos/abrir-turno";
+import { EstadoConexion } from "@/components/pos/estado-conexion";
 import {
   cerrarVenta,
   listarCatalogo,
@@ -47,6 +48,8 @@ import {
   type Ticket,
 } from "@/lib/pos/api";
 import { nuevoUlid } from "@/lib/pos/ulid";
+import { confirmada, encolar } from "@/lib/pos/almacen";
+import { arrancarCola, sincronizar } from "@/lib/pos/sincronizacion";
 import { ivaDe } from "@/lib/pos/dinero";
 import type { LineaCarrito } from "@/lib/pos/carrito";
 
@@ -92,6 +95,10 @@ export default function PantallaVenta() {
   const CAJERA = turno?.cajera_nombre ?? "";
 
   // Al entrar, reanudar el turno abierto de esta caja si lo hay.
+  // La cola de sincronización vive mientras viva la pantalla: al volver la
+  // red vacía sola lo que se cobró sin ella.
+  useEffect(() => arrancarCola(), []);
+
   useEffect(() => {
     if (!configurado) return;
     let vigente = true;
@@ -297,14 +304,20 @@ export default function PantallaVenta() {
   }
 
   // ── Cierre ─────────────────────────────────────────────────────────────
+  //
+  // ESCRITURA ANTICIPADA: la venta se guarda en disco ANTES de intentar
+  // mandarla. Lo natural sería al revés —intentar, y encolar si falla— pero
+  // eso la pierde en la única ventana que importa: el instante entre que la
+  // clienta paga y el servidor responde. Si ahí se va la luz, con el orden
+  // natural no queda rastro; con este, la venta está en disco y sale sola.
   async function cobrar(
     pagos: { medio_pago_id: string; monto_centavos: number; es_efectivo: boolean }[],
   ) {
     setAviso(null);
-    try {
-      const t = await cerrarVenta({
-        venta_id: ventaId.current,
-        numero: tomarNumero(),
+    const numero = tomarNumero();
+    const cuerpo = {
+      venta_id: ventaId.current,
+      numero,
         tienda_id: TIENDA,
         caja_id: CAJA,
         sesion_id: SESION,
@@ -323,19 +336,53 @@ export default function PantallaVenta() {
               }
             : {}),
         })),
-        pagos,
+      pagos,
+    };
+
+    try {
+      await encolar({
+        venta_id: ventaId.current, numero, cuerpo,
+        creada_en: Date.now(), intentos: 0, estado: "en_cola",
       });
+    } catch {
+      // Sin disco no hay red de seguridad. Se sigue igual —negarse a vender
+      // sería peor— pero la cajera tiene que saber que esta venta no
+      // sobrevive a un corte de luz.
+      setAviso("Este equipo no puede guardar la venta localmente. Si se corta "
+               + "la luz antes de que el servidor responda, se pierde.");
+    }
+
+    try {
+      const t = await cerrarVenta(cuerpo);
+      await confirmada(ventaId.current).catch(() => {});
       setTicket(t);
       setFase("cerrada");
     } catch (e) {
-      setAviso(
-        e instanceof SobreElTope
-          ? e.mensaje
-          : e instanceof Error
-            ? e.message
-            : "No se pudo cerrar la venta.",
-      );
-      setFase("vendiendo");
+      // Un rechazo del servidor —tope, número repetido— NO es una venta
+      // pendiente: no va a entrar por insistir. Se saca de la cola y se le
+      // dice a la cajera, que todavía tiene a la clienta enfrente.
+      const rechazada =
+        e instanceof SobreElTope ||
+        (e instanceof Error && !(e instanceof TypeError));
+      if (rechazada) {
+        await confirmada(ventaId.current).catch(() => {});
+        setAviso(e instanceof SobreElTope ? e.mensaje
+                 : e instanceof Error ? e.message : "No se pudo cerrar la venta.");
+        setFase("vendiendo");
+        return;
+      }
+      // Falló la RED. La venta ya está en disco y sale sola: no se pierde y
+      // la clienta no tiene que esperar a que vuelva internet.
+      void sincronizar();
+      setTicket({
+        venta_id: ventaId.current, numero,
+        total_centavos: totales.total, pagado_centavos: totales.total,
+        vuelto_centavos: 0, iva_centavos: totales.iva,
+        descuento_centavos: totales.descuento,
+        estado_fiscal: "pendiente", duplicada: false,
+        pendiente_de_envio: true,
+      });
+      setFase("cerrada");
     }
   }
 
@@ -412,9 +459,12 @@ export default function PantallaVenta() {
           style={{ borderColor: "var(--pos-divider)" }}
         >
           <h1 className="titular text-[20px]">Venta</h1>
-          <p className="text-[12px]" style={{ color: "var(--pos-600)" }}>
-            {contexto?.tienda_nombre ?? TIENDA} · {contexto?.caja_nombre ?? CAJA} · {CAJERA} · {hoy}
-          </p>
+          <div className="flex items-center gap-3">
+            <EstadoConexion />
+            <p className="text-[12px]" style={{ color: "var(--pos-600)" }}>
+              {contexto?.tienda_nombre ?? TIENDA} · {contexto?.caja_nombre ?? CAJA} · {CAJERA} · {hoy}
+            </p>
+          </div>
         </header>
 
         {/* Las columnas viven en pos.css: llevan media query, y una pista

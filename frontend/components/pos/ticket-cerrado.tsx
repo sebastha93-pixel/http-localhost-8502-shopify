@@ -106,16 +106,25 @@ export function TicketCerrado({ ticket, onNueva }: { ticket: Ticket; onNueva: ()
               : "🧾 Tirilla impresa"}
         </div>
         <div>
-          {ticket.estado_fiscal === "emitido"
-            ? "✅ Factura electrónica emitida"
-            : "⏳ Factura electrónica: emitiendo…"}
+          {ticket.pendiente_de_envio
+            ? "📥 Guardada sin conexión · se envía sola"
+            : ticket.estado_fiscal === "emitido"
+              ? "✅ Factura electrónica emitida"
+              : "⏳ Factura electrónica: emitiendo…"}
         </div>
         {ticket.duplicada && <div>↺ Esta venta ya estaba registrada</div>}
       </div>
 
       {errorImpresion && (
         <p className="mt-3 max-w-[380px] border border-[var(--pos-800)] bg-[var(--pos-800)]/10 p-2.5 text-[12px] leading-relaxed text-[var(--pos-900)]">
-          {errorImpresion} La venta SÍ quedó registrada — esto es sólo el papel.
+          {/* Decir «la venta SÍ quedó registrada» cuando está en la cola local
+              es mentir en el peor momento: la cajera lo lee, se queda
+              tranquila, y no sabe que hay algo que vigilar. Sin red la venta
+              está GUARDADA, que no es lo mismo que registrada. */}
+          {ticket.pendiente_de_envio
+            ? "Sin conexión no se pudo imprimir. La venta está guardada en este "
+              + "equipo y se envía sola al volver la red — no hay que repetirla."
+            : `${errorImpresion} La venta SÍ quedó registrada — esto es sólo el papel.`}
         </p>
       )}
 
