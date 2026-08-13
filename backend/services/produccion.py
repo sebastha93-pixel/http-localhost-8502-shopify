@@ -2174,12 +2174,13 @@ def actualizar_indicaciones_corte(oc_id: str, indicaciones: Optional[str], *,
             res = autorizar_orden_corte(
                 oc_id, usuario=usuario or (previo.get("autorizada_por") or ""),
                 mensaje_extra="(Indicaciones actualizadas por diseño)",
+                motivo="reenvio_indicaciones",
                 solo_reenviar=True)
-            # `enviado_por` va DENTRO de res["correo"], no al nivel de arriba
-            # (la función devuelve la orden con el correo anidado). Y solo cuenta
-            # como reenviado si salió por Resend: un `mailto_url` no envía nada,
+            # El resultado va DENTRO de res["correo"], no al nivel de arriba
+            # (la función devuelve la orden con el correo anidado). Solo cuenta
+            # como reenviado si Resend lo aceptó: un `mailto_url` no envía nada,
             # necesita que alguien abra su cliente de correo.
-            reenviado = ((res.get("correo") or {}).get("enviado_por") == "resend")
+            reenviado = ((res.get("correo") or {}).get("estado") == "enviado")
             log.info(f"[corte] {previo.get('consecutivo')}: indicaciones cambiaron, "
                      f"correo reenviado={reenviado}")
         except Exception as e:
@@ -2224,8 +2225,37 @@ def listar_ordenes_corte(*, estado: Optional[str] = None,
         for oc in out:
             oc["tiene_remision_confeccion"] = oc["id"] in con_conf
             oc["tiene_remision_terminacion"] = oc["id"] in con_term
+    _anotar_estado_correo(out)
     _cache_set(cache_key, out, ttl_seg=20)
     return out
+
+
+def _anotar_estado_correo(ordenes: list[dict]) -> None:
+    """Marca cada orden con el estado de su ÚLTIMO correo, en una sola consulta.
+
+    Aquí NO se consulta a Resend: sería una llamada HTTP por orden. Se muestra
+    el último estado persistido; al abrir la orden, el detalle lo refresca.
+    """
+    ids = [o["id"] for o in ordenes if o.get("id")]
+    if not ids:
+        return
+    sb = _sb()
+    if sb is None:
+        return
+    ultimo: dict[str, str] = {}
+    try:
+        filas = (sb.table("correos_orden_corte")
+                   .select("orden_corte_id,estado,created_at")
+                   .in_("orden_corte_id", ids)
+                   .order("created_at", desc=True)
+                   .execute()).data or []
+        for f in filas:                      # ordenadas desc: la 1ª es la última
+            ultimo.setdefault(f["orden_corte_id"], f["estado"])
+    except Exception as e:
+        log.warning(f"[corte] no pude traer los estados de correo: {str(e)[:150]}")
+        return
+    for o in ordenes:
+        o["correo_estado"] = ultimo.get(o.get("id"))
 
 
 def reset_datos_produccion() -> dict:
@@ -3077,10 +3107,209 @@ def _trazos_texto(oc: dict) -> str:
     return "\n".join(f"  · {t.get('filename') or 'archivo'}: {t.get('url')}" for t in lista)
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# CORREO DE LA ORDEN DE CORTE — envío, registro y acuse de entrega
+# ═══════════════════════════════════════════════════════════════════════
+
+# `last_event` de Resend → estado interno.
+# Fuente: https://resend.com/docs/dashboard/webhooks/event-types
+#
+# `opened` y `clicked` no se muestran (dependen de que el cliente de correo
+# cargue imágenes y no son fiables), pero implican que el correo llegó: se
+# tratan como entregado. Mapearlos a 'enviado' dejaría la orden reconsultando
+# a Resend para siempre.
+_ESTADO_POR_EVENTO = {
+    "sent": "enviado",
+    "delivered": "entregado",
+    "opened": "entregado",
+    "clicked": "entregado",
+    "bounced": "rebotado",
+    "complained": "spam",
+    "delivery_delayed": "demorado",
+    "failed": "fallido",
+    "suppressed": "suprimido",
+}
+
+# Estados que ya no cambian: no se vuelve a consultar a Resend.
+# 'error_envio' es nuestro, no de Resend: la petición se rechazó y nunca
+# llegó a existir un correo que consultar.
+_ESTADOS_DEFINITIVOS = frozenset({
+    "entregado", "rebotado", "spam", "suprimido", "fallido", "error_envio",
+})
+
+
+def _estado_desde_last_event(last_event: Optional[str]) -> str:
+    """Traduce el `last_event` de Resend al estado interno.
+
+    Un evento desconocido queda como 'enviado' (en curso): nunca inventamos
+    una entrega que Resend no confirmó.
+    """
+    return _ESTADO_POR_EVENTO.get((last_event or "").strip().lower(), "enviado")
+
+
+def _enviar_por_resend(dest: list[str], asunto: str, body: str) -> dict:
+    """Manda el correo por Resend. NUNCA lanza: devuelve qué pasó.
+
+    Antes esto vivía dentro de `autorizar_orden_corte` en un `try/except` que
+    imprimía el error y caía a `mailto`. Como el frontend hacía
+    `window.location.href = mailto_url` y en Chrome con Gmail web eso no hace
+    nada, un fallo de Resend se veía exactamente igual que un envío exitoso.
+    """
+    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
+    if not resend_key:
+        return {"resend_id": None, "estado": "error_envio",
+                "error": "sin_RESEND_API_KEY"}
+    if not dest:
+        return {"resend_id": None, "estado": "error_envio",
+                "error": "sin_destinatarios"}
+    try:
+        import httpx
+        from_email = os.environ.get("RESEND_FROM", "orden-corte@maledenim.com").strip()
+        r = httpx.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {resend_key}",
+                     "Content-Type": "application/json"},
+            json={"from": from_email, "to": dest, "subject": asunto, "text": body},
+            timeout=15.0,
+        )
+        if r.status_code >= 400:
+            return {"resend_id": None, "estado": "error_envio",
+                    "error": f"resend {r.status_code}: {r.text[:300]}"}
+        return {"resend_id": ((r.json() or {}).get("id")),
+                "estado": "enviado", "error": None}
+    except Exception as e:
+        log.warning(f"[corte.correo] Resend falló: {type(e).__name__}: {str(e)[:200]}")
+        return {"resend_id": None, "estado": "error_envio",
+                "error": f"{type(e).__name__}: {str(e)[:300]}"}
+
+
+def _registrar_correo_corte(oc_id: str, *, destinatarios: list[str], asunto: str,
+                            motivo: str, resultado: dict,
+                            usuario: str) -> Optional[dict]:
+    """Deja una fila en `correos_orden_corte` por cada intento de envío.
+
+    No lanza: si el registro falla, el correo ya salió y perder la bitácora no
+    puede tumbar la autorización de la orden.
+    """
+    sb = _sb()
+    if sb is None:
+        return None
+    fila = {
+        "orden_corte_id": oc_id,
+        "destinatarios": destinatarios,
+        "asunto": asunto,
+        "motivo": motivo,
+        "resend_id": resultado.get("resend_id"),
+        "estado": resultado.get("estado") or "error_envio",
+        "error": resultado.get("error"),
+        "enviado_por": usuario,
+        "estado_actualizado_at": _now_iso(),
+    }
+    try:
+        r = (sb.table("correos_orden_corte").insert(fila).execute()).data
+        return (r or [None])[0]
+    except Exception as e:
+        log.warning(f"[corte.correo] no pude registrar el envío de {oc_id}: {str(e)[:200]}")
+        return None
+
+
+def _consultar_estado_resend(resend_id: str) -> Optional[str]:
+    """`last_event` del correo según Resend, o None si no se pudo saber.
+
+    GET /emails/{id} — https://resend.com/docs/api-reference/emails/retrieve-email
+    """
+    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
+    if not resend_key or not resend_id:
+        return None
+    try:
+        import httpx
+        r = httpx.get(f"https://api.resend.com/emails/{resend_id}",
+                      headers={"Authorization": f"Bearer {resend_key}"},
+                      timeout=10.0)
+        if r.status_code >= 400:
+            return None
+        return ((r.json() or {}).get("last_event"))
+    except Exception as e:
+        log.warning(f"[corte.correo] no pude consultar {resend_id}: {str(e)[:150]}")
+        return None
+
+
+def _guardar_estado_correo(correo_id: str, estado: str) -> None:
+    """Persiste el estado nuevo. No lanza: es caché, no es la verdad."""
+    sb = _sb()
+    if sb is None:
+        return
+    try:
+        (sb.table("correos_orden_corte")
+           .update({"estado": estado, "estado_actualizado_at": _now_iso()})
+           .eq("id", correo_id).execute())
+    except Exception as e:
+        log.warning(f"[corte.correo] no pude guardar el estado de {correo_id}: {str(e)[:150]}")
+
+
+def refrescar_estados_correo(correos: list[dict]) -> list[dict]:
+    """Actualiza contra Resend solo los envíos que todavía pueden cambiar.
+
+    Los definitivos no se consultan, y sin `resend_id` no hay nada que
+    consultar (un `error_envio` nunca llegó a crear un correo en Resend).
+    """
+    salida = []
+    for c in correos or []:
+        c = dict(c)
+        estado = c.get("estado") or "enviado"
+        rid = c.get("resend_id")
+        if rid and estado not in _ESTADOS_DEFINITIVOS:
+            evento = _consultar_estado_resend(rid)
+            if evento:
+                nuevo = _estado_desde_last_event(evento)
+                if nuevo != estado:
+                    _guardar_estado_correo(c["id"], nuevo)
+                    c["estado"] = nuevo
+        salida.append(c)
+    return salida
+
+
+def listar_correos_corte(oc_id: str) -> list[dict]:
+    """Historial de envíos de la orden, más reciente primero, ya refrescado."""
+    sb = _sb()
+    if sb is None:
+        return []
+    try:
+        r = (sb.table("correos_orden_corte")
+               .select("*")
+               .eq("orden_corte_id", oc_id)
+               .order("created_at", desc=True)
+               .execute()).data or []
+    except Exception as e:
+        log.warning(f"[corte.correo] no pude listar los correos de {oc_id}: {str(e)[:150]}")
+        return []
+    return refrescar_estados_correo(r)
+
+
+def reenviar_correo_corte(oc_id: str, *, destinatarios: Optional[list[str]],
+                          mensaje_extra: Optional[str],
+                          usuario: str) -> dict:
+    """Reenvía el correo, típicamente a OTRA dirección porque la primera estaba mal.
+
+    Va por `solo_reenviar=True` para no pisar `fecha_autorizacion`, pero sí
+    actualiza `destinatarios_correo`: la corrección queda guardada y el
+    siguiente reenvío ya sale bien por defecto.
+    """
+    return autorizar_orden_corte(
+        oc_id,
+        destinatarios=destinatarios,
+        mensaje_extra=mensaje_extra,
+        solo_reenviar=True,
+        motivo="reenvio_manual",
+        usuario=usuario,
+    )
+
+
 # ── Autorizar orden de corte y enviar correo ──────────────────────────
 def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = None,
                            mensaje_extra: Optional[str] = None,
                            solo_reenviar: bool = False,
+                           motivo: str = "autorizacion",
                            usuario: str) -> dict:
     """Marca la orden como 'autorizada' y prepara el correo para los destinatarios.
 
@@ -3162,49 +3391,27 @@ def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = No
     body += f"\nAutorizada por: {usuario}\n"
 
     dest = destinatarios if destinatarios is not None else (oc.get("destinatarios_correo") or [])
+
+    envio = _enviar_por_resend(dest, asunto, body)
+    _registrar_correo_corte(oc_id, destinatarios=dest, asunto=asunto,
+                            motivo=motivo, resultado=envio, usuario=usuario)
+
+    # El `mailto` deja de ser un redirect automático que aparenta funcionar:
+    # ahora es una salida manual que el frontend ofrece SOLO si el envío falló.
+    from urllib.parse import quote
+    mailto_url = (f"mailto:{','.join(dest) if dest else ''}"
+                  f"?subject={quote(asunto)}&body={quote(body)}")
+
     resultado = {
         "asunto": asunto,
         "body": body,
         "destinatarios": dest,
-        "enviado_por": None,   # 'resend' | 'mailto'
-        "mailto_url": None,
+        "estado": envio["estado"],            # 'enviado' | 'error_envio'
+        "error": envio["error"],
+        "resend_id": envio["resend_id"],
+        "enviado_por": "resend" if envio["estado"] == "enviado" else None,
+        "mailto_url": mailto_url,
     }
-
-    # Envío via Resend si hay API key
-    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
-    if resend_key and dest:
-        try:
-            import httpx
-            from_email = os.environ.get("RESEND_FROM", "orden-corte@maledenim.com").strip()
-            r = httpx.post(
-                "https://api.resend.com/emails",
-                headers={"Authorization": f"Bearer {resend_key}",
-                         "Content-Type": "application/json"},
-                json={
-                    "from": from_email,
-                    "to": dest,
-                    "subject": asunto,
-                    "text": body,
-                },
-                timeout=15.0,
-            )
-            if r.status_code >= 400:
-                raise RuntimeError(f"resend_error: {r.status_code} {r.text[:200]}")
-            resultado["enviado_por"] = "resend"
-        except Exception as e:
-            print(f"[corte.autorizar] Resend falló, fallback a mailto: {e}")
-
-    # Fallback mailto
-    if resultado["enviado_por"] is None:
-        from urllib.parse import quote
-        to_str = ",".join(dest) if dest else ""
-        resultado["mailto_url"] = (
-            f"mailto:{to_str}"
-            f"?subject={quote(asunto)}"
-            f"&body={quote(body)}"
-        )
-        resultado["enviado_por"] = "mailto"
-
     return {**obtener_orden_corte(oc_id), "correo": resultado}
 
 
