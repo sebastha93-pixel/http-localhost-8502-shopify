@@ -149,33 +149,43 @@ class SesionCaja:
     # ── Movimientos de efectivo ─────────────────────────────────────────────
 
     def registrar_retiro(self, monto: Dinero, *, motivo: str, usuario_id: str,
-                         autorizado_por: Optional[str]) -> None:
-        """Sangría. INV-C6: no puede dejar el efectivo en negativo."""
+                         puede_mover_caja: bool = False) -> None:
+        """Sangría. INV-C6: no puede dejar el efectivo en negativo.
+
+        Antes pedía la firma de un tercero por PIN. Sin PIN, el permiso lo trae
+        quien tiene la sesión abierta —igual que en el cierre con descuadre— y
+        quien saca la plata es quien firma.
+        """
         self._movimiento_manual(TipoMovimiento.RETIRO, -monto, motivo=motivo,
                                 usuario_id=usuario_id,
-                                autorizado_por=autorizado_por, exige_firma=True)
+                                puede_mover_caja=puede_mover_caja,
+                                exige_permiso=True)
 
     def registrar_gasto(self, monto: Dinero, *, motivo: str, usuario_id: str,
-                        autorizado_por: Optional[str]) -> None:
+                        puede_mover_caja: bool = False) -> None:
         self._movimiento_manual(TipoMovimiento.GASTO, -monto, motivo=motivo,
                                 usuario_id=usuario_id,
-                                autorizado_por=autorizado_por, exige_firma=True)
+                                puede_mover_caja=puede_mover_caja,
+                                exige_permiso=True)
 
     def registrar_ingreso(self, monto: Dinero, *, motivo: str,
                           usuario_id: str) -> None:
+        """Meter plata al cajón no necesita permiso: no es la operación de la
+        que hay que protegerse."""
         self._movimiento_manual(TipoMovimiento.INGRESO, monto, motivo=motivo,
-                                usuario_id=usuario_id, autorizado_por=None,
-                                exige_firma=False)
+                                usuario_id=usuario_id, puede_mover_caja=True,
+                                exige_permiso=False)
 
     def _movimiento_manual(self, tipo, monto_con_signo: Dinero, *, motivo: str,
-                           usuario_id: str, autorizado_por: Optional[str],
-                           exige_firma: bool) -> None:
+                           usuario_id: str, puede_mover_caja: bool,
+                           exige_permiso: bool) -> None:
         self._exigir_abierta_o_en_arqueo()
         if not (motivo or "").strip():
             raise ReglaDeNegocio(f"un {tipo.value} de caja necesita motivo escrito")
-        if exige_firma and not autorizado_por:
+        if exige_permiso and not puede_mover_caja:
             raise RequiereAutorizacion(
-                f"Sacar plata de la caja necesita autorización de un supervisor."
+                "Sacar plata de la caja necesita permiso. Pide que entre "
+                "alguien que lo tenga, con su correo y contraseña."
             )
         if monto_con_signo.es_cero():
             raise ReglaDeNegocio("el movimiento de caja no puede ser de cero")
@@ -189,10 +199,11 @@ class SesionCaja:
                     f"el efectivo esperado es {disponible.formateado()}."
                 )
 
+        # Quien saca la plata ES quien firma. Ya no hay dos nombres.
         self._anotar(tipo, monto_con_signo, medio_pago_id=self.medio_efectivo_id,
                      motivo=motivo.strip(),
                      usuario_id=usuario_id, es_efectivo=True,
-                     autorizado_por=autorizado_por)
+                     autorizado_por=usuario_id if exige_permiso else None)
 
     # ── Esperado ────────────────────────────────────────────────────────────
 

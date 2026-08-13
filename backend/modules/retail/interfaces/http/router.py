@@ -687,6 +687,14 @@ class MedioResumen(BaseModel):
     total_centavos: int
 
 
+class MovimientoManual(BaseModel):
+    movimiento_id: str
+    tipo: str
+    monto_centavos: int
+    motivo: str
+    quien: str
+
+
 class ResumenCierre(BaseModel):
     sesion_id: str
     numero_turno: int
@@ -703,6 +711,11 @@ class ResumenCierre(BaseModel):
     documentos_pendientes: int
     cierre_ciego: bool
     umbral_descuadre_centavos: int
+    # Retiros, gastos e ingresos. Van APARTE del desglose por medio de pago:
+    # mezclarlos haría que ese desglose no cuadre con lo vendido, y es justo el
+    # número que la administradora compara contra el informe del día.
+    movimientos: List[MovimientoManual] = []
+    puede_mover_caja: bool = False
     # Sólo viene si NO es ciego o si quien mira tiene permiso de verlo.
     esperado_por_medio: Optional[dict] = None
 
@@ -749,10 +762,12 @@ async def resumen_cierre(
         datos = await t.turnos.resumen(sesion_id)
         borradores = await t.turnos.ventas_en_borrador(sesion_id)
         pendientes = await t.turnos.documentos_pendientes(sesion_id)
+        movimientos = await t.turnos.movimientos_manuales(sesion_id)
         cab = (await t.sesion.execute(_t("""
             SELECT s.numero_turno, s.abierta_en, s.base_inicial,
                    coalesce(p.nombre, s.abierta_por) AS cajera,
-                   coalesce(pp.puede_ver_esperado, false) AS puede_ver
+                   coalesce(pp.puede_ver_esperado, false)  AS puede_ver,
+                   coalesce(pp.puede_mover_caja, false)    AS puede_mover
               FROM retail.sesiones_caja s
               LEFT JOIN retail.permisos_pos p ON p.usuario_id = s.abierta_por
               LEFT JOIN retail.permisos_pos pp ON pp.usuario_id = :quien
@@ -785,6 +800,11 @@ async def resumen_cierre(
         documentos_pendientes=pendientes,
         cierre_ciego=sesion.cierre_ciego,
         umbral_descuadre_centavos=sesion.umbral_descuadre.centavos,
+        movimientos=[MovimientoManual(
+            movimiento_id=m["id"], tipo=m["tipo"],
+            monto_centavos=int(m["monto"]), motivo=m["motivo"],
+            quien=m["quien"]) for m in movimientos],
+        puede_mover_caja=bool(cab["puede_mover"]),
         esperado_por_medio=esperado,
     )
 
@@ -1207,3 +1227,107 @@ async def _prefijo_de(t, caja_id: str) -> str:
     return (await t.sesion.execute(_t("""
         SELECT coalesce(prefijo_factura, 'POS') FROM retail.cajas WHERE id = :c
     """), {"c": caja_id})).scalar() or "POS"
+
+
+# ── Movimientos de caja: retiro, ingreso, gasto ─────────────────────────────
+
+class MovimientoEntrada(BaseModel):
+    movimiento_id: str = Field(description="ULID generado en el dispositivo")
+    sesion_id: str
+    tipo: str = Field(pattern="^(retiro|ingreso|gasto)$")
+    monto_centavos: int = Field(gt=0, description="Siempre positivo; el signo "
+                                                  "lo pone el tipo")
+    motivo: str = Field(min_length=3, max_length=200)
+
+
+class MovimientoSalida(BaseModel):
+    movimiento_id: str
+    tipo: str
+    monto_centavos: int
+    motivo: str
+    efectivo_esperado_centavos: Optional[int] = None
+
+
+@router.post("/caja/movimientos", response_model=MovimientoSalida)
+async def registrar_movimiento(
+    entrada: MovimientoEntrada,
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Plata que entra o sale del cajón sin ser una venta.
+
+    SIN ESTO EL CIERRE SE ROMPE A DIARIO: sale plata para un domiciliario o
+    para bolsas, no hay dónde anotarlo, y el arqueo lo lee como faltante. La
+    cajera termina justificando y buscando un supervisor por algo rutinario, y
+    un control que salta con lo normal deja de mirarse en una semana.
+
+    El monto llega SIEMPRE POSITIVO y el signo lo pone el tipo. Dejar que el
+    cliente mande negativos permite convertir un retiro en un ingreso con un
+    guion de más.
+    """
+    from datetime import datetime, timezone
+    from sqlalchemy import text as _t
+    from backend.modules.retail.domain.shared.dinero import Dinero
+
+    ahora = datetime.now(timezone.utc)
+
+    async with uow as t:
+        try:
+            sesion = await t.turnos.cargar(entrada.sesion_id)
+        except ReglaDeNegocio as e:
+            raise HTTPException(404, {"error": "no_encontrada",
+                                      "mensaje": str(e)})
+
+        puede = bool((await t.sesion.execute(_t("""
+            SELECT coalesce(puede_mover_caja, false) FROM retail.permisos_pos
+             WHERE usuario_id = :u AND activo
+        """), {"u": usuario.id})).scalar())
+
+        monto = Dinero(entrada.monto_centavos, sesion.moneda)
+        try:
+            if entrada.tipo == "retiro":
+                sesion.registrar_retiro(monto, motivo=entrada.motivo,
+                                        usuario_id=usuario.id,
+                                        puede_mover_caja=puede)
+            elif entrada.tipo == "gasto":
+                sesion.registrar_gasto(monto, motivo=entrada.motivo,
+                                       usuario_id=usuario.id,
+                                       puede_mover_caja=puede)
+            else:
+                sesion.registrar_ingreso(monto, motivo=entrada.motivo,
+                                         usuario_id=usuario.id)
+        except RequiereAutorizacion as e:
+            raise HTTPException(403, {"error": "sin_permiso_caja",
+                                      "mensaje": str(e),
+                                      "accion_sugerida": "entrar_con_otro_usuario"})
+        except ReglaDeNegocio as e:
+            raise HTTPException(400, {"error": "regla_de_negocio",
+                                      "mensaje": str(e)})
+
+        anotado = sesion.movimientos[-1]
+        await t.turnos.anotar_movimiento(
+            movimiento_id=entrada.movimiento_id, sesion_id=sesion.id,
+            tipo=entrada.tipo, monto=anotado.monto.centavos,
+            motivo=entrada.motivo.strip(), usuario_id=usuario.id,
+            medio_pago_id=sesion.medio_efectivo_id,
+            autorizado_por=anotado.autorizado_por, ahora=ahora)
+
+        # CRÍTICO en la auditoría cuando sale plata: es la operación que más se
+        # parece a un robo cuando no queda rastro de por qué.
+        await t.auditoria.registrar(
+            evento=f"caja.{entrada.tipo}", ocurrido_en=ahora,
+            severidad="critico" if entrada.tipo != "ingreso" else "aviso",
+            tienda_id=sesion.tienda_id, caja_id=sesion.caja_id,
+            sesion_id=sesion.id, usuario_id=usuario.id,
+            agregado_tipo="sesion_caja", agregado_id=sesion.id,
+            payload={"tipo": entrada.tipo, "monto": anotado.monto.centavos,
+                     "motivo": entrada.motivo.strip()})
+        await t.commit()
+
+    return MovimientoSalida(
+        movimiento_id=entrada.movimiento_id, tipo=entrada.tipo,
+        monto_centavos=anotado.monto.centavos, motivo=entrada.motivo.strip(),
+        # Lo que queda en el cajón sólo se devuelve a quien puede verlo: con
+        # cierre ciego, decirlo aquí sería la puerta de atrás al arqueo.
+        efectivo_esperado_centavos=None,
+    )

@@ -314,6 +314,16 @@ export interface ResumenCierre {
   documentos_pendientes: number;
   cierre_ciego: boolean;
   umbral_descuadre_centavos: number;
+  /** Retiros, gastos e ingresos. Aparte del desglose por medio de pago:
+   *  mezclarlos haría que ese desglose no cuadre con lo vendido. */
+  movimientos: {
+    movimiento_id: string;
+    tipo: string;
+    monto_centavos: number;
+    motivo: string;
+    quien: string;
+  }[];
+  puede_mover_caja: boolean;
   /** `null` en cierre ciego: el backend se NIEGA a mandarlo hasta que se
    *  declare el conteo. No es un dato que falte, es el control funcionando. */
   esperado_por_medio: Record<string, number> | null;
@@ -500,4 +510,31 @@ export interface Tirilla {
  *  es lo que permite reimprimir tres días después. */
 export async function pedirTirilla(ventaId: string): Promise<Tirilla> {
   return api.get<Tirilla>(`/api/retail/ventas/${ventaId}/tirilla`);
+}
+
+// ── Movimientos de caja ─────────────────────────────────────────────────────
+
+export interface MovimientoCaja {
+  movimiento_id: string;
+  tipo: "retiro" | "ingreso" | "gasto";
+  monto_centavos: number;
+  motivo: string;
+}
+
+/** Plata que entra o sale del cajón sin ser una venta.
+ *
+ *  El monto va SIEMPRE POSITIVO: el signo lo pone el tipo. Mandar negativos
+ *  dejaría convertir un retiro en un ingreso con un guion de más. */
+export async function moverCaja(cuerpo: {
+  movimiento_id: string;
+  sesion_id: string;
+  tipo: "retiro" | "ingreso" | "gasto";
+  monto_centavos: number;
+  motivo: string;
+}): Promise<MovimientoCaja> {
+  try {
+    return await api.post<MovimientoCaja>("/api/retail/caja/movimientos", cuerpo);
+  } catch (e) {
+    return traducir(e);
+  }
 }

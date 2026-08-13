@@ -16,8 +16,10 @@ import { useAuth } from "@/components/auth-provider";
 import { Panel } from "@/components/pos/marco";
 import { Rail } from "@/components/pos/rail";
 import { Arqueo, DialogoDescuadre } from "@/components/pos/arqueo";
+import { DialogoMovimiento } from "@/components/pos/dialogo-movimiento";
 import {
   cerrarCaja,
+  moverCaja,
   resumenCierre,
   turnoActual,
   type Cierre,
@@ -25,6 +27,7 @@ import {
   type Turno,
 } from "@/lib/pos/api";
 import { formatear, desdePesosTecleados } from "@/lib/pos/dinero";
+import { nuevoUlid } from "@/lib/pos/ulid";
 
 const CAJA = process.env.NEXT_PUBLIC_POS_CAJA || "";
 
@@ -39,6 +42,9 @@ export default function PantallaCierre() {
   const [descuadre, setDescuadre] = useState<string | null>(null);
   const [errorPin, setErrorPin] = useState<string | null>(null);
   const [cerrado, setCerrado] = useState<Cierre | null>(null);
+  const [moviendo, setMoviendo] = useState(false);
+  const [errorMovimiento, setErrorMovimiento] = useState<string | null>(null);
+  const [guardandoMov, setGuardandoMov] = useState(false);
 
   useEffect(() => {
     let vivo = true;
@@ -112,6 +118,31 @@ export default function PantallaCierre() {
     [resumen, contados, descuadre],
   );
 
+  async function registrarMovimiento(
+    tipo: "retiro" | "gasto" | "ingreso",
+    montoCentavos: number,
+    motivo: string,
+  ) {
+    if (!resumen) return;
+    setGuardandoMov(true);
+    setErrorMovimiento(null);
+    try {
+      await moverCaja({
+        movimiento_id: nuevoUlid(), sesion_id: resumen.sesion_id,
+        tipo, monto_centavos: montoCentavos, motivo,
+      });
+      // Se recarga el resumen entero: el movimiento cambió el esperado, y
+      // recalcularlo aquí sería una segunda versión de esa cuenta.
+      setResumen(await resumenCierre(resumen.sesion_id));
+      setMoviendo(false);
+    } catch (e) {
+      setErrorMovimiento(
+        e instanceof Error ? e.message : "No se pudo registrar el movimiento.");
+    } finally {
+      setGuardandoMov(false);
+    }
+  }
+
   const cajera = user?.nombre || user?.email || "";
 
   return (
@@ -148,7 +179,7 @@ export default function PantallaCierre() {
 
         {!cerrado && resumen && (
           <div className="grid max-w-[900px] grid-cols-1 gap-4 lg:grid-cols-2">
-            <ResumenTurno resumen={resumen} />
+            <ResumenTurno resumen={resumen} onMover={() => setMoviendo(true)} />
             <Arqueo
               resumen={resumen}
               contados={contados}
@@ -162,6 +193,15 @@ export default function PantallaCierre() {
           </div>
         )}
       </main>
+
+      {moviendo && (
+        <DialogoMovimiento
+          onCancelar={() => { setMoviendo(false); setErrorMovimiento(null); }}
+          onRegistrar={registrarMovimiento}
+          error={errorMovimiento}
+          guardando={guardandoMov}
+        />
+      )}
 
       {descuadre && (
         <DialogoDescuadre
@@ -178,7 +218,13 @@ export default function PantallaCierre() {
   );
 }
 
-function ResumenTurno({ resumen }: { resumen: ResumenCierre }) {
+function ResumenTurno({
+  resumen,
+  onMover,
+}: {
+  resumen: ResumenCierre;
+  onMover: () => void;
+}) {
   const netas = resumen.ventas_brutas_centavos - resumen.monto_anulado_centavos;
 
   return (
@@ -225,6 +271,48 @@ function ResumenTurno({ resumen }: { resumen: ResumenCierre }) {
                 (con base)
               </span>
             )}
+          </span>
+        </div>
+      ))}
+
+      {/* MOVIMIENTOS DE CAJA. Van aparte del desglose por medio de pago: son
+          plata que entró o salió sin ser una venta, y mezclarlos haría que ese
+          desglose no cuadre con lo vendido. */}
+      <div className="mt-3 flex items-center justify-between">
+        <p className="kicker text-[var(--pos-600)]">Movimientos de caja</p>
+        <button
+          onClick={onMover}
+          className="border border-[var(--pos-divider)] px-2.5 py-1 text-[11px] text-[var(--pos-700)] hover:bg-[var(--pos-100)]"
+        >
+          + Registrar
+        </button>
+      </div>
+      {resumen.movimientos.length === 0 && (
+        <p className="text-[12.5px] text-[var(--pos-600)]">
+          Ninguno. Si sacaste plata del cajón —domicilio, bolsas, sangría—
+          regístralo aquí o el arqueo lo va a leer como faltante.
+        </p>
+      )}
+      {resumen.movimientos.map((m) => (
+        <div
+          key={m.movimiento_id}
+          className="flex justify-between gap-2 border-b border-[var(--pos-divider)]/60 py-1.5 text-[13px]"
+        >
+          <span className="min-w-0 flex-1 truncate text-[var(--pos-700)]">
+            <span className="capitalize">{m.tipo}</span>
+            <span className="ml-1.5 text-[var(--pos-600)]">{m.motivo}</span>
+            <span className="ml-1.5 text-[11px] text-[var(--pos-500)]">
+              · {m.quien}
+            </span>
+          </span>
+          {/* El monto viene CON SIGNO desde la base: negativo si salió. */}
+          <span
+            className={`tabular whitespace-nowrap font-semibold ${
+              m.monto_centavos < 0 ? "text-[var(--pos-800)]" : ""
+            }`}
+          >
+            {m.monto_centavos > 0 ? "+" : ""}
+            {formatear(m.monto_centavos)}
           </span>
         </div>
       ))}

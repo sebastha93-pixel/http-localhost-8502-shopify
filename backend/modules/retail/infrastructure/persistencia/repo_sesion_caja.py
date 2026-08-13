@@ -178,6 +178,44 @@ class RepositorioSesionCajaSQL:
                AND estado_fiscal IN ('pendiente','enviando','rechazado','fallido')
         """), {"i": sesion_id})).scalar() or 0
 
+    async def anotar_movimiento(self, *, movimiento_id: str, sesion_id: str,
+                                tipo: str, monto: int, motivo: str,
+                                usuario_id: str, medio_pago_id: str,
+                                autorizado_por, ahora) -> None:
+        """Escribe el movimiento que el AGREGADO ya validó.
+
+        El monto llega CON SIGNO: un retiro es negativo. Guardarlo en positivo
+        y decidir el signo al sumar dejaría la regla del saldo repartida entre
+        la escritura y cada lectura, y basta que una se olvide para que el
+        arqueo cuadre mal en una sola dirección.
+        """
+        await self._s.execute(text("""
+            INSERT INTO retail.movimientos_caja
+                (id, sesion_id, tipo, medio_pago_id, monto, motivo,
+                 usuario_id, autorizado_por, creado_en)
+            VALUES (:i, :s, :t, :m, :monto, :motivo, :u, :aut, :ts)
+        """), {"i": movimiento_id, "s": sesion_id, "t": tipo,
+               "m": medio_pago_id, "monto": monto, "motivo": motivo,
+               "u": usuario_id, "aut": autorizado_por, "ts": ahora})
+
+    async def movimientos_manuales(self, sesion_id: str) -> list:
+        """Retiros, gastos e ingresos del turno — lo que NO son ventas.
+
+        Van aparte en el cierre: mezclarlos con los cobros haría que el
+        desglose por medio de pago no cuadre con lo vendido, y es justo el
+        número que la administradora compara contra el informe del día.
+        """
+        filas = (await self._s.execute(text("""
+            SELECT m.id, m.tipo, m.monto, m.motivo, m.creado_en,
+                   coalesce(p.nombre, m.usuario_id) AS quien
+              FROM retail.movimientos_caja m
+              LEFT JOIN retail.permisos_pos p ON p.usuario_id = m.usuario_id
+             WHERE m.sesion_id = :i
+               AND m.tipo IN ('retiro', 'gasto', 'ingreso')
+             ORDER BY m.creado_en
+        """), {"i": sesion_id})).mappings().all()
+        return [dict(f) for f in filas]
+
     async def resumen(self, sesion_id: str) -> dict:
         """Lo que se imprime al cerrar el día."""
         cab = (await self._s.execute(text("""

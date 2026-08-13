@@ -112,7 +112,7 @@ def test_retiro_e_ingreso_mueven_el_efectivo():
     s = nueva_sesion()
     vender(s, EFECTIVO, "800000")
     s.registrar_retiro(pesos("500000"), motivo="sangría a caja fuerte",
-                       usuario_id="maria", autorizado_por="laura")
+                       usuario_id="laura", puede_mover_caja=True)
     s.registrar_ingreso(pesos("50000"), motivo="cambio de sencillo",
                         usuario_id="maria")
     assert s.esperado_de(EFECTIVO, autorizado_a_ver=True) == pesos("550000")
@@ -121,7 +121,7 @@ def test_retiro_e_ingreso_mueven_el_efectivo():
 def test_un_gasto_de_caja_menor_baja_el_efectivo():
     s = nueva_sesion()
     s.registrar_gasto(pesos("35000"), motivo="domicilio almuerzo",
-                      usuario_id="maria", autorizado_por="laura")
+                      usuario_id="laura", puede_mover_caja=True)
     assert s.esperado_de(EFECTIVO, autorizado_a_ver=True) == pesos("165000")
 
 
@@ -130,17 +130,43 @@ def test_no_se_puede_sacar_plata_que_no_hay():
     s = nueva_sesion()
     with pytest.raises(ReglaDeNegocio, match="no hay"):
         s.registrar_retiro(pesos("300000"), motivo="sangría",
-                           usuario_id="maria", autorizado_por="laura")
+                           usuario_id="laura", puede_mover_caja=True)
 
 
-def test_retiro_y_gasto_exigen_motivo_y_autorizacion():
+def test_retiro_y_gasto_exigen_motivo_y_permiso():
+    """El motivo escrito y el permiso son las dos mitades del control: sin
+    motivo no se puede revisar después, y sin permiso lo hace cualquiera.
+
+    La firma por PIN de un tercero se quitó con el resto del PIN; ahora el
+    permiso lo trae quien tiene la sesión abierta y quien saca la plata es
+    quien firma.
+    """
     s = nueva_sesion()
     with pytest.raises(ReglaDeNegocio):
-        s.registrar_retiro(pesos("1000"), motivo="", usuario_id="maria",
-                           autorizado_por="laura")
+        s.registrar_retiro(pesos("1000"), motivo="", usuario_id="laura",
+                           puede_mover_caja=True)
     with pytest.raises(RequiereAutorizacion):
-        s.registrar_retiro(pesos("1000"), motivo="sangría", usuario_id="maria",
-                           autorizado_por=None)
+        s.registrar_retiro(pesos("1000"), motivo="sangría",
+                           usuario_id="maria", puede_mover_caja=False)
+
+
+def test_quien_saca_la_plata_es_quien_firma():
+    """Ya no hay dos nombres. El del movimiento tiene que ser el de verdad."""
+    s = nueva_sesion()
+    s.registrar_retiro(pesos("50000"), motivo="sangría", usuario_id="laura",
+                       puede_mover_caja=True)
+    ultimo = s.movimientos[-1]
+    assert ultimo.usuario_id == "laura"
+    assert ultimo.autorizado_por == "laura"
+
+
+def test_un_ingreso_no_lleva_firma():
+    """`autorizado_por` sólo tiene sentido donde hubo algo que autorizar.
+    Llenarlo siempre haría que un informe de movimientos autorizados los
+    listara todos."""
+    s = nueva_sesion()
+    s.registrar_ingreso(pesos("50000"), motivo="sencillo", usuario_id="maria")
+    assert s.movimientos[-1].autorizado_por is None
 
 
 def test_anular_una_venta_devuelve_la_plata_al_esperado():
