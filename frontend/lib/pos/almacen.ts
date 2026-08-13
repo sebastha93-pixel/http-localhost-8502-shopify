@@ -196,3 +196,28 @@ export async function leerCatalogo<R>(): Promise<CatalogoGuardado<R> | undefined
   return conStore<CatalogoGuardado<R> | undefined>(
     CATALOGO, "readonly", (s) => s.get("completo"));
 }
+
+
+// ── Cuánto lleva esta caja sin hablar con el servidor ───────────────────────
+//
+// No es lo mismo que «hay red». La caja puede estar cobrando sin conexión
+// perfectamente durante una hora; lo que no puede es seguir haciéndolo tres
+// días. Cuanto más tiempo pasa, más cosas se han movido a sus espaldas: precios
+// que cambiaron, stock que se vendió en la otra caja, un turno que alguien
+// cerró desde el panel.
+//
+// Se guarda el ÚLTIMO CONTACTO EXITOSO, no el último intento: un equipo que
+// lleva tres días intentando cada dos minutos sigue llevando tres días sin
+// saber nada.
+
+const CONTACTO = "ultimo_contacto";
+
+export async function marcarContacto(): Promise<void> {
+  await conStore(CARRITO, "readwrite", (s) => s.put(Date.now(), CONTACTO));
+}
+
+export async function ultimoContacto(): Promise<number | null> {
+  const v = await conStore<number | undefined>(
+    CARRITO, "readonly", (s) => s.get(CONTACTO));
+  return typeof v === "number" ? v : null;
+}

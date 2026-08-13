@@ -22,6 +22,7 @@ import {
   anotarIntento,
   confirmada,
   encolar,
+  marcarContacto,
   pendientes,
   type VentaPendiente,
 } from "@/lib/pos/almacen";
@@ -97,6 +98,7 @@ async function enviarUna(v: VentaPendiente): Promise<boolean> {
   try {
     await cerrarVenta(v.cuerpo);
     await confirmada(v.venta_id);
+    await marcarContacto().catch(() => {});
     return true;
   } catch (e) {
     // NÚMERO REPETIDO: la venta es buena, sólo su número está tomado. Se

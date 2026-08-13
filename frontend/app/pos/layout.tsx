@@ -14,6 +14,7 @@
 import type { Metadata } from "next";
 import { Barlow, Barlow_Condensed } from "next/font/google";
 import "./pos.css";
+import { RegistrarSW } from "@/components/pos/registrar-sw";
 
 const barlow = Barlow({
   subsets: ["latin"],
@@ -33,6 +34,7 @@ export const metadata: Metadata = {
   title: "POS · MALE'DENIM",
   // La caja se opera a pantalla completa, sin barra del navegador.
   appleWebApp: { capable: true, statusBarStyle: "default" },
+  manifest: "/pos.webmanifest",
 };
 
 export default function PosLayout({ children }: { children: React.ReactNode }) {
@@ -40,6 +42,9 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     <div
       className={`pos-raiz min-h-screen antialiased ${barlow.variable} ${barlowCondensed.variable}`}
     >
+      {/* Lo que permite que la caja ABRA sin internet. Todo lo demás del
+          offline sólo funciona si la pestaña ya estaba viva. */}
+      <RegistrarSW />
       {children}
     </div>
   );

@@ -55,6 +55,8 @@ import {
   guardarCatalogo,
   idDelEquipo,
   leerCatalogo,
+  marcarContacto,
+  ultimoContacto,
 } from "@/lib/pos/almacen";
 import { armarTirillaLocal } from "@/lib/pos/tirilla-local";
 import { arrancarCola, sincronizar, usarNumerador } from "@/lib/pos/sincronizacion";
@@ -100,6 +102,22 @@ function filtrar(
   });
 }
 
+/**
+ * Cuánto puede operar una caja sin hablar con el servidor.
+ *
+ * A las 4 h se avisa; a las 24 h no se deja cobrar más. No es capricho: cuanto
+ * más tiempo pasa, más cosas se movieron a espaldas de esta caja —precios que
+ * cambiaron, stock que se vendió en la otra, un turno que alguien cerró desde
+ * el panel—. Un equipo desconectado una semana emitiendo tiquetes produce un
+ * descuadre que después no se puede reconstruir.
+ *
+ * BLOQUEAR ES CARO Y AUN ASÍ ES LO CORRECTO: una caja parada se nota y se
+ * arregla en el momento; una caja vendiendo con datos de la semana pasada no
+ * se nota hasta el cierre contable.
+ */
+const HORAS_AVISO = 4;
+const HORAS_BLOQUEO = 24;
+
 export default function PantallaVenta() {
   const [consulta, setConsulta] = useState("");
   const [categoria, setCategoria] = useState("Todo");
@@ -131,6 +149,10 @@ export default function PantallaVenta() {
   // que se ve es una foto, y ofrecer lo que ya se vendió en la otra caja es la
   // peor conversación posible en el mostrador.
   const [catalogoDe, setCatalogoDe] = useState<number | null>(null);
+  // Horas desde el último contacto con el servidor. No es «hay red»: la caja
+  // puede cobrar sin conexión una hora sin problema; lo que no puede es
+  // seguir haciéndolo tres días.
+  const [horasSinContacto, setHorasSinContacto] = useState(0);
   const [cargandoTurno, setCargandoTurno] = useState(true);
   const [abriendo, setAbriendo] = useState(false);
   const [errorTurno, setErrorTurno] = useState<string | null>(null);
@@ -239,6 +261,8 @@ export default function PantallaVenta() {
         d = await listarCatalogo(UBICACION, consulta.trim(), categoria);
         if (!vigente) return;
         setCatalogoDe(null);
+        void marcarContacto().catch(() => {});
+        setHorasSinContacto(0);
         // Se guarda la copia SIN filtros: es la que sirve cuando no hay red, y
         // guardar lo filtrado dejaría a la cajera viendo tres referencias
         // porque justo antes de la caída había buscado «falda».
@@ -255,6 +279,8 @@ export default function PantallaVenta() {
           return;
         }
         setCatalogoDe(local.guardado_en);
+        const ultimo = await ultimoContacto();
+        setHorasSinContacto(ultimo ? (Date.now() - ultimo) / 3_600_000 : 0);
         d = { referencias: filtrar(local.referencias, consulta, categoria),
               categorias: local.categorias };
       }
@@ -413,6 +439,18 @@ export default function PantallaVenta() {
   async function cobrar(
     pagos: { medio_pago_id: string; monto_centavos: number; es_efectivo: boolean }[],
   ) {
+    if (horasSinContacto >= HORAS_BLOQUEO) {
+      setAviso(
+        `Esta caja lleva ${Math.floor(horasSinContacto)} horas sin conectarse. `
+        + "No se puede seguir cobrando sin sincronizar: el stock y los precios "
+        + "que ves son de hace demasiado. Conecta el equipo a internet.",
+      );
+      // Devolver la fase, o el panel de cobro se queda en «CERRANDO…» con el
+      // botón muerto y la cajera sin forma de salir ni de leer el motivo, que
+      // se pinta en el carrito.
+      setFase("vendiendo");
+      return;
+    }
     setAviso(null);
     const numero = tomarNumero();
     const cuerpo = {
@@ -588,6 +626,20 @@ export default function PantallaVenta() {
         >
           <h1 className="titular text-[20px]">Venta</h1>
           <div className="flex items-center gap-3">
+            {horasSinContacto >= HORAS_AVISO && (
+              <span
+                role="status"
+                className={`border px-2.5 py-1 text-[11px] ${
+                  horasSinContacto >= HORAS_BLOQUEO
+                    ? "border-[var(--pos-accent)] bg-[var(--pos-accent)] text-white"
+                    : "border-[var(--pos-accent)] bg-[var(--pos-accent)]/10 text-[var(--pos-900)]"
+                }`}
+              >
+                {horasSinContacto >= HORAS_BLOQUEO
+                  ? "Sin sincronizar · no se puede cobrar"
+                  : `${Math.floor(horasSinContacto)} h sin sincronizar`}
+              </span>
+            )}
             {catalogoDe !== null && (
               // El stock de aquí es de hace un rato. Decir CUÁNTO es lo que
               // permite a la cajera decidir si confía o va a mirar la percha.
