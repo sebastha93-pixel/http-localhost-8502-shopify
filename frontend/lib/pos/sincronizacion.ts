@@ -21,6 +21,7 @@ import { cerrarVenta, SobreElTope } from "@/lib/pos/api";
 import {
   anotarIntento,
   confirmada,
+  encolar,
   pendientes,
   type VentaPendiente,
 } from "@/lib/pos/almacen";
@@ -36,6 +37,19 @@ export interface EstadoCola {
 }
 
 type Oyente = (e: EstadoCola) => void;
+
+/** Cuántas veces se renumera una venta antes de darla por perdida. Tres, y no
+ *  «hasta que entre»: si el bloque del equipo está mal, insistir consume la
+ *  numeración entera del turno buscando un hueco que no existe. */
+const RENUMERADOS_MAX = 3;
+
+/** La pone la pantalla, que es la que tiene el bloque. La cola no puede pedir
+ *  números por su cuenta: sin red no hay a quién pedírselos. */
+let tomarNumero: (() => string) | null = null;
+
+export function usarNumerador(fn: () => string): void {
+  tomarNumero = fn;
+}
 
 let corriendo = false;
 let temporizador: ReturnType<typeof setTimeout> | null = null;
@@ -66,6 +80,10 @@ async function avisar(sincronizando = false): Promise<void> {
  * venta que sí habría entrado es perderla; reintentar una que no va a entrar
  * sólo cuesta peticiones, y de todas formas queda visible en la pantalla.
  */
+function esNumeroRepetido(e: unknown): boolean {
+  return e instanceof Error && /ya está usado/i.test(e.message);
+}
+
 function esDefinitivo(e: unknown): boolean {
   if (e instanceof SobreElTope) return true;
   const mensaje = e instanceof Error ? e.message : "";
@@ -81,6 +99,31 @@ async function enviarUna(v: VentaPendiente): Promise<boolean> {
     await confirmada(v.venta_id);
     return true;
   } catch (e) {
+    // NÚMERO REPETIDO: la venta es buena, sólo su número está tomado. Se
+    // renumera y se reintenta en vez de darla por perdida — es plata que sí
+    // entró a la caja, y dejarla «rechazada» la borra del sistema aunque la
+    // clienta se haya llevado su prenda y su papel.
+    //
+    // El número impreso se CONSERVA para que la cajera pueda encontrar la
+    // venta con el papel que la clienta trae de vuelta.
+    if (esNumeroRepetido(e) && tomarNumero && (v.renumerados ?? 0) < RENUMERADOS_MAX) {
+      try {
+        const nuevo = tomarNumero();
+        await encolar({
+          ...v,
+          numero: nuevo,
+          numero_impreso: v.numero_impreso ?? v.numero,
+          cuerpo: { ...(v.cuerpo as object), numero: nuevo },
+          renumerados: (v.renumerados ?? 0) + 1,
+          intentos: v.intentos + 1,
+          estado: "en_cola",
+        });
+        return true;   // sigue la cola: la próxima vuelta lo reintenta
+      } catch {
+        // Sin numeración disponible: cae al camino normal y queda visible.
+      }
+    }
+
     const definitivo = esDefinitivo(e);
     await anotarIntento(v.venta_id, {
       estado: definitivo ? "rechazada" : "en_cola",

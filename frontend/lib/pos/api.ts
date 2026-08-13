@@ -215,8 +215,12 @@ export interface Bloque {
 /** Pide el bloque siguiente. Se llama al 80 % consumido, no al agotarse: si se
  *  espera al último número, la petición cae justo cuando ya no quedan, y sin
  *  red en ese momento la caja se queda sin poder vender. */
-export async function arrendarBloque(cajaId: string): Promise<Bloque> {
+export async function arrendarBloque(
+  cajaId: string,
+  dispositivoId?: string,
+): Promise<Bloque> {
   const p = new URLSearchParams({ caja_id: cajaId });
+  if (dispositivoId) p.set("dispositivo_id", dispositivoId);
   try {
     return await api.post<Bloque>(`/api/retail/caja/consecutivos?${p}`, {});
   } catch (e) {
@@ -226,8 +230,17 @@ export async function arrendarBloque(cajaId: string): Promise<Bloque> {
 
 /** El turno abierto de esta caja, o null. Recargar la pantalla a media mañana
  *  no puede costar volver a entrar. */
-export async function turnoActual(cajaId: string): Promise<Turno | null> {
+export async function turnoActual(
+  cajaId: string,
+  equipo?: { id: string; nombre: string },
+): Promise<Turno | null> {
   const p = new URLSearchParams({ caja_id: cajaId });
+  // El equipo se identifica también al REANUDAR: es la vía por la que entra
+  // una segunda tableta, y sin decir quién es se lleva el bloque de la primera.
+  if (equipo) {
+    p.set("dispositivo_id", equipo.id);
+    p.set("dispositivo_nombre", equipo.nombre);
+  }
   return api.get<Turno | null>(`/api/retail/caja/turno-actual?${p}`);
 }
 
@@ -237,6 +250,8 @@ export async function abrirTurno(cuerpo: {
   sesion_id: string;
   tienda_id: string;
   caja_id: string;
+  dispositivo_id?: string;
+  dispositivo_nombre?: string;
 }): Promise<Turno> {
   try {
     return await api.post<Turno>("/api/retail/caja/turno", cuerpo);

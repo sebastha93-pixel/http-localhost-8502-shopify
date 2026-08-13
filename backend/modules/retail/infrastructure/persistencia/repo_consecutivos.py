@@ -49,9 +49,25 @@ class RepositorioConsecutivosSQL:
     def __init__(self, sesion: AsyncSession) -> None:
         self._s = sesion
 
+    async def registrar_dispositivo(self, *, dispositivo_id: str, caja_id: str,
+                                    nombre: str, usuario_id: str) -> None:
+        """El equipo se anota solo la primera vez.
+
+        No autentica nada —de eso se encarga el login del ERP— sólo dice «soy
+        este equipo», que es lo que hace falta para que dos tabletas no
+        compartan bloque de numeración.
+        """
+        await self._s.execute(text("""
+            INSERT INTO retail.dispositivos
+                (id, caja_id, nombre, registrado_por, ultimo_visto_en)
+            VALUES (:d, :c, :n, :u, now())
+            ON CONFLICT (id) DO UPDATE SET ultimo_visto_en = now()
+        """), {"d": dispositivo_id, "c": caja_id, "n": nombre, "u": usuario_id})
+
     async def vigente(self, caja_id: str) -> Optional[dict]:
         fila = (await self._s.execute(text("""
-            SELECT id, caja_id, prefijo, desde, hasta, siguiente, arrendado_en
+            SELECT id, caja_id, prefijo, desde, hasta, siguiente, arrendado_en,
+                   arrendado_a
               FROM retail.bloques_consecutivo
              WHERE caja_id = :c AND NOT agotado
         """), {"c": caja_id})).mappings().first()
@@ -118,9 +134,20 @@ class RepositorioConsecutivosSQL:
 
         Reanudar un turno NO debe consumir un bloque: recargar la pantalla a
         media mañana dejaría huecos de 500 números cada vez.
+
+        PERO SÓLO SE REUSA EL BLOQUE PROPIO. Si el vigente lo tiene otro
+        equipo, este recibe uno nuevo: devolverle el ajeno pondría a las dos
+        tabletas numerando desde el mismo punto, y saldrían dos tiquetes con el
+        mismo número. Es la única forma en que un duplicado puede ocurrir una
+        vez que el contador avanza bien.
         """
         actual = await self.vigente(caja_id)
-        if actual and actual["prefijo"] == prefijo and \
+        mismo_equipo = (
+            actual is not None
+            and (actual["arrendado_a"] is None or dispositivo_id is None
+                 or actual["arrendado_a"] == dispositivo_id)
+        )
+        if actual and mismo_equipo and actual["prefijo"] == prefijo and \
                 actual["siguiente"] <= actual["hasta"]:
             return actual
         return await self.arrendar(caja_id=caja_id, prefijo=prefijo,

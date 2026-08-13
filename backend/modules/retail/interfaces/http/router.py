@@ -458,13 +458,20 @@ class AbrirTurnoEntrada(BaseModel):
     sesion_id: str = Field(description="ULID generado en el dispositivo")
     tienda_id: str
     caja_id: str
+    # Quién es este equipo. No autentica nada —de eso se encarga el login del
+    # ERP— pero sin él dos tabletas en la misma caja comparten bloque de
+    # numeración y sacan tiquetes con el mismo número.
+    dispositivo_id: Optional[str] = None
+    dispositivo_nombre: Optional[str] = None
 
 
 @router.get("/caja/turno-actual", response_model=Optional[TurnoSalida])
 async def turno_actual(
     caja_id: str = Query(),
+    dispositivo_id: Optional[str] = Query(None),
+    dispositivo_nombre: Optional[str] = Query(None),
     uow=Depends(unidad_de_trabajo),
-    _: CurrentUser = Depends(require_permission("retail", "ver")),
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
 ):
     """Si la caja ya tiene turno abierto, se REANUDA. Recargar la pantalla a
     media mañana no puede costar volver a entrar."""
@@ -479,9 +486,19 @@ async def turno_actual(
         ), {"u": abierta["abierta_por"]})).scalar()
         # Reanudar NO arrienda: recargar la pantalla a media mañana dejaría un
         # hueco de 500 números cada vez.
+        #
+        # PERO EL EQUIPO SE IDENTIFICA IGUAL. Esta es la vía por la que entra
+        # una SEGUNDA tableta —abre el POS y encuentra el turno ya abierto—, y
+        # sin decir quién es se llevaría el bloque de la primera: las dos
+        # numerando desde el mismo punto.
         prefijo = await _prefijo_de(t, caja_id)
+        if dispositivo_id:
+            await t.consecutivos.registrar_dispositivo(
+                dispositivo_id=dispositivo_id, caja_id=caja_id,
+                nombre=dispositivo_nombre or "Equipo sin nombre",
+                usuario_id=usuario.id)
         bloque = await t.consecutivos.vigente_o_arrendar(
-            caja_id=caja_id, prefijo=prefijo)
+            caja_id=caja_id, prefijo=prefijo, dispositivo_id=dispositivo_id)
         await t.commit()
 
     return TurnoSalida(
@@ -527,8 +544,10 @@ async def abrir_turno(
                 "SELECT tope_descuento_pct FROM retail.permisos_pos WHERE usuario_id=:u"
             ), {"u": ya["abierta_por"]})).scalar()
             prefijo = await _prefijo_de(t, entrada.caja_id)
+            await _anotar_equipo(t, entrada, usuario.id)
             bloque = await t.consecutivos.vigente_o_arrendar(
-                caja_id=entrada.caja_id, prefijo=prefijo)
+                caja_id=entrada.caja_id, prefijo=prefijo,
+                dispositivo_id=entrada.dispositivo_id)
             await t.commit()
             return TurnoSalida(
                 sesion_id=ya["id"], numero_turno=ya["numero_turno"],
@@ -551,8 +570,10 @@ async def abrir_turno(
             # turno abierto sin bloque es una caja que no puede numerar, y una
             # caja que no puede numerar no puede vender.
             prefijo = await _prefijo_de(t, entrada.caja_id)
+            await _anotar_equipo(t, entrada, usuario.id)
             bloque = await t.consecutivos.vigente_o_arrendar(
-                caja_id=entrada.caja_id, prefijo=prefijo)
+                caja_id=entrada.caja_id, prefijo=prefijo,
+                dispositivo_id=entrada.dispositivo_id)
             await t.auditoria.registrar(
                 evento="caja.abierta", ocurrido_en=ahora,
                 tienda_id=entrada.tienda_id, caja_id=entrada.caja_id,
@@ -1130,6 +1151,7 @@ class BloqueSalida(BaseModel):
 @router.post("/caja/consecutivos", response_model=BloqueSalida)
 async def arrendar_bloque(
     caja_id: str = Query(),
+    dispositivo_id: Optional[str] = Query(None),
     uow=Depends(unidad_de_trabajo),
     usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
 ):
@@ -1141,11 +1163,27 @@ async def arrendar_bloque(
     """
     async with uow as t:
         prefijo = await _prefijo_de(t, caja_id)
-        bloque = await t.consecutivos.arrendar(caja_id=caja_id, prefijo=prefijo)
+        bloque = await t.consecutivos.arrendar(
+            caja_id=caja_id, prefijo=prefijo, dispositivo_id=dispositivo_id)
         await t.commit()
 
     return BloqueSalida(prefijo=bloque["prefijo"], desde=bloque["desde"],
                         hasta=bloque["hasta"], siguiente=bloque["siguiente"])
+
+
+async def _anotar_equipo(t, entrada, usuario_id: str) -> None:
+    """Deja constancia del equipo antes de arrendarle numeración.
+
+    El bloque referencia al dispositivo, así que tiene que existir primero.
+    Si la pantalla no manda id —un cliente viejo— se sigue igual: el bloque
+    queda sin dueño y se comporta como antes.
+    """
+    if not entrada.dispositivo_id:
+        return
+    await t.consecutivos.registrar_dispositivo(
+        dispositivo_id=entrada.dispositivo_id, caja_id=entrada.caja_id,
+        nombre=entrada.dispositivo_nombre or "Equipo sin nombre",
+        usuario_id=usuario_id)
 
 
 async def _prefijo_de(t, caja_id: str) -> str:

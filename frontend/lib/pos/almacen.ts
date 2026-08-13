@@ -36,6 +36,12 @@ export interface VentaPendiente {
   creada_en: number;
   intentos: number;
   estado: EstadoPendiente;
+  /** Cuántas veces se le cambió el número porque el suyo ya estaba tomado. */
+  renumerados?: number;
+  /** El número que se IMPRIMIÓ en el papel de la clienta. Si la venta se
+   *  renumeró al sincronizar, el sistema quedó con otro — y este es el único
+   *  hilo para encontrarla cuando la clienta vuelve con su tirilla. */
+  numero_impreso?: string;
   /** Por qué la rechazó el servidor. Sólo se llena cuando NO tiene sentido
    *  reintentar: un número repetido o una regla de negocio no mejoran por
    *  insistir, y hay que enseñárselo a la cajera. */
@@ -132,4 +138,26 @@ export async function leerCarrito<T>(): Promise<T | undefined> {
 
 export async function limpiarCarrito(): Promise<void> {
   await conStore(CARRITO, "readwrite", (s) => s.delete("actual"));
+}
+
+
+// ── La identidad del equipo ─────────────────────────────────────────────────
+//
+// No autentica nada: de eso se encarga el login del ERP. Sirve para que dos
+// tabletas en la misma caja no compartan bloque de numeración y saquen
+// tiquetes con el mismo número.
+//
+// Vive en la MISMA base que la cola de ventas: si se borran los datos del
+// navegador se pierden las dos a la vez, que es lo coherente — un equipo sin
+// su cola pendiente es, a efectos prácticos, un equipo nuevo.
+
+const EQUIPO = "equipo";
+
+export async function idDelEquipo(nuevoId: () => string): Promise<string> {
+  const guardado = await conStore<string | undefined>(
+    CARRITO, "readonly", (s) => s.get(EQUIPO));
+  if (guardado) return guardado;
+  const id = nuevoId();
+  await conStore(CARRITO, "readwrite", (s) => s.put(id, EQUIPO));
+  return id;
 }

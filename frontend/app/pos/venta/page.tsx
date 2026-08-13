@@ -49,9 +49,9 @@ import {
   type Tirilla as TirillaDatos,
 } from "@/lib/pos/api";
 import { nuevoUlid } from "@/lib/pos/ulid";
-import { confirmada, encolar } from "@/lib/pos/almacen";
+import { confirmada, encolar, idDelEquipo } from "@/lib/pos/almacen";
 import { armarTirillaLocal } from "@/lib/pos/tirilla-local";
-import { arrancarCola, sincronizar } from "@/lib/pos/sincronizacion";
+import { arrancarCola, sincronizar, usarNumerador } from "@/lib/pos/sincronizacion";
 import { ivaDe } from "@/lib/pos/dinero";
 import type { LineaCarrito } from "@/lib/pos/carrito";
 
@@ -86,6 +86,9 @@ export default function PantallaVenta() {
   const siguienteNumero = useRef<number | null>(null);
   const bloque = useRef<{ prefijo: string; hasta: number; desde: number } | null>(null);
   const pidiendoBloque = useRef(false);
+  // Quién es este equipo. Sin esto, dos tabletas en la misma caja reciben el
+  // MISMO bloque vigente y numeran desde el mismo punto.
+  const equipo = useRef<string | null>(null);
   const [cargandoTurno, setCargandoTurno] = useState(true);
   const [abriendo, setAbriendo] = useState(false);
   const [errorTurno, setErrorTurno] = useState<string | null>(null);
@@ -102,14 +105,29 @@ export default function PantallaVenta() {
   // Al entrar, reanudar el turno abierto de esta caja si lo hay.
   // La cola de sincronización vive mientras viva la pantalla: al volver la
   // red vacía sola lo que se cobró sin ella.
-  useEffect(() => arrancarCola(), []);
+  useEffect(() => {
+    // La cola no puede pedir números por su cuenta —sin red no hay a quién—
+    // así que se le presta el numerador del bloque, para poder renumerar una
+    // venta cuyo número resultó estar tomado.
+    usarNumerador(() => tomarNumero());
+    return arrancarCola();
+  }, []);
 
   useEffect(() => {
     if (!configurado) return;
     let vigente = true;
     (async () => {
       try {
-        const [t, ctx] = await Promise.all([turnoActual(CAJA), contextoCaja(CAJA)]);
+        // El id del equipo primero: reanudar sin decir quién es haría que una
+        // segunda tableta se llevara el bloque de la primera.
+        const id = await idDelEquipo(nuevoUlid);
+        equipo.current = id;
+        const [t, ctx] = await Promise.all([
+          turnoActual(CAJA, {
+            id, nombre: `${CAJA} · ${navigator.platform || "equipo"}`,
+          }),
+          contextoCaja(CAJA),
+        ]);
         if (!vigente) return;
         setTurno(t);
         if (t) cargarBloque(t);
@@ -129,6 +147,12 @@ export default function PantallaVenta() {
     try {
       const abierto = await abrirTurno({
         sesion_id: nuevoUlid(), tienda_id: TIENDA, caja_id: CAJA,
+        ...(equipo.current
+          ? {
+              dispositivo_id: equipo.current,
+              dispositivo_nombre: `${CAJA} · ${navigator.platform || "equipo"}`,
+            }
+          : {}),
       });
       setTurno(abierto);
       cargarBloque(abierto);
@@ -305,7 +329,7 @@ export default function PantallaVenta() {
       pidiendoBloque.current = true;
       // Sin `await`: pedir el bloque siguiente no puede meterse en los 30
       // segundos de la venta en curso. Si falla, se reintenta en la próxima.
-      arrendarBloque(CAJA)
+      arrendarBloque(CAJA, equipo.current ?? undefined)
         .then((nuevo) => {
           bloque.current = { prefijo: nuevo.prefijo, desde: nuevo.desde,
                              hasta: nuevo.hasta };

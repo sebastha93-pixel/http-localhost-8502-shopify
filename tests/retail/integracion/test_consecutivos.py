@@ -345,3 +345,112 @@ def test_una_venta_que_llega_TARDE_no_retrocede_el_contador(entorno):
             """))).scalar()
 
     assert asyncio.get_event_loop().run_until_complete(contador()) == base + 6
+
+
+# ── Dos equipos en la misma caja ────────────────────────────────────────────
+
+def _abrir_con_equipo(c, caja: str, sufijo: str, equipo: str) -> dict:
+    r = c.post("/api/retail/caja/turno", json={
+        "sesion_id": f"01JQ8X4T5N6P{sufijo}R8S9V0W1X2Y",
+        "tienda_id": "florida", "caja_id": caja,
+        "dispositivo_id": equipo, "dispositivo_nombre": "Tablet"})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_dos_TABLETAS_en_la_misma_caja_no_comparten_bloque(entorno):
+    """La única forma que quedaba de sacar dos tiquetes con el mismo número.
+
+    Con el contador arreglado, un duplicado ya sólo puede venir de dos equipos
+    numerando desde el mismo punto — y eso pasaba: la segunda tableta abría la
+    misma caja, `vigente_o_arrendar` le devolvía el bloque vivo con el mismo
+    `siguiente`, y las dos empezaban en el mismo número.
+    """
+    c, _ = entorno
+    EQ_A = "01JQ8X4T5N6PAAAR8S9V0W1X2Y"
+    EQ_B = "01JQ8X4T5N6PBBBR8S9V0W1X2Y"
+
+    a = _abrir_con_equipo(c, "florida_caja1", "001", EQ_A)
+    b = _abrir_con_equipo(c, "florida_caja1", "001", EQ_B)
+
+    rango_a = set(range(a["consecutivo_desde"], a["consecutivo_hasta"] + 1))
+    rango_b = set(range(b["consecutivo_desde"], b["consecutivo_hasta"] + 1))
+    assert not (rango_a & rango_b), (
+        "las dos tabletas numeran desde el mismo punto"
+    )
+
+
+def test_la_MISMA_tableta_reanudando_conserva_su_bloque(entorno):
+    """Lo de arriba no puede lograrse a costa de que recargar gaste un bloque:
+    la cajera recarga varias veces al día."""
+    c, _ = entorno
+    EQ = "01JQ8X4T5N6PAAAR8S9V0W1X2Y"
+    primero = _abrir_con_equipo(c, "florida_caja1", "001", EQ)
+    for _ in range(3):
+        otra = _abrir_con_equipo(c, "florida_caja1", "001", EQ)
+        assert otra["consecutivo_desde"] == primero["consecutivo_desde"]
+
+
+def test_el_equipo_queda_registrado_solo(entorno):
+    """Sin acto administrativo: el navegador genera su id la primera vez y se
+    anota. Exigir que una administradora registre cada tableta era del esquema
+    de tokens que se fue con el PIN."""
+    c, motor = entorno
+    EQ = "01JQ8X4T5N6PAAAR8S9V0W1X2Y"
+    _abrir_con_equipo(c, "florida_caja1", "001", EQ)
+
+    async def leer():
+        async with motor.connect() as cn:
+            return (await cn.execute(text("""
+                SELECT caja_id, nombre, registrado_por FROM retail.dispositivos
+                 WHERE id = :d
+            """), {"d": EQ})).mappings().first()
+
+    fila = asyncio.get_event_loop().run_until_complete(leer())
+    assert fila is not None
+    assert fila["caja_id"] == "florida_caja1"
+    assert fila["registrado_por"] == "maria"
+
+
+def test_una_pantalla_sin_id_de_equipo_sigue_funcionando(entorno):
+    """Compatibilidad: un cliente que no manda id no puede quedarse sin vender.
+    Su bloque queda sin dueño y se comporta como antes."""
+    c, _ = entorno
+    t = _abrir(c, "florida_caja1", "001")
+    assert t["consecutivo_desde"] >= 1
+    n = t["consecutivo_siguiente"]
+    assert _vender(c, caja="florida_caja1", sesion=t["sesion_id"],
+                   numero=f"FV-20-{n}", n=30).status_code == 200
+
+
+def test_una_SEGUNDA_tableta_que_reanuda_tampoco_hereda_el_bloque(entorno):
+    """La vía real por la que entra un segundo equipo.
+
+    La primera tableta abre el turno. La segunda llega, encuentra el turno ya
+    abierto y lo REANUDA — no pasa por abrir. Si en ese camino no dice quién
+    es, se lleva el bloque de la primera y las dos numeran desde el mismo
+    punto. Es el mismo agujero de arriba por la otra puerta.
+    """
+    c, _ = entorno
+    EQ_A = "01JQ8X4T5N6PAAAR8S9V0W1X2Y"
+    EQ_B = "01JQ8X4T5N6PBBBR8S9V0W1X2Y"
+
+    a = _abrir_con_equipo(c, "florida_caja1", "001", EQ_A)
+    b = c.get("/api/retail/caja/turno-actual", params={
+        "caja_id": "florida_caja1", "dispositivo_id": EQ_B,
+        "dispositivo_nombre": "Tablet 2"}).json()
+
+    assert b["consecutivo_desde"] != a["consecutivo_desde"], (
+        "la segunda tableta reanudó con el bloque de la primera"
+    )
+
+
+def test_la_misma_tableta_reanudando_por_esa_via_conserva_el_suyo(entorno):
+    c, _ = entorno
+    EQ = "01JQ8X4T5N6PAAAR8S9V0W1X2Y"
+    a = _abrir_con_equipo(c, "florida_caja1", "001", EQ)
+    for _ in range(3):
+        b = c.get("/api/retail/caja/turno-actual", params={
+            "caja_id": "florida_caja1", "dispositivo_id": EQ,
+            "dispositivo_nombre": "Tablet"}).json()
+        assert b["consecutivo_desde"] == a["consecutivo_desde"]
