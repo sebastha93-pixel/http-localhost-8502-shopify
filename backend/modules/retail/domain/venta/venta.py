@@ -388,9 +388,14 @@ class Venta:
             lineas=self._lineas_del_evento(),
         )
 
-    def anular(self, *, motivo: str, autorizado_por: Optional[str],
+    def anular(self, *, motivo: str, usuario_id: str, puede_anular: bool,
                ahora: datetime) -> VentaAnulada:
-        """INV-V11. Sólo se anula lo que se cerró, con motivo y con firma."""
+        """INV-V11. Sólo se anula lo que se cerró, con motivo y con permiso.
+
+        Pedía la firma de un tercero por PIN. Sin PIN, el permiso lo trae quien
+        tiene la sesión abierta —igual que el descuadre y los movimientos de
+        caja— y quien anula es quien queda firmando.
+        """
         if self.estado is not EstadoVenta.CERRADA:
             raise ReglaDeNegocio(
                 f"Sólo se anula una venta cerrada. Ésta está {self.estado.value}; "
@@ -398,9 +403,10 @@ class Venta:
             )
         if not (motivo or "").strip():
             raise ReglaDeNegocio("Anular una venta exige escribir el motivo.")
-        if not autorizado_por:
+        if not puede_anular:
             raise RequiereAutorizacion(
-                "Anular una venta necesita autorización de un supervisor."
+                "Anular una venta necesita permiso. Pide que entre alguien "
+                "que lo tenga, con su correo y contraseña."
             )
 
         total = self.total()
@@ -416,7 +422,7 @@ class Venta:
             numero=self.numero,
             tienda_id=self.tienda_id,
             motivo=self.motivo_anulacion,
-            autorizado_por=autorizado_por,
+            autorizado_por=usuario_id,
             total_revertido=total,
             lineas=lineas,
         )

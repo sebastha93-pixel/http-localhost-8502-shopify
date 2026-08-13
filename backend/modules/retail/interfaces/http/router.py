@@ -716,6 +716,9 @@ class ResumenCierre(BaseModel):
     # número que la administradora compara contra el informe del día.
     movimientos: List[MovimientoManual] = []
     puede_mover_caja: bool = False
+    # Permiso DISTINTO al de mover caja: sacar plata del cajón y deshacer una
+    # venta cobrada no son la misma operación ni las hace la misma persona.
+    puede_anular_venta: bool = False
     # Sólo viene si NO es ciego o si quien mira tiene permiso de verlo.
     esperado_por_medio: Optional[dict] = None
 
@@ -767,7 +770,8 @@ async def resumen_cierre(
             SELECT s.numero_turno, s.abierta_en, s.base_inicial,
                    coalesce(p.nombre, s.abierta_por) AS cajera,
                    coalesce(pp.puede_ver_esperado, false)  AS puede_ver,
-                   coalesce(pp.puede_mover_caja, false)    AS puede_mover
+                   coalesce(pp.puede_mover_caja, false)    AS puede_mover,
+                   coalesce(pp.puede_anular_venta, false)  AS puede_anular
               FROM retail.sesiones_caja s
               LEFT JOIN retail.permisos_pos p ON p.usuario_id = s.abierta_por
               LEFT JOIN retail.permisos_pos pp ON pp.usuario_id = :quien
@@ -805,6 +809,7 @@ async def resumen_cierre(
             monto_centavos=int(m["monto"]), motivo=m["motivo"],
             quien=m["quien"]) for m in movimientos],
         puede_mover_caja=bool(cab["puede_mover"]),
+        puede_anular_venta=bool(cab["puede_anular"]),
         esperado_por_medio=esperado,
     )
 
@@ -1330,4 +1335,107 @@ async def registrar_movimiento(
         # Lo que queda en el cajón sólo se devuelve a quien puede verlo: con
         # cierre ciego, decirlo aquí sería la puerta de atrás al arqueo.
         efectivo_esperado_centavos=None,
+    )
+
+
+# ── Ventas del turno y anulación ────────────────────────────────────────────
+
+class VentaDelTurno(BaseModel):
+    venta_id: str
+    numero: str
+    hora: str
+    total_centavos: int
+    unidades: int
+    estado: str
+    estado_fiscal: str
+    cliente_nombre: Optional[str] = None
+    motivo_anulacion: Optional[str] = None
+
+
+@router.get("/caja/ventas", response_model=List[VentaDelTurno])
+async def ventas_del_turno(
+    sesion_id: str = Query(),
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Las ventas de ESTE turno, para reimprimir o anular.
+
+    Hasta ahora la tirilla sólo se podía reimprimir mientras la pantalla del
+    ticket siguiera abierta — ocho segundos. La clienta que vuelve media hora
+    después con el papel borrado no tenía por dónde.
+    """
+    from sqlalchemy import text as _t
+
+    async with uow as t:
+        filas = (await t.sesion.execute(_t("""
+            SELECT v.id, v.numero, v.total, v.estado, v.estado_fiscal,
+                   v.motivo_anulacion,
+                   to_char(v.cerrada_en AT TIME ZONE coalesce(ti.zona_horaria,
+                           'America/Bogota'), 'HH24:MI') AS hora,
+                   coalesce((SELECT sum(l.cantidad) FROM retail.venta_lineas l
+                              WHERE l.venta_id = v.id), 0) AS unidades,
+                   trim(concat_ws(' ', c.nombre, c.apellido)) AS cliente
+              FROM retail.ventas v
+              JOIN retail.tiendas ti ON ti.id = v.tienda_id
+              LEFT JOIN retail.clientes c ON c.id = v.cliente_id
+             WHERE v.sesion_id = :s AND v.cerrada_en IS NOT NULL
+             ORDER BY v.cerrada_en DESC
+        """), {"s": sesion_id})).mappings().all()
+
+    return [VentaDelTurno(
+        venta_id=f["id"], numero=f["numero"], hora=f["hora"] or "",
+        total_centavos=int(f["total"]), unidades=int(f["unidades"]),
+        estado=f["estado"], estado_fiscal=f["estado_fiscal"],
+        cliente_nombre=f["cliente"] or None,
+        motivo_anulacion=f["motivo_anulacion"]) for f in filas]
+
+
+class AnularEntrada(BaseModel):
+    motivo: str = Field(min_length=5, max_length=200)
+
+
+class AnulacionSalida(BaseModel):
+    venta_id: str
+    numero: str
+    total_revertido_centavos: int
+    unidades_devueltas: int
+    # Si la factura ya salió, anular aquí NO la revierte ante la DIAN: hace
+    # falta una nota crédito. Se dice en la respuesta para que la pantalla lo
+    # muestre en vez de dejar creer que quedó todo deshecho.
+    exige_nota_credito: bool
+
+
+@router.post("/ventas/{venta_id}/anular", response_model=AnulacionSalida)
+async def anular_venta(
+    venta_id: str,
+    entrada: AnularEntrada,
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Deshace una venta cerrada del turno EN CURSO.
+
+    Cuatro cosas a la vez y en una sola transacción: la venta se marca, la
+    prenda vuelve al stock, la plata sale del arqueo y queda constancia. Si
+    alguna se cayera sola el resultado sería peor que no anular.
+    """
+    from datetime import datetime, timezone
+    from backend.modules.retail.application.comandos.anular_venta import AnularVenta
+
+    try:
+        r = await AnularVenta(uow).ejecutar(
+            venta_id=venta_id, motivo=entrada.motivo, usuario_id=usuario.id,
+            ahora=datetime.now(timezone.utc))
+    except RequiereAutorizacion as e:
+        raise HTTPException(403, {"error": "sin_permiso_anular",
+                                  "mensaje": str(e),
+                                  "accion_sugerida": "entrar_con_otro_usuario"})
+    except ReglaDeNegocio as e:
+        raise HTTPException(400, {"error": "regla_de_negocio",
+                                  "mensaje": str(e)})
+
+    return AnulacionSalida(
+        venta_id=r.venta_id, numero=r.numero,
+        total_revertido_centavos=r.total_revertido_centavos,
+        unidades_devueltas=r.unidades_devueltas,
+        exige_nota_credito=r.exige_nota_credito,
     )

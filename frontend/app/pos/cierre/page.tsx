@@ -17,10 +17,17 @@ import { Panel } from "@/components/pos/marco";
 import { Rail } from "@/components/pos/rail";
 import { Arqueo, DialogoDescuadre } from "@/components/pos/arqueo";
 import { DialogoMovimiento } from "@/components/pos/dialogo-movimiento";
+import { DialogoAnular, VentasDelTurno } from "@/components/pos/ventas-del-turno";
+import { Tirilla } from "@/components/pos/tirilla";
 import {
+  anularVenta,
   cerrarCaja,
   moverCaja,
+  pedirTirilla,
   resumenCierre,
+  ventasDelTurno,
+  type Tirilla as DatosTirilla,
+  type VentaDelTurno,
   turnoActual,
   type Cierre,
   type ResumenCierre,
@@ -45,6 +52,11 @@ export default function PantallaCierre() {
   const [moviendo, setMoviendo] = useState(false);
   const [errorMovimiento, setErrorMovimiento] = useState<string | null>(null);
   const [guardandoMov, setGuardandoMov] = useState(false);
+  const [ventas, setVentas] = useState<VentaDelTurno[]>([]);
+  const [anulando, setAnulando] = useState<VentaDelTurno | null>(null);
+  const [errorAnular, setErrorAnular] = useState<string | null>(null);
+  const [enviandoAnulacion, setEnviandoAnulacion] = useState(false);
+  const [tirillaAImprimir, setTirillaAImprimir] = useState<DatosTirilla | null>(null);
 
   useEffect(() => {
     let vivo = true;
@@ -53,7 +65,10 @@ export default function PantallaCierre() {
         const t = await turnoActual(CAJA);
         if (!vivo) return;
         setTurno(t);
-        if (t) setResumen(await resumenCierre(t.sesion_id));
+        if (t) {
+          setResumen(await resumenCierre(t.sesion_id));
+          setVentas(await ventasDelTurno(t.sesion_id));
+        }
       } catch (e) {
         if (vivo) setError(e instanceof Error ? e.message : "No se pudo cargar el turno.");
       } finally {
@@ -143,6 +158,36 @@ export default function PantallaCierre() {
     }
   }
 
+  async function reimprimir(ventaId: string) {
+    try {
+      setTirillaAImprimir(await pedirTirilla(ventaId));
+      // La misma pausa que en el cierre de venta: React tiene que pintar la
+      // tirilla antes de abrir el diálogo, o sale una hoja en blanco.
+      await new Promise((r) => setTimeout(r, 60));
+      window.print();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo traer la tirilla.");
+    }
+  }
+
+  async function confirmarAnulacion(motivo: string) {
+    if (!anulando || !resumen) return;
+    setEnviandoAnulacion(true);
+    setErrorAnular(null);
+    try {
+      await anularVenta(anulando.venta_id, motivo);
+      // Se recargan las DOS cosas: la anulación mueve el arqueo y la lista.
+      setResumen(await resumenCierre(resumen.sesion_id));
+      setVentas(await ventasDelTurno(resumen.sesion_id));
+      setAnulando(null);
+    } catch (e) {
+      setErrorAnular(
+        e instanceof Error ? e.message : "No se pudo anular la venta.");
+    } finally {
+      setEnviandoAnulacion(false);
+    }
+  }
+
   const cajera = user?.nombre || user?.email || "";
 
   return (
@@ -180,19 +225,44 @@ export default function PantallaCierre() {
         {!cerrado && resumen && (
           <div className="grid max-w-[900px] grid-cols-1 gap-4 lg:grid-cols-2">
             <ResumenTurno resumen={resumen} onMover={() => setMoviendo(true)} />
-            <Arqueo
-              resumen={resumen}
+            <div className="flex flex-col gap-4">
+              <Arqueo
+                resumen={resumen}
               contados={contados}
               onContar={(id, texto) =>
                 setContados((c) => ({ ...c, [id]: texto.replace(/[^\d]/g, "") }))
               }
               onCerrar={() => enviar()}
-              cerrando={cerrando}
-              error={error}
-            />
+                cerrando={cerrando}
+                error={error}
+              />
+              <VentasDelTurno
+                ventas={ventas}
+                onReimprimir={reimprimir}
+                onAnular={setAnulando}
+                puedeAnular={resumen.puede_anular_venta}
+              />
+            </div>
           </div>
         )}
       </main>
+
+      {/* Fuera de pantalla, no `display:none`: lo oculto no se imprime. */}
+      {tirillaAImprimir && (
+        <div className="absolute -left-[9999px] top-0" aria-hidden>
+          <Tirilla datos={tirillaAImprimir} />
+        </div>
+      )}
+
+      {anulando && (
+        <DialogoAnular
+          venta={anulando}
+          onCancelar={() => { setAnulando(null); setErrorAnular(null); }}
+          onConfirmar={confirmarAnulacion}
+          error={errorAnular}
+          anulando={enviandoAnulacion}
+        />
+      )}
 
       {moviendo && (
         <DialogoMovimiento

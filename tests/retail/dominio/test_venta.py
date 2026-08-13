@@ -428,22 +428,31 @@ def test_no_se_cierra_dos_veces():
 
 # ── Anulación · INV-V11 ─────────────────────────────────────────────────────
 
-def test_anular_exige_motivo_y_autorizacion():
+def test_anular_exige_motivo_y_permiso():
+    """Las dos mitades del control: sin motivo no se puede revisar después, y
+    sin permiso lo hace cualquiera. Anular es la forma limpia de hacer
+    desaparecer una venta cobrada.
+
+    La firma por PIN de un tercero se quitó con el resto del PIN: ahora el
+    permiso lo trae quien tiene la sesión abierta, y quien anula es quien firma.
+    """
     v = nueva_venta()
     con_una_linea(v)
     v.registrar_pago("efectivo", pesos("169900"), es_efectivo=True)
     v.cerrar(AHORA)
 
     with pytest.raises(ReglaDeNegocio):
-        v.anular(motivo="", autorizado_por="laura", ahora=AHORA)
+        v.anular(motivo="", usuario_id="laura", puede_anular=True, ahora=AHORA)
     with pytest.raises(RequiereAutorizacion):
-        v.anular(motivo="la clienta cambió de opinión", autorizado_por=None,
-                 ahora=AHORA)
+        v.anular(motivo="la clienta cambió de opinión", usuario_id="maria",
+                 puede_anular=False, ahora=AHORA)
 
     evento = v.anular(motivo="la clienta cambió de opinión",
-                      autorizado_por="laura", ahora=AHORA)
+                      usuario_id="laura", puede_anular=True, ahora=AHORA)
     assert isinstance(evento, VentaAnulada)
     assert v.estado is EstadoVenta.ANULADA
+    # Quien anula es quien firma: ya no hay dos nombres.
+    assert evento.autorizado_por == "laura"
 
 
 def test_no_se_anula_algo_que_nunca_se_cerro():
@@ -451,7 +460,8 @@ def test_no_se_anula_algo_que_nunca_se_cerro():
     v = nueva_venta()
     con_una_linea(v)
     with pytest.raises(ReglaDeNegocio):
-        v.anular(motivo="me equivoqué", autorizado_por="laura", ahora=AHORA)
+        v.anular(motivo="me equivoqué", usuario_id="laura",
+                 puede_anular=True, ahora=AHORA)
 
 
 # ── Cliente ─────────────────────────────────────────────────────────────────

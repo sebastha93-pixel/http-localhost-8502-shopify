@@ -324,6 +324,9 @@ export interface ResumenCierre {
     quien: string;
   }[];
   puede_mover_caja: boolean;
+  /** Distinto de mover caja: sacar plata y deshacer una venta cobrada no
+   *  son la misma operación ni las hace la misma persona. */
+  puede_anular_venta: boolean;
   /** `null` en cierre ciego: el backend se NIEGA a mandarlo hasta que se
    *  declare el conteo. No es un dato que falte, es el control funcionando. */
   esperado_por_medio: Record<string, number> | null;
@@ -534,6 +537,49 @@ export async function moverCaja(cuerpo: {
 }): Promise<MovimientoCaja> {
   try {
     return await api.post<MovimientoCaja>("/api/retail/caja/movimientos", cuerpo);
+  } catch (e) {
+    return traducir(e);
+  }
+}
+
+// ── Ventas del turno ────────────────────────────────────────────────────────
+
+export interface VentaDelTurno {
+  venta_id: string;
+  numero: string;
+  hora: string;
+  total_centavos: number;
+  unidades: number;
+  estado: string;
+  estado_fiscal: string;
+  cliente_nombre: string | null;
+  motivo_anulacion: string | null;
+}
+
+/** Para reimprimir o anular. Hasta ahora la tirilla sólo se podía reimprimir
+ *  mientras la pantalla del ticket siguiera abierta — ocho segundos. */
+export async function ventasDelTurno(sesionId: string): Promise<VentaDelTurno[]> {
+  const p = new URLSearchParams({ sesion_id: sesionId });
+  return api.get<VentaDelTurno[]>(`/api/retail/caja/ventas?${p}`);
+}
+
+export interface Anulacion {
+  venta_id: string;
+  numero: string;
+  total_revertido_centavos: number;
+  unidades_devueltas: number;
+  /** Si la factura ya salió, anular en el POS NO la revierte ante la DIAN:
+   *  hace falta una nota crédito. La pantalla tiene que decirlo. */
+  exige_nota_credito: boolean;
+}
+
+export async function anularVenta(
+  ventaId: string,
+  motivo: string,
+): Promise<Anulacion> {
+  try {
+    return await api.post<Anulacion>(
+      `/api/retail/ventas/${ventaId}/anular`, { motivo });
   } catch (e) {
     return traducir(e);
   }

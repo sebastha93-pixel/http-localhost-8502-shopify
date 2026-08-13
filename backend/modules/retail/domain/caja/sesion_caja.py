@@ -140,10 +140,18 @@ class SesionCaja:
                      es_efectivo=es_efectivo, venta_id=venta_id)
 
     def registrar_anulacion(self, *, medio_pago_id: str, monto: Dinero,
-                            es_efectivo: bool, venta_id: str) -> None:
+                            es_efectivo: bool, venta_id: str,
+                            usuario_id: Optional[str] = None) -> None:
+        """La plata que vuelve a salir del cajón.
+
+        Queda a nombre de QUIEN ANULA, no de quien abrió el turno. Lo segundo
+        era lo que hacía antes, y significaba que al revisar quién había
+        deshecho una venta salía siempre la misma persona: la que abrió la
+        caja esa mañana.
+        """
         self._exigir_abierta_o_en_arqueo()
         self._anotar(TipoMovimiento.ANULACION, -monto, medio_pago_id=medio_pago_id,
-                     motivo="anulación", usuario_id=self.abierta_por,
+                     motivo="anulación", usuario_id=usuario_id or self.abierta_por,
                      es_efectivo=es_efectivo, venta_id=venta_id)
 
     # ── Movimientos de efectivo ─────────────────────────────────────────────

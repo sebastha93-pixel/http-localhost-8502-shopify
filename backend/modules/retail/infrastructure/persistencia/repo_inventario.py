@@ -78,6 +78,33 @@ class RepositorioInventarioSQL:
             referencia_id=referencia_id, usuario_id=usuario_id)
         return saldo
 
+    async def devolver(self, *, ubicacion_id: str, variante_id: str,
+                       cantidad: int, referencia_id: str,
+                       usuario_id: str, motivo: str = "anulacion") -> int:
+        """Devuelve prenda al saldo. El libro es APPEND-ONLY.
+
+        No se borra ni se edita el asiento de la venta: se escribe el
+        contrario. Un libro que se puede editar no sirve para cuadrar nada —
+        cualquier diferencia se puede hacer desaparecer, y entonces la
+        conciliación mensual deja de significar algo.
+        """
+        fila = (await self._s.execute(text("""
+            UPDATE retail.stock_ubicacion
+               SET cantidad = cantidad + :n, actualizado_en = now()
+             WHERE ubicacion_id = :ubicacion AND variante_id = :variante
+         RETURNING cantidad
+        """), {"n": cantidad, "ubicacion": ubicacion_id,
+               "variante": variante_id})).first()
+        if fila is None:
+            raise LookupError(
+                f"no hay saldo registrado de {variante_id} en {ubicacion_id}")
+        await self._asentar(
+            ubicacion_id=ubicacion_id, variante_id=variante_id, delta=cantidad,
+            saldo_despues=fila.cantidad, motivo=motivo,
+            referencia_tipo="venta", referencia_id=referencia_id,
+            usuario_id=usuario_id)
+        return fila.cantidad
+
     async def _asentar(self, **kw) -> None:
         """Asiento del libro mayor. Append-only: la tabla tiene REVOKE
         UPDATE/DELETE, así que corregir es un movimiento contrario."""

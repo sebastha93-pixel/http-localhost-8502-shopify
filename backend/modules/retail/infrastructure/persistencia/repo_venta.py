@@ -14,7 +14,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -141,6 +141,22 @@ class RepositorioVentasSQL:
         }
 
     # ── Lectura ─────────────────────────────────────────────────────────────
+
+    async def marcar_anulada(self, *, venta_id: str, motivo: str,
+                             anulada_por: str, ahora) -> None:
+        """Anular NO toca las líneas ni los pagos: sólo el encabezado.
+
+        Volver a escribir la venta entera con `guardar` obligaría a traer el
+        mapa de SKU→variante que la venta ya no necesita, y reescribiría filas
+        que no cambiaron. Peor: si el mapa llegara incompleto —como me pasó—
+        las líneas se perderían al reescribirlas.
+        """
+        await self._s.execute(text("""
+            UPDATE retail.ventas
+               SET estado = 'anulada', motivo_anulacion = :m,
+                   anulada_por = :u, anulada_en = :ts
+             WHERE id = :i
+        """), {"i": venta_id, "m": motivo, "u": anulada_por, "ts": ahora})
 
     async def obtener(self, venta_id: str) -> Optional[Venta]:
         fila = (await self._s.execute(
