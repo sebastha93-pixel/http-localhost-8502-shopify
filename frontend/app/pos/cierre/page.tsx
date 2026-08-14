@@ -93,7 +93,8 @@ export default function PantallaCierre() {
         const conteos = (resumen.medios.length
           ? resumen.medios
           : [{ medio_pago_id: "efectivo", es_efectivo: true,
-               entra_al_arqueo: true, total_centavos: 0 }]
+               entra_al_arqueo: true, total_centavos: 0, nombre: "Efectivo",
+               tipo: "efectivo" }]
         ).map((m) =>
           // El efectivo va por PIEZAS: el total lo saca el servidor, así que
           // deja de ser un número que se pueda escribir de memoria. Los demás

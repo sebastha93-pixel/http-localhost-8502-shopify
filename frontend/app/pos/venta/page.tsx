@@ -442,7 +442,15 @@ export default function PantallaVenta() {
   // clienta paga y el servidor responde. Si ahí se va la luz, con el orden
   // natural no queda rastro; con este, la venta está en disco y sale sola.
   async function cobrar(
-    pagos: { medio_pago_id: string; monto_centavos: number; es_efectivo: boolean }[],
+    // `referencia` viaja hasta el cuerpo de la venta: es el número de
+    // aprobación del datáfono, de Addi o del QR, y sin él ese cobro no se
+    // puede cuadrar después contra el informe del proveedor.
+    pagos: {
+      medio_pago_id: string;
+      monto_centavos: number;
+      es_efectivo: boolean;
+      referencia?: string;
+    }[],
   ) {
     if (horasSinContacto >= HORAS_BLOQUEO) {
       setAviso(
@@ -721,6 +729,7 @@ export default function PantallaVenta() {
               {fase === "cobrando" ? (
                 <PanelCobro
                   total={totales.total}
+                  medios={contexto?.medios_pago ?? []}
                   onCancelar={() => setFase("vendiendo")}
                   onConfirmar={cobrar}
                 />

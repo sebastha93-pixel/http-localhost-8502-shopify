@@ -278,13 +278,17 @@ class RepositorioSesionCajaSQL:
 
         medios = (await self._s.execute(text("""
             SELECT m.medio_pago_id, coalesce(p.nombre, m.medio_pago_id) AS nombre,
+                   coalesce(p.tipo, 'otro')             AS tipo,
                    coalesce(p.tipo = 'efectivo', true)  AS es_efectivo,
                    coalesce(p.entra_al_arqueo, true)    AS entra_al_arqueo,
                    sum(m.monto)::bigint AS total
               FROM retail.movimientos_caja m
               LEFT JOIN retail.medios_pago p ON p.id = m.medio_pago_id
              WHERE m.sesion_id = :i AND m.medio_pago_id IS NOT NULL
-             GROUP BY 1, 2, 3, 4
+             -- Por NOMBRE y no por posición: agrupar por «1, 2, 3, 4» se
+             -- desalinea en silencio en cuanto alguien inserta una columna en
+             -- medio, que es justo lo que acabo de hacer al añadir `tipo`.
+             GROUP BY m.medio_pago_id, p.nombre, p.tipo, p.entra_al_arqueo
              ORDER BY min(coalesce(p.orden, 0)), 2
         """), {"i": sesion_id})).mappings().all()
 

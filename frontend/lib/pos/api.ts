@@ -285,6 +285,25 @@ export interface ContextoCaja {
    *  equipo ya guarda— porque contar el cajón es justo lo que se hace al
    *  encender la tableta, cuando puede que todavía no haya red. */
   denominaciones: Denominacion[];
+  /** Los medios que esta tienda cobra hoy. Estaban QUEMADOS en la pantalla de
+   *  cobro, y uno apuntaba a un id inexistente: con tarjeta no se podía
+   *  cobrar. Viajan con el contexto para que también funcionen sin red. */
+  medios_pago: MedioPago[];
+}
+
+export interface MedioPago {
+  id: string;
+  nombre: string;
+  tipo: string;
+  es_efectivo: boolean;
+  permite_vuelto: boolean;
+  /** El único hilo que une una línea del POS con una del informe del
+   *  proveedor. Sin él, cuadrar el día es comparar dos totales. */
+  exige_referencia: boolean;
+  /** Si la factura electrónica de este medio puede salir. Un medio sin forma
+   *  de pago de Siigo se COBRA igual —la caja no se bloquea por Siigo— y su
+   *  documento queda esperando. */
+  factura_lista: boolean;
 }
 
 export interface Denominacion {
@@ -305,6 +324,7 @@ export async function contextoCaja(cajaId: string): Promise<ContextoCaja> {
 export interface MedioResumen {
   medio_pago_id: string;
   nombre: string;
+  tipo: string;
   es_efectivo: boolean;
   /** Un medio que no entra al arqueo (crédito) igual hay que declararlo, pero
    *  no hay nada físico que contar: se prellena y se bloquea. */

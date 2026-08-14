@@ -670,6 +670,30 @@ class Denominacion(BaseModel):
     tipo: str
 
 
+class MedioPago(BaseModel):
+    """Un medio de pago, tal como lo tiene configurado la tienda.
+
+    ESTO ANTES ESTABA QUEMADO EN LA PANTALLA, con dos entradas fijas y una de
+    ellas apuntando a un id que no existe (`datafono_florida`): con tarjeta no
+    se podía cobrar y nadie lo notó porque todas las pruebas fueron en
+    efectivo. Ahora sale de la tabla, que es lo que permite dar de alta Addi o
+    un QR sin tocar código.
+    """
+    id: str
+    nombre: str
+    tipo: str
+    es_efectivo: bool
+    permite_vuelto: bool
+    # El único hilo que une una línea del POS con una del informe del
+    # proveedor. Sin él, cuadrar el día es comparar dos totales y encogerse de
+    # hombros cuando no dan.
+    exige_referencia: bool
+    # Si la factura electrónica de este medio puede salir. Un medio sin forma
+    # de pago de Siigo COBRA igual —la caja no se bloquea por Siigo— y su
+    # documento espera.
+    factura_lista: bool
+
+
 class ContextoCaja(BaseModel):
     tienda_id: str
     tienda_nombre: str
@@ -695,6 +719,10 @@ class ContextoCaja(BaseModel):
     # que se hace cuando se acaba de encender la tableta y puede que todavía
     # no haya red.
     denominaciones: List[Denominacion] = []
+    # Los medios que esta tienda cobra hoy. Viajan con el contexto —que el
+    # equipo guarda— porque una venta con Addi o con QR hay que poder cobrarla
+    # también cuando se cayó el internet de la tienda.
+    medios_pago: List[MedioPago] = []
 
 
 @router.get("/caja/contexto", response_model=ContextoCaja)
@@ -744,7 +772,19 @@ async def contexto_caja(
         mensaje_tirilla=fila["mensaje_tirilla"],
         tiene_resolucion=bool(fila["tiene_resolucion"]),
         denominaciones=[Denominacion(**d) for d in (await _denominaciones(sesion))],
+        medios_pago=[MedioPago(**m) for m in (await _medios_pago(sesion))],
     )
+
+
+async def _medios_pago(sesion) -> list:
+    from sqlalchemy import text as _t
+    filas = (await sesion.execute(_t("""
+        SELECT id, nombre, tipo, permite_vuelto, exige_referencia,
+               (siigo_forma_pago_id IS NOT NULL) AS factura_lista
+          FROM retail.medios_pago
+         WHERE activo ORDER BY orden, nombre
+    """))).mappings().all()
+    return [{**dict(f), "es_efectivo": f["tipo"] == "efectivo"} for f in filas]
 
 
 async def _denominaciones(sesion) -> list:
@@ -762,6 +802,7 @@ async def _denominaciones(sesion) -> list:
 class MedioResumen(BaseModel):
     medio_pago_id: str
     nombre: str
+    tipo: str = "otro"
     es_efectivo: bool
     # Un medio que NO entra al arqueo (crédito a 30 días) igual hay que
     # declararlo, pero no se cuenta: no hay nada físico. La pantalla lo
@@ -890,7 +931,8 @@ async def resumen_cierre(
         anuladas=datos["anuladas"],
         monto_anulado_centavos=datos["monto_anulado"],
         medios=[MedioResumen(medio_pago_id=m["medio_pago_id"],
-                             nombre=m["nombre"], es_efectivo=m["es_efectivo"],
+                             nombre=m["nombre"], tipo=m.get("tipo", "otro"),
+                             es_efectivo=m["es_efectivo"],
                              entra_al_arqueo=m["entra_al_arqueo"],
                              total_centavos=int(m["total"]))
                 for m in datos["medios"]],

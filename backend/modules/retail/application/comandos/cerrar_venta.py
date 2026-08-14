@@ -75,6 +75,20 @@ class CerrarVenta:
         evento = venta.cerrar(ahora)
 
         async with self._uow as t:
+            # 1b. LA REFERENCIA DE LOS MEDIOS QUE LA EXIGEN.
+            #
+            # `exige_referencia` existe en la migración 0001 y no lo leía
+            # nadie. Es el único hilo que une una línea del POS con una línea
+            # del informe de Addi, de Wompi o del datáfono: sin él, cuadrar el
+            # día se reduce a comparar dos totales y encogerse de hombros
+            # cuando no dan — y la clienta que quiere reclamar un cobro se
+            # queda sin el número con el que reclamarlo.
+            #
+            # Se comprueba contra la BASE, no contra lo que diga el
+            # dispositivo: una tableta con el catálogo viejo no sabe que ese
+            # medio pasó a exigirla.
+            await self._exigir_referencias(t, venta)
+
             # 2
             await t.ventas.guardar(venta, variante_por_sku=variante_por_sku)
 
@@ -169,6 +183,45 @@ class CerrarVenta:
             estado_fiscal=venta.estado_fiscal.value,
             evento=evento,
         )
+
+    @staticmethod
+    async def _exigir_referencias(t, venta) -> None:
+        """Que ningún pago que necesite referencia entre sin ella.
+
+        Se pregunta por LOS MEDIOS DE ESTA VENTA y no por todos: una tienda
+        puede tener veinte configurados y la consulta iría a buscarlos todos en
+        cada cobro.
+        """
+        from sqlalchemy import text as _t
+
+        ids = sorted({p.medio_pago_id for p in venta.pagos})
+        if not ids:
+            return
+        filas = (await t.sesion.execute(_t("""
+            SELECT id, nombre, exige_referencia FROM retail.medios_pago
+             WHERE id = ANY(:ids)
+        """), {"ids": ids})).mappings().all()
+        exigen = {f["id"]: f["nombre"] for f in filas if f["exige_referencia"]}
+
+        # Un medio que no está en la tabla no se deja pasar en silencio: la
+        # llave foránea lo rechazaría después con un error de base de datos que
+        # en pantalla no dice nada. Así fue como «datafono_florida» —el id
+        # quemado en la pantalla— rompía todo cobro con tarjeta.
+        desconocidos = sorted(set(ids) - {f["id"] for f in filas})
+        if desconocidos:
+            raise ReglaDeNegocio(
+                f"El equipo mandó un medio de pago que esta tienda no tiene: "
+                f"{', '.join(desconocidos)}. Actualiza la pantalla."
+            )
+
+        sin = [exigen[p.medio_pago_id] for p in venta.pagos
+               if p.medio_pago_id in exigen and not (p.referencia or "").strip()]
+        if sin:
+            raise ReglaDeNegocio(
+                f"Falta el número de aprobación de {', '.join(sorted(set(sin)))}. "
+                f"Está en la pantalla del datáfono o en la app, y es lo único "
+                f"que después permite cuadrar ese cobro."
+            )
 
 
 class RelojDelSistema:

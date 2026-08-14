@@ -44,6 +44,14 @@ export interface Conteo {
   contado_centavos: number;
 }
 
+/** Dónde va a buscar la cajera el número que se le pide declarar. */
+function fuenteDe(m: MedioResumen): string {
+  if (m.tipo === "tarjeta") return "cierre del datáfono";
+  if (m.tipo === "financiacion") return "informe del día en su app";
+  if (m.tipo === "transferencia") return "movimientos recibidos hoy";
+  return "informe del día";
+}
+
 export function Arqueo({
   resumen,
   contados,
@@ -71,7 +79,8 @@ export function Arqueo({
   const aDeclarar: MedioResumen[] = resumen.medios.length
     ? resumen.medios
     : [{
-        medio_pago_id: "efectivo", nombre: "Efectivo", es_efectivo: true,
+        medio_pago_id: "efectivo", nombre: "Efectivo", tipo: "efectivo",
+        es_efectivo: true,
         entra_al_arqueo: true, total_centavos: resumen.base_inicial_centavos,
       }];
 
@@ -114,8 +123,13 @@ export function Arqueo({
       <div className="mt-1 flex flex-col gap-4">
         {aDeclarar.map((m) => (
           <label key={m.medio_pago_id} className="block">
+            {/* DE DÓNDE SALE EL NÚMERO, y eso depende del medio. Decía «cierre
+                del datáfono» para todo lo que no era efectivo, así que a la
+                cajera que cobró con Addi la mandaba a mirar el aparato
+                equivocado. Un rótulo que indica mal la fuente hace que se
+                declare cualquier cosa, y ahí el arqueo deja de medir. */}
             <span className="kicker text-[var(--pos-600)]">
-              {m.es_efectivo ? "Efectivo contado" : `${m.nombre} · cierre del datáfono`}
+              {m.es_efectivo ? "Efectivo contado" : `${m.nombre} · ${fuenteDe(m)}`}
             </span>
             {m.es_efectivo ? (
               // POR DENOMINACIÓN, no un total. El cierre ya era ciego, pero
