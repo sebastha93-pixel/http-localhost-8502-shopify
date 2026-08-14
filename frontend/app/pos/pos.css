@@ -18,6 +18,8 @@
   --pos-accent: #23262b;
   --pos-divider: color-mix(in srgb, #1d1f20 16%, transparent);
 
+  /* La rampa neutra. Son valores de ESCALA: sirven para fondos, bordes y
+     separadores. Del 100 al 500 NO se usan para texto — ver `--pos-muted`. */
   --pos-100: #f1f2f5;
   --pos-200: #e3e5ea;
   --pos-300: #ccd0d8;
@@ -27,6 +29,28 @@
   --pos-700: #444a54;
   --pos-800: #2e333b;
   --pos-900: #1b1e24;
+
+  /**
+   * EL TEXTO SECUNDARIO. Token semántico, no un peldaño de la rampa.
+   *
+   * `--pos-500` se estaba usando como color de texto en 18 sitios y da 3,10:1
+   * sobre el panel: por debajo del 4,5:1 que exige WCAG AA. No es una
+   * formalidad —es la hora, el nombre de la cajera, el motivo de una
+   * anulación— leído en una tienda con luz de vitrina, de pie y con prisa.
+   *
+   * Éste es el gris MÁS CLARO que pasa AA sobre los cuatro fondos del sistema
+   * (5,23:1 en el peor, el panel). Y sigue siendo más claro que `--pos-600`,
+   * así que la jerarquía de tres niveles —texto, secundario, terciario— se
+   * conserva tal cual la dibujó el handoff.
+   *
+   * La regla que se lleva de aquí: para texto se usan tokens con NOMBRE, no
+   * peldaños de una escala. Un peldaño no sabe sobre qué fondo va a caer.
+   */
+  --pos-muted: #5b6368;
+
+  /* Micro-interacción. Un solo valor para que nada vaya a destiempo: por
+     debajo de 120ms no se percibe, por encima de 300ms se siente lento. */
+  --pos-transicion: 180ms;
 
   /* Escala 0.85× del sistema. */
   --pos-1: 3.4px;
@@ -55,12 +79,21 @@
   letter-spacing: -0.015em;
 }
 
-/* Kickers y etiquetas: 10–11px, versalitas espaciadas. */
+/**
+ * Kickers y etiquetas: versalitas espaciadas.
+ *
+ * El handoff las dibuja a 10px. Sube a 11: en versalitas se pierde la altura
+ * de x —no hay letras con bastón ni ojo bajo que ayuden a distinguir— y 10px
+ * a la distancia de un mostrador se vuelve textura en vez de palabra.
+ *
+ * Es el ÚNICO texto por debajo del suelo de 12px, y se lo permite porque
+ * etiqueta un dato que va justo debajo: se ojea, no se lee.
+ */
 .pos-raiz .kicker {
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.14em;
-  line-height: 1.2;
+  letter-spacing: 0.13em;
+  line-height: 1.25;
 }
 
 /**
@@ -94,10 +127,89 @@
 .pos-raiz .blueprint > .corner.br { bottom: -6px; right: -6px; }
 
 /* Foco visible del sistema. En una pantalla táctil casi no se ve, pero el POS
-   también se opera con teclado y ahí es lo único que dice dónde estás. */
+   también se opera con teclado y ahí es lo único que dice dónde estás.
+   `:focus-visible` y no `:focus`: con el segundo, cada toque deja el anillo
+   pegado y la pantalla se ve sucia. Gana por especificidad al `outline-none`
+   de Tailwind, así que los 15 inputs que lo traen siguen enfocándose bien. */
 .pos-raiz :focus-visible {
   outline: 2px solid var(--pos-accent);
   outline-offset: 2px;
+}
+
+/**
+ * EL OBJETIVO TÁCTIL DE 44px, sin tocar el dibujo.
+ *
+ * Los chips de talla miden 40×40. Son EL control más pulsado del producto
+ * —uno por cada línea de cada venta— y se tocan de pie, rápido, con una
+ * prenda en la otra mano. Cuatro píxeles de menos ahí no es una formalidad:
+ * es la talla equivocada dentro de una bolsa.
+ *
+ * Agrandarlos a 44 visualmente no cabe: cinco chips de 44 más sus huecos se
+ * salen de la tarjeta, y ensanchar la tarjeta baja a dos columnas el catálogo
+ * —se ve la mitad de referencias por pantalla—. Así que se agranda el ÁREA,
+ * no el dibujo: cada chip reclama la mitad del hueco que tiene a cada lado
+ * (3px de 6) y 2px arriba y abajo. 46×44 de zona sensible, 40×40 a la vista.
+ *
+ * Es la técnica de Apple para los iconos pequeños de barra. Y la mitad del
+ * hueco es exacta: las zonas se tocan pero NO se solapan, que sería peor que
+ * el problema —pulsar la 10 y que registre la 12—.
+ */
+/**
+ * EL SUELO DE 44px LO PONE EL SISTEMA, no cada autor.
+ *
+ * Perseguirlo archivo por archivo se cumple hasta el siguiente botón que
+ * alguien escriba con prisa un martes. Aquí queda garantizado para todo lo
+ * que ya existe y para todo lo que venga.
+ *
+ * `.compacto` es la salida deliberada, para el control que de verdad tiene
+ * que ser pequeño. Que haya que escribirla es el punto: obliga a decidirlo.
+ */
+.pos-raiz button:not(.compacto),
+.pos-raiz select,
+.pos-raiz input:not([type="checkbox"]):not([type="radio"]) {
+  min-height: 44px;
+}
+.pos-raiz button:not(.compacto) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pos-raiz .toque-44 {
+  position: relative;
+}
+/* El ancho sí se amplía sin dibujar: cada control reclama la mitad del hueco
+   que tiene a cada lado. Media exacta, así que las zonas se tocan pero nunca
+   se solapan — solaparlas sería pulsar «Crítico» y que filtre «Avisos». */
+.pos-raiz .toque-44::after {
+  content: "";
+  position: absolute;
+  inset: 0 -3px;
+}
+
+/* El POS también vive en un ordenador de mostrador con ratón. Un botón que no
+   cambia el cursor no parece un botón. */
+.pos-raiz button:not(:disabled),
+.pos-raiz [role="button"]:not([aria-disabled="true"]) {
+  cursor: pointer;
+}
+
+/**
+ * Movimiento reducido.
+ *
+ * No es sólo preferencia estética: hay gente a la que el movimiento le produce
+ * mareo, y una cajera pasa ocho horas frente a esta pantalla. Se anula todo,
+ * no se acorta — «casi sin animación» sigue moviéndose.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .pos-raiz *,
+  .pos-raiz *::before,
+  .pos-raiz *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Los números se alinean en columna: precios, cantidades, totales. */

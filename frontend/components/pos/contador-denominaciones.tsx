@@ -85,7 +85,7 @@ export function ContadorDenominaciones({
             cincuenta» son $200.000, y un cero de más se ve al instante. */}
         <span
           className="tabular flex-1 text-right text-[13px]"
-          style={{ color: cantidad ? "var(--pos-700)" : "var(--pos-500)" }}
+          style={{ color: cantidad ? "var(--pos-700)" : "var(--pos-muted)" }}
         >
           {cantidad ? formatear(d.valor_centavos * cantidad) : "—"}
         </span>

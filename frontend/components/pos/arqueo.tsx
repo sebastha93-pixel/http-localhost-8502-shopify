@@ -152,7 +152,7 @@ export function Arqueo({
               />
             )}
             {contados[m.medio_pago_id] && (
-              <span className="mt-1 block tabular text-[11px] text-[var(--pos-600)]">
+              <span className="mt-1 block tabular text-[12px] text-[var(--pos-600)]">
                 {formatear(desdePesosTecleados(contados[m.medio_pago_id]))}
               </span>
             )}
@@ -168,7 +168,7 @@ export function Arqueo({
         atenuado={!esperado}
       />
       {!esperado && (
-        <p className="-mt-2 tabular text-[10.5px] leading-relaxed text-[var(--pos-600)]">
+        <p className="-mt-2 tabular text-[12px] leading-relaxed text-[var(--pos-600)]">
           Aparece al cerrar.
         </p>
       )}
@@ -182,7 +182,7 @@ export function Arqueo({
       <button
         onClick={onCerrar}
         disabled={faltaAlguno || cerrando}
-        className="mt-1 h-[52px] w-full bg-[var(--pos-accent)] titular text-[15px] font-semibold tracking-[0.05em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-500)]"
+        className="mt-1 h-[52px] w-full bg-[var(--pos-accent)] titular text-[15px] font-semibold tracking-[0.05em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-muted)]"
       >
         {cerrando ? "CERRANDO…" : "CERRAR CAJA"}
       </button>
@@ -230,7 +230,7 @@ function Fila({
       <span
         className={`tabular ${
           fuerte ? "titular text-[18px] font-semibold" : "font-medium"
-        } ${atenuado ? "text-[var(--pos-500)]" : "text-[var(--pos-text)]"}`}
+        } ${atenuado ? "text-[var(--pos-muted)]" : "text-[var(--pos-text)]"}`}
       >
         {valor}
       </span>
@@ -296,7 +296,7 @@ export function DialogoDescuadre({
           </p>
         )}
 
-        <p className="mt-4 tabular text-[10.5px] leading-relaxed text-[var(--pos-600)]">
+        <p className="mt-4 tabular text-[12px] leading-relaxed text-[var(--pos-600)]">
           El cierre queda marcado como crítico en la auditoría, con tu nombre y
           lo que escribas aquí.
         </p>
@@ -311,7 +311,7 @@ export function DialogoDescuadre({
           <button
             disabled={justificacion.trim().length < 5}
             onClick={() => onFirmar(justificacion.trim())}
-            className="h-12 flex-1 bg-[var(--pos-accent)] titular text-[13px] font-semibold tracking-[0.08em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-500)]"
+            className="h-12 flex-1 bg-[var(--pos-accent)] titular text-[13px] font-semibold tracking-[0.08em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-muted)]"
           >
             CERRAR CON DIFERENCIA
           </button>

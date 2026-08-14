@@ -54,7 +54,7 @@ export function CarritoPanel({
         >
           <div className="min-w-0">
             <p className="truncate text-[13px]">{cliente.nombre}</p>
-            <p className="text-[11px]" style={{ color: "var(--pos-600)" }}>
+            <p className="text-[12px]" style={{ color: "var(--pos-600)" }}>
               {cliente.tipo_documento} {cliente.numero_documento}
               {cliente.telefono && ` · ${cliente.telefono}`}
             </p>
@@ -82,7 +82,7 @@ export function CarritoPanel({
         {lineas.length === 0 ? (
           <p
             className="mt-10 px-4 text-center text-[13px] leading-relaxed"
-            style={{ color: "var(--pos-500)" }}
+            style={{ color: "var(--pos-muted)" }}
           >
             Toca una talla para agregar artículos a la venta.
           </p>
@@ -96,7 +96,7 @@ export function CarritoPanel({
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="truncate text-[13px]">{l.descripcion}</p>
-                  <p className="text-[11px]" style={{ color: "var(--pos-600)" }}>
+                  <p className="text-[12px]" style={{ color: "var(--pos-600)" }}>
                     Talla {l.talla} · {formatear(conIvaUnidad(l))}
                   </p>
                 </div>
@@ -112,7 +112,7 @@ export function CarritoPanel({
                 <button
                   onClick={() => onDescuento(l.sku)}
                   aria-label={`Aplicar descuento a ${l.sku}`}
-                  className="ml-1 h-8 rounded-[var(--pos-r-sm)] border px-2 text-[12px] hover:bg-[var(--pos-100)]"
+                  className="ml-1 h-11 min-w-11 rounded-[var(--pos-r-sm)] border px-2 text-[13px] transition-colors duration-[var(--pos-transicion)] hover:bg-[var(--pos-100)]"
                   style={{ borderColor: "var(--pos-divider)", color: "var(--pos-700)" }}
                 >
                   %
@@ -120,14 +120,14 @@ export function CarritoPanel({
               </div>
 
               {l.descuentoPct ? (
-                <p className="mt-1.5 text-[11px]" style={{ color: "var(--pos-700)" }}>
+                <p className="mt-1.5 text-[12px]" style={{ color: "var(--pos-700)" }}>
                   −{l.descuentoPct}% · {l.descuentoMotivo}
                   {l.autorizadoPor && ` · firmó ${l.autorizadoPor}`}
                 </p>
               ) : null}
 
               {l.disponible <= 0 && (
-                <p className="mt-1.5 text-[11px]" style={{ color: "var(--pos-700)" }}>
+                <p className="mt-1.5 text-[12px]" style={{ color: "var(--pos-700)" }}>
                   ⚠ El sistema no la tiene en esta tienda. Se vende igual y queda alertado.
                 </p>
               )}
@@ -195,7 +195,7 @@ function Fila({ etiqueta, valor, tenue }: { etiqueta: string; valor: number; ten
   return (
     <div
       className="tabular flex justify-between py-0.5 text-[13px]"
-      style={{ color: tenue ? "var(--pos-500)" : "var(--pos-700)" }}
+      style={{ color: tenue ? "var(--pos-muted)" : "var(--pos-700)" }}
     >
       <span>{etiqueta}</span>
       <span>{formatear(valor)}</span>
@@ -208,7 +208,7 @@ function Paso({ onClick, children, etiqueta }: { onClick: () => void; children: 
     <button
       onClick={onClick}
       aria-label={etiqueta}
-      className="h-8 w-8 rounded-[var(--pos-r-sm)] border text-[14px] hover:bg-[var(--pos-100)]"
+      className="h-11 w-11 rounded-[var(--pos-r-sm)] border text-[15px] transition-colors duration-[var(--pos-transicion)] hover:bg-[var(--pos-100)]"
       style={{ borderColor: "var(--pos-divider)", color: "var(--pos-800)" }}
     >
       {children}

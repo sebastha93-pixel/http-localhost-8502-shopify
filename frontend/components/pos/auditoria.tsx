@@ -62,7 +62,7 @@ export function Auditoria({ tiendaId }: { tiendaId: string }) {
             <button
               key={f.id}
               onClick={() => setSeveridad(f.id)}
-              className={`border px-2.5 py-1 text-[11px] transition-colors ${
+              className={`toque-44 border px-2.5 py-1 text-[12px] transition-colors duration-[var(--pos-transicion)] ${
                 severidad === f.id
                   ? "border-[var(--pos-800)] bg-[var(--pos-800)] text-white"
                   : "border-[var(--pos-divider)] text-[var(--pos-700)]"
@@ -129,7 +129,7 @@ export function Auditoria({ tiendaId }: { tiendaId: string }) {
                 <span className="font-medium">{etiqueta(e.evento)}</span>
                 <span className="text-[var(--pos-700)]">{e.resumen}</span>
               </p>
-              <p className="tabular text-[10.5px] text-[var(--pos-600)]">
+              <p className="tabular text-[12px] text-[var(--pos-600)]">
                 {e.cuando} · {e.quien}
                 {e.caja ? ` · ${e.caja}` : ""}
               </p>
@@ -139,7 +139,7 @@ export function Auditoria({ tiendaId }: { tiendaId: string }) {
       </div>
 
       {datos && datos.total > datos.eventos.length && (
-        <p className="tabular text-[10.5px] text-[var(--pos-600)]">
+        <p className="tabular text-[12px] text-[var(--pos-600)]">
           Mostrando {datos.eventos.length} de {datos.total}.
         </p>
       )}

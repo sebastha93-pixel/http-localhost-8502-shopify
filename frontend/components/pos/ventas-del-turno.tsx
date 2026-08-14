@@ -32,7 +32,7 @@ export function VentasDelTurno({
     <Panel className="flex flex-col gap-2 p-6">
       <div className="flex items-baseline justify-between">
         <h2 className="titular text-[17px] font-semibold">Ventas del turno</h2>
-        <span className="tabular text-[11px] text-[var(--pos-600)]">
+        <span className="tabular text-[12px] text-[var(--pos-600)]">
           {ventas.filter((v) => v.estado === "cerrada").length} vigentes
         </span>
       </div>
@@ -54,22 +54,22 @@ export function VentasDelTurno({
               <p className="flex items-baseline gap-2 text-[13px]">
                 <span
                   className={`tabular font-medium ${
-                    anulada ? "text-[var(--pos-500)] line-through" : ""
+                    anulada ? "text-[var(--pos-muted)] line-through" : ""
                   }`}
                 >
                   {v.numero}
                 </span>
-                <span className="tabular text-[11px] text-[var(--pos-600)]">
+                <span className="tabular text-[12px] text-[var(--pos-600)]">
                   {v.hora} · {v.unidades} u
                 </span>
                 {v.cliente_nombre && (
-                  <span className="truncate text-[11px] text-[var(--pos-600)]">
+                  <span className="truncate text-[12px] text-[var(--pos-600)]">
                     {v.cliente_nombre}
                   </span>
                 )}
               </p>
               {anulada && v.motivo_anulacion && (
-                <p className="text-[11px] text-[var(--pos-accent)]">
+                <p className="text-[12px] text-[var(--pos-accent)]">
                   Anulada · {v.motivo_anulacion}
                 </p>
               )}
@@ -77,7 +77,7 @@ export function VentasDelTurno({
 
             <span
               className={`tabular whitespace-nowrap text-[13px] font-semibold ${
-                anulada ? "text-[var(--pos-500)] line-through" : ""
+                anulada ? "text-[var(--pos-muted)] line-through" : ""
               }`}
             >
               {formatear(v.total_centavos)}
@@ -90,14 +90,14 @@ export function VentasDelTurno({
               <button
                 onClick={() => onReimprimir(v.venta_id)}
                 title="Reimprimir la tirilla"
-                className="border border-[var(--pos-divider)] px-2 py-1 text-[11px] text-[var(--pos-700)] hover:bg-[var(--pos-100)]"
+                className="border border-[var(--pos-divider)] px-2 py-1 text-[12px] text-[var(--pos-700)] hover:bg-[var(--pos-100)]"
               >
                 Tirilla
               </button>
               {!anulada && puedeAnular && (
                 <button
                   onClick={() => onAnular(v)}
-                  className="border border-[var(--pos-accent)]/40 px-2 py-1 text-[11px] text-[var(--pos-accent)] hover:bg-[var(--pos-accent)]/10"
+                  className="border border-[var(--pos-accent)]/40 px-2 py-1 text-[12px] text-[var(--pos-accent)] hover:bg-[var(--pos-accent)]/10"
                 >
                   Anular
                 </button>
@@ -175,7 +175,7 @@ export function DialogoAnular({
           </p>
         )}
 
-        <p className="mt-4 tabular text-[10.5px] leading-relaxed text-[var(--pos-600)]">
+        <p className="mt-4 tabular text-[12px] leading-relaxed text-[var(--pos-600)]">
           Queda como CRÍTICO en la auditoría, con tu nombre y este motivo.
         </p>
 
@@ -189,7 +189,7 @@ export function DialogoAnular({
           <button
             disabled={motivo.trim().length < 5 || anulando}
             onClick={() => onConfirmar(motivo.trim())}
-            className="h-12 flex-1 bg-[var(--pos-accent)] titular text-[13px] font-semibold tracking-[0.08em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-500)]"
+            className="h-12 flex-1 bg-[var(--pos-accent)] titular text-[13px] font-semibold tracking-[0.08em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-muted)]"
           >
             {anulando ? "ANULANDO…" : "ANULAR"}
           </button>

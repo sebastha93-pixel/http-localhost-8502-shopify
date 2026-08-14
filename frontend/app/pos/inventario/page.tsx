@@ -80,7 +80,7 @@ export default function PantallaInventario() {
               <button
                 onClick={() => setSoloBajos((v) => !v)}
                 title="Lo que hay que reponer"
-                className={`border px-2.5 py-1 text-[11px] tracking-[0.08em] uppercase transition-colors ${
+                className={`border px-2.5 py-1 text-[12px] tracking-[0.08em] uppercase transition-colors ${
                   soloBajos
                     ? "border-[var(--pos-accent)] bg-[var(--pos-accent)] text-white"
                     : "border-[var(--pos-800)]/30 bg-[var(--pos-800)]/10 text-[var(--pos-900)]"
@@ -156,7 +156,7 @@ export default function PantallaInventario() {
         </div>
 
         {datos && (
-          <p className="mt-2 tabular text-[10.5px] text-[var(--pos-600)]">
+          <p className="mt-2 tabular text-[12px] text-[var(--pos-600)]">
             Avisa cuando el total de la referencia baja de {datos.umbral_tienda}{" "}
             unidades, y cuando una talla con mínimo propio cae por debajo del
             suyo. Lo apartado por otra caja ya está descontado.
@@ -191,7 +191,7 @@ function Fila({ fila, columnas }: { fila: FilaInventario; columnas: string[] }) 
           // Esta referencia no se fabrica en esta talla. Un 0 diría «se acabó»,
           // que es una respuesta distinta y manda a pedir lo que no existe.
           return (
-            <Td key={t} alineado="center" className="text-[var(--pos-500)]">
+            <Td key={t} alineado="center" className="text-[var(--pos-muted)]">
               ·
             </Td>
           );
@@ -209,7 +209,7 @@ function Fila({ fila, columnas }: { fila: FilaInventario; columnas: string[] }) 
               negativo
                 ? "font-semibold text-[var(--pos-accent)]"
                 : celda.disponible === 0
-                  ? "text-[var(--pos-500)]"
+                  ? "text-[var(--pos-muted)]"
                   : celda.es_bajo
                     ? "font-semibold text-[var(--pos-900)]"
                     : ""
@@ -261,7 +261,7 @@ function Estado({ estado }: { estado: "ok" | "bajo" | "agotado" }) {
 
   return (
     <span
-      className={`inline-block whitespace-nowrap border px-2 py-0.5 text-[11px] ${estilo}`}
+      className={`inline-block whitespace-nowrap border px-2 py-0.5 text-[12px] ${estilo}`}
     >
       {texto}
     </span>
@@ -270,7 +270,7 @@ function Estado({ estado }: { estado: "ok" | "bajo" | "agotado" }) {
 
 function Etiqueta({ children }: { children: React.ReactNode }) {
   return (
-    <span className="border border-[var(--pos-divider)] px-2.5 py-1 text-[11px] uppercase tracking-[0.08em] text-[var(--pos-700)]">
+    <span className="border border-[var(--pos-divider)] px-2.5 py-1 text-[12px] uppercase tracking-[0.08em] text-[var(--pos-700)]">
       {children}
     </span>
   );
@@ -287,7 +287,7 @@ function Th({
 }) {
   return (
     <th
-      className={`whitespace-nowrap border-b border-[var(--pos-divider)] px-3 py-2.5 text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--pos-600)] ${
+      className={`whitespace-nowrap border-b border-[var(--pos-divider)] px-3 py-2.5 text-[12px] font-medium uppercase tracking-[0.08em] text-[var(--pos-600)] ${
         estrecha ? "w-[52px]" : ""
       }`}
       style={{ textAlign: alineado }}

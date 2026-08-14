@@ -30,7 +30,7 @@ export function RejillaReferencias({
   if (!referencias.length) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <p className="text-[13px]" style={{ color: "var(--pos-500)" }}>
+        <p className="text-[13px]" style={{ color: "var(--pos-muted)" }}>
           Sin referencias para ese filtro.
         </p>
       </div>
@@ -50,7 +50,7 @@ export function RejillaReferencias({
           <h3 className="titular text-[15px]">{r.nombre}</h3>
 
           <div className="mt-2 flex items-baseline justify-between">
-            <span className="font-mono text-[11px]" style={{ color: "var(--pos-600)" }}>
+            <span className="font-mono text-[12px]" style={{ color: "var(--pos-600)" }}>
               {r.referencia}
             </span>
             <span className="tabular text-[13px] font-semibold">
@@ -58,7 +58,24 @@ export function RejillaReferencias({
             </span>
           </div>
 
-          <div className="mt-3 flex gap-1.5">
+          {/**
+            * Las tallas en REJILLA PROPIA, no en una fila que se estira.
+            *
+            * Eran una fila `flex-1`: a 1280px daban 40px de ancho y a 1024 —el
+            * iPad apaisado de una caja, que es el equipo real— bajaban a 19px.
+            * Cinco chips de 44 no caben en una tarjeta de 150px y no hay
+            * pseudo-elemento que lo arregle: agrandar la zona sensible más allá
+            * del hueco haría que pulsar la 10 registrara la 12, que es peor que
+            * el problema.
+            *
+            * `auto-fill minmax(44px,1fr)` los deja envolver a la siguiente
+            * línea manteniendo el ancho mínimo y el mismo ancho entre ellos. La
+            * tarjeta crece un renglón; el catálogo conserva sus columnas.
+            */}
+          <div
+            className="mt-3 grid gap-1.5"
+            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(44px, 1fr))" }}
+          >
             {r.tallas.map((t) => {
               const agotada = t.disponible <= 0;
               return (
@@ -68,7 +85,11 @@ export function RejillaReferencias({
                   onClick={() => onElegir(r, t)}
                   title={agotada ? "Agotada" : `${t.disponible} en stock`}
                   aria-label={`Talla ${t.talla}${agotada ? ", agotada" : `, ${t.disponible} en stock`}`}
-                  className="h-10 flex-1 rounded-[var(--pos-r-sm)] border text-[13px] transition-colors enabled:hover:border-[var(--pos-accent)] enabled:hover:bg-[var(--pos-100)]"
+                  // 44×44 de verdad, no una zona sensible que lo aparente. Es
+                  // el control más pulsado del producto —uno por línea de cada
+                  // venta, de pie y con una prenda en la otra mano— y ahí un
+                  // fallo de puntería es una talla equivocada en la bolsa.
+                  className="h-11 w-full rounded-[var(--pos-r-sm)] border text-[14px] transition-colors duration-[var(--pos-transicion)] enabled:hover:border-[var(--pos-accent)] enabled:hover:bg-[var(--pos-100)]"
                   style={{
                     borderColor: "color-mix(in srgb, var(--pos-text) 12%, transparent)",
                   }}

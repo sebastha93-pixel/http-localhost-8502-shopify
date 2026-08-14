@@ -67,7 +67,7 @@ export function DialogoMovimiento({
               }`}
             >
               <span className="block font-medium">{t.etiqueta}</span>
-              <span className="block text-[10px] opacity-70">{t.ayuda}</span>
+              <span className="block text-[12px] opacity-70">{t.ayuda}</span>
             </button>
           ))}
         </div>
@@ -84,7 +84,7 @@ export function DialogoMovimiento({
             className="mt-1.5 h-12 w-full border border-[var(--pos-divider)] bg-white px-3 titular text-[18px] tabular text-[var(--pos-text)] outline-none focus:border-[var(--pos-accent)]"
           />
           {centavos > 0 && (
-            <span className="mt-1 block tabular text-[11px] text-[var(--pos-600)]">
+            <span className="mt-1 block tabular text-[12px] text-[var(--pos-600)]">
               {tipo === "ingreso" ? "+" : "−"}
               {formatear(centavos)}
             </span>
@@ -111,7 +111,7 @@ export function DialogoMovimiento({
           </p>
         )}
 
-        <p className="mt-4 tabular text-[10.5px] leading-relaxed text-[var(--pos-600)]">
+        <p className="mt-4 tabular text-[12px] leading-relaxed text-[var(--pos-600)]">
           {tipo === "ingreso"
             ? "Queda registrado con tu nombre."
             : "Sacar plata queda como CRÍTICO en la auditoría, con tu nombre y este motivo."}
@@ -127,7 +127,7 @@ export function DialogoMovimiento({
           <button
             disabled={!listo || guardando}
             onClick={() => onRegistrar(tipo, centavos, motivo.trim())}
-            className="h-12 flex-1 bg-[var(--pos-accent)] titular text-[13px] font-semibold tracking-[0.08em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-500)]"
+            className="h-12 flex-1 bg-[var(--pos-accent)] titular text-[13px] font-semibold tracking-[0.08em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-muted)]"
           >
             {guardando ? "GUARDANDO…" : "REGISTRAR"}
           </button>

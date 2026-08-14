@@ -99,7 +99,7 @@ export function TicketCerrado({
 
       {ticket.vuelto_centavos > 0 && (
         <div className="mt-4">
-          <div className="titular text-[11px] tracking-[0.14em] text-[var(--pos-600)]">
+          <div className="titular text-[12px] tracking-[0.14em] text-[var(--pos-600)]">
             VUELTO
           </div>
           <div className="tabular text-[34px] font-semibold tabular-nums text-[var(--pos-800)]">
@@ -108,7 +108,7 @@ export function TicketCerrado({
         </div>
       )}
 
-      <div className="mt-6 space-y-1 tabular text-[11.5px] text-[var(--pos-600)]">
+      <div className="mt-6 space-y-1 tabular text-[12px] text-[var(--pos-600)]">
         <div>
           {imprimiendo
             ? "🧾 Imprimiendo tirilla…"
@@ -155,7 +155,7 @@ export function TicketCerrado({
         </button>
       </div>
       {!imprimiendo && (
-        <p className="mt-3 tabular text-[10.5px] text-[var(--pos-500)]">
+        <p className="mt-3 tabular text-[12px] text-[var(--pos-muted)]">
           Vuelve solo en {restan} s
         </p>
       )}

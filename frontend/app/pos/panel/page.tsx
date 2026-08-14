@@ -63,7 +63,7 @@ export default function PantallaPanel() {
               tienen que ser alcanzables sin teclear la URL a mano. */}
           <a
             href="/pos/permisos"
-            className="ml-auto border border-[var(--pos-divider)] px-2.5 py-1 text-[11px] text-[var(--pos-700)] hover:bg-[var(--pos-100)]"
+            className="ml-auto border border-[var(--pos-divider)] px-2.5 py-1 text-[12px] text-[var(--pos-700)] hover:bg-[var(--pos-100)]"
           >
             Permisos
           </a>
@@ -71,7 +71,7 @@ export default function PantallaPanel() {
             <p className="tabular text-[12px] text-[var(--pos-600)]">
               {datos.tienda_nombre} · {fechaLarga(datos.fecha)}
               {actualizado && (
-                <span className="ml-2 text-[var(--pos-500)]">
+                <span className="ml-2 text-[var(--pos-muted)]">
                   actualizado{" "}
                   {actualizado.toLocaleTimeString("es-CO", {
                     hour: "2-digit",
@@ -173,18 +173,18 @@ export default function PantallaPanel() {
                             background: esPico
                               ? "var(--pos-accent)"
                               : h.ventas_centavos
-                                ? "var(--pos-500)"
+                                ? "var(--pos-muted)"
                                 : "var(--pos-divider)",
                           }}
                         />
-                        <span className="text-[10px] text-[var(--pos-600)]">
+                        <span className="text-[12px] text-[var(--pos-600)]">
                           {h.hora}
                         </span>
                       </div>
                     );
                   })}
                 </div>
-                <p className="tabular text-[10.5px] text-[var(--pos-600)]">
+                <p className="tabular text-[12px] text-[var(--pos-600)]">
                   Hora de la tienda. Las barras vacías son horas sin ventas, no
                   horas sin datos.
                 </p>
@@ -216,7 +216,7 @@ export default function PantallaPanel() {
                           </span>
                         )}
                       </p>
-                      <p className="tabular text-[11px] text-[var(--pos-600)]">
+                      <p className="tabular text-[12px] text-[var(--pos-600)]">
                         {m.referencia}
                       </p>
                     </div>
@@ -224,14 +224,14 @@ export default function PantallaPanel() {
                       <p className="tabular text-[13px] font-semibold">
                         {m.unidades} u
                       </p>
-                      <p className="tabular text-[11px] text-[var(--pos-600)]">
+                      <p className="tabular text-[12px] text-[var(--pos-600)]">
                         {formatear(m.valor_centavos)}
                       </p>
                     </div>
                   </div>
                 ))}
                 {datos.mas_vendidos.length > 0 && (
-                  <p className="tabular mt-1 text-[10.5px] text-[var(--pos-600)]">
+                  <p className="tabular mt-1 text-[12px] text-[var(--pos-600)]">
                     Por unidades y agrupado por referencia: es lo que hay que
                     reponer.
                   </p>
@@ -273,7 +273,7 @@ function Tarjeta({
       >
         {valor}
       </span>
-      <span className="tabular text-[11px] text-[var(--pos-600)]">{pie}</span>
+      <span className="tabular text-[12px] text-[var(--pos-600)]">{pie}</span>
     </Marco>
   );
 }

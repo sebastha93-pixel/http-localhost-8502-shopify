@@ -635,7 +635,7 @@ export default function PantallaVenta() {
             {horasSinContacto >= HORAS_AVISO && (
               <span
                 role="status"
-                className={`border px-2.5 py-1 text-[11px] ${
+                className={`border px-2.5 py-1 text-[12px] ${
                   horasSinContacto >= HORAS_BLOQUEO
                     ? "border-[var(--pos-accent)] bg-[var(--pos-accent)] text-white"
                     : "border-[var(--pos-accent)] bg-[var(--pos-accent)]/10 text-[var(--pos-900)]"
@@ -651,7 +651,7 @@ export default function PantallaVenta() {
               // permite a la cajera decidir si confía o va a mirar la percha.
               <span
                 role="status"
-                className="border border-[var(--pos-800)]/30 bg-[var(--pos-800)]/10 px-2.5 py-1 text-[11px] text-[var(--pos-900)]"
+                className="border border-[var(--pos-800)]/30 bg-[var(--pos-800)]/10 px-2.5 py-1 text-[12px] text-[var(--pos-900)]"
                 title="Sin conexión: el stock puede haber cambiado"
               >
                 Stock de hace {antiguedad(catalogoDe)}
@@ -682,7 +682,11 @@ export default function PantallaVenta() {
                 aria-label="Buscar producto"
                 autoComplete="off"
                 spellCheck={false}
-                className="w-full bg-transparent text-[14px] outline-none placeholder:text-[var(--pos-500)]"
+                // `h-full`: la caja se ve de 44px pero el input medía 22 y el
+                // resto era relleno del contenedor. Tocar el borde superior no
+                // enfocaba nada — un control que parece más grande de lo que
+                // responde es peor que uno pequeño y honesto.
+                className="h-full w-full bg-transparent text-[14px] outline-none placeholder:text-[var(--pos-muted)]"
               />
             </div>
 
@@ -775,7 +779,7 @@ function SinConfigurar() {
           equivocado.
         </p>
         <pre
-          className="mt-4 overflow-x-auto rounded-[var(--pos-r-sm)] p-3 font-mono text-[11px]"
+          className="mt-4 overflow-x-auto rounded-[var(--pos-r-sm)] p-3 font-mono text-[12px]"
           style={{ background: "var(--pos-100)", color: "var(--pos-700)" }}
         >
 {`NEXT_PUBLIC_POS_TIENDA=florida
@@ -794,7 +798,7 @@ function LupaIcono() {
       height="18"
       viewBox="0 0 24 24"
       fill="none"
-      stroke="var(--pos-500)"
+      stroke="var(--pos-muted)"
       strokeWidth={1.5}
       strokeLinecap="round"
       strokeLinejoin="round"

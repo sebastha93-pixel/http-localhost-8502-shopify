@@ -40,13 +40,13 @@ export function PanelCobro({
     <div className="flex h-full flex-col">
       <button
         onClick={onCancelar}
-        className="mb-3 self-start tabular text-[11px] text-[var(--pos-600)] hover:text-[var(--pos-text)]"
+        className="mb-3 self-start tabular text-[12px] text-[var(--pos-600)] hover:text-[var(--pos-text)]"
       >
         ← Volver al ticket · Esc
       </button>
 
       <div className="mb-4">
-        <div className="titular text-[11px] tracking-[0.14em] text-[var(--pos-600)]">
+        <div className="titular text-[12px] tracking-[0.14em] text-[var(--pos-600)]">
           A COBRAR
         </div>
         <div className="tabular text-[34px] font-semibold tabular-nums tracking-tight">
@@ -70,7 +70,7 @@ export function PanelCobro({
         ))}
       </div>
 
-      <label className="titular text-[10.5px] tracking-[0.12em] text-[var(--pos-600)]">
+      <label className="titular text-[12px] tracking-[0.12em] text-[var(--pos-600)]">
         MONTO RECIBIDO
       </label>
       <input
@@ -86,7 +86,7 @@ export function PanelCobro({
           <button
             key={i}
             onClick={() => setTexto(String(Math.round(v / 100)))}
-            className="border border-[var(--pos-divider)] bg-[var(--pos-100)] px-2.5 py-1.5 tabular text-[11px] text-[var(--pos-700)] hover:border-[var(--pos-600)]"
+            className="border border-[var(--pos-divider)] bg-[var(--pos-100)] px-2.5 py-1.5 tabular text-[12px] text-[var(--pos-700)] hover:border-[var(--pos-600)]"
           >
             {i === 0 ? "Exacto" : formatear(v)}
           </button>
@@ -96,7 +96,7 @@ export function PanelCobro({
       <div className="mt-auto">
         {vuelto > 0 && (
           <div className="mb-3">
-            <div className="titular text-[10.5px] tracking-[0.12em] text-[var(--pos-600)]">
+            <div className="titular text-[12px] tracking-[0.12em] text-[var(--pos-600)]">
               VUELTO
             </div>
             <div className="tabular text-[26px] font-semibold tabular-nums text-[var(--pos-800)]">
@@ -105,7 +105,7 @@ export function PanelCobro({
           </div>
         )}
         {excedenteInvalido && (
-          <p className="mb-3 border border-[var(--pos-700)] bg-[var(--pos-700)]/10 p-2.5 text-[11.5px] leading-snug text-[var(--pos-800)]">
+          <p className="mb-3 border border-[var(--pos-700)] bg-[var(--pos-700)]/10 p-2.5 text-[12px] leading-snug text-[var(--pos-800)]">
             Un datáfono no da vuelto. Si se cobró de más, revisa el monto: ese
             excedente aparecería como sobrante en el arqueo sin saber de dónde salió.
           </p>
@@ -123,12 +123,12 @@ export function PanelCobro({
               },
             ]);
           }}
-          className="w-full bg-[var(--pos-accent)] py-3.5 titular text-[13.5px] font-semibold tracking-[0.12em] text-white disabled:cursor-not-allowed disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-500)]"
+          className="w-full bg-[var(--pos-accent)] py-3.5 titular text-[13.5px] font-semibold tracking-[0.12em] text-white disabled:cursor-not-allowed disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-muted)]"
         >
           {enviando ? "CERRANDO…" : "CONFIRMAR · F12"}
         </button>
         {!alcanza && (
-          <p className="mt-2 text-center tabular text-[11px] text-[var(--pos-600)]">
+          <p className="mt-2 text-center tabular text-[12px] text-[var(--pos-600)]">
             Faltan {formatear(total - monto)}
           </p>
         )}

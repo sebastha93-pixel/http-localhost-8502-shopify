@@ -117,12 +117,12 @@ export default function PantallaPermisos() {
                 <p className="titular text-[16px] font-semibold">
                   {u.nombre}
                   {!u.activo && (
-                    <span className="ml-2 text-[11px] font-normal text-[var(--pos-600)]">
+                    <span className="ml-2 text-[12px] font-normal text-[var(--pos-600)]">
                       · inactiva
                     </span>
                   )}
                 </p>
-                <p className="tabular text-[11px] text-[var(--pos-600)]">
+                <p className="tabular text-[12px] text-[var(--pos-600)]">
                   {u.usuario_id}
                   {u.rol ? ` · ${u.rol}` : ""}
                   {u.tiendas.length ? ` · ${u.tiendas.join(", ")}` : ""}
@@ -162,7 +162,7 @@ export default function PantallaPermisos() {
                     }`}
                   >
                     <span className="block font-medium">{c.etiqueta}</span>
-                    <span className="block text-[10px] opacity-70">{c.ayuda}</span>
+                    <span className="block text-[12px] opacity-70">{c.ayuda}</span>
                   </button>
                 );
               })}

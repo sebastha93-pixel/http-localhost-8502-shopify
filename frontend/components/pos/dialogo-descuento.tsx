@@ -37,7 +37,7 @@ export function DialogoDescuento({
 
   return (
     <Marco titulo="APLICAR DESCUENTO" onCancelar={onCancelar}>
-      <p className="tabular text-[11px] text-[var(--pos-600)]">
+      <p className="tabular text-[12px] text-[var(--pos-600)]">
         {sku} · {formatear(base)}
       </p>
 
@@ -60,7 +60,7 @@ export function DialogoDescuento({
         ))}
       </div>
 
-      <label className="mt-4 block titular text-[10.5px] tracking-[0.12em] text-[var(--pos-600)]">
+      <label className="mt-4 block titular text-[12px] tracking-[0.12em] text-[var(--pos-600)]">
         MOTIVO (OBLIGATORIO)
       </label>
       <input
@@ -82,7 +82,7 @@ export function DialogoDescuento({
           de que no se puede cuando ya se lo dijiste a la clienta es peor que
           no haberlo ofrecido. */}
       {sobreTope && (
-        <p className="mt-3 border border-[var(--pos-700)] bg-[var(--pos-700)]/10 p-2.5 text-[11.5px] leading-snug text-[var(--pos-800)]">
+        <p className="mt-3 border border-[var(--pos-700)] bg-[var(--pos-700)]/10 p-2.5 text-[12px] leading-snug text-[var(--pos-800)]">
           Supera tu tope ({tope}%). Para aplicarlo tiene que entrar alguien con
           un tope mayor, con su correo y contraseña.
         </p>
@@ -91,12 +91,12 @@ export function DialogoDescuento({
       <button
         disabled={!motivoValido || sobreTope}
         onClick={() => onAplicar(pct, motivo.trim())}
-        className="mt-4 w-full bg-[var(--pos-accent)] py-3 titular text-[13px] font-semibold tracking-[0.12em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-500)]"
+        className="mt-4 w-full bg-[var(--pos-accent)] py-3 titular text-[13px] font-semibold tracking-[0.12em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-muted)]"
       >
         APLICAR
       </button>
       {!motivoValido && !sobreTope && (
-        <p className="mt-2 text-center tabular text-[10.5px] text-[var(--pos-600)]">
+        <p className="mt-2 text-center tabular text-[12px] text-[var(--pos-600)]">
           Escribe el motivo (mínimo 4 letras).
         </p>
       )}

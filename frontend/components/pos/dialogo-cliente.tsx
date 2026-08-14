@@ -146,7 +146,7 @@ export function DialogoCliente({
                   className="flex h-12 w-full items-center justify-between rounded-[var(--pos-r-sm)] px-3 text-left hover:bg-[var(--pos-100)]"
                 >
                   <span className="text-[14px]">{c.nombre}</span>
-                  <span className="text-[11px]" style={{ color: "var(--pos-600)" }}>
+                  <span className="text-[12px]" style={{ color: "var(--pos-600)" }}>
                     {c.tipo_documento} {c.numero_documento} · {c.compras} compras
                   </span>
                 </button>
@@ -283,7 +283,7 @@ function Campo({
         style={{ borderColor: "var(--pos-divider)", background: "var(--pos-bg)" }}
       />
       {ayuda && (
-        <p className="mt-1 text-[11px]" style={{ color: "var(--pos-600)" }}>
+        <p className="mt-1 text-[12px]" style={{ color: "var(--pos-600)" }}>
           {ayuda}
         </p>
       )}

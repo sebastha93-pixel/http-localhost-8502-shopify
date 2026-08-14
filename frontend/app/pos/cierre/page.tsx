@@ -366,7 +366,7 @@ function ResumenTurno({
         <p className="kicker text-[var(--pos-600)]">Movimientos de caja</p>
         <button
           onClick={onMover}
-          className="border border-[var(--pos-divider)] px-2.5 py-1 text-[11px] text-[var(--pos-700)] hover:bg-[var(--pos-100)]"
+          className="border border-[var(--pos-divider)] px-2.5 py-1 text-[12px] text-[var(--pos-700)] hover:bg-[var(--pos-100)]"
         >
           + Registrar
         </button>
@@ -385,7 +385,7 @@ function ResumenTurno({
           <span className="min-w-0 flex-1 truncate text-[var(--pos-700)]">
             <span className="capitalize">{m.tipo}</span>
             <span className="ml-1.5 text-[var(--pos-600)]">{m.motivo}</span>
-            <span className="ml-1.5 text-[11px] text-[var(--pos-500)]">
+            <span className="ml-1.5 text-[12px] text-[var(--pos-muted)]">
               · {m.quien}
             </span>
           </span>
@@ -482,7 +482,7 @@ function CajaCerrada({
             }.`}
       </p>
 
-      <p className="mt-4 tabular text-[10.5px] leading-relaxed text-[var(--pos-600)]">
+      <p className="mt-4 tabular text-[12px] leading-relaxed text-[var(--pos-600)]">
         La caja queda libre para el siguiente turno.
       </p>
 
