@@ -6,18 +6,25 @@ import { pedirTirilla, type Ticket, type Tirilla as DatosTirilla } from "@/lib/p
 import { Tirilla } from "@/components/pos/tirilla";
 
 /**
- * Venta cerrada.
+ * Venta cerrada — con la tirilla A LA VISTA.
  *
- * El auto-avance importa: sin él la cajera tiene que tocar la pantalla entre
- * clientas, y ese toque son dos segundos de los treinta.
+ * ANTES SE IMPRIMÍA A CIEGAS. La tirilla se pintaba fuera de pantalla, en
+ * `left: -9999px`, y se mandaba a imprimir. La cajera no veía nunca lo que
+ * salía por el papel: si la impresora se quedaba sin rollo, si el nombre de la
+ * clienta estaba mal, si el total no era el que acababa de cobrar, se enteraba
+ * cuando la clienta ya se había ido — o no se enteraba.
  *
- * El estado fiscal se muestra como lo que es — «emitiendo» — y no se espera.
- * La clienta ya se fue con su prenda y su tirilla (ADR-002).
+ * Ahora la tirilla se ve al tamaño real del papel (80 mm) mientras se imprime.
+ * No hace falta leerla: basta con que esté ahí para reconocer de un vistazo
+ * que salió lo correcto.
  *
- * LA TIRILLA SALE SOLA, y el auto-avance NO CORRE hasta que salga. Antes esta
- * pantalla decía «🧾 Ticket impreso» sin imprimir nada: la cajera lo leía,
- * daba la venta por terminada y la clienta se iba sin papel. Ahora se pide al
- * servidor y se manda a imprimir; si falla, se dice que falló y queda el botón.
+ * SIGUE IMPRIMIENDO SOLA Y SIGUE AVANZANDO SOLA. La vista previa no añade un
+ * paso: es lo que se mira mientras la impresora trabaja. Obligar a pulsar
+ * «imprimir» delante de cada clienta serían dos segundos de los treinta, cien
+ * veces al día.
+ *
+ * El estado fiscal se muestra como lo que es —«emitiendo»— y no se espera. La
+ * clienta ya se fue con su prenda y su papel (ADR-002).
  */
 export function TicketCerrado({
   ticket,
@@ -81,84 +88,121 @@ export function TicketCerrado({
   }, [restan, onNueva, imprimiendo]);
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center p-8 text-center">
-      {/* Fuera de pantalla, no `display:none`: lo oculto no se imprime. */}
-      {tirilla && (
-        <div className="absolute -left-[9999px] top-0" aria-hidden>
-          <Tirilla datos={tirilla} />
-        </div>
-      )}
-
-      <div aria-hidden className="text-5xl">✅</div>
-      <h1 className="mt-4 titular text-2xl tracking-wide">VENTA CERRADA</h1>
-      <p className="mt-1 tabular text-sm text-[var(--pos-700)]">{ticket.numero}</p>
-
-      <div className="mt-6 tabular text-[40px] font-semibold tabular-nums">
-        {formatear(ticket.total_centavos)}
-      </div>
-
-      {ticket.vuelto_centavos > 0 && (
-        <div className="mt-4">
-          <div className="titular text-[12px] tracking-[0.14em] text-[var(--pos-600)]">
-            VUELTO
-          </div>
-          <div className="tabular text-[34px] font-semibold tabular-nums text-[var(--pos-800)]">
-            {formatear(ticket.vuelto_centavos)}
-          </div>
-        </div>
-      )}
-
-      <div className="mt-6 space-y-1 tabular text-[12px] text-[var(--pos-600)]">
-        <div>
-          {imprimiendo
-            ? "🧾 Imprimiendo tirilla…"
-            : errorImpresion
-              ? "⚠️ La tirilla no salió"
-              : "🧾 Tirilla impresa"}
-        </div>
-        <div>
-          {ticket.pendiente_de_envio
-            ? "📥 Guardada sin conexión · se envía sola"
-            : ticket.estado_fiscal === "emitido"
-              ? "✅ Factura electrónica emitida"
-              : "⏳ Factura electrónica: emitiendo…"}
-        </div>
-        {ticket.duplicada && <div>↺ Esta venta ya estaba registrada</div>}
-      </div>
-
-      {errorImpresion && (
-        <p className="mt-3 max-w-[380px] border border-[var(--pos-800)] bg-[var(--pos-800)]/10 p-2.5 text-[12px] leading-relaxed text-[var(--pos-900)]">
-          {/* Decir «la venta SÍ quedó registrada» cuando está en la cola local
-              es mentir en el peor momento: la cajera lo lee, se queda
-              tranquila, y no sabe que hay algo que vigilar. Sin red la venta
-              está GUARDADA, que no es lo mismo que registrada. */}
-          {ticket.pendiente_de_envio
-            ? "Sin conexión no se pudo imprimir. La venta está guardada en este "
-              + "equipo y se envía sola al volver la red — no hay que repetirla."
-            : `${errorImpresion} La venta SÍ quedó registrada — esto es sólo el papel.`}
+    <div className="flex min-h-screen items-start justify-center gap-10 overflow-y-auto p-8">
+      {/* EL PAPEL, al ancho real de 80 mm. Se ve, no se adivina. */}
+      <div className="hidden shrink-0 pt-2 md:block">
+        <p className="kicker mb-2 text-center text-[var(--pos-600)]">
+          {imprimiendo ? "Saliendo por la impresora" : "Lo que salió por el papel"}
         </p>
-      )}
-
-      <div className="mt-8 flex gap-3">
-        <button
-          onClick={imprimir}
-          disabled={imprimiendo}
-          className="border border-[var(--pos-divider)] px-6 py-3.5 titular text-[13.5px] tracking-[0.12em] text-[var(--pos-700)] disabled:opacity-50"
+        <div
+          className="w-[302px] border bg-white p-1"
+          style={{ borderColor: "var(--pos-divider)",
+                   boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}
         >
-          {errorImpresion ? "REINTENTAR" : "REIMPRIMIR"}
-        </button>
-        <button
-          onClick={onNueva}
-          className="bg-[var(--pos-accent)] px-10 py-3.5 titular text-[13.5px] font-semibold tracking-[0.12em] text-white"
-        >
-          NUEVA VENTA · Enter
-        </button>
+          {tirilla ? (
+            <Tirilla datos={tirilla} />
+          ) : (
+            <div className="flex h-[420px] items-center justify-center px-6 text-center text-[12px] leading-relaxed"
+                 style={{ color: "var(--pos-600)" }}>
+              {errorImpresion ? "No se pudo preparar la tirilla." : "Preparando…"}
+            </div>
+          )}
+        </div>
       </div>
-      {!imprimiendo && (
-        <p className="mt-3 tabular text-[12px] text-[var(--pos-muted)]">
-          Vuelve solo en {restan} s
-        </p>
-      )}
+
+      <div className="max-w-[420px] pt-2 text-center md:pt-16">
+        <h1 className="titular text-[26px] tracking-wide">VENTA CERRADA</h1>
+        <p className="mt-1 tabular text-[13px] text-[var(--pos-700)]">{ticket.numero}</p>
+
+        <div className="mt-6 tabular text-[40px] font-semibold tabular-nums">
+          {formatear(ticket.total_centavos)}
+        </div>
+
+        {ticket.vuelto_centavos > 0 && (
+          <div className="mt-4">
+            <div className="titular text-[12px] tracking-[0.14em] text-[var(--pos-600)]">
+              VUELTO
+            </div>
+            <div className="tabular text-[34px] font-semibold tabular-nums text-[var(--pos-800)]">
+              {formatear(ticket.vuelto_centavos)}
+            </div>
+          </div>
+        )}
+
+        <div className="mt-6 space-y-1.5 text-[12px] text-[var(--pos-600)]">
+          <Estado
+            texto={
+              imprimiendo
+                ? "Imprimiendo tirilla…"
+                : errorImpresion
+                  ? "La tirilla no salió"
+                  : "Tirilla impresa"
+            }
+            alerta={Boolean(errorImpresion)}
+          />
+          <Estado
+            texto={
+              ticket.pendiente_de_envio
+                ? "Guardada sin conexión · se envía sola"
+                : ticket.estado_fiscal === "emitido"
+                  ? "Factura electrónica emitida"
+                  : "Factura electrónica: emitiendo…"
+            }
+            alerta={Boolean(ticket.pendiente_de_envio)}
+          />
+          {ticket.duplicada && <Estado texto="Esta venta ya estaba registrada" />}
+        </div>
+
+        {errorImpresion && (
+          <p className="mt-4 border border-[var(--pos-800)] bg-[var(--pos-800)]/10 p-2.5 text-left text-[12px] leading-relaxed text-[var(--pos-900)]">
+            {/* Decir «la venta SÍ quedó registrada» cuando está en la cola local
+                es mentir en el peor momento: la cajera lo lee, se queda
+                tranquila, y no sabe que hay algo que vigilar. Sin red la venta
+                está GUARDADA, que no es lo mismo que registrada. */}
+            {ticket.pendiente_de_envio
+              ? "Sin conexión no se pudo imprimir. La venta está guardada en este "
+                + "equipo y se envía sola al volver la red — no hay que repetirla."
+              : `${errorImpresion} La venta SÍ quedó registrada — esto es sólo el papel.`}
+          </p>
+        )}
+
+        <div className="mt-8 flex flex-wrap justify-center gap-3">
+          <button
+            onClick={imprimir}
+            disabled={imprimiendo}
+            className="border border-[var(--pos-divider)] px-6 py-3.5 titular text-[13.5px] tracking-[0.12em] text-[var(--pos-700)] transition-colors duration-[var(--pos-transicion)] disabled:opacity-50"
+          >
+            {errorImpresion ? "REINTENTAR" : "REIMPRIMIR"}
+          </button>
+          <button
+            onClick={onNueva}
+            className="bg-[var(--pos-accent)] px-10 py-3.5 titular text-[13.5px] font-semibold tracking-[0.12em] text-white"
+          >
+            NUEVA VENTA · Enter
+          </button>
+        </div>
+        {!imprimiendo && (
+          <p className="mt-3 tabular text-[12px] text-[var(--pos-muted)]">
+            Vuelve solo en {restan} s
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Un punto y una frase. Antes eran emoji (🧾 ⏳ ⚠️): se ven distintos en cada
+ *  sistema, no se pueden colorear con los tokens, y un lector de pantalla los
+ *  lee en voz alta como «etiqueta» o «reloj de arena». */
+function Estado({ texto, alerta }: { texto: string; alerta?: boolean }) {
+  return (
+    <div className="flex items-center justify-center gap-2">
+      <span
+        aria-hidden
+        className="h-1.5 w-1.5 shrink-0 rounded-full"
+        style={{ background: alerta ? "var(--pos-accent)" : "var(--pos-400)" }}
+      />
+      <span>{texto}</span>
     </div>
   );
 }

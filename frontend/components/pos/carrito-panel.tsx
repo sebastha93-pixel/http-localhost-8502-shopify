@@ -1,5 +1,6 @@
 "use client";
 
+import { BuscadorCliente } from "@/components/pos/buscador-cliente";
 import { formatear } from "@/lib/pos/dinero";
 import type { LineaCarrito } from "@/lib/pos/carrito";
 import type { Cliente } from "@/lib/pos/api";
@@ -22,6 +23,7 @@ export function CarritoPanel({
   cliente,
   onAsignarCliente,
   onQuitarCliente,
+  onCrearCliente,
 }: {
   lineas: LineaCarrito[];
   totales: { base: number; iva: number; descuento: number; total: number };
@@ -30,8 +32,9 @@ export function CarritoPanel({
   onDescuento: (sku: string) => void;
   onCobrar: () => void;
   cliente: Cliente | null;
-  onAsignarCliente: () => void;
+  onAsignarCliente: (c: Cliente) => void;
   onQuitarCliente: () => void;
+  onCrearCliente: (documento: string) => void;
 }) {
   const articulos = lineas.reduce((n, l) => n + l.cantidad, 0);
 
@@ -47,36 +50,15 @@ export function CarritoPanel({
         </span>
       </div>
 
-      {cliente ? (
-        <div
-          className="mt-3 flex items-center justify-between rounded-[var(--pos-r-md)] border px-3 py-2"
-          style={{ borderColor: "var(--pos-divider)" }}
-        >
-          <div className="min-w-0">
-            <p className="truncate text-[13px]">{cliente.nombre}</p>
-            <p className="text-[12px]" style={{ color: "var(--pos-600)" }}>
-              {cliente.tipo_documento} {cliente.numero_documento}
-              {cliente.telefono && ` · ${cliente.telefono}`}
-            </p>
-          </div>
-          <button
-            onClick={onQuitarCliente}
-            className="shrink-0 text-[12px] underline"
-            style={{ color: "var(--pos-600)" }}
-          >
-            quitar
-          </button>
-        </div>
-      ) : (
-        <button
-          onClick={onAsignarCliente}
-          className="mt-3 h-11 w-full rounded-[var(--pos-r-md)] border border-dashed text-[13px] transition-colors hover:bg-[var(--pos-100)]"
-          style={{ borderColor: "var(--pos-400)", color: "var(--pos-700)" }}
-          title="Necesaria para la factura electrónica"
-        >
-          + Asignar clienta
-        </button>
-      )}
+      {/* LA CLIENTA SE BUSCA AQUÍ, no detrás de un botón. Un botón se salta;
+          un campo con el cursor puesto es parte del flujo — y sin documento no
+          hay factura electrónica a nombre de nadie. */}
+      <BuscadorCliente
+        cliente={cliente}
+        onAsignar={onAsignarCliente}
+        onQuitar={onQuitarCliente}
+        onCrear={onCrearCliente}
+      />
 
       <div className="my-3 min-h-0 flex-1 overflow-y-auto">
         {lineas.length === 0 ? (

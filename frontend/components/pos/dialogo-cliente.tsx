@@ -30,12 +30,18 @@ const TIPOS = [
 export function DialogoCliente({
   onCerrar,
   onAsignar,
+  documentoInicial,
 }: {
   onCerrar: () => void;
   onAsignar: (c: Cliente) => void;
+  /** El documento que la cajera ya tecleó en el buscador del carrito. Si
+   *  viene, este diálogo ABRE DIRECTO EN EL ALTA: llegó aquí porque buscó y no
+   *  encontró, así que devolverla a buscar de nuevo es un paso muerto. */
+  documentoInicial?: string;
 }) {
-  const [modo, setModo] = useState<"buscar" | "crear">("buscar");
-  const [documento, setDocumento] = useState("");
+  const [modo, setModo] = useState<"buscar" | "crear">(
+    documentoInicial ? "crear" : "buscar");
+  const [documento, setDocumento] = useState(documentoInicial ?? "");
   const [resultados, setResultados] = useState<Cliente[]>([]);
   const [buscado, setBuscado] = useState(false);
   const [error, setError] = useState<string | null>(null);

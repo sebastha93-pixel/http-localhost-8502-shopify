@@ -132,7 +132,10 @@ export default function PantallaVenta() {
   const [aviso, setAviso] = useState<string | null>(null);
   const [descontando, setDescontando] = useState<string | null>(null);
   const [cliente, setCliente] = useState<Cliente | null>(null);
-  const [asignandoCliente, setAsignandoCliente] = useState(false);
+  // Guarda el DOCUMENTO ya tecleado, no un booleano: quien abre el alta
+  // acaba de buscar y no encontrar, y volver a pedirle el número sería
+  // hacerle teclear dos veces lo mismo delante de la clienta.
+  const [creandoCliente, setCreandoCliente] = useState<string | null>(null);
   const [turno, setTurno] = useState<Turno | null>(null);
   // El siguiente número del bloque. En una `ref` y no en `useState` porque se
   // consume DENTRO de `cobrar`: con estado, dos cobros seguidos leerían el
@@ -231,7 +234,7 @@ export default function PantallaVenta() {
       setAbriendo(false);
     }
   }
-  const hayDialogo = Boolean(descontando || asignandoCliente);
+  const hayDialogo = Boolean(descontando || creandoCliente !== null);
 
   const agregar = useCallback((r: Referencia, t: Talla) => {
     setLineas((prev) => {
@@ -742,8 +745,9 @@ export default function PantallaVenta() {
                   onDescuento={setDescontando}
                   onCobrar={() => setFase("cobrando")}
                   cliente={cliente}
-                  onAsignarCliente={() => setAsignandoCliente(true)}
+                  onAsignarCliente={setCliente}
                   onQuitarCliente={() => setCliente(null)}
+                  onCrearCliente={setCreandoCliente}
                 />
               )}
             </Panel>
@@ -751,12 +755,13 @@ export default function PantallaVenta() {
         </div>
       </div>
 
-      {asignandoCliente && (
+      {creandoCliente !== null && (
         <DialogoCliente
-          onCerrar={() => setAsignandoCliente(false)}
+          documentoInicial={creandoCliente}
+          onCerrar={() => setCreandoCliente(null)}
           onAsignar={(c) => {
             setCliente(c);
-            setAsignandoCliente(false);
+            setCreandoCliente(null);
           }}
         />
       )}
