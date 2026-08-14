@@ -205,12 +205,17 @@ export default function PantallaVenta() {
     return () => { vigente = false; };
   }, [configurado]);
 
-  async function abrir() {
+  async function abrir(
+    conteo: Record<number, number>,
+    justificacion: string,
+  ) {
     setAbriendo(true);
     setErrorTurno(null);
     try {
       const abierto = await abrirTurno({
         sesion_id: nuevoUlid(), tienda_id: TIENDA, caja_id: CAJA,
+        conteo_apertura: conteo,
+        ...(justificacion ? { base_justificacion: justificacion } : {}),
         ...(equipo.current
           ? {
               dispositivo_id: equipo.current,
@@ -593,6 +598,7 @@ export default function PantallaVenta() {
         caja={contexto?.caja_nombre ?? CAJA}
         cajera={user?.nombre ?? "…"}
         base={contexto?.base_caja_centavos ?? null}
+        denominaciones={contexto?.denominaciones ?? []}
         ocupadoPor={null}
         abriendo={abriendo}
         error={errorTurno}

@@ -57,7 +57,8 @@ class RepositorioSesionCajaSQL:
 
     async def abrir(self, *, sesion_id: str, tienda_id: str, caja_id: str,
                     usuario_id: str, base_inicial: int,
-                    ahora: datetime) -> dict:
+                    ahora: datetime, base_esperada: Optional[int] = None,
+                    base_justificacion: Optional[str] = None) -> dict:
         siguiente = (await self._s.execute(text("""
             SELECT coalesce(max(numero_turno), 0) + 1
               FROM retail.sesiones_caja WHERE caja_id = :c
@@ -67,11 +68,13 @@ class RepositorioSesionCajaSQL:
             await self._s.execute(text("""
                 INSERT INTO retail.sesiones_caja
                     (id, tienda_id, caja_id, numero_turno, estado,
-                     base_inicial, abierta_por, abierta_en)
-                VALUES (:id, :t, :c, :n, 'abierta', :base, :u, :ts)
+                     base_inicial, abierta_por, abierta_en,
+                     base_esperada, base_justificacion)
+                VALUES (:id, :t, :c, :n, 'abierta', :base, :u, :ts, :esp, :just)
             """), {"id": sesion_id, "t": tienda_id, "c": caja_id,
                    "n": siguiente, "base": base_inicial, "u": usuario_id,
-                   "ts": ahora})
+                   "ts": ahora, "esp": base_esperada,
+                   "just": base_justificacion})
         except Exception as e:  # noqa: BLE001
             if "ux_sesion_abierta" in str(e):
                 raise ReglaDeNegocio(
@@ -94,6 +97,42 @@ class RepositorioSesionCajaSQL:
 
         return {"id": sesion_id, "numero_turno": siguiente,
                 "base_inicial": base_inicial}
+
+    # ── Conteo por denominación ─────────────────────────────────────────────
+
+    async def denominaciones(self) -> list:
+        """Las que la tienda cuenta hoy, de mayor a menor.
+
+        De mayor a menor porque es el orden en que se cuenta un cajón: los
+        billetes grandes salen primero y las monedas al final.
+        """
+        filas = (await self._s.execute(text("""
+            SELECT valor_centavos, tipo FROM retail.denominaciones
+             WHERE activa ORDER BY valor_centavos DESC
+        """))).mappings().all()
+        return [{"valor_centavos": int(f["valor_centavos"]), "tipo": f["tipo"]}
+                for f in filas]
+
+    async def guardar_conteo(self, *, sesion_id: str, momento: str,
+                             conteo, usuario_id: str) -> None:
+        """Deja las piezas contadas, para poder recontar sin la cajera.
+
+        Guardar sólo el total haría irreconstruible el error más común del
+        cierre: la fila mal digitada. Con las piezas, quien revisa ve «declaró
+        4 de $50.000» y puede ir a mirar si en el cajón había 5.
+        """
+        if conteo is None or conteo.esta_vacio():
+            return
+        for valor, cantidad in conteo.lineas():
+            await self._s.execute(text("""
+                INSERT INTO retail.conteos_denominacion
+                    (sesion_id, momento, valor_centavos, cantidad, usuario_id)
+                VALUES (:s, :m, :v, :c, :u)
+                ON CONFLICT (sesion_id, momento, valor_centavos)
+                DO UPDATE SET cantidad = excluded.cantidad,
+                              usuario_id = excluded.usuario_id
+            """), {"s": sesion_id, "m": momento, "v": valor,
+                   "c": cantidad, "u": usuario_id})
 
     async def base_de_tienda(self, tienda_id: str) -> int:
         base = (await self._s.execute(text("""
@@ -160,6 +199,15 @@ class RepositorioSesionCajaSQL:
                 usuario_id=m["usuario_id"], es_efectivo=m["es_efectivo"],
                 autorizado_por=m["autorizado_por"], venta_id=m["venta_id"],
             )
+
+        # La base contada al abrir se restaura DESPUÉS de construir, no como
+        # argumento. INV-C9 se decidió y se firmó en la apertura; volver a
+        # evaluarlo aquí ataría un turno ya cerrado al umbral de HOY, y bajar
+        # ese umbral dejaría turnos viejos sin poder ni siquiera leerse.
+        sesion.base_inicial = Dinero(int(fila["base_inicial"]), moneda)
+        if fila["base_esperada"] is not None:
+            sesion.base_esperada = Dinero(int(fila["base_esperada"]), moneda)
+        sesion.base_justificacion = fila["base_justificacion"]
 
         sesion.estado = EstadoSesion(fila["estado"])
         return sesion

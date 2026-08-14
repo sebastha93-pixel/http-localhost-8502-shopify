@@ -15,7 +15,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from sqlalchemy.exc import IntegrityError
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -470,6 +470,13 @@ class AbrirTurnoEntrada(BaseModel):
     # numeración y sacan tiquetes con el mismo número.
     dispositivo_id: Optional[str] = None
     dispositivo_nombre: Optional[str] = None
+    # EL CAJÓN CONTADO. `{valor_centavos: cantidad}`. Opcional a propósito: una
+    # tableta sin actualizar, o una apertura que quedó en la cola offline, no
+    # puede quedarse sin poder abrir turno porque le falte un campo nuevo. Sin
+    # conteo se abre como antes, con la base configurada, y se nota que nadie
+    # miró —`base_esperada` queda nula, que no es lo mismo que «cuadró».
+    conteo_apertura: Optional[Dict[int, int]] = None
+    base_justificacion: Optional[str] = None
 
 
 @router.get("/caja/turno-actual", response_model=Optional[TurnoSalida])
@@ -568,11 +575,45 @@ async def abrir_turno(
             )
 
         try:
-            base = await t.turnos.base_de_tienda(entrada.tienda_id)
+            configurada = await t.turnos.base_de_tienda(entrada.tienda_id)
+            base, esperada, conteo, diferencia_base = configurada, None, None, None
+
+            if entrada.conteo_apertura is not None:
+                from backend.modules.retail.domain.caja.conteo_denominacion import (
+                    ConteoDenominacion,
+                )
+                conteo = ConteoDenominacion(entrada.conteo_apertura, moneda="COP")
+                conteo.solo_denominaciones(
+                    d["valor_centavos"] for d in await t.turnos.denominaciones())
+                # LO CONTADO MANDA. La base del turno es la plata que hay en el
+                # cajón, no la que debería haber: si se abriera con la
+                # configurada, el faltante de anoche reaparecería al cierre
+                # como faltante de quien cerró hoy.
+                base = conteo.total().centavos
+                esperada = configurada
+                # La regla es del DOMINIO y es la misma que aplica el agregado
+                # al construirse. Aquí sólo se le pasan los datos.
+                from backend.modules.retail.domain.caja.sesion_caja import (
+                    exigir_explicacion_de_base,
+                )
+                from backend.modules.retail.domain.shared.dinero import Dinero as _D
+
+                umbral = (await t.sesion.execute(_t(
+                    "SELECT umbral_descuadre FROM retail.tiendas WHERE id=:t"
+                ), {"t": entrada.tienda_id})).scalar() or 0
+                diferencia_base = exigir_explicacion_de_base(
+                    contada=_D(base, "COP"), esperada=_D(esperada, "COP"),
+                    umbral=_D(int(umbral), "COP"),
+                    justificacion=entrada.base_justificacion)
+
             turno = await t.turnos.abrir(
                 sesion_id=entrada.sesion_id, tienda_id=entrada.tienda_id,
                 caja_id=entrada.caja_id, usuario_id=usuario.id,
-                base_inicial=base, ahora=ahora)
+                base_inicial=base, ahora=ahora, base_esperada=esperada,
+                base_justificacion=entrada.base_justificacion)
+            await t.turnos.guardar_conteo(
+                sesion_id=entrada.sesion_id, momento="apertura",
+                conteo=conteo, usuario_id=usuario.id)
             # El bloque se arrienda EN LA MISMA TRANSACCIÓN que el turno: un
             # turno abierto sin bloque es una caja que no puede numerar, y una
             # caja que no puede numerar no puede vender.
@@ -581,13 +622,28 @@ async def abrir_turno(
             bloque = await t.consecutivos.vigente_o_arrendar(
                 caja_id=entrada.caja_id, prefijo=prefijo,
                 dispositivo_id=entrada.dispositivo_id)
+            # UN CAJÓN QUE AMANECIÓ CORTO ES UN HALLAZGO, no un dato de la
+            # apertura. Tres niveles, igual que el cierre y por el mismo
+            # motivo: marcar crítico cualquier diferencia —$200 en monedas—
+            # llena el log de críticos todas las mañanas, y un log que siempre
+            # tiene críticos no lo revisa nadie.
+            severidad = "info"
+            if diferencia_base is not None and not diferencia_base.es_cero():
+                grande = abs(diferencia_base.centavos) > int(umbral)
+                severidad = "critico" if grande else "aviso"
+
             await t.auditoria.registrar(
                 evento="caja.abierta", ocurrido_en=ahora,
+                severidad=severidad,
                 tienda_id=entrada.tienda_id, caja_id=entrada.caja_id,
                 sesion_id=entrada.sesion_id, usuario_id=usuario.id,
                 agregado_tipo="sesion_caja", agregado_id=entrada.sesion_id,
                 payload={"numero_turno": turno["numero_turno"],
                          "base_inicial": base,
+                         "base_esperada": esperada,
+                         "base_diferencia": (None if diferencia_base is None
+                                             else diferencia_base.centavos),
+                         "base_justificacion": entrada.base_justificacion,
                          "consecutivos": f"{bloque['desde']}-{bloque['hasta']}"})
             await t.commit()
         except ReglaDeNegocio as e:
@@ -607,6 +663,11 @@ async def abrir_turno(
         consecutivo_hasta=bloque["hasta"],
         consecutivo_siguiente=bloque["siguiente"],
     )
+
+
+class Denominacion(BaseModel):
+    valor_centavos: int
+    tipo: str
 
 
 class ContextoCaja(BaseModel):
@@ -629,6 +690,11 @@ class ContextoCaja(BaseModel):
     # —no hay documento emitido— pero el dato viaja para no tener que
     # adivinarlo al reconectar.
     tiene_resolucion: bool = False
+    # LOS BILLETES Y MONEDAS QUE SE CUENTAN. Viajan aquí, con el resto del
+    # contexto que el equipo guarda, porque contar el cajón es exactamente lo
+    # que se hace cuando se acaba de encender la tableta y puede que todavía
+    # no haya red.
+    denominaciones: List[Denominacion] = []
 
 
 @router.get("/caja/contexto", response_model=ContextoCaja)
@@ -641,6 +707,12 @@ async def contexto_caja(
 
     La pantalla de apertura los necesita ANTES de que exista un turno. Mostrar
     `florida_caja1` en vez de «Caja 01» delata que nadie miró esa pantalla.
+
+    LA BASE CONFIGURADA VIAJA, Y ESO ESTÁ BIEN. En el cierre lo esperado se
+    esconde porque depende del día y nadie lo sabe de memoria. La base no: es
+    la misma cifra cada mañana y la cajera se la sabe en la segunda semana.
+    Ocultarla sería teatro. Lo que cambia con el conteo por denominación no es
+    que el número esté oculto, es que para responder hay que tocar la plata.
     """
     from sqlalchemy import text as _t
     fila = (await sesion.execute(_t("""
@@ -671,7 +743,18 @@ async def contexto_caja(
         direccion=fila["direccion"], telefono=fila["telefono"],
         mensaje_tirilla=fila["mensaje_tirilla"],
         tiene_resolucion=bool(fila["tiene_resolucion"]),
+        denominaciones=[Denominacion(**d) for d in (await _denominaciones(sesion))],
     )
+
+
+async def _denominaciones(sesion) -> list:
+    from sqlalchemy import text as _t
+    filas = (await sesion.execute(_t("""
+        SELECT valor_centavos, tipo FROM retail.denominaciones
+         WHERE activa ORDER BY valor_centavos DESC
+    """))).mappings().all()
+    return [{"valor_centavos": int(f["valor_centavos"]), "tipo": f["tipo"]}
+            for f in filas]
 
 
 # ── Cierre de caja (vista 7 del handoff) ────────────────────────────────────
@@ -721,11 +804,22 @@ class ResumenCierre(BaseModel):
     puede_anular_venta: bool = False
     # Sólo viene si NO es ciego o si quien mira tiene permiso de verlo.
     esperado_por_medio: Optional[dict] = None
+    denominaciones: List[Denominacion] = []
+    # Lo que se contó al ABRIR. Va aquí porque es el número contra el que se
+    # está midiendo este cierre: si el cajón amaneció corto y se explicó, quien
+    # cierra tiene derecho a verlo antes de firmar su propia diferencia.
+    base_esperada_centavos: Optional[int] = None
+    base_justificacion: Optional[str] = None
 
 
 class ConteoEntrada(BaseModel):
     medio_pago_id: str
-    contado_centavos: int = Field(ge=0)
+    # Uno de los dos. `piezas` para el efectivo: la cajera mete cantidades y el
+    # total lo saca el sistema, así que deja de ser un número que se pueda
+    # escribir de memoria. `contado_centavos` para los demás medios, que no
+    # tienen denominaciones y cuya cifra se lee del cierre del datáfono.
+    contado_centavos: Optional[int] = Field(default=None, ge=0)
+    piezas: Optional[Dict[int, int]] = None
 
 
 class CerrarCajaEntrada(BaseModel):
@@ -777,6 +871,7 @@ async def resumen_cierre(
               LEFT JOIN retail.permisos_pos pp ON pp.usuario_id = :quien
              WHERE s.id = :i
         """), {"i": sesion_id, "quien": usuario.id})).mappings().one()
+        denominaciones = await _denominaciones(t.sesion)
 
     puede_ver = bool(cab["puede_ver"]) or not sesion.cierre_ciego
     esperado = None
@@ -811,6 +906,10 @@ async def resumen_cierre(
         puede_mover_caja=bool(cab["puede_mover"]),
         puede_anular_venta=bool(cab["puede_anular"]),
         esperado_por_medio=esperado,
+        denominaciones=[Denominacion(**d) for d in denominaciones],
+        base_esperada_centavos=(None if sesion.base_esperada is None
+                                else sesion.base_esperada.centavos),
+        base_justificacion=sesion.base_justificacion,
     )
 
 
@@ -854,9 +953,41 @@ async def cerrar_caja(
             sesion.iniciar_arqueo(ventas_en_borrador=borradores,
                                   documentos_fiscales_pendientes=pendientes,
                                   confirmado=True)
-            conteos = {}
+            from backend.modules.retail.domain.caja.conteo_denominacion import (
+                ConteoDenominacion,
+            )
+            activas = [d["valor_centavos"] for d in await t.turnos.denominaciones()]
+            conteos, piezas_efectivo = {}, None
+
             for c in entrada.conteos:
-                monto = Dinero(c.contado_centavos, sesion.moneda)
+                if c.piezas is not None:
+                    if c.contado_centavos is not None:
+                        # Dos representaciones del mismo dinero que no se
+                        # obligan a coincidir es el origen exacto de un
+                        # descuadre inexplicable. Se manda una.
+                        raise HTTPException(400, {
+                            "error": "conteo_ambiguo",
+                            "mensaje": "Manda las piezas o el total, no ambos."})
+                    if c.medio_pago_id != sesion.medio_efectivo_id:
+                        # Un datáfono no tiene billetes. Aceptarlo y quedarse
+                        # con el total descartaría el desglose en silencio: la
+                        # pantalla creería haber guardado un conteo que no
+                        # existe, y al recontar no habría nada que mirar.
+                        raise HTTPException(400, {
+                            "error": "denominaciones_en_medio_no_efectivo",
+                            "mensaje": f"{c.medio_pago_id} no se cuenta por "
+                                       f"billetes. Manda el total."})
+                    contado = ConteoDenominacion(c.piezas, moneda=sesion.moneda)
+                    contado.solo_denominaciones(activas)
+                    monto = contado.total()
+                    piezas_efectivo = contado
+                elif c.contado_centavos is not None:
+                    monto = Dinero(c.contado_centavos, sesion.moneda)
+                else:
+                    raise HTTPException(400, {
+                        "error": "conteo_vacio",
+                        "mensaje": f"Falta declarar {c.medio_pago_id}."})
+
                 sesion.declarar_conteo(c.medio_pago_id, monto,
                                        usuario_id=usuario.id)
                 conteos[c.medio_pago_id] = monto
@@ -877,6 +1008,12 @@ async def cerrar_caja(
             sesion=sesion, conteos=conteos, usuario_id=usuario.id,
             justificacion=entrada.justificacion,
             autorizado_por=evento.autorizado_por, ahora=ahora)
+        # Las piezas, no sólo el total. El error más común de un cierre es una
+        # fila mal digitada, y con el total guardado solo es irreconstruible:
+        # quien revisa ve «declaró 4 de $50.000» y va a mirar si había 5.
+        await t.turnos.guardar_conteo(
+            sesion_id=sesion.id, momento="cierre",
+            conteo=piezas_efectivo, usuario_id=usuario.id)
         # Tres niveles, no dos. Marcar CRÍTICO cualquier diferencia —incluso
         # $100 de vuelto mal dado— llena el log de críticos todos los días, y
         # un log que siempre tiene críticos no lo revisa nadie: el descuadre
@@ -1543,6 +1680,39 @@ async def leer_auditoria(
     )
 
 
+# Los nombres cortos con los que viaja un permiso en la auditoría. El mapa
+# existe porque los eventos ya escritos guardaron la fila cruda —nombres de
+# columna y booleanos convertidos a 'True'— y la cadena de hash impide
+# reescribirlos: se normalizan al LEER para que los renglones viejos también se
+# entiendan.
+_ALIAS_PERMISOS = {
+    "puede_anular_venta": "anular",
+    "puede_cerrar_con_descuadre": "descuadre",
+    "puede_ver_esperado": "esperado",
+    "puede_mover_caja": "caja",
+    "puede_ver_auditoria": "auditoria",
+    "tope_descuento_pct": "tope",
+}
+
+
+def _foto_permisos(fila) -> dict:
+    foto = {}
+    for k, v in dict(fila).items():
+        clave = _ALIAS_PERMISOS.get(k, k)
+        if clave in ("usuario_id", "nombre", "tiendas", "rol",
+                     "intentos_fallidos", "creado_en", "actualizado_en"):
+            continue
+        if v in ("True", "False"):          # eventos viejos, ya encadenados
+            v = v == "True"
+        # El tope llega como Decimal desde la fila y como str desde el cuerpo.
+        # Se guarda str en los dos casos —Decimal no es serializable a JSON, y
+        # el payload de la auditoría se firma tal cual se escribe.
+        elif not isinstance(v, (bool, str)) and v is not None:
+            v = str(v)
+        foto[clave] = v
+    return foto
+
+
 def _resumir(evento: str, p: dict) -> str:
     """Una línea en español por evento.
 
@@ -1569,7 +1739,19 @@ def _resumir(evento: str, p: dict) -> str:
     if evento in ("caja.retiro", "caja.gasto", "caja.ingreso"):
         return f"{pesos(abs(int(p.get('monto', 0))))} · {p.get('motivo','')}"
     if evento == "caja.abierta":
-        return f"turno #{p.get('numero_turno','?')} · base {pesos(p.get('base_inicial'))}"
+        linea = (f"turno #{p.get('numero_turno','?')} · "
+                 f"base {pesos(p.get('base_inicial'))}")
+        # Lo que hace útil este renglón un lunes: si el cajón amaneció corto,
+        # se ve aquí y no hay que abrir el turno para descubrirlo.
+        d = p.get("base_diferencia")
+        if d:
+            linea += (f" · {'faltaban' if d < 0 else 'sobraban'} {pesos(abs(d))} "
+                      f"al abrir")
+            if p.get("base_justificacion"):
+                linea += f" ({p['base_justificacion']})"
+        elif d == 0:
+            linea += " · contada y cuadró"
+        return linea
     if evento == "caja.cerrada":
         dif = int(p.get("diferencia", 0))
         if dif == 0:
@@ -1577,6 +1759,24 @@ def _resumir(evento: str, p: dict) -> str:
         signo = "sobrante" if dif > 0 else "faltante"
         return (f"turno #{p.get('numero_turno','?')} · {signo} {pesos(abs(dif))}"
                 f"{' · ' + p.get('justificacion') if p.get('justificacion') else ''}")
+    if evento == "permisos.cambiados":
+        # Sin este caso el evento caía al volcado de abajo y salía en pantalla
+        # como `antes={'activo': 'True', 'puede_mover_...`. Y es un evento
+        # CRÍTICO: conceder permisos habilita todo lo demás, así que es de los
+        # que alguien va a leer de verdad.
+        despues = _foto_permisos(p.get("despues") or {})
+        sobre = p.get("sobre", "?")
+        if p.get("antes") is None:
+            dados = [k for k, v in despues.items() if v is True]
+            return (f"alta de {sobre}"
+                    + (f" · {', '.join(dados)}" if dados else " · sin permisos"))
+        # Sólo lo que CAMBIÓ. Repetir los siete permisos en cada renglón
+        # esconde el único que se movió, que es lo que se está buscando.
+        antes = _foto_permisos(p["antes"])
+        cambios = [f"{'+' if v else '−'}{k}" if isinstance(v, bool)
+                   else f"{k} {antes.get(k)}→{v}"
+                   for k, v in despues.items() if antes.get(k) != v]
+        return f"{sobre} · {', '.join(cambios) if cambios else 'sin cambios'}"
     return ", ".join(f"{k}={v}" for k, v in list(p.items())[:3])
 
 
@@ -1736,8 +1936,11 @@ async def guardar_permisos(
             usuario_id=usuario.id,
             agregado_tipo="permisos_pos", agregado_id=usuario_id,
             payload={"sobre": usuario_id, "nombre": entrada.nombre,
-                     "antes": {k: str(v) for k, v in dict(antes).items()}
-                              if antes else None,
+                     # LA MISMA FORMA QUE `despues`, y no la fila cruda. Con
+                     # nombres de columna de un lado y nombres cortos del otro
+                     # —y 'True' contra True— no hay forma de restar los dos
+                     # estados, que es justo para lo que existe este par.
+                     "antes": _foto_permisos(antes) if antes else None,
                      "despues": {"tope": str(tope),
                                  "anular": entrada.puede_anular_venta,
                                  "descuadre": entrada.puede_cerrar_con_descuadre,

@@ -22,6 +22,12 @@
  * Es la misma decisión que se tomó con el descuento: el diseñador no tenía por
  * qué saber que ese bloque era un control, no una etiqueta.
  *
+ * Y OCULTAR EL ESPERADO NO BASTABA. Declarar seguía siendo escribir un número,
+ * y quien lleva el día en la cabeza puede escribir una cifra plausible sin
+ * abrir el cajón: el conteo ciego más débil que existe es el que se responde
+ * de memoria. El efectivo se cuenta por denominación —cantidades, no total— y
+ * el total lo saca el sistema.
+ *
  * EXTENSIÓN SOBRE EL DISEÑO: el handoff sólo cuenta efectivo. Una venta con
  * tarjeta también hay que cuadrarla contra el datáfono, o el descuadre del
  * datáfono no lo detecta nadie hasta la conciliación bancaria del mes. Se
@@ -29,6 +35,7 @@
  */
 import { useState } from "react";
 import { Panel } from "@/components/pos/marco";
+import { ContadorDenominaciones } from "@/components/pos/contador-denominaciones";
 import { formatear, desdePesosTecleados } from "@/lib/pos/dinero";
 import type { MedioResumen, ResumenCierre } from "@/lib/pos/api";
 
@@ -41,6 +48,8 @@ export function Arqueo({
   resumen,
   contados,
   onContar,
+  piezas,
+  onPiezas,
   onCerrar,
   cerrando,
   error,
@@ -48,6 +57,8 @@ export function Arqueo({
   resumen: ResumenCierre;
   contados: Record<string, string>;
   onContar: (medioId: string, texto: string) => void;
+  piezas: Record<number, number>;
+  onPiezas: (piezas: Record<number, number>) => void;
   onCerrar: () => void;
   cerrando: boolean;
   error: string | null;
@@ -64,7 +75,13 @@ export function Arqueo({
         entra_al_arqueo: true, total_centavos: resumen.base_inicial_centavos,
       }];
 
-  const faltaAlguno = aDeclarar.some((m) => !(contados[m.medio_pago_id] ?? "").trim());
+  // El efectivo se cuenta por denominación; los demás medios se declaran con
+  // el total del cierre del datáfono, que no tiene billetes que contar.
+  const contoElEfectivo = Object.keys(piezas).length > 0;
+  const faltaAlguno = aDeclarar.some((m) =>
+    m.es_efectivo
+      ? !contoElEfectivo
+      : m.entra_al_arqueo && !(contados[m.medio_pago_id] ?? "").trim());
 
   return (
     <Panel className="flex flex-col gap-4 self-start p-6">
@@ -100,7 +117,22 @@ export function Arqueo({
             <span className="kicker text-[var(--pos-600)]">
               {m.es_efectivo ? "Efectivo contado" : `${m.nombre} · cierre del datáfono`}
             </span>
-            {m.entra_al_arqueo ? (
+            {m.es_efectivo ? (
+              // POR DENOMINACIÓN, no un total. El cierre ya era ciego, pero
+              // declarar era ESCRIBIR UN NÚMERO, y quien lleva el día en la
+              // cabeza puede escribir una cifra plausible sin abrir el cajón.
+              // Metiendo cantidades, el total lo saca el sistema y deja de ser
+              // algo que se pueda responder de memoria.
+              <div className="mt-2">
+                <ContadorDenominaciones
+                  denominaciones={resumen.denominaciones}
+                  piezas={piezas}
+                  onCambio={onPiezas}
+                  deshabilitado={cerrando}
+                  columnas={1}
+                />
+              </div>
+            ) : m.entra_al_arqueo ? (
               <input
                 inputMode="numeric"
                 autoComplete="off"

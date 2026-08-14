@@ -199,6 +199,36 @@ def test_cambiar_permisos_queda_CRITICO_con_el_antes_y_el_despues(entorno):
     assert a["payload"]["despues"]["auditoria"] is True
 
 
+def test_el_renglon_dice_QUE_PERMISO_se_movió(entorno):
+    """Sin este caso el evento caía al volcado genérico y salía en pantalla
+    como `antes={'activo': 'True', 'puede_mover_...`. Y repetir los siete
+    permisos en cada renglón esconde el único que cambió, que es lo que se
+    está buscando."""
+    c, motor, entrar_como = entorno
+    entrar_como("sebastian", "admin")
+    c.patch("/api/retail/admin/permisos/maria",
+          json={**CUERPO, "nombre": "María R.", "puede_anular_venta": False,
+                "puede_mover_caja": False, "tope_descuento_pct": "0"})
+    c.patch("/api/retail/admin/permisos/maria",
+          json={**CUERPO, "nombre": "María R.", "puede_anular_venta": True,
+                "puede_mover_caja": False, "tope_descuento_pct": "0"})
+
+    # Se lee como María y el permiso se da por SQL: ser administrador del ERP
+    # no da acceso a la auditoría —son cosas distintas a propósito— y hacerlo
+    # con un PATCH más metería un evento extra en el renglón que se comprueba.
+    async def dejarla_ver():
+        async with motor.begin() as cn:
+            await cn.execute(text("UPDATE retail.permisos_pos "
+                                  "SET puede_ver_auditoria = true "
+                                  " WHERE usuario_id = 'maria'"))
+
+    asyncio.get_event_loop().run_until_complete(dejarla_ver())
+    entrar_como("maria", "user")
+    d = c.get("/api/retail/auditoria", params={"tienda_id": "florida"}).json()
+    ultimo = next(e for e in d["eventos"] if e["evento"] == "permisos.cambiados")
+    assert ultimo["resumen"] == "maria · +anular"
+
+
 def test_un_alta_nueva_no_tiene_ANTES(entorno):
     """Distinguir «se creó» de «se cambió» importa al revisar: un permiso que
     aparece de la nada no es lo mismo que uno que alguien subió."""

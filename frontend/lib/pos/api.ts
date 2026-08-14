@@ -252,6 +252,11 @@ export async function abrirTurno(cuerpo: {
   caja_id: string;
   dispositivo_id?: string;
   dispositivo_nombre?: string;
+  /** El cajón contado: `{valor_centavos: cantidad}`. Lo contado MANDA sobre la
+   *  base configurada — si se abriera con la configurada, el faltante de
+   *  anoche reaparecería al cierre como faltante de quien cerró hoy. */
+  conteo_apertura?: Record<number, number>;
+  base_justificacion?: string;
 }): Promise<Turno> {
   try {
     return await api.post<Turno>("/api/retail/caja/turno", cuerpo);
@@ -276,6 +281,15 @@ export interface ContextoCaja {
   telefono: string;
   mensaje_tirilla: string | null;
   tiene_resolucion: boolean;
+  /** Los billetes y monedas que se cuentan. Viajan con el contexto —que el
+   *  equipo ya guarda— porque contar el cajón es justo lo que se hace al
+   *  encender la tableta, cuando puede que todavía no haya red. */
+  denominaciones: Denominacion[];
+}
+
+export interface Denominacion {
+  valor_centavos: number;
+  tipo: "billete" | "moneda";
 }
 
 /** Nombres de tienda y caja, y la base configurada. La pantalla de apertura
@@ -314,6 +328,12 @@ export interface ResumenCierre {
   documentos_pendientes: number;
   cierre_ciego: boolean;
   umbral_descuadre_centavos: number;
+  denominaciones: Denominacion[];
+  /** Lo que se contó al ABRIR. Es el número contra el que se está midiendo
+   *  este cierre: si el cajón amaneció corto y se explicó, quien cierra tiene
+   *  derecho a verlo antes de firmar su propia diferencia. */
+  base_esperada_centavos: number | null;
+  base_justificacion: string | null;
   /** Retiros, gastos e ingresos. Aparte del desglose por medio de pago:
    *  mezclarlos haría que ese desglose no cuadre con lo vendido. */
   movimientos: {
@@ -348,7 +368,16 @@ export async function resumenCierre(sesionId: string): Promise<ResumenCierre> {
 
 export async function cerrarCaja(cuerpo: {
   sesion_id: string;
-  conteos: { medio_pago_id: string; contado_centavos: number }[];
+  /** Uno de los dos por medio: `piezas` para el efectivo —cantidades, y el
+   *  total lo saca el servidor— y `contado_centavos` para los demás, que se
+   *  leen del cierre del datáfono. Mandar ambos es un 400: dos
+   *  representaciones del mismo dinero que no se obligan a coincidir son el
+   *  origen exacto de un descuadre que nadie puede explicar. */
+  conteos: {
+    medio_pago_id: string;
+    contado_centavos?: number;
+    piezas?: Record<number, number>;
+  }[];
   justificacion?: string;
 }): Promise<Cierre> {
   try {

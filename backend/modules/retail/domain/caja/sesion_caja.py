@@ -1,6 +1,13 @@
 """SesionCaja — el turno, y lo que hace que el arqueo mida algo.
 
-DOS REGLAS GOBIERNAN ESTE ARCHIVO.
+TRES REGLAS GOBIERNAN ESTE ARCHIVO.
+
+**La base contada manda sobre la configurada (INV-C9).** El turno abría con la
+base de `tiendas.base_caja` y nadie miraba el cajón. Un cajón que amaneció
+corto no desaparece: reaparece al cierre, como faltante de quien cerró. Se
+cuenta al abrir para que la diferencia quede donde ocurrió. No bloquea la
+apertura —una tienda que no puede abrir no vende en todo el día—, pero por
+encima del umbral exige explicación escrita.
 
 **El cierre ciego (INV-C4).** La cajera no ve cuánto debería haber hasta que
 declara lo que contó. Si lo ve, escribe lo que ve, y el descuadre desaparece
@@ -36,9 +43,36 @@ from backend.modules.retail.domain.venta.errores import (
     RequiereAutorizacion,
 )
 
-__all__ = ["SesionCaja"]
+__all__ = ["SesionCaja", "exigir_explicacion_de_base"]
 
 _ULID = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
+
+
+def exigir_explicacion_de_base(*, contada: Dinero, esperada: Dinero,
+                               umbral: Dinero,
+                               justificacion: Optional[str]) -> Dinero:
+    """INV-C9. Devuelve la diferencia; lanza si es grande y no está explicada.
+
+    Es función suelta y no un método porque la apertura del turno se escribe
+    con SQL directo —el agregado sólo se rehidrata para el cierre—, y la regla
+    tiene que ser LA MISMA en las dos vías. Duplicarla en el endpoint sería
+    tener dos versiones de cuándo un cajón corto puede abrirse.
+
+    NO BLOQUEA POR SER GRANDE: pide explicación. Una tienda que no puede abrir
+    porque le faltan $20.000 es una tienda que no vende en todo el día, y eso
+    cuesta más que el faltante.
+    """
+    diferencia = contada - esperada
+    magnitud = -diferencia if diferencia.es_negativo() else diferencia
+    if not diferencia.es_cero() and magnitud > umbral:
+        if not (justificacion or "").strip():
+            falta = "faltan" if diferencia.es_negativo() else "sobran"
+            raise ReglaDeNegocio(
+                f"Contaste {contada.formateado()} y la base de la tienda es "
+                f"{esperada.formateado()}: {falta} {magnitud.formateado()}. "
+                f"Escribe qué pasó antes de abrir."
+            )
+    return diferencia
 
 
 class SesionCaja:
@@ -59,6 +93,8 @@ class SesionCaja:
         umbral_descuadre: Optional[Dinero] = None,
         dispositivo_id: Optional[str] = None,
         medio_efectivo_id: str = "efectivo",
+        base_esperada: Optional[Dinero] = None,
+        base_justificacion: Optional[str] = None,
     ) -> None:
         if not isinstance(id, str) or not _ULID.match(id.strip().upper()):
             raise ReglaDeNegocio(f"el identificador del turno no es un ULID: {id!r}")
@@ -83,6 +119,26 @@ class SesionCaja:
         # Deducirlo mirando los cobros hacía que un medio sin movimientos
         # todavía se llevara la base entera.
         self.medio_efectivo_id = medio_efectivo_id
+
+        # INV-C9: LA BASE CONTADA MANDA SOBRE LA CONFIGURADA.
+        #
+        # Antes la base salía de `tiendas.base_caja` y nadie miraba el cajón.
+        # Si amaneció con $280.000 en vez de $300.000, ese faltante no
+        # desaparecía: reaparecía ocho horas después en el arqueo de quien
+        # cerró. La persona equivocada, el momento equivocado, y ya sin forma
+        # de saber dónde ocurrió.
+        #
+        # Contarla al abrir mueve la diferencia al sitio donde pasó. Y NO
+        # BLOQUEA: una tienda que no puede abrir porque le faltan $20.000 es
+        # una tienda que no vende en todo el día. Se registra, se explica por
+        # escrito si es grande, y se abre.
+        self.base_esperada = base_esperada
+        self.base_justificacion = (base_justificacion or "").strip() or None
+        if base_esperada is not None:
+            exigir_explicacion_de_base(
+                contada=base_inicial, esperada=base_esperada,
+                umbral=self.umbral_descuadre,
+                justificacion=self.base_justificacion)
 
         self.estado = EstadoSesion.ABIERTA
         self.movimientos: List[MovimientoCaja] = []
@@ -303,6 +359,17 @@ class SesionCaja:
             raise ReglaDeNegocio("el conteo no puede ser negativo")
         self._esperado_congelado[medio_pago_id] = self._esperado_actual_de(medio_pago_id)
         self._declarado[medio_pago_id] = monto
+
+    def diferencia_base(self) -> Optional[Dinero]:
+        """Lo contado al abrir menos lo que la tienda tiene configurado.
+
+        `None` cuando el turno abrió sin contar —la vía vieja, que sigue viva
+        para una tableta sin actualizar—: no es lo mismo «cuadró» que «nadie
+        miró», y colapsarlo a cero haría pasar lo segundo por lo primero.
+        """
+        if self.base_esperada is None:
+            return None
+        return self.base_inicial - self.base_esperada
 
     def diferencia_por_medio(self) -> Dict[str, Dinero]:
         return {

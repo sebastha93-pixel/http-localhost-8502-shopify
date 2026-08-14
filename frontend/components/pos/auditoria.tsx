@@ -152,6 +152,19 @@ export function Auditoria({ tiendaId }: { tiendaId: string }) {
 function etiqueta(evento: string): string {
   const partes = evento.split(".");
   const nombre = (partes[1] ?? evento).replace(/_/g, " ");
-  const sujeto = partes[0] === "caja" ? "Caja" : "Venta";
+  // Todo lo que no es «caja» NO es una venta: `permisos.cambiados` salía
+  // rotulado «Venta · Cambiados», que es peor que no rotularlo. Cada sujeto
+  // nuevo se nombra aquí, y el que falte cae a su propio prefijo en vez de
+  // heredar uno ajeno.
+  const SUJETOS: Record<string, string> = {
+    caja: "Caja",
+    venta: "Venta",
+    linea: "Venta",
+    descuento: "Venta",
+    permisos: "Permisos",
+  };
+  const sujeto =
+    SUJETOS[partes[0]] ??
+    partes[0].charAt(0).toUpperCase() + partes[0].slice(1);
   return `${sujeto} · ${nombre.charAt(0).toUpperCase()}${nombre.slice(1)}`;
 }

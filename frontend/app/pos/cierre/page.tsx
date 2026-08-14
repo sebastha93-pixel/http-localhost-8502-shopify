@@ -19,6 +19,7 @@ import { Arqueo, DialogoDescuadre } from "@/components/pos/arqueo";
 import { DialogoMovimiento } from "@/components/pos/dialogo-movimiento";
 import { DialogoAnular, VentasDelTurno } from "@/components/pos/ventas-del-turno";
 import { Tirilla } from "@/components/pos/tirilla";
+import { totalDe } from "@/components/pos/contador-denominaciones";
 import {
   anularVenta,
   cerrarCaja,
@@ -43,6 +44,8 @@ export default function PantallaCierre() {
   const [turno, setTurno] = useState<Turno | null>(null);
   const [resumen, setResumen] = useState<ResumenCierre | null>(null);
   const [contados, setContados] = useState<Record<string, string>>({});
+  // El efectivo se cuenta por denominación; los demás medios siguen con total.
+  const [piezas, setPiezas] = useState<Record<number, number>>({});
   const [cerrando, setCerrando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cargando, setCargando] = useState(true);
@@ -89,13 +92,21 @@ export default function PantallaCierre() {
       try {
         const conteos = (resumen.medios.length
           ? resumen.medios
-          : [{ medio_pago_id: "efectivo", entra_al_arqueo: true, total_centavos: 0 }]
-        ).map((m) => ({
-          medio_pago_id: m.medio_pago_id,
-          contado_centavos: m.entra_al_arqueo
-            ? desdePesosTecleados(contados[m.medio_pago_id] ?? "")
-            : m.total_centavos,
-        }));
+          : [{ medio_pago_id: "efectivo", es_efectivo: true,
+               entra_al_arqueo: true, total_centavos: 0 }]
+        ).map((m) =>
+          // El efectivo va por PIEZAS: el total lo saca el servidor, así que
+          // deja de ser un número que se pueda escribir de memoria. Los demás
+          // medios no tienen billetes y su cifra sale del cierre del datáfono.
+          m.es_efectivo
+            ? { medio_pago_id: m.medio_pago_id, piezas }
+            : {
+                medio_pago_id: m.medio_pago_id,
+                contado_centavos: m.entra_al_arqueo
+                  ? desdePesosTecleados(contados[m.medio_pago_id] ?? "")
+                  : m.total_centavos,
+              },
+        );
 
         setCerrado(
           await cerrarCaja({
@@ -130,7 +141,7 @@ export default function PantallaCierre() {
         setCerrando(false);
       }
     },
-    [resumen, contados, descuadre],
+    [resumen, contados, piezas, descuadre],
   );
 
   async function registrarMovimiento(
@@ -219,7 +230,8 @@ export default function PantallaCierre() {
         {error && !resumen && <Aviso texto={error} tono="error" />}
 
         {cerrado && resumen && (
-          <CajaCerrada cierre={cerrado} resumen={resumen} contados={contados} />
+          <CajaCerrada cierre={cerrado} resumen={resumen} contados={contados}
+                       piezas={piezas} />
         )}
 
         {!cerrado && resumen && (
@@ -232,6 +244,8 @@ export default function PantallaCierre() {
               onContar={(id, texto) =>
                 setContados((c) => ({ ...c, [id]: texto.replace(/[^\d]/g, "") }))
               }
+              piezas={piezas}
+              onPiezas={setPiezas}
               onCerrar={() => enviar()}
                 cerrando={cerrando}
                 error={error}
@@ -408,10 +422,12 @@ function CajaCerrada({
   cierre,
   resumen,
   contados,
+  piezas,
 }: {
   cierre: Cierre;
   resumen: ResumenCierre;
   contados: Record<string, string>;
+  piezas: Record<number, number>;
 }) {
   const dif = cierre.diferencia_centavos;
 
@@ -433,9 +449,11 @@ function CajaCerrada({
             key={m.medio_pago_id}
             label={`${m.nombre} contado`}
             valor={formatear(
-              m.entra_al_arqueo
-                ? desdePesosTecleados(contados[m.medio_pago_id] ?? "")
-                : m.total_centavos,
+              m.es_efectivo
+                ? totalDe(piezas)
+                : m.entra_al_arqueo
+                  ? desdePesosTecleados(contados[m.medio_pago_id] ?? "")
+                  : m.total_centavos,
             )}
           />
         ))}
