@@ -61,9 +61,11 @@ export function ReasignarConfeccionista({
   const [hecho, setHecho] = useState<Resultado | null>(null);
 
   // Mismo permiso que exige el endpoint.
+  // El `return null` va después del useMutation, no acá: `user` llega vacío en
+  // el primer render y se llena cuando responde la sesión, así que salir antes
+  // del hook cambia cuántos hooks ve React entre renders y tumba la pantalla.
   const puede = puedeAccionModulo(user, "produccion_remisiones", "modificar") ||
                 puedeAccionModulo(user, "produccion_corte", "modificar");
-  if (!puede) return null;
 
   const mut = useMutation({
     mutationFn: () => api.post<Resultado>(
@@ -84,6 +86,9 @@ export function ReasignarConfeccionista({
       setError(MOTIVO_RECHAZO[e.message] || e.message || "No se pudo reasignar");
     },
   });
+
+  // Ya pasaron todos los hooks: acá sí se puede salir sin desbalancear nada.
+  if (!puede) return null;
 
   if (hecho) {
     const avisado = (hecho.aviso_nuevo || []).some((a) => a.enviado);
