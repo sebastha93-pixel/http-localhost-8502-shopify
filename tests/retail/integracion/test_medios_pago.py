@@ -348,3 +348,58 @@ def test_la_tirilla_muestra_LOS_DOS_pagos_con_su_referencia(entorno):
     assert [(p["nombre"], p["monto_centavos"]) for p in t["pagos"]] == [
         ("Addi", 10000000), ("Efectivo", 6990000)]
     assert t["pagos"][0]["referencia"] == "ADDI-55120"
+
+
+# ── LA COLUMNA DE TOTALES DEL PAPEL ─────────────────────────────────────────
+#
+# Presentada como la tirilla real de Siigo que MALE imprime hoy: «Subtotal» es
+# la base ANTES de IVA. Antes usábamos esa misma palabra para el total CON IVA
+# — la misma palabra con dos significados en papeles de la misma tienda.
+# Ver docs/retail-pos/tirilla-real-siigo.md
+
+def test_el_subtotal_del_papel_es_SIN_iva(entorno):
+    c, _, turno = entorno
+    venta = "01JQ8X4T5N7V001R8S9V0W1X2Y"
+    vender(c, turno, [{"medio_pago_id": "efectivo", "monto_centavos": PRECIO,
+                       "es_efectivo": True}], venta_id=venta)
+    t = c.get(f"/api/retail/ventas/{venta}/tirilla").json()
+
+    # $169.900 con IVA → base 142.773,11 e IVA 27.126,89
+    assert t["total_centavos"] == PRECIO
+    assert t["base_gravable_centavos"] < PRECIO          # es la BASE, no el total
+    assert (t["base_gravable_centavos"] + t["iva_centavos"]) == PRECIO
+
+
+def test_la_columna_CUADRA(entorno):
+    """Total bruto − Descuentos = Subtotal, y Subtotal + IVA = Total a pagar.
+
+    Una columna que no cuadra en un papel fiscal es lo primero que alguien
+    mira. Por eso el descuento se DERIVA de los otros dos y no se calcula
+    aparte: así no puede desviarse un centavo por redondeo.
+    """
+    c, _, turno = entorno
+    venta = "01JQ8X4T5N7V001R8S9V0W1X2Y"
+    vender(c, turno, [{"medio_pago_id": "efectivo", "monto_centavos": PRECIO,
+                       "es_efectivo": True}], venta_id=venta)
+    t = c.get(f"/api/retail/ventas/{venta}/tirilla").json()
+
+    assert (t["total_bruto_centavos"] - t["descuento_base_centavos"]
+            == t["base_gravable_centavos"])
+    assert (t["base_gravable_centavos"] + t["iva_centavos"]
+            == t["total_centavos"])
+
+
+def test_el_bloque_de_impuestos_va_por_TARIFA(entorno):
+    """Con una sola tarifa parece redundante. Con dos es lo único que permite
+    cuadrar la factura contra la declaración — y es lo que Siigo ya imprime."""
+    c, _, turno = entorno
+    venta = "01JQ8X4T5N7V001R8S9V0W1X2Y"
+    vender(c, turno, [{"medio_pago_id": "efectivo", "monto_centavos": PRECIO,
+                       "es_efectivo": True}], venta_id=venta)
+    t = c.get(f"/api/retail/ventas/{venta}/tirilla").json()
+
+    assert len(t["impuestos"]) == 1
+    imp = t["impuestos"][0]
+    assert imp["tasa"] == "19.00"
+    assert imp["base_centavos"] == t["base_gravable_centavos"]
+    assert imp["impuesto_centavos"] == t["iva_centavos"]

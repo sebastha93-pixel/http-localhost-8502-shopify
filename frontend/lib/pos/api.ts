@@ -533,7 +533,12 @@ export interface Tirilla {
   cliente_documento: string | null;
   lineas: LineaTirilla[];
   pagos: PagoTirilla[];
+  /** Presentados como en la tirilla real de Siigo: «Subtotal» es la base
+   *  ANTES de IVA. Ver docs/retail-pos/tirilla-real-siigo.md */
   subtotal_centavos: number;
+  total_bruto_centavos: number;
+  descuento_base_centavos: number;
+  impuestos: { tasa: string; base_centavos: number; impuesto_centavos: number }[];
   descuento_centavos: number;
   total_centavos: number;
   base_gravable_centavos: number;

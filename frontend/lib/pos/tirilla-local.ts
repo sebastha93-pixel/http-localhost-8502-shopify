@@ -38,6 +38,11 @@ export function armarTirillaLocal(opciones: {
   let descuento = 0;
   let iva = 0;
   let unidades = 0;
+  // «Total bruto»: la base ANTES de descuento, acumulada POR LÍNEA con su
+  // propia tarifa. Sobre el total daría otro centavo, y con dos tarifas
+  // repartiría el descuento contra la equivocada.
+  let brutoSinIva = 0;
+  const porTarifa = new Map<string, { base: number; impuesto: number }>();
 
   const lineas = opciones.lineas.map((l) => {
     const bruto = l.precioConIva * l.cantidad;
@@ -46,7 +51,14 @@ export function armarTirillaLocal(opciones: {
     subtotal += bruto;
     descuento += desc;
     // Por LÍNEA, igual que el backend. Sobre el total daría otro centavo.
-    iva += ivaDe(total, Number(l.tasaIva));
+    const ivaLinea = ivaDe(total, Number(l.tasaIva));
+    iva += ivaLinea;
+    brutoSinIva += bruto - ivaDe(bruto, Number(l.tasaIva));
+    const t = String(l.tasaIva);
+    const acc = porTarifa.get(t) ?? { base: 0, impuesto: 0 };
+    acc.base += total - ivaLinea;
+    acc.impuesto += ivaLinea;
+    porTarifa.set(t, acc);
     unidades += l.cantidad;
     return {
       sku: l.sku,
@@ -60,6 +72,10 @@ export function armarTirillaLocal(opciones: {
   });
 
   const total = subtotal - descuento;
+  const impuestosPorTarifa = [...porTarifa.entries()]
+    .sort((a, b) => Number(b[0]) - Number(a[0]))
+    .map(([tasa, v]) => ({ tasa, base_centavos: v.base,
+                           impuesto_centavos: v.impuesto }));
   const pagado = opciones.pagos.reduce((a, p) => a + p.monto_centavos, 0);
 
   return {
@@ -84,6 +100,14 @@ export function armarTirillaLocal(opciones: {
     })),
     subtotal_centavos: subtotal,
     descuento_centavos: descuento,
+    // Los mismos totales que el servidor, presentados como en la tirilla real:
+    // «Total bruto» y «Subtotal» son bases SIN IVA. La tirilla offline tiene
+    // que decir exactamente lo mismo que la del servidor — si la clienta
+    // vuelve con el papel y los renglones no coinciden, no hay forma de
+    // explicarle cuál de los dos vale.
+    total_bruto_centavos: brutoSinIva,
+    descuento_base_centavos: brutoSinIva - (total - iva),
+    impuestos: impuestosPorTarifa,
     total_centavos: total,
     base_gravable_centavos: total - iva,
     iva_centavos: iva,

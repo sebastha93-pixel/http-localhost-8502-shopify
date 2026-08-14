@@ -113,32 +113,57 @@ export function Tirilla({ datos }: { datos: Datos }) {
 
       <div className="t-sep" />
 
+      {/* EL BLOQUE DE IMPUESTOS, como la tirilla real. Con una sola tarifa
+          parece redundante; con dos es lo único que permite cuadrar la factura
+          contra la declaración. */}
+      {datos.impuestos.length > 0 && (
+        <>
+          <div className="t-fila t-chico">
+            <span>Impuesto</span>
+            <span>Base</span>
+          </div>
+          {datos.impuestos.map((i) => (
+            <div key={i.tasa} className="t-fila t-chico">
+              <span>IVA {tasaCorta(i.tasa)}%</span>
+              <span>{formatear(i.base_centavos)}</span>
+            </div>
+          ))}
+          <div className="t-sep-fino" />
+        </>
+      )}
+
       <div className="t-fila">
-        <span>Subtotal</span>
-        <span>{formatear(datos.subtotal_centavos)}</span>
+        <span>Total ítems</span>
+        <span>{datos.unidades}</span>
       </div>
-      {datos.descuento_centavos > 0 && (
+      {/* «SUBTOTAL» ES ANTES DE IVA — como en la tirilla que MALE imprime hoy.
+          Aquí decía «Subtotal» al total CON IVA: la misma palabra con dos
+          significados en papeles de la misma tienda, y quien cuadra el día
+          encuentra números que no casan. El cálculo no cambió; la presentación
+          sí. Ver docs/retail-pos/tirilla-real-siigo.md */}
+      <div className="t-fila">
+        <span>Total bruto</span>
+        <span>{formatear(datos.total_bruto_centavos)}</span>
+      </div>
+      {datos.descuento_base_centavos > 0 && (
         <div className="t-fila">
           <span>Descuentos</span>
-          <span>−{formatear(datos.descuento_centavos)}</span>
+          <span>−{formatear(datos.descuento_base_centavos)}</span>
         </div>
       )}
-      {/* IVA INCLUIDO, no sumado. El precio de la etiqueta ES el total; el
-          impuesto se lee de él. Ponerlo como una línea que suma daría un total
-          distinto al que la clienta ya vio en la vitrina. */}
-      <div className="t-fila t-chico">
-        <span>Base gravable</span>
+      <div className="t-fila">
+        <span>Subtotal</span>
         <span>{formatear(datos.base_gravable_centavos)}</span>
       </div>
-      <div className="t-fila t-chico">
-        <span>IVA incluido</span>
+      <div className="t-fila">
+        <span>IVA {tasaCorta(datos.impuestos[0]?.tasa ?? "19")}%</span>
         <span>{formatear(datos.iva_centavos)}</span>
       </div>
 
       <div className="t-sep" />
 
       <div className="t-fila t-total">
-        <span>TOTAL</span>
+        <span>TOTAL A PAGAR</span>
         <span>{formatear(datos.total_centavos)}</span>
       </div>
 
@@ -278,3 +303,10 @@ const ESTILOS = `
   .tirilla { position: absolute; left: 0; top: 0; }
 }
 `;
+
+/** «19.00» → «19». La tarifa llega como NUMERIC(5,2) de la base y los ceros de
+ *  la escala son ruido en un papel de 80 mm — la tirilla real dice «IVA 19%».
+ *  Se recortan sólo los decimales vacíos: un 5,5 % tiene que seguir saliendo. */
+function tasaCorta(t: string): string {
+  return String(Number(t)).replace(".", ",");
+}

@@ -70,10 +70,31 @@ class Tirilla:
     lineas: List[LineaTirilla] = field(default_factory=list)
     pagos: List[PagoTirilla] = field(default_factory=list)
 
-    subtotal_centavos: int = 0
-    descuento_centavos: int = 0
+    # LOS TOTALES SE PRESENTAN COMO EN LA TIRILLA REAL DE SIIGO, que es la que
+    # la clienta reconoce y la contadora sabe leer:
+    #
+    #   Total bruto   = base ANTES de descuento   (sin IVA)
+    #   Descuentos    = el descuento              (sin IVA)
+    #   Subtotal      = base DESPUÉS de descuento (sin IVA)
+    #   IVA 19%
+    #   Total a pagar
+    #
+    # Nosotros imprimíamos «Subtotal» para el total CON IVA. No era otro
+    # nombre: era la MISMA palabra significando dos cosas en papeles de la
+    # misma tienda, y quien cuadra el día encuentra números que no casan.
+    #
+    # El cálculo no cambia —el precio de vitrina manda y el IVA se deriva por
+    # línea (INV-V12)—; cambia cómo se presenta.
+    subtotal_centavos: int = 0          # con IVA, antes de dcto (interno)
+    descuento_centavos: int = 0         # con IVA (interno)
+    total_bruto_centavos: int = 0       # base antes de dcto → «Total bruto»
+    descuento_base_centavos: int = 0    # descuento sin IVA  → «Descuentos»
     total_centavos: int = 0
-    base_gravable_centavos: int = 0
+    base_gravable_centavos: int = 0     # base tras dcto     → «Subtotal»
+    # Base e impuesto POR TARIFA. Con una sola parece redundante; con dos es lo
+    # único que permite cuadrar la factura contra la declaración, y es lo que
+    # imprime Siigo hoy.
+    impuestos: list = field(default_factory=list)
     iva_centavos: int = 0
     pagado_centavos: int = 0
     vuelto_centavos: int = 0
@@ -140,7 +161,8 @@ class ArmarTirilla:
 
         lineas = (await self._s.execute(text("""
             SELECT sku, descripcion, cantidad, precio_unitario,
-                   descuento_monto, descuento_motivo, total_linea
+                   descuento_monto, descuento_motivo, total_linea,
+                   tasa_iva, base_gravable, iva_monto
               FROM retail.venta_lineas WHERE venta_id = :i ORDER BY orden
         """), {"i": venta_id})).mappings().all()
 
@@ -191,6 +213,7 @@ class ArmarTirilla:
             descuento_centavos=int(v["descuento_total"]),
             total_centavos=int(v["total"]),
             base_gravable_centavos=int(v["base_gravable"]),
+            **_brutos(lineas), impuestos=impuestos_por_tarifa(lineas),
             iva_centavos=int(v["iva_total"]),
             pagado_centavos=int(v["pagado"]),
             vuelto_centavos=int(v["vuelto"]),
@@ -253,3 +276,45 @@ def _poner_qr(tirilla: Tirilla, doc, *, con_resolucion: bool) -> None:
     tirilla.qr_contenido = contenido
     tirilla.qr_ruta = "".join(trozos)
     tirilla.qr_modulos = len(matriz)
+
+
+def _brutos(lineas) -> dict:
+    """«Total bruto» y «Descuentos» como los presenta Siigo: SIN IVA.
+
+    Se calcula POR LÍNEA y no con una proporción sobre el total, porque cada
+    línea guarda su propia tarifa: el día que entre un producto exento o al 5 %,
+    una proporción sobre el total repartiría el descuento contra la tarifa
+    equivocada y la base declarada saldría mal. Con dos tarifas el error no
+    revienta — sale en la factura, que es peor.
+
+    La resta queda garantizada: `total_bruto − descuentos = subtotal`, porque
+    el descuento se DERIVA de esos dos y no se calcula aparte. Una columna que
+    no cuadra en un papel fiscal es lo primero que alguien va a mirar.
+    """
+    from backend.modules.retail.domain.shared.impuestos import separar_iva
+
+    bruto = 0
+    base_neta = 0
+    for l in lineas:
+        antes = int(l["precio_unitario"]) * int(l["cantidad"])
+        base, _ = separar_iva(antes, l["tasa_iva"])
+        bruto += base
+        base_neta += int(l["base_gravable"])
+    return {"total_bruto_centavos": bruto,
+            "descuento_base_centavos": bruto - base_neta}
+
+
+def impuestos_por_tarifa(lineas) -> list:
+    """El bloque «Impuestos» de la tirilla real: base e impuesto por tarifa.
+
+    Con una sola tarifa parece redundante. Con dos es lo ÚNICO que permite
+    cuadrar la factura contra la declaración, y es lo que imprime Siigo hoy.
+    """
+    por_tasa: dict = {}
+    for l in lineas:
+        t = str(l["tasa_iva"])
+        acc = por_tasa.setdefault(t, {"tasa": t, "base_centavos": 0,
+                                      "impuesto_centavos": 0})
+        acc["base_centavos"] += int(l["base_gravable"])
+        acc["impuesto_centavos"] += int(l["iva_monto"])
+    return [por_tasa[k] for k in sorted(por_tasa, key=lambda x: -float(x))]

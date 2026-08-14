@@ -1250,6 +1250,12 @@ class LineaTirillaSalida(BaseModel):
     total_centavos: int
 
 
+class ImpuestoTirillaSalida(BaseModel):
+    tasa: str
+    base_centavos: int
+    impuesto_centavos: int
+
+
 class PagoTirillaSalida(BaseModel):
     nombre: str
     monto_centavos: int
@@ -1272,11 +1278,16 @@ class TirillaSalida(BaseModel):
     cliente_documento: Optional[str] = None
     lineas: List[LineaTirillaSalida]
     pagos: List[PagoTirillaSalida]
+    # Presentados como en la tirilla real de Siigo: «Subtotal» es la base
+    # ANTES de IVA, no el total con IVA. Ver docs/retail-pos/tirilla-real-siigo.md
     subtotal_centavos: int
     descuento_centavos: int
+    total_bruto_centavos: int = 0
+    descuento_base_centavos: int = 0
     total_centavos: int
     base_gravable_centavos: int
     iva_centavos: int
+    impuestos: List[ImpuestoTirillaSalida] = []
     pagado_centavos: int
     vuelto_centavos: int
     unidades: int
@@ -1337,6 +1348,9 @@ async def tirilla(
         pagos=[PagoTirillaSalida(nombre=p.nombre, monto_centavos=p.monto_centavos,
                                  referencia=p.referencia) for p in d.pagos],
         subtotal_centavos=d.subtotal_centavos,
+        total_bruto_centavos=d.total_bruto_centavos,
+        descuento_base_centavos=d.descuento_base_centavos,
+        impuestos=[ImpuestoTirillaSalida(**i) for i in d.impuestos],
         descuento_centavos=d.descuento_centavos,
         total_centavos=d.total_centavos,
         base_gravable_centavos=d.base_gravable_centavos,
