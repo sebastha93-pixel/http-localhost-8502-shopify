@@ -253,3 +253,98 @@ def test_se_puede_pagar_MITAD_Addi_MITAD_efectivo(entorno):
         {"medio_pago_id": "efectivo", "monto_centavos": PRECIO - mitad,
          "es_efectivo": True}])
     assert r.status_code == 200, r.text
+
+
+# ── PAGO MIXTO ──────────────────────────────────────────────────────────────
+#
+# El dominio siempre lo aceptó —`Venta` tiene `saldo()`, `vuelto()` e INV-V3—
+# pero la pantalla mandaba un solo pago. Con Addi eso deja de ser un detalle:
+# el cupo aprobado casi nunca cubre la compra entera. Sin pago mixto la cajera
+# tendría que partir la venta en dos tiquetes, y entonces el inventario, la
+# numeración y la factura cuentan dos ventas donde hubo una.
+
+def test_el_vuelto_sale_del_efectivo(entorno):
+    """Addi $100.000 + un billete de $100.000 sobre una venta de $169.900. El
+    excedente entró en efectivo, así que se puede devolver."""
+    c, _, turno = entorno
+    r = vender(c, turno, [
+        {"medio_pago_id": "addi", "monto_centavos": 10000000,
+         "es_efectivo": False, "referencia": "ADDI-55120"},
+        {"medio_pago_id": "efectivo", "monto_centavos": 10000000,
+         "es_efectivo": True}])
+    assert r.status_code == 200, r.text
+    assert r.json()["vuelto_centavos"] == 20000000 - PRECIO
+
+
+def test_un_excedente_MAYOR_QUE_EL_EFECTIVO_se_rechaza(entorno):
+    """INV-V3, y la regla exacta importa: el vuelto no sale «del efectivo de
+    este pago», sale del efectivo que hay en el cajón. $10.000 en billetes no
+    pueden devolver $30.100, así que esta venta no cierra.
+
+    (Escribí antes esta prueba con $50.000 en efectivo esperando un rechazo, y
+    el código tenía razón: con $50.000 el cajón SÍ puede devolver $30.100.)
+    """
+    c, _, turno = entorno
+    r = vender(c, turno, [
+        {"medio_pago_id": "efectivo", "monto_centavos": 1000000,
+         "es_efectivo": True},
+        {"medio_pago_id": "addi", "monto_centavos": 19000000,
+         "es_efectivo": False, "referencia": "ADDI-9"}])
+    assert r.status_code == 400
+    assert "vuelto" in r.json()["detail"]["mensaje"]
+
+
+def test_pero_si_el_efectivo_ALCANZA_para_el_vuelto_sí_pasa(entorno):
+    """El otro lado de la misma regla, para que quede escrito por qué no es
+    «el excedente tiene que ser de la línea de efectivo»."""
+    c, _, turno = entorno
+    r = vender(c, turno, [
+        {"medio_pago_id": "efectivo", "monto_centavos": 5000000,
+         "es_efectivo": True},
+        {"medio_pago_id": "addi", "monto_centavos": 15000000,
+         "es_efectivo": False, "referencia": "ADDI-9"}])
+    assert r.status_code == 200, r.text
+    assert r.json()["vuelto_centavos"] == 20000000 - PRECIO
+
+
+def test_si_entre_los_dos_no_alcanza_tampoco(entorno):
+    """El otro lado de INV-V3, y el que de verdad cuesta plata: cerrar una
+    venta cobrando de menos."""
+    c, _, turno = entorno
+    r = vender(c, turno, [
+        {"medio_pago_id": "addi", "monto_centavos": 5000000,
+         "es_efectivo": False, "referencia": "ADDI-3"},
+        {"medio_pago_id": "efectivo", "monto_centavos": 5000000,
+         "es_efectivo": True}])
+    assert r.status_code == 400
+    assert "falta cobrar" in r.json()["detail"]["mensaje"].lower()
+
+
+def test_cada_pago_exige_SU_referencia(entorno):
+    """Que uno de los dos la traiga no cubre al otro: son dos cobros distintos
+    en dos informes distintos."""
+    c, _, turno = entorno
+    r = vender(c, turno, [
+        {"medio_pago_id": "addi", "monto_centavos": 10000000,
+         "es_efectivo": False, "referencia": "ADDI-1"},
+        {"medio_pago_id": "datafono", "monto_centavos": 6990000,
+         "es_efectivo": False}])
+    assert r.status_code == 400
+    assert "Tarjeta" in r.json()["detail"]["mensaje"]
+
+
+def test_la_tirilla_muestra_LOS_DOS_pagos_con_su_referencia(entorno):
+    """Es el comprobante de la clienta: si sólo saliera uno, quien pagó mitad
+    y mitad no tiene con qué demostrar la otra mitad."""
+    c, _, turno = entorno
+    venta = "01JQ8X4T5N7V001R8S9V0W1X2Y"
+    vender(c, turno, [
+        {"medio_pago_id": "addi", "monto_centavos": 10000000,
+         "es_efectivo": False, "referencia": "ADDI-55120"},
+        {"medio_pago_id": "efectivo", "monto_centavos": 6990000,
+         "es_efectivo": True}], venta_id=venta)
+
+    t = c.get(f"/api/retail/ventas/{venta}/tirilla").json()
+    assert [(p["nombre"], p["monto_centavos"]) for p in t["pagos"]] == [
+        ("Addi", 10000000), ("Efectivo", 6990000)]
+    assert t["pagos"][0]["referencia"] == "ADDI-55120"
