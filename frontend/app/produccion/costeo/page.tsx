@@ -88,6 +88,17 @@ export default function CosteoRealPage() {
     staleTime: 5 * 60_000,
   });
 
+  // LOS HOOKS VAN ANTES DE CUALQUIER RETURN. Este estaba debajo del
+  // `isLoading` y eso es una llamada condicional a un hook: en el render donde
+  // llegan los datos aparece un hook que antes no estaba, y React revienta con
+  // "Rendered more hooks than during the previous render". El build NO lo marca
+  // —compila igual— y la pantalla queda en blanco: "Application error".
+  // Se lee de `q.data?` y no de `data`, que se define más abajo: acá arriba
+  // todavía no existe, y el hook tiene que quedar antes del return.
+  const lotes = q.data?.lotes || [];
+  const { q: busca, setQ: setBusca, filtrados } = useBusqueda(
+    lotes, (l) => [l.consecutivo, l.referencia, l.confeccionista, l.estado]);
+
   if (q.isLoading) return <LoadingState label="Cruzando lotes con Siigo… (puede tardar unos segundos)" />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
@@ -134,9 +145,6 @@ export default function CosteoRealPage() {
     lotes: 0, con_ds: 0, ok: 0, con_alerta: 0,
     total_teorico: 0, total_real: 0, desviacion: 0,
   };
-  const lotes = data.lotes || [];
-  const { q: busca, setQ: setBusca, filtrados } = useBusqueda(
-    lotes, (l) => [l.consecutivo, l.referencia, l.confeccionista, l.estado]);
   const alertas = data.alertas || [];
   const dsSinLote = data.ds_sin_lote || [];
   const ajenos = data.ajenos;

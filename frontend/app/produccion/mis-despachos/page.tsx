@@ -77,12 +77,18 @@ export default function MisDespachosPage() {
     onError: (e: Error) => setErr(`No se pudo marcar el despacho: ${e.message}`),
   });
 
-  if (q.isLoading) return <LoadingState label="Cargando tus despachos…" />;
-  if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
-
+  // LOS HOOKS VAN ANTES DE CUALQUIER RETURN. Este estaba debajo del
+  // `isLoading` y eso es una llamada condicional a un hook: en el render donde
+  // llegan los datos aparece un hook que antes no estaba, y React revienta con
+  // "Rendered more hooks than during the previous render". El build NO lo marca
+  // —compila igual— y la pantalla queda en blanco: "Application error".
   const rows = q.data?.despachos || [];
   const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(
     rows, (d) => [d.consecutivo, d.referencia, d.nombre, d.responsable, d.remision?.consecutivo]);
+
+  if (q.isLoading) return <LoadingState label="Cargando tus despachos…" />;
+  if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
+
   const totalDespachado = rows.filter((r) => r.remision?.despachada).reduce((s, r) => s + r.total, 0);
   const totalPendiente = rows.filter((r) => !r.remision?.despachada).reduce((s, r) => s + r.total, 0);
 

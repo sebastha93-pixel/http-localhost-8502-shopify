@@ -187,12 +187,18 @@ export default function InsumosPage() {
     setLineas((prev) => prev.map((l, idx) => (idx === i ? { ...l, [campo]: v } : l)));
   }
 
-  if (q.isLoading) return <LoadingState label="Cargando insumos…" />;
-  if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
-
+  // LOS HOOKS VAN ANTES DE CUALQUIER RETURN. Este estaba debajo del
+  // `isLoading` y eso es una llamada condicional a un hook: en el render donde
+  // llegan los datos aparece un hook que antes no estaba, y React revienta con
+  // "Rendered more hooks than during the previous render". El build NO lo marca
+  // —compila igual— y la pantalla queda en blanco: "Application error".
   const insumos = q.data?.insumos || [];
   const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(
     insumos, (i) => [i.nombre, i.codigo, i.categoria, i.unidad]);
+
+  if (q.isLoading) return <LoadingState label="Cargando insumos…" />;
+  if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
+
   const negativos = insumos.filter((i) => i.cantidad_disponible < 0);
 
   return (

@@ -95,12 +95,18 @@ export default function InventarioPage() {
     }
   }
 
-  if (resumenQ.isLoading) return <LoadingState label="Cargando inventario…" />;
-  if (resumenQ.isError) return <ErrorState error={resumenQ.error} onRetry={() => resumenQ.refetch()} />;
-
+  // LOS HOOKS VAN ANTES DE CUALQUIER RETURN. Este estaba debajo del
+  // `isLoading` y eso es una llamada condicional a un hook: en el render donde
+  // llegan los datos aparece un hook que antes no estaba, y React revienta con
+  // "Rendered more hooks than during the previous render". El build NO lo marca
+  // —compila igual— y la pantalla queda en blanco: "Application error".
   const resumen = resumenQ.data?.resumen || [];
   const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(
     resumen, (r) => [r.descripcion_tela, r.tono, r.composicion]);
+
+  if (resumenQ.isLoading) return <LoadingState label="Cargando inventario…" />;
+  if (resumenQ.isError) return <ErrorState error={resumenQ.error} onRetry={() => resumenQ.refetch()} />;
+
   const totalMetros = resumen.reduce((s, r) => s + r.metros_disponible, 0);
   const totalRollos = resumen.reduce((s, r) => s + r.num_rollos, 0);
   const conValor = resumen.some((r) => r.valor_estimado != null);

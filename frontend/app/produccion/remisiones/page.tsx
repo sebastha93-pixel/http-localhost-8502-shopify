@@ -54,9 +54,11 @@ export default function RemisionesPage() {
   });
   const listos = (listosQ.data?.ordenes || []).filter((o) => !o.tiene_remision_confeccion);
 
-  if (q.isLoading) return <LoadingState label="Cargando remisiones…" />;
-  if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
-
+  // LOS HOOKS VAN ANTES DE CUALQUIER RETURN. Este estaba debajo del
+  // `isLoading` y eso es una llamada condicional a un hook: en el render donde
+  // llegan los datos aparece un hook que antes no estaba, y React revienta con
+  // "Rendered more hooks than during the previous render". El build NO lo marca
+  // —compila igual— y la pantalla queda en blanco: "Application error".
   const lista = q.data?.remisiones || [];
   const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(lista, (r) => [
     r.consecutivo, r.confeccionista?.nombre, r.tipo, r.estado,
@@ -67,6 +69,10 @@ export default function RemisionesPage() {
       i.orden_corte?.referencia?.codigo_referencia,
     ]),
   ]);
+
+  if (q.isLoading) return <LoadingState label="Cargando remisiones…" />;
+  if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
+
 
   return (
     <PageShell title="Remisiones" subtitle="Entregas a confección y terminación">

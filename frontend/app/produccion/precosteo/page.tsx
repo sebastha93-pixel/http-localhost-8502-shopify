@@ -98,12 +98,19 @@ export default function PrecosteoListPage() {
     onError: (e: Error) => setSyncMsg(`Error: ${e.message}`),
   });
 
-  if (q.isLoading) return <LoadingState label="Cargando precosteos…" />;
-  if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
-
+  // LOS HOOKS VAN ANTES DE CUALQUIER RETURN. Estaban debajo del
+  // `if (isLoading) return …` y eso es una llamada condicional a un hook: en el
+  // render donde llegan los datos aparece un hook que antes no estaba y React
+  // revienta con "Rendered more hooks than during the previous render". El build
+  // NO lo marca —compila igual— y la pantalla queda en blanco con
+  // "Application error: a client-side exception has occurred".
   const rows = q.data?.precosteos || [];
   const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(
     rows, (r) => [r.codigo_referencia, r.nombre, r.tela, r.color]);
+
+  if (q.isLoading) return <LoadingState label="Cargando precosteos…" />;
+  if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
+
 
   return (
     <PageShell

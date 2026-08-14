@@ -34,11 +34,17 @@ export default function InformesCortePage() {
     queryFn: () => api.get("/api/produccion/corte?estado=cortada&limit=200"),
   });
 
+  // LOS HOOKS VAN ANTES DE CUALQUIER RETURN. Este estaba debajo del
+  // `isLoading` y eso es una llamada condicional a un hook: en el render donde
+  // llegan los datos aparece un hook que antes no estaba, y React revienta con
+  // "Rendered more hooks than during the previous render". El build NO lo marca
+  // —compila igual— y la pantalla queda en blanco: "Application error".
+  const lista = q.data?.ordenes || [];
+  const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(lista, (o) => [o.consecutivo, o.referencia_lote, o.responsable]);
+
   if (q.isLoading) return <LoadingState label="Cargando informes…" />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
-  const lista = q.data?.ordenes || [];
-  const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(lista, (o) => [o.consecutivo, o.referencia_lote, o.responsable]);
 
   return (
     <PageShell title="Informes de corte" subtitle="Órdenes cerradas con cierre del cortador">

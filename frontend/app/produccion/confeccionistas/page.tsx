@@ -85,11 +85,17 @@ export default function ConfeccionistasPage() {
     onError: (e: Error) => setBienvMsg(`Error: ${e.message}`),
   });
 
+  // LOS HOOKS VAN ANTES DE CUALQUIER RETURN. Este estaba debajo del
+  // `isLoading` y eso es una llamada condicional a un hook: en el render donde
+  // llegan los datos aparece un hook que antes no estaba, y React revienta con
+  // "Rendered more hooks than during the previous render". El build NO lo marca
+  // —compila igual— y la pantalla queda en blanco: "Application error".
+  const lista = q.data?.confeccionistas || [];
+  const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(lista, (c) => [c.nombre, c.telefono, c.documento, c.tipo]);
+
   if (q.isLoading) return <LoadingState label="Cargando proveedores…" />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
-  const lista = q.data?.confeccionistas || [];
-  const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(lista, (c) => [c.nombre, c.telefono, c.documento, c.tipo]);
 
   return (
     <PageShell title="Proveedores" subtitle="Confección · terminación · lavandería · textilera · otros">

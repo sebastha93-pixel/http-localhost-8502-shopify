@@ -29,11 +29,17 @@ export default function IngresosPage() {
     queryFn: () => api.get("/api/produccion/ingreso?limit=100"),
   });
 
+  // LOS HOOKS VAN ANTES DE CUALQUIER RETURN. Este estaba debajo del
+  // `isLoading` y eso es una llamada condicional a un hook: en el render donde
+  // llegan los datos aparece un hook que antes no estaba, y React revienta con
+  // "Rendered more hooks than during the previous render". El build NO lo marca
+  // —compila igual— y la pantalla queda en blanco: "Application error".
+  const ingresos = q.data?.ingresos || [];
+  const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(ingresos, (i) => [i.numero_ingreso, i.textilera, i.numero_documento, i.tipo_documento, i.estado]);
+
   if (q.isLoading) return <LoadingState label="Cargando ingresos…" />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
-  const ingresos = q.data?.ingresos || [];
-  const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(ingresos, (i) => [i.numero_ingreso, i.textilera, i.numero_documento, i.tipo_documento, i.estado]);
 
   return (
     <PageShell
