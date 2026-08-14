@@ -8,6 +8,7 @@
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { api } from "@/lib/api";
+import { CasillaBusqueda, useBusqueda } from "@/components/buscador";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { KpiCard } from "@/components/kpi-card";
@@ -134,6 +135,8 @@ export default function CosteoRealPage() {
     total_teorico: 0, total_real: 0, desviacion: 0,
   };
   const lotes = data.lotes || [];
+  const { q: busca, setQ: setBusca, filtrados } = useBusqueda(
+    lotes, (l) => [l.consecutivo, l.referencia, l.confeccionista, l.estado]);
   const alertas = data.alertas || [];
   const dsSinLote = data.ds_sin_lote || [];
   const ajenos = data.ajenos;
@@ -177,10 +180,15 @@ export default function CosteoRealPage() {
       {/* Tabla lotes */}
       <Card>
         <CardContent className="p-0">
-          <div className="px-5 py-3 border-b border-border">
+          <div className="space-y-3 px-5 py-3 border-b border-border">
             <p className="section-label">Lotes · teórico vs contabilizado</p>
+            <CasillaBusqueda
+              valor={busca} onChange={setBusca}
+              placeholder="Buscar lote por referencia, consecutivo o confeccionista…"
+              visibles={filtrados.length} total={lotes.length}
+            />
           </div>
-          {lotes.length === 0 ? (
+          {filtrados.length === 0 ? (
             <p className="p-8 text-center text-xs text-graphite">No hay lotes cortados aún.</p>
           ) : (
             <div className="overflow-x-auto">
@@ -204,7 +212,7 @@ export default function CosteoRealPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {lotes.map((l) => {
+                  {filtrados.map((l) => {
                     const ui = ESTADO_UI[l.estado] || ESTADO_UI.sin_asignar;
                     return (
                       <tr key={l.orden_corte_id} className="border-b border-border/40 hover:bg-cloud/30">

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, API_BASE } from "@/lib/api";
 import { getToken } from "@/lib/auth";
+import { CasillaBusqueda, useBusqueda } from "@/components/buscador";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { BotonInformeInventario } from "@/components/boton-informe-inventario";
@@ -98,6 +99,8 @@ export default function InventarioPage() {
   if (resumenQ.isError) return <ErrorState error={resumenQ.error} onRetry={() => resumenQ.refetch()} />;
 
   const resumen = resumenQ.data?.resumen || [];
+  const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(
+    resumen, (r) => [r.descripcion_tela, r.tono, r.composicion]);
   const totalMetros = resumen.reduce((s, r) => s + r.metros_disponible, 0);
   const totalRollos = resumen.reduce((s, r) => s + r.num_rollos, 0);
   const conValor = resumen.some((r) => r.valor_estimado != null);
@@ -110,6 +113,12 @@ export default function InventarioPage() {
       onRefresh={() => resumenQ.refetch()}
       aside={<BotonInformeInventario tipo="telas" />}
     >
+      <CasillaBusqueda
+        valor={busca} onChange={setBusca}
+        placeholder="Buscar tela por nombre, tono o composición…"
+        visibles={filtrados.length} total={resumen.length}
+      />
+
       <Card>
         <CardContent className={`p-4 grid grid-cols-2 ${conValor ? "md:grid-cols-4" : "md:grid-cols-3"} gap-4`}>
           <Kpi label="Telas distintas" value={new Set(resumen.map((r) => r.descripcion_tela)).size.toString()} />
@@ -158,7 +167,7 @@ export default function InventarioPage() {
               <p className="px-4 py-2 text-[0.7rem] text-teal border-b border-border">{compMsg}</p>
             )}
             <div className="divide-y divide-border">
-              {resumen.map((r) => {
+              {filtrados.map((r) => {
                 const key = `${r.descripcion_tela}||${r.tono}`;
                 const isOpen = expandido === key;
                 return (

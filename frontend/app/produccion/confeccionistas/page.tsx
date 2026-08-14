@@ -6,6 +6,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { CasillaBusqueda, useBusqueda } from "@/components/buscador";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -88,9 +89,16 @@ export default function ConfeccionistasPage() {
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
   const lista = q.data?.confeccionistas || [];
+  const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(lista, (c) => [c.nombre, c.telefono, c.documento, c.tipo]);
 
   return (
     <PageShell title="Proveedores" subtitle="Confección · terminación · lavandería · textilera · otros">
+      <CasillaBusqueda
+        valor={busca} onChange={setBusca}
+        placeholder="Buscar proveedor por nombre, teléfono, documento o tipo…"
+        visibles={filtrados.length} total={lista.length}
+      />
+
       <div className="flex items-center justify-between">
         <label className="flex items-center gap-2 text-xs text-graphite">
           <input type="checkbox" checked={incluirInactivos} onChange={(e) => setIncluirInactivos(e.target.checked)} />
@@ -209,7 +217,7 @@ export default function ConfeccionistasPage() {
                 </tr>
               </thead>
               <tbody>
-                {lista.map((c) => <FilaConfeccionista key={c.id} c={c} />)}
+                {filtrados.map((c) => <FilaConfeccionista key={c.id} c={c} />)}
               </tbody>
             </table>
             </div>

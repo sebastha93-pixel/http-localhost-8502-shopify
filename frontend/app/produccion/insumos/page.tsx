@@ -11,6 +11,7 @@ import { api, API_BASE } from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
 import { getToken } from "@/lib/auth";
 import { fmtDateTime } from "@/lib/utils";
+import { CasillaBusqueda, useBusqueda } from "@/components/buscador";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { BotonInformeInventario } from "@/components/boton-informe-inventario";
@@ -190,11 +191,19 @@ export default function InsumosPage() {
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
   const insumos = q.data?.insumos || [];
+  const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(
+    insumos, (i) => [i.nombre, i.codigo, i.categoria, i.unidad]);
   const negativos = insumos.filter((i) => i.cantidad_disponible < 0);
 
   return (
     <PageShell title="Insumos" subtitle="Entradas manuales · salidas automáticas al entregar remisiones"
       aside={<BotonInformeInventario tipo="insumos" />}>
+      <CasillaBusqueda
+        valor={busca} onChange={setBusca}
+        placeholder="Buscar insumo por nombre, código, categoría o unidad…"
+        visibles={filtrados.length} total={insumos.length}
+      />
+
       <div className="flex items-center justify-between">
         <p className="text-xs text-graphite">{insumos.length} insumo(s) en inventario</p>
         <button onClick={() => setMostrarIngreso(true)}
@@ -307,8 +316,11 @@ export default function InsumosPage() {
                 <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
                   <th className="px-4 py-2 w-[36px]">
                     <input type="checkbox"
-                      checked={insumos.length > 0 && seleccion.size === insumos.length}
-                      onChange={() => setSeleccion(seleccion.size === insumos.length ? new Set() : new Set(insumos.map((x) => x.id)))}
+                      checked={filtrados.length > 0 && filtrados.every((x) => seleccion.has(x.id))}
+                      onChange={() => setSeleccion(
+                        filtrados.every((x) => seleccion.has(x.id))
+                          ? new Set()
+                          : new Set(filtrados.map((x) => x.id)))}
                       aria-label="Seleccionar todos" className="h-4 w-4 cursor-pointer" />
                   </th>
                   <th className="px-4 py-2">Código</th>
@@ -320,7 +332,7 @@ export default function InsumosPage() {
                 </tr>
               </thead>
               <tbody>
-                {insumos.map((i) => (
+                {filtrados.map((i) => (
                   <tr key={i.id} className={`border-b border-border/40 ${seleccion.has(i.id) ? "bg-navy-600/[0.05]" : "hover:bg-cloud/30"}`}>
                     <td className="px-4 py-2">
                       <input type="checkbox" checked={seleccion.has(i.id)} onChange={() => toggleSeleccion(i.id)}

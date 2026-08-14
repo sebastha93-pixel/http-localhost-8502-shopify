@@ -8,6 +8,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { CasillaBusqueda, useBusqueda } from "@/components/buscador";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -74,6 +75,7 @@ export default function RutasPage() {
   });
 
   const rutas = q.data?.rutas || [];
+  const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(rutas, (r) => [r.orden_corte?.consecutivo, r.orden_corte?.referencia?.codigo_referencia, r.orden_corte?.referencia?.nombre, r.orden_corte?.referencia?.tela, r.confeccionista?.nombre, r.etapa]);
 
   const kpis = useMemo(() => {
     const c: Record<string, number> = {};
@@ -86,6 +88,12 @@ export default function RutasPage() {
 
   return (
     <PageShell title="Rutas de lote" subtitle="Confección → lavandería → terminación → despacho · la lavandería se omite cuando el precosteo la tiene en 0">
+      <CasillaBusqueda
+        valor={busca} onChange={setBusca}
+        placeholder="Buscar por referencia, lote, tela, proveedor o etapa…"
+        visibles={filtrados.length} total={rutas.length}
+      />
+
       {/* KPIs por etapa */}
       <Card>
         <CardContent className="p-5 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
@@ -109,7 +117,7 @@ export default function RutasPage() {
         ))}
       </div>
 
-      {rutas.length === 0 ? (
+      {filtrados.length === 0 ? (
         <Card>
           <CardContent className="p-10 text-center">
             <Truck className="mx-auto h-8 w-8 text-graphite" />
@@ -134,7 +142,7 @@ export default function RutasPage() {
                 </tr>
               </thead>
               <tbody>
-                {rutas.map((r) => {
+                {filtrados.map((r) => {
                   const dias = diasDesde(r.asignado_at);
                   return (
                     <tr key={r.id} className="border-b border-border/40 hover:bg-cloud/30">

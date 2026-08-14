@@ -11,6 +11,7 @@ import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { fmtFecha } from "@/lib/utils";
+import { CasillaBusqueda, useBusqueda } from "@/components/buscador";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { CheckCircle, Loader2, Truck, FileDown } from "lucide-react";
@@ -80,6 +81,8 @@ export default function MisDespachosPage() {
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
   const rows = q.data?.despachos || [];
+  const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(
+    rows, (d) => [d.consecutivo, d.referencia, d.nombre, d.responsable, d.remision?.consecutivo]);
   const totalDespachado = rows.filter((r) => r.remision?.despachada).reduce((s, r) => s + r.total, 0);
   const totalPendiente = rows.filter((r) => !r.remision?.despachada).reduce((s, r) => s + r.total, 0);
 
@@ -89,6 +92,12 @@ export default function MisDespachosPage() {
       subtitle="Unidades cortadas y entregadas por lote — control interno"
       onRefresh={() => q.refetch()}
     >
+      <CasillaBusqueda
+        valor={busca} onChange={setBusca}
+        placeholder="Buscar por lote, referencia, remisión o cortador…"
+        visibles={filtrados.length} total={rows.length}
+      />
+
       <Card>
         <CardContent className="p-4 grid grid-cols-2 md:grid-cols-3 gap-4">
           <Kpi label="Cortes cerrados" value={rows.length.toString()} />
@@ -126,7 +135,7 @@ export default function MisDespachosPage() {
 
       <Card>
         <CardContent className="p-0">
-          {rows.length === 0 ? (
+          {filtrados.length === 0 ? (
             <p className="p-8 text-center text-sm text-graphite">
               Aún no tienes cortes cerrados. Cierra el informe de corte en{" "}
               <Link href="/produccion/corte" className="text-navy-600 hover:underline">Orden de corte</Link>.
@@ -135,7 +144,7 @@ export default function MisDespachosPage() {
             <>
             {/* Móvil: tarjetas — el cortador usa el celular en el taller */}
             <div className="space-y-2 p-3 sm:hidden">
-              {rows.map((r) => {
+              {filtrados.map((r) => {
                 const tallas = Object.entries(r.unidades)
                   .filter(([, v]) => Number(v) > 0)
                   .sort(([a], [b]) => Number(a) - Number(b));
@@ -189,7 +198,7 @@ export default function MisDespachosPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((r) => {
+                  {filtrados.map((r) => {
                     const tallas = Object.entries(r.unidades)
                       .filter(([, v]) => Number(v) > 0)
                       .sort(([a], [b]) => Number(a) - Number(b));

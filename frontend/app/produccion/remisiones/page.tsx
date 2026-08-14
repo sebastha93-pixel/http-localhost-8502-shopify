@@ -10,6 +10,7 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { fmtFecha } from "@/lib/utils";
+import { CasillaBusqueda, useBusqueda } from "@/components/buscador";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -57,9 +58,24 @@ export default function RemisionesPage() {
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
   const lista = q.data?.remisiones || [];
+  const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(lista, (r) => [
+    r.consecutivo, r.confeccionista?.nombre, r.tipo, r.estado,
+    // También por la referencia del lote: uno busca la remisión por lo que
+    // llevaba, no por su número de consecutivo.
+    ...(r.items || []).flatMap((i) => [
+      i.orden_corte?.consecutivo,
+      i.orden_corte?.referencia?.codigo_referencia,
+    ]),
+  ]);
 
   return (
     <PageShell title="Remisiones" subtitle="Entregas a confección y terminación">
+      <CasillaBusqueda
+        valor={busca} onChange={setBusca}
+        placeholder="Buscar remisión por consecutivo, destinatario o tipo…"
+        visibles={filtrados.length} total={lista.length}
+      />
+
       <div className="flex items-center justify-between">
         <p className="text-xs text-graphite">{lista.length} remisión(es)</p>
         <Link href="/produccion/remisiones/nueva"
@@ -91,7 +107,7 @@ export default function RemisionesPage() {
         </Card>
       )}
 
-      {lista.length === 0 ? (
+      {filtrados.length === 0 ? (
         <Card>
           <CardContent className="p-10 text-center">
             <FileText className="mx-auto h-8 w-8 text-graphite" />
@@ -116,7 +132,7 @@ export default function RemisionesPage() {
                 </tr>
               </thead>
               <tbody>
-                {lista.map((r) => {
+                {filtrados.map((r) => {
                   const esTerm = r.tipo === "terminacion";
                   return (
                     <tr key={r.id} className="border-b border-border/40 hover:bg-cloud/40">

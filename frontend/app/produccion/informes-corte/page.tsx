@@ -7,6 +7,7 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { CasillaBusqueda, useBusqueda } from "@/components/buscador";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -37,20 +38,35 @@ export default function InformesCortePage() {
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
   const lista = q.data?.ordenes || [];
+  const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(lista, (o) => [o.consecutivo, o.referencia_lote, o.responsable]);
 
   return (
     <PageShell title="Informes de corte" subtitle="Órdenes cerradas con cierre del cortador">
+      <CasillaBusqueda
+        valor={busca} onChange={setBusca}
+        placeholder="Buscar por consecutivo, lote o cortador…"
+        visibles={filtrados.length} total={lista.length}
+      />
+
       <div className="flex items-center justify-between">
         <p className="text-xs text-graphite">{lista.length} informe(s)</p>
       </div>
 
-      {lista.length === 0 ? (
+      {filtrados.length === 0 ? (
         <Card>
           <CardContent className="p-10 text-center">
             <FileText className="mx-auto h-8 w-8 text-graphite" />
             <p className="mt-3 text-sm text-graphite">
-              Aún no hay órdenes cerradas. Cierra una orden en /produccion/corte para ver su informe aquí.
+              {buscando
+                ? "Ningún informe coincide con lo que buscaste."
+                : "Aún no hay órdenes cerradas. Cierra una orden en /produccion/corte para ver su informe aquí."}
             </p>
+            {buscando && (
+              <button type="button" onClick={() => setBusca("")}
+                className="mt-2 text-xs font-semibold uppercase tracking-wider text-navy-600 hover:underline">
+                Ver los {lista.length}
+              </button>
+            )}
           </CardContent>
         </Card>
       ) : (
@@ -72,7 +88,7 @@ export default function InformesCortePage() {
                 </tr>
               </thead>
               <tbody>
-                {lista.map((o) => {
+                {filtrados.map((o) => {
                   const totalCortado = Object.values(o.unidades_cortadas || {})
                     .reduce<number>((s, n) => s + (Number(n) || 0), 0);
                   const diffTone = (o.diferencia_pct || 0) > 0 ? "text-terracotta" : (o.diferencia_pct || 0) < 0 ? "text-teal" : "text-graphite";

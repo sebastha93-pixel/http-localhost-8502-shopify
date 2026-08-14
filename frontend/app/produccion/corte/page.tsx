@@ -6,6 +6,7 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { CasillaBusqueda, useBusqueda } from "@/components/buscador";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -52,9 +53,16 @@ export default function CortesPage() {
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
   const ordenes = q.data?.ordenes || [];
+  const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(ordenes, (o) => [o.consecutivo, o.referencia?.codigo_referencia, o.referencia?.nombre, o.tono, o.responsable, o.estado]);
 
   return (
     <PageShell title="Órdenes de corte" subtitle="Trazo · curva · consumo real">
+      <CasillaBusqueda
+        valor={busca} onChange={setBusca}
+        placeholder="Buscar por referencia, consecutivo, tono, cortador o estado…"
+        visibles={filtrados.length} total={ordenes.length}
+      />
+
       <div className="flex items-center justify-between">
         <p className="text-xs text-graphite">{ordenes.length} orden(es)</p>
         <Link href="/produccion/corte/nueva"
@@ -88,7 +96,7 @@ export default function CortesPage() {
                 </tr>
               </thead>
               <tbody>
-                {ordenes.map((o) => (
+                {filtrados.map((o) => (
                   <tr key={o.id} className="border-b border-border/40 hover:bg-cloud/40">
                     <td className="px-4 py-2 font-semibold tabular text-navy-600">
                       <Link href={`/produccion/corte/${o.id}`} className="hover:underline">

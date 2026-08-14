@@ -9,6 +9,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { CasillaBusqueda, useBusqueda } from "@/components/buscador";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Clock, Scissors, User, Package, Check, ArrowRight } from "lucide-react";
@@ -164,6 +165,12 @@ export default function LotesPage() {
     }
   }, [lotes, tab]);
 
+  // El texto filtra DENTRO de la pestaña elegida, no por encima de ella.
+  const { q: busca, setQ: setBusca, filtrados: visibles } = useBusqueda(
+    filtrados, (l) => [l.oc.consecutivo, l.oc.referencia_lote,
+                       l.oc.referencia?.codigo_referencia, l.oc.referencia?.nombre,
+                       l.ruta?.confeccionista?.nombre, l.oc.estado, l.ruta?.etapa]);
+
   const contadores = useMemo(() => {
     return {
       todas:      lotes.length,
@@ -192,6 +199,12 @@ export default function LotesPage() {
         </div>
       )}
 
+      <CasillaBusqueda
+        valor={busca} onChange={setBusca}
+        placeholder="Buscar lote por referencia, consecutivo, proveedor o etapa…"
+        visibles={visibles.length} total={filtrados.length}
+      />
+
       {/* Tabs */}
       <div className="flex flex-wrap gap-2">
         {TABS.map((t) => {
@@ -218,7 +231,7 @@ export default function LotesPage() {
         </Card>
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          {filtrados.map(({ oc, ruta }) => (
+          {visibles.map(({ oc, ruta }) => (
             <LoteCard key={oc.id} oc={oc} ruta={ruta} />
           ))}
         </div>

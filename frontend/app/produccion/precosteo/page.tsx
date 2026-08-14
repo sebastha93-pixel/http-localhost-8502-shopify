@@ -9,7 +9,8 @@ import { useAuth } from "@/components/auth-provider";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Lock, Sheet, Loader2, CheckCircle, Trash2, AlertCircle, Search, X } from "lucide-react";
+import { Plus, Lock, Sheet, Loader2, CheckCircle, Trash2, AlertCircle } from "lucide-react";
+import { CasillaBusqueda, useBusqueda } from "@/components/buscador";
 
 interface Ref {
   id: string;
@@ -42,16 +43,8 @@ function margenDe(r: Ref): number | null {
   return ((precioSin - costoSin) / precioSin) * 100;
 }
 
-/** Sin acentos y en minúsculas: "bóxer" y "BOXER" tienen que encontrarse. */
-function norm(s: string): string {
-  return (s || "")
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase().trim();
-}
-
 export default function PrecosteoListPage() {
   const [estado, setEstado] = useState<string>("");
-  const [busca, setBusca] = useState("");
 
   const [syncMsg, setSyncMsg] = useState("");
   const [errDel, setErrDel] = useState("");
@@ -105,69 +98,26 @@ export default function PrecosteoListPage() {
     onError: (e: Error) => setSyncMsg(`Error: ${e.message}`),
   });
 
-  /**
-   * Filtra en el NAVEGADOR, no en el servidor.
-   *
-   * La lista completa ya está cargada (son ~23 referencias), así que buscar
-   * contra el backend sería una llamada por cada tecla para filtrar algo que ya
-   * está en memoria. Escribir y ver el resultado al instante es justo lo que se
-   * pidió: "llegar más rápido a las referencias".
-   *
-   * Busca por código, nombre, tela y color: uno se acuerda de la tela o del
-   * nombre tanto como del número. Sin acentos ni mayúsculas — "verbena"
-   * encuentra "VERBENA" y "bóxer" encuentra "BOXER".
-   */
-  const filtradas = useMemo(() => {
-    const todas = q.data?.precosteos || [];
-    const t = norm(busca);
-    if (!t) return todas;
-    const palabras = t.split(/\s+/).filter(Boolean);
-    return todas.filter((r) => {
-      const heno = norm(
-        [r.codigo_referencia, r.nombre, r.tela, r.color].filter(Boolean).join(" "));
-      // TODAS las palabras deben aparecer: "flare verbena" no trae los flare de
-      // otra tela. Escribir más debe reducir, no ensanchar.
-      return palabras.every((w) => heno.includes(w));
-    });
-  }, [q.data, busca]);
-
   if (q.isLoading) return <LoadingState label="Cargando precosteos…" />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
   const rows = q.data?.precosteos || [];
+  const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(
+    rows, (r) => [r.codigo_referencia, r.nombre, r.tela, r.color]);
 
   return (
     <PageShell
       title="Precosteo"
       subtitle={busca
-        ? `${filtradas.length} de ${rows.length} referencias · «${busca}»`
+        ? `${filtrados.length} de ${rows.length} referencias · «${busca}»`
         : `${rows.length} referencias · costeo por unidad`}
       onRefresh={() => q.refetch()}
     >
-      {/* CASILLA DE BÚSQUEDA (2026-08-12, pedido de Sebastián: "llegar más rápido
-          a las referencias"). Filtra en el navegador sobre la lista ya cargada,
-          así que responde mientras se escribe. Busca por código, nombre, tela y
-          color, porque uno se acuerda de la tela tanto como del número. */}
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-graphite" aria-hidden />
-        <input
-          value={busca}
-          onChange={(e) => setBusca(e.target.value)}
-          placeholder="Buscar referencia por código, nombre, tela o color…"
-          aria-label="Buscar referencia"
-          className="w-full rounded-sm border border-border bg-card py-2.5 pl-10 pr-10 text-sm outline-none focus:border-navy-600"
-        />
-        {busca && (
-          <button
-            type="button"
-            onClick={() => setBusca("")}
-            title="Limpiar"
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-graphite hover:text-ink-900"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        )}
-      </div>
+      <CasillaBusqueda
+        valor={busca} onChange={setBusca}
+        placeholder="Buscar referencia por código, nombre, tela o color…"
+        visibles={filtrados.length} total={rows.length}
+      />
 
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
@@ -219,7 +169,7 @@ export default function PrecosteoListPage() {
 
       <Card>
         <CardContent className="p-0">
-          {filtradas.length === 0 ? (
+          {filtrados.length === 0 ? (
             /* Dos vacíos distintos. "No hay nada" y "tu búsqueda no encontró
                nada" se resuelven de formas opuestas: uno se arregla creando una
                referencia, el otro borrando lo que escribiste. Un solo mensaje
@@ -258,7 +208,7 @@ export default function PrecosteoListPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtradas.map((r) => (
+                {filtrados.map((r) => (
                   <tr key={r.id} className="border-b border-border hover:bg-cloud/50">
                     <td className="px-4 py-3 tabular font-medium">
                       <Link href={`/produccion/precosteo/${r.id}`} className="text-navy-600 hover:underline">
