@@ -276,3 +276,65 @@ def contar() -> int:
         return 0
     res = sb.table("usuarios").select("id", count="exact").execute()
     return res.count or 0
+
+
+# ── Tokens para restablecer contraseña ────────────────────────────────────
+# Ver la migración 20260818010000_password_reset.sql. Lo que llega acá es el
+# SHA-256 del token, nunca el token: el que viaja en el enlace se manda al
+# correo y se olvida, así que ni esta capa ni la base pueden reconstruirlo.
+
+def crear_token_reset(*, usuario_id: str, token_hash: str,
+                      expira_en: str, ip: str = "") -> dict:
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    res = sb.table("password_reset_tokens").insert({
+        "token_hash": token_hash,
+        "usuario_id": usuario_id,
+        "expira_en":  expira_en,
+        "ip":         ip or None,
+    }).execute()
+    return (res.data or [{}])[0]
+
+
+def obtener_token_reset(token_hash: str) -> Optional[dict]:
+    sb = _sb()
+    if sb is None:
+        return None
+    res = (sb.table("password_reset_tokens")
+           .select("token_hash,usuario_id,expira_en,usado_en")
+           .eq("token_hash", token_hash)
+           .limit(1)
+           .execute())
+    return (res.data or [None])[0]
+
+
+def gastar_tokens_de(usuario_id: str, *, ahora: str) -> int:
+    """Marca como usados TODOS los tokens vivos de esa persona.
+
+    Se apagan todos y no solo el que se acaba de usar: si alguien pidió el
+    enlace tres veces —porque el primer correo no llegó—, los otros dos siguen
+    siendo llaves válidas de la cuenta después de que la clave ya cambió.
+    """
+    sb = _sb()
+    if sb is None:
+        return 0
+    res = (sb.table("password_reset_tokens")
+           .update({"usado_en": ahora})
+           .eq("usuario_id", usuario_id)
+           .is_("usado_en", "null")
+           .execute())
+    return len(res.data or [])
+
+
+def contar_tokens_recientes(usuario_id: str, *, desde: str) -> int:
+    """Cuántos enlaces se pidieron desde `desde`. Freno anti-inundación."""
+    sb = _sb()
+    if sb is None:
+        return 0
+    res = (sb.table("password_reset_tokens")
+           .select("token_hash", count="exact")
+           .eq("usuario_id", usuario_id)
+           .gte("creado_en", desde)
+           .execute())
+    return res.count or 0

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -151,7 +152,10 @@ export default function LoginPage() {
                       Revisa también el <strong>correo completo</strong>, no solo la contraseña:
                       el aviso es el mismo en ambos casos. Si lo rellenó el navegador,
                       escríbelo a mano una vez. Al quinto intento fallido la cuenta
-                      se bloquea 15 minutos.
+                      se bloquea 15 minutos —
+                      <Link href="/recuperar" className="font-semibold underline">
+                        mejor pide un enlace para cambiarla
+                      </Link>.
                     </p>
                   )}
                 </div>
@@ -168,6 +172,17 @@ export default function LoginPage() {
                   "Entrar"
                 )}
               </button>
+
+              {/* Visible SIEMPRE, no solo después de fallar: quien ya sabe que
+                  no se acuerda de la clave no tiene por qué equivocarse
+                  primero — y cada intento fallido lo acerca al bloqueo de 15
+                  minutos. */}
+              <Link
+                href="/recuperar"
+                className="block text-center text-xs font-semibold text-graphite hover:text-ink"
+              >
+                ¿Olvidaste tu contraseña?
+              </Link>
             </form>
           </CardContent>
         </Card>

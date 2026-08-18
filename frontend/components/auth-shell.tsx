@@ -13,7 +13,10 @@ import { NotificacionesBell } from "@/components/notificaciones-bell";
 // - /login → pantalla de acceso
 // - /lote/[token] → vista pública del confeccionista (WhatsApp link)
 // - /terminacion/[token] → vista pública del proveedor de terminación
-const PUBLIC_PATHS = ["/login"];
+// /recuperar y /restablecer son públicas por definición: a ellas llega quien NO
+// puede entrar. Si quedaran detrás del guardián, la recuperación de contraseña
+// exigiría estar logueado para poder recuperar la contraseña.
+const PUBLIC_PATHS = ["/login", "/recuperar", "/restablecer"];
 const PUBLIC_PREFIXES = ["/lote/", "/terminacion/"];
 
 export function AuthShell({ children }: { children: React.ReactNode }) {
