@@ -4934,6 +4934,85 @@ def obtener_ruta_por_token_terminacion(token: str) -> Optional[dict]:
     return _con_etapas_omitidas(r[0]) if r else None
 
 
+def obtener_ruta_por_token_lavanderia(token: str) -> Optional[dict]:
+    sb = _sb()
+    if sb is None:
+        return None
+    try:
+        r = (sb.table("hoja_ruta_lote")
+               .select("*,lavanderia:lavanderia_id(nombre),"
+                       "orden_corte:orden_corte_id(consecutivo,curva_trazo,unidades_cortadas,"
+                       "cantidad_programada,referencia_lote,fecha_entrega,"
+                       "referencia:referencia_id(codigo_referencia,nombre,tela,color,foto_url))")
+               .eq("token_publico_lavanderia", token).limit(1).execute()).data
+    except Exception:
+        return None
+    return _con_etapas_omitidas(r[0]) if r else None
+
+
+def lavanderia_registrar(ruta_id: str, *, accion: str,
+                         cantidad: Optional[int] = None,
+                         nota: str = "",
+                         fecha_estimada: str = "") -> dict:
+    """Lo que la lavandería reporta desde su enlace público.
+
+    DOS HECHOS DISTINTOS, Y LA DIFERENCIA IMPORTA:
+
+    · `recibi`  → el lote está físicamente en la lavandería. Eso SÍ avanza la
+      etapa a 'lavanderia', porque es exactamente lo que esa etapa significa
+      ("el confeccionista terminó y lo envió a lavandería") y lo está
+      confirmando quien lo tiene en la mano.
+
+    · `entregue` → la lavandería dice que lo despachó. Esto NO avanza a
+      'terminacion_recibida'. Que la lavandería entregue y que terminación
+      reciba son dos cosas que pueden estar separadas por un día y por un
+      camión, y la etapa 'terminacion_recibida' la firma terminación desde su
+      propio enlace. Si la lavandería pudiera avanzarla, el tablero diría que
+      terminación ya tiene el lote cuando todavía va en camino — y nadie
+      preguntaría por él.
+    """
+    if accion not in ("recibi", "entregue"):
+        raise ValueError(f"accion_invalida:{accion}")
+
+    campo_hora = "lav_recibido_at" if accion == "recibi" else "lav_entregado_at"
+    campo_cant = ("lav_cantidad_recibida" if accion == "recibi"
+                  else "lav_cantidad_entregada")
+
+    update: dict = {campo_hora: _now_iso(), "updated_at": _now_iso()}
+    if cantidad is not None:
+        update[campo_cant] = int(cantidad)
+    if fecha_estimada:
+        update["lav_fecha_estimada"] = fecha_estimada
+
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    res = sb.table("hoja_ruta_lote").update(update).eq("id", ruta_id).execute()
+    if not res.data:
+        raise ValueError("no_encontrada")
+
+    # La nota va al timeline (no sobrescribe), igual que las del confeccionista.
+    if nota.strip():
+        try:
+            crear_nota_ruta(ruta_id=ruta_id, actor="lavanderia",
+                            mensaje=nota.strip())
+        except Exception as e:
+            log.warning(f"[lavanderia] nota al timeline fallo, guardo en campo: {e}")
+            try:
+                sb.table("hoja_ruta_lote").update(
+                    {"nota_lavanderia": nota.strip()}).eq("id", ruta_id).execute()
+            except Exception:
+                pass
+
+    if accion == "recibi":
+        try:
+            avanzar_etapa_si_antes(ruta_id, "lavanderia")
+        except Exception as e:
+            log.warning(f"[lavanderia] avance de etapa fallo: {e}")
+
+    return (res.data or [{}])[0]
+
+
 def obtener_ruta_por_token(token: str) -> Optional[dict]:
     sb = _sb()
     if sb is None:
@@ -5115,6 +5194,9 @@ def actualizar_ruta_lote(ruta_id: str, **campos) -> dict:
         "precio_confeccion", "precio_terminacion",
         "fecha_entrega_confeccion", "remision_lavanderia_url",
         "notas", "nota_confeccionista", "nota_terminacion",
+        # Lo que registra la lavandería desde su enlace público.
+        "nota_lavanderia", "lav_recibido_at", "lav_entregado_at",
+        "lav_cantidad_recibida", "lav_cantidad_entregada", "lav_fecha_estimada",
     }
     update = {k: v for k, v in campos.items() if k in permitidos and v is not None}
     if not update:
@@ -5348,10 +5430,14 @@ def listar_rutas(*, etapa: Optional[str] = None,
 def crear_nota_ruta(*, ruta_id: str, actor: str, mensaje: str,
                      autor: Optional[str] = None) -> dict:
     """Agrega una nota al histórico de la ruta.
-    - actor: 'confeccionista' | 'terminacion' | 'admin'
+    - actor: 'confeccionista' | 'terminacion' | 'lavanderia' | 'admin'
     - autor: email o identificador (opcional)
+
+    Esta lista tiene que coincidir con el CHECK de `notas_hoja_ruta.actor` en la
+    base (migración 20260818020000). Si acá se permite un actor que allá no,
+    el insert falla y la nota se va por un camino que la UI no muestra.
     """
-    if actor not in ("confeccionista", "terminacion", "admin"):
+    if actor not in ("confeccionista", "terminacion", "lavanderia", "admin"):
         raise ValueError("actor_invalido")
     msg = (mensaje or "").strip()
     if not msg:

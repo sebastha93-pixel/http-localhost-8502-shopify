@@ -2037,6 +2037,117 @@ def recibir_terminacion_publica(token: str) -> dict:
         raise HTTPException(400, str(e))
 
 
+# ── Lavandería (público) ─────────────────────────────────────────────────
+#
+# POR QUÉ EXISTE (2026-08-18). La pregunta era "¿cómo traemos la información del
+# grupo de WhatsApp?". La API oficial de grupos de Meta no sirve para el grupo
+# que ya existe: exige Official Business Account, tope de 8 participantes, y
+# solo funciona con grupos creados por la propia API. Así que en vez de leer el
+# chat, el dato entra por donde ya entra el de confección y terminación: un
+# enlace con token que la lavandería abre desde el celular.
+#
+# La diferencia con leer el grupo no es solo técnica. Acá cada hecho queda con
+# autor, hora y lote; en el chat queda un "ya salió" que hay que interpretar.
+
+
+@publico.get("/lavanderia/{token}")
+def lavanderia_publica(token: str) -> dict:
+    """Vista para la lavandería. Sin precios ni datos del confeccionista."""
+    r = svc.obtener_ruta_por_token_lavanderia(token)
+    if not r:
+        raise HTTPException(404, "lote_no_encontrado")
+
+    oc = r.get("orden_corte") or {}
+    ref = oc.get("referencia") or {}
+    total = 0
+    if oc.get("unidades_cortadas"):
+        total = sum(int(v or 0) for v in (oc.get("unidades_cortadas") or {}).values())
+    if total == 0:
+        total = int(oc.get("cantidad_programada") or 0)
+
+    return {
+        "consecutivo":       oc.get("consecutivo"),
+        "referencia_codigo": ref.get("codigo_referencia"),
+        "referencia_nombre": ref.get("nombre"),
+        "tela":              ref.get("tela"),
+        "color":             ref.get("color"),
+        "foto_url":          ref.get("foto_url"),
+        "referencia_lote":   oc.get("referencia_lote"),
+        "curva":             oc.get("curva_trazo"),
+        "unidades_cortadas": oc.get("unidades_cortadas"),
+        "total_unidades":    total,
+        "lavanderia_nombre": (r.get("lavanderia") or {}).get("nombre"),
+        "etapa":             r.get("etapa"),
+        "recibido_at":       r.get("lav_recibido_at"),
+        "entregado_at":      r.get("lav_entregado_at"),
+        "cantidad_recibida":  r.get("lav_cantidad_recibida"),
+        "cantidad_entregada": r.get("lav_cantidad_entregada"),
+        "fecha_estimada":    r.get("lav_fecha_estimada"),
+        "tiene_remision":    bool(r.get("remision_lavanderia_url")),
+    }
+
+
+class LavanderiaBody(BaseModel):
+    accion:   str                              # 'recibi' | 'entregue'
+    cantidad: Optional[int] = Field(default=None, ge=0)
+    nota:     str = Field(default="", max_length=2000)
+    # Solo tiene sentido al recibir: cuándo promete entregarlo.
+    fecha_estimada: str = Field(default="", max_length=10)
+
+
+@publico.post("/lavanderia/{token}/registrar")
+def registrar_lavanderia_publica(token: str, body: LavanderiaBody) -> dict:
+    """La lavandería confirma que recibió o que entregó el lote."""
+    r = svc.obtener_ruta_por_token_lavanderia(token)
+    if not r:
+        raise HTTPException(404, "lote_no_encontrado")
+    # Idempotente: si vuelve a tocar el botón no se duplica ni se mueve la hora
+    # original. Un doble toque en un celular es lo normal, no un error.
+    ya = r.get("lav_recibido_at") if body.accion == "recibi" else r.get("lav_entregado_at")
+    if ya:
+        raise HTTPException(400, f"ya_registrado:{body.accion}")
+    if body.accion == "entregue" and not r.get("lav_recibido_at"):
+        raise HTTPException(400, "primero_recibir")
+    try:
+        svc.lavanderia_registrar(
+            r["id"], accion=body.accion, cantidad=body.cantidad,
+            nota=body.nota, fecha_estimada=body.fecha_estimada.strip(),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"registrar_lavanderia: {str(e)[:200]}")
+    return {"ok": True}
+
+
+@publico.post("/lavanderia/{token}/remision")
+async def subir_remision_lavanderia_publica(
+    token: str,
+    archivo: UploadFile = File(...),
+) -> dict:
+    """La lavandería sube la foto o el PDF de su remisión.
+
+    Reusa el mismo servicio que usa el equipo desde adentro, así que sube al
+    mismo bucket, con el mismo nombre de archivo, y avanza la etapa igual. No
+    hay dos caminos que puedan quedar distintos.
+    """
+    r = svc.obtener_ruta_por_token_lavanderia(token)
+    if not r:
+        raise HTTPException(404, "lote_no_encontrado")
+    try:
+        datos = await archivo.read()
+        res = svc.subir_remision_lavanderia(
+            r["id"], file_bytes=datos,
+            filename=archivo.filename or "remision.jpg",
+            content_type=archivo.content_type or "image/jpeg",
+        )
+        return {"ok": True, "url": res.get("remision_lavanderia_url")}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"remision_lavanderia_publica: {str(e)[:200]}")
+
+
 # ── Notas del confeccionista y del proveedor de terminación (público)
 class NotaBody(BaseModel):
     nota: str = Field(min_length=1, max_length=2000)

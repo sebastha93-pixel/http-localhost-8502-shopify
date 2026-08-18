@@ -27,6 +27,7 @@ export const RUTAS_PUBLICAS = [
 export const PREFIJOS_PUBLICOS = [
   "/lote/",         // vista del confeccionista, sin login (llega por WhatsApp)
   "/terminacion/",  // vista del proveedor de terminación
+  "/lavanderia/",   // vista de la lavandería: recibí / remisión / entregué
 ] as const;
 
 export function esRutaPublica(pathname: string | null | undefined): boolean {
