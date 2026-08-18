@@ -111,8 +111,39 @@ class RepositorioConsecutivosSQL:
              WHERE prefijo = :p
         """), {"p": prefijo})).scalar() or 0
 
-        desde = max(int(ultimo), int(vendido)) + 1
+        # EL PISO Y EL TECHO DE LA RESOLUCIÓN, leídos por caja → tienda.
+        #
+        # `consecutivo_externo` es el último número consumido FUERA del POS.
+        # Sin él, una base nueva arranca en 1 y la primera venta sale con un
+        # número que Siigo ya emitió bajo la misma resolución: dos documentos
+        # distintos con el mismo número, que es un problema con la DIAN y no
+        # con el software.
+        res = (await self._s.execute(text("""
+            SELECT coalesce(t.consecutivo_externo, 0) AS piso,
+                   t.autorizacion_hasta               AS techo
+              FROM retail.cajas c
+              JOIN retail.tiendas t ON t.id = c.tienda_id
+             WHERE c.id = :c
+        """), {"c": caja_id})).mappings().first()
+        piso = int(res["piso"]) if res else 0
+        techo = int(res["techo"]) if res and res["techo"] else None
+
+        desde = max(int(ultimo), int(vendido), piso) + 1
         hasta = desde + tamano - 1
+
+        # La autorización dice hasta qué número ampara. Emitir por encima es
+        # emitir FUERA de resolución. Con ~8.400 disponibles nadie se va a
+        # acordar el día que se acaben, así que tiene que avisar solo — y
+        # avisar ANTES, no cuando ya no quedan.
+        if techo is not None:
+            if desde > techo:
+                raise ReglaDeNegocio(
+                    f"La numeración {prefijo} se agotó: la resolución ampara "
+                    f"hasta {techo} y el siguiente sería {desde}. Hay que pedir "
+                    f"una resolución nueva a la DIAN antes de seguir facturando."
+                )
+            # El último bloque se recorta en vez de pasarse del techo.
+            hasta = min(hasta, techo)
 
         await self._s.execute(text("""
             UPDATE retail.bloques_consecutivo SET agotado = true

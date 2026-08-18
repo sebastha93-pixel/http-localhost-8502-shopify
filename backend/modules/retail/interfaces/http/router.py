@@ -1399,8 +1399,16 @@ async def arrendar_bloque(
     """
     async with uow as t:
         prefijo = await _prefijo_de(t, caja_id)
-        bloque = await t.consecutivos.arrendar(
-            caja_id=caja_id, prefijo=prefijo, dispositivo_id=dispositivo_id)
+        try:
+            bloque = await t.consecutivos.arrendar(
+                caja_id=caja_id, prefijo=prefijo, dispositivo_id=dispositivo_id)
+        except ReglaDeNegocio as e:
+            # «La resolución se agotó» es una regla de negocio con una salida
+            # concreta —pedirle a la DIAN una nueva—, no un fallo del servidor.
+            # Sin esto salía como 500 y la pantalla mostraba un error genérico
+            # justo en el momento en que hace falta saber QUÉ pasó.
+            raise HTTPException(400, {"error": "regla_de_negocio",
+                                      "mensaje": str(e)})
         await t.commit()
 
     return BloqueSalida(prefijo=bloque["prefijo"], desde=bloque["desde"],

@@ -81,6 +81,12 @@ dirección, prefijo `FL`). Falta lo que depende de la operación:
 * Los **medios de pago**: `wompi_qr`, `addi` y `sumas` nacen SIN id de Siigo a
   propósito. Se cobran igual; su factura queda pendiente hasta que se
   configuren. Ver `tirilla-real-siigo.md`.
+* **`tiendas.consecutivo_externo`** — el último número que Siigo POS ya usó.
+  La 0018 lo deja en 1536 para Florida, que es lo que decía la tirilla de la
+  foto. **Mientras Siigo POS siga facturando en paralelo durante el piloto,
+  hay que subirlo antes de cada jornada**, o los dos sistemas emitirán el
+  mismo número bajo la misma resolución. El día que el POS sea el único que
+  emite, deja de moverse.
 
 ### 4. Encender
 
@@ -127,8 +133,10 @@ En este orden, porque cada uno desbloquea al siguiente:
   es lo correcto mientras no haya documento emitido.
 * **El stock no llega a Shopify.** `publicar_stock_shopify` se encola y nadie lo
   consume.
-* **La numeración empieza en 1** y la resolución `FL` va por 1536. Al emitir hay
-  que continuar donde va Siigo.
+* **El piloto en paralelo exige mover `consecutivo_externo` a mano.** El POS ya
+  respeta el piso (arranca en 1537) y el techo de la resolución (avisa al
+  agotarse), pero no sabe cuánto facturó Siigo POS ayer. Eso se sincroniza solo
+  el día que exista el emisor.
 * **Nunca ha corrido en una tableta ni con impresora térmica real.**
 
 Por eso el primer día en tienda va **en paralelo** con lo que se usa hoy, no

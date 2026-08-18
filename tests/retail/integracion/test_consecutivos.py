@@ -454,3 +454,87 @@ def test_la_misma_tableta_reanudando_por_esa_via_conserva_el_suyo(entorno):
             "caja_id": "florida_caja1", "dispositivo_id": EQ,
             "dispositivo_nombre": "Tablet"}).json()
         assert b["consecutivo_desde"] == a["consecutivo_desde"]
+
+
+# ── EL PISO Y EL TECHO DE LA RESOLUCIÓN ─────────────────────────────────────
+#
+# El POS arrancaba en 1 y la resolución FL de MALE ya va por 1536. La primera
+# venta habría salido con un número que Siigo emitió hace meses BAJO LA MISMA
+# RESOLUCIÓN — dos documentos distintos con el mismo número. Eso no es un bug
+# de software, es un problema con la DIAN.
+
+def test_no_reparte_por_debajo_de_lo_que_SIIGO_ya_uso(entorno):
+    """`consecutivo_externo` = último número consumido FUERA del POS."""
+    import asyncio
+    c, motor = entorno
+
+    async def poner_piso():
+        async with motor.begin() as cn:
+            await cn.execute(text(
+                "UPDATE retail.tiendas SET consecutivo_externo = 1536"))
+
+    asyncio.get_event_loop().run_until_complete(poner_piso())
+
+    r = c.post("/api/retail/caja/consecutivos",
+               params={"caja_id": "florida_caja1"})
+    assert r.status_code == 200, r.text
+    # 1536 está USADO, así que el siguiente es 1537.
+    assert r.json()["desde"] == 1537
+
+
+def test_el_bloque_se_RECORTA_para_no_pasarse_del_techo(entorno):
+    """La autorización ampara hasta un número. Repartir por encima sería
+    entregarle a la caja permiso para emitir fuera de resolución."""
+    import asyncio
+    c, motor = entorno
+
+    async def apretar():
+        async with motor.begin() as cn:
+            await cn.execute(text(
+                "UPDATE retail.tiendas SET consecutivo_externo = 1000,"
+                " autorizacion_hasta = 1010"))
+
+    asyncio.get_event_loop().run_until_complete(apretar())
+
+    r = c.post("/api/retail/caja/consecutivos",
+               params={"caja_id": "florida_caja1"})
+    assert r.status_code == 200, r.text
+    assert (r.json()["desde"], r.json()["hasta"]) == (1001, 1010)
+
+
+def test_agotada_la_resolucion_NO_se_reparte_y_se_explica(entorno):
+    """Con ~8.400 números disponibles nadie se va a acordar el día que se
+    acaben. Tiene que avisar solo, y decir qué hacer."""
+    import asyncio
+    c, motor = entorno
+
+    async def agotar():
+        async with motor.begin() as cn:
+            await cn.execute(text(
+                "UPDATE retail.tiendas SET consecutivo_externo = 10000,"
+                " autorizacion_hasta = 10000"))
+
+    asyncio.get_event_loop().run_until_complete(agotar())
+
+    r = c.post("/api/retail/caja/consecutivos",
+               params={"caja_id": "florida_caja1"})
+    assert r.status_code == 400
+    mensaje = r.json()["detail"]["mensaje"]
+    assert "se agotó" in mensaje
+    assert "DIAN" in mensaje          # dice a quién hay que pedirle
+
+
+def test_sin_techo_configurado_reparte_igual(entorno):
+    """Una tienda sin resolución cargada todavía tiene que poder vender: la
+    tirilla sale como comprobante interno, que es lo correcto."""
+    import asyncio
+    c, motor = entorno
+
+    async def sin_techo():
+        async with motor.begin() as cn:
+            await cn.execute(text(
+                "UPDATE retail.tiendas SET autorizacion_hasta = NULL"))
+
+    asyncio.get_event_loop().run_until_complete(sin_techo())
+    assert c.post("/api/retail/caja/consecutivos",
+                  params={"caja_id": "florida_caja1"}).status_code == 200
