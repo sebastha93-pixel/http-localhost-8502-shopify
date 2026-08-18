@@ -4,7 +4,7 @@ Ingesta de eventos del control de acceso.
 Lo que protegen estos tests: que reenviar un lote no duplique, que un evento
 sin mapear NO se pierda, y que el hecho sea inmutable.
 """
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 from unittest.mock import MagicMock
@@ -134,7 +134,9 @@ def test_ingesta_basica(monkeypatch):
     fake = FakeSB()
     monkeypatch.setattr(svc, "sb_requerido", lambda: fake)
     monkeypatch.setattr(svc, "_sb", lambda: fake)
-    monkeypatch.setattr(svc, "_mapa_externo", lambda d: {"1001": "EMP-1"})
+    monkeypatch.setattr(svc, "_mapa_externo",
+                        lambda d: {"1001": [{"empleado_id": "EMP-1",
+                                             "valido_desde": None, "valido_hasta": None}]})
 
     r = svc.ingerir(dispositivo_id="D1", eventos=[_ev("08:00"), _ev("18:00", direccion="salida")])
     assert r["recibidos"] == 2
@@ -162,7 +164,9 @@ def test_evento_invalido_no_tumba_el_lote(monkeypatch):
     fake = FakeSB()
     monkeypatch.setattr(svc, "sb_requerido", lambda: fake)
     monkeypatch.setattr(svc, "_sb", lambda: fake)
-    monkeypatch.setattr(svc, "_mapa_externo", lambda d: {"1001": "EMP-1"})
+    monkeypatch.setattr(svc, "_mapa_externo",
+                        lambda d: {"1001": [{"empleado_id": "EMP-1",
+                                             "valido_desde": None, "valido_hasta": None}]})
 
     r = svc.ingerir(dispositivo_id="D1",
                     eventos=[_ev("08:00"), {"basura": True}, _ev("18:00", direccion="salida")])
@@ -220,3 +224,99 @@ def test_mapa_externo_sin_tabla(monkeypatch):
             raise Exception('relation "personal_mapeo_externo" does not exist')
     monkeypatch.setattr(svc, "_sb", lambda: SinTabla())
     assert svc._mapa_externo("D1") == {}
+
+
+# ── Vigencia del mapeo: el Dahua reusa los ids ───────────────────────────────
+#
+# Medido en el equipo de MALE DENIM el 2026-08-18, sobre los 4785 registros:
+#
+#     UserID 007 · Hilary Zapata                13 marcaciones · abr 6 → abr 10
+#     UserID 007 · Alejandra Valencia Alvarez  117 marcaciones · abr 11 → jun 4
+#
+# Dos personas, un id. Resolver sin mirar la fecha le mete a una las horas de
+# la otra y no aparece ningún error: solo un banco de horas equivocado.
+
+CASO_007 = {
+    "007": [
+        {"empleado_id": "EMP-HILARY",
+         "valido_desde": None, "valido_hasta": date(2026, 4, 10)},
+        {"empleado_id": "EMP-ALEJANDRA",
+         "valido_desde": date(2026, 4, 11), "valido_hasta": date(2026, 6, 4)},
+    ],
+}
+
+
+@pytest.mark.parametrize("dia,esperado", [
+    (date(2026, 4, 6),  "EMP-HILARY"),      # dentro del primer titular
+    (date(2026, 4, 10), "EMP-HILARY"),      # último día, inclusive
+    (date(2026, 4, 11), "EMP-ALEJANDRA"),   # primer día del segundo, inclusive
+    (date(2026, 6, 4),  "EMP-ALEJANDRA"),   # último día, inclusive
+    (date(2026, 6, 5),  None),              # ya no es de nadie
+    (date(2026, 8, 18), None),              # hoy el 007 está libre
+])
+def test_el_mismo_id_resuelve_a_quien_era_ese_dia(dia, esperado):
+    assert svc.resolver_empleado(CASO_007, "007", dia) == esperado
+
+
+def test_los_bordes_de_la_vigencia_son_inclusivos():
+    """Un día de diferencia son las horas de una jornada completa atribuidas
+    a la persona equivocada."""
+    assert svc.resolver_empleado(CASO_007, "007", date(2026, 4, 10)) == "EMP-HILARY"
+    assert svc.resolver_empleado(CASO_007, "007", date(2026, 4, 11)) == "EMP-ALEJANDRA"
+
+
+def test_mapeo_sin_fechas_sigue_funcionando_como_antes():
+    """Los 16 mapeos que ya existían no tienen vigencia. No pueden romperse."""
+    mapa = {"017": [{"empleado_id": "EMP-MANUELA",
+                     "valido_desde": None, "valido_hasta": None}]}
+    for dia in (date(2020, 1, 1), date(2026, 8, 18), date(2030, 12, 31)):
+        assert svc.resolver_empleado(mapa, "017", dia) == "EMP-MANUELA"
+
+
+def test_id_desconocido_o_vacio_no_resuelve():
+    assert svc.resolver_empleado(CASO_007, "999", date(2026, 4, 6)) is None
+    assert svc.resolver_empleado(CASO_007, None, date(2026, 4, 6)) is None
+    assert svc.resolver_empleado(CASO_007, "", date(2026, 4, 6)) is None
+    assert svc.resolver_empleado({}, "007", date(2026, 4, 6)) is None
+
+
+def test_el_mapeo_con_fechas_gana_sobre_el_abierto():
+    """Si conviven uno abierto y uno con vigencia, el específico decide.
+    Sin orden estable, el resultado dependería de cómo devolviera Postgres las
+    filas — o sea, sería distinto entre ejecuciones."""
+    mapa = {"007": svc.ordenar_mapeos([
+        {"empleado_id": "EMP-ABIERTO", "valido_desde": None, "valido_hasta": None},
+        {"empleado_id": "EMP-CONFECHA",
+         "valido_desde": date(2026, 4, 1), "valido_hasta": date(2026, 4, 30)},
+    ])}
+    assert svc.resolver_empleado(mapa, "007", date(2026, 4, 15)) == "EMP-CONFECHA"
+    assert svc.resolver_empleado(mapa, "007", date(2026, 7, 1)) == "EMP-ABIERTO"
+
+
+def test_ingesta_resuelve_con_la_fecha_del_evento_no_con_hoy(monkeypatch):
+    """Reprocesar abril tiene que dar el titular de abril. Si resolviera con la
+    fecha de hoy, cada recálculo reescribiría el histórico."""
+    fake = FakeSB()
+    monkeypatch.setattr(svc, "sb_requerido", lambda: fake)
+    monkeypatch.setattr(svc, "_sb", lambda: fake)
+    monkeypatch.setattr(svc, "_mapa_externo", lambda d: CASO_007)
+    monkeypatch.setattr(svc, "_incidencias_desconocido", lambda *a: None)
+
+    r = svc.ingerir(dispositivo_id="D1", eventos=[
+        {"id_externo_empleado": "007", "event_timestamp": "2026-04-08T08:00:00-05:00"},
+        {"id_externo_empleado": "007", "event_timestamp": "2026-04-15T08:00:00-05:00"},
+    ])
+    filas = (fake.upserted or fake.inserted)[0][1]
+    assert [f["empleado_id"] for f in filas] == ["EMP-HILARY", "EMP-ALEJANDRA"]
+    assert r["sin_mapeo"] == 0
+
+
+def test_a_fecha_tolera_formas_distintas():
+    assert svc._a_fecha("2026-04-10") == date(2026, 4, 10)
+    assert svc._a_fecha("2026-04-10T00:00:00+00:00") == date(2026, 4, 10)
+    assert svc._a_fecha(date(2026, 4, 10)) == date(2026, 4, 10)
+    assert svc._a_fecha(datetime(2026, 4, 10, 13, 5)) == date(2026, 4, 10)
+    assert svc._a_fecha(None) is None
+    assert svc._a_fecha("") is None
+    # Ilegible → sin límite. Perder el mapeo sería peor que resolver de más.
+    assert svc._a_fecha("no es fecha") is None

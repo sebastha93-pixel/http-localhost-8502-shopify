@@ -108,16 +108,88 @@ def _normalizar(e: dict) -> dict:
 
 # ── Mapeo empleado ───────────────────────────────────────────────────────────
 
-def _mapa_externo(dispositivo_id: str) -> dict[str, str]:
-    """id externo → empleado_id, para un dispositivo."""
+def _a_fecha(v) -> Optional[date]:
+    """'2026-04-10' | date | None → date | None. Un valor ilegible se trata
+    como sin límite: es más seguro resolver de más que perder el mapeo."""
+    if not v:
+        return None
+    if isinstance(v, date) and not isinstance(v, datetime):
+        return v
+    if isinstance(v, datetime):
+        return v.date()
+    try:
+        return date.fromisoformat(str(v)[:10])
+    except ValueError:
+        log.warning(f"[personal.eventos] vigencia ilegible en mapeo: {v!r}")
+        return None
+
+
+def ordenar_mapeos(mapeos: list[dict]) -> list[dict]:
+    """Deja primero el mapeo MÁS ESPECÍFICO. Ordena en sitio y lo devuelve.
+
+    Si conviven uno con vigencia y uno abierto ("desde siempre, para siempre"),
+    el abierto abarca cualquier fecha y taparía al correcto. Sin un orden fijo,
+    cuál gana depende de en qué orden devuelva las filas Postgres — es decir,
+    el mismo día podría resolver distinto entre dos ejecuciones.
+    """
+    mapeos.sort(key=lambda m: (m.get("valido_desde") is None,
+                               m.get("valido_hasta") is None,
+                               m.get("valido_desde") or date.min))
+    return mapeos
+
+
+def resolver_empleado(
+    mapa: dict[str, list[dict]], id_externo: Optional[str], momento: date,
+) -> Optional[str]:
+    """De quién era este id externo EN ESA FECHA.
+
+    Función pura: no toca base ni reloj. Se puede probar sola.
+
+    El Dahua reusa los identificadores. Medido en el equipo de MALE DENIM el
+    2026-08-18: el UserID 007 fue de Hilary Zapata (hasta el 10 de abril) y
+    después de Alejandra Valencia (desde el 11). Resolver sin mirar la fecha
+    le atribuye a una las horas de la otra, sin ningún error visible.
+
+    Con vigencias abiertas por los dos lados el resultado es el de siempre, así
+    que los mapeos que ya existían siguen funcionando igual.
+    """
+    if not id_externo:
+        return None
+    candidatos = mapa.get(id_externo) or []
+    for m in candidatos:
+        desde, hasta = m.get("valido_desde"), m.get("valido_hasta")
+        if desde and momento < desde:
+            continue
+        if hasta and momento > hasta:
+            continue
+        return m.get("empleado_id")
+    return None
+
+
+def _mapa_externo(dispositivo_id: str) -> dict[str, list[dict]]:
+    """id externo → mapeos vigentes (puede haber varios en el tiempo).
+
+    Devuelve una LISTA por id, no un solo empleado: el mismo id externo puede
+    haber pertenecido a distintas personas en distintas épocas. Quién es en un
+    momento dado lo decide `resolver_empleado`.
+    """
     sb = _sb()
     if sb is None:
         return {}
     try:
         r = (sb.table("personal_mapeo_externo")
-             .select("id_externo_empleado,empleado_id")
+             .select("id_externo_empleado,empleado_id,valido_desde,valido_hasta")
              .eq("dispositivo_id", dispositivo_id).eq("activo", True).execute())
-        return {m["id_externo_empleado"]: m["empleado_id"] for m in (r.data or [])}
+        mapa: dict[str, list[dict]] = {}
+        for m in (r.data or []):
+            mapa.setdefault(m["id_externo_empleado"], []).append({
+                "empleado_id": m["empleado_id"],
+                "valido_desde": _a_fecha(m.get("valido_desde")),
+                "valido_hasta": _a_fecha(m.get("valido_hasta")),
+            })
+        for lst in mapa.values():
+            ordenar_mapeos(lst)
+        return mapa
     except Exception as e:
         if not es_error_tabla_faltante(e):
             log.error(f"[personal.eventos] error leyendo mapeo: {e}")
@@ -156,7 +228,10 @@ def ingerir(
             errores.append({"indice": i, "error": str(ex)[:200]})
             continue
         f["dispositivo_id"] = dispositivo_id
-        f["empleado_id"] = mapa.get(f["id_externo_empleado"] or "")
+        # Se resuelve con la fecha DEL EVENTO, no con la de hoy: reprocesar un
+        # día de abril tiene que dar el titular que el id tenía en abril.
+        f["empleado_id"] = resolver_empleado(
+            mapa, f["id_externo_empleado"], parse_iso(f["event_timestamp"]).date())
         f["origen"] = origen
         f["registrado_por"] = registrado_por
         f["motivo_manual"] = motivo_manual

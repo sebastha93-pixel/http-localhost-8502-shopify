@@ -184,11 +184,20 @@ def construir_proveedor(conf: dict):
         from proveedores.csv_local import CsvLocal
         return CsvLocal(conf.get("csv", {}))
 
-    if tipo in ("dahua_http", "dahua_sdk", "dss_express", "dss_pro"):
+    if tipo == "dahua_http":
+        # Verificado contra el DHI-ASI6213S de MALE DENIM el 2026-08-18.
+        # Las rarezas del equipo (filtro de fechas ignorado, epoch en UTC, sin
+        # distinción entrada/salida) están medidas y anotadas en el proveedor.
+        from proveedores.dahua_http import DahuaHttp
+        if not conf.get("dahua_password"):
+            log("✗ Falta dahua_password en config.json.")
+            sys.exit(1)
+        return DahuaHttp(conf)
+
+    if tipo in ("dahua_sdk", "dss_express", "dss_pro"):
         log(f"✗ El proveedor '{tipo}' todavía no está implementado.")
-        log("  Faltan: modelo exacto, firmware y protocolo del equipo.")
+        log("  Para este equipo no hace falta: 'dahua_http' ya lee los registros.")
         log("  Ver DAHUA_INTEGRATION_REQUIREMENTS.md")
-        log("  Mientras tanto usa proveedor='mock' o 'csv'.")
         sys.exit(1)
 
     log(f"✗ Proveedor desconocido: {tipo}")
