@@ -2016,3 +2016,96 @@ async def guardar_permisos(
         puede_ver_auditoria=entrada.puede_ver_auditoria,
         activo=entrada.activo,
     )
+
+
+# ── Traer la base de clientas que ya existe en Siigo ─────────────────────────
+#
+# No es comodidad: `siigo_customer_id` existe desde la migración 0001 y no lo
+# escribía nadie. Sin ese vínculo, la primera factura que emitamos a una
+# clienta que Siigo ya tiene o la DUPLICA en la contabilidad de MALE o se cae.
+
+
+class ResumenImportacionSalida(BaseModel):
+    leidas_de_siigo: int
+    creadas: int
+    enlazadas: int
+    completadas: int
+    sin_documento: int
+    inactivas_omitidas: int
+    ambiguas_para_revisar: int
+    ensayo: bool
+    ejemplos: List[str] = []
+
+
+@router.get("/admin/clientes/muestra-siigo")
+async def muestra_clientes_siigo(
+    cuantas: int = Query(3, ge=1, le=20),
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Unas pocas clientas REALES, crudas y mapeadas al lado.
+
+    Se mira ANTES de importar. El mapeo de campos está escrito contra la
+    documentación de Siigo, no contra la cuenta de MALE, y ya pasó una vez que
+    la documentación y la cuenta no coincidían: la bodega «5» que no era 5.
+    Comparar las dos columnas es lo que delata un campo leído del sitio
+    equivocado — un correo mal mapeado deja a la clienta sin recibir su factura
+    y nadie se entera.
+    """
+    _exigir_admin(usuario)
+    from backend.modules.retail.infrastructure.siigo import clientes_siigo
+    return clientes_siigo.muestra(cuantas)
+
+
+@router.post("/admin/clientes/importar", response_model=ResumenImportacionSalida)
+async def importar_clientes_siigo(
+    dry_run: bool = Query(True, description="Por defecto ENSAYA. Sobre la base "
+                                            "de clientas de un negocio no se "
+                                            "prueba en vivo."),
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    _exigir_admin(usuario)
+    from backend.modules.retail.application.comandos.importar_clientes import (
+        ImportarClientes,
+    )
+    from backend.modules.retail.infrastructure.siigo import clientes_siigo
+
+    async with uow as t:
+        cmd = ImportarClientes(t.sesion)
+        try:
+            resumen = await cmd.ejecutar(
+                (clientes_siigo.a_cliente(c) for c in clientes_siigo.paginar()),
+                usuario_id=usuario.id, dry_run=dry_run, nuevo_id=_nuevo_ulid)
+        except RuntimeError as e:
+            # `paginar` lanza si no pudo leerlas TODAS. Se propaga con su
+            # mensaje: una importación a medias que dice «listo» es peor que
+            # una que falla, porque nadie vuelve a mirarla.
+            raise HTTPException(502, {"error": "siigo_incompleto",
+                                      "mensaje": str(e)})
+        if not dry_run:
+            await t.auditoria.registrar(
+                evento="clientes.importados", ocurrido_en=_ahora_utc(),
+                severidad="aviso", tienda_id=None, caja_id=None, sesion_id=None,
+                usuario_id=usuario.id, agregado_tipo="clientes",
+                agregado_id="siigo", payload=resumen.como_dict())
+            await t.commit()
+    return ResumenImportacionSalida(**resumen.como_dict())
+
+
+def _nuevo_ulid() -> str:
+    """ULID del servidor. El alfabeto excluye I, L, O y U."""
+    import os as _os
+    import time as _time
+    alfabeto = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+    ms = int(_time.time() * 1000)
+    cabeza = ""
+    for _ in range(10):
+        cabeza = alfabeto[ms % 32] + cabeza
+        ms //= 32
+    cola = "".join(alfabeto[b % 32] for b in _os.urandom(16))
+    return (cabeza + cola)[:26]
+
+
+def _ahora_utc():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc)
