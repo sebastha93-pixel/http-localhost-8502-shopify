@@ -57,6 +57,34 @@ if (!OS_URL || !SECRET) {
   process.exit(1);
 }
 
+// CERROJO DE INSTANCIA ÚNICA. La tarea de Windows reintenta cada 5 minutos para
+// que el oyente reviva solo si se cayó; sin este cerrojo, cada reintento
+// levantaría OTRO oyente y dos procesos peleando la misma sesión de WhatsApp la
+// invalidan — se desvincularían mutuamente en bucle.
+const CERROJO = path.join(__dirname, "oyente.pid");
+
+function tomarCerrojo() {
+  try {
+    if (fs.existsSync(CERROJO)) {
+      const pid = parseInt(fs.readFileSync(CERROJO, "utf8").trim(), 10);
+      if (pid && pid !== process.pid) {
+        try {
+          process.kill(pid, 0);   // no mata: solo pregunta si vive
+          return false;           // hay otro oyente vivo
+        } catch (_) { /* el pid es de un proceso muerto: se puede seguir */ }
+      }
+    }
+    fs.writeFileSync(CERROJO, String(process.pid));
+    const soltar = () => { try { fs.unlinkSync(CERROJO); } catch (_) {} };
+    process.on("exit", soltar);
+    process.on("SIGINT", () => { soltar(); process.exit(0); });
+    process.on("SIGTERM", () => { soltar(); process.exit(0); });
+    return true;
+  } catch (e) {
+    return true;   // ante la duda, arrancar: peor es no escuchar nada
+  }
+}
+
 function log(...a) {
   console.log(new Date().toISOString(), ...a);
 }
@@ -205,10 +233,20 @@ async function arrancar() {
     if (connection === "close") {
       const code = lastDisconnect?.error?.output?.statusCode;
       if (code === DisconnectReason.loggedOut) {
-        // Sesión revocada: reconectar en bucle no sirve, hay que re-escanear.
-        log("SESIÓN CERRADA en WhatsApp. Borra la carpeta 'sesion' y vuelve a vincular.");
-        latido({ error: "sesion_cerrada: hay que volver a vincular" })
-          .finally(() => process.exit(1));
+        // ANTES esto se rendía y salía. Estaba mal para el caso más común: si
+        // nadie teclea el código de pareo en los 3 minutos que le da WhatsApp,
+        // llega un loggedOut y el oyente moría — obligando a alguien a entrar al
+        // servidor a arrancarlo otra vez para conseguir otro código. Ahora borra
+        // la sesión a medias y pide uno NUEVO, así el código siempre está fresco
+        // cuando la persona por fin lo va a teclear.
+        log("sesión no válida; borro la sesión a medias y pido un código nuevo");
+        latido({ error: "vinculación no completada; pidiendo código nuevo" });
+        try {
+          fs.rmSync(SESION_DIR, { recursive: true, force: true });
+        } catch (e) {
+          log(`no pude borrar la sesión: ${e.message}`);
+        }
+        setTimeout(() => arrancar().catch((e) => console.error(e.message)), 5000);
         return;
       }
       log(`conexión cerrada (${code}); reintentando en 5s`);
@@ -271,6 +309,11 @@ setInterval(() => {
   drenarPendientes().catch(() => {});
   latido({});   // señal de vida, para distinguir "grupo callado" de "proceso muerto"
 }, 120000);
+
+if (!tomarCerrojo()) {
+  log("ya hay otro oyente corriendo; salgo sin hacer nada");
+  process.exit(0);
+}
 
 arrancar().catch((e) => {
   console.error("no pude arrancar:", e.message);
