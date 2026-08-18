@@ -2147,6 +2147,101 @@ def estado_grupo(_: CurrentUser = Depends(get_current_user)) -> dict:
     return svc.estado_oyente_grupo()
 
 
+# ── Persecución de la remisión de lavandería · LOS DOS RELOJES ───────────
+#
+# Cuando el diseñador dice en el grupo que un lote sale para lavandería, el OS
+# abre una persecución. Son dos relojes porque «sale para lavandería» NO
+# significa que la lavandería lo tenga: primero se confirma la recogida, y solo
+# después se pide la remisión (que es la que libera el pago de la semana).
+#
+# Nada de esto mueve la etapa del lote. Leer un chat es una suposición; la etapa
+# la firma quien tiene el lote en la mano, desde su propio enlace.
+
+@router.get("/lavanderia/pendientes")
+def lavanderia_pendientes(
+    estado: str = Query(default="abierto",
+                        description="abierto | escalado | cerrado | anulado | todos"),
+    _: CurrentUser = Depends(get_current_user),
+) -> dict:
+    from backend.core import produccion_scheduler
+    from backend.services import lavanderia_chase as lav
+    return {
+        "pendientes":   lav.listar(estado=estado),
+        "resumen":      lav.resumen(),
+        "reloj":        produccion_scheduler.status_lavanderia(),
+        # Si esto viene en False, el motor calcula y registra pero NO le escribe
+        # a nadie. Sirve para verlo correr un día antes de soltarlo.
+        "envio_activo": lav.activo(),
+        "cadencia": {
+            "gracia_min":            lav.GRACIA_MIN(),
+            "intervalo_horas":       lav.INTERVALO_HORAS(),
+            "recogida_escala_dias":  lav.RECOGIDA_ESCALA_DIAS(),
+            "remision_gracia_horas": lav.REMISION_GRACIA_HORAS(),
+            "remision_escala_dias":  lav.REMISION_ESCALA_DIAS(),
+        },
+    }
+
+
+class AnularPendienteIn(BaseModel):
+    motivo: str = "la detección se equivocó"
+
+
+@router.post("/lavanderia/pendientes/{pendiente_id}/anular")
+def anular_pendiente_lavanderia(
+    pendiente_id: str,
+    body: AnularPendienteIn,
+    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+) -> dict:
+    """El lote no salió, o salió a otra parte. Se ANULA, no se cierra: cerrado
+    significa «se cumplió» y anulado «no debió existir». La diferencia importa
+    para poder medir después qué tan bien lee el grupo la detección."""
+    from backend.services import lavanderia_chase as lav
+    ok = lav.anular_pendiente(pendiente_id, motivo=body.motivo, por=user.email)
+    if not ok:
+        raise HTTPException(404, "no_encontrado_o_ya_cerrado")
+    return {"ok": True}
+
+
+class AbrirPendienteIn(BaseModel):
+    consecutivo:    str = ""
+    orden_corte_id: str = ""
+    reloj:          str = "recogida"
+
+
+@router.post("/lavanderia/pendientes")
+def abrir_pendiente_lavanderia(
+    body: AbrirPendienteIn,
+    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+) -> dict:
+    """Abrir la persecución a mano, para cuando el grupo no lo dijo (o lo dijo
+    de una forma que la detección no entendió)."""
+    from backend.services import lavanderia_chase as lav
+    if body.reloj not in ("recogida", "remision"):
+        raise HTTPException(400, "reloj_invalido")
+    ruta = None
+    if body.orden_corte_id:
+        ruta = svc.obtener_ruta_por_corte(body.orden_corte_id)
+    elif body.consecutivo.strip():
+        ruta = lav._ruta_por_consecutivo(body.consecutivo.strip())
+    if not ruta:
+        raise HTTPException(404, "lote_no_encontrado")
+    r = lav.abrir_pendiente(ruta=ruta, reloj=body.reloj, origen="manual",
+                            creado_por=user.email)
+    if not r.get("abierto"):
+        raise HTTPException(409, r.get("motivo") or "no_se_pudo_abrir")
+    return r
+
+
+@router.post("/lavanderia/barrido")
+def correr_barrido_lavanderia(
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+) -> dict:
+    """Corre los dos relojes ahora mismo, sin esperar el tick. Para probar y
+    para desatascar si el hilo del líder se cayó."""
+    from backend.services import lavanderia_chase as lav
+    return lav.barrer()
+
+
 # ── Lavandería (público) ─────────────────────────────────────────────────
 #
 # POR QUÉ EXISTE (2026-08-18). La pregunta era "¿cómo traemos la información del

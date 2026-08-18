@@ -4988,8 +4988,20 @@ def guardar_mensajes_grupo(*, grupo_id: str, grupo_nombre: str,
     res = (sb.table("mensajes_grupo_produccion")
              .upsert(filas, on_conflict="wa_message_id")
              .execute())
+
+    # Recién guardado el espejo, se lee lo que dijeron. Va DESPUÉS del upsert y
+    # dentro de try: si la detección falla, el espejo ya está a salvo y el
+    # oyente no se queda sin poder subir mensajes por un bug de acá.
+    deteccion = None
+    try:
+        from backend.services import lavanderia_chase
+        deteccion = lavanderia_chase.procesar_mensajes(filas)
+    except Exception as e:
+        log.warning(f"[grupo] deteccion lavanderia falló: {str(e)[:200]}")
+
     return {"guardados": len(res.data or []),
-            "descartados": len(mensajes) - len(filas)}
+            "descartados": len(mensajes) - len(filas),
+            "deteccion": deteccion}
 
 
 def listar_mensajes_grupo(*, limite: int = 100, desde: str = "",
@@ -5190,6 +5202,14 @@ def lavanderia_registrar(ruta_id: str, *, accion: str,
             avanzar_etapa_si_antes(ruta_id, "lavanderia")
         except Exception as e:
             log.warning(f"[lavanderia] avance de etapa fallo: {e}")
+        # Confirmó que lo recogió → se apaga el reloj de la recogida y arranca
+        # el de la remisión. Antes de esto no tiene sentido pedirle la foto de
+        # algo que todavía no tenía en las manos.
+        try:
+            from backend.services import lavanderia_chase
+            lavanderia_chase.al_confirmar_recogida(ruta_id)
+        except Exception as e:
+            log.warning(f"[lavanderia] relevo de relojes falló: {str(e)[:160]}")
 
     return (res.data or [{}])[0]
 
@@ -5422,6 +5442,7 @@ def actualizar_ruta_lote(ruta_id: str, **campos) -> dict:
             avanzar_etapa_si_antes(ruta_id, "lavanderia")
         except Exception as e:
             log.warning(f"[ruta] avance a lavanderia (patch) fallo: {e}")
+        _cerrar_persecucion_lavanderia(ruta_id, "remision", "remision_cargada")
         r2 = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
         if r2:
             return r2[0]
@@ -5578,8 +5599,23 @@ def subir_remision_lavanderia(ruta_id: str, *, file_bytes: bytes, filename: str,
         avanzar_etapa_si_antes(ruta_id, "lavanderia")
     except Exception as e:
         log.warning(f"[ruta] avance a lavanderia fallo: {e}")
+    # Llegó la remisión → se apaga la persecución. Da igual por dónde entró
+    # (portal de la lavandería o cargada desde adentro): el hecho es el mismo.
+    _cerrar_persecucion_lavanderia(ruta_id, "remision", "remision_cargada")
     r = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
     return {"url": url, "ruta": r[0] if r else {}}
+
+
+def _cerrar_persecucion_lavanderia(ruta_id: str, reloj: str, motivo: str) -> None:
+    """Apaga el pendiente que ya se cumplió. Tolerante a fallos a propósito:
+    el barrido periódico vuelve a intentarlo, así que un error acá atrasa el
+    cierre unos minutos pero no rompe la operación de quien subió el documento.
+    """
+    try:
+        from backend.services import lavanderia_chase
+        lavanderia_chase.cerrar_pendientes(ruta_id, reloj=reloj, motivo=motivo)
+    except Exception as e:
+        log.warning(f"[lavanderia] cerrar persecucion {reloj} falló: {str(e)[:160]}")
 
 
 def listar_rutas(*, etapa: Optional[str] = None,

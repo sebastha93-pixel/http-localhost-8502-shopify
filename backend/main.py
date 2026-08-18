@@ -161,6 +161,8 @@ async def lifespan(app: FastAPI):
                 print(f"   🧵 Producción digest activo · {produccion_scheduler.HORA_OBJETIVO_BOG}:30am Bogotá")
             if produccion_scheduler.start_warmer():
                 print(f"   🔥 Calentador Siigo activo · cada {produccion_scheduler.WARM_INTERVAL_MIN} min")
+            if produccion_scheduler.start_lavanderia():
+                print(f"   🧼 Relojes de lavandería activos · cada {produccion_scheduler.LAV_INTERVALO_MIN} min")
         except Exception as e:
             print(f"   ⚠️  Producción digest no arrancó: {e}")
 
