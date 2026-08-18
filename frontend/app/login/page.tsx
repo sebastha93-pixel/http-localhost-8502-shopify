@@ -38,7 +38,15 @@ export default function LoginPage() {
   });
 
   const mut = useMutation({
-    mutationFn: () => api.post<LoginResponse>("/api/auth/login", { email, password }),
+    // El correo se normaliza ACÁ, no solo en el backend. Cuando el gestor de
+    // contraseñas del Mac rellena el campo suele dejar un espacio al final, y
+    // ese espacio hace que Pydantic rechace el correo con un 422 antes de que
+    // el backend llegue a limpiarlo. La contraseña NO se toca: un espacio
+    // puede ser parte legítima de ella y recortarla rompería a quien lo use.
+    mutationFn: () => api.post<LoginResponse>("/api/auth/login", {
+      email: email.trim().toLowerCase(),
+      password,
+    }),
     onSuccess: (data) => {
       setToken(data.access_token);
       qc.setQueryData(["auth", "me"], data.user);
@@ -75,12 +83,23 @@ export default function LoginPage() {
               className="space-y-4"
             >
               <div>
-                <label className="block text-[0.7rem] font-bold uppercase tracking-wider text-graphite mb-1.5">
+                <label htmlFor="email" className="block text-[0.7rem] font-bold uppercase tracking-wider text-graphite mb-1.5">
                   Email
                 </label>
                 <div className="relative">
                   <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-graphite" />
+                  {/* `name` + `autoComplete` no son decoración: son lo que el
+                      gestor de contraseñas usa para saber QUÉ pareja
+                      correo/clave rellenar. Sin ellos Safari y Chrome
+                      adivinan, y con varias cuentas guardadas del mismo sitio
+                      pueden meter el correo de una y la clave de otra — que se
+                      ve exactamente como "credenciales inválidas" con la clave
+                      bien guardada. También es lo que le permite al navegador
+                      ACTUALIZAR la clave guardada cuando alguien la cambia. */}
                   <input
+                    id="email"
+                    name="email"
+                    autoComplete="username"
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -93,12 +112,15 @@ export default function LoginPage() {
               </div>
 
               <div>
-                <label className="block text-[0.7rem] font-bold uppercase tracking-wider text-graphite mb-1.5">
+                <label htmlFor="password" className="block text-[0.7rem] font-bold uppercase tracking-wider text-graphite mb-1.5">
                   Contraseña
                 </label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-graphite" />
                   <input
+                    id="password"
+                    name="password"
+                    autoComplete="current-password"
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
@@ -110,9 +132,28 @@ export default function LoginPage() {
               </div>
 
               {error && (
-                <div className="flex items-center gap-2 rounded-md bg-crimson/10 border border-crimson/30 px-3 py-2 text-sm text-crimson">
-                  <AlertCircle className="h-4 w-4" />
-                  {error}
+                <div className="rounded-md bg-crimson/10 border border-crimson/30 px-3 py-2 text-sm text-crimson">
+                  <p className="flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    {error}
+                  </p>
+                  {/* El backend responde "Credenciales inválidas" tanto si el
+                      correo no existe como si la clave está mal, y eso es
+                      correcto: distinguirlos le diría a un atacante qué correos
+                      son reales. Pero para quien sí es dueño de la cuenta el
+                      mensaje es un callejón sin salida —se queda mirando la
+                      contraseña cuando a veces el que está mal es el correo—.
+                      Por eso el aviso, y el del bloqueo: al quinto intento
+                      fallido la cuenta queda 15 minutos sin poder entrar, y
+                      enterarse DESPUÉS es peor. */}
+                  {/^credenciales/i.test(error) && (
+                    <p className="mt-1.5 pl-6 text-[0.75rem] leading-snug text-crimson/80">
+                      Revisa también el <strong>correo completo</strong>, no solo la contraseña:
+                      el aviso es el mismo en ambos casos. Si lo rellenó el navegador,
+                      escríbelo a mano una vez. Al quinto intento fallido la cuenta
+                      se bloquea 15 minutos.
+                    </p>
+                  )}
                 </div>
               )}
 
