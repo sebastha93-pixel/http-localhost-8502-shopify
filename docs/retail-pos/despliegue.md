@@ -1,7 +1,7 @@
 # Poner el POS en línea
 
-Estado a 2026-08-18: **bloqueado por facturas vencidas en Supabase.** Todo lo
-demás está listo y verificado. Cuando se salde el pago, esto son minutos.
+Estado a 2026-08-18: **falta crear la base.** Todo lo demás está listo y
+verificado; en cuanto exista la `DATABASE_URL`, esto son minutos.
 
 ## Lo que hace que este despliegue sea seguro
 
@@ -19,7 +19,7 @@ Si el módulo tuviera un fallo al importar, el `except` impide que tumbe el ERP.
 
 Por eso el orden es base → variable → migraciones → fusionar, y no al revés.
 
-## Decisión de arquitectura: instancia PROPIA
+## Decisión de arquitectura: instancia PROPIA, en Railway
 
 El POS no comparte base con el ERP. El motivo no es la limpieza: es que **la
 tienda tiene que poder cobrar aunque el ERP esté caído.** Compartir instancia
@@ -29,21 +29,32 @@ conexiones un martes, la caja deja de cobrar sin que nadie entienda por qué.
 El esquema `retail` ya está aislado por nombre, así que compartir *funcionaría*.
 Lo que se pierde es la independencia, que es justo lo que hace falta.
 
-Costo: 10 USD/mes (proyecto Supabase). Frente a perder un día de ventas, es
-barato — y los backups diarios vienen incluidos, que para la base que guarda
-las ventas y es el registro legal hasta que se emitan facturas no es opcional.
+**Por qué Railway y no Supabase.** Va en el MISMO proyecto que el backend, así
+que la consulta no sale a internet. Es más barato (~5 USD/mes contra 10). Y es
+un proveedor menos: el intento de crearlo en Supabase se topó con
+`PaymentRequiredException — overdue invoices`, y depender de dos facturaciones
+distintas para que la tienda cobre es una dependencia que no hace falta tener.
+
+**Por qué NO un servidor propio administrado por nosotros.** El día malo de un
+servicio gestionado es una factura vencida: molesto, se arregla pagando, la
+tienda no se entera. El día malo de un servidor propio es un sábado a las 8pm
+con la tienda llena y el disco lleno. Además el ahorro no existe a esta escala:
+dos tiendas generan decenas de miles de filas al mes, una base que cabe en la
+máquina más pequeña de cualquier proveedor. Si algún día se quiere servidor
+propio, el POS es el PEOR primer candidato — es lo más nuevo, lo menos probado,
+y lo único que para la caja.
 
 ## Los pasos
 
 ### 1. Crear la base
 
-Supabase → organización `yyixgpntdgschcbvkuoy` → nuevo proyecto
-`male-denim-pos`, región `us-east-2` (la misma que `male-crm`).
+Railway → proyecto `vivacious-perception` → **New → Database → Add PostgreSQL**.
 
-> Bloqueado hoy: `PaymentRequiredException — There are overdue invoices`.
-> Los seis proyectos existentes siguen `ACTIVE_HEALTHY`, pero una organización
-> con facturas vencidas puede terminar con proyectos pausados. Eso es más
-> urgente que este despliegue.
+Se hace desde el panel y no por API a propósito: la API no permite adjuntar
+volumen, y **un Postgres sin volumen borra todas las ventas en cada
+redespliegue, en silencio.** La plantilla del panel lo trae correcto.
+
+Luego, la `DATABASE_URL` del servicio nuevo es la que va en el paso 4.
 
 ### 2. Migrar
 
@@ -51,7 +62,7 @@ Desde cualquier máquina con el repo y el `.venv`:
 
 ```bash
 python -m backend.modules.retail.migraciones.runner \
-  "postgresql+psycopg://postgres:CLAVE@db.REF.supabase.co:5432/postgres"
+  "$DATABASE_URL_DEL_SERVICIO_POSTGRES"
 ```
 
 Imprime a dónde va a migrar **sin la contraseña** antes de tocar nada. Migrar
@@ -76,8 +87,16 @@ dirección, prefijo `FL`). Falta lo que depende de la operación:
 Railway → proyecto `vivacious-perception` → servicio `backend` → variable:
 
 ```
-RETAIL_DATABASE_URL = postgresql+psycopg://postgres:CLAVE@db.REF.supabase.co:5432/postgres
+RETAIL_DATABASE_URL = ${{Postgres.DATABASE_URL}}
 ```
+
+Se usa la REFERENCIA de Railway (`${{Postgres.DATABASE_URL}}`) y no la cadena
+copiada a mano: si la contraseña rota, la referencia sigue apuntando bien y una
+copia pegada deja de funcionar sin decir por qué.
+
+Ojo con el prefijo: Railway entrega `postgresql://…` y SQLAlchemy necesita
+`postgresql+psycopg://…`. Si el arranque no monta el módulo, es lo primero a
+mirar.
 
 Al redesplegar, el arranque imprime `🛒 Modulo retail (POS) montado en /api/retail`.
 Si no aparece esa línea, el módulo NO está montado — el `except` se lo tragó y
