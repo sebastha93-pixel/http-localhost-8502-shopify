@@ -65,14 +65,14 @@ export default function LavanderiaPublicaPage() {
 
   const q = useQuery<LoteLav>({
     queryKey: ["lavanderia-publica", token],
-    queryFn: () => fetchJSON(`${API_BASE}/api/produccion/publico/lavanderia/${token}`),
+    queryFn: () => fetchJSON(`${API_BASE}/api/publico/lavanderia/${token}`),
     enabled: !!token,
     retry: false,
   });
 
   const registrar = useMutation({
     mutationFn: (accion: "recibi" | "entregue") =>
-      fetchJSON(`${API_BASE}/api/produccion/publico/lavanderia/${token}/registrar`, {
+      fetchJSON(`${API_BASE}/api/publico/lavanderia/${token}/registrar`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -94,7 +94,7 @@ export default function LavanderiaPublicaPage() {
     try {
       const fd = new FormData();
       fd.append("archivo", archivo);
-      await fetchJSON(`${API_BASE}/api/produccion/publico/lavanderia/${token}/remision`,
+      await fetchJSON(`${API_BASE}/api/publico/lavanderia/${token}/remision`,
                       { method: "POST", body: fd });
       qc.invalidateQueries({ queryKey: ["lavanderia-publica", token] });
     } catch (e) {
