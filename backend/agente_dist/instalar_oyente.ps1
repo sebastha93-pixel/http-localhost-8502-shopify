@@ -48,6 +48,27 @@ if (-not $v) {
 }
 Write-Host "Node $v" -ForegroundColor Green
 
+# 1b · git. npm lo NECESITA aqui: Baileys arrastra una dependencia que se baja
+#      desde GitHub (libsignal), y sin git el install muere con
+#      "ENOENT spawn git" aunque Node y npm esten perfectos. Paso exactamente
+#      eso en el MDS.
+try { $g = (git --version) } catch { $g = $null }
+if (-not $g) {
+  Write-Host "git no esta instalado (npm lo necesita). Instalando con winget..." -ForegroundColor Yellow
+  try {
+    winget install --id Git.Git --silent --accept-package-agreements --accept-source-agreements
+    # Igual que con Node: winget no refresca el PATH de esta sesion.
+    $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+                [Environment]::GetEnvironmentVariable("Path", "User")
+    try { $g = (git --version) } catch { $g = $null }
+  } catch { }
+  if (-not $g) {
+    Write-Host "No pude instalar git. Instalalo desde https://git-scm.com y reintenta." -ForegroundColor Red
+    return
+  }
+}
+Write-Host "$g" -ForegroundColor Green
+
 # 2 · Carpeta y archivos, bajados del backend (misma via que el agente de impresion)
 New-Item -ItemType Directory -Force -Path $carpeta | Out-Null
 Set-Location $carpeta
