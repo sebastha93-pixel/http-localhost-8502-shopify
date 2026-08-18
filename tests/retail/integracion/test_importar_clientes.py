@@ -316,3 +316,60 @@ def test_sin_direccion_se_registra_igual(sesion):
         return c
 
     assert correr(crear()).numero_documento == "900123456"
+
+
+# ── EL VEREDICTO DE COBERTURA ───────────────────────────────────────────────
+#
+# No basta con devolver el crudo y el mapeado al lado: eso deja la decisión en
+# quien mire, y el fallo que hay que cazar es SILENCIOSO. Si el correo se lee
+# del sitio equivocado, la columna sale VACÍA —no incorrecta— y una columna
+# vacía se confunde con «esa clienta no tenía correo».
+
+def test_si_NINGUNA_trae_correo_lo_dice(monkeypatch):
+    """El caso exacto de un campo leído del sitio equivocado. En Siigo el
+    correo vive en `contacts[].email`; si alguien lo buscara en la raíz, todas
+    saldrían sin correo y parecería que la cuenta no los tiene."""
+    from backend.modules.retail.infrastructure.siigo import clientes_siigo
+
+    crudas = [{"id": f"sg-{i}", "identification": str(i), "check_digit": "1",
+               "id_type": {"code": "13"}, "name": ["A", "B"],
+               "address": {"address": "CL 1", "city": {"city_name": "Medellín"}},
+               "phones": [{"number": "300"}],
+               # El correo en la RAÍZ, que es donde NO va.
+               "email": "no@aqui.com"} for i in range(3)]
+    c = clientes_siigo.cobertura([clientes_siigo.a_cliente(x) for x in crudas])
+
+    assert c["con_cada_campo"]["correo"] == 0
+    assert c["veredicto"] == "REVISAR ANTES DE IMPORTAR"
+    assert any("contacts" in p for p in c["problemas"])
+
+
+def test_una_cuenta_completa_da_luz_verde():
+    from backend.modules.retail.infrastructure.siigo import clientes_siigo
+
+    crudas = [{"id": f"sg-{i}", "identification": str(1000 + i),
+               "check_digit": "6", "id_type": {"code": "13"},
+               "name": ["ELI", "GONZALEZ"],
+               "address": {"address": "CL 50", "city": {"city_name": "Medellín"}},
+               "phones": [{"number": "3117910110"}],
+               "contacts": [{"email": "eli@correo.com"}]} for i in range(3)]
+    c = clientes_siigo.cobertura([clientes_siigo.a_cliente(x) for x in crudas])
+
+    assert c["veredicto"] == "se puede importar"
+    assert c["porcentaje"]["correo"] == 100
+    assert c["problemas"] == []
+
+
+def test_una_clienta_sin_documento_enciende_la_alarma():
+    """Sin documento no se puede buscar ni facturar, y la importación la salta.
+    Que se sepa ANTES, no después de correrla."""
+    from backend.modules.retail.infrastructure.siigo import clientes_siigo
+
+    crudas = [{"id": "sg-1", "identification": "1", "id_type": {"code": "13"},
+               "name": ["A"], "contacts": [{"email": "a@b.com"}],
+               "address": {"address": "CL 1"}},
+              {"id": "sg-2", "name": ["Sin", "Documento"]}]
+    c = clientes_siigo.cobertura([clientes_siigo.a_cliente(x) for x in crudas])
+
+    assert any("SIN DOCUMENTO" in p for p in c["problemas"])
+    assert c["veredicto"] == "REVISAR ANTES DE IMPORTAR"

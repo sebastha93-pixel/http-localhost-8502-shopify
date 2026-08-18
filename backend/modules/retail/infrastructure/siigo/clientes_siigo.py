@@ -54,12 +54,60 @@ def muestra(cuantas: int = 3) -> dict:
         return {"_error": "siigo_no_configurado"}
     cruda = siigo.siigo_get("/customers", {"page": 1, "page_size": cuantas})
     filas = cruda.get("results") or []
+    mapeadas = [a_cliente(f) for f in filas]
     return {
         "total_en_siigo": cruda.get("pagination", {}).get("total_results"),
+        # EL VEREDICTO PRIMERO. Debajo va el crudo y el mapeado para poder
+        # mirar, pero lo que decide si se puede importar es esto.
+        "cobertura": cobertura(mapeadas),
         "crudas": filas,
-        # El mapeo aplicado, al lado del crudo. Comparar las dos columnas es lo
-        # que delata un campo que se está leyendo del sitio equivocado.
-        "mapeadas": [a_cliente(f) for f in filas],
+        "mapeadas": mapeadas,
+    }
+
+
+def cobertura(mapeadas: list) -> dict:
+    """Cuántas clientas trajeron cada campo, y el veredicto.
+
+    POR QUÉ NO BASTA DEVOLVER EL CRUDO Y EL MAPEADO AL LADO. Eso deja el
+    trabajo de decidir en quien mire, y el fallo que hay que cazar es
+    silencioso: si el correo se lee del sitio equivocado, la columna sale VACÍA
+    —no incorrecta— y una columna vacía se confunde con «esa clienta no tenía
+    correo». Contarlas convierte la duda en un número.
+
+    El correo y la dirección importan más que los demás: sin correo la factura
+    electrónica no llega a nadie, y sin dirección sale incompleta.
+    """
+    n = len(mapeadas) or 1
+    def con(campo):
+        return sum(1 for m in mapeadas if (m.get(campo) or "").strip())
+
+    campos = {c: con(c) for c in
+              ("numero_documento", "nombre", "apellido", "telefono",
+               "correo", "direccion", "ciudad", "dv", "siigo_customer_id")}
+
+    problemas = []
+    if campos["numero_documento"] < len(mapeadas):
+        problemas.append("hay clientas SIN DOCUMENTO: no se podrán buscar ni "
+                         "facturar, y la importación las va a saltar")
+    if campos["siigo_customer_id"] < len(mapeadas):
+        problemas.append("falta el id de Siigo en alguna: sin él la factura "
+                         "duplicaría la clienta en la contabilidad, que es lo "
+                         "que esta importación viene a evitar")
+    if campos["correo"] == 0:
+        problemas.append("NINGUNA trajo correo — o la cuenta no los tiene, o "
+                         "se está leyendo del sitio equivocado. En Siigo vive "
+                         "en `contacts[].email`, no en la raíz")
+    if campos["direccion"] == 0:
+        problemas.append("ninguna trajo dirección — la factura electrónica la "
+                         "imprime; revisar `address.address`")
+
+    return {
+        "clientas_miradas": len(mapeadas),
+        "con_cada_campo": campos,
+        "porcentaje": {c: round(100 * v / n) for c, v in campos.items()},
+        "problemas": problemas,
+        "veredicto": ("se puede importar" if not problemas
+                      else "REVISAR ANTES DE IMPORTAR"),
     }
 
 
