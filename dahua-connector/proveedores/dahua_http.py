@@ -204,39 +204,44 @@ class DahuaHttp:
             return {"eventos": [], "cursor": str(desde), "hay_mas": False,
                     "resumen": self.ultimo_resumen}
 
-        # Se lee desde el FINAL hacia atrás. En operación normal (poll de 60 s
-        # con 2 o 3 marcaciones nuevas) esto es UNA sola llamada.
+        # Se lee desde el FINAL hacia atrás, página por página, hasta cruzar el
+        # cursor. En operación normal (poll de 60 s con 2 o 3 marcaciones
+        # nuevas) es UNA sola llamada; en una carga histórica son todas.
+        nuevos: list[dict] = []
         fin = total
-        arranque = max(0, fin - self.pagina)
-        lote = self._pagina(arranque, fin - arranque)
-        ultima_pagina = _con_recno(lote)
+        primera = True
 
-        # ¿Se purgó o reinició el búfer? Se compara el cursor contra el RecNo
-        # MÁS ALTO que el equipo tiene ahora — no contra el total.
-        #
-        # Comparar con el total era un bug: son unidades distintas. Un equipo
-        # que purgó lo viejo y quedó con los RecNo 4700–4785 reporta total=86,
-        # que es menor que cualquier cursor razonable → el conector concluía
-        # "se reinició" y rebarría los 4785 registros en CADA poll, para
-        # siempre. El backend deduplica, así que no corrompía nada: solo
-        # martillaba el equipo sin que ningún error lo delatara.
-        tope = max(int(r["RecNo"]) for r in ultima_pagina) if ultima_pagina else 0
-        if tope < desde:
-            desde = 0
-
-        nuevos = [r for r in ultima_pagina if int(r["RecNo"]) > desde]
-        # Mientras la página venga entera nueva, puede haber más atrás.
-        while len(nuevos) and len(nuevos) == len(ultima_pagina) and arranque > 0:
-            fin = arranque
+        while fin > 0:
             arranque = max(0, fin - self.pagina)
-            lote = self._pagina(arranque, fin - arranque)
-            ultima_pagina = _con_recno(lote)
-            if not ultima_pagina:
+            pagina = _con_recno(self._pagina(arranque, fin - arranque))
+            if not pagina:
                 break
-            frescos = [r for r in ultima_pagina if int(r["RecNo"]) > desde]
+
+            if primera:
+                # ¿Se purgó o reinició el búfer? Se compara el cursor contra el
+                # RecNo MÁS ALTO que el equipo tiene ahora — no contra el total.
+                #
+                # Comparar con el total era un bug: son unidades distintas. Un
+                # equipo que purgó lo viejo y quedó con los RecNo 4700–4785
+                # reporta total=86, menor que cualquier cursor razonable → el
+                # conector concluía "se reinició" y rebarría todo el histórico
+                # en CADA poll, para siempre. El backend deduplica, así que no
+                # corrompía nada: solo martillaba el equipo en silencio.
+                if max(int(r["RecNo"]) for r in pagina) < desde:
+                    desde = 0
+                primera = False
+
+            frescos = [r for r in pagina if int(r["RecNo"]) > desde]
             nuevos = frescos + nuevos
-            if len(frescos) < len(ultima_pagina):
+
+            # Se compara ESTA página, no el acumulado. Comparar el acumulado
+            # contra el tamaño de la página fue un corte silencioso: a la
+            # segunda vuelta `len(nuevos)` ya valía 600 contra una página de
+            # 300, el bucle salía, y el cursor saltaba al final. La carga
+            # histórica trajo 482 de 3787 marcaciones y reportó éxito.
+            if len(frescos) < len(pagina):
                 break
+            fin = arranque
 
         nuevos.sort(key=lambda r: int(r["RecNo"]))
 

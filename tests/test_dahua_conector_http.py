@@ -232,6 +232,40 @@ def test_los_eventos_salen_en_orden_cronologico():
     assert recnos == sorted(recnos)
 
 
+def test_una_carga_historica_no_se_corta_en_la_segunda_pagina():
+    """El corte silencioso que se llevó 3305 marcaciones.
+
+    Con 1000 registros y páginas de 300, el bucle comparaba el ACUMULADO
+    (`nuevos`) contra el tamaño de la página actual. A la segunda vuelta el
+    acumulado ya valía 600 contra una página de 300, la condición fallaba y
+    salía. El cursor saltaba al final igual, así que las 3305 marcaciones
+    anteriores quedaban inalcanzables — y el resumen decía "listo".
+
+    No hay error, no hay excepción: solo un histórico incompleto que se lee
+    como completo. Por eso el test mira `revisados`, no solo el resultado.
+    """
+    regs = [{**MARCACION, "RecNo": str(n)} for n in range(1, 1001)]
+    p = _provee(regs, dahua_pagina=300)
+    r = p.obtener_eventos(cursor=0, limite=5000)
+    assert r["resumen"]["revisados"] == 1000, "se cortó la paginación"
+    assert len(r["eventos"]) == 1000
+    recnos = [int(e["id_evento_externo"].rsplit("-", 1)[1]) for e in r["eventos"]]
+    assert recnos == list(range(1, 1001)), "hay huecos en el histórico"
+    assert len(p.llamadas) == 4, f"debía leer 4 páginas, leyó {len(p.llamadas)}"
+
+
+def test_la_carga_historica_atraviesa_paginas_llenas_de_no_atribuibles():
+    """Una página entera de aperturas sin lector no puede cortar el barrido:
+    los registros viejos de más atrás siguen siendo marcaciones reales."""
+    regs = ([{**MARCACION, "RecNo": str(n)} for n in range(1, 301)]
+            + [{**SIN_LECTOR, "RecNo": str(n)} for n in range(301, 601)]
+            + [{**MARCACION, "RecNo": str(n)} for n in range(601, 901)])
+    r = _provee(regs, dahua_pagina=300).obtener_eventos(cursor=0, limite=5000)
+    assert r["resumen"]["revisados"] == 900
+    assert r["resumen"]["excluidos_sin_lector"] == 300
+    assert len(r["eventos"]) == 600
+
+
 def test_en_operacion_normal_lee_una_sola_pagina():
     """Poll de 60 s con 2 marcaciones nuevas no debe barrer los 4785 registros."""
     regs = [{**MARCACION, "RecNo": str(n)} for n in range(1, 501)]
