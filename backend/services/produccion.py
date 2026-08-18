@@ -4934,6 +4934,112 @@ def obtener_ruta_por_token_terminacion(token: str) -> Optional[dict]:
     return _con_etapas_omitidas(r[0]) if r else None
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# ESPEJO DEL GRUPO DE WHATSAPP DE PRODUCCIÓN (fase 1)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# El equipo ya reporta la producción en un grupo de WhatsApp. Esto trae esos
+# mensajes al OS TAL CUAL, sin interpretar nada: el objetivo de la fase 1 es
+# tener el dato en tiempo real y poder medir qué tan legible es lo que la gente
+# escribe de verdad, antes de invertir en que una IA lo lea.
+#
+# Nada de acá mueve el estado de un lote. Cuando eso llegue, trabajará sobre
+# esta tabla y no sobre el chat, para que un error del parser siempre se pueda
+# comparar contra lo que en realidad se dijo.
+
+
+def guardar_mensajes_grupo(*, grupo_id: str, grupo_nombre: str,
+                           mensajes: list[dict]) -> dict:
+    """Guarda los mensajes que reenvía el oyente. Idempotente por wa_message_id.
+
+    Se hace un upsert y no un insert porque el oyente REENVÍA: cuando se
+    reconecta después de una caída manda el atraso, y ahí van mensajes que ya
+    habíamos guardado. Sin idempotencia el espejo mostraría todo duplicado y
+    cualquier conteo quedaría inflado.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+
+    filas = []
+    for m in mensajes:
+        wa_id = (m.get("wa_message_id") or "").strip()
+        enviado = (m.get("enviado_en") or "").strip()
+        # Sin id no hay forma de deduplicar, y sin fecha de envío el espejo
+        # mentiría sobre el orden. Un mensaje así se descarta y se cuenta.
+        if not wa_id or not enviado:
+            continue
+        filas.append({
+            "wa_message_id":  wa_id,
+            "grupo_id":       grupo_id,
+            "grupo_nombre":   grupo_nombre or None,
+            "autor_telefono": (m.get("autor_telefono") or "").strip() or None,
+            "autor_nombre":   (m.get("autor_nombre") or "").strip() or None,
+            "tipo":           (m.get("tipo") or "texto").strip() or "texto",
+            "texto":          m.get("texto") or None,
+            "media_url":      m.get("media_url") or None,
+            "enviado_en":     enviado,
+            "crudo":          m.get("crudo") or None,
+        })
+
+    if not filas:
+        return {"guardados": 0, "descartados": len(mensajes)}
+
+    res = (sb.table("mensajes_grupo_produccion")
+             .upsert(filas, on_conflict="wa_message_id")
+             .execute())
+    return {"guardados": len(res.data or []),
+            "descartados": len(mensajes) - len(filas)}
+
+
+def listar_mensajes_grupo(*, limite: int = 100, desde: str = "",
+                          buscar: str = "") -> list[dict]:
+    sb = _sb()
+    if sb is None:
+        return []
+    q = (sb.table("mensajes_grupo_produccion")
+           .select("id,wa_message_id,grupo_nombre,autor_nombre,autor_telefono,"
+                   "tipo,texto,media_url,enviado_en,recibido_en")
+           .order("enviado_en", desc=True)
+           .limit(min(int(limite), 500)))
+    if desde:
+        q = q.gte("enviado_en", desde)
+    if buscar.strip():
+        q = q.ilike("texto", f"%{buscar.strip()}%")
+    return (q.execute()).data or []
+
+
+def estado_oyente_grupo() -> dict:
+    """¿Está vivo el oyente? Se responde con el último mensaje que llegó.
+
+    No hay latido aparte a propósito: un latido puede seguir llegando de un
+    proceso que ya perdió la sesión de WhatsApp y no está viendo nada. El
+    último mensaje real es la única señal que no puede mentir — con la salvedad
+    de que un grupo callado un domingo se ve igual que un oyente muerto, y eso
+    se distingue mirando la hora contra el horario de la fábrica.
+    """
+    sb = _sb()
+    if sb is None:
+        return {"disponible": False}
+    r = (sb.table("mensajes_grupo_produccion")
+           .select("enviado_en,recibido_en,autor_nombre")
+           .order("recibido_en", desc=True).limit(1).execute()).data
+    total = (sb.table("mensajes_grupo_produccion")
+               .select("id", count="exact").execute()).count or 0
+    if not r:
+        return {"disponible": True, "total": 0, "ultimo": None}
+    ultimo = r[0]
+    minutos = None
+    try:
+        rec = datetime.fromisoformat(
+            str(ultimo["recibido_en"]).replace("Z", "+00:00").split(".")[0] + "+00:00")
+        minutos = int((datetime.now(timezone.utc) - rec).total_seconds() // 60)
+    except Exception:
+        pass
+    return {"disponible": True, "total": total,
+            "ultimo": ultimo, "minutos_desde_ultimo": minutos}
+
+
 def obtener_ruta_por_token_lavanderia(token: str) -> Optional[dict]:
     sb = _sb()
     if sb is None:

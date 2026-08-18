@@ -9,6 +9,7 @@ FASE 1 · Bloque 2: Ingreso + Inventario.
 from __future__ import annotations
 
 import logging
+import hmac
 import os
 from typing import List, Optional
 
@@ -16,7 +17,7 @@ from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query,
                      Request, Response, UploadFile)
 from pydantic import BaseModel, Field
 
-from backend.core.security import (CurrentUser, require_role, require_permission,
+from backend.core.security import (CurrentUser, get_current_user, require_role, require_permission,
                                     require_permission_estricto, tiene_permiso_costos,
                                     require_permission_any, tiene_permiso)
 from backend.services import produccion as svc
@@ -2035,6 +2036,87 @@ def recibir_terminacion_publica(token: str) -> dict:
         return {"ok": True, "ruta": svc.cambiar_etapa_ruta(r["id"], "terminacion_recibida")}
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# ── Espejo del grupo de WhatsApp de producción (fase 1) ──────────────────
+#
+# El equipo ya reporta la producción en un grupo de WhatsApp. La API oficial de
+# Meta no puede leer ese grupo (exige Official Business Account, tope de 8
+# participantes, y solo entra a grupos que ella misma crea), así que un oyente
+# corriendo en el servidor MDS —el mismo que ya hospeda el agente de impresión—
+# reenvía acá lo que se dice.
+#
+# FASE 1 NO INTERPRETA NADA. Solo guarda. El objetivo es tener el dato en
+# tiempo real y poder medir qué tan legible es lo que la gente escribe de
+# verdad, antes de invertir en que una IA lo lea y mueva estados de lotes.
+
+
+class MensajeGrupoIn(BaseModel):
+    wa_message_id:  str = Field(min_length=1, max_length=200)
+    autor_telefono: str = ""
+    autor_nombre:   str = ""
+    tipo:           str = "texto"
+    texto:          Optional[str] = None
+    media_url:      Optional[str] = None
+    enviado_en:     str                     # ISO 8601 con zona
+    crudo:          Optional[dict] = None
+
+
+class LoteMensajesGrupo(BaseModel):
+    grupo_id:     str = Field(min_length=1, max_length=200)
+    grupo_nombre: str = ""
+    # En lote y no de uno en uno: cuando el oyente se reconecta después de una
+    # caída manda el atraso completo, y una petición por mensaje sería una
+    # tormenta de HTTP por algo que cabe en una.
+    mensajes:     List[MensajeGrupoIn] = Field(min_length=1, max_length=200)
+
+
+def _verificar_secreto_oyente(request: Request) -> None:
+    """Fail-closed, igual que el webhook de Melonn.
+
+    Si la env var no está puesta el endpoint responde 503 en vez de aceptar
+    todo: un receptor abierto de mensajes internos es peor que uno caído.
+    """
+    esperado = os.environ.get("GRUPO_WA_SECRET", "").strip()
+    if not esperado:
+        raise HTTPException(503, "GRUPO_WA_SECRET no configurado en Railway")
+    recibido = (request.headers.get("X-Webhook-Secret") or "").strip()
+    # compare_digest y no == : evita filtrar el secreto por tiempo de respuesta.
+    if not hmac.compare_digest(recibido, esperado):
+        raise HTTPException(401, "secreto_invalido")
+
+
+@router.post("/grupo/mensajes")
+async def recibir_mensajes_grupo(body: LoteMensajesGrupo, request: Request) -> dict:
+    """Lo llama el oyente del grupo. No requiere sesión: se autentica por secreto."""
+    _verificar_secreto_oyente(request)
+    try:
+        res = svc.guardar_mensajes_grupo(
+            grupo_id=body.grupo_id,
+            grupo_nombre=body.grupo_nombre,
+            mensajes=[m.model_dump() for m in body.mensajes],
+        )
+        return {"ok": True, **res}
+    except Exception as e:
+        raise HTTPException(500, f"guardar_mensajes_grupo: {str(e)[:200]}")
+
+
+@router.get("/grupo/mensajes")
+def listar_mensajes_grupo(
+    limite: int = Query(default=100, ge=1, le=500),
+    desde:  str = Query(default=""),
+    buscar: str = Query(default=""),
+    _: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """El espejo, para verlo desde el OS."""
+    return {"mensajes": svc.listar_mensajes_grupo(
+        limite=limite, desde=desde, buscar=buscar)}
+
+
+@router.get("/grupo/estado")
+def estado_grupo(_: CurrentUser = Depends(get_current_user)) -> dict:
+    """¿Sigue vivo el oyente? Responde con el último mensaje que llegó."""
+    return svc.estado_oyente_grupo()
 
 
 # ── Lavandería (público) ─────────────────────────────────────────────────
