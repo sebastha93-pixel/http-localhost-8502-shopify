@@ -3,6 +3,7 @@
  * Envía JWT Bearer token y redirige a /login si recibe 401.
  */
 import { getToken, setToken, clearToken } from "@/lib/auth";
+import { esRutaPublica } from "./rutas-publicas";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || "";
 export const API_BASE = BASE;
@@ -25,6 +26,11 @@ function irAlLogin() {
   if (typeof window === "undefined") return;
   const actual = window.location.pathname + window.location.search;
   if (window.location.pathname.startsWith("/login")) return;
+  // Tampoco se expulsa desde una pantalla que existe justamente para quien NO
+  // tiene sesión: en /restablecer un 401 de cualquier llamada suelta mandaría a
+  // la persona al login en medio de recuperar su contraseña, y el enlace del
+  // correo parecería roto. Salir de acá es correcto SOLO en rutas privadas.
+  if (esRutaPublica(window.location.pathname)) return;
   const volver = actual && actual !== "/" ? `?volver=${encodeURIComponent(actual)}` : "";
   window.location.href = `/login${volver}`;
 }

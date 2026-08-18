@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { homePath } from "@/lib/nav";
 import { User, getToken, clearToken } from "@/lib/auth";
+import { esRutaPublica } from "@/lib/rutas-publicas";
 import { Loader2 } from "lucide-react";
 
 interface Ctx {
@@ -18,11 +19,6 @@ const AuthCtx = createContext<Ctx>({ user: null, loading: true, logout: () => {}
 
 export const useAuth = () => useContext(AuthCtx);
 
-// Rutas públicas — no requieren token.
-// /lote/[token] es la vista del confeccionista sin login.
-// /terminacion/[token] es la vista del proveedor de terminación.
-const PUBLIC_PATHS = ["/login"];
-const PUBLIC_PREFIXES = ["/lote/", "/terminacion/"];
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -50,8 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     staleTime: 5 * 60_000,
   });
 
-  const isPublic = PUBLIC_PATHS.includes(pathname) ||
-                   PUBLIC_PREFIXES.some((p) => pathname.startsWith(p));
+  const isPublic = esRutaPublica(pathname);
   const loading = !hydrated || (!!token && meQ.isLoading);
 
   // Redirige a /login si no hay token y no es ruta pública.
