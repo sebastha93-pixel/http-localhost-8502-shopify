@@ -13,6 +13,10 @@
 # ═══════════════════════════════════════════════════════════════════════════
 
 $ErrorActionPreference = "Stop"
+# Este servidor tiene la ejecucion de scripts DESHABILITADA (Restricted). Solo
+# para ESTE proceso se levanta: no cambia la politica de la maquina, y sin esto
+# no corre ni el shim de npm.
+try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force } catch { }
 $BASE    = "https://backend-production-21f0.up.railway.app"
 $carpeta = "C:\male-oyente-grupo"
 $tarea   = "MALE Oyente Grupo Produccion"
@@ -54,7 +58,17 @@ foreach ($f in @("oyente.js", "package.json")) {
 
 # 3 · Dependencias
 Write-Host "Instalando dependencias (un par de minutos)..."
-npm install --omit=dev --silent
+# npm.cmd y NO npm: en PowerShell `npm` resuelve a npm.ps1, y en una maquina con
+# ExecutionPolicy Restricted eso falla con PSSecurityException aunque npm este
+# perfectamente instalado. Fue exactamente lo que paso en el MDS. El .cmd no
+# pasa por PowerShell, asi que funciona sin tocar la politica del sistema.
+$npm = Join-Path $env:ProgramFiles "nodejs\npm.cmd"
+if (-not (Test-Path $npm)) { $npm = "npm.cmd" }   # por si Node quedo en otra ruta
+& $npm install --omit=dev --silent
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "npm install fallo (codigo $LASTEXITCODE). Revisa la conexion y reintenta." -ForegroundColor Red
+  return
+}
 Write-Host "dependencias listas" -ForegroundColor Green
 
 # 4 · Configuracion. El secreto y el numero se piden aca y quedan SOLO en este
