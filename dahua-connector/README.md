@@ -97,3 +97,48 @@ Exporta los eventos del periodo desde SmartPSS y cárgalos:
 3. Devuelve `"proveedor"` a lo que estaba
 
 Los que ya habían entrado se detectan como duplicados y no se cargan dos veces.
+
+---
+
+## Conexión al equipo real (verificado 2026-08-18)
+
+El proveedor `dahua_http` ya está implementado y probado contra el
+**DHI-ASI6213S** de la oficina. Para usarlo:
+
+```json
+{
+  "dahua_host": "10.30.1.4",
+  "dahua_usuario": "admin",
+  "dahua_password": "…",
+  "proveedor": "dahua_http",
+  "poll_seconds": 60,
+  "lote": 100
+}
+```
+
+`config.json` está en `.gitignore` y debe quedar con permisos `600`:
+
+```bash
+chmod 600 config.json
+```
+
+### Qué revisar antes de dar por bueno un arranque
+
+1. **El desfase de reloj.** `salud()` lo reporta. Un reloj corrido no produce
+   ningún error: produce horas mal. El equipo tiene NTP activo contra
+   `time.windows.com` con zona Bogotá; hoy va con 0 s de desfase.
+2. **El cuadre.** `emitidos + excluidos` tiene que dar el total de registros
+   del equipo. Si no, la paginación se cortó — y una carga incompleta se lee
+   igual que una completa.
+3. **Los excluidos.** El conector deja fuera a propósito las aperturas sin
+   lector y los intentos fallidos, pero **siempre los cuenta**. Si el número de
+   fallidos crece, hay alguien cuya cara el equipo dejó de reconocer.
+
+### Lo que este equipo NO hace
+
+- **No filtra por fecha.** `condition.StartTime/EndTime` se ignoran.
+- **No distingue entrada de salida.** Todo llega como `Entry`.
+- **No avisa de duplicados.** Registra la misma cara dos veces en segundos.
+
+Los tres están medidos y compensados en `proveedores/dahua_http.py`, con la
+evidencia anotada en el encabezado del archivo.

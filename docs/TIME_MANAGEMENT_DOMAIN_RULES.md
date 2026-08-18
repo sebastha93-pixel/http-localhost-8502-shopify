@@ -374,11 +374,43 @@ Además de los 36 casos funcionales, la suite prueba explícitamente:
 
 ---
 
+## 11. Lo que el dato real permite decir (medido 2026-08-18)
+
+Cargados los 4.788 registros del Dahua y calculadas 1.439 jornadas, la
+cobertura resultó ser la restricción de fondo — no el cálculo.
+
+| | |
+|---|---|
+| Persona-día con marcaciones | 1.365 |
+| **Cierran solos** (entrada y salida) | **740 · 54 %** |
+| **Les falta una marca** | **625 · 46 %** |
+| De los que tienen UNA sola marca, es de la mañana | **89 %** |
+| Mediana de las jornadas cerradas | **8,39 h** (horario 8:30–17:00 = 8,5 h) |
+
+La mediana valida el cálculo donde hay datos. El 46 % restante no es un defecto
+del motor: **el terminal registra quién entra pero no quién sale** (se sale con
+el botón, que no identifica). Ver `DAHUA_INTEGRATION_REQUIREMENTS.md`.
+
+### La consecuencia para el banco de horas
+
+Una jornada abierta tiene los minutos trabajados **subestimados por
+construcción**: el segmento sin cierre aporta 0. Meterla al balance produce una
+deuda que la persona no tiene.
+
+**Regla:** el balance se calcula SOLO sobre días cerrados, y la cobertura se
+reporta al lado. Un saldo sin su cobertura se lee como si fuera completo, y
+sobre eso se toman decisiones de nómina.
+
+Esto es coherente con el invariante 2 (el motor nunca inventa una hora): si no
+puede inventar la salida, tampoco puede fingir que el balance de ese día existe.
+
+---
+
 ## Referencias
 
 - `TIME_MANAGEMENT_ARCHITECTURE.md` — capas y despliegue
 - `TIME_MANAGEMENT_RBAC.md` — matriz de permisos
-- `DAHUA_INTEGRATION_REQUIREMENTS.md` — qué falta para la integración real
+- `DAHUA_INTEGRATION_REQUIREMENTS.md` — el equipo real, medido y conectado
 - `BIOMETRIC_DATA_HANDLING.md` — tratamiento de datos sensibles
 - `SUPABASE_MIGRATION_PERSONAL.sql` — DDL
 
