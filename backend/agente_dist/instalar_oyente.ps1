@@ -125,10 +125,24 @@ node oyente.js *>> "C:\male-oyente-grupo\oyente.log"
 
 # 6 · Tarea de Windows: arranca con la maquina, como SYSTEM, sin limite de
 #     tiempo. Mismo patron que el agente de impresion.
-schtasks /Delete /TN $tarea /F 2>$null | Out-Null
+# ErrorActionPreference vuelve a Continue SOLO aca. `schtasks /Delete` de una
+# tarea que no existe escribe en stderr, y con Stop puesto PowerShell convierte
+# ese ruido en un error FATAL que aborta el instalador justo antes de crear la
+# tarea. Paso exactamente eso en el MDS en la primera instalacion.
+$prev = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+schtasks /Delete /TN $tarea /F 2>&1 | Out-Null
 $accion = "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$carpeta\arrancar.ps1`""
-schtasks /Create /TN $tarea /TR $accion /SC ONSTART /RU SYSTEM /RL HIGHEST /F | Out-Null
-Write-Host "tarea de Windows creada" -ForegroundColor Green
+schtasks /Create /TN $tarea /TR $accion /SC ONSTART /RU SYSTEM /RL HIGHEST /F 2>&1 | Out-Null
+$codigoTarea = $LASTEXITCODE
+$ErrorActionPreference = $prev
+if ($codigoTarea -ne 0) {
+  Write-Host "No pude crear la tarea de Windows (codigo $codigoTarea)." -ForegroundColor Red
+  Write-Host "El oyente sirve igual arrancandolo a mano con .\arrancar.ps1," -ForegroundColor Yellow
+  Write-Host "pero no revivira solo al reiniciar el servidor." -ForegroundColor Yellow
+} else {
+  Write-Host "tarea de Windows creada" -ForegroundColor Green
+}
 
 # 7 · Vinculacion. Solo si hay numero: pedirle a WhatsApp un codigo de pareo
 #     para una linea que no existe termina en error y parece que algo se rompio.
