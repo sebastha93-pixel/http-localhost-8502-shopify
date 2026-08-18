@@ -12,7 +12,7 @@ import logging
 import os
 import re
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from supabase import Client, create_client
@@ -5009,6 +5009,49 @@ def listar_mensajes_grupo(*, limite: int = 100, desde: str = "",
     return (q.execute()).data or []
 
 
+def latido_oyente_grupo(*, codigo_pareo: str = "", codigo_ttl_min: int = 3,
+                        conectado: Optional[bool] = None,
+                        error: str = "", numero: str = "",
+                        grupos: Optional[list] = None) -> dict:
+    """Lo llama el oyente para decir cómo va: conectado, con error, o pidiendo
+    que se publique un código de pareo.
+
+    El código de pareo se publica ACÁ y no se deja en la consola del servidor a
+    propósito: así quien vincula el número lee el código desde el OS, en el
+    celular que tiene en la mano, sin entrar al servidor. Vive 3 minutos porque
+    es lo que WhatsApp le da antes de rotarlo.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    ahora = datetime.now(timezone.utc)
+    update: dict = {"latido_en": ahora.isoformat(),
+                    "actualizado_en": ahora.isoformat()}
+    if codigo_pareo:
+        update["codigo_pareo"] = codigo_pareo
+        update["codigo_expira"] = (ahora + timedelta(minutes=codigo_ttl_min)).isoformat()
+    if conectado is True:
+        update["conectado_en"] = ahora.isoformat()
+        # Al conectar se limpia el código: ya no sirve y dejarlo visible hace
+        # creer que falta vincular algo.
+        update["codigo_pareo"] = None
+        update["codigo_expira"] = None
+        update["ultimo_error"] = None
+    if error:
+        update["ultimo_error"] = error[:500]
+    if numero:
+        update["numero"] = numero
+    if grupos is not None:
+        update["grupos"] = grupos
+    res = (sb.table("oyente_grupo_estado").update(update)
+             .eq("id", "default").execute())
+    fila = (res.data or [{}])[0]
+    # La RESPUESTA le dice al oyente qué grupo escuchar. Así el objetivo se
+    # cambia desde el OS y surte efecto en el siguiente latido, sin entrar al
+    # servidor a editar un .env ni reiniciar el servicio.
+    return {"ok": True, "grupo_id": fila.get("grupo_id_objetivo")}
+
+
 def estado_oyente_grupo() -> dict:
     """¿Está vivo el oyente? Se responde con el último mensaje que llegó.
 
@@ -5026,18 +5069,50 @@ def estado_oyente_grupo() -> dict:
            .order("recibido_en", desc=True).limit(1).execute()).data
     total = (sb.table("mensajes_grupo_produccion")
                .select("id", count="exact").execute()).count or 0
-    if not r:
-        return {"disponible": True, "total": 0, "ultimo": None}
-    ultimo = r[0]
-    minutos = None
-    try:
-        rec = datetime.fromisoformat(
-            str(ultimo["recibido_en"]).replace("Z", "+00:00").split(".")[0] + "+00:00")
-        minutos = int((datetime.now(timezone.utc) - rec).total_seconds() // 60)
-    except Exception:
-        pass
-    return {"disponible": True, "total": total,
-            "ultimo": ultimo, "minutos_desde_ultimo": minutos}
+
+    est = (sb.table("oyente_grupo_estado").select("*")
+             .eq("id", "default").limit(1).execute()).data
+    est = (est or [{}])[0]
+
+    ahora = datetime.now(timezone.utc)
+
+    def _minutos(valor) -> Optional[int]:
+        if not valor:
+            return None
+        try:
+            v = str(valor).replace("Z", "+00:00")
+            if "." in v:
+                cab, resto = v.split(".", 1)
+                dig = "".join(c for c in resto if c.isdigit())
+                v = f"{cab}.{dig.ljust(6, '0')[:6]}{resto[len(dig):]}"
+            d = datetime.fromisoformat(v)
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=timezone.utc)
+            return int((ahora - d).total_seconds() // 60)
+        except Exception:
+            return None
+
+    # El código solo se reporta si todavía sirve: mostrar uno vencido hace que
+    # alguien lo teclee y crea que el sistema está roto cuando WhatsApp lo
+    # rechaza.
+    codigo = est.get("codigo_pareo")
+    if codigo and est.get("codigo_expira"):
+        vencido = (_minutos(est["codigo_expira"]) or 0) > 0
+        if vencido:
+            codigo = None
+
+    return {
+        "disponible": True,
+        "total": total,
+        "ultimo": r[0] if r else None,
+        "minutos_desde_ultimo": _minutos(r[0]["recibido_en"]) if r else None,
+        # Vinculación
+        "codigo_pareo":         codigo,
+        "numero":               est.get("numero"),
+        "conectado_en":         est.get("conectado_en"),
+        "minutos_desde_latido": _minutos(est.get("latido_en")),
+        "ultimo_error":         est.get("ultimo_error"),
+    }
 
 
 def obtener_ruta_por_token_lavanderia(token: str) -> Optional[dict]:

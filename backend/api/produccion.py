@@ -2113,9 +2113,37 @@ def listar_mensajes_grupo(
         limite=limite, desde=desde, buscar=buscar)}
 
 
+class LatidoOyenteIn(BaseModel):
+    codigo_pareo: str = ""
+    conectado:    Optional[bool] = None
+    error:        str = ""
+    numero:       str = ""
+    # Los grupos que ve el número dedicado. Se reportan para poder elegir el
+    # correcto desde el OS en vez de adivinar un JID.
+    grupos:       Optional[list] = None
+
+
+@router.post("/grupo/latido")
+async def latido_oyente(body: LatidoOyenteIn, request: Request) -> dict:
+    """Señal de vida del oyente, y el canal por el que publica el código de pareo.
+
+    Que el código llegue por acá es lo que evita tener que entrar al servidor:
+    WhatsApp pide un código de 8 caracteres para vincular por número, el oyente
+    lo publica y el OS lo muestra. Quien vincula lo lee en el celular que ya
+    tiene en la mano.
+    """
+    _verificar_secreto_oyente(request)
+    try:
+        return svc.latido_oyente_grupo(
+            codigo_pareo=body.codigo_pareo, conectado=body.conectado,
+            error=body.error, numero=body.numero, grupos=body.grupos)
+    except Exception as e:
+        raise HTTPException(500, f"latido_oyente: {str(e)[:200]}")
+
+
 @router.get("/grupo/estado")
 def estado_grupo(_: CurrentUser = Depends(get_current_user)) -> dict:
-    """¿Sigue vivo el oyente? Responde con el último mensaje que llegó."""
+    """¿Sigue vivo el oyente, y hay algo que vincular?"""
     return svc.estado_oyente_grupo()
 
 
@@ -2739,6 +2767,14 @@ _AGENTE_ARCHIVOS = {
     # Instalador de una linea: se eleva solo y deja la tarea siempre viva.
     #   irm <BASE>/api/produccion/agente/instalar.ps1 | iex
     "instalar.ps1": "text/plain; charset=utf-8",
+    # Oyente del grupo de WhatsApp. Se sirve igual que el agente de impresión
+    # para que instalarlo sea UNA línea en el servidor y no copiar carpetas:
+    #   irm <BASE>/api/produccion/agente/instalar_oyente.ps1 | iex
+    # Son scripts sin secretos: el secreto lo pide el instalador y queda solo
+    # en el .env del servidor, nunca en un archivo público.
+    "instalar_oyente.ps1": "text/plain; charset=utf-8",
+    "oyente.js":           "text/plain; charset=utf-8",
+    "package.json":        "application/json; charset=utf-8",
 }
 
 
