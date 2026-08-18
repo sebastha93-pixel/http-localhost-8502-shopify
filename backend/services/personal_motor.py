@@ -203,7 +203,9 @@ def calcular_jornada(
     incidencias: list[Incidencia] = []
     pasos: list[str] = []
 
-    eventos = _preparar_eventos(eventos, work_date, R, incidencias, pasos)
+    # El horario entra aquí porque decide qué marcaciones son de este día:
+    # un turno nocturno reclama las de la madrugada siguiente, uno normal no.
+    eventos = _preparar_eventos(eventos, work_date, R, incidencias, pasos, horario)
 
     # ── Caso: sin horario ──────────────────────────────────────────────
     # Nunca se asume un horario por defecto. Un empleado sin horario es un
@@ -451,6 +453,10 @@ _REGLAS_BASE = {
     "umbral_posible_extra_min": 30,
     "generar_incidencia_salida_faltante": True,
     "descontar_descanso_no_marcado": True,
+    # Cuánto puede desbordar un turno NOCTURNO por cada extremo antes de que
+    # la marcación deje de considerarse suya. Solo aplica a turnos que cruzan
+    # medianoche; los normales usan el día calendario.
+    "holgura_jornada_min": 240,
     "hora_inicio_nocturno": "21:00",
     "hora_fin_nocturno": "06:00",
 }
@@ -469,10 +475,49 @@ def _minutos(a: datetime, b: datetime) -> int:
     return max(0, int((b - a).total_seconds() // 60))
 
 
-def _preparar_eventos(eventos, work_date, R, incidencias, pasos) -> list[Evento]:
-    """Ordena, descarta denegados y colapsa duplicados."""
+def eventos_de_la_jornada(eventos, work_date: date,
+                          horario: Optional[HorarioDia], R: dict) -> list[Evento]:
+    """Filtra los eventos que REALMENTE pertenecen a esta jornada.
+
+    Quien consulta la base pide una ventana amplia (el día anterior y el
+    siguiente) porque un turno nocturno puede desbordar por cualquiera de los
+    dos extremos. Decidir cuáles caen dentro es trabajo del motor, y hay que
+    hacerlo: sin este filtro, cada jornada suma las marcaciones de sus vecinas.
+
+    Pasó de verdad. La jornada del 11 de agosto de una persona quedó con
+    `primera_entrada_at` del día 10 y 850 minutos trabajados contra 480
+    esperados — la entrada del lunes emparejada con la salida del martes.
+    No hubo error: solo un banco de horas con el doble de lo real.
+
+    La regla:
+      · turno normal  → el día calendario. Los horarios de MALE DENIM
+        (8:30–17:00 administración, 11:00–21:00 tiendas) no cruzan medianoche.
+      · turno nocturno → la ventana programada, con holgura a los dos lados
+        para tolerar que alguien llegue antes o se vaya después.
+
+    Una marcación que queda fuera no se pierde: cae en la jornada del día que
+    le corresponde, y si allí no cuadra, el motor levanta incidencia. Que se
+    vea es el punto.
+    """
+    if horario is None or not horario.cruza_medianoche:
+        return [e for e in eventos if e.timestamp.date() == work_date]
+
+    inicio, fin = _ventana_programada(work_date, horario)
+    holgura = timedelta(minutes=R.get("holgura_jornada_min", 240))
+    return [e for e in eventos if inicio - holgura <= e.timestamp <= fin + holgura]
+
+
+def _preparar_eventos(eventos, work_date, R, incidencias, pasos,
+                      horario: Optional[HorarioDia] = None) -> list[Evento]:
+    """Acota al día, ordena, descarta denegados y colapsa duplicados."""
+    del_dia = eventos_de_la_jornada(eventos, work_date, horario, R)
+    descartados = len(list(eventos)) - len(del_dia)
+    if descartados:
+        pasos.append(f"{descartados} marcación(es) de otros días quedaron fuera "
+                     f"de esta jornada.")
+
     ordenados = sorted(
-        [e for e in eventos if e.resultado == "concedido"],
+        [e for e in del_dia if e.resultado == "concedido"],
         key=lambda e: (e.timestamp, e.id),      # id desempata → orden estable
     )
     if not ordenados:

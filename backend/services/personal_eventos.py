@@ -30,7 +30,7 @@ from typing import Any, Optional
 
 from backend.core.timeutils import parse_iso
 from backend.services.personal_base import (
-    _now_iso, _sb, es_error_tabla_faltante, sb_requerido,
+    BOGOTA, _now_iso, _sb, es_error_tabla_faltante, sb_requerido,
 )
 
 log = logging.getLogger(__name__)
@@ -393,8 +393,10 @@ def eventos_del_dia(empleado_id: str, work_date: date) -> list[dict]:
     sb = _sb()
     if sb is None:
         return []
-    ini = datetime.combine(work_date - timedelta(days=1), datetime.min.time())
-    fin = datetime.combine(work_date + timedelta(days=1), datetime.min.time()) \
+    # Con offset de Bogotá: `event_timestamp` es TIMESTAMPTZ, y un naive se
+    # compara como UTC — la ventana quedaría corrida 5 horas.
+    ini = datetime.combine(work_date - timedelta(days=1), datetime.min.time(), BOGOTA)
+    fin = datetime.combine(work_date + timedelta(days=1), datetime.min.time(), BOGOTA) \
         + timedelta(hours=12)
     try:
         r = (sb.table("personal_eventos_crudos").select("*")

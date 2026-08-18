@@ -30,7 +30,8 @@ from backend.services import personal_eventos as ev_svc
 from backend.services import personal_motor as motor
 from backend.services import personal_reglas as reglas_svc
 from backend.services.personal_base import (
-    _now_iso, _sb, cache_get, cache_set, es_error_tabla_faltante, sb_requerido,
+    BOGOTA, _now_iso, _sb, cache_get, cache_set, es_error_tabla_faltante,
+    sb_requerido,
 )
 
 log = logging.getLogger(__name__)
@@ -146,9 +147,51 @@ def resolver_horario(empleado_id: str, work_date: date) -> Optional[motor.Horari
         return None
 
 
+def a_local(valor) -> datetime:
+    """TIMESTAMPTZ de la base → hora de pared de Bogotá, sin zona.
+
+    El motor trabaja en horas de pared: compara una marcación contra un horario
+    escrito como "08:30". Para que esa comparación signifique algo, ambos lados
+    tienen que estar en el mismo marco.
+
+    Postgres guarda TIMESTAMPTZ en UTC y PostgREST lo devuelve como
+    `2026-08-11T13:19:38+00:00`. Hacer `.replace(tzinfo=None)` ahí NO convierte:
+    deja `13:19:38` como si fuera hora local, y esa persona entró a las 08:19.
+
+    Cinco horas de corrimiento que no producen ningún error: producen tardanzas
+    inventadas y recargos nocturnos donde no los hubo.
+    """
+    dt = parse_iso(valor) if isinstance(valor, str) else valor
+    if dt.tzinfo is None:
+        # Ya viene sin zona: se asume que es hora de pared local, que es lo
+        # único que tiene sentido en este módulo.
+        return dt
+    return dt.astimezone(BOGOTA).replace(tzinfo=None)
+
+
+def de_local(dt: Optional[datetime]) -> Optional[str]:
+    """Hora de pared de Bogotá → ISO con offset, para guardar en TIMESTAMPTZ.
+
+    El complemento de `a_local`. Sin el offset explícito, Postgres interpreta
+    el naive según la zona de la sesión (UTC) y el horario de las 08:30 queda
+    guardado como las 03:30 de Bogotá.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=BOGOTA)
+    return dt.isoformat()
+
+
 def _ventana(work_date: date) -> tuple[str, str]:
-    ini = datetime.combine(work_date - timedelta(days=1), time(0, 0))
-    fin = datetime.combine(work_date + timedelta(days=1), time(23, 59))
+    """Ventana amplia para CONSULTAR; el motor decide qué cae dentro.
+
+    Va con offset de Bogotá: sin él, Postgres lee el naive como UTC y la
+    ventana queda corrida 5 horas. Con ±1 día de holgura no se perdía nada,
+    pero una ventana que miente sobre lo que pide es una trampa esperando.
+    """
+    ini = datetime.combine(work_date - timedelta(days=1), time(0, 0), BOGOTA)
+    fin = datetime.combine(work_date + timedelta(days=1), time(23, 59), BOGOTA)
     return ini.isoformat(), fin.isoformat()
 
 
@@ -168,8 +211,8 @@ def _permisos(empleado_id: str, work_date: date) -> list[motor.Permiso]:
              .gte("fin_solicitado_at", ini).execute())
         return [motor.Permiso(
             id=p["id"],
-            inicio=parse_iso(p["inicio_solicitado_at"]).replace(tzinfo=None),
-            fin=parse_iso(p["fin_solicitado_at"]).replace(tzinfo=None),
+            inicio=a_local(p["inicio_solicitado_at"]),
+            fin=a_local(p["fin_solicitado_at"]),
             minutos=int(p.get("minutos_solicitados") or 0),
         ) for p in (r.data or [])]
     except Exception as e:
@@ -194,8 +237,8 @@ def _compensaciones(empleado_id: str, work_date: date) -> list[motor.Compensacio
              .in_("estado", ["programado", "parcial"]).execute())
         return [motor.Compensacion(
             id=b["id"],
-            inicio=parse_iso(b["inicio_planeado_at"]).replace(tzinfo=None),
-            fin=parse_iso(b["fin_planeado_at"]).replace(tzinfo=None),
+            inicio=a_local(b["inicio_planeado_at"]),
+            fin=a_local(b["fin_planeado_at"]),
             minutos_planeados=int(b.get("minutos_planeados") or 0),
         ) for b in (r.data or [])]
     except Exception as e:
@@ -216,8 +259,8 @@ def _extras(empleado_id: str, work_date: date) -> list[motor.Extra]:
              .in_("estado", ["aprobada", "ejecutada"]).execute())
         return [motor.Extra(
             id=x["id"],
-            inicio=parse_iso(x["inicio_at"]).replace(tzinfo=None),
-            fin=parse_iso(x["fin_at"]).replace(tzinfo=None),
+            inicio=a_local(x["inicio_at"]),
+            fin=a_local(x["fin_at"]),
             minutos_autorizados=int(x.get("minutos_solicitados") or 0),
         ) for x in (r.data or [])]
     except Exception as e:
@@ -248,7 +291,7 @@ def _a_eventos_motor(filas: list[dict]) -> list[motor.Evento]:
     salida = []
     for f in filas:
         try:
-            ts = parse_iso(f["event_timestamp"]).replace(tzinfo=None)
+            ts = a_local(f["event_timestamp"])
         except Exception:
             continue
         salida.append(motor.Evento(
@@ -348,10 +391,10 @@ def _persistir(res: motor.Resultado) -> dict:
         "horario_id":                 j.horario_id,
         "turno_planificado_id":       j.turno_planificado_id,
         "sede_id":                    j.sede_id,
-        "inicio_programado":          j.inicio_programado.isoformat() if j.inicio_programado else None,
-        "fin_programado":             j.fin_programado.isoformat() if j.fin_programado else None,
-        "primera_entrada_at":         j.primera_entrada_at.isoformat() if j.primera_entrada_at else None,
-        "ultima_salida_at":           j.ultima_salida_at.isoformat() if j.ultima_salida_at else None,
+        "inicio_programado":          de_local(j.inicio_programado),
+        "fin_programado":             de_local(j.fin_programado),
+        "primera_entrada_at":         de_local(j.primera_entrada_at),
+        "ultima_salida_at":           de_local(j.ultima_salida_at),
         "minutos_esperados":          j.minutos_esperados,
         "minutos_trabajados":         j.minutos_trabajados,
         "minutos_permiso_autorizado": j.minutos_permiso_autorizado,
@@ -384,8 +427,8 @@ def _persistir(res: motor.Resultado) -> dict:
                 "jornada_id":        jid,
                 "evento_entrada_id": s.evento_entrada_id,
                 "evento_salida_id":  s.evento_salida_id,
-                "entrada_at":        s.entrada_at.isoformat() if s.entrada_at else None,
-                "salida_at":         s.salida_at.isoformat() if s.salida_at else None,
+                "entrada_at":        de_local(s.entrada_at),
+                "salida_at":         de_local(s.salida_at),
                 "minutos_trabajados": s.minutos,
                 "tipo_segmento":     s.tipo,
                 "estado":            s.estado,

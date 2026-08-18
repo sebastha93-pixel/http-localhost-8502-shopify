@@ -665,3 +665,85 @@ def test_sin_control_no_es_lo_mismo_que_no_sujeto_a_jornada():
     # El que no tiene lector no acumula nada, porque no hay qué medir
     assert operativo.jornada.minutos_trabajados == 0
     assert operativo.jornada.estado_asistencia == "sin_datos"
+
+
+# ── Alcance de la jornada: no contar los días vecinos ────────────────────────
+#
+# El bug real, encontrado con datos de producción el 2026-08-18.
+#
+# La consulta trae una ventana amplia (día anterior + siguiente) porque un turno
+# nocturno puede desbordar por cualquiera de los dos extremos. El motor se los
+# tragaba TODOS: la jornada del 11 de agosto de una persona quedó con
+# `primera_entrada_at` del día 10 y 850 minutos trabajados contra 480 esperados
+# — la entrada del lunes emparejada con la salida del martes.
+#
+# No hubo excepción ni log. Solo un banco de horas con el doble de lo real.
+
+from backend.services.personal_motor import _REGLAS_BASE, eventos_de_la_jornada
+
+ADMIN = horario(inicio="08:30", fin="17:00", descanso=("12:30", "13:00"),
+                esperados=480)
+
+
+def ev_ago(dia, hh, mm):
+    """Marcación de agosto, sin dirección — como las manda el Dahua real."""
+    return Evento(id=f"{dia}-{hh:02d}{mm:02d}",
+                  timestamp=datetime(2026, 8, dia, hh, mm),
+                  direccion="desconocida", resultado="concedido")
+
+
+def test_no_cuenta_las_marcaciones_del_dia_anterior():
+    """El caso exacto que se coló a producción."""
+    r = calcular_jornada(
+        empleado=emp(), work_date=date(2026, 8, 11), horario=ADMIN,
+        eventos=[ev_ago(10, 8, 12), ev_ago(10, 17, 2),   # lunes: NO son de aquí
+                 ev_ago(11, 8, 19), ev_ago(11, 17, 2)])  # martes: estas sí
+    assert r.jornada.primera_entrada_at == datetime(2026, 8, 11, 8, 19)
+    assert r.jornada.ultima_salida_at == datetime(2026, 8, 11, 17, 2)
+    # 8h43 entre marcas − 30 min de descanso no marcado
+    assert r.jornada.minutos_trabajados == 493
+    assert r.jornada.minutos_trabajados < 600, "se tragó el día vecino"
+
+
+def test_no_cuenta_las_marcaciones_del_dia_siguiente():
+    r = calcular_jornada(
+        empleado=emp(), work_date=date(2026, 8, 11), horario=ADMIN,
+        eventos=[ev_ago(11, 8, 30), ev_ago(11, 17, 0),
+                 ev_ago(12, 8, 25), ev_ago(12, 17, 5)])
+    assert r.jornada.ultima_salida_at == datetime(2026, 8, 11, 17, 0)
+
+
+def test_el_descarte_queda_dicho_en_la_explicacion():
+    """Descartar en silencio es cómo se cuela el error de vuelta."""
+    r = calcular_jornada(
+        empleado=emp(), work_date=date(2026, 8, 11), horario=ADMIN,
+        eventos=[ev_ago(10, 8, 12), ev_ago(11, 8, 19), ev_ago(11, 17, 2)])
+    assert "otros días" in (r.jornada.explicacion or "")
+
+
+def test_un_turno_nocturno_SI_reclama_la_madrugada_siguiente():
+    """El filtro no puede romper el caso para el que existe la ventana amplia."""
+    noche = horario(inicio="22:00", fin="06:00", descanso=None,
+                    esperados=480, cruza=True)
+    r = calcular_jornada(
+        empleado=emp(), work_date=date(2026, 8, 11), horario=noche,
+        eventos=[ev_ago(11, 21, 55), ev_ago(12, 6, 3)])
+    assert r.jornada.primera_entrada_at == datetime(2026, 8, 11, 21, 55)
+    assert r.jornada.ultima_salida_at == datetime(2026, 8, 12, 6, 3)
+    assert r.jornada.minutos_trabajados == 488
+
+
+def test_sin_horario_tambien_se_acota_al_dia():
+    """`sin_datos` no puede ser una puerta trasera para contar de más."""
+    r = calcular_jornada(
+        empleado=emp(), work_date=date(2026, 8, 11), horario=None,
+        eventos=[ev_ago(10, 8, 12), ev_ago(11, 8, 19), ev_ago(12, 9, 0)])
+    assert r.jornada.primera_entrada_at == datetime(2026, 8, 11, 8, 19)
+    assert r.jornada.ultima_salida_at == datetime(2026, 8, 11, 8, 19)
+
+
+def test_eventos_de_la_jornada_no_muta_lo_que_recibe():
+    eventos = [ev_ago(10, 8, 12), ev_ago(11, 8, 19)]
+    copia = list(eventos)
+    eventos_de_la_jornada(eventos, date(2026, 8, 11), ADMIN, dict(_REGLAS_BASE))
+    assert eventos == copia
