@@ -272,3 +272,47 @@ def test_una_lectura_COMPLETA_no_se_queja(monkeypatch):
         "pagination": {"total_results": 3},
         "results": paginas.get((params or {}).get("page", 1), [])})
     assert len(list(clientes_siigo.paginar(page_size=2))) == 3
+
+
+# ── La dirección en el alta del mostrador ───────────────────────────────────
+
+def test_el_alta_del_mostrador_guarda_DIRECCION(sesion):
+    """La factura real la imprime. La importación de Siigo sí traía dirección,
+    así que sin esto quedaba media base facturable y media no — y el corte lo
+    decidía quién creó a la clienta, no el negocio."""
+    from datetime import datetime, timezone
+    from backend.modules.retail.application.comandos.clientes import CrearCliente
+
+    async def crear():
+        await CrearCliente(sesion).ejecutar(
+            cliente_id="01JQ8X4T5N6P7R8S9V0W1XDD01", tipo_documento="CC",
+            numero_documento="1037368561", nombre="Eli Gonzalez",
+            telefono="3117910110", correo="eli@correo.com",
+            direccion="CL 50 A 86-450 APTO 513", ciudad="Medellín",
+            creado_por="maria", ahora=datetime.now(timezone.utc))
+        await sesion.commit()
+        return (await sesion.execute(text(
+            "SELECT direccion, ciudad FROM retail.clientes "
+            " WHERE numero_documento='1037368561'"))).mappings().first()
+
+    f = correr(crear())
+    assert f["direccion"] == "CL 50 A 86-450 APTO 513"
+    assert f["ciudad"] == "Medellín"
+
+
+def test_sin_direccion_se_registra_igual(sesion):
+    """Obligarla convertiría un dato en un forcejeo en pleno mostrador, y la
+    cajera acabaría escribiendo «no dio» en el campo."""
+    from datetime import datetime, timezone
+    from backend.modules.retail.application.comandos.clientes import CrearCliente
+
+    async def crear():
+        c = await CrearCliente(sesion).ejecutar(
+            cliente_id="01JQ8X4T5N6P7R8S9V0W1XDD02", tipo_documento="CC",
+            numero_documento="900123456", nombre="Sin Direccion",
+            telefono="3000000000", correo="x@y.com",
+            creado_por="maria", ahora=datetime.now(timezone.utc))
+        await sesion.commit()
+        return c
+
+    assert correr(crear()).numero_documento == "900123456"

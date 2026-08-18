@@ -177,6 +177,10 @@ export async function crearCliente(cuerpo: {
   nombre: string;
   telefono: string;
   correo: string;
+  /** La factura electrónica la imprime. Opcional: obligarla convertiría un
+   *  dato en un forcejeo en pleno mostrador. */
+  direccion?: string;
+  ciudad?: string;
 }): Promise<Cliente> {
   try {
     return await api.post<Cliente>("/api/retail/clientes", cuerpo);

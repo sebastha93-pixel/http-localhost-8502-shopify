@@ -11,17 +11,20 @@ LO QUE OCURRE EN UNA SOLA TRANSACCIÓN:
   3. las reservas se vuelven salidas reales de inventario
   4. el ingreso entra a la caja del turno
   5. la auditoría, encadenada
-  6. el outbox: emitir el documento fiscal, publicar el stock a Shopify
+  6. el outbox: emitir el documento fiscal
   COMMIT
 
 Y sólo DESPUÉS del commit: imprimir y avisar por WebSocket. Nunca antes —
 imprimir un ticket de una venta que después se revierte deja a la clienta con
 un papel que no existe en el sistema.
 
-LO QUE ESTE CASO DE USO **NO** HACE: llamar a Siigo. Ni a Shopify. Esas van al
-outbox y las despacha el worker (ADR-002). Si esperáramos a Siigo, el cierre
-pasaría de 800 ms a lo que Siigo quiera ese día, y la promesa de 30 segundos
-por venta se cae.
+LO QUE ESTE CASO DE USO **NO** HACE: llamar a Siigo. Eso va al outbox y lo
+despacha el worker (ADR-002). Si esperáramos a Siigo, el cierre pasaría de
+800 ms a lo que Siigo quiera ese día, y la promesa de 30 segundos por venta se
+cae.
+
+A SHOPIFY NO SE LE DICE NADA, y tampoco es un pendiente: la web vende contra el
+inventario de Melonn, no contra el de la tienda. Ver la nota en el paso 6.
 """
 from __future__ import annotations
 
@@ -166,12 +169,28 @@ class CerrarVenta:
                 agregado_id=venta.id,
                 payload={"venta_id": venta.id, "tienda_id": venta.tienda_id,
                          "caja_id": venta.caja_id})
-            await t.outbox.encolar(
-                tipo="publicar_stock_shopify", agregado_tipo="venta",
-                agregado_id=venta.id,
-                payload={"ubicacion_id": ubicacion_id,
-                         "variantes": [variante_por_sku[l.sku.codigo]
-                                       for l in venta.lineas]})
+            # NO SE ENCOLA STOCK PARA SHOPIFY, y es a propósito.
+            #
+            # Shopify vende contra el inventario de MELONN (bodega 32 de
+            # Siigo); el stock de la tienda física es un pozo distinto. O sea
+            # que lo que se venda en Florida no cambia lo que la web puede
+            # vender, y empujarlo a Shopify no arregla nada: lo rompe.
+            #
+            # Aquí se encolaba `publicar_stock_shopify` con
+            # `{ubicacion_id, variantes}` y NUNCA hubo consumidor — ni podía
+            # haberlo, porque `retail.ubicaciones` no tiene
+            # `shopify_location_id`: no existe el mapeo tienda↔location. La cola
+            # sólo acumulaba mensajes inejecutables (16 al quitarlo).
+            #
+            # Y las dos formas obvias de consumirla habrían hecho daño:
+            #   · Cantidad ABSOLUTA: borra del stock de Shopify las ventas web,
+            #     porque nada mete esas ventas al inventario del POS.
+            #   · DELTA: una cola con reintentos aplica el mismo descuento dos
+            #     veces y deja stock fantasma.
+            #
+            # Si algún día MALE quiere mostrar «disponible en tienda» en la web,
+            # esto vuelve — pero con mapeo de ubicación y con una sincronización
+            # de ENTRADA, no reactivando este encolado.
 
             await t.commit()
 

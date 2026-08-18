@@ -140,9 +140,14 @@ async def test_el_documento_fiscal_queda_encolado_no_emitido(entorno):
         usuario_id="maria")
 
     cola = await _filas(motor, "SELECT tipo, estado FROM retail.outbox ORDER BY tipo")
+    # SÓLO el documento fiscal. Aquí también se encolaba
+    # `publicar_stock_shopify`, y era código muerto: la web vende contra el
+    # inventario de Melonn, no contra el de la tienda, así que lo que se venda
+    # en Florida no cambia lo que Shopify puede vender. Nunca hubo consumidor
+    # —ni podía haberlo, sin mapeo tienda↔location— y la cola sólo acumulaba
+    # mensajes inejecutables.
     assert [(f["tipo"], f["estado"]) for f in cola] == [
         ("emitir_documento_fiscal", "pendiente"),
-        ("publicar_stock_shopify", "pendiente"),
     ]
     # Y no existe ningún documento fiscal todavía: eso es del worker.
     assert await _filas(motor, "SELECT 1 FROM retail.documentos_fiscales") == []

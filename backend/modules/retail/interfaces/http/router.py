@@ -389,6 +389,16 @@ class ClienteNuevo(BaseModel):
     nombre: str
     telefono: str
     correo: str
+    # LA DIRECCIÓN LA IMPRIME LA FACTURA. La tirilla real de Siigo la trae
+    # («CL 50 A 86-450 APTO 513…») y este alta no la pedía: la importación de
+    # Siigo sí trae dirección, así que sin esto quedaba media base facturable y
+    # media no — y el corte lo decidía quién creó a la clienta, no el negocio.
+    #
+    # Opcional a propósito: una clienta que no la quiere dar se registra igual.
+    # Obligarla convertiría un dato en un obstáculo en pleno mostrador, y la
+    # cajera acabaría escribiendo «no dio» en el campo.
+    direccion: Optional[str] = None
+    ciudad: Optional[str] = None
 
 
 @router.get("/clientes/buscar", response_model=List[ClienteSalida])
@@ -425,7 +435,8 @@ async def crear_cliente(
                 tipo_documento=entrada.tipo_documento,
                 numero_documento=entrada.numero_documento,
                 nombre=entrada.nombre, telefono=entrada.telefono,
-                correo=entrada.correo, creado_por=usuario.id,
+                correo=entrada.correo, direccion=entrada.direccion,
+                ciudad=entrada.ciudad, creado_por=usuario.id,
                 ahora=datetime.now(timezone.utc))
         except ReglaDeNegocio as e:
             raise HTTPException(400, {"error": "regla_de_negocio",

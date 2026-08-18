@@ -52,6 +52,11 @@ export function DialogoCliente({
   const [nombre, setNombre] = useState("");
   const [telefono, setTelefono] = useState("");
   const [correo, setCorreo] = useState("");
+  // LA DIRECCIÓN LA IMPRIME LA FACTURA — la tirilla real de Siigo la trae. No
+  // es obligatoria: una clienta que no la quiere dar se registra igual, y
+  // obligarla convertiría un dato en un forcejeo en pleno mostrador.
+  const [direccion, setDireccion] = useState("");
+  const [ciudad, setCiudad] = useState("");
 
   useEffect(() => {
     primero.current?.focus();
@@ -93,6 +98,8 @@ export function DialogoCliente({
         nombre,
         telefono,
         correo,
+        ...(direccion.trim() ? { direccion: direccion.trim() } : {}),
+        ...(ciudad.trim() ? { ciudad: ciudad.trim() } : {}),
       });
       onAsignar(c);
     } catch (e) {
@@ -218,6 +225,13 @@ export function DialogoCliente({
               tipo="email"
               ayuda="A este correo llega la factura electrónica."
             />
+            <Campo
+              etiqueta="Dirección (opcional)"
+              valor={direccion}
+              onCambio={setDireccion}
+              ayuda="La factura electrónica la imprime. Se puede dejar en blanco."
+            />
+            <Campo etiqueta="Ciudad (opcional)" valor={ciudad} onCambio={setCiudad} />
 
             {error && (
               <p

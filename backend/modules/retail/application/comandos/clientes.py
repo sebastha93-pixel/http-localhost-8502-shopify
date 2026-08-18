@@ -76,7 +76,9 @@ class CrearCliente:
     async def ejecutar(self, *, cliente_id: str, tipo_documento: str,
                        numero_documento: str, nombre: str, telefono: str,
                        correo: str, creado_por: str,
-                       ahora: datetime) -> ClienteEncontrado:
+                       ahora: datetime,
+                       direccion: str = "", ciudad: str = "",
+                       ) -> ClienteEncontrado:
         tipo = (tipo_documento or "").strip().upper()
         if tipo not in TIPOS_DOCUMENTO:
             raise ReglaDeNegocio(f"Tipo de documento no válido: {tipo_documento!r}")
@@ -110,11 +112,16 @@ class CrearCliente:
             await self._s.execute(text("""
                 INSERT INTO retail.clientes
                     (id, tipo_documento, numero_documento, nombre, apellido,
-                     telefono, correo, creado_por, creado_en, actualizado_en)
-                VALUES (:id, :tipo, :doc, :nom, :ape, :tel, :mail, :por, :ts, :ts)
+                     telefono, correo, direccion, ciudad,
+                     creado_por, creado_en, actualizado_en)
+                VALUES (:id, :tipo, :doc, :nom, :ape, :tel, :mail, :dir, :ciu,
+                        :por, :ts, :ts)
             """), {"id": cliente_id, "tipo": tipo, "doc": documento,
                    "nom": partes[0], "ape": partes[1] if len(partes) > 1 else "",
-                   "tel": tel, "mail": limpio, "por": creado_por, "ts": ahora})
+                   "tel": tel, "mail": limpio,
+                   "dir": (direccion or "").strip() or None,
+                   "ciu": (ciudad or "").strip() or None,
+                   "por": creado_por, "ts": ahora})
         except Exception as e:  # noqa: BLE001
             if "ux_cliente_doc" in str(e):
                 raise ReglaDeNegocio(
