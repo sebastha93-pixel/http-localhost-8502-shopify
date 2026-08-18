@@ -23,9 +23,24 @@ Write-Host "=== Oyente del grupo de produccion ===" -ForegroundColor Cyan
 # 1 · Node
 try { $v = (node --version) } catch { $v = $null }
 if (-not $v) {
-  Write-Host "Node no esta instalado." -ForegroundColor Red
-  Write-Host "Instalalo desde https://nodejs.org (version LTS) y vuelve a correr esta linea." -ForegroundColor Red
-  return
+  # Intentar con winget antes de rendirse: mandar a alguien a descargar un
+  # instalador a mano a mitad de camino es como se abandonan estas cosas.
+  Write-Host "Node no esta instalado. Intento instalarlo con winget..." -ForegroundColor Yellow
+  $tieneWinget = $false
+  try { winget --version | Out-Null; $tieneWinget = $true } catch { }
+  if ($tieneWinget) {
+    winget install --id OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements
+    # winget no refresca el PATH de la sesion actual: hay que releerlo o el
+    # 'node --version' de abajo seguiria fallando aunque quedo instalado.
+    $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+                [Environment]::GetEnvironmentVariable("Path", "User")
+    try { $v = (node --version) } catch { $v = $null }
+  }
+  if (-not $v) {
+    Write-Host "No pude instalar Node automaticamente." -ForegroundColor Red
+    Write-Host "Instalalo desde https://nodejs.org (version LTS) y vuelve a correr esta linea." -ForegroundColor Red
+    return
+  }
 }
 Write-Host "Node $v" -ForegroundColor Green
 
@@ -48,7 +63,9 @@ if (-not (Test-Path "$carpeta\.env")) {
   Write-Host ""
   Write-Host "Configuracion (una sola vez):" -ForegroundColor Cyan
   $secreto = Read-Host "  GRUPO_WA_SECRET"
-  $numero  = Read-Host "  Numero dedicado, formato internacional sin + (ej. 573001234567)"
+  Write-Host "  (si la linea dedicada todavia no existe, deja el numero VACIO:" -ForegroundColor Gray
+  Write-Host "   se instala todo y se vincula despues)" -ForegroundColor Gray
+  $numero  = Read-Host "  Numero dedicado, sin + (ej. 573001234567) o vacio"
   $numero  = ($numero -replace '[^0-9]', '')
   @"
 OS_URL=$BASE
@@ -78,9 +95,33 @@ $accion = "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$c
 schtasks /Create /TN $tarea /TR $accion /SC ONSTART /RU SYSTEM /RL HIGHEST /F | Out-Null
 Write-Host "tarea de Windows creada" -ForegroundColor Green
 
-# 7 · Vinculacion. Se arranca en primer plano UNA vez para que salga el codigo.
+# 7 · Vinculacion. Solo si hay numero: pedirle a WhatsApp un codigo de pareo
+#     para una linea que no existe termina en error y parece que algo se rompio.
+Get-Content "$carpeta\.env" | ForEach-Object {
+  if ($_ -match "^\s*([^#=]+)=(.*)$") {
+    [Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim(), "Process")
+  }
+}
+$numeroCfg = [Environment]::GetEnvironmentVariable("NUMERO_DEDICADO", "Process")
+
+if ([string]::IsNullOrWhiteSpace($numeroCfg)) {
+  Write-Host ""
+  Write-Host "=== INSTALADO, FALTA VINCULAR ===" -ForegroundColor Cyan
+  Write-Host "Todo quedo listo en $carpeta (Node, dependencias, tarea de Windows)." -ForegroundColor Green
+  Write-Host ""
+  Write-Host "Cuando la linea dedicada tenga WhatsApp activo:" -ForegroundColor Yellow
+  Write-Host "  1) Escribe el numero en NUMERO_DEDICADO dentro de $carpeta\.env" -ForegroundColor White
+  Write-Host "  2) cd $carpeta ; .\arrancar.ps1" -ForegroundColor White
+  Write-Host "  3) Teclea el codigo de 8 caracteres en ese WhatsApp:" -ForegroundColor White
+  Write-Host "     Ajustes -> Dispositivos vinculados -> Vincular con numero de telefono" -ForegroundColor White
+  Write-Host "  4) Cuando diga 'conectado', Ctrl+C y: schtasks /Run /TN `"$tarea`"" -ForegroundColor White
+  Write-Host ""
+  Write-Host "Log: $carpeta\oyente.log" -ForegroundColor Gray
+  return
+}
+
 Write-Host ""
-Write-Host "Vinculando el numero. En unos segundos aparece un CODIGO DE 8 CARACTERES." -ForegroundColor Yellow
+Write-Host "Vinculando. En unos segundos aparece un CODIGO DE 8 CARACTERES." -ForegroundColor Yellow
 Write-Host "Tecléalo en el WhatsApp de ese numero:" -ForegroundColor Yellow
 Write-Host "   Ajustes -> Dispositivos vinculados -> Vincular con numero de telefono" -ForegroundColor White
 Write-Host "(el codigo tambien queda en el OS, por si esta consola se cierra)" -ForegroundColor Gray
@@ -89,9 +130,4 @@ Write-Host "Cuando diga 'conectado a WhatsApp', cierra con Ctrl+C y corre:" -For
 Write-Host "   schtasks /Run /TN `"$tarea`"" -ForegroundColor White
 Write-Host ""
 
-Get-Content "$carpeta\.env" | ForEach-Object {
-  if ($_ -match "^\s*([^#=]+)=(.*)$") {
-    [Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim(), "Process")
-  }
-}
 node oyente.js
