@@ -53,8 +53,10 @@ import {
   confirmada,
   encolar,
   guardarCatalogo,
+  guardarContexto,
   idDelEquipo,
   leerCatalogo,
+  leerContexto,
   marcarContacto,
   ultimoContacto,
 } from "@/lib/pos/almacen";
@@ -199,8 +201,25 @@ export default function PantallaVenta() {
         setTurno(t);
         if (t) cargarBloque(t);
         setContexto(ctx);
+        // Se guarda para poder ABRIR TURNO sin red. En el contexto viajan las
+        // denominaciones y los medios de pago: sin ellos la pantalla de
+        // apertura sale con cero filas que contar y el POS no vende.
+        void guardarContexto(ctx);
       } catch (e) {
-        if (vigente) setErrorTurno(e instanceof Error ? e.message : "No se pudo leer el turno.");
+        // SIN RED SE TRABAJA CON LA COPIA. Antes esto pintaba «Failed to
+        // fetch» —el mensaje del navegador, en inglés— y dejaba la pantalla
+        // de apertura sin billetes que contar: la cajera no podía ni empezar.
+        const guardado = await leerContexto<ContextoCaja>();
+        if (!vigente) return;
+        if (guardado) {
+          setContexto(guardado);
+          setErrorTurno(null);
+        } else {
+          setErrorTurno(
+            "Este equipo no ha hablado con el servidor todavía y no hay copia "
+            + "local. Conéctalo a internet una vez para poder trabajar sin red "
+            + "después.");
+        }
       } finally {
         if (vigente) setCargandoTurno(false);
       }

@@ -20,11 +20,12 @@
  */
 
 const BASE = "pos-male";
-const VERSION = 2;
+const VERSION = 3;
 
 const PENDIENTES = "ventas_pendientes";
 const CARRITO = "carrito";
 const CATALOGO = "catalogo";
+const CONTEXTO = "contexto";
 
 export type EstadoPendiente = "en_cola" | "enviando" | "rechazada";
 
@@ -65,6 +66,9 @@ function abrir(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(CATALOGO)) {
         db.createObjectStore(CATALOGO);
+      }
+      if (!db.objectStoreNames.contains(CONTEXTO)) {
+        db.createObjectStore(CONTEXTO);
       }
     };
     peticion.onsuccess = () => resolver(peticion.result);
@@ -195,6 +199,32 @@ export async function guardarCatalogo<R>(
 export async function leerCatalogo<R>(): Promise<CatalogoGuardado<R> | undefined> {
   return conStore<CatalogoGuardado<R> | undefined>(
     CATALOGO, "readonly", (s) => s.get("completo"));
+}
+
+
+/**
+ * EL CONTEXTO DE LA CAJA, guardado.
+ *
+ * Sin esto, una tableta que enciende sin red no puede VENDER — ni siquiera
+ * abrir el turno. En el contexto viajan las DENOMINACIONES (sin ellas no hay
+ * nada que contar y el botón dice «Cuenta el cajón» para siempre) y los MEDIOS
+ * DE PAGO (sin ellos no hay con qué cobrar). También el encabezado de la
+ * tirilla: razón social, NIT y dirección.
+ *
+ * Lo encontré apagando el servidor de verdad: la pantalla de apertura salía
+ * con cero filas de billetes. Yo mismo había escrito en el router que estos
+ * datos «viajan con el contexto, que el equipo ya guarda» — y el equipo no lo
+ * guardaba. El comentario afirmaba algo que no era cierto.
+ */
+export async function guardarContexto(datos: unknown): Promise<void> {
+  await conStore(CONTEXTO, "readwrite", (s) =>
+    s.put({ datos, guardado_en: Date.now() }, "caja"));
+}
+
+export async function leerContexto<T>(): Promise<T | undefined> {
+  const g = await conStore<{ datos: T } | undefined>(
+    CONTEXTO, "readonly", (s) => s.get("caja"));
+  return g?.datos;
 }
 
 
