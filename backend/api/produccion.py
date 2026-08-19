@@ -2316,6 +2316,23 @@ def abrir_pendiente_lavanderia(
     return r
 
 
+@router.post("/lavanderia/reprocesar-espejo")
+def reprocesar_espejo_lavanderia(
+    limite: int = Query(default=200, ge=1, le=500),
+    desde:  str = Query(default=""),
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+) -> dict:
+    """Vuelve a leer mensajes YA guardados del grupo con la detección de hoy.
+
+    Hace falta cuando la detección mejora: los mensajes que decían «Ref 96616-1»
+    entraron cuando el código solo entendía consecutivos y no abrieron nada. El
+    espejo guarda el original justamente para poder volver sobre él. Repetirlo es
+    seguro: no abre dos veces por el mismo mensaje.
+    """
+    from backend.services import lavanderia_chase as lav
+    return lav.reprocesar_espejo(limite=limite, desde=desde)
+
+
 @router.post("/lavanderia/barrido")
 def correr_barrido_lavanderia(
     _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),

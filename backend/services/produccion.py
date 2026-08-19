@@ -5061,7 +5061,19 @@ def guardar_media_grupo(*, wa_message_id: str, file_bytes: bytes,
     except Exception as e:
         log.warning(f"[grupo] no pude enlazar media a {wa_message_id}: {str(e)[:160]}")
     log.info(f"[grupo] media guardada · {wa_message_id} · {len(file_bytes)} bytes")
-    return {"url": url, "bytes": len(file_bytes), "path": path}
+
+    # ¿Es la remisión de un lote? Se decide con el pie de foto, nunca a ciegas.
+    # Va dentro de try porque el archivo YA está guardado: si esto falla, la foto
+    # no se pierde y un humano la puede enlazar igual.
+    adjuntar = None
+    try:
+        from backend.services import lavanderia_chase
+        adjuntar = lavanderia_chase.al_llegar_media(wa_message_id)
+    except Exception as e:
+        log.warning(f"[grupo] revisión de remisión falló: {str(e)[:200]}")
+
+    return {"url": url, "bytes": len(file_bytes), "path": path,
+            "remision": adjuntar}
 
 
 def usar_media_grupo_como_remision(*, wa_message_id: str, ruta_id: str,

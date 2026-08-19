@@ -398,6 +398,132 @@ def anular_pendiente(pendiente_id: str, *, motivo: str, por: str = "") -> bool:
 # ENTRADA DESDE EL ESPEJO DEL GRUPO
 # ═══════════════════════════════════════════════════════════════════════
 
+_RE_REMISION = re.compile(r"remisi[óo]n|remision", re.I)
+
+
+def al_llegar_media(wa_message_id: str) -> dict:
+    """Llegó una foto del grupo. ¿Es la remisión de un lote?
+
+    POR QUÉ ESTO EXISTE ASÍ (2026-08-19). El diseño anterior guardaba la foto y
+    esperaba a que una persona dijera de qué lote era. Sebastián probó y dijo lo
+    obvio: «la remisión llegó, el lote sí está en el OS, y no hubo cambio en el
+    estado». Tenía razón — capturar la foto sin que mueva nada no es trazabilidad,
+    es un archivo bonito.
+
+    La regla para no adivinar: se adjunta sola SOLO cuando alguien nombró el lote.
+    Dos caminos, los dos con una afirmación humana detrás:
+
+      · el pie de foto dice «remisión» y trae un código que resuelve a UN lote
+      · el pie trae un código de un lote que YA tiene abierto el reloj de la
+        remisión, o sea que el OS estaba pidiendo justamente eso
+
+    Sin pie de foto no se adjunta nada: una foto muda no dice a qué lote
+    pertenece, y adivinarlo movería producción con una suposición.
+    """
+    from backend.services import produccion as prod
+    out = {"adjuntada": False, "motivo": "", "consecutivo": None}
+    sb = _sb()
+    if sb is None:
+        out["motivo"] = "sin_supabase"
+        return out
+    fila = (sb.table("mensajes_grupo_produccion")
+              .select("wa_message_id,texto,media_url,tipo")
+              .eq("wa_message_id", (wa_message_id or "").strip())
+              .limit(1).execute()).data
+    if not fila:
+        out["motivo"] = "mensaje_no_encontrado"
+        return out
+    pie = (fila[0].get("texto") or "").strip()
+    if not fila[0].get("media_url"):
+        out["motivo"] = "sin_archivo"
+        return out
+    if not pie:
+        out["motivo"] = "sin_pie_de_foto"
+        return out
+
+    codigos = [f"{a}-{b}" for a, b in _RE_CODIGO.findall(pie)]
+    if not codigos:
+        out["motivo"] = "el_pie_no_trae_codigo"
+        return out
+
+    dice_remision = bool(_RE_REMISION.search(pie))
+    for cod in codigos:
+        hallado = resolver_lote(cod)
+        ruta = hallado.get("ruta")
+        if not ruta:
+            continue
+        # Si el pie no dice «remisión», solo se acepta cuando el OS ya estaba
+        # pidiendo la remisión de ese lote. Así una foto cualquiera con un
+        # número no se convierte en documento por accidente.
+        if not dice_remision and not _tiene_pendiente_remision(ruta["id"]):
+            out["motivo"] = "el_pie_no_dice_remision_y_no_habia_pendiente"
+            continue
+        if ruta.get("remision_lavanderia_url"):
+            out["motivo"] = "el_lote_ya_tenia_remision"
+            continue
+        try:
+            prod.usar_media_grupo_como_remision(
+                wa_message_id=wa_message_id, ruta_id=ruta["id"],
+                usuario="OS · leído del grupo")
+        except Exception as e:
+            log.warning(f"[lavanderia-chase] adjuntar remisión falló: {str(e)[:200]}")
+            out["motivo"] = f"error:{str(e)[:100]}"
+            return out
+        cons = (ruta.get("orden_corte") or {}).get("consecutivo") or cod
+        out.update({"adjuntada": True, "motivo": "ok", "consecutivo": cons})
+        log.info(f"[lavanderia-chase] remisión adjuntada al lote {cons} desde el grupo")
+        _avisar_os(
+            titulo=f"Remisión de lavandería del lote {cons} cargada desde el grupo",
+            mensaje=(f"Llegó una foto al grupo con el pie «{pie[:120]}» y el OS la "
+                     f"guardó como remisión de ese lote. La etapa avanzó a "
+                     f"lavandería. Si es un error, se puede reemplazar desde la "
+                     f"hoja de ruta."),
+            enlace="/produccion/tablero",
+            dedup_wa_id=wa_message_id,
+        )
+        return out
+    if not out["motivo"]:
+        out["motivo"] = "ningun_codigo_del_pie_existe_en_el_os"
+    return out
+
+
+def _tiene_pendiente_remision(ruta_id: str) -> bool:
+    sb = _sb()
+    if sb is None:
+        return False
+    try:
+        r = (sb.table(TABLA).select("id")
+               .eq("hoja_ruta_id", ruta_id).eq("reloj", "remision")
+               .eq("estado", "abierto").limit(1).execute()).data
+        return bool(r)
+    except Exception:
+        return False
+
+
+def reprocesar_espejo(*, limite: int = 200, desde: str = "") -> dict:
+    """Vuelve a leer mensajes YA guardados con la detección de hoy.
+
+    Hace falta porque la detección cambia: los mensajes del 19-ago que decían
+    «Sale lote de lavandería / Ref 96616-1» entraron cuando el código solo
+    entendía consecutivos, así que no abrieron nada. El espejo guarda el
+    original justamente para poder volver sobre él.
+
+    Es seguro repetirlo: `_ya_procesado` impide abrir dos veces por el mismo
+    mensaje, y los códigos que no existen en el OS se ignoran.
+    """
+    sb = _sb()
+    if sb is None:
+        return {"ok": False, "error": "sin_supabase"}
+    q = (sb.table("mensajes_grupo_produccion")
+           .select("wa_message_id,texto,autor_nombre,enviado_en")
+           .order("enviado_en", desc=True).limit(min(int(limite), 500)))
+    if desde:
+        q = q.gte("enviado_en", desde)
+    filas = (q.execute()).data or []
+    res = procesar_mensajes(filas)
+    return {"ok": True, "mensajes_leidos": len(filas), **res}
+
+
 def _ya_procesado(wa_message_id: str) -> bool:
     """¿Este mensaje del grupo ya abrió un pendiente alguna vez?
 
