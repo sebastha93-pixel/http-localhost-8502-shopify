@@ -2128,3 +2128,20 @@ def _nuevo_ulid() -> str:
 def _ahora_utc():
     from datetime import datetime, timezone
     return datetime.now(timezone.utc)
+
+
+@router.get("/admin/siigo/comprobantes")
+async def diagnostico_comprobantes_siigo(
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """¿Se puede emitir con los comprobantes de las tiendas? Sólo lectura.
+
+    Es LA llamada que desbloquea la fase fiscal. Responde tres cosas de un
+    golpe, y cada una bloquea algo distinto: si el prefijo aparece —o sea, si
+    la API lo acepta—, en qué número va HOY (el del relevo), y quién pone el
+    número. Además trae las formas de pago CON SU ID, que es lo que falta para
+    Addi, Wompi y Sumas.
+    """
+    _exigir_admin(usuario)
+    from backend.modules.retail.infrastructure.siigo import comprobantes_siigo
+    return comprobantes_siigo.diagnostico_comprobantes()
