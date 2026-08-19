@@ -400,6 +400,72 @@ def anular_pendiente(pendiente_id: str, *, motivo: str, por: str = "") -> bool:
 
 _RE_REMISION = re.compile(r"remisi[óo]n|remision", re.I)
 
+# Minutos entre la foto y el mensaje que la identifica.
+#
+# POR QUÉ EXISTE ESTA VENTANA (Sebastián, 2026-08-19): la foto de la remisión
+# entró a las 09:49:57 SIN pie de foto, y la identificación llegó a las 09:50:33
+# en un mensaje aparte — «Revisión recogida de lote lavandería stone jeans Ref
+# 96616-1». Así se comporta la gente: manda la foto y después escribe qué es.
+# Exigir el texto dentro del pie de foto era pedirle al equipo que cambiara la
+# costumbre, que es justo lo que este proyecto prometió no hacer.
+VENTANA_PAREO_MIN = int(os.environ.get("LAVANDERIA_VENTANA_PAREO_MIN", "10"))
+
+
+def _texto_que_identifica(foto: dict) -> Optional[dict]:
+    """El mensaje de texto del MISMO autor más cercano en el tiempo a la foto.
+
+    Mira hacia adelante y hacia atrás: normalmente el texto llega DESPUÉS, pero
+    a veces se anuncia antes («ahí va la remisión del 96616-1») y luego la foto.
+    """
+    sb = _sb()
+    if sb is None:
+        return None
+    t = _ts(foto.get("enviado_en"))
+    autor = (foto.get("autor_nombre") or "").strip()
+    if t is None or not autor:
+        return None
+    desde = _iso(t - timedelta(minutes=VENTANA_PAREO_MIN))
+    hasta = _iso(t + timedelta(minutes=VENTANA_PAREO_MIN))
+    try:
+        filas = (sb.table("mensajes_grupo_produccion")
+                   .select("wa_message_id,texto,enviado_en,autor_nombre")
+                   .eq("autor_nombre", autor)
+                   .gte("enviado_en", desde).lte("enviado_en", hasta)
+                   .limit(40).execute()).data or []
+    except Exception as e:
+        log.warning(f"[lavanderia-chase] busqueda de texto vecino falló: {str(e)[:160]}")
+        return None
+    candidatos = []
+    for f in filas:
+        if f["wa_message_id"] == foto.get("wa_message_id"):
+            continue
+        txt = (f.get("texto") or "").strip()
+        if not txt or not _RE_LAVANDERIA.search(txt):
+            continue
+        if not _RE_CODIGO.search(txt):
+            continue
+        ft = _ts(f.get("enviado_en"))
+        if ft is None:
+            continue
+        candidatos.append((abs((ft - t).total_seconds()), f))
+    if not candidatos:
+        return None
+    candidatos.sort(key=lambda c: c[0])
+    return candidatos[0][1]
+
+
+def _media_ya_usada(media_url: str) -> bool:
+    """¿Esta foto ya es la remisión de algún lote? Evita re-adjuntarla."""
+    sb = _sb()
+    if sb is None or not media_url:
+        return False
+    try:
+        r = (sb.table("hoja_ruta_lote").select("id")
+               .eq("remision_lavanderia_url", media_url).limit(1).execute()).data
+        return bool(r)
+    except Exception:
+        return False
+
 
 def al_llegar_media(wa_message_id: str) -> dict:
     """Llegó una foto del grupo. ¿Es la remisión de un lote?
@@ -433,30 +499,48 @@ def al_llegar_media(wa_message_id: str) -> dict:
     if not fila:
         out["motivo"] = "mensaje_no_encontrado"
         return out
-    pie = (fila[0].get("texto") or "").strip()
-    if not fila[0].get("media_url"):
+    foto = fila[0]
+    if not foto.get("media_url"):
         out["motivo"] = "sin_archivo"
         return out
-    if not pie:
-        out["motivo"] = "sin_pie_de_foto"
+    if _media_ya_usada(foto["media_url"]):
+        out["motivo"] = "esta_foto_ya_es_remision_de_un_lote"
         return out
 
-    codigos = [f"{a}-{b}" for a, b in _RE_CODIGO.findall(pie)]
+    # De dónde sale la identificación del lote, en orden:
+    #   1. el pie de la foto
+    #   2. el mensaje del MISMO autor más cercano en el tiempo — que es el caso
+    #      real: la foto entró a las 09:49:57 y el «Ref 96616-1» a las 09:50:33
+    pie = (foto.get("texto") or "").strip()
+    fuente = "pie_de_foto"
+    texto_id = pie
+    if not _RE_CODIGO.search(texto_id or ""):
+        vecino = _texto_que_identifica(foto)
+        if vecino:
+            texto_id = (vecino.get("texto") or "").strip()
+            fuente = f"mensaje_vecino ({vecino.get('wa_message_id')})"
+    if not texto_id:
+        out["motivo"] = "sin_pie_ni_mensaje_que_la_identifique"
+        return out
+
+    codigos = [f"{a}-{b}" for a, b in _RE_CODIGO.findall(texto_id)]
     if not codigos:
-        out["motivo"] = "el_pie_no_trae_codigo"
+        out["motivo"] = "nada_identifica_el_lote"
         return out
+    out["fuente"] = fuente
 
-    dice_remision = bool(_RE_REMISION.search(pie))
+    dice_remision = bool(_RE_REMISION.search(texto_id))
     for cod in codigos:
         hallado = resolver_lote(cod)
         ruta = hallado.get("ruta")
         if not ruta:
             continue
-        # Si el pie no dice «remisión», solo se acepta cuando el OS ya estaba
-        # pidiendo la remisión de ese lote. Así una foto cualquiera con un
-        # número no se convierte en documento por accidente.
-        if not dice_remision and not _tiene_pendiente_remision(ruta["id"]):
-            out["motivo"] = "el_pie_no_dice_remision_y_no_habia_pendiente"
+        # Si el texto no dice «remisión» explícitamente, se acepta cuando el OS
+        # ya estaba siguiendo ese lote hacia lavandería — o sea, cuando hay algo
+        # abierto esperando justamente ese documento. Así una foto cualquiera con
+        # un número no se convierte en documento por accidente.
+        if not dice_remision and not _tiene_pendiente_lavanderia(ruta["id"]):
+            out["motivo"] = "no_dice_remision_y_no_habia_seguimiento_abierto"
             continue
         if ruta.get("remision_lavanderia_url"):
             out["motivo"] = "el_lote_ya_tenia_remision"
@@ -474,10 +558,10 @@ def al_llegar_media(wa_message_id: str) -> dict:
         log.info(f"[lavanderia-chase] remisión adjuntada al lote {cons} desde el grupo")
         _avisar_os(
             titulo=f"Remisión de lavandería del lote {cons} cargada desde el grupo",
-            mensaje=(f"Llegó una foto al grupo con el pie «{pie[:120]}» y el OS la "
-                     f"guardó como remisión de ese lote. La etapa avanzó a "
-                     f"lavandería. Si es un error, se puede reemplazar desde la "
-                     f"hoja de ruta."),
+            mensaje=(f"Llegó una foto al grupo y el OS la guardó como remisión de "
+                     f"ese lote. Identificada por {fuente}: «{texto_id[:110]}». "
+                     f"La etapa avanzó a lavandería. Si la foto no era la "
+                     f"remisión, se puede reemplazar desde la hoja de ruta."),
             enlace="/produccion/tablero",
             dedup_wa_id=wa_message_id,
         )
@@ -487,14 +571,20 @@ def al_llegar_media(wa_message_id: str) -> dict:
     return out
 
 
-def _tiene_pendiente_remision(ruta_id: str) -> bool:
+def _tiene_pendiente_lavanderia(ruta_id: str) -> bool:
+    """¿El OS está siguiendo este lote hacia lavandería ahora mismo?
+
+    Cuenta cualquiera de los dos relojes, no solo el de la remisión: si el lote
+    acaba de salir y todavía estamos en el de recogida, una foto que lo nombre
+    sigue siendo el documento que esperábamos.
+    """
     sb = _sb()
     if sb is None:
         return False
     try:
         r = (sb.table(TABLA).select("id")
-               .eq("hoja_ruta_id", ruta_id).eq("reloj", "remision")
-               .eq("estado", "abierto").limit(1).execute()).data
+               .eq("hoja_ruta_id", ruta_id)
+               .in_("estado", ["abierto", "escalado"]).limit(1).execute()).data
         return bool(r)
     except Exception:
         return False
@@ -522,6 +612,43 @@ def reprocesar_espejo(*, limite: int = 200, desde: str = "") -> dict:
     filas = (q.execute()).data or []
     res = procesar_mensajes(filas)
     return {"ok": True, "mensajes_leidos": len(filas), **res}
+
+
+def _adjuntar_fotos_huerfanas(mensaje_texto: dict) -> int:
+    """Fotos del mismo autor, cerca en el tiempo, que aún no son de ningún lote.
+
+    Se llama cuando un mensaje de TEXTO identificó un lote. El orden natural en
+    WhatsApp es foto primero y explicación después, así que cuando llega la
+    explicación hay que mirar atrás.
+    """
+    sb = _sb()
+    if sb is None:
+        return 0
+    t = _ts(mensaje_texto.get("enviado_en"))
+    autor = (mensaje_texto.get("autor_nombre") or "").strip()
+    if t is None or not autor:
+        return 0
+    try:
+        fotos = (sb.table("mensajes_grupo_produccion")
+                   .select("wa_message_id,media_url,enviado_en,autor_nombre,texto")
+                   .eq("autor_nombre", autor)
+                   .in_("tipo", ["imagen", "documento"])
+                   .gte("enviado_en", _iso(t - timedelta(minutes=VENTANA_PAREO_MIN)))
+                   .lte("enviado_en", _iso(t + timedelta(minutes=VENTANA_PAREO_MIN)))
+                   .limit(10).execute()).data or []
+    except Exception as e:
+        log.warning(f"[lavanderia-chase] busqueda de fotos huérfanas falló: {str(e)[:160]}")
+        return 0
+    n = 0
+    for f in fotos:
+        if not f.get("media_url"):
+            continue                       # todavía no subió el archivo
+        if _media_ya_usada(f["media_url"]):
+            continue
+        r = al_llegar_media(f["wa_message_id"])
+        if r.get("adjuntada"):
+            n += 1
+    return n
 
 
 def _ya_procesado(wa_message_id: str) -> bool:
@@ -556,7 +683,8 @@ def procesar_mensajes(mensajes: list[dict]) -> dict:
     # `ignorados` = se habló de lavandería pero el lote no es del OS. No es un
     # error ni un pendiente: es tráfico que no nos toca.
     res = {"revisados": 0, "detectados": 0, "abiertos": 0,
-           "sin_lote": 0, "ignorados": 0, "ya_existian": 0}
+           "sin_lote": 0, "ignorados": 0, "ya_existian": 0,
+           "fotos_adjuntadas": 0}
     for m in (mensajes or []):
         try:
             texto = (m.get("texto") or "").strip()
@@ -608,6 +736,11 @@ def procesar_mensajes(mensajes: list[dict]) -> dict:
                     log.info(f"[lavanderia-chase] {cod} ambiguo: {hallado['ambiguo']}")
                     continue
                 log.info(f"[lavanderia-chase] {cod} resuelto por {hallado['via']}")
+                # La foto suele llegar ANTES del texto que la identifica, así que
+                # cuando por fin sabemos de qué lote habla el mensaje, hay que
+                # volver sobre las fotos que quedaron sin dueño. Sin esto, el
+                # caso real (foto 09:49:57 → texto 09:50:33) nunca se cierra.
+                res["fotos_adjuntadas"] += _adjuntar_fotos_huerfanas(m)
                 r = abrir_pendiente(ruta=ruta, reloj="recogida", origen="grupo",
                                     wa_message_id=m.get("wa_message_id") or "",
                                     detectado_texto=texto,
