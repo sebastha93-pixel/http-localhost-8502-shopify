@@ -5004,6 +5004,99 @@ def guardar_mensajes_grupo(*, grupo_id: str, grupo_nombre: str,
             "deteccion": deteccion}
 
 
+_BUCKET_GRUPO = "produccion-trazos"
+_EXT_POR_MIME = {
+    "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png",
+    "image/webp": "webp", "application/pdf": "pdf",
+}
+
+
+def guardar_media_grupo(*, wa_message_id: str, file_bytes: bytes,
+                        mime: str = "", nombre: str = "") -> dict:
+    """Guarda el archivo de un mensaje del grupo y le pone la URL a su fila.
+
+    POR QUÉ EXISTE (2026-08-19): la remisión de lavandería llega como FOTO al
+    grupo. La fase 1 del oyente guardaba tipo='imagen' con media_url en null, o
+    sea quedaba constancia de que alguien mandó algo y nada más — el documento
+    que de verdad mueve producción se perdía.
+
+    El archivo lo sube el BACKEND, no el oyente: así la llave de Supabase no
+    tiene que vivir en el servidor de la oficina. El oyente solo tiene el
+    secreto del webhook, que es lo único que necesita.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    wa_message_id = (wa_message_id or "").strip()
+    if not wa_message_id:
+        raise ValueError("sin_wa_message_id")
+    if not file_bytes:
+        raise ValueError("archivo_vacio")
+
+    ext = ""
+    if "." in (nombre or ""):
+        ext = nombre.rsplit(".", 1)[-1].lower()
+    if ext not in ("jpg", "jpeg", "png", "webp", "pdf"):
+        ext = _EXT_POR_MIME.get((mime or "").split(";")[0].strip().lower(), "jpg")
+
+    # El id del mensaje puede traer caracteres raros; se limpia porque va en una
+    # ruta de storage.
+    seguro = "".join(c for c in wa_message_id if c.isalnum() or c in "-_")[:120]
+    path = f"grupo/{seguro}.{ext}"
+    try:
+        try:
+            sb.storage.from_(_BUCKET_GRUPO).remove([path])
+        except Exception:
+            pass
+        sb.storage.from_(_BUCKET_GRUPO).upload(
+            path, file_bytes,
+            {"content-type": mime or "application/octet-stream", "upsert": "true"})
+    except Exception as e:
+        raise RuntimeError(f"subir_media_grupo: {str(e)[:200]}")
+
+    url = sb.storage.from_(_BUCKET_GRUPO).get_public_url(path)
+    try:
+        sb.table("mensajes_grupo_produccion").update(
+            {"media_url": url}).eq("wa_message_id", wa_message_id).execute()
+    except Exception as e:
+        log.warning(f"[grupo] no pude enlazar media a {wa_message_id}: {str(e)[:160]}")
+    log.info(f"[grupo] media guardada · {wa_message_id} · {len(file_bytes)} bytes")
+    return {"url": url, "bytes": len(file_bytes), "path": path}
+
+
+def usar_media_grupo_como_remision(*, wa_message_id: str, ruta_id: str,
+                                   usuario: str = "") -> dict:
+    """Una foto del grupo se declara remisión de lavandería de un lote.
+
+    Lo confirma una PERSONA, no la IA: una foto sin pie de foto no dice a qué
+    lote pertenece, y adivinarlo movería producción con una suposición. El OS la
+    captura sola; el clic humano es el que la convierte en documento del lote.
+
+    Reusa `actualizar_ruta_lote`, así que hereda el avance de etapa a
+    'lavanderia' y el cierre del pendiente de la remisión.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    fila = (sb.table("mensajes_grupo_produccion").select("media_url,tipo")
+              .eq("wa_message_id", (wa_message_id or "").strip())
+              .limit(1).execute()).data
+    if not fila:
+        raise ValueError("mensaje_no_encontrado")
+    url = (fila[0].get("media_url") or "").strip()
+    if not url:
+        raise ValueError("mensaje_sin_archivo")
+    ruta = actualizar_ruta_lote(ruta_id, {"remision_lavanderia_url": url})
+    try:
+        crear_nota_ruta(ruta_id=ruta_id, actor="admin",
+                        mensaje=(f"Remisión de lavandería tomada de una foto del "
+                                 f"grupo de WhatsApp (mensaje {wa_message_id})"),
+                        autor=usuario or "OS")
+    except Exception as e:
+        log.warning(f"[grupo] nota de remisión falló: {str(e)[:160]}")
+    return {"ok": True, "url": url, "ruta": ruta}
+
+
 def listar_mensajes_grupo(*, limite: int = 100, desde: str = "",
                           buscar: str = "") -> list[dict]:
     sb = _sb()

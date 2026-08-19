@@ -144,17 +144,28 @@ def _horas_desde(valor) -> Optional[float]:
 # DETECCIÓN · leer el grupo sin creerle demasiado
 # ═══════════════════════════════════════════════════════════════════════
 
-# Consecutivo de orden de corte: 2608-0007 (AAMM-NNNN). Se admite espacio
-# alrededor del guion porque la gente escribe rápido. La validación de verdad
-# no es la forma: es que ese consecutivo EXISTA en ordenes_corte.
-_RE_CONSECUTIVO = re.compile(r"\b(\d{4})\s*-\s*(\d{3,5})\b")
+# Código de lote tal como lo escribe la gente. Cubre DOS cosas a propósito:
+#   · consecutivo de orden de corte  → 2608-0007  (AAMM-NNNN)
+#   · código de referencia           → 96616-1, 26620-1
+#
+# COMPROBADO CON EL GRUPO REAL (2026-08-19): el diseñador NO escribe el
+# consecutivo, escribe la referencia — «Sale lote de lavandería / Ref 45610-1 /
+# Terminacion Francy». La primera versión de esto exigía consecutivo y por eso
+# habría detectado CERO de los tres mensajes reales de ese día.
+#
+# No se intenta distinguir por la forma: se saca el código y **la base decide**
+# si es un consecutivo, una referencia, o nada. Es la única validación honesta.
+_RE_CODIGO = re.compile(r"\b(\d{3,6})\s*-\s*(\d{1,5})\b")
 
 _RE_LAVANDERIA = re.compile(r"lavander[íi]a|lavanderia|lavando|lavada", re.I)
 
 # Señal de salida. Sin esto, un «la lavandería llamó» abriría persecución.
+# `recogid|recodig` incluye el typo real que escribieron en el grupo
+# («Revisión recodiga de lote lavandería»).
 _RE_SALIDA = re.compile(
     r"\b(sale|salen|sali[óo]|salieron|va|van|despach|enviad|envi[éeo]|"
-    r"mand[éoa]|para\s+lavander|a\s+lavander|listo\s+para\s+lavar|recoger)",
+    r"mand[éoa]|para\s+lavander|a\s+lavander|listo\s+para\s+lavar|"
+    r"recoger|recogid|recodig)",
     re.I)
 
 # Si el mensaje niega o corrige, no se abre nada. Es más barato perder una
@@ -167,29 +178,29 @@ _RE_NEGACION = re.compile(
 def detectar_salida_lavanderia(texto: str) -> dict:
     """¿Este mensaje dice que un lote sale a lavandería? ¿Cuál lote?
 
-    Devuelve {'es_salida': bool, 'consecutivos': [...], 'motivo': str}.
+    Devuelve {'es_salida': bool, 'codigos': [...], 'motivo': str}.
     Deliberadamente conservador: exige mención de lavandería + señal de salida
     + ausencia de negación. Un falso negativo lo arregla una persona; un falso
     positivo le escribe a un proveedor.
     """
     t = (texto or "").strip()
     if not t:
-        return {"es_salida": False, "consecutivos": [], "motivo": "vacio"}
+        return {"es_salida": False, "codigos": [], "motivo": "vacio"}
     if not _RE_LAVANDERIA.search(t):
-        return {"es_salida": False, "consecutivos": [], "motivo": "sin_mencion_lavanderia"}
+        return {"es_salida": False, "codigos": [], "motivo": "sin_mencion_lavanderia"}
     if _RE_NEGACION.search(t):
-        return {"es_salida": False, "consecutivos": [], "motivo": "negacion"}
+        return {"es_salida": False, "codigos": [], "motivo": "negacion"}
     if not _RE_SALIDA.search(t):
-        return {"es_salida": False, "consecutivos": [], "motivo": "sin_senal_de_salida"}
-    cons = [f"{a}-{b}" for a, b in _RE_CONSECUTIVO.findall(t)]
-    # dedup conservando orden
+        return {"es_salida": False, "codigos": [], "motivo": "sin_senal_de_salida"}
+    # dedup conservando orden de aparición
     vistos, unicos = set(), []
-    for c in cons:
+    for a, b in _RE_CODIGO.findall(t):
+        c = f"{a}-{b}"
         if c not in vistos:
             vistos.add(c)
             unicos.append(c)
-    return {"es_salida": True, "consecutivos": unicos,
-            "motivo": "ok" if unicos else "sin_consecutivo"}
+    return {"es_salida": True, "codigos": unicos,
+            "motivo": "ok" if unicos else "sin_codigo"}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -197,7 +208,7 @@ def detectar_salida_lavanderia(texto: str) -> dict:
 # ═══════════════════════════════════════════════════════════════════════
 
 def _ruta_por_consecutivo(consecutivo: str) -> Optional[dict]:
-    """La hoja de ruta del lote, buscando por el consecutivo que dijo el grupo."""
+    """La hoja de ruta del lote, buscando por el consecutivo de orden de corte."""
     from backend.services import produccion as prod
     sb = _sb()
     if sb is None:
@@ -207,6 +218,65 @@ def _ruta_por_consecutivo(consecutivo: str) -> Optional[dict]:
     if not oc:
         return None
     return prod.obtener_ruta_por_corte(oc[0]["id"])
+
+
+def resolver_lote(codigo: str) -> dict:
+    """Del código que dijo el grupo al lote concreto.
+
+    Devuelve {'ruta': dict|None, 'via': 'consecutivo'|'referencia'|None,
+              'ambiguo': [consecutivos]}.
+
+    POR QUÉ NO ES UN SIMPLE SELECT. Un consecutivo apunta a un lote y ya. Pero
+    una REFERENCIA puede tener varias órdenes de corte (la misma prenda cortada
+    en tandas distintas), y el grupo dice «Ref 96616-1» sin decir cuál tanda. En
+    ese caso:
+
+      · un solo candidato perseguible  → ese es
+      · varios                          → NO se adivina. Se devuelve `ambiguo` y
+                                          un humano lo enlaza desde el OS.
+
+    «Perseguible» = tiene hoja de ruta y todavía no tiene remisión de lavandería.
+    Un lote que ya entregó su remisión no vuelve a la cola por un mensaje nuevo.
+    """
+    from backend.services import produccion as prod
+    codigo = (codigo or "").strip()
+    vacio = {"ruta": None, "via": None, "ambiguo": []}
+    sb = _sb()
+    if sb is None or not codigo:
+        return vacio
+
+    # 1) ¿Es un consecutivo de orden de corte?
+    ruta = _ruta_por_consecutivo(codigo)
+    if ruta:
+        return {"ruta": ruta, "via": "consecutivo", "ambiguo": []}
+
+    # 2) ¿Es un código de referencia del precosteo?
+    try:
+        ref = (sb.table("referencias_precosteo").select("id,codigo_referencia")
+                 .eq("codigo_referencia", codigo).limit(1).execute()).data
+    except Exception as e:
+        log.warning(f"[lavanderia-chase] busqueda de referencia falló: {str(e)[:160]}")
+        return vacio
+    if not ref:
+        return vacio
+
+    ordenes = (sb.table("ordenes_corte").select("id,consecutivo,created_at")
+                 .eq("referencia_id", ref[0]["id"])
+                 .order("created_at", desc=True).limit(50).execute()).data or []
+
+    candidatos = []
+    for oc in ordenes:
+        r = prod.obtener_ruta_por_corte(oc["id"])
+        if r and not r.get("remision_lavanderia_url"):
+            candidatos.append(r)
+
+    if len(candidatos) == 1:
+        return {"ruta": candidatos[0], "via": "referencia", "ambiguo": []}
+    if len(candidatos) > 1:
+        return {"ruta": None, "via": "referencia",
+                "ambiguo": [(c.get("orden_corte") or {}).get("consecutivo") or c["id"]
+                            for c in candidatos]}
+    return vacio
 
 
 def abrir_pendiente(*, ruta: dict, reloj: str, origen: str = "grupo",
@@ -372,7 +442,7 @@ def procesar_mensajes(mensajes: list[dict]) -> dict:
                 continue
             res["detectados"] += 1
 
-            if not d["consecutivos"]:
+            if not d["codigos"]:
                 res["sin_lote"] += 1
                 _avisar_os(
                     titulo="En el grupo dijeron que algo sale a lavandería",
@@ -383,12 +453,27 @@ def procesar_mensajes(mensajes: list[dict]) -> dict:
                 )
                 continue
 
-            for cons in d["consecutivos"]:
-                ruta = _ruta_por_consecutivo(cons)
+            for cod in d["codigos"]:
+                hallado = resolver_lote(cod)
+                ruta = hallado["ruta"]
                 if not ruta:
                     res["sin_lote"] += 1
-                    log.info(f"[lavanderia-chase] consecutivo {cons} no existe — ignorado")
+                    if hallado["ambiguo"]:
+                        # La referencia existe pero tiene varias tandas abiertas.
+                        # Adivinar cuál sería peor que preguntar.
+                        _avisar_os(
+                            titulo=f"«{cod}» sale a lavandería, pero hay varios lotes de esa referencia",
+                            mensaje=("No sé cuál es: " + ", ".join(hallado["ambiguo"][:6]) +
+                                     f". Texto del grupo: «{texto[:150]}». "
+                                     f"Ábrele el seguimiento al lote correcto desde el OS."),
+                            enlace="/produccion/lavanderia",
+                            dedup_wa_id=m.get("wa_message_id") or "",
+                        )
+                        log.info(f"[lavanderia-chase] {cod} ambiguo: {hallado['ambiguo']}")
+                    else:
+                        log.info(f"[lavanderia-chase] {cod} no existe en el OS — ignorado")
                     continue
+                log.info(f"[lavanderia-chase] {cod} resuelto por {hallado['via']}")
                 r = abrir_pendiente(ruta=ruta, reloj="recogida", origen="grupo",
                                     wa_message_id=m.get("wa_message_id") or "",
                                     detectado_texto=texto,

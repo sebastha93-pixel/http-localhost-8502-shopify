@@ -2147,6 +2147,84 @@ def estado_grupo(_: CurrentUser = Depends(get_current_user)) -> dict:
     return svc.estado_oyente_grupo()
 
 
+class MediaGrupoIn(BaseModel):
+    wa_message_id: str = Field(min_length=1, max_length=200)
+    mime:          str = ""
+    nombre:        str = ""
+    # base64 y no multipart: el oyente es un script de Node en el servidor de la
+    # oficina, y armar multipart a mano ahí es más frágil que pagar el 33% de
+    # más que cuesta base64 en una foto de celular.
+    contenido_b64: str = Field(min_length=1)
+
+
+# Tope de tamaño. Una remisión fotografiada con un celular pesa 1-4 MB; 15 MB
+# deja margen de sobra y evita que un video suba por accidente.
+_MAX_MEDIA_MB = 15
+
+
+@router.post("/grupo/media")
+async def recibir_media_grupo(body: MediaGrupoIn, request: Request) -> dict:
+    """El archivo de un mensaje del grupo (la foto de la remisión).
+
+    Lo manda el oyente, autenticado por el mismo secreto que los mensajes. Sube
+    el archivo el backend para que la llave de Supabase no viva en el servidor
+    de la oficina.
+    """
+    _verificar_secreto_oyente(request)
+    import base64
+    try:
+        crudo = base64.b64decode(body.contenido_b64, validate=True)
+    except Exception:
+        raise HTTPException(400, "base64_invalido")
+    if len(crudo) > _MAX_MEDIA_MB * 1024 * 1024:
+        raise HTTPException(413, f"archivo_muy_grande (max {_MAX_MEDIA_MB} MB)")
+    try:
+        return {"ok": True, **svc.guardar_media_grupo(
+            wa_message_id=body.wa_message_id, file_bytes=crudo,
+            mime=body.mime, nombre=body.nombre)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"guardar_media_grupo: {str(e)[:200]}")
+
+
+class UsarComoRemisionIn(BaseModel):
+    ruta_id:     str = ""
+    consecutivo: str = ""   # consecutivo de corte o código de referencia
+
+
+@router.post("/grupo/mensajes/{wa_message_id}/usar-como-remision")
+def usar_como_remision(
+    wa_message_id: str,
+    body: UsarComoRemisionIn,
+    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+) -> dict:
+    """Declara que la foto de ese mensaje del grupo ES la remisión de un lote.
+
+    El paso lo da una persona a propósito. Una foto sin pie de foto no dice a
+    qué lote pertenece; que la IA lo adivinara movería producción con una
+    suposición. El OS captura la foto solo, el humano solo confirma cuál lote.
+    """
+    from backend.services import lavanderia_chase as lav
+    ruta_id = body.ruta_id.strip()
+    if not ruta_id and body.consecutivo.strip():
+        hallado = lav.resolver_lote(body.consecutivo.strip())
+        if hallado["ambiguo"]:
+            raise HTTPException(409, "varios_lotes_de_esa_referencia: "
+                                     + ", ".join(hallado["ambiguo"][:6]))
+        if hallado["ruta"]:
+            ruta_id = hallado["ruta"]["id"]
+    if not ruta_id:
+        raise HTTPException(404, "lote_no_encontrado")
+    try:
+        return svc.usar_media_grupo_como_remision(
+            wa_message_id=wa_message_id, ruta_id=ruta_id, usuario=user.email)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"usar_como_remision: {str(e)[:200]}")
+
+
 # ── Persecución de la remisión de lavandería · LOS DOS RELOJES ───────────
 #
 # Cuando el diseñador dice en el grupo que un lote sale para lavandería, el OS
@@ -2222,7 +2300,13 @@ def abrir_pendiente_lavanderia(
     if body.orden_corte_id:
         ruta = svc.obtener_ruta_por_corte(body.orden_corte_id)
     elif body.consecutivo.strip():
-        ruta = lav._ruta_por_consecutivo(body.consecutivo.strip())
+        # Acepta consecutivo (2608-0007) o código de referencia (96616-1), que
+        # es como habla el grupo de verdad.
+        hallado = lav.resolver_lote(body.consecutivo.strip())
+        if hallado["ambiguo"]:
+            raise HTTPException(409, "varios_lotes_de_esa_referencia: "
+                                     + ", ".join(hallado["ambiguo"][:6]))
+        ruta = hallado["ruta"]
     if not ruta:
         raise HTTPException(404, "lote_no_encontrado")
     r = lav.abrir_pendiente(ruta=ruta, reloj=body.reloj, origen="manual",

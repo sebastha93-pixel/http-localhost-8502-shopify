@@ -40,6 +40,7 @@ const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
+  downloadMediaMessage,
 } = require("@whiskeysockets/baileys");
 
 const OS_URL = (process.env.OS_URL || "").replace(/\/+$/, "");
@@ -141,6 +142,57 @@ async function enviarAlOS(payload) {
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
   return r.json();
+}
+
+// Tope: una remisión fotografiada pesa 1-4 MB. 15 MB deja margen y evita que
+// un video del grupo se suba por accidente (el backend rechaza más de eso).
+const MAX_MEDIA_BYTES = 15 * 1024 * 1024;
+
+/**
+ * Baja el archivo de un mensaje y lo manda al OS.
+ *
+ * POR QUÉ EL OYENTE NO SUBE A SUPABASE DIRECTO: habría que poner la llave de
+ * Supabase en el servidor de la oficina. Se manda al backend, que ya tiene la
+ * llave, usando el mismo secreto del webhook que este proceso ya conoce.
+ *
+ * Nunca lanza: si una foto no se puede bajar, el mensaje YA está en el espejo
+ * y perder el archivo no puede tumbar el oyente.
+ */
+async function enviarMedia(m, wa_message_id) {
+  try {
+    const c = m.message || {};
+    const nodo = c.imageMessage || c.documentMessage || null;
+    if (!nodo) return false;
+
+    const buf = await downloadMediaMessage(m, "buffer", {});
+    if (!buf || !buf.length) {
+      log(`media vacía en ${wa_message_id}`);
+      return false;
+    }
+    if (buf.length > MAX_MEDIA_BYTES) {
+      log(`media de ${wa_message_id} pesa ${Math.round(buf.length / 1048576)} MB; no se sube`);
+      return false;
+    }
+    const r = await fetch(`${OS_URL}/api/produccion/grupo/media`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Webhook-Secret": SECRET },
+      body: JSON.stringify({
+        wa_message_id,
+        mime: nodo.mimetype || "",
+        nombre: nodo.fileName || "",
+        contenido_b64: buf.toString("base64"),
+      }),
+    });
+    if (!r.ok) {
+      log(`media ${wa_message_id} rechazada: HTTP ${r.status} ${(await r.text()).slice(0, 120)}`);
+      return false;
+    }
+    log(`media subida (${wa_message_id}, ${Math.round(buf.length / 1024)} KB)`);
+    return true;
+  } catch (e) {
+    log(`no pude bajar la media de ${wa_message_id}: ${e.message}`);
+    return false;
+  }
 }
 
 async function drenarPendientes() {
@@ -258,6 +310,10 @@ async function arrancar() {
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;   // 'append' es historial, no novedades
     const utiles = [];
+    // Los mensajes que traen archivo, junto con el objeto original: bajar la
+    // media necesita el mensaje completo (llave y ruta del archivo), que no
+    // sobrevive al mapeo del payload.
+    const conMedia = [];
     for (const m of messages) {
       const jid = m.key?.remoteJid || "";
       if (!jid.endsWith("@g.us")) continue;              // solo grupos
@@ -275,10 +331,14 @@ async function arrancar() {
         autor_nombre: m.pushName || "",
         tipo,
         texto,
-        media_url: null,   // fase 1 no descarga archivos todavía
+        // La URL la pone el backend cuando reciba el archivo (paso siguiente).
+        media_url: null,
         enviado_en: new Date((Number(m.messageTimestamp) || 0) * 1000).toISOString(),
         crudo: null,
       });
+      if (tipo === "imagen" || tipo === "documento") {
+        conMedia.push({ m, wa_message_id: m.key.id });
+      }
     }
     if (!utiles.length) return;
     if (!grupoObjetivo) {
@@ -296,6 +356,11 @@ async function arrancar() {
     try {
       const res = await enviarAlOS(payload);
       log(`enviados ${utiles.length}, guardados ${res.guardados}`);
+      // Los archivos van DESPUÉS del texto y de uno en uno: si la subida de una
+      // foto falla, la fila del espejo ya existe y el mensaje no se pierde.
+      for (const { m, wa_message_id } of conMedia) {
+        await enviarMedia(m, wa_message_id);
+      }
     } catch (e) {
       log(`fallo el envío (${e.message}); queda en cola`);
       encolar(payload);
