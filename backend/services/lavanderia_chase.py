@@ -800,7 +800,17 @@ def barrer() -> dict:
                 continue
 
             # ── 1. ¿ya se cumplió?
-            if p["reloj"] == "recogida" and ruta.get("lav_recibido_at"):
+            #
+            # Tener la REMISIÓN cierra también el reloj de la recogida, no solo
+            # el suyo: si la remisión existe, es imposible que no hayan recogido
+            # el lote. Sin esta línea, un lote cuya remisión llegó por el grupo
+            # —sin que la lavandería confirmara en el portal— seguiría con el
+            # reloj 1 abierto y a los 3 días escalaría «la lavandería no ha
+            # recogido», que sería falso y le enseñaría a la gente a ignorar los
+            # escalamientos.
+            ya_lo_tiene = (ruta.get("lav_recibido_at")
+                           or ruta.get("remision_lavanderia_url"))
+            if p["reloj"] == "recogida" and ya_lo_tiene:
                 cerrar_pendientes(p["hoja_ruta_id"], reloj="recogida",
                                   motivo="confirmo_recogida")
                 resumen["cerrados"] += 1
