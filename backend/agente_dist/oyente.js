@@ -91,6 +91,61 @@ function log(...a) {
 }
 
 /**
+ * AUTOACTUALIZACIÓN — para que nadie tenga que volver a entrar al servidor.
+ *
+ * POR QUÉ EXISTE (2026-08-19): cada cambio en este archivo obligaba a una sesión
+ * de escritorio remoto al MDS. Eso tiene tres costos: Windows 10 permite UNA
+ * sesión interactiva, así que conectarse SACA a quien esté trabajando; el
+ * instalador necesita elevación, o sea que alguien tiene que estar ahí para dar
+ * el UAC; y en la práctica significa que los arreglos esperan días.
+ *
+ * Cómo se protege de romperse a sí mismo, que es el riesgo real de esto:
+ *   1. el archivo bajado tiene que traer el sello y un tamaño razonable
+ *   2. se valida con `node --check` ANTES de reemplazar — un error de sintaxis
+ *      dejaría el oyente muerto y sin forma de arreglarlo desde acá
+ *   3. se guarda oyente.js.bak con la versión que sí funcionaba
+ * Solo entonces se reemplaza y el proceso SALE: la tarea de Windows lo levanta
+ * a los pocos minutos con el código nuevo.
+ */
+const SELLO = "OYENTE DEL GRUPO DE PRODUCCIÓN";
+const MIN_BYTES_VALIDO = 5000;
+const REVISAR_VERSION_MIN = Number(process.env.REVISAR_VERSION_MIN || 15);
+
+async function buscarActualizacion() {
+  try {
+    const r = await fetch(`${OS_URL}/api/produccion/agente/oyente.js`);
+    if (!r.ok) return;
+    const nuevo = await r.text();
+    const propio = fs.readFileSync(__filename, "utf8");
+    if (nuevo === propio) return;                       // ya estamos al día
+
+    if (nuevo.length < MIN_BYTES_VALIDO || !nuevo.includes(SELLO)) {
+      log(`versión nueva descartada: no parece el oyente (${nuevo.length} bytes)`);
+      return;
+    }
+    const tmp = path.join(__dirname, "oyente.js.nuevo");
+    fs.writeFileSync(tmp, nuevo);
+    try {
+      require("child_process").execFileSync(process.execPath, ["--check", tmp],
+                                            { stdio: "pipe" });
+    } catch (e) {
+      log("versión nueva DESCARTADA: no compila. Me quedo con la que funciona.");
+      try { fs.unlinkSync(tmp); } catch (_) {}
+      return;
+    }
+    try {
+      fs.copyFileSync(__filename, path.join(__dirname, "oyente.js.bak"));
+    } catch (_) { /* el respaldo es deseable, no obligatorio */ }
+    fs.renameSync(tmp, __filename);
+    log("código actualizado; salgo para que la tarea me levante con la versión nueva");
+    latido({ error: "" }).catch(() => {});
+    setTimeout(() => process.exit(0), 1500);
+  } catch (e) {
+    log(`no pude revisar si hay versión nueva: ${e.message}`);
+  }
+}
+
+/**
  * Los mensajes que no se pudieron enviar quedan en un archivo y se reintentan.
  *
  * Sin esto, un corte de internet de diez minutos —o un redeploy del backend—
@@ -374,6 +429,15 @@ setInterval(() => {
   drenarPendientes().catch(() => {});
   latido({});   // señal de vida, para distinguir "grupo callado" de "proceso muerto"
 }, 120000);
+
+// Revisar si hay código nuevo. Va aparte y más lento que el latido: es una
+// descarga de ~15 KB y no hay ninguna prisa. La primera revisión espera un rato
+// para no competir con la vinculación al arrancar.
+setTimeout(() => {
+  buscarActualizacion().catch(() => {});
+  setInterval(() => buscarActualizacion().catch(() => {}),
+              REVISAR_VERSION_MIN * 60000);
+}, 5 * 60000);
 
 if (!tomarCerrojo()) {
   log("ya hay otro oyente corriendo; salgo sin hacer nada");
