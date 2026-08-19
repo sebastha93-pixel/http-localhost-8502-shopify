@@ -2206,6 +2206,21 @@ function InformeCerradoCard({ oc }: { oc: OrdenCorte }) {
 }
 
 
+/** ¿Esta URL apunta a una imagen que se pueda mostrar?
+ *
+ *  El campo `remision_lavanderia_url` guarda dos cosas distintas: a veces una
+ *  foto (la que sube la lavandería, o la que ahora entra sola desde el grupo de
+ *  WhatsApp) y a veces un número de remisión o un link a otro sistema. Solo lo
+ *  primero se puede pintar; lo demás sigue siendo un enlace.
+ *
+ *  Se ignora el query string porque las URLs firmadas de Supabase traen `?token=`
+ *  después de la extensión. */
+function esImagen(url?: string): boolean {
+  if (!url) return false;
+  const sinQuery = url.split("?")[0].toLowerCase();
+  return /\.(jpg|jpeg|png|webp|gif)$/.test(sinQuery);
+}
+
 interface RutaCorte {
   id: string;
   token_publico: string;
@@ -2510,9 +2525,27 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
               </button>
               {r.remision_lavanderia_url && (
                 <a href={r.remision_lavanderia_url} target="_blank" rel="noopener noreferrer"
-                  className="text-[0.65rem] text-navy-600 hover:underline">Ver actual</a>
+                  className="text-[0.65rem] text-navy-600 hover:underline">Abrir</a>
               )}
             </div>
+
+            {/* LA REMISIÓN SE VE, no solo se enlaza.
+                Antes había únicamente un link "Ver actual": para saber si el
+                documento correcto estaba cargado había que abrir otra pestaña,
+                y en la práctica nadie lo hacía. Ahora la foto se ve acá mismo y
+                el clic la abre en grande. Importa más desde que la remisión
+                puede entrar sola desde el grupo de WhatsApp: si el OS adjuntó la
+                foto equivocada, se nota de un vistazo en vez de descubrirse el
+                día del pago. */}
+            {r.remision_lavanderia_url && esImagen(r.remision_lavanderia_url) && (
+              <a href={r.remision_lavanderia_url} target="_blank" rel="noopener noreferrer"
+                className="mt-2 inline-block rounded-sm border border-border bg-cloud/40 p-1
+                           hover:border-navy-600 transition-colors"
+                title="Abrir la remisión en grande">
+                <img src={r.remision_lavanderia_url} alt="Remisión de lavandería"
+                  className="max-h-40 w-auto rounded-sm object-contain" />
+              </a>
+            )}
           </div>
         )}
 
