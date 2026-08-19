@@ -237,6 +237,33 @@ def _procesar_whatsapp(payload: dict, background_tasks: Optional[BackgroundTasks
                             if background_tasks is not None:
                                 background_tasks.add_task(_tx_now)
 
+                    # ¿UN PROVEEDOR MANDÓ LA REMISIÓN DE LAVANDERÍA?
+                    #
+                    # Responder el recordatorio con la foto es la forma natural
+                    # de contestar: no hay portal que explicar ni app que
+                    # instalar. Acá solo se dispara; quién es y de qué lote lo
+                    # decide lavanderia_chase, que nunca adivina entre dos lotes.
+                    #
+                    # En background para no demorar la respuesta del webhook:
+                    # baja el archivo y a veces lo lee con visión, y Meta
+                    # reintenta el webhook si tarda.
+                    if msg_type in ("image", "document"):
+                        _media = (m.get("image") or m.get("document") or {})
+                        _media_id = _media.get("id")
+                        _mime = _media.get("mime_type") or ""
+                        _caption = _media.get("caption") or ""
+                        if _media_id and background_tasks is not None:
+                            def _remision_now(tel=wa_id_from, mid=_media_id,
+                                              mime=_mime, cap=_caption, wamid=msg_id):
+                                try:
+                                    from backend.services import lavanderia_chase as _lav
+                                    _lav.remision_por_whatsapp(
+                                        telefono=tel, media_id=mid, mime=mime,
+                                        texto=cap, wa_message_id=wamid)
+                                except Exception:
+                                    pass
+                            background_tasks.add_task(_remision_now)
+
             # Statuses (sent/delivered/read) — son los eventos para OUTGOING
             # Meta los envía con el id del mensaje saliente. Si NO lo teníamos
             # registrado lo creamos como outgoing-stub.

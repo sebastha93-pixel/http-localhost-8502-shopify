@@ -1143,3 +1143,222 @@ def resumen() -> dict:
         elif f["estado"] == "cerrado":
             out["cerrados"] += 1
     return out
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# EL CONFECCIONISTA RESPONDE LA PLANTILLA CON LA FOTO DE LA REMISIÓN
+#
+# Es la forma natural de contestar: le llega el recordatorio y responde con el
+# papel. No hay portal que explicar ni app que instalar.
+#
+# LA PREGUNTA DIFÍCIL (Sebastián, 2026-08-19): «¿si un confeccionista entrega
+# más de un lote qué pasa?». Se resuelve en este orden, y NUNCA adivinando:
+#
+#   1. Lo que ESCRIBIÓ. Si menciona una referencia y coincide con un pendiente
+#      suyo, listo. Es una afirmación explícita de una persona.
+#   2. Si solo tiene UN lote pendiente, es ese. No hay ambigüedad que resolver.
+#   3. Lo que dice EL PAPEL. La remisión trae la referencia escrita; se lee con
+#      visión y se cruza contra SUS pendientes. Preguntarle algo que ya escribió
+#      en el documento es hacerlo trabajar dos veces.
+#   4. Si después de todo eso sigue sin estar claro: se le responde preguntando
+#      cuál, y queda en la campanita. Un documento de pago pegado al lote
+#      equivocado es peor que un documento sin pegar.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _solo_digitos(t: str) -> str:
+    return "".join(c for c in (t or "") if c.isdigit())
+
+
+def _confeccionista_por_telefono(telefono: str) -> Optional[dict]:
+    """Proveedor cuyo teléfono termina igual. Se comparan los últimos 10 dígitos
+    porque el número llega de Meta con indicativo (57...) y en el directorio
+    está guardado de mil formas distintas."""
+    sb = _sb()
+    cola = _solo_digitos(telefono)[-10:]
+    if sb is None or len(cola) < 10:
+        return None
+    try:
+        filas = (sb.table("confeccionistas")
+                   .select("id,nombre,telefono,tipo").execute()).data or []
+    except Exception:
+        return None
+    for f in filas:
+        if _solo_digitos(f.get("telefono") or "")[-10:] == cola:
+            return f
+    return None
+
+
+def _pendientes_de(confeccionista_id: str) -> list[dict]:
+    """Lotes de ESE confeccionista con seguimiento de remisión abierto."""
+    sb = _sb()
+    if sb is None:
+        return []
+    try:
+        rutas = (sb.table("hoja_ruta_lote").select("id")
+                   .eq("confeccionista_id", confeccionista_id)
+                   .is_("remision_lavanderia_url", "null")
+                   .limit(200).execute()).data or []
+        ids = [r["id"] for r in rutas]
+        if not ids:
+            return []
+        return (sb.table(TABLA).select("*")
+                  .in_("hoja_ruta_id", ids)
+                  .in_("estado", ["abierto", "escalado"])
+                  .limit(50).execute()).data or []
+    except Exception as e:
+        log.warning(f"[lavanderia-chase] pendientes del proveedor: {str(e)[:160]}")
+        return []
+
+
+def _codigos_del_pendiente(p: dict) -> set:
+    """Con qué códigos se puede nombrar ese lote: su consecutivo de orden de
+    corte (2607-0015) Y su código de referencia (96616-1).
+
+    Los dos hacen falta. El pendiente guarda el consecutivo, pero la remisión
+    y el proveedor hablan de la REFERENCIA — cruzarlos solo por consecutivo no
+    daría nunca una coincidencia.
+    """
+    codigos = set()
+    cons = (p.get("consecutivo") or "").strip().upper()
+    if cons:
+        codigos.add(cons)
+    sb = _sb()
+    if sb is None or not p.get("orden_corte_id"):
+        return codigos
+    try:
+        oc = (sb.table("ordenes_corte").select("referencia_id")
+                .eq("id", p["orden_corte_id"]).limit(1).execute()).data
+        if oc and oc[0].get("referencia_id"):
+            rp = (sb.table("referencias_precosteo").select("codigo_referencia")
+                    .eq("id", oc[0]["referencia_id"]).limit(1).execute()).data
+            if rp and rp[0].get("codigo_referencia"):
+                codigos.add(rp[0]["codigo_referencia"].strip().upper())
+    except Exception as e:
+        log.warning(f"[lavanderia-chase] códigos del pendiente: {str(e)[:140]}")
+    return codigos
+
+
+def _elegir_pendiente(pendientes: list[dict], refs: list[str]) -> Optional[dict]:
+    """El pendiente cuyo lote coincide con alguna referencia leída.
+
+    Devuelve None si no coincide ninguno o si coincide MÁS DE UNO. Que dos
+    coincidan no es un empate a resolver a la suerte: es exactamente el caso en
+    que hay que preguntar.
+    """
+    if not refs:
+        return None
+    buscadas = {r.strip().upper() for r in refs if r and r.strip()}
+    encontrados = [p for p in pendientes
+                   if _codigos_del_pendiente(p) & buscadas]
+    return encontrados[0] if len(encontrados) == 1 else None
+
+
+def remision_por_whatsapp(*, telefono: str, media_id: str, mime: str = "",
+                          texto: str = "", wa_message_id: str = "") -> dict:
+    """Un proveedor respondió con una foto. ¿Es la remisión de alguno de sus lotes?
+
+    Nunca lanza: corre desde el webhook de Meta y un error acá no puede
+    afectar la recepción de mensajes del CRM.
+    """
+    from backend.services import produccion as prod
+    out = {"adjuntada": False, "motivo": "", "consecutivo": None}
+    try:
+        prov = _confeccionista_por_telefono(telefono)
+        if not prov:
+            out["motivo"] = "no_es_un_proveedor_conocido"
+            return out
+        pendientes = _pendientes_de(prov["id"])
+        if not pendientes:
+            out["motivo"] = "el_proveedor_no_tiene_lotes_esperando_remision"
+            return out
+
+        # 1) Lo que escribió el proveedor.
+        elegido = _elegir_pendiente(
+            pendientes, [f"{a}-{b}" for a, b in _RE_CODIGO.findall(texto or "")])
+        via = "lo_que_escribio"
+
+        # 2) Un solo lote pendiente: no hay ambigüedad que resolver.
+        if not elegido and len(pendientes) == 1:
+            elegido, via = pendientes[0], "unico_lote_pendiente"
+
+        # Se baja el archivo acá: hace falta para adjuntarlo, y también para
+        # leerlo si toca desempatar.
+        bajado = None
+        try:
+            from backend.services.transcription import descargar_media_meta
+            bajado = descargar_media_meta(media_id)
+        except Exception as e:
+            log.warning(f"[lavanderia-chase] no pude bajar la media: {str(e)[:160]}")
+        if not bajado:
+            out["motivo"] = "no_se_pudo_descargar_el_archivo"
+            return out
+        contenido, mime_real = bajado
+        mime_real = mime_real or mime or "image/jpeg"
+
+        # 3) Lo que dice el papel.
+        lectura = None
+        if not elegido:
+            from backend.services.remision_ocr import leer_remision_lavanderia
+            lectura = leer_remision_lavanderia(contenido, mime_real)
+            if lectura.get("ok"):
+                elegido = _elegir_pendiente(pendientes, lectura.get("referencias") or [])
+                via = f"leyendo_la_remision ({lectura.get('confianza')})"
+            else:
+                log.info(f"[lavanderia-chase] no pude leer la remisión: {lectura.get('error')}")
+
+        # 4) Sigue sin estar claro → se pregunta, no se adivina.
+        if not elegido:
+            lista = ", ".join((p.get("consecutivo") or "?") for p in pendientes[:6])
+            _avisar_os(
+                titulo=f"{prov['nombre']} mandó una remisión y no sé de cuál lote es",
+                mensaje=(f"Tiene {len(pendientes)} lotes esperando remisión ({lista}). "
+                         f"Ni el mensaje ni el documento lo aclaran. "
+                         f"Enlázala a mano desde el lote correcto."),
+                enlace="/produccion/tablero",
+                dedup_wa_id=wa_message_id,
+            )
+            _responder(telefono,
+                       f"¡Gracias {prov['nombre']}! Para no equivocarnos, "
+                       f"¿de cuál lote es esa remisión? ({lista})")
+            out["motivo"] = "ambiguo_se_preguntó"
+            return out
+
+        # Adjuntar. `subir_remision_lavanderia` sube el archivo, avanza la etapa
+        # a 'lavanderia' y —por el enganche que ya existe— apaga los recordatorios.
+        ext = "pdf" if "pdf" in mime_real else "jpg"
+        prod.subir_remision_lavanderia(
+            elegido["hoja_ruta_id"], file_bytes=contenido,
+            filename=f"remision_wa.{ext}", content_type=mime_real)
+        cons = elegido.get("consecutivo") or "?"
+        _nota(elegido["hoja_ruta_id"],
+              f"Remisión de lavandería recibida por WhatsApp de {prov['nombre']} "
+              f"(confección). Lote identificado por: {via}.")
+        _avisar_os(
+            titulo=f"Remisión del lote {cons} recibida por WhatsApp",
+            mensaje=(f"{prov['nombre']} respondió con la remisión. Se adjuntó al "
+                     f"lote {cons} ({via}) y la etapa avanzó a lavandería."),
+            enlace="/produccion/tablero", dedup_wa_id=wa_message_id)
+        _responder(telefono,
+                   f"¡Gracias {prov['nombre']}! Recibimos la remisión del lote "
+                   f"{cons}. Queda registrada como soporte de tu pago. 🧵")
+        log.info(f"[lavanderia-chase] remisión por WhatsApp → lote {cons} ({via})")
+        out.update({"adjuntada": True, "motivo": "ok", "consecutivo": cons,
+                    "via": via})
+        return out
+    except Exception as e:
+        log.exception(f"[lavanderia-chase] remision_por_whatsapp falló: {e}")
+        out["motivo"] = f"error:{str(e)[:120]}"
+        return out
+
+
+def _responder(telefono: str, texto: str) -> None:
+    """Contesta al proveedor. Texto libre a propósito: él acaba de escribir, así
+    que la ventana de 24 h está abierta y no hace falta plantilla."""
+    try:
+        from backend.services import whatsapp_cloud as wa
+        if activo():
+            wa.enviar_texto(telefono, texto)
+        else:
+            log.info(f"[lavanderia-chase] SIMULADA respuesta a {telefono}: {texto[:80]}")
+    except Exception as e:
+        log.warning(f"[lavanderia-chase] no pude responder: {str(e)[:140]}")
