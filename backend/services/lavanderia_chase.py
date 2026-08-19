@@ -31,7 +31,8 @@ ENV
   LAVANDERIA_REMISION_GRACIA_H horas tras recibir antes de pedir foto (default 24)
   LAVANDERIA_REMISION_ESCALA   días sin remisión → escala (default 3)
   LAVANDERIA_ESCALA_EMAILS     a quién se escala (default sebastian.hurtado@…)
-  LAVANDERIA_PLANTILLA_RECOGER / _REMISION   nombres de plantilla en Meta
+  LAVANDERIA_PLANTILLA_CONFECCIONISTA  nombre de la plantilla en Meta
+                               (default confeccionista_remision_lavanderia)
   LAVANDERIA_CHASE_ACTIVO      "0" apaga el envío y deja todo en simulación
 """
 from __future__ import annotations
@@ -322,13 +323,16 @@ def abrir_pendiente(*, ruta: dict, reloj: str, origen: str = "grupo",
     _nota(ruta["id"], f"El OS abrió seguimiento de {'recogida' if reloj == 'recogida' else 'remisión'} "
                       f"de lavandería" + (f" (leído del grupo: «{detectado_texto[:120]}»)"
                                           if detectado_texto else ""))
-    if not ruta.get("lavanderia_id"):
+    # El aviso es sobre el CONFECCIONISTA, que es a quien se le escribe. Que
+    # falte la lavandería ya no bloquea nada: solo se pierde poder nombrarla en
+    # el mensaje. Que falte el teléfono de confección sí bloquea.
+    if not (ruta.get("confeccionista") or {}).get("telefono"):
         _avisar_os(
-            titulo=f"Lote {oc.get('consecutivo') or '?'} sale a lavandería sin lavandería asignada",
-            mensaje=("Se abrió el seguimiento pero no hay a quién escribirle. "
-                     "Asigna la lavandería en la hoja de ruta para que el OS "
-                     "pueda pedir la remisión."),
-            enlace=f"/produccion/tablero",
+            titulo=f"Lote {oc.get('consecutivo') or '?'}: confección sin teléfono",
+            mensaje=("Se abrió el seguimiento de la remisión de lavandería, pero "
+                     "el confeccionista de este lote no tiene teléfono en el "
+                     "directorio, así que el recordatorio no puede salir."),
+            enlace="/produccion/proveedores",
         )
     return {"abierto": True, "pendiente": p, "consecutivo": oc.get("consecutivo")}
 
@@ -844,19 +848,24 @@ def barrer() -> dict:
             if ult is not None and ult < INTERVALO_HORAS():
                 continue
 
-            lav = ruta.get("lavanderia") or {}
-            tel = (lav.get("telefono") or "").strip()
-            if not (ruta.get("lavanderia_id") and tel):
+            # El destinatario es el CONFECCIONISTA, no la lavandería: la remisión
+            # es el soporte de SU pago, y la lavandería a veces se demora en
+            # recoger — cosa que no depende de él.
+            conf = ruta.get("confeccionista") or {}
+            tel = (conf.get("telefono") or "").strip()
+            if not tel:
                 resumen["sin_destinatario"] += 1
+                log.info(f"[lavanderia-chase] lote {p.get('consecutivo')}: el "
+                         f"confeccionista no tiene teléfono, no se puede avisar")
                 continue
 
             if not activo():
                 resumen["simulados"] += 1
-                log.info(f"[lavanderia-chase] SIMULADO aviso {p['reloj']} "
-                         f"lote {p.get('consecutivo')} → {lav.get('nombre')}")
+                log.info(f"[lavanderia-chase] SIMULADO recordatorio de remisión · "
+                         f"lote {p.get('consecutivo')} → {conf.get('nombre')} (confección)")
                 continue
 
-            if _avisar_lavanderia(p, ruta):
+            if _avisar_confeccionista(p, ruta):
                 resumen["avisos"] += 1
             else:
                 resumen["fallos"] += 1
@@ -875,6 +884,7 @@ def _ruta_por_id(ruta_id: str) -> Optional[dict]:
         return None
     r = (sb.table("hoja_ruta_lote")
            .select("*,lavanderia:lavanderia_id(nombre,telefono),"
+                   "confeccionista:confeccionista_id(nombre,telefono),"
                    "orden_corte:orden_corte_id(consecutivo)")
            .eq("id", ruta_id).limit(1).execute()).data
     return r[0] if r else None
@@ -918,34 +928,43 @@ def _soltar_claim(p: dict) -> None:
         pass
 
 
-def _avisar_lavanderia(p: dict, ruta: dict) -> bool:
-    """Mensaje a la lavandería por la Cloud API. Plantilla aprobada primero
-    (inicia conversación aunque nunca nos haya escrito); si la plantilla no
-    sale, texto libre por si estamos dentro de la ventana de 24 h."""
+def _avisar_confeccionista(p: dict, ruta: dict) -> bool:
+    """Mensaje al CONFECCIONISTA por la Cloud API.
+
+    A QUIÉN Y POR QUÉ (decisión de Sebastián, 2026-08-19). El primer diseño le
+    escribía a la lavandería. Cambió por dos razones suyas, y las dos son buenas:
+
+    · La remisión de lavandería es el **soporte del pago del confeccionista**.
+      Es él quien la necesita y quien la entrega, así que es a él a quien se le
+      pide — pedírsela a la lavandería era pedirle a un tercero un papel que no
+      es suyo.
+    · **La lavandería a veces se demora en recoger**, y eso no es culpa del
+      confeccionista. Por eso el mensaje NO exige la remisión ya: recuerda
+      mandarla *una vez recojan*. Un mensaje que reclama algo que el otro no
+      puede hacer todavía genera roce y enseña a ignorar los mensajes.
+
+    Ventaja lateral que no es menor: todo lote tiene confeccionista (la columna
+    es NOT NULL), mientras que casi ninguno tiene lavandería asignada. Así que
+    este cambio además destraba el envío.
+    """
     from backend.services import whatsapp_cloud as wa
 
-    lav = ruta.get("lavanderia") or {}
-    nombre = (lav.get("nombre") or "equipo").strip()
-    tel = (lav.get("telefono") or "").strip()
+    conf = ruta.get("confeccionista") or {}
+    nombre = (conf.get("nombre") or "equipo").strip()
+    tel = (conf.get("telefono") or "").strip()
     cons = p.get("consecutivo") or (ruta.get("orden_corte") or {}).get("consecutivo") or "—"
-    token = ruta.get("token_publico_lavanderia") or ""
-    enlace = f"{APP_URL}/lavanderia/{token}" if token else f"{APP_URL}"
+    lav = (ruta.get("lavanderia") or {}).get("nombre") or ""
+    de_quien = f" de {lav}" if lav else ""
 
-    if p["reloj"] == "recogida":
-        plantilla = os.environ.get("LAVANDERIA_PLANTILLA_RECOGER",
-                                   "lavanderia_recoger").strip()
-        texto = (f"Hola {nombre}, MALE'DENIM tiene el lote *{cons}* listo para "
-                 f"que lo recojas. Cuando lo tengas, confírmalo acá para que "
-                 f"quede registrado:\n\n{enlace}")
-    else:
-        plantilla = os.environ.get("LAVANDERIA_PLANTILLA_REMISION",
-                                   "lavanderia_remision").strip()
-        texto = (f"Hola {nombre}, nos falta la remisión del lote *{cons}*. "
-                 f"Súbele la foto acá — sin la remisión el lote no entra al "
-                 f"pago de esta semana:\n\n{enlace}")
+    plantilla = os.environ.get("LAVANDERIA_PLANTILLA_CONFECCIONISTA",
+                               "confeccionista_remision_lavanderia").strip()
+    texto = (f"Hola {nombre} 👋 Recuerda enviarnos la remisión de lavandería"
+             f"{de_quien} una vez recojan el lote *{cons}*. "
+             f"Es el soporte que necesitamos para tu pago. ¡Gracias!")
 
-    envio = wa.enviar_plantilla(tel, plantilla, variables=[nombre, cons],
-                                boton_url_suffix=token or None)
+    # Sin botón: acá no se manda a ningún portal, la remisión llega por el grupo
+    # o por donde ya la mandan hoy. Menos fricción, menos que explicar.
+    envio = wa.enviar_plantilla(tel, plantilla, variables=[nombre, cons])
     if not envio.get("enviado"):
         log.info(f"[lavanderia-chase] plantilla {plantilla} no salió "
                  f"({envio.get('detalle') or envio.get('motivo')}); intento texto libre")
@@ -958,9 +977,9 @@ def _avisar_lavanderia(p: dict, ruta: dict) -> bool:
         return False
 
     _nota(ruta["id"],
-          f"El OS le escribió a {nombre} por WhatsApp: "
-          f"{'¿ya recogiste el lote?' if p['reloj'] == 'recogida' else 'falta la remisión'} "
-          f"(aviso #{(p.get('avisos') or 0) + 1})")
+          f"El OS le recordó a {nombre} (confección) enviar la remisión de "
+          f"lavandería del lote, por WhatsApp "
+          f"(recordatorio #{(p.get('avisos') or 0) + 1})")
     return True
 
 
@@ -969,19 +988,17 @@ def _escalar(p: dict, ruta: dict, dias: float) -> bool:
     pendiente como escalado para no repetir el escalamiento todos los días."""
     sb = _sb()
     cons = p.get("consecutivo") or "?"
-    lav = (ruta.get("lavanderia") or {}).get("nombre") or "sin lavandería asignada"
+    lav = (ruta.get("lavanderia") or {}).get("nombre") or "lavandería sin asignar"
+    conf = (ruta.get("confeccionista") or {}).get("nombre") or "confeccionista"
     d = int(dias)
+    avisos = p.get("avisos") or 0
 
-    if p["reloj"] == "recogida":
-        titulo = f"Lavandería no ha recogido el lote {cons} ({d} días)"
-        cuerpo = (f"El lote {cons} salió para lavandería hace {d} días y "
-                  f"{lav} todavía no confirma que lo recogió. El cuello de "
-                  f"botella es la RECOGIDA, no la remisión.")
-    else:
-        titulo = f"Falta la remisión de lavandería del lote {cons} ({d} días)"
-        cuerpo = (f"{lav} recibió el lote {cons} y no ha subido la remisión "
-                  f"después de {d} días. Sin remisión el lote no avanza y no "
-                  f"se activa el pago de esta semana.")
+    titulo = f"Falta la remisión de lavandería del lote {cons} ({d} días)"
+    cuerpo = (f"El lote {cons} salió para {lav} hace {d} días y todavía no hay "
+              f"remisión de lavandería. Se le recordó {avisos} vez(ces) a {conf} "
+              f"(confección), que es quien la entrega como soporte de su pago.\n\n"
+              f"Ojo antes de reclamar: si la lavandería no ha recogido, el "
+              f"atraso no es de confección.")
 
     if sb is not None:
         try:
