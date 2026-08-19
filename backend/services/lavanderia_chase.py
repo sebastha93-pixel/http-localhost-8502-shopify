@@ -423,6 +423,11 @@ def _texto_que_identifica(foto: dict) -> Optional[dict]:
     t = _ts(foto.get("enviado_en"))
     autor = (foto.get("autor_nombre") or "").strip()
     if t is None or not autor:
+        # Se avisa en el log en vez de devolver None callado: si quien llama
+        # olvidó pedir estas columnas, el síntoma es «la foto no se adjuntó» y
+        # sin esta línea no hay forma de saber por qué.
+        log.warning("[lavanderia-chase] no puedo buscar el mensaje vecino: "
+                    f"falta enviado_en o autor_nombre (autor={autor!r})")
         return None
     desde = _iso(t - timedelta(minutes=VENTANA_PAREO_MIN))
     hasta = _iso(t + timedelta(minutes=VENTANA_PAREO_MIN))
@@ -492,8 +497,13 @@ def al_llegar_media(wa_message_id: str) -> dict:
     if sb is None:
         out["motivo"] = "sin_supabase"
         return out
+    # OJO: `enviado_en` y `autor_nombre` son OBLIGATORIOS acá, aunque parezca que
+    # solo hacen falta el texto y la url. Sin ellos `_texto_que_identifica` no
+    # puede buscar el mensaje vecino (no sabe de quién ni de cuándo) y devuelve
+    # None en silencio. Ese fue exactamente el bug del 19-ago: la foto se guardó,
+    # el texto existía, y el lote no se movió porque el select venía corto.
     fila = (sb.table("mensajes_grupo_produccion")
-              .select("wa_message_id,texto,media_url,tipo")
+              .select("wa_message_id,texto,media_url,tipo,enviado_en,autor_nombre")
               .eq("wa_message_id", (wa_message_id or "").strip())
               .limit(1).execute()).data
     if not fila:
