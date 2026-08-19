@@ -158,8 +158,12 @@ def test_dice_cuales_NO_pueden_facturar_todavia(entorno):
     d = c.get("/api/retail/caja/contexto",
               params={"caja_id": "florida_caja1"}).json()
     listas = {m["id"]: m["factura_lista"] for m in d["medios_pago"]}
-    assert listas == {"efectivo": True, "datafono": True, "wompi_qr": False,
-                      "addi": False, "sumas": False}
+    # Addi (12245 «ADDI FLORIDA») y Sumas (12218 «SUMAS PAY TIENDA») YA tienen
+    # su id: se leyeron de la cuenta real en la migración 0019. Los que siguen
+    # sin él son Wompi —hay dos candidatos y ninguno dice «tienda»— y
+    # transferencia. Ver docs/retail-pos/siigo-lo-que-dice-la-cuenta.md
+    assert listas == {"efectivo": True, "datafono": True, "addi": True,
+                      "sumas": True, "wompi_qr": False}
 
 
 # ── LA REFERENCIA, que estaba muerta desde la migración 0001 ────────────────
