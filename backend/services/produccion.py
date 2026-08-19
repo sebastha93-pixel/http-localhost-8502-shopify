@@ -5098,7 +5098,9 @@ def usar_media_grupo_como_remision(*, wa_message_id: str, ruta_id: str,
     url = (fila[0].get("media_url") or "").strip()
     if not url:
         raise ValueError("mensaje_sin_archivo")
-    ruta = actualizar_ruta_lote(ruta_id, {"remision_lavanderia_url": url})
+    # Ojo: `actualizar_ruta_lote(ruta_id, **campos)` recibe los campos por
+    # nombre, no un diccionario posicional.
+    ruta = actualizar_ruta_lote(ruta_id, remision_lavanderia_url=url)
     try:
         crear_nota_ruta(ruta_id=ruta_id, actor="admin",
                         mensaje=(f"Remisión de lavandería tomada de una foto del "
