@@ -427,8 +427,10 @@ def procesar_mensajes(mensajes: list[dict]) -> dict:
     a salvo. Nunca lanza — el oyente no puede quedarse sin poder subir mensajes
     porque la detección tenga un problema.
     """
+    # `ignorados` = se habló de lavandería pero el lote no es del OS. No es un
+    # error ni un pendiente: es tráfico que no nos toca.
     res = {"revisados": 0, "detectados": 0, "abiertos": 0,
-           "sin_lote": 0, "ya_existian": 0}
+           "sin_lote": 0, "ignorados": 0, "ya_existian": 0}
     for m in (mensajes or []):
         try:
             texto = (m.get("texto") or "").strip()
@@ -443,35 +445,41 @@ def procesar_mensajes(mensajes: list[dict]) -> dict:
             res["detectados"] += 1
 
             if not d["codigos"]:
-                res["sin_lote"] += 1
-                _avisar_os(
-                    titulo="En el grupo dijeron que algo sale a lavandería",
-                    mensaje=(f"No pude identificar el lote. Texto: «{texto[:200]}». "
-                             f"Ábrele el seguimiento a mano si aplica."),
-                    enlace="/produccion/lavanderia",
-                    dedup_wa_id=m.get("wa_message_id") or "",
-                )
+                # SILENCIO A PROPÓSITO (instrucción de Sebastián, 2026-08-19):
+                # «las referencias que envíen por ahí y no existan en el OS no
+                # las tengas en cuenta». En el grupo se habla de lotes que el
+                # OS no conoce — el primer día ya pasó con 45610-1 y 86509-2.
+                # Avisar de cada uno convertiría la campanita en ruido, y una
+                # campanita que repite es una campanita que se ignora.
+                res["ignorados"] += 1
+                log.info(f"[lavanderia-chase] salida sin código identificable — ignorado")
                 continue
 
             for cod in d["codigos"]:
                 hallado = resolver_lote(cod)
                 ruta = hallado["ruta"]
                 if not ruta:
-                    res["sin_lote"] += 1
-                    if hallado["ambiguo"]:
-                        # La referencia existe pero tiene varias tandas abiertas.
-                        # Adivinar cuál sería peor que preguntar.
-                        _avisar_os(
-                            titulo=f"«{cod}» sale a lavandería, pero hay varios lotes de esa referencia",
-                            mensaje=("No sé cuál es: " + ", ".join(hallado["ambiguo"][:6]) +
-                                     f". Texto del grupo: «{texto[:150]}». "
-                                     f"Ábrele el seguimiento al lote correcto desde el OS."),
-                            enlace="/produccion/lavanderia",
-                            dedup_wa_id=m.get("wa_message_id") or "",
-                        )
-                        log.info(f"[lavanderia-chase] {cod} ambiguo: {hallado['ambiguo']}")
-                    else:
+                    if not hallado["ambiguo"]:
+                        # El código no existe en el OS. Se ignora en silencio:
+                        # no es un problema que alguien tenga que resolver, es
+                        # un lote que sencillamente no se lleva por acá.
+                        res["ignorados"] += 1
                         log.info(f"[lavanderia-chase] {cod} no existe en el OS — ignorado")
+                        continue
+                    # Acá solo llega lo AMBIGUO: la referencia sí existe en el
+                    # OS pero tiene varias tandas cortadas y el grupo no dice
+                    # cuál. Eso sí se avisa, porque es un lote nuestro y hay algo
+                    # concreto que una persona puede resolver.
+                    res["sin_lote"] += 1
+                    _avisar_os(
+                        titulo=f"«{cod}» sale a lavandería, pero hay varios lotes de esa referencia",
+                        mensaje=("No sé cuál es: " + ", ".join(hallado["ambiguo"][:6]) +
+                                 f". Texto del grupo: «{texto[:150]}». "
+                                 f"Ábrele el seguimiento al lote correcto desde el OS."),
+                        enlace="/produccion/lavanderia",
+                        dedup_wa_id=m.get("wa_message_id") or "",
+                    )
+                    log.info(f"[lavanderia-chase] {cod} ambiguo: {hallado['ambiguo']}")
                     continue
                 log.info(f"[lavanderia-chase] {cod} resuelto por {hallado['via']}")
                 r = abrir_pendiente(ruta=ruta, reloj="recogida", origen="grupo",
