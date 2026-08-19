@@ -359,6 +359,25 @@ def al_confirmar_recogida(ruta_id: str) -> dict:
     return out
 
 
+def cerrar_todo_por_remision(hoja_ruta_id: str) -> int:
+    """Llegó la remisión → SE CALLA TODO sobre ese lote, ya.
+
+    Cierra los DOS relojes, no solo el de la remisión. El de la recogida también,
+    porque si la remisión existe es imposible que no hayan recogido el lote.
+
+    Por qué en línea y no esperando al barrido (Sebastián, 2026-08-19: «si ya la
+    remisión llegó no se sigan enviando mensajes»): el barrido corre cada 15 min
+    y cierra antes de decidir a quién avisar, así que técnicamente no se escapaba
+    ninguno. Pero depender de ese orden es frágil — basta reordenar dos líneas en
+    el futuro para empezar a molestar a un proveedor que ya cumplió. Cerrar en el
+    momento en que el documento entra no deja esa ventana abierta.
+    """
+    n = 0
+    for reloj in ("recogida", "remision"):
+        n += cerrar_pendientes(hoja_ruta_id, reloj=reloj, motivo="remision_cargada")
+    return n
+
+
 def cerrar_pendientes(hoja_ruta_id: str, *, reloj: str, motivo: str) -> int:
     """Cierra los pendientes abiertos de ese lote y reloj. Devuelve cuántos."""
     sb = _sb()

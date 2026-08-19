@@ -5549,7 +5549,7 @@ def actualizar_ruta_lote(ruta_id: str, **campos) -> dict:
             avanzar_etapa_si_antes(ruta_id, "lavanderia")
         except Exception as e:
             log.warning(f"[ruta] avance a lavanderia (patch) fallo: {e}")
-        _cerrar_persecucion_lavanderia(ruta_id, "remision", "remision_cargada")
+        _cerrar_persecucion_lavanderia(ruta_id)
         r2 = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
         if r2:
             return r2[0]
@@ -5708,21 +5708,28 @@ def subir_remision_lavanderia(ruta_id: str, *, file_bytes: bytes, filename: str,
         log.warning(f"[ruta] avance a lavanderia fallo: {e}")
     # Llegó la remisión → se apaga la persecución. Da igual por dónde entró
     # (portal de la lavandería o cargada desde adentro): el hecho es el mismo.
-    _cerrar_persecucion_lavanderia(ruta_id, "remision", "remision_cargada")
+    _cerrar_persecucion_lavanderia(ruta_id)
     r = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
     return {"url": url, "ruta": r[0] if r else {}}
 
 
-def _cerrar_persecucion_lavanderia(ruta_id: str, reloj: str, motivo: str) -> None:
-    """Apaga el pendiente que ya se cumplió. Tolerante a fallos a propósito:
-    el barrido periódico vuelve a intentarlo, así que un error acá atrasa el
-    cierre unos minutos pero no rompe la operación de quien subió el documento.
+def _cerrar_persecucion_lavanderia(ruta_id: str) -> None:
+    """Llegó la remisión → se callan los recordatorios de ese lote, en el acto.
+
+    Cierra los DOS relojes: si la remisión existe, es imposible que no hayan
+    recogido el lote. Regla de Sebastián: «si ya la remisión llegó no se sigan
+    enviando mensajes» — y un proveedor que ya cumplió y sigue recibiendo
+    recordatorios deja de leer los que sí importan.
+
+    Tolerante a fallos a propósito: el barrido periódico vuelve a cerrarlo, así
+    que un error acá atrasa el cierre unos minutos pero no rompe la operación de
+    quien acaba de subir el documento.
     """
     try:
         from backend.services import lavanderia_chase
-        lavanderia_chase.cerrar_pendientes(ruta_id, reloj=reloj, motivo=motivo)
+        lavanderia_chase.cerrar_todo_por_remision(ruta_id)
     except Exception as e:
-        log.warning(f"[lavanderia] cerrar persecucion {reloj} falló: {str(e)[:160]}")
+        log.warning(f"[lavanderia] cerrar persecucion falló: {str(e)[:160]}")
 
 
 def listar_rutas(*, etapa: Optional[str] = None,
