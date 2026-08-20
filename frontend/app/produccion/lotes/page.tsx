@@ -254,17 +254,29 @@ function LoteCard({ oc, ruta }: { oc: OrdenCorte; ruta?: Ruta }) {
         <CardContent className="p-5 space-y-4">
           {/* Cabecera: consecutivo + estado */}
           <div className="flex items-start justify-between gap-3">
+            {/* JERARQUÍA: la REFERENCIA DE PRODUCCIÓN va grande y el consecutivo
+                interno pequeño (pedido de Sebastián, 2026-08-19: «esa es la que
+                necesito siempre tener en cuenta»).
+                Y tiene sentido más allá del gusto: la referencia es el idioma
+                común con proveedores, remisiones y el grupo de WhatsApp — el
+                diseñador canta «Ref 96623-1», no el consecutivo. Poner arriba el
+                número que solo existe dentro del OS obligaba a traducir de
+                memoria en cada tarjeta. */}
             <div className="min-w-0">
-              <p className="font-display text-lg font-semibold tabular text-navy-600 group-hover:underline leading-none">
-                {oc.consecutivo}
+              <p className="font-display text-lg font-semibold text-navy-600 group-hover:underline leading-none truncate">
+                {oc.referencia?.codigo_referencia || oc.consecutivo}
               </p>
               <p className="mt-1.5 text-sm font-semibold text-ink-900 truncate">
-                {oc.referencia?.codigo_referencia || "—"}
-                <span className="font-normal text-graphite"> · {oc.referencia?.nombre || ""}</span>
+                {oc.referencia?.nombre || "sin nombre de referencia"}
               </p>
               <p className="text-[0.68rem] text-graphite truncate">
-                {oc.referencia?.tela || "sin tela"}
-                {oc.referencia_lote ? ` · Lote ${oc.referencia_lote}` : ""}
+                <span className="tabular">{oc.consecutivo}</span>
+                {oc.referencia?.tela ? ` · ${oc.referencia.tela}` : " · sin tela"}
+                {/* El "Lote X" solo aporta cuando es DISTINTO del consecutivo.
+                    En la tarjeta que mostró Sebastián decía «Lote 2608-0007»
+                    justo debajo del 2608-0007: la misma cifra dos veces. */}
+                {oc.referencia_lote && oc.referencia_lote !== oc.consecutivo
+                  ? ` · Lote ${oc.referencia_lote}` : ""}
               </p>
             </div>
             <span className={`shrink-0 rounded-sm px-2.5 py-1 text-[0.7rem] font-bold uppercase tracking-widest ${estado.tone}`}>
