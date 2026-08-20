@@ -717,7 +717,7 @@ def procesar_mensajes(mensajes: list[dict]) -> dict:
     # error ni un pendiente: es tráfico que no nos toca.
     res = {"revisados": 0, "detectados": 0, "abiertos": 0,
            "sin_lote": 0, "ignorados": 0, "ya_existian": 0,
-           "fotos_adjuntadas": 0}
+           "fotos_adjuntadas": 0, "lavanderias_asignadas": 0}
     for m in (mensajes or []):
         try:
             texto = (m.get("texto") or "").strip()
@@ -769,6 +769,13 @@ def procesar_mensajes(mensajes: list[dict]) -> dict:
                     log.info(f"[lavanderia-chase] {cod} ambiguo: {hallado['ambiguo']}")
                     continue
                 log.info(f"[lavanderia-chase] {cod} resuelto por {hallado['via']}")
+                # La lavandería también viene escrita en el mensaje («stone
+                # jeans»). Se llena solo si está vacía: un mensaje del chat no
+                # debe sobrescribir lo que una persona ya decidió.
+                asignada = asignar_lavanderia_si_falta(ruta, texto)
+                if asignada:
+                    res["lavanderias_asignadas"] += 1
+                    ruta = _ruta_por_id(ruta["id"]) or ruta
                 # La foto suele llegar ANTES del texto que la identifica, así que
                 # cuando por fin sabemos de qué lote habla el mensaje, hay que
                 # volver sobre las fotos que quedaron sin dueño. Sin esto, el
@@ -1385,3 +1392,81 @@ def _responder(telefono: str, texto: str) -> None:
             log.info(f"[lavanderia-chase] SIMULADA respuesta a {telefono}: {texto[:80]}")
     except Exception as e:
         log.warning(f"[lavanderia-chase] no pude responder: {str(e)[:140]}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ¿A QUÉ LAVANDERÍA VA? — también viene escrito en el mensaje
+#
+# «Revisión recogida de lote lavandería **stone jeans** Ref 96616-1». El nombre
+# está ahí, y STONE JEANS S.A.S está en el directorio con teléfono. Pedirle a
+# alguien que digite en el OS un dato que ya escribió en el grupo es trabajo que
+# no debería existir.
+#
+# Solo se LLENA lo vacío: si el lote ya tiene lavandería asignada, no se toca.
+# Un mensaje del chat no debe sobrescribir algo que una persona decidió.
+# ═══════════════════════════════════════════════════════════════════════
+
+_RUIDO_NOMBRE = {"sas", "s.a.s", "s.a", "sa", "ltda", "y", "de", "del", "la",
+                 "los", "las", "e", "en"}
+
+
+def _sin_tildes(t: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", (t or "").lower())
+                   if unicodedata.category(c) != "Mn")
+
+
+def _lavanderias() -> list[dict]:
+    sb = _sb()
+    if sb is None:
+        return []
+    try:
+        return (sb.table("confeccionistas").select("id,nombre,telefono")
+                  .eq("tipo", "lavanderia").eq("activo", True).execute()).data or []
+    except Exception:
+        return []
+
+
+def detectar_lavanderia(texto: str) -> Optional[dict]:
+    """La lavandería nombrada en el texto, o None.
+
+    Se compara por palabras significativas del nombre (≥5 letras) para que
+    «stone jeans» encuentre a STONE JEANS S.A.S sin que un «de» o un «sas»
+    empareje con cualquier cosa. Si dos lavanderías empatan, se devuelve None:
+    un empate es justo el caso en que no hay que decidir solo.
+    """
+    t = _sin_tildes(texto)
+    if not t:
+        return None
+    hallados = []
+    for lav in _lavanderias():
+        palabras = [p for p in _sin_tildes(lav.get("nombre") or "").split()
+                    if len(p) >= 5 and p not in _RUIDO_NOMBRE]
+        if palabras and any(p in t for p in palabras):
+            hallados.append(lav)
+    return hallados[0] if len(hallados) == 1 else None
+
+
+def asignar_lavanderia_si_falta(ruta: dict, texto: str) -> Optional[str]:
+    """Llena `lavanderia_id` leyendo el mensaje. Devuelve el nombre si asignó."""
+    if ruta.get("lavanderia_id"):
+        return None                      # ya la decidió alguien: no se toca
+    lav = detectar_lavanderia(texto)
+    if not lav:
+        return None
+    sb = _sb()
+    if sb is None:
+        return None
+    try:
+        sb.table("hoja_ruta_lote").update(
+            {"lavanderia_id": lav["id"], "updated_at": _iso(_ahora())}
+        ).eq("id", ruta["id"]).is_("lavanderia_id", "null").execute()
+    except Exception as e:
+        log.warning(f"[lavanderia-chase] no pude asignar lavandería: {str(e)[:160]}")
+        return None
+    _nota(ruta["id"],
+          f"Lavandería asignada automáticamente: {lav['nombre']} "
+          f"(nombrada en el grupo). Si es otra, cámbiala en la hoja de ruta.")
+    log.info(f"[lavanderia-chase] lavandería {lav['nombre']} asignada al lote "
+             f"{(ruta.get('orden_corte') or {}).get('consecutivo')}")
+    return lav["nombre"]
