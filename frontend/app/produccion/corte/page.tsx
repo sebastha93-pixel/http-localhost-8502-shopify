@@ -90,8 +90,11 @@ export default function CortesPage() {
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
                 <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
-                  <th className="px-4 py-2">Consecutivo</th>
+                  {/* La REFERENCIA va primero: es el número que se persigue y el
+                      idioma común con proveedores, remisiones y el grupo de
+                      WhatsApp. El consecutivo es control interno del OS. */}
                   <th className="px-4 py-2">Referencia</th>
+                  <th className="px-4 py-2">Consecutivo</th>
                   <th className="px-4 py-2">Tono</th>
                   <th className="px-4 py-2 text-right">Trazo m</th>
                   <th className="px-4 py-2 text-right">Capas</th>
@@ -104,15 +107,15 @@ export default function CortesPage() {
               <tbody>
                 {filtrados.map((o) => (
                   <tr key={o.id} className="border-b border-border/40 hover:bg-cloud/40">
-                    <td className="px-4 py-2 font-semibold tabular text-navy-600">
+                    <td className="px-4 py-2 font-semibold text-navy-600">
                       <Link href={`/produccion/corte/${o.id}`} className="hover:underline">
-                        {o.consecutivo}
+                        {o.referencia?.codigo_referencia || o.consecutivo}
                       </Link>
+                      <div className="text-[0.7rem] font-normal text-graphite">
+                        {o.referencia?.nombre || ""}
+                      </div>
                     </td>
-                    <td className="px-4 py-2 text-ink-900">
-                      {o.referencia?.codigo_referencia || "—"}
-                      <div className="text-[0.7rem] text-graphite">{o.referencia?.nombre || ""}</div>
-                    </td>
+                    <td className="px-4 py-2 tabular text-graphite">{o.consecutivo}</td>
                     <td className="px-4 py-2 text-graphite">{o.tono || "—"}</td>
                     <td className="px-4 py-2 text-right tabular">{o.largo_trazo}</td>
                     <td className="px-4 py-2 text-right tabular">{o.num_capas}</td>

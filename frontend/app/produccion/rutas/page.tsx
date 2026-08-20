@@ -132,8 +132,10 @@ export default function RutasPage() {
             <table className="w-full text-xs">
               <thead className="bg-cloud/60 border-b border-border">
                 <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
-                  <th className="px-4 py-2">Consecutivo</th>
+                  {/* Referencia primero: es el número que se persigue. El
+                      consecutivo es control interno del OS. */}
                   <th className="px-4 py-2">Referencia</th>
+                  <th className="px-4 py-2">Consecutivo</th>
                   <th className="px-4 py-2">Confeccionista</th>
                   <th className="px-4 py-2">Terminación</th>
                   <th className="px-4 py-2">Etapa</th>
@@ -146,16 +148,17 @@ export default function RutasPage() {
                   const dias = diasDesde(r.asignado_at);
                   return (
                     <tr key={r.id} className="border-b border-border/40 hover:bg-cloud/30">
-                      <td className="px-4 py-2 font-semibold tabular text-navy-600">
+                      <td className="px-4 py-2 font-semibold text-navy-600">
                         <Link href={`/produccion/corte/${r.orden_corte_id}`} className="hover:underline">
-                          {r.orden_corte?.consecutivo || "—"}
+                          {r.orden_corte?.referencia?.codigo_referencia
+                            || r.orden_corte?.consecutivo || "—"}
                         </Link>
-                      </td>
-                      <td className="px-4 py-2 text-ink-900">
-                        {r.orden_corte?.referencia?.codigo_referencia || "—"}
-                        <div className="text-[0.7rem] text-graphite">
+                        <div className="text-[0.7rem] font-normal text-graphite">
                           {r.orden_corte?.referencia?.nombre} {r.orden_corte?.referencia?.tela ? `· ${r.orden_corte.referencia.tela}` : ""}
                         </div>
+                      </td>
+                      <td className="px-4 py-2 tabular text-graphite">
+                        {r.orden_corte?.consecutivo || "—"}
                       </td>
                       <td className="px-4 py-2 text-ink-900">{r.confeccionista?.nombre || "—"}</td>
                       <td className="px-4 py-2 text-graphite">{r.terminacion?.nombre || "—"}</td>
