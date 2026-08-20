@@ -210,6 +210,9 @@ export default function PrecosteoListPage() {
                   <th className="px-4 py-3 text-right">Precio venta</th>
                   <th className="px-4 py-3 text-right">Margen</th>
                   <th className="px-4 py-3">Insumos confección</th>
+                  {/* Fechas: el dato existía en la base y nunca se mostró. */}
+                  <th className="px-4 py-3">Creado</th>
+                  <th className="px-4 py-3">Autorizado</th>
                   <th className="px-4 py-3">Estado</th>
                   {admin && <th className="px-4 py-3 text-right">Acción</th>}
                 </tr>
@@ -245,6 +248,22 @@ export default function PrecosteoListPage() {
                         </div>
                       ) : (
                         <span className="text-[0.7rem] text-terracotta">Sin insumos cargados</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 tabular text-graphite whitespace-nowrap">
+                      {r.created_at
+                        ? new Date(r.created_at).toLocaleDateString("es-CO",
+                            { day: "2-digit", month: "2-digit", year: "2-digit" })
+                        : "—"}
+                    </td>
+                    <td className="px-4 py-3 tabular whitespace-nowrap">
+                      {r.fecha_autorizacion ? (
+                        <span className="text-graphite">
+                          {new Date(r.fecha_autorizacion).toLocaleDateString("es-CO",
+                            { day: "2-digit", month: "2-digit", year: "2-digit" })}
+                        </span>
+                      ) : (
+                        <span className="text-terracotta font-semibold">sin autorizar</span>
                       )}
                     </td>
                     <td className="px-4 py-3">
