@@ -1180,6 +1180,8 @@ def descuadres(limite: int = 100) -> list[dict]:
         c = cruce_cantidades(f["id"])
         difs = [c.get("dif_corte_vs_remision"),
                 c.get("dif_remision_vs_recibidas"),
+                c.get("dif_remision_vs_terminacion"),
+                c.get("dif_terminacion_vs_terminadas"),
                 c.get("dif_recibidas_vs_entregadas")]
         if any(d for d in difs if d):
             c["hoja_ruta_id"] = f["id"]
@@ -1610,7 +1612,8 @@ def cruce_cantidades(ruta_id: str) -> dict:
         hr = (sb.table("hoja_ruta_lote")
                 .select("id,orden_corte_id,lav_cantidad_remision,"
                         "lav_cantidad_remision_origen,lav_cantidad_recibida,"
-                        "lav_cantidad_entregada")
+                        "lav_cantidad_entregada,term_cantidad_recibida,"
+                        "term_cantidad_terminada")
                 .eq("id", ruta_id).limit(1).execute()).data
         if not hr:
             return {}
@@ -1626,6 +1629,8 @@ def cruce_cantidades(ruta_id: str) -> dict:
     rem = hr[0].get("lav_cantidad_remision")
     recib = hr[0].get("lav_cantidad_recibida")
     entreg = hr[0].get("lav_cantidad_entregada")
+    term = hr[0].get("term_cantidad_recibida")
+    term_fin = hr[0].get("term_cantidad_terminada")
 
     def dif(a, b):
         # None cuando falta cualquiera de los dos: un cruce con un dato ausente
@@ -1643,4 +1648,11 @@ def cruce_cantidades(ruta_id: str) -> dict:
         "dif_corte_vs_remision": dif(cortadas, rem),
         "dif_remision_vs_recibidas": dif(rem, recib),
         "dif_recibidas_vs_entregadas": dif(recib, entreg),
+        "recibidas_terminacion": term,
+        "terminadas": term_fin,
+        # EL CRUCE QUE IMPORTA: lo que dice la remisión de lavandería contra lo
+        # que llegó a terminación. Esa diferencia es lo que se quedó en la
+        # lavandería, y es la única forma de verlo sin que la lavandería reporte.
+        "dif_remision_vs_terminacion": dif(rem, term),
+        "dif_terminacion_vs_terminadas": dif(term, term_fin),
     }

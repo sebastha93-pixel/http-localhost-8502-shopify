@@ -57,6 +57,7 @@ interface Descuadre {
   en_remision?: number | null;
   recibidas_lavanderia?: number | null;
   entregadas_lavanderia?: number | null;
+  recibidas_terminacion?: number | null;
   dif_corte_vs_remision?: number | null;
   dif_remision_vs_recibidas?: number | null;
   faltan?: number;
@@ -229,8 +230,7 @@ export default function LavanderiaPage() {
                     <th className="px-4 py-2">Lote</th>
                     <th className="px-4 py-2 text-right">Cortadas</th>
                     <th className="px-4 py-2 text-right">En la remisión</th>
-                    <th className="px-4 py-2 text-right">Recibidas</th>
-                    <th className="px-4 py-2 text-right">Entregadas</th>
+                    <th className="px-4 py-2 text-right">Llegó a terminación</th>
                     <th className="px-4 py-2 text-right">Sin ubicar</th>
                   </tr>
                 </thead>
@@ -240,8 +240,7 @@ export default function LavanderiaPage() {
                       <td className="px-4 py-2 font-semibold tabular">{c.consecutivo || "—"}</td>
                       <td className="px-4 py-2 text-right tabular">{c.cortadas ?? "—"}</td>
                       <td className="px-4 py-2 text-right tabular">{c.en_remision ?? "—"}</td>
-                      <td className="px-4 py-2 text-right tabular">{c.recibidas_lavanderia ?? "—"}</td>
-                      <td className="px-4 py-2 text-right tabular">{c.entregadas_lavanderia ?? "—"}</td>
+                      <td className="px-4 py-2 text-right tabular">{c.recibidas_terminacion ?? "—"}</td>
                       <td className="px-4 py-2 text-right tabular font-bold text-terracotta">
                         {c.faltan ? c.faltan : "—"}
                       </td>

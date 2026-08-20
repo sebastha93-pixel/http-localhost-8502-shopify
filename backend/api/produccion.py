@@ -2053,16 +2053,37 @@ def terminacion_publica(token: str) -> dict:
     }
 
 
+class RecibirTerminacionBody(BaseModel):
+    # Opcional para no romper el flujo si alguien confirma sin contar, pero es
+    # LA cifra que cierra la trazabilidad: comparada con lo que dice la remisión
+    # de lavandería, la diferencia es lo que se quedó en la lavandería.
+    cantidad: Optional[int] = None
+
+
 @publico.post("/terminacion/{token}/recibir")
-def recibir_terminacion_publica(token: str) -> dict:
-    """El proveedor de terminación confirma que ya recibió el lote."""
+def recibir_terminacion_publica(token: str,
+                                body: Optional[RecibirTerminacionBody] = None) -> dict:
+    """El proveedor de terminación confirma que ya recibió el lote, y cuántas.
+
+    La CANTIDAD es lo que cierra la cadena (Sebastián, 2026-08-19: «eso lo
+    averiguamos con lo que llega a terminación»). Antes el portal mostraba el
+    total esperado y no guardaba lo real, así que las prendas que se quedaban en
+    la lavandería eran invisibles hasta el inventario.
+    """
     r = svc.obtener_ruta_por_token_terminacion(token)
     if not r:
         raise HTTPException(404, "lote_no_encontrado")
     if r.get("etapa") in ("terminacion_recibida", "terminacion_terminada", "despachado"):
         raise HTTPException(400, f"ya_recibido:{r.get('etapa')}")
+    cant = (body.cantidad if body else None)
+    if cant is not None and (cant < 0 or cant > 100000):
+        raise HTTPException(400, "cantidad_fuera_de_rango")
     try:
-        return {"ok": True, "ruta": svc.cambiar_etapa_ruta(r["id"], "terminacion_recibida")}
+        ruta = svc.cambiar_etapa_ruta(r["id"], "terminacion_recibida")
+        cruce = None
+        if cant is not None:
+            cruce = svc.registrar_cantidad_terminacion(r["id"], cant)
+        return {"ok": True, "ruta": ruta, "cruce": cruce}
     except ValueError as e:
         raise HTTPException(400, str(e))
 

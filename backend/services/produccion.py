@@ -6931,3 +6931,66 @@ def devolver_etapa_ruta(ruta_id: str, etapa_destino: str, *, motivo: str,
     fresca = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
     return {"ok": True, "de": actual, "a": etapa_destino,
             "sellos_borrados": borradas, "ruta": fresca[0] if fresca else {}}
+
+
+def registrar_cantidad_terminacion(ruta_id: str, cantidad: int) -> dict:
+    """Guarda cuántas prendas dice terminación que recibió, y cierra el cruce.
+
+    ESTE ES EL ESLABÓN QUE FALTABA (Sebastián, 2026-08-19: «eso lo averiguamos
+    con lo que llega a terminación»). La cadena queda:
+
+        cortadas ── remisión a lavandería ── recibidas en terminación
+
+    y la diferencia entre las dos últimas es, exactamente, lo que se quedó en la
+    lavandería. Se avisa EN EL MOMENTO en que terminación confirma, porque
+    perseguir prendas perdidas sirve mientras alguien recuerda el lote — no en el
+    inventario de fin de mes.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    sb.table("hoja_ruta_lote").update(
+        {"term_cantidad_recibida": int(cantidad), "updated_at": _now_iso()}
+    ).eq("id", ruta_id).execute()
+
+    try:
+        from backend.services import lavanderia_chase as lav
+        cruce = lav.cruce_cantidades(ruta_id)
+    except Exception as e:
+        log.warning(f"[terminacion] cruce falló: {str(e)[:160]}")
+        return {"cantidad": int(cantidad)}
+
+    esperadas = cruce.get("en_remision") or cruce.get("cortadas")
+    faltan = None if esperadas is None else int(esperadas) - int(cantidad)
+    try:
+        crear_nota_ruta(
+            ruta_id=ruta_id, actor="terminacion",
+            mensaje=(f"Terminación recibió {cantidad} prendas."
+                     + ("" if faltan is None else
+                        f" Se esperaban {esperadas}: "
+                        + ("cuadra." if faltan == 0
+                           else f"FALTAN {faltan}." if faltan > 0
+                           else f"llegaron {abs(faltan)} de más."))),
+            autor="portal de terminación")
+    except Exception as e:
+        log.warning(f"[terminacion] nota falló: {str(e)[:160]}")
+
+    if faltan:
+        try:
+            from backend.services import notificaciones as notif
+            cons = cruce.get("consecutivo") or "?"
+            notif.crear_para_modulo(
+                modulo="produccion_cortador", tipo="lavanderia_pendiente",
+                titulo=(f"Lote {cons}: {'faltan' if faltan > 0 else 'sobran'} "
+                        f"{abs(faltan)} prendas al llegar a terminación"),
+                mensaje=(f"Se enviaron {esperadas} a lavandería y terminación "
+                         f"recibió {cantidad}. Conviene revisarlo hoy, mientras "
+                         f"en la lavandería recuerdan el lote."),
+                enlace="/produccion/lavanderia", creado_por="sistema")
+        except Exception as e:
+            log.warning(f"[terminacion] aviso de descuadre falló: {str(e)[:160]}")
+
+    log.info(f"[terminacion] lote {cruce.get('consecutivo')} recibió {cantidad} "
+             f"(esperadas {esperadas}, dif {faltan})")
+    return {"cantidad": int(cantidad), "esperadas": esperadas, "faltan": faltan,
+            "cruce": cruce}
