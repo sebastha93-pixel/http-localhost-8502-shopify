@@ -1120,9 +1120,32 @@ def listar(*, estado: str = "abierto", limite: int = 200) -> list[dict]:
     if estado and estado != "todos":
         q = q.eq("estado", estado)
     filas = (q.execute()).data or []
+    # Se agrega la REFERENCIA de producción, no solo el consecutivo: es el número
+    # que se persigue y el que habla el equipo («Ref 96616-1»). Una lista que solo
+    # muestre consecutivos obliga a traducir de memoria.
     for f in filas:
         h = _horas_desde(f.get("abierto_at"))
         f["dias_abierto"] = round((h or 0) / 24.0, 1)
+        f["codigo_referencia"] = None
+        f["referencia_nombre"] = None
+        f["confeccionista"] = None
+        try:
+            oc = (sb.table("ordenes_corte").select("referencia_id")
+                    .eq("id", f["orden_corte_id"]).limit(1).execute()).data
+            if oc and oc[0].get("referencia_id"):
+                rp = (sb.table("referencias_precosteo")
+                        .select("codigo_referencia,nombre")
+                        .eq("id", oc[0]["referencia_id"]).limit(1).execute()).data
+                if rp:
+                    f["codigo_referencia"] = rp[0].get("codigo_referencia")
+                    f["referencia_nombre"] = rp[0].get("nombre")
+            hr = (sb.table("hoja_ruta_lote")
+                    .select("confeccionista:confeccionista_id(nombre,telefono)")
+                    .eq("id", f["hoja_ruta_id"]).limit(1).execute()).data
+            if hr:
+                f["confeccionista"] = hr[0].get("confeccionista")
+        except Exception as e:
+            log.warning(f"[lavanderia-chase] enriquecer pendiente: {str(e)[:140]}")
     return filas
 
 
