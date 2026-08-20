@@ -19,6 +19,13 @@ from backend.core.security import CurrentUser, require_role, require_permission
 
 router = APIRouter(prefix="/api/comercial", tags=["comercial"])
 
+# PERMISOS: todos estos endpoints son de LECTURA, así que piden "ver", no
+# "modificar" (corregido 2026-08-19). Antes pedían "modificar" y el efecto era
+# concreto: el menú ofrece «Comercial» con solo tener el módulo, pero un usuario
+# con rol `lector` —que por definición solo puede "ver"— entraba y recibía 403 en
+# TODAS las consultas. La pantalla quedaba ofrecida y rota a la vez.
+# Los endpoints de admin (/asesores-map, /debug/*) siguen con require_role.
+
 
 def _shopify_metrics():
     """Lazy import de src/shopify_metrics para que el backend no rompa si Shopify falla."""
@@ -36,7 +43,7 @@ async def _run(fn, *args, **kwargs):
 
 @router.get("/overview")
 async def overview(
-    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
+    _: CurrentUser = Depends(require_permission("comercial", "ver")),
 ) -> dict:
     """
     Overview comercial completo en una sola llamada.
@@ -80,7 +87,7 @@ async def overview(
 @router.get("/ventas")
 def ventas(
     dias: int = Query(12, ge=1, le=60),
-    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
+    _: CurrentUser = Depends(require_permission("comercial", "ver")),
 ) -> dict:
     """Serie diaria de ventas (default 12 días)."""
     try:
@@ -99,7 +106,7 @@ def ventas(
 def top_productos(
     n: int = Query(5, ge=1, le=20),
     dias: int = Query(30, ge=1, le=90),
-    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
+    _: CurrentUser = Depends(require_permission("comercial", "ver")),
 ) -> dict:
     """Top N productos por revenue de los últimos `dias`."""
     try:
@@ -111,7 +118,7 @@ def top_productos(
 
 @router.get("/comparativas")
 def comparativas(
-    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
+    _: CurrentUser = Depends(require_permission("comercial", "ver")),
 ) -> dict:
     """
     Comparativas temporales:
@@ -129,7 +136,7 @@ def comparativas(
 @router.get("/clientes")
 def clientes(
     dias: int = Query(90, ge=30, le=365),
-    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
+    _: CurrentUser = Depends(require_permission("comercial", "ver")),
 ) -> dict:
     """
     Análisis de clientes en los últimos `dias`:
@@ -286,7 +293,7 @@ def desglose(
     periodo: str = Query("30d", pattern="^(hoy|ayer|7d|30d|mes|ytd|custom)$"),
     desde:   str = Query("", description="ISO YYYY-MM-DD (solo si periodo=custom)"),
     hasta:   str = Query("", description="ISO YYYY-MM-DD (solo si periodo=custom)"),
-    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
+    _: CurrentUser = Depends(require_permission("comercial", "ver")),
 ) -> dict:
     """Desglose de ventas: bruto, neto, descuentos, por canal y por asesor.
     Al canal se le suman las tiendas físicas (Florida/Arrayanes) desde las
@@ -297,6 +304,13 @@ def desglose(
     except Exception as e:
         raise HTTPException(503, f"Error: {str(e)[:200]}")
 
+    # Se declara SIEMPRE, y por defecto en False: el frontend tiene que poder
+    # distinguir «las tiendas están sumadas» de «no pude preguntarle a Siigo».
+    # Sin esto, la ausencia de la bandera era ambigua y la pantalla asumía lo
+    # mejor — mostrando un total menor como si fuera el total.
+    if isinstance(data, dict):
+        data = dict(data)
+        data.setdefault("tiendas_siigo", False)
     try:
         from backend.services import siigo
         if siigo.siigo_configurado():
@@ -342,7 +356,7 @@ def fit_talla(
     desde:   str = Query(""),
     hasta:   str = Query(""),
     canal:   str = Query(""),
-    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
+    _: CurrentUser = Depends(require_permission("comercial", "ver")),
 ) -> dict:
     """RF-05 — Ventas por Fit y Talla (netas, unidades, participación, ticket)."""
     try:
@@ -360,7 +374,7 @@ def fit_ciudad(
     periodo: str = Query("30d", pattern="^(hoy|ayer|7d|30d|mes|ytd|custom)$"),
     desde:   str = Query(""),
     hasta:   str = Query(""),
-    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
+    _: CurrentUser = Depends(require_permission("comercial", "ver")),
 ) -> dict:
     """Fit más vendido por ciudad de envío (Shopify)."""
     try:
@@ -375,7 +389,7 @@ def ubicacion(
     periodo: str = Query("30d", pattern="^(hoy|ayer|7d|30d|mes|ytd|custom)$"),
     desde:   str = Query(""),
     hasta:   str = Query(""),
-    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
+    _: CurrentUser = Depends(require_permission("comercial", "ver")),
 ) -> dict:
     """% de ventas por ciudad y por departamento (separados)."""
     try:
@@ -387,7 +401,7 @@ def ubicacion(
 
 @router.get("/inventario")
 def inventario(
-    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
+    _: CurrentUser = Depends(require_permission("comercial", "ver")),
 ) -> dict:
     """
     Inventario Shopify: productos activos / borrador / archivados +
@@ -403,7 +417,7 @@ def inventario(
 @router.get("/ventas-periodo")
 def ventas_periodo(
     periodo: str = Query("30d", pattern="^(7d|30d|90d|ytd)$"),
-    _: CurrentUser = Depends(require_permission("comercial", "modificar")),
+    _: CurrentUser = Depends(require_permission("comercial", "ver")),
 ) -> dict:
     """Ventas para un período preset: 7d, 30d, 90d, ytd."""
     try:
