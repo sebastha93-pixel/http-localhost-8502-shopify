@@ -379,16 +379,52 @@ def _fetch_orders_periodo(desde: date, hasta: date, fields: str = "id,total_pric
             "limit": 250,
             "fields": fields,
         }
-        # Paginar con cursor — Shopify devuelve max 250 por página
-        try:
-            from shopify_client import paginar
-            for page in paginar("/orders.json", "orders", params):
-                orders.extend(page)
-        except Exception:
-            # Fallback sin paginar (limita a 250)
-            r = _get("/orders.json", params)
-            orders.extend(r.get("orders", []))
-        return orders
+        # Paginar con cursor — Shopify devuelve max 250 por página.
+        #
+        # ANTES ACÁ HABÍA DOS BUGS QUE PRODUCÍAN PLATA FALSA (2026-08-19):
+        #
+        #   try:  for page in paginar(...): orders.extend(page)
+        #   except Exception:  orders.extend(_get(...)["orders"])   # ← 250 otra vez
+        #
+        # 1. Si la paginación fallaba A MITAD, las páginas ya recogidas se
+        #    quedaban Y encima se volvían a agregar las primeras 250: órdenes
+        #    DUPLICADAS y revenue inflado.
+        # 2. Si fallaba al inicio, devolvía 250 órdenes haciéndose pasar por el
+        #    período completo. Con ~1.400 órdenes al mes, eso es una fracción
+        #    presentada como total — y cacheada 30 minutos.
+        #
+        # Regla que no se rompe más: una función que mide TIENE que reportar
+        # cómo terminó. Si el período no se pudo leer completo, revienta; el
+        # endpoint responde 503 y quien mira ve un error, no una cifra menor
+        # que parece verdadera. Un error se nota; un número falso se usa para
+        # tomar decisiones.
+        from shopify_client import paginar
+        ultimo_error = None
+        for intento in (1, 2):
+            orders = []
+            try:
+                for page in paginar("/orders.json", "orders", params):
+                    orders.extend(page)
+                break
+            except Exception as e:
+                ultimo_error = e
+                orders = []          # se descarta lo parcial: nunca se mezcla
+        else:
+            raise RuntimeError(
+                f"fetch_incompleto: no se pudo leer el período "
+                f"{desde}→{hasta} completo ({str(ultimo_error)[:120]})")
+
+        # Dedup por id: cinturón y tirantes. Si algún día otro camino vuelve a
+        # agregar páginas repetidas, acá no se convierte en revenue doble.
+        vistos, unicas = set(), []
+        for o in orders:
+            oid = o.get("id")
+            if oid is not None and oid in vistos:
+                continue
+            if oid is not None:
+                vistos.add(oid)
+            unicas.append(o)
+        return unicas
 
     return _cached(key, _calc, ttl=1800)
 
@@ -435,27 +471,49 @@ def analisis_clientes(dias: int = 90) -> dict:
 
         top = sorted(por_cliente.values(), key=lambda x: x["revenue"], reverse=True)[:10]
 
-        # Tasa de recompra: clientes con orden en ventana antigua que volvieron
+        # ── TASA DE RECOMPRA — EN DOS PASADAS, Y ESO ES EL ARREGLO ──────────
+        #
+        # La versión anterior preguntaba `cid in clientes_ventana_vieja` MIENTRAS
+        # todavía estaba construyendo ese set, en un solo recorrido. Y Shopify
+        # devuelve las órdenes de la MÁS NUEVA A LA MÁS VIEJA (medido el
+        # 2026-08-19), así que la orden reciente de un cliente se procesaba antes
+        # que su orden vieja: cuando se preguntaba, el cliente todavía no estaba
+        # en el set y no contaba como recompra.
+        #
+        # Resultado: la tasa salía ~0 SIEMPRE, para cualquier realidad. No era
+        # una recompra baja, era un cero estructural — y se leía como un dato.
+        #
+        # Con dos pasadas el orden de llegada deja de importar, que es como debe
+        # ser: un cálculo que depende del orden en que la API responde no es un
+        # cálculo, es una casualidad.
         ventana_vieja_ini = hoy - timedelta(days=90)
         ventana_vieja_fin = hoy - timedelta(days=60)
         ventana_reciente_ini = hoy - timedelta(days=60)
-        clientes_ventana_vieja = set()
-        clientes_volvieron = set()
-        for o in orders:
+
+        def _cliente_y_fecha(o):
             c = o.get("customer") or {}
             cid = c.get("id") or (c.get("email") or "").lower().strip()
             if not cid:
-                continue
-            fecha_str = (o.get("created_at") or "")[:10]
+                return None, None
             try:
-                fecha = datetime.fromisoformat(fecha_str).date()
+                return cid, datetime.fromisoformat((o.get("created_at") or "")[:10]).date()
             except Exception:
-                continue
-            if ventana_vieja_ini <= fecha < ventana_vieja_fin:
+                return cid, None
+
+        # 1ª pasada: quiénes compraron en la ventana vieja.
+        clientes_ventana_vieja = set()
+        for o in orders:
+            cid, fecha = _cliente_y_fecha(o)
+            if cid and fecha and ventana_vieja_ini <= fecha < ventana_vieja_fin:
                 clientes_ventana_vieja.add(cid)
-            if fecha >= ventana_reciente_ini:
-                if cid in clientes_ventana_vieja:
-                    clientes_volvieron.add(cid)
+
+        # 2ª pasada: de esos, quiénes volvieron después.
+        clientes_volvieron = set()
+        for o in orders:
+            cid, fecha = _cliente_y_fecha(o)
+            if (cid and fecha and fecha >= ventana_reciente_ini
+                    and cid in clientes_ventana_vieja):
+                clientes_volvieron.add(cid)
 
         tasa_recompra = (
             len(clientes_volvieron) / len(clientes_ventana_vieja) * 100
