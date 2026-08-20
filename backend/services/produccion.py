@@ -5069,6 +5069,12 @@ def guardar_media_grupo(*, wa_message_id: str, file_bytes: bytes,
     try:
         from backend.services import lavanderia_chase
         adjuntar = lavanderia_chase.al_llegar_media(wa_message_id)
+        # Si quedó adjuntada, se le lee la CANTIDAD al documento aprovechando
+        # que los bytes todavía están acá. Es el cruce que permite saber cuántas
+        # prendas se quedaron en el camino, y solo sirve si se captura ahora.
+        if adjuntar and adjuntar.get("hoja_ruta_id"):
+            lavanderia_chase.capturar_cantidad_remision(
+                adjuntar["hoja_ruta_id"], file_bytes, mime)
     except Exception as e:
         log.warning(f"[grupo] revisión de remisión falló: {str(e)[:200]}")
 

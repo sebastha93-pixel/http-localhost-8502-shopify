@@ -49,6 +49,19 @@ interface RespPendientes {
   cadencia: Record<string, number>;
 }
 
+interface Descuadre {
+  hoja_ruta_id: string;
+  consecutivo?: string;
+  programadas?: number | null;
+  cortadas?: number | null;
+  en_remision?: number | null;
+  recibidas_lavanderia?: number | null;
+  entregadas_lavanderia?: number | null;
+  dif_corte_vs_remision?: number | null;
+  dif_remision_vs_recibidas?: number | null;
+  faltan?: number;
+}
+
 interface MensajeGrupo {
   id: string;
   wa_message_id: string;
@@ -92,6 +105,12 @@ export default function LavanderiaPage() {
     queryKey: ["grupo-mensajes"],
     queryFn: () => api.get("/api/produccion/grupo/mensajes?limite=40"),
     refetchInterval: 30_000,
+  });
+
+  const cuadreQ = useQuery<{ descuadres: Descuadre[]; total_faltantes: number }>({
+    queryKey: ["lavanderia-descuadres"],
+    queryFn: () => api.get("/api/produccion/lavanderia/descuadres"),
+    refetchInterval: 120_000,
   });
 
   const anular = useMutation({
@@ -186,6 +205,54 @@ export default function LavanderiaPage() {
           </Card>
         ))}
       </div>
+
+      {/* ── PRENDAS QUE NO CUADRAN ────────────────────────────────────
+          Va antes de los pendientes: un documento que va tarde se persigue,
+          pero prendas perdidas hay que ir a buscarlas, y el rastro se enfría.
+          Solo aparece si hay algo — una tarjeta vacía enseña a ignorarla. */}
+      {(cuadreQ.data?.descuadres?.length || 0) > 0 && (
+        <>
+          <div className="mb-2 flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-terracotta" />
+            <h2 className="text-sm font-semibold uppercase tracking-widest text-terracotta">
+              Prendas que no cuadran
+            </h2>
+            <span className="text-xs text-graphite">
+              {cuadreQ.data?.total_faltantes} sin ubicar
+            </span>
+          </div>
+          <Card className="mb-6 border-terracotta/40">
+            <CardContent className="p-0">
+              <table className="w-full text-xs">
+                <thead className="border-b border-border bg-terracotta/5">
+                  <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite">
+                    <th className="px-4 py-2">Lote</th>
+                    <th className="px-4 py-2 text-right">Cortadas</th>
+                    <th className="px-4 py-2 text-right">En la remisión</th>
+                    <th className="px-4 py-2 text-right">Recibidas</th>
+                    <th className="px-4 py-2 text-right">Entregadas</th>
+                    <th className="px-4 py-2 text-right">Sin ubicar</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(cuadreQ.data?.descuadres || []).map((c) => (
+                    <tr key={c.hoja_ruta_id} className="border-b border-border/40">
+                      <td className="px-4 py-2 font-semibold tabular">{c.consecutivo || "—"}</td>
+                      <td className="px-4 py-2 text-right tabular">{c.cortadas ?? "—"}</td>
+                      <td className="px-4 py-2 text-right tabular">{c.en_remision ?? "—"}</td>
+                      <td className="px-4 py-2 text-right tabular">{c.recibidas_lavanderia ?? "—"}</td>
+                      <td className="px-4 py-2 text-right tabular">{c.entregadas_lavanderia ?? "—"}</td>
+                      <td className="px-4 py-2 text-right tabular font-bold text-terracotta">
+                        {c.faltan ? c.faltan : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </CardContent>
+          </Card>
+        </>
+      )}
 
       {/* ── 2. ¿QUÉ ESTÁ ESPERANDO? ──────────────────────────────────── */}
       <div className="mb-2 flex items-center gap-2">

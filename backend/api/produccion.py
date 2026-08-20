@@ -2362,6 +2362,27 @@ def reprocesar_espejo_lavanderia(
     return lav.reprocesar_espejo(limite=limite, desde=desde)
 
 
+@router.get("/lavanderia/descuadres")
+def lavanderia_descuadres(_: CurrentUser = Depends(get_current_user)) -> dict:
+    """Lotes donde las cifras no cuadran — ahí están las prendas que faltan.
+
+    Cruza tres cifras que son distintas a propósito: lo que salió de corte, lo
+    que dice la remisión, y lo que la lavandería confirma. La diferencia entre
+    dos de ellas es el número de prendas que hay que ir a buscar, y buscarlas
+    sirve mientras el rastro está fresco.
+    """
+    from backend.services import lavanderia_chase as lav
+    filas = lav.descuadres()
+    return {"descuadres": filas,
+            "total_faltantes": sum(f.get("faltan") or 0 for f in filas)}
+
+
+@router.get("/lavanderia/cruce/{ruta_id}")
+def lavanderia_cruce(ruta_id: str, _: CurrentUser = Depends(get_current_user)) -> dict:
+    from backend.services import lavanderia_chase as lav
+    return lav.cruce_cantidades(ruta_id)
+
+
 @router.post("/lavanderia/barrido")
 def correr_barrido_lavanderia(
     _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),

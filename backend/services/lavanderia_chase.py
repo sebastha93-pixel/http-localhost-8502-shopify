@@ -587,7 +587,8 @@ def al_llegar_media(wa_message_id: str) -> dict:
             out["motivo"] = f"error:{str(e)[:100]}"
             return out
         cons = (ruta.get("orden_corte") or {}).get("consecutivo") or cod
-        out.update({"adjuntada": True, "motivo": "ok", "consecutivo": cons})
+        out.update({"adjuntada": True, "motivo": "ok", "consecutivo": cons,
+                    "hoja_ruta_id": ruta["id"]})
         log.info(f"[lavanderia-chase] remisión adjuntada al lote {cons} desde el grupo")
         _avisar_os(
             titulo=f"Remisión de lavandería del lote {cons} cargada desde el grupo",
@@ -1156,6 +1157,38 @@ def listar(*, estado: str = "abierto", limite: int = 200) -> list[dict]:
     return filas
 
 
+def descuadres(limite: int = 100) -> list[dict]:
+    """Lotes donde las cifras NO cuadran: ahí están las prendas que faltan.
+
+    Solo devuelve los que tienen una diferencia real (no los que le faltan
+    datos), porque una lista llena de «no sabemos» no se revisa. Los faltantes
+    de verdad van primero: perseguir prendas perdidas es más urgente que
+    entender un sobrante.
+    """
+    sb = _sb()
+    if sb is None:
+        return []
+    try:
+        filas = (sb.table("hoja_ruta_lote").select("id")
+                   .not_.is_("lav_cantidad_remision", "null")
+                   .limit(min(int(limite), 300)).execute()).data or []
+    except Exception as e:
+        log.warning(f"[lavanderia-chase] descuadres: {str(e)[:160]}")
+        return []
+    out = []
+    for f in filas:
+        c = cruce_cantidades(f["id"])
+        difs = [c.get("dif_corte_vs_remision"),
+                c.get("dif_remision_vs_recibidas"),
+                c.get("dif_recibidas_vs_entregadas")]
+        if any(d for d in difs if d):
+            c["hoja_ruta_id"] = f["id"]
+            c["faltan"] = max((d for d in difs if d and d > 0), default=0)
+            out.append(c)
+    out.sort(key=lambda x: -(x.get("faltan") or 0))
+    return out
+
+
 def resumen() -> dict:
     """Contadores para el tablero: cuántos esperan recogida, cuántos remisión,
     cuántos ya se escalaron."""
@@ -1360,6 +1393,10 @@ def remision_por_whatsapp(*, telefono: str, media_id: str, mime: str = "",
             elegido["hoja_ruta_id"], file_bytes=contenido,
             filename=f"remision_wa.{ext}", content_type=mime_real)
         cons = elegido.get("consecutivo") or "?"
+        # El archivo ya está en memoria y a veces ya fue leído para desempatar:
+        # es el momento más barato de sacarle la cantidad.
+        capturar_cantidad_remision(elegido["hoja_ruta_id"], contenido, mime_real,
+                                   ya_leido=lectura)
         _nota(elegido["hoja_ruta_id"],
               f"Remisión de lavandería recibida por WhatsApp de {prov['nombre']} "
               f"(confección). Lote identificado por: {via}.")
@@ -1470,3 +1507,140 @@ def asignar_lavanderia_si_falta(ruta: dict, texto: str) -> Optional[str]:
     log.info(f"[lavanderia-chase] lavandería {lav['nombre']} asignada al lote "
              f"{(ruta.get('orden_corte') or {}).get('consecutivo')}")
     return lav["nombre"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CRUCE DE CANTIDADES — dónde se quedaron las prendas
+#
+# Sebastián, 2026-08-19: «cruzar las remisiones me parece súper indispensable
+# para saber dónde se quedaron las prendas y poder recuperarlas».
+#
+# El primer caso real ya lo valida: la remisión de Stone Jeans dice 297 y las
+# unidades cortadas del lote 2607-0015 suman exactamente 297. Cuando NO cuadre,
+# esa diferencia es el número de prendas que hay que ir a buscar — y hay que
+# buscarlas mientras el rastro está fresco, no en el inventario de fin de mes.
+#
+# Tres cifras que NO son la misma y por eso viven separadas:
+#   cortadas   → lo que salió de corte      (ordenes_corte.unidades_cortadas)
+#   remisión   → lo que dice el PAPEL       (lav_cantidad_remision)
+#   recibidas  → lo que la lavandería FIRMA (lav_cantidad_recibida)
+# ═══════════════════════════════════════════════════════════════════════
+
+def sumar_cortadas(unidades) -> Optional[int]:
+    """Total de una `unidades_cortadas`, que viene por talla: {"8": 66, ...}.
+
+    Devuelve None si no hay nada que sumar, para poder distinguir «cero prendas»
+    de «no sabemos» — que en un cruce de faltantes no es lo mismo.
+    """
+    if not isinstance(unidades, dict) or not unidades:
+        return None
+    total = 0
+    for v in unidades.values():
+        try:
+            total += int(v or 0)
+        except (TypeError, ValueError):
+            continue
+    return total or None
+
+
+def capturar_cantidad_remision(ruta_id: str, archivo: bytes, mime: str,
+                               ya_leido: Optional[dict] = None) -> Optional[int]:
+    """Lee la cantidad escrita en la remisión y la guarda.
+
+    `ya_leido` evita pagar dos veces la lectura cuando el flujo ya llamó al OCR
+    para desempatar de qué lote era la foto.
+    """
+    lectura = ya_leido
+    if not lectura or not lectura.get("ok"):
+        try:
+            from backend.services.remision_ocr import leer_remision_lavanderia
+            lectura = leer_remision_lavanderia(archivo, mime)
+        except Exception as e:
+            log.warning(f"[lavanderia-chase] no pude leer la cantidad: {str(e)[:160]}")
+            return None
+    if not lectura.get("ok"):
+        return None
+    try:
+        cant = int(lectura.get("cantidad") or 0)
+    except (TypeError, ValueError):
+        return None
+    if cant <= 0:
+        return None
+    # Confianza baja: se guarda igual pero queda marcado, porque una cifra
+    # dudosa sirve para revisar y una cifra ausente no sirve para nada.
+    origen = f"ia_vision:{lectura.get('confianza') or 'media'}"
+    sb = _sb()
+    if sb is None:
+        return None
+    try:
+        sb.table("hoja_ruta_lote").update(
+            {"lav_cantidad_remision": cant,
+             "lav_cantidad_remision_origen": origen,
+             "updated_at": _iso(_ahora())}
+        ).eq("id", ruta_id).execute()
+    except Exception as e:
+        log.warning(f"[lavanderia-chase] no pude guardar la cantidad: {str(e)[:160]}")
+        return None
+
+    cruce = cruce_cantidades(ruta_id)
+    dif = cruce.get("dif_corte_vs_remision")
+    _nota(ruta_id,
+          f"La remisión dice {cant} prendas (leído del documento)."
+          + (f" Corte había despachado {cruce.get('cortadas')}: "
+             f"{'CUADRA' if dif == 0 else f'FALTAN {abs(dif)}' if dif and dif > 0 else f'SOBRAN {abs(dif)}'}."
+             if dif is not None else ""))
+    if dif:
+        _avisar_os(
+            titulo=(f"Lote {cruce.get('consecutivo')}: la remisión no cuadra con corte "
+                    f"({abs(dif)} prendas)"),
+            mensaje=(f"Corte despachó {cruce.get('cortadas')} y la remisión de "
+                     f"lavandería dice {cant}. "
+                     f"{'Faltan' if dif > 0 else 'Sobran'} {abs(dif)} prendas. "
+                     f"Vale revisarlo ahora que el rastro está fresco."),
+            enlace="/produccion/lavanderia")
+    return cant
+
+
+def cruce_cantidades(ruta_id: str) -> dict:
+    """Las cifras del lote lado a lado, con las diferencias ya calculadas."""
+    sb = _sb()
+    if sb is None:
+        return {}
+    try:
+        hr = (sb.table("hoja_ruta_lote")
+                .select("id,orden_corte_id,lav_cantidad_remision,"
+                        "lav_cantidad_remision_origen,lav_cantidad_recibida,"
+                        "lav_cantidad_entregada")
+                .eq("id", ruta_id).limit(1).execute()).data
+        if not hr:
+            return {}
+        oc = (sb.table("ordenes_corte")
+                .select("consecutivo,cantidad_programada,unidades_cortadas")
+                .eq("id", hr[0]["orden_corte_id"]).limit(1).execute()).data
+    except Exception as e:
+        log.warning(f"[lavanderia-chase] cruce falló: {str(e)[:160]}")
+        return {}
+
+    o = oc[0] if oc else {}
+    cortadas = sumar_cortadas(o.get("unidades_cortadas"))
+    rem = hr[0].get("lav_cantidad_remision")
+    recib = hr[0].get("lav_cantidad_recibida")
+    entreg = hr[0].get("lav_cantidad_entregada")
+
+    def dif(a, b):
+        # None cuando falta cualquiera de los dos: un cruce con un dato ausente
+        # no da cero, da "no sabemos". Confundirlos escondería el faltante.
+        return None if a is None or b is None else int(a) - int(b)
+
+    return {
+        "consecutivo": o.get("consecutivo"),
+        "programadas": o.get("cantidad_programada"),
+        "cortadas": cortadas,
+        "en_remision": rem,
+        "remision_origen": hr[0].get("lav_cantidad_remision_origen"),
+        "recibidas_lavanderia": recib,
+        "entregadas_lavanderia": entreg,
+        "dif_corte_vs_remision": dif(cortadas, rem),
+        "dif_remision_vs_recibidas": dif(rem, recib),
+        "dif_recibidas_vs_entregadas": dif(recib, entreg),
+    }
