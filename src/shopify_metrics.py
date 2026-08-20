@@ -112,7 +112,6 @@ def _fetch_orders_dia(d: date, status: str = "any") -> list:
     Incluye total_tax y taxes_included para poder calcular ventas
     SIN IVA en Shopify Colombia (donde precios vienen con IVA incluido).
     """
-    orders = []
     params = {
         "status": status,
         "created_at_min": _iso_inicio(d),
@@ -120,8 +119,21 @@ def _fetch_orders_dia(d: date, status: str = "any") -> list:
         "limit": 250,
         "fields": "id,total_price,subtotal_price,total_tax,taxes_included,total_discounts,line_items,created_at,financial_status,cancelled_at",
     }
-    resp = _get("/orders.json", params)
-    orders.extend(resp.get("orders", []))
+    # SE PAGINA (arreglado 2026-08-19). Antes era UN solo `_get` con tope 250:
+    # el día que la tienda pasara de 250 órdenes, las ventas del día se
+    # recortaban en silencio. Medido ese día: el máximo real en 45 días fue 154
+    # órdenes — o sea al 62% del techo, sin margen y sin alarma. El número
+    # equivocado saldría justo en el día más grande del año, que es cuando más
+    # se mira.
+    from shopify_client import paginar
+    orders: list = []
+    try:
+        for page in paginar("/orders.json", "orders", params):
+            orders.extend(page)
+    except Exception as e:
+        raise RuntimeError(
+            f"fetch_incompleto: no pude leer completo el día {d} "
+            f"({str(e)[:120]})")
     return orders
 
 
@@ -153,16 +165,20 @@ def _fetch_orders_rango(desde: date, hasta: date, fields: str = "",
             "limit": 250,
             "fields": _ORDERS_FIELDS,
         }
+        # El fallback anterior devolvía 250 órdenes como si fueran el rango
+        # completo. Para un mes son ~1.400: mostraba el 18% de la venta y el
+        # warning quedaba enterrado en los logs mientras la pantalla exhibía la
+        # cifra con toda naturalidad. Ahora revienta y el endpoint da 503: un
+        # error se nota, un número menor creíble se usa para decidir.
         try:
             for page in paginar("/orders.json", "orders", params):
                 out.extend(page)
         except Exception as e:
             import logging as _lg
-            _lg.getLogger("shopify_metrics").warning(f"rango fetch: {e}")
-            try:
-                out = _get("/orders.json", params).get("orders", []) or []
-            except Exception:
-                pass
+            _lg.getLogger("shopify_metrics").warning(
+                f"rango {desde}→{hasta} incompleto: {e}")
+            raise RuntimeError(
+                f"fetch_incompleto: rango {desde}→{hasta} ({str(e)[:120]})")
         return out
 
     # Rango que incluye hoy: refrescar cada 5 min (ventas en vivo).
@@ -1121,6 +1137,17 @@ def inventario_shopify() -> dict:
         total_unidades = 0
         sin_stock = 0
         stock_bajo = 0
+        # ANTES ACÁ HABÍA UN `except Exception: pass` (arreglado 2026-08-19).
+        # Hay 859 productos activos y una página trae 250: son 4 páginas. Si
+        # fallaba en la segunda, los contadores se quedaban con el parcial y la
+        # función lo devolvía como total, CACHEADO UNA HORA y sin dejar ni una
+        # línea de log. El inventario podía mostrar un cuarto de la realidad sin
+        # que nada lo delatara.
+        #
+        # No revienta —a diferencia de las ventas— porque los tres conteos por
+        # status ya son útiles por sí solos. Pero lo marca: `parcial: true` y la
+        # pantalla lo dice.
+        parcial = False
         try:
             from shopify_client import paginar
             for page in paginar(
@@ -1137,8 +1164,15 @@ def inventario_shopify() -> dict:
                             sin_stock += 1
                         elif qty <= 5:
                             stock_bajo += 1
-        except Exception:
-            pass
+        except Exception as e:
+            parcial = True
+            import logging as _lg
+            _lg.getLogger("shopify_metrics").warning(
+                f"inventario incompleto tras {total_skus} SKUs: {e}")
+
+        # Si los conteos por status fallaron, también se avisa: mostrar "0
+        # productos activos" como un hecho es peor que decir que no se sabe.
+        conteos_ok = not (activos == 0 and borrador == 0 and archivados == 0)
 
         return {
             "activos":      activos,
@@ -1148,12 +1182,13 @@ def inventario_shopify() -> dict:
             "total_unidades": total_unidades,
             "sin_stock":    sin_stock,
             "stock_bajo":   stock_bajo,
+            "parcial":      parcial or not conteos_ok,
         }
 
     return _cached(key, _calc, ttl=3600)  # 1 hora — inventario cambia lento
 
 
-def listar_productos(status: str = "active", limit: int = 250) -> list:
+def listar_productos(status: str = "active", limit: Optional[int] = None) -> list:
     """
     Lista productos con stock por variante + precios + descuentos + lanzamiento.
 
@@ -1191,7 +1226,7 @@ def listar_productos(status: str = "active", limit: int = 250) -> list:
             for page in paginar(
                 "/products.json",
                 "products",
-                {"status": status, "limit": min(limit, 250), "fields": fields},
+                {"status": status, "limit": 250, "fields": fields},
             ):
                 for p in page:
                     variantes = p.get("variants") or []
@@ -1272,7 +1307,13 @@ def listar_productos(status: str = "active", limit: int = 250) -> list:
                     break
         except Exception as e:
             print(f"listar_productos error: {e}")
-        return productos[:limit]
+        # SIN `limit` se devuelve TODO (arreglado 2026-08-19). Antes el default
+        # era 250 y acá se cortaba en seco: con 859 productos activos, la
+        # pantalla de inventario mostraba el 29% del catálogo — y el endpoint
+        # reportaba `total: 250`, así que la cifra CONFIRMABA el recorte en vez
+        # de delatarlo. Un truncamiento que también miente sobre su propio
+        # tamaño es indetectable desde la pantalla.
+        return productos[:limit] if limit else productos
 
     return _cached(key, _calc, ttl=1800)
 

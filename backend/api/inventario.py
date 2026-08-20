@@ -10,6 +10,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.core.security import CurrentUser, require_role, require_permission
@@ -40,13 +42,21 @@ def resumen(
 @router.get("/productos")
 def productos(
     status: str = Query("active", pattern="^(active|draft|archived)$"),
-    limit: int = Query(250, ge=1, le=500),
+    limit: Optional[int] = Query(None, ge=1, le=5000,
+                                 description="Sin valor = todo el catálogo"),
     _: CurrentUser = Depends(require_permission("operaciones", "ver")),
 ) -> dict:
-    """Lista productos con stock por variante."""
+    """Lista productos con stock por variante.
+
+    Por defecto trae TODO el catálogo. Antes el default era 250 y con 859
+    productos activos la pantalla mostraba el 29% reportando `total: 250` —
+    la cifra confirmaba el recorte en lugar de delatarlo.
+    """
     try:
         items = _sm().listar_productos(status=status, limit=limit)
-        return {"status": status, "total": len(items), "productos": items}
+        return {"status": status, "total": len(items), "productos": items,
+                # Explícito: si se pidió un tope y se alcanzó, hay más detrás.
+                "truncado": bool(limit) and len(items) >= limit}
     except Exception as e:
         raise HTTPException(503, f"Error: {str(e)[:200]}")
 
