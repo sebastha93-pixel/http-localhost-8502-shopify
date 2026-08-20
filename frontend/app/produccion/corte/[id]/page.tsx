@@ -2319,6 +2319,15 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
     onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }); },
     onError: (e: Error) => setErrRuta(`No se pudo cambiar la etapa: ${e.message}`),
   });
+  // DEVOLVER UNA ETAPA. Avanzar era un clic y devolverse no existía: un lote
+  // marcado por error solo se arreglaba entrando a la base de datos. El motivo
+  // es obligatorio del lado del servidor, así que acá se pide antes de mandar.
+  const devolverEtapa = useMutation({
+    mutationFn: ({ etapa, motivo }: { etapa: string; motivo: string }) =>
+      api.post(`/api/produccion/rutas/${q.data?.id}/devolver-etapa`, { etapa, motivo }),
+    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }); },
+    onError: (e: Error) => setErrRuta(`No se pudo devolver la etapa: ${e.message}`),
+  });
   const guardarUrl = useMutation({
     mutationFn: () => api.patch(`/api/produccion/rutas/${q.data?.id}`, {
       remision_lavanderia_url: urlLav || null,
@@ -2552,6 +2561,37 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
         {/* Acciones + notificación */}
         <div className="border-t border-border pt-3 flex flex-wrap items-center gap-2">
           {botonSiguiente()}
+
+          {/* DEVOLVER ETAPA — discreto a propósito: es una corrección, no parte
+              del flujo normal. Solo aparece si hay una etapa anterior a la que
+              volver, y pide el motivo antes de mandar porque el servidor lo
+              exige (un retroceso sin explicación es indistinguible de un error
+              nuevo cuando alguien lo revisa dos semanas después). */}
+          {(() => {
+            const orden = ["asignado", "aceptado", "en_confeccion", "lavanderia",
+                           "terminacion_recibida", "terminacion_terminada", "despachado"];
+            const i = orden.indexOf(r.etapa);
+            if (i <= 0) return null;
+            const anterior = orden[i - 1];
+            return (
+              <button
+                onClick={() => {
+                  const motivo = window.prompt(
+                    `Devolver este lote de "${r.etapa}" a "${anterior}".\n\n` +
+                    `¿Por qué? (queda en el histórico del lote)`);
+                  if (motivo && motivo.trim().length >= 3) {
+                    devolverEtapa.mutate({ etapa: anterior, motivo: motivo.trim() });
+                  }
+                }}
+                disabled={devolverEtapa.isPending}
+                className="rounded-sm border border-border px-2.5 py-1.5 text-[0.62rem] font-semibold uppercase tracking-widest text-graphite hover:bg-cloud disabled:opacity-40"
+                title={`Corregir: devolver a ${anterior}`}
+              >
+                {devolverEtapa.isPending ? "Devolviendo…" : `↩ Devolver a ${anterior}`}
+              </button>
+            );
+          })()}
+
           <div className="flex-1" />
           <span className="text-[0.7rem] text-graphite uppercase tracking-widest">Notificar:</span>
           {ADMINS_WA.map((a) => (

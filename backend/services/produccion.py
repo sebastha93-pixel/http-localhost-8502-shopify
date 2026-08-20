@@ -6851,3 +6851,77 @@ def guardar_separacion(ruta_id: str, *, tipo: str, items: dict,
         except Exception as e:
             log.warning(f"[separacion] liberar impresión falló OC {oc_id} ({tipo}): {e}")
     return entrada
+
+
+# Columnas de timestamp por etapa. Se declara UNA vez acá porque tanto avanzar
+# como devolver necesitan el mismo mapa, y tenerlo duplicado es la forma segura
+# de que un día alguien agregue una etapa en un sitio y no en el otro.
+TS_POR_ETAPA = {
+    "aceptado":              "aceptado_at",
+    "en_confeccion":         "confeccion_iniciada_at",
+    "lavanderia":            "lavanderia_at",
+    "terminacion_recibida":  "terminacion_recibida_at",
+    "terminacion_terminada": "terminacion_terminada_at",
+    "despachado":            "despachado_at",
+}
+
+
+def devolver_etapa_ruta(ruta_id: str, etapa_destino: str, *, motivo: str,
+                        usuario: str = "") -> dict:
+    """Devuelve un lote a una etapa ANTERIOR, borrando los sellos que se deshacen.
+
+    POR QUÉ EXISTE (2026-08-19). Avanzar de etapa es un clic; devolverse no
+    existía. Sebastián marcó por error un lote como recibido en terminación y la
+    única forma de arreglarlo fue que yo entrara a la base a mano. Eso le va a
+    pasar a un cortador un martes a las 3 de la tarde, y ahí no va a haber nadie
+    mirando la base — el lote se queda diciendo una mentira, y el tablero con él.
+
+    TRES REGLAS QUE NO SON OBVIAS:
+
+    1. Se BORRAN los timestamps de las etapas que se deshacen. Si solo se
+       cambiara `etapa`, el lote diría "estoy en lavandería" con una fecha de
+       terminación puesta: cualquier informe que mida tiempos por etapa daría
+       cifras falsas, y nadie sabría por qué.
+    2. Exige MOTIVO. Un retroceso sin explicación es indistinguible de un error
+       nuevo cuando alguien lo revisa dos semanas después.
+    3. NO borra la remisión de lavandería ni los documentos. Devolver la etapa es
+       corregir dónde está el lote, no negar que el papel llegó. Si además hay
+       que quitar el documento, es otra acción explícita.
+    """
+    orden = _ruta_orden_map()
+    if etapa_destino not in orden:
+        raise ValueError(f"etapa_invalida:{etapa_destino}")
+    if not (motivo or "").strip():
+        raise ValueError("motivo_obligatorio")
+
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    r = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
+    if not r:
+        raise ValueError("no_encontrada")
+    actual = (r[0].get("etapa") or "asignado")
+    if orden[etapa_destino] >= orden.get(actual, 0):
+        raise ValueError(f"no_es_un_retroceso:{actual}→{etapa_destino}")
+
+    update: dict = {"etapa": etapa_destino, "updated_at": _now_iso()}
+    borradas = []
+    for etapa, col in TS_POR_ETAPA.items():
+        if orden[etapa] > orden[etapa_destino] and r[0].get(col):
+            update[col] = None
+            borradas.append(etapa)
+
+    sb.table("hoja_ruta_lote").update(update).eq("id", ruta_id).execute()
+    try:
+        crear_nota_ruta(
+            ruta_id=ruta_id, actor="admin",
+            mensaje=(f"Etapa devuelta de '{actual}' a '{etapa_destino}'. "
+                     f"Motivo: {motivo.strip()}"
+                     + (f" · Sellos borrados: {', '.join(borradas)}" if borradas else "")),
+            autor=usuario or "OS")
+    except Exception as e:
+        log.warning(f"[ruta] nota de retroceso falló: {str(e)[:160]}")
+    log.info(f"[ruta {ruta_id}] devuelta {actual} → {etapa_destino} por {usuario}")
+    fresca = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
+    return {"ok": True, "de": actual, "a": etapa_destino,
+            "sellos_borrados": borradas, "ruta": fresca[0] if fresca else {}}

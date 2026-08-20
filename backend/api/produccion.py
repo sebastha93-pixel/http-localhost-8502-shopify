@@ -1887,6 +1887,35 @@ def cambiar_etapa(
         raise HTTPException(400, str(e))
 
 
+class DevolverEtapaBody(BaseModel):
+    etapa: str
+    # Obligatorio a propósito: un retroceso sin explicación es indistinguible de
+    # un error nuevo cuando alguien lo revisa dos semanas después.
+    motivo: str = Field(min_length=3, max_length=300)
+
+
+@router.post("/rutas/{ruta_id}/devolver-etapa")
+def devolver_etapa(
+    ruta_id: str,
+    body: DevolverEtapaBody,
+    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+) -> dict:
+    """Devuelve un lote a una etapa anterior y borra los sellos que se deshacen.
+
+    Avanzar era un clic y devolverse no existía: el 19-ago un lote quedó marcado
+    como recibido en terminación por error y hubo que arreglarlo por base de
+    datos. Eso le va a pasar a un cortador un martes a las 3 de la tarde, y ahí
+    no va a haber nadie mirando la base.
+    """
+    try:
+        return svc.devolver_etapa_ruta(ruta_id, body.etapa,
+                                       motivo=body.motivo, usuario=user.email)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"devolver_etapa: {str(e)[:200]}")
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # HOJA DE RUTA · público (sin auth) — para el link del confeccionista
 # ═══════════════════════════════════════════════════════════════════════
