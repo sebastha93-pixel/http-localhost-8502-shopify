@@ -1,0 +1,65 @@
+/* MALE DENIM POS — v2 "Apple-grade" theme. Reemplaza a styles.css solo para la v2. */
+:root {
+  --color-bg: #f5f5f7;
+  --color-surface: #ffffff;
+  --color-text: #1d1d1f;
+  --color-accent: #1d1d1f;
+  --color-accent-100: #f5f5f7;
+  --color-accent-200: #e8e8ed;
+  --color-accent-300: #d2d2d7;
+  --color-accent-400: #aeaeb4;
+  --color-accent-500: #86868b;
+  --color-accent-600: #6e6e73;
+  --color-accent-700: #515154;
+  --color-accent-800: #333336;
+  --color-accent-900: #161617;
+  --color-divider: rgba(0, 0, 0, 0.08);
+  --font-heading: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif;
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-7: 28px; --space-8: 36px;
+  --radius-sm: 8px; --radius-md: 12px; --radius-lg: 18px;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04), 0 2px 8px rgba(0,0,0,0.04);
+  --shadow-md: 0 2px 6px rgba(0,0,0,0.05), 0 8px 24px rgba(0,0,0,0.08);
+  --shadow-lg: 0 8px 20px rgba(0,0,0,0.10), 0 24px 60px rgba(0,0,0,0.16);
+}
+body { font-family: var(--font-body); font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+h1, h2, h3 { font-family: var(--font-heading); letter-spacing: -0.02em; }
+::selection { background: var(--color-accent-200); }
+:focus-visible { outline: 2px solid var(--color-accent-500); outline-offset: 2px; border-radius: 4px; }
+button:disabled, input:disabled { opacity: 0.4; cursor: default; }
+
+/* La v1 enmarcaba con .blueprint + marcas de esquina; aquí son cards suaves */
+.blueprint { position: relative; background: var(--color-surface); border: none; border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); }
+.corner { display: none; }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-family: var(--font-body); font-weight: 500; font-size: 14px; border: none; border-radius: 980px; cursor: pointer; padding: 0 18px; height: 40px; transition: background 0.15s ease, transform 0.05s ease; color: var(--color-text); background: transparent; }
+.btn:active { transform: scale(0.98); }
+.btn-primary { background: var(--color-accent); color: #fff; box-shadow: none; }
+.btn-primary:hover { background: var(--color-accent-800); }
+.btn-secondary { background: var(--color-accent-200); color: var(--color-text); }
+.btn-secondary:hover { background: var(--color-accent-300); }
+.btn-ghost { background: transparent; color: var(--color-accent-700); }
+.btn-ghost:hover { background: var(--color-accent-100); }
+
+.tag { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 980px; font-size: 12px; font-weight: 500; letter-spacing: 0; }
+.tag-accent { background: var(--color-accent-900); color: #fff; }
+.tag-neutral { background: var(--color-accent-200); color: var(--color-accent-700); }
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label { font-size: 12px; font-weight: 500; color: var(--color-accent-600); }
+.input { font-family: var(--font-body); font-size: 15px; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-divider); border-radius: var(--radius-md); padding: 0 14px; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
+.input:hover { border-color: rgba(0,0,0,0.16); }
+.input:focus { outline: none; border-color: var(--color-accent-500); box-shadow: 0 0 0 3px rgba(0,0,0,0.06); }
+.input::placeholder { color: var(--color-accent-500); }
+
+.table { border-collapse: separate; border-spacing: 0; background: var(--color-surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); overflow: hidden; }
+.table th { text-align: left; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--color-accent-600); padding: 12px 14px; border-bottom: 1px solid var(--color-divider); background: var(--color-surface); }
+.table td { padding: 12px 14px; border-bottom: 1px solid rgba(0,0,0,0.05); }
+.table tbody tr:last-child td { border-bottom: none; }
+.table tbody tr:hover td { background: var(--color-accent-100); }
+
+.dialog-backdrop { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(0,0,0,0.35); backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2); }
+.dialog { width: min(440px, 100%); max-height: 86vh; overflow-y: auto; display: flex; flex-direction: column; gap: var(--space-4); background: var(--color-surface); border-radius: 22px; box-shadow: var(--shadow-lg); padding: var(--space-6); }
+.dialog-title { font-family: var(--font-heading); font-weight: 600; font-size: 21px; letter-spacing: -0.02em; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }

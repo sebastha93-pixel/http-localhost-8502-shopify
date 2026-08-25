@@ -1,0 +1,526 @@
+"""SesionCaja — el turno, y lo que hace que el arqueo mida algo.
+
+TRES REGLAS GOBIERNAN ESTE ARCHIVO.
+
+**La base contada manda sobre la configurada (INV-C9).** El turno abría con la
+base de `tiendas.base_caja` y nadie miraba el cajón. Un cajón que amaneció
+corto no desaparece: reaparece al cierre, como faltante de quien cerró. Se
+cuenta al abrir para que la diferencia quede donde ocurrió. No bloquea la
+apertura —una tienda que no puede abrir no vende en todo el día—, pero por
+encima del umbral exige explicación escrita.
+
+**El cierre ciego (INV-C4).** La cajera no ve cuánto debería haber hasta que
+declara lo que contó. Si lo ve, escribe lo que ve, y el descuadre desaparece
+de los informes sin desaparecer de la realidad. Es configurable por tienda
+—hay operaciones donde estorba— pero el valor por defecto es ciego.
+
+**La venta que llega tarde (INV-C8).** Una venta hecha sin internet puede
+sincronizar después de que su turno cerró. Rechazarla sería perder una venta
+real que ya ocurrió y ya se cobró; aceptarla en silencio descuadraría un
+cierre ya firmado. Se acepta por una puerta distinta, se marca y se reporta.
+Es el caso que rompe los POS que no lo modelaron.
+
+INV-C1 (una sola sesión abierta por caja) no vive aquí: es un índice único
+parcial en la base (`ux_sesion_abierta`). Una regla comprobada en Python tiene
+una ventana de carrera; el índice no.
+"""
+from __future__ import annotations
+
+import re
+from datetime import datetime
+from typing import Dict, List, Optional
+
+from backend.modules.retail.domain.caja.errores import ArqueoCiego, SesionYaCerrada
+from backend.modules.retail.domain.caja.estados import EstadoSesion, TipoMovimiento
+from backend.modules.retail.domain.caja.eventos import (
+    SesionCajaCerrada,
+    VentaDesfasada,
+)
+from backend.modules.retail.domain.caja.movimiento import MovimientoCaja
+from backend.modules.retail.domain.shared.dinero import Dinero
+from backend.modules.retail.domain.venta.errores import (
+    ReglaDeNegocio,
+    RequiereAutorizacion,
+)
+
+__all__ = ["SesionCaja", "exigir_explicacion_de_base"]
+
+_ULID = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
+
+
+def exigir_explicacion_de_base(*, contada: Dinero, esperada: Dinero,
+                               umbral: Dinero,
+                               justificacion: Optional[str]) -> Dinero:
+    """INV-C9. Devuelve la diferencia; lanza si es grande y no está explicada.
+
+    Es función suelta y no un método porque la apertura del turno se escribe
+    con SQL directo —el agregado sólo se rehidrata para el cierre—, y la regla
+    tiene que ser LA MISMA en las dos vías. Duplicarla en el endpoint sería
+    tener dos versiones de cuándo un cajón corto puede abrirse.
+
+    NO BLOQUEA POR SER GRANDE: pide explicación. Una tienda que no puede abrir
+    porque le faltan $20.000 es una tienda que no vende en todo el día, y eso
+    cuesta más que el faltante.
+    """
+    diferencia = contada - esperada
+    magnitud = -diferencia if diferencia.es_negativo() else diferencia
+    if not diferencia.es_cero() and magnitud > umbral:
+        if not (justificacion or "").strip():
+            falta = "faltan" if diferencia.es_negativo() else "sobran"
+            raise ReglaDeNegocio(
+                f"Contaste {contada.formateado()} y la base de la tienda es "
+                f"{esperada.formateado()}: {falta} {magnitud.formateado()}. "
+                f"Escribe qué pasó antes de abrir."
+            )
+    return diferencia
+
+
+class SesionCaja:
+    """Agregado raíz del turno de caja."""
+
+    def __init__(
+        self,
+        *,
+        id: str,
+        tienda_id: str,
+        caja_id: str,
+        numero_turno: int,
+        base_inicial: Dinero,
+        abierta_por: str,
+        abierta_en: datetime,
+        moneda: str,
+        cierre_ciego: bool = True,
+        umbral_descuadre: Optional[Dinero] = None,
+        dispositivo_id: Optional[str] = None,
+        medio_efectivo_id: str = "efectivo",
+        base_esperada: Optional[Dinero] = None,
+        base_justificacion: Optional[str] = None,
+    ) -> None:
+        if not isinstance(id, str) or not _ULID.match(id.strip().upper()):
+            raise ReglaDeNegocio(f"el identificador del turno no es un ULID: {id!r}")
+        if base_inicial.es_negativo():
+            raise ReglaDeNegocio(
+                f"la base inicial no puede ser negativa: {base_inicial.formateado()}"
+            )
+
+        self.id = id.strip().upper()
+        self.tienda_id = tienda_id
+        self.caja_id = caja_id
+        self.numero_turno = numero_turno
+        self.base_inicial = base_inicial
+        self.abierta_por = abierta_por
+        self.abierta_en = abierta_en
+        self.moneda = moneda
+        self.cierre_ciego = cierre_ciego
+        self.umbral_descuadre = umbral_descuadre or Dinero.cero(moneda)
+        self.dispositivo_id = dispositivo_id
+        # Cuál medio de pago ES el efectivo. Se recibe, no se adivina: la base,
+        # los retiros y los gastos son plata física y tienen que sumar ahí.
+        # Deducirlo mirando los cobros hacía que un medio sin movimientos
+        # todavía se llevara la base entera.
+        self.medio_efectivo_id = medio_efectivo_id
+
+        # INV-C9: LA BASE CONTADA MANDA SOBRE LA CONFIGURADA.
+        #
+        # Antes la base salía de `tiendas.base_caja` y nadie miraba el cajón.
+        # Si amaneció con $280.000 en vez de $300.000, ese faltante no
+        # desaparecía: reaparecía ocho horas después en el arqueo de quien
+        # cerró. La persona equivocada, el momento equivocado, y ya sin forma
+        # de saber dónde ocurrió.
+        #
+        # Contarla al abrir mueve la diferencia al sitio donde pasó. Y NO
+        # BLOQUEA: una tienda que no puede abrir porque le faltan $20.000 es
+        # una tienda que no vende en todo el día. Se registra, se explica por
+        # escrito si es grande, y se abre.
+        self.base_esperada = base_esperada
+        self.base_justificacion = (base_justificacion or "").strip() or None
+        if base_esperada is not None:
+            exigir_explicacion_de_base(
+                contada=base_inicial, esperada=base_esperada,
+                umbral=self.umbral_descuadre,
+                justificacion=self.base_justificacion)
+
+        self.estado = EstadoSesion.ABIERTA
+        self.movimientos: List[MovimientoCaja] = []
+        self.cerrada_por: Optional[str] = None
+        self.cerrada_en: Optional[datetime] = None
+        self.justificacion: Optional[str] = None
+        self.autorizada_por: Optional[str] = None
+
+        # Conteo declarado y esperado CONGELADO en el momento de declarar.
+        self._declarado: Dict[str, Dinero] = {}
+        self._esperado_congelado: Dict[str, Dinero] = {}
+        self._desfasadas: List[VentaDesfasada] = []
+
+        self._siguiente = 1
+        self._anotar(TipoMovimiento.BASE_INICIAL, base_inicial,
+                     medio_pago_id=self.medio_efectivo_id,
+                     motivo="base inicial", usuario_id=abierta_por, es_efectivo=True)
+
+    @classmethod
+    def abrir(cls, **kw) -> "SesionCaja":
+        return cls(**kw)
+
+    # ── Guardas ─────────────────────────────────────────────────────────────
+
+    def _exigir_abierta_o_en_arqueo(self) -> None:
+        if not self.estado.es_mutable():
+            raise SesionYaCerrada(
+                f"El turno #{self.numero_turno} ya se cerró y se firmó. "
+                f"No se puede modificar."
+            )
+
+    def _cero(self) -> Dinero:
+        return Dinero.cero(self.moneda)
+
+    def _anotar(self, tipo, monto, *, medio_pago_id, motivo, usuario_id,
+                es_efectivo, autorizado_por=None, venta_id=None) -> MovimientoCaja:
+        mov = MovimientoCaja(
+            numero=self._siguiente, tipo=tipo, monto=monto,
+            medio_pago_id=medio_pago_id, motivo=motivo, usuario_id=usuario_id,
+            es_efectivo=es_efectivo, autorizado_por=autorizado_por,
+            venta_id=venta_id,
+        )
+        self.movimientos.append(mov)
+        self._siguiente += 1
+        return mov
+
+    # ── Cobros ──────────────────────────────────────────────────────────────
+
+    def registrar_cobro(self, *, medio_pago_id: str, monto: Dinero,
+                        es_efectivo: bool, venta_id: str) -> None:
+        self._exigir_abierta_o_en_arqueo()
+        _ = self._cero() + monto
+        self._anotar(TipoMovimiento.VENTA, monto, medio_pago_id=medio_pago_id,
+                     motivo="venta", usuario_id=self.abierta_por,
+                     es_efectivo=es_efectivo, venta_id=venta_id)
+
+    def registrar_anulacion(self, *, medio_pago_id: str, monto: Dinero,
+                            es_efectivo: bool, venta_id: str,
+                            usuario_id: Optional[str] = None) -> None:
+        """La plata que vuelve a salir del cajón.
+
+        Queda a nombre de QUIEN ANULA, no de quien abrió el turno. Lo segundo
+        era lo que hacía antes, y significaba que al revisar quién había
+        deshecho una venta salía siempre la misma persona: la que abrió la
+        caja esa mañana.
+        """
+        self._exigir_abierta_o_en_arqueo()
+        self._anotar(TipoMovimiento.ANULACION, -monto, medio_pago_id=medio_pago_id,
+                     motivo="anulación", usuario_id=usuario_id or self.abierta_por,
+                     es_efectivo=es_efectivo, venta_id=venta_id)
+
+    def registrar_devolucion(self, monto: Dinero, *, motivo: str,
+                             usuario_id: str) -> None:
+        """El efectivo que se le entrega a una clienta por una venta de otro día.
+
+        ⚠️ VA CON `medio_efectivo_id`, NO SIN MEDIO DE PAGO. Parece un detalle
+        y es el que decide si el arqueo cuadra: `_calcular` suma los
+        movimientos FILTRANDO por medio, así que uno con el medio en nulo
+        simplemente no existe para el esperado. La caja habría esperado la
+        plata que la cajera acababa de entregar, y la diferencia se la habría
+        comido ella en el cierre.
+
+        NO ES UN RETIRO, aunque se le parezca en que saca plata: un retiro
+        necesita permiso para mover caja (es una sangría hacia la caja fuerte,
+        de la que sí hay que protegerse) y una devolución no — negarla dejaría
+        a la clienta esperando a que aparezca alguien con permiso, por una
+        operación que ya está documentada, con su motivo y su nota crédito.
+
+        Lo que sí se conserva de los movimientos manuales es INV-C6: no se
+        entrega efectivo que no está en el cajón. Se comprueba ANTES de anotar,
+        para no dejar el libro en negativo.
+        """
+        self._exigir_abierta_o_en_arqueo()
+        if monto.es_cero():
+            raise ReglaDeNegocio("una devolución no puede ser de cero")
+
+        disponible = self._esperado_efectivo_actual()
+        if (disponible - monto).es_negativo():
+            raise ReglaDeNegocio(
+                f"En la caja no hay {monto.formateado()} para devolver: el "
+                f"efectivo esperado es {disponible.formateado()}. Devuélvele "
+                f"al método original o deja crédito en tienda."
+            )
+
+        self._anotar(TipoMovimiento.DEVOLUCION, -monto,
+                     medio_pago_id=self.medio_efectivo_id, motivo=motivo,
+                     usuario_id=usuario_id, es_efectivo=True,
+                     autorizado_por=usuario_id)
+
+    # ── Movimientos de efectivo ─────────────────────────────────────────────
+
+    def registrar_retiro(self, monto: Dinero, *, motivo: str, usuario_id: str,
+                         puede_mover_caja: bool = False) -> None:
+        """Sangría. INV-C6: no puede dejar el efectivo en negativo.
+
+        Antes pedía la firma de un tercero por PIN. Sin PIN, el permiso lo trae
+        quien tiene la sesión abierta —igual que en el cierre con descuadre— y
+        quien saca la plata es quien firma.
+        """
+        self._movimiento_manual(TipoMovimiento.RETIRO, -monto, motivo=motivo,
+                                usuario_id=usuario_id,
+                                puede_mover_caja=puede_mover_caja,
+                                exige_permiso=True)
+
+    def registrar_gasto(self, monto: Dinero, *, motivo: str, usuario_id: str,
+                        puede_mover_caja: bool = False) -> None:
+        self._movimiento_manual(TipoMovimiento.GASTO, -monto, motivo=motivo,
+                                usuario_id=usuario_id,
+                                puede_mover_caja=puede_mover_caja,
+                                exige_permiso=True)
+
+    def registrar_ingreso(self, monto: Dinero, *, motivo: str,
+                          usuario_id: str) -> None:
+        """Meter plata al cajón no necesita permiso: no es la operación de la
+        que hay que protegerse."""
+        self._movimiento_manual(TipoMovimiento.INGRESO, monto, motivo=motivo,
+                                usuario_id=usuario_id, puede_mover_caja=True,
+                                exige_permiso=False)
+
+    def _movimiento_manual(self, tipo, monto_con_signo: Dinero, *, motivo: str,
+                           usuario_id: str, puede_mover_caja: bool,
+                           exige_permiso: bool) -> None:
+        self._exigir_abierta_o_en_arqueo()
+        if not (motivo or "").strip():
+            raise ReglaDeNegocio(f"un {tipo.value} de caja necesita motivo escrito")
+        if exige_permiso and not puede_mover_caja:
+            raise RequiereAutorizacion(
+                "Sacar plata de la caja necesita permiso. Pide que entre "
+                "alguien que lo tenga, con su correo y contraseña."
+            )
+        if monto_con_signo.es_cero():
+            raise ReglaDeNegocio("el movimiento de caja no puede ser de cero")
+
+        # INV-C6: se evalúa ANTES de anotar, para no dejar el libro en negativo.
+        if monto_con_signo.es_negativo():
+            disponible = self._esperado_efectivo_actual()
+            if (disponible + monto_con_signo).es_negativo():
+                raise ReglaDeNegocio(
+                    f"En la caja no hay {(-monto_con_signo).formateado()}: "
+                    f"el efectivo esperado es {disponible.formateado()}."
+                )
+
+        # Quien saca la plata ES quien firma. Ya no hay dos nombres.
+        self._anotar(tipo, monto_con_signo, medio_pago_id=self.medio_efectivo_id,
+                     motivo=motivo.strip(),
+                     usuario_id=usuario_id, es_efectivo=True,
+                     autorizado_por=usuario_id if exige_permiso else None)
+
+    # ── Esperado ────────────────────────────────────────────────────────────
+
+    def _calcular(self, medio_pago_id: str) -> Dinero:
+        """El esperado VIVO de un medio, sin mirar lo congelado."""
+        return sum((m.monto for m in self.movimientos
+                    if m.medio_pago_id == medio_pago_id), self._cero())
+
+    def _esperado_efectivo_actual(self) -> Dinero:
+        return self._calcular(self.medio_efectivo_id)
+
+    def _esperado_actual_de(self, medio_pago_id: str) -> Dinero:
+        """El esperado que vale para el arqueo.
+
+        Si ya se declaró el conteo de ese medio, devuelve el valor CONGELADO en
+        ese momento: una venta offline que entre después no puede cambiar una
+        diferencia que la cajera ya firmó.
+        """
+        if medio_pago_id in self._esperado_congelado:
+            return self._esperado_congelado[medio_pago_id]
+        return self._calcular(medio_pago_id)
+
+    def esperado_de(self, medio_pago_id: str, *,
+                    autorizado_a_ver: bool = False) -> Dinero:
+        """Cuánto debería haber de ese medio.
+
+        En cierre ciego se niega a responder hasta que el conteo esté declarado
+        (INV-C4). No es un fallo: es la regla funcionando.
+        """
+        if not self._puede_revelar(medio_pago_id, autorizado_a_ver):
+            raise ArqueoCiego(
+                "El sistema no muestra lo esperado hasta que declares el conteo. "
+                "Así el arqueo mide algo real."
+            )
+        return self._esperado_actual_de(medio_pago_id)
+
+    def _puede_revelar(self, medio_pago_id: str, autorizado_a_ver: bool) -> bool:
+        if not self.cierre_ciego or autorizado_a_ver:
+            return True
+        if self.estado is EstadoSesion.CERRADA:
+            return True
+        return medio_pago_id in self._declarado
+
+    def medios_movidos(self) -> List[str]:
+        """Los medios que hay que declarar en el arqueo, en orden de aparición.
+
+        El efectivo entra siempre, aunque no se haya vendido nada: la base
+        está ahí y hay que contarla.
+        """
+        vistos: List[str] = [self.medio_efectivo_id]
+        for m in self.movimientos:
+            if m.medio_pago_id and m.medio_pago_id not in vistos:
+                vistos.append(m.medio_pago_id)
+        return vistos
+
+    # ── Arqueo ──────────────────────────────────────────────────────────────
+
+    def iniciar_arqueo(self, *, ventas_en_borrador: int,
+                       documentos_fiscales_pendientes: int = 0,
+                       confirmado: bool = False) -> None:
+        self._exigir_abierta_o_en_arqueo()
+        # INV-C2: un carrito abierto es plata sin registrar.
+        if ventas_en_borrador:
+            raise ReglaDeNegocio(
+                f"Hay {ventas_en_borrador} venta(s) en borrador sin cerrar. "
+                f"Termínalas o descártalas antes de arquear."
+            )
+        # INV-C3: avisa, no bloquea. Bloquear por algo que depende de Siigo
+        # dejaría a la tienda sin poder cerrar por una caída ajena.
+        if documentos_fiscales_pendientes and not confirmado:
+            raise ReglaDeNegocio(
+                f"Quedan {documentos_fiscales_pendientes} documento(s) fiscal(es) "
+                f"por emitir. Puedes cerrar igual, pero confírmalo: la venta ya "
+                f"está en el arqueo y la factura sale cuando vuelva Siigo."
+            )
+        self.estado = EstadoSesion.EN_ARQUEO
+
+    def declarar_conteo(self, medio_pago_id: str, monto: Dinero, *,
+                        usuario_id: str) -> None:
+        """Congela el esperado de ese medio en el momento de declarar.
+
+        Si se recalculara al leer, una venta offline que entre después
+        cambiaría la diferencia que la cajera ya firmó.
+        """
+        self._exigir_abierta_o_en_arqueo()
+        if self.estado is not EstadoSesion.EN_ARQUEO:
+            raise ReglaDeNegocio("Primero hay que iniciar el arqueo.")
+        if monto.es_negativo():
+            raise ReglaDeNegocio("el conteo no puede ser negativo")
+        self._esperado_congelado[medio_pago_id] = self._esperado_actual_de(medio_pago_id)
+        self._declarado[medio_pago_id] = monto
+
+    def diferencia_base(self) -> Optional[Dinero]:
+        """Lo contado al abrir menos lo que la tienda tiene configurado.
+
+        `None` cuando el turno abrió sin contar —la vía vieja, que sigue viva
+        para una tableta sin actualizar—: no es lo mismo «cuadró» que «nadie
+        miró», y colapsarlo a cero haría pasar lo segundo por lo primero.
+        """
+        if self.base_esperada is None:
+            return None
+        return self.base_inicial - self.base_esperada
+
+    def diferencia_por_medio(self) -> Dict[str, Dinero]:
+        return {
+            medio: declarado - self._esperado_actual_de(medio)
+            for medio, declarado in self._declarado.items()
+        }
+
+    def diferencia_total(self) -> Dinero:
+        return sum(self.diferencia_por_medio().values(), self._cero())
+
+    # ── Cierre ──────────────────────────────────────────────────────────────
+
+    def cerrar(self, *, usuario_id: str, ahora: datetime,
+               justificacion: Optional[str] = None,
+               puede_cerrar_con_descuadre: bool = False) -> SesionCajaCerrada:
+        """Cierra el turno.
+
+        LA FIRMA ES DE QUIEN CIERRA. Antes, un descuadre grande pedía el PIN de
+        un supervisor y quedaban dos nombres: quien contó y quien aprobó. El
+        PIN se quitó por decisión del negocio —una sola credencial, correo y
+        contraseña—, así que el permiso lo trae el usuario que tiene la sesión
+        abierta: o puede cerrar con descuadre, o no puede.
+
+        La justificación escrita SE QUEDA. Es lo que convierte un faltante en
+        algo revisable; sin ella el descuadre es un número sin historia.
+        """
+        self._exigir_abierta_o_en_arqueo()
+        if self.estado is not EstadoSesion.EN_ARQUEO:
+            raise ReglaDeNegocio("Primero hay que arquear la caja.")
+
+        faltan = [m for m in self.medios_movidos() if m not in self._declarado]
+        if faltan:
+            raise ReglaDeNegocio(
+                f"Falta declarar el conteo de: {', '.join(faltan)}."
+            )
+
+        diferencia = self.diferencia_total()
+        # INV-C5. El sobrante también cuenta: es plata sin venta que la explique.
+        excede = self._excede_umbral(diferencia)
+        if excede:
+            if not (justificacion or "").strip():
+                raise ReglaDeNegocio(
+                    f"La diferencia de {diferencia.formateado()} supera el umbral "
+                    f"de {self.umbral_descuadre.formateado()}. "
+                    f"Escribe la justificación."
+                )
+            if not puede_cerrar_con_descuadre:
+                raise RequiereAutorizacion(
+                    "Cerrar con una diferencia de este tamaño necesita un "
+                    "usuario con permiso para hacerlo. Pide que entre un "
+                    "supervisor con su correo y contraseña."
+                )
+
+        self.estado = EstadoSesion.CERRADA
+        self.cerrada_por = usuario_id
+        self.cerrada_en = ahora
+        self.justificacion = (justificacion or "").strip() or None
+        # Quien cierra ES quien firma: no hay un segundo nombre que registrar.
+        self.autorizada_por = usuario_id if excede else None
+
+        return SesionCajaCerrada(
+            ocurrido_en=ahora,
+            sesion_id=self.id,
+            tienda_id=self.tienda_id,
+            caja_id=self.caja_id,
+            numero_turno=self.numero_turno,
+            cerrada_por=usuario_id,
+            diferencia=diferencia,
+            diferencia_por_medio=dict(self.diferencia_por_medio()),
+            cuadro=diferencia.es_cero(),
+            justificacion=self.justificacion,
+            autorizado_por=self.autorizada_por,
+        )
+
+    def _excede_umbral(self, diferencia: Dinero) -> bool:
+        if diferencia.es_cero():
+            return False
+        magnitud = -diferencia if diferencia.es_negativo() else diferencia
+        return magnitud > self.umbral_descuadre
+
+    # ── INV-C8: la venta que llega tarde ────────────────────────────────────
+
+    def registrar_venta_desfasada(self, *, venta_id: str, medio_pago_id: str,
+                                  monto: Dinero, es_efectivo: bool,
+                                  ocurrido_en: datetime) -> VentaDesfasada:
+        """Una venta offline que sincronizó después de que el turno cerró.
+
+        NO entra al arqueo: ese cierre ya está firmado y su diferencia tiene
+        que seguir siendo reproducible. Queda registrada aparte y se reporta al
+        supervisor, que decide qué hacer con la plata.
+
+        Rechazarla sería perder una venta real, ya cobrada, que existe.
+        """
+        desfase = VentaDesfasada(
+            ocurrido_en=ocurrido_en,
+            sesion_id=self.id,
+            tienda_id=self.tienda_id,
+            caja_id=self.caja_id,
+            venta_id=venta_id,
+            medio_pago_id=medio_pago_id,
+            monto=monto,
+            es_efectivo=es_efectivo,
+        )
+        self._desfasadas.append(desfase)
+        return desfase
+
+    def tiene_ventas_desfasadas(self) -> bool:
+        return bool(self._desfasadas)
+
+    @property
+    def ventas_desfasadas(self):
+        return tuple(self._desfasadas)
+
+    def __repr__(self) -> str:
+        return (f"SesionCaja(#{self.numero_turno} {self.caja_id} · "
+                f"{self.estado.value})")

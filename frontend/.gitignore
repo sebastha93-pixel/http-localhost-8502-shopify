@@ -31,3 +31,9 @@ yarn-error.log*
 
 # Vercel
 .vercel
+
+# Salida del build de verificación. Va aparte de `.next` a propósito:
+# construir en el mismo sitio que usa `next dev` lo corrompe, y eso obligaba a
+# matar el dev server antes de cada verificación — que es como se tumbaban los
+# servers de los otros proyectos de esta máquina.
+.next-verificacion/

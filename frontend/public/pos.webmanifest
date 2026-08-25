@@ -1,0 +1,13 @@
+{
+  "name": "POS · MALE'DENIM",
+  "short_name": "POS",
+  "description": "Punto de venta de las tiendas MALE DENIM",
+  "start_url": "/pos/venta",
+  "scope": "/pos/",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#f4f4f2",
+  "theme_color": "#f4f4f2",
+  "lang": "es-CO",
+  "icons": []
+}

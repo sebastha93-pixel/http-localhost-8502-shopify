@@ -12,13 +12,30 @@ import { esRutaPublica } from "@/lib/rutas-publicas";
  */
 // La lista vive en lib/rutas-publicas.ts — ver por qué está allá y no acá.
 
+// El POS entra por el login del ERP (correo + contrasena) como todo lo
+// demas, pero NO comparte su navegacion: trae su propio rail. Cada enlace
+// ajeno es una forma de salirse de la venta, y una cajera con una clienta
+// enfrente no tiene por que poder llegar a Produccion.
+const SIN_CHROME_ERP = ["/pos"];
+
 export function AuthShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isPublic = esRutaPublica(pathname);
+
+  // ⚠️ DOS COSAS DISTINTAS QUE AQUÍ SE SUMAN, y conviene no fundirlas:
+  //
+  //   · `esRutaPublica` = la ruta va SIN sesión (login, enlaces firmados).
+  //   · `SIN_CHROME_ERP` = la ruta SÍ exige sesión, pero no quiere la
+  //     navegación del ERP. Es el caso del POS.
+  //
+  // Se ven iguales porque las dos esconden el sidebar, pero meter `/pos` en
+  // la lista de rutas públicas le quitaría la autenticación a la caja sin que
+  // nadie lo note hasta que alguien entre sin contraseña.
+  const sinChromeERP = esRutaPublica(pathname) ||
+                       SIN_CHROME_ERP.some((p) => pathname.startsWith(p));
 
   return (
     <AuthProvider>
-      {isPublic ? (
+      {sinChromeERP ? (
         children
       ) : (
         <div className="flex min-h-screen">
