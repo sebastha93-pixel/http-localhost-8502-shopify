@@ -153,7 +153,7 @@ export function Arqueo({
                 placeholder="0"
                 value={contados[m.medio_pago_id] ?? ""}
                 onChange={(e) => onContar(m.medio_pago_id, e.target.value)}
-                className="mt-1.5 h-12 w-full border border-[var(--pos-divider)] bg-white px-3 titular text-[18px] tabular text-[var(--pos-text)] outline-none focus:border-[var(--pos-accent)]"
+                className="mt-1.5 h-12 w-full pos-input px-3 titular text-[18px] tabular text-[var(--pos-text)]"
               />
             ) : (
               // No hay nada físico que contar (un crédito a 30 días). Se
@@ -188,7 +188,7 @@ export function Arqueo({
       )}
 
       {error && (
-        <p className="border border-[var(--pos-800)] bg-[var(--pos-800)]/10 p-2.5 text-[12px] leading-relaxed text-[var(--pos-900)]">
+        <p className="border border-[var(--pos-800)] rounded-[var(--pos-r-sm)] bg-[var(--pos-800)]/10 p-2.5 text-[12px] leading-relaxed text-[var(--pos-900)]">
           {error}
         </p>
       )}
@@ -196,7 +196,7 @@ export function Arqueo({
       <button
         onClick={onCerrar}
         disabled={faltaAlguno || cerrando}
-        className="mt-1 h-[52px] w-full bg-[var(--pos-accent)] titular text-[15px] font-semibold tracking-[0.05em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-muted)]"
+        className="mt-1 h-[52px] w-full pos-btn pos-btn-primario text-[15px]"
       >
         {cerrando ? "CERRANDO…" : "CERRAR CAJA"}
       </button>
@@ -277,14 +277,14 @@ export function DialogoDescuadre({
   const [justificacion, setJustificacion] = useState("");
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center pos-backdrop p-4">
       <Panel
         role="dialog"
         aria-modal="true"
         aria-label="Autorizar descuadre"
-        className="w-full max-w-[440px] bg-[var(--pos-bg)] p-6"
+        className="pos-dialogo w-full max-w-[440px] p-6"
       >
-        <h2 className="titular text-[15px] font-semibold tracking-[0.08em]">
+        <h2 className="titular text-[15px] font-semibold">
           🔒 DESCUADRE POR ENCIMA DEL TOPE
         </h2>
         <p className="mt-3 text-[13px] leading-relaxed text-[var(--pos-700)]">
@@ -299,13 +299,13 @@ export function DialogoDescuadre({
             value={justificacion}
             onChange={(e) => setJustificacion(e.target.value)}
             placeholder="Faltante detectado al contar; se revisa con el supervisor."
-            className="mt-1.5 w-full resize-none border border-[var(--pos-divider)] bg-white p-2.5 text-[13px] leading-relaxed text-[var(--pos-text)] outline-none focus:border-[var(--pos-accent)]"
+            className="mt-1.5 w-full resize-none pos-input p-2.5 text-[13px] leading-relaxed text-[var(--pos-text)]"
           />
         </label>
 
 
         {error && (
-          <p className="mt-4 border border-[var(--pos-800)] bg-[var(--pos-800)]/10 p-2.5 text-[12px] text-[var(--pos-900)]">
+          <p className="mt-4 border border-[var(--pos-800)] rounded-[var(--pos-r-sm)] bg-[var(--pos-800)]/10 p-2.5 text-[12px] text-[var(--pos-900)]">
             {error}
           </p>
         )}
@@ -318,14 +318,14 @@ export function DialogoDescuadre({
         <div className="mt-5 flex gap-3">
           <button
             onClick={onCancelar}
-            className="h-12 flex-1 border border-[var(--pos-divider)] titular text-[13px] tracking-[0.08em] text-[var(--pos-700)]"
+            className="pos-btn pos-btn-sec h-12 flex-1 text-[13px]"
           >
             VOLVER A CONTAR
           </button>
           <button
             disabled={justificacion.trim().length < 5}
             onClick={() => onFirmar(justificacion.trim())}
-            className="h-12 flex-1 bg-[var(--pos-accent)] titular text-[13px] font-semibold tracking-[0.08em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-muted)]"
+            className="h-12 flex-1 pos-btn pos-btn-primario text-[13px]"
           >
             CERRAR CON DIFERENCIA
           </button>

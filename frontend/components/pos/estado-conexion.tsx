@@ -31,7 +31,7 @@ export function EstadoConexion() {
       className={`flex items-center gap-2 border px-3 py-1.5 text-[12px] ${
         hayRechazadas
           ? "border-[var(--pos-accent)] bg-[var(--pos-accent)]/10 text-[var(--pos-900)]"
-          : "border-[var(--pos-800)]/30 bg-[var(--pos-800)]/10 text-[var(--pos-900)]"
+          : "border-[var(--pos-800)]/30 rounded-[var(--pos-r-sm)] bg-[var(--pos-800)]/10 text-[var(--pos-900)]"
       }`}
     >
       <span

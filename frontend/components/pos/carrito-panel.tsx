@@ -146,19 +146,23 @@ export function CarritoPanel({
         </div>
       </div>
 
+      {/* EL BOTÓN QUE REMATA LA VENTA. 56px y 17px — el control más grande de
+          la pantalla, porque es el último paso y el que no se puede fallar.
+
+          Ya no lleva `blueprint` ni marcas de esquina: era una tarjeta usada
+          como botón, herencia de la v1. Y deja de gritar en versalitas
+          («COBRAR $559.700»): el handoff lo escribe en caja normal, que a
+          17px y en negro sólido ya destaca sin necesidad de gritar.
+
+          El deshabilitado tampoco se pinta de gris: lo atenúa la regla del
+          sistema. Pintarlo de `--pos-300` lo dejaba con el mismo aspecto que
+          un botón secundario ACTIVO. */}
       <button
         onClick={onCobrar}
         disabled={!lineas.length}
-        className="blueprint mt-3 h-14 w-full text-[14px] font-semibold tracking-[0.1em] transition-opacity"
-        style={{
-          background: lineas.length ? "var(--pos-accent)" : "var(--pos-300)",
-          color: lineas.length ? "#fff" : "var(--pos-600)",
-          borderColor: "transparent",
-        }}
+        className="pos-btn pos-btn-primario mt-3 h-14 w-full text-[17px]"
       >
-        <i className="corner tl" aria-hidden /><i className="corner tr" aria-hidden />
-        <i className="corner bl" aria-hidden /><i className="corner br" aria-hidden />
-        COBRAR {formatear(totales.total)}
+        Cobrar {formatear(totales.total)}
       </button>
     </div>
   );

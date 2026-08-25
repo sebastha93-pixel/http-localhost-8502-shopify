@@ -6,29 +6,21 @@
  * tarea, y una cajera con una clienta enfrente no tiene por qué poder llegar a
  * Producción.
  *
- * El sistema visual es el del handoff ("Industry" retemado): tema CLARO,
- * Barlow + Barlow Condensed, estética de plano — esquinas rectas, bordes
- * finos, marcas de registro. Va aislado bajo `.pos-raiz` porque el ERP tiene
- * su propia paleta y dos sistemas sueltos en el mismo `:root` se pisan.
+ * El sistema visual es el del handoff v2 ("Apple-grade"): tema CLARO, fuente
+ * del SISTEMA, tarjetas blancas redondas con sombra suave, botones píldora.
+ * Va aislado bajo `.pos-raiz` porque el ERP tiene su propia paleta y dos
+ * sistemas sueltos en el mismo `:root` se pisan.
+ *
+ * ── YA NO SE DESCARGA NINGUNA FUENTE (v2, 2026-08-25) ──────────────────────
+ * Aquí vivían Barlow y Barlow Condensed, de la v1. La v2 pide el stack del
+ * sistema (ver `--pos-fuente` en `pos.css`), así que las dos se van: mantener
+ * cargadas dos familias que ya no pinta nadie le cuesta a la caja dos
+ * descargas en el arranque, que es justo el momento en que la cajera está
+ * esperando para abrir el turno.
  */
 import type { Metadata } from "next";
-import { Barlow, Barlow_Condensed } from "next/font/google";
 import "./pos.css";
 import { RegistrarSW } from "@/components/pos/registrar-sw";
-
-const barlow = Barlow({
-  subsets: ["latin"],
-  weight: ["400", "500", "700"],
-  variable: "--font-barlow",
-  display: "swap",
-});
-
-const barlowCondensed = Barlow_Condensed({
-  subsets: ["latin"],
-  weight: ["400", "600", "700"],
-  variable: "--font-barlow-condensed",
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: "POS · MALE'DENIM",
@@ -39,9 +31,7 @@ export const metadata: Metadata = {
 
 export default function PosLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div
-      className={`pos-raiz min-h-screen antialiased ${barlow.variable} ${barlowCondensed.variable}`}
-    >
+    <div className="pos-raiz min-h-screen antialiased">
       {/* Lo que permite que la caja ABRA sin internet. Todo lo demás del
           offline sólo funciona si la pestaña ya estaba viva. */}
       <RegistrarSW />

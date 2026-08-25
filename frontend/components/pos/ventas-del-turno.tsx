@@ -128,14 +128,14 @@ export function DialogoAnular({
   const [motivo, setMotivo] = useState("");
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center pos-backdrop p-4">
       <Panel
         role="dialog"
         aria-modal="true"
         aria-label="Anular venta"
-        className="w-full max-w-[440px] bg-[var(--pos-bg)] p-6"
+        className="pos-dialogo w-full max-w-[440px] p-6"
       >
-        <h2 className="titular text-[15px] font-semibold tracking-[0.08em]">
+        <h2 className="titular text-[15px] font-semibold">
           ANULAR {venta.numero}
         </h2>
         <p className="mt-2 tabular text-[13px] text-[var(--pos-700)]">
@@ -165,12 +165,12 @@ export function DialogoAnular({
             value={motivo}
             onChange={(e) => setMotivo(e.target.value)}
             placeholder="se cobró dos veces por error"
-            className="mt-1.5 h-11 w-full border border-[var(--pos-divider)] bg-white px-3 text-[13px] text-[var(--pos-text)] outline-none focus:border-[var(--pos-accent)]"
+            className="mt-1.5 h-11 w-full pos-input px-3 text-[13px] text-[var(--pos-text)]"
           />
         </label>
 
         {error && (
-          <p className="mt-4 border border-[var(--pos-800)] bg-[var(--pos-800)]/10 p-2.5 text-[12px] leading-relaxed text-[var(--pos-900)]">
+          <p className="mt-4 border border-[var(--pos-800)] rounded-[var(--pos-r-sm)] bg-[var(--pos-800)]/10 p-2.5 text-[12px] leading-relaxed text-[var(--pos-900)]">
             {error}
           </p>
         )}
@@ -182,14 +182,14 @@ export function DialogoAnular({
         <div className="mt-5 flex gap-3">
           <button
             onClick={onCancelar}
-            className="h-12 flex-1 border border-[var(--pos-divider)] titular text-[13px] tracking-[0.08em] text-[var(--pos-700)]"
+            className="pos-btn pos-btn-sec h-12 flex-1 text-[13px]"
           >
             NO ANULAR
           </button>
           <button
             disabled={motivo.trim().length < 5 || anulando}
             onClick={() => onConfirmar(motivo.trim())}
-            className="h-12 flex-1 bg-[var(--pos-accent)] titular text-[13px] font-semibold tracking-[0.08em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-muted)]"
+            className="h-12 flex-1 pos-btn pos-btn-primario text-[13px]"
           >
             {anulando ? "ANULANDO…" : "ANULAR"}
           </button>

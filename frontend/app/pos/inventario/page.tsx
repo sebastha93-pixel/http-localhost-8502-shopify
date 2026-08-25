@@ -72,18 +72,20 @@ export default function PantallaInventario() {
             value={consulta}
             onChange={(e) => setConsulta(e.target.value)}
             placeholder="Filtrar por nombre o referencia"
-            className="h-11 w-[320px] border border-[var(--pos-divider)] bg-white px-3 text-[14px] text-[var(--pos-text)] outline-none focus:border-[var(--pos-accent)]"
+            className="h-11 w-[320px] pos-input px-3 text-[14px] text-[var(--pos-text)]"
           />
           {datos && (
             <>
               <Etiqueta>{datos.referencias} referencias</Etiqueta>
+              {/* `compacto` es la salida deliberada del suelo de 44px: esto es
+                  una píldora de 24 que además filtra. Va marcada porque el
+                  sistema obliga a decidirlo, no a saltárselo por descuido. */}
               <button
                 onClick={() => setSoloBajos((v) => !v)}
                 title="Lo que hay que reponer"
-                className={`border px-2.5 py-1 text-[12px] tracking-[0.08em] uppercase transition-colors ${
-                  soloBajos
-                    ? "border-[var(--pos-accent)] bg-[var(--pos-accent)] text-white"
-                    : "border-[var(--pos-800)]/30 bg-[var(--pos-800)]/10 text-[var(--pos-900)]"
+                aria-pressed={soloBajos}
+                className={`compacto pos-tag transition-colors ${
+                  soloBajos ? "pos-tag-acento" : "pos-tag-neutro"
                 }`}
               >
                 {datos.con_stock_bajo} con stock bajo
@@ -93,14 +95,21 @@ export default function PantallaInventario() {
 
           <div className="ml-auto flex gap-1.5">
             {["Todo", ...(datos?.categorias ?? [])].map((c) => (
+              // Mismo chip que en Venta: píldora, tinte + borde de acento
+              // cuando está activo. Eran dos dibujos distintos para el mismo
+              // gesto en dos pantallas contiguas.
               <button
                 key={c}
                 onClick={() => setCategoria(c)}
-                className={`border px-3 py-1.5 text-[12px] transition-colors ${
-                  categoria === c
-                    ? "border-[var(--pos-800)] bg-[var(--pos-800)] text-white"
-                    : "border-[var(--pos-divider)] text-[var(--pos-700)] hover:bg-[var(--pos-100)]"
-                }`}
+                aria-pressed={categoria === c}
+                className="h-11 rounded-[var(--pos-r-pill)] border px-4 text-[14px] font-medium transition-colors"
+                style={{
+                  borderColor:
+                    categoria === c ? "var(--pos-accent)" : "var(--pos-divider)",
+                  background:
+                    categoria === c ? "var(--pos-100)" : "var(--pos-surface)",
+                  color: categoria === c ? "var(--pos-800)" : "var(--pos-700)",
+                }}
               >
                 {c}
               </button>
@@ -109,14 +118,14 @@ export default function PantallaInventario() {
         </header>
 
         {error && (
-          <p className="border-l-2 border-[var(--pos-800)] bg-[var(--pos-800)]/10 py-3 pl-4 text-[13px] text-[var(--pos-900)]">
+          <p className="border-l-2 border-[var(--pos-800)] rounded-[var(--pos-r-sm)] bg-[var(--pos-800)]/10 py-3 pl-4 text-[13px] text-[var(--pos-900)]">
             {error}
           </p>
         )}
 
         {/* La tabla scrollea DENTRO de su caja. Sin `min-w-0` en el padre, una
             tienda con doce tallas empuja el rail fuera de la pantalla. */}
-        <div className="min-h-0 flex-1 overflow-auto border border-[var(--pos-divider)] bg-white">
+        <div className="blueprint min-h-0 flex-1 overflow-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead className="sticky top-0 z-10 bg-[var(--pos-100)]">
               <tr className="text-left">
@@ -254,7 +263,7 @@ function Fila({ fila, columnas }: { fila: FilaInventario; columnas: string[] }) 
 function Estado({ estado }: { estado: "ok" | "bajo" | "agotado" }) {
   const estilo = {
     ok: "border-[var(--pos-divider)] text-[var(--pos-600)]",
-    bajo: "border-[var(--pos-800)]/30 bg-[var(--pos-800)]/10 text-[var(--pos-900)]",
+    bajo: "border-[var(--pos-800)]/30 rounded-[var(--pos-r-sm)] bg-[var(--pos-800)]/10 text-[var(--pos-900)]",
     agotado: "border-[var(--pos-accent)] bg-[var(--pos-accent)] text-white",
   }[estado];
   const texto = { ok: "OK", bajo: "Stock bajo", agotado: "Agotado" }[estado];
@@ -270,9 +279,7 @@ function Estado({ estado }: { estado: "ok" | "bajo" | "agotado" }) {
 
 function Etiqueta({ children }: { children: React.ReactNode }) {
   return (
-    <span className="border border-[var(--pos-divider)] px-2.5 py-1 text-[12px] uppercase tracking-[0.08em] text-[var(--pos-700)]">
-      {children}
-    </span>
+    <span className="pos-tag pos-tag-neutro">{children}</span>
   );
 }
 
@@ -287,7 +294,7 @@ function Th({
 }) {
   return (
     <th
-      className={`whitespace-nowrap border-b border-[var(--pos-divider)] px-3 py-2.5 text-[12px] font-medium uppercase tracking-[0.08em] text-[var(--pos-600)] ${
+      className={`whitespace-nowrap border-b border-[var(--pos-divider)] px-3 py-2.5 text-[12px] font-medium uppercase text-[var(--pos-600)] ${
         estrecha ? "w-[52px]" : ""
       }`}
       style={{ textAlign: alineado }}

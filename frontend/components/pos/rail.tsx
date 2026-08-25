@@ -23,10 +23,14 @@ const SECCIONES = [
 export function Rail({ cajera }: { cajera: string }) {
   const ruta = usePathname();
 
+  // BLANCO Y SIN BORDE (handoff v2). Antes era una franja del color del fondo
+  // separada por una línea; ahora es una superficie propia, y lo que la separa
+  // del catálogo es el cambio de color, no un filete. La diferencia se nota en
+  // la tablet: una línea de 1px a 60cm y con reflejo se pierde; un cambio de
+  // superficie no.
   return (
     <nav
-      className="flex w-[92px] shrink-0 flex-col items-center border-r py-4"
-      style={{ borderColor: "var(--pos-divider)" }}
+      className="flex w-[92px] shrink-0 flex-col items-center bg-[var(--pos-surface)] py-4"
       aria-label="Secciones del punto de venta"
     >
       <span className="titular mb-6 text-[15px] tracking-tight">M&apos;D</span>

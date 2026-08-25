@@ -84,7 +84,7 @@ export default function PantallaPanel() {
         </header>
 
         {error && (
-          <p className="max-w-[560px] border-l-2 border-[var(--pos-800)] bg-[var(--pos-800)]/10 py-3 pl-4 text-[13px] text-[var(--pos-900)]">
+          <p className="max-w-[560px] border-l-2 border-[var(--pos-800)] rounded-[var(--pos-r-sm)] bg-[var(--pos-800)]/10 py-3 pl-4 text-[13px] text-[var(--pos-900)]">
             {error}
           </p>
         )}

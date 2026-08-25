@@ -98,7 +98,7 @@ export default function PantallaPermisos() {
         </header>
 
         {error && (
-          <p className="max-w-[620px] border-l-2 border-[var(--pos-800)] bg-[var(--pos-800)]/10 py-3 pl-4 text-[13px] leading-relaxed text-[var(--pos-900)]">
+          <p className="max-w-[620px] border-l-2 border-[var(--pos-800)] rounded-[var(--pos-r-sm)] bg-[var(--pos-800)]/10 py-3 pl-4 text-[13px] leading-relaxed text-[var(--pos-900)]">
             {error}
           </p>
         )}
@@ -140,7 +140,7 @@ export default function PantallaPermisos() {
                       void cambiar(u, { tope_descuento_pct: v });
                     }
                   }}
-                  className="h-9 w-[70px] border border-[var(--pos-divider)] bg-white px-2 tabular text-[13px] text-[var(--pos-text)] outline-none focus:border-[var(--pos-accent)]"
+                  className="h-9 w-[70px] pos-input px-2 tabular text-[13px] text-[var(--pos-text)]"
                 />
                 <span className="text-[var(--pos-600)]">%</span>
               </label>

@@ -134,7 +134,7 @@ export function PanelCobro({
       </button>
 
       <div className="mb-4">
-        <div className="titular text-[12px] tracking-[0.14em] text-[var(--pos-600)]">
+        <div className="kicker">
           {pagos.length ? "FALTA POR COBRAR" : "A COBRAR"}
         </div>
         <div className="tabular text-[34px] font-semibold tabular-nums tracking-tight">
@@ -214,7 +214,7 @@ export function PanelCobro({
 
       {medio.exige_referencia && (
         <label className="mb-3 block">
-          <span className="titular text-[12px] tracking-[0.12em] text-[var(--pos-600)]">
+          <span className="kicker">
             NÚMERO DE APROBACIÓN
           </span>
           <input
@@ -222,7 +222,7 @@ export function PanelCobro({
             onChange={(e) => setReferencia(e.target.value)}
             autoComplete="off"
             placeholder="el que salió en la pantalla o en la app"
-            className="mt-1 w-full border border-[var(--pos-divider)] bg-white px-3 py-2.5 tabular text-[15px] text-[var(--pos-text)] outline-none focus:border-[var(--pos-accent)]"
+            className="mt-1 w-full pos-input px-3 py-2.5 tabular text-[15px] text-[var(--pos-text)]"
           />
           <span className="mt-1 block text-[12px] leading-relaxed text-[var(--pos-600)]">
             Es lo único que después permite cuadrar este cobro contra el informe
@@ -231,7 +231,7 @@ export function PanelCobro({
         </label>
       )}
 
-      <label className="titular text-[12px] tracking-[0.12em] text-[var(--pos-600)]">
+      <label className="kicker">
         {medio.permite_vuelto ? "MONTO RECIBIDO" : "MONTO COBRADO"}
       </label>
       <input
@@ -240,7 +240,7 @@ export function PanelCobro({
         inputMode="numeric"
         placeholder={formatear(restante)}
         aria-label={`Monto con ${medio.nombre}`}
-        className="mt-1 border border-[var(--pos-divider)] bg-[var(--pos-100)] px-3 py-2.5 tabular text-lg tabular-nums text-[var(--pos-text)] outline-none focus:border-[var(--pos-accent)]"
+        className="mt-1 border border-[var(--pos-divider)] bg-[var(--pos-100)] px-3 py-2.5 tabular text-lg tabular-nums text-[var(--pos-text)]"
       />
 
       <div className="mt-2 flex flex-wrap gap-2">
@@ -266,7 +266,7 @@ export function PanelCobro({
       <div className="mt-auto pt-4">
         {vuelto > 0 && (
           <div className="mb-3">
-            <div className="titular text-[12px] tracking-[0.12em] text-[var(--pos-600)]">
+            <div className="kicker">
               VUELTO
             </div>
             <div className="tabular text-[26px] font-semibold tabular-nums text-[var(--pos-800)]">
@@ -286,7 +286,7 @@ export function PanelCobro({
         <button
           disabled={montoInvalido || excedenteInvalido || faltaReferencia || enviando}
           onClick={cubre ? confirmar : agregar}
-          className="w-full bg-[var(--pos-accent)] py-3.5 titular text-[13.5px] font-semibold tracking-[0.12em] text-white disabled:cursor-not-allowed disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-muted)]"
+          className="w-full pos-btn pos-btn-primario py-3.5 text-[13.5px] disabled:cursor-not-allowed"
         >
           {enviando
             ? "CERRANDO…"

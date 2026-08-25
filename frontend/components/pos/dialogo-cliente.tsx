@@ -116,12 +116,12 @@ export function DialogoCliente({
     correo.includes("@");
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center pos-backdrop p-6">
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Asignar clienta"
-        className="blueprint w-full max-w-[520px] p-6"
+        className="pos-dialogo w-full max-w-[520px] p-6"
         style={{ background: "var(--pos-surface)" }}
       >
         <i className="corner tl" aria-hidden /><i className="corner tr" aria-hidden />

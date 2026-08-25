@@ -99,7 +99,7 @@ export function BuscadorCliente({
         autoComplete="off"
         aria-label="Buscar clienta por número de identificación"
         placeholder="Documento de la clienta"
-        className="h-11 w-full rounded-[var(--pos-r-md)] border px-3 tabular text-[13px] outline-none focus:border-[var(--pos-accent)]"
+        className="h-11 w-full rounded-[var(--pos-r-md)] border px-3 tabular text-[13px]"
         style={{ borderColor: "var(--pos-divider)", background: "#fff",
                  color: "var(--pos-text)" }}
       />

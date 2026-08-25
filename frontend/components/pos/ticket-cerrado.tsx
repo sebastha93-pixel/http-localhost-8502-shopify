@@ -120,7 +120,7 @@ export function TicketCerrado({
 
         {ticket.vuelto_centavos > 0 && (
           <div className="mt-4">
-            <div className="titular text-[12px] tracking-[0.14em] text-[var(--pos-600)]">
+            <div className="kicker">
               VUELTO
             </div>
             <div className="tabular text-[34px] font-semibold tabular-nums text-[var(--pos-800)]">
@@ -154,7 +154,7 @@ export function TicketCerrado({
         </div>
 
         {errorImpresion && (
-          <p className="mt-4 border border-[var(--pos-800)] bg-[var(--pos-800)]/10 p-2.5 text-left text-[12px] leading-relaxed text-[var(--pos-900)]">
+          <p className="mt-4 border border-[var(--pos-800)] rounded-[var(--pos-r-sm)] bg-[var(--pos-800)]/10 p-2.5 text-left text-[12px] leading-relaxed text-[var(--pos-900)]">
             {/* Decir «la venta SÍ quedó registrada» cuando está en la cola local
                 es mentir en el peor momento: la cajera lo lee, se queda
                 tranquila, y no sabe que hay algo que vigilar. Sin red la venta
@@ -170,13 +170,13 @@ export function TicketCerrado({
           <button
             onClick={imprimir}
             disabled={imprimiendo}
-            className="border border-[var(--pos-divider)] px-6 py-3.5 titular text-[13.5px] tracking-[0.12em] text-[var(--pos-700)] transition-colors duration-[var(--pos-transicion)] disabled:opacity-50"
+            className="pos-btn pos-btn-sec px-6 py-3.5 text-[13.5px] transition-colors duration-[var(--pos-transicion)] disabled:opacity-50"
           >
             {errorImpresion ? "REINTENTAR" : "REIMPRIMIR"}
           </button>
           <button
             onClick={onNueva}
-            className="bg-[var(--pos-accent)] px-10 py-3.5 titular text-[13.5px] font-semibold tracking-[0.12em] text-white"
+            className="pos-btn pos-btn-primario px-10 py-3.5 text-[13.5px]"
           >
             NUEVA VENTA · Enter
           </button>

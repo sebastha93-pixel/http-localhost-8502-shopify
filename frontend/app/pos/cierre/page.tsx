@@ -410,7 +410,7 @@ function ResumenTurno({
         </p>
       )}
       {resumen.ventas_en_borrador > 0 && (
-        <p className="mt-3 border-l-2 border-[var(--pos-800)] bg-[var(--pos-800)]/10 py-2 pl-3 text-[12px] leading-relaxed text-[var(--pos-900)]">
+        <p className="mt-3 border-l-2 border-[var(--pos-800)] rounded-[var(--pos-r-sm)] bg-[var(--pos-800)]/10 py-2 pl-3 text-[12px] leading-relaxed text-[var(--pos-900)]">
           Hay {resumen.ventas_en_borrador} venta(s) sin terminar. Ciérralas o
           descártalas antes de arquear.
         </p>
@@ -471,7 +471,7 @@ function CajaCerrada({
         className={`mt-5 border-l-2 py-2.5 pl-3 text-[12.5px] leading-relaxed ${
           cierre.cuadro
             ? "border-[var(--pos-accent)] bg-[var(--pos-100)] text-[var(--pos-700)]"
-            : "border-[var(--pos-800)] bg-[var(--pos-800)]/10 text-[var(--pos-900)]"
+            : "border-[var(--pos-800)] rounded-[var(--pos-r-sm)] bg-[var(--pos-800)]/10 text-[var(--pos-900)]"
         }`}
       >
         {cierre.cuadro
@@ -489,7 +489,7 @@ function CajaCerrada({
 
       <a
         href="/pos/venta"
-        className="mt-6 flex h-12 items-center justify-center bg-[var(--pos-accent)] titular text-[13px] font-semibold tracking-[0.08em] text-white"
+        className="mt-6 flex h-12 items-center justify-center pos-btn pos-btn-primario text-[13px]"
       >
         VOLVER A VENTA
       </a>
@@ -539,7 +539,7 @@ function Aviso({ texto, tono }: { texto: string; tono?: "error" }) {
     <p
       className={`max-w-[560px] border-l-2 py-3 pl-4 text-[13px] leading-relaxed ${
         tono === "error"
-          ? "border-[var(--pos-800)] bg-[var(--pos-800)]/10 text-[var(--pos-900)]"
+          ? "border-[var(--pos-800)] rounded-[var(--pos-r-sm)] bg-[var(--pos-800)]/10 text-[var(--pos-900)]"
           : "border-[var(--pos-divider)] bg-[var(--pos-100)] text-[var(--pos-700)]"
       }`}
     >

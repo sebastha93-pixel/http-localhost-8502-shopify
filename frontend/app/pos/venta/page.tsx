@@ -665,10 +665,8 @@ export default function PantallaVenta() {
             {horasSinContacto >= HORAS_AVISO && (
               <span
                 role="status"
-                className={`border px-2.5 py-1 text-[12px] ${
-                  horasSinContacto >= HORAS_BLOQUEO
-                    ? "border-[var(--pos-accent)] bg-[var(--pos-accent)] text-white"
-                    : "border-[var(--pos-accent)] bg-[var(--pos-accent)]/10 text-[var(--pos-900)]"
+                className={`pos-tag ${
+                  horasSinContacto >= HORAS_BLOQUEO ? "pos-tag-acento" : "pos-tag-neutro"
                 }`}
               >
                 {horasSinContacto >= HORAS_BLOQUEO
@@ -681,7 +679,7 @@ export default function PantallaVenta() {
               // permite a la cajera decidir si confía o va a mirar la percha.
               <span
                 role="status"
-                className="border border-[var(--pos-800)]/30 bg-[var(--pos-800)]/10 px-2.5 py-1 text-[12px] text-[var(--pos-900)]"
+                className="border border-[var(--pos-800)]/30 rounded-[var(--pos-r-sm)] bg-[var(--pos-800)]/10 px-2.5 py-1 text-[12px] text-[var(--pos-900)]"
                 title="Sin conexión: el stock puede haber cambiado"
               >
                 Stock de hace {antiguedad(catalogoDe)}
@@ -699,10 +697,7 @@ export default function PantallaVenta() {
             min-content y hacía desbordar las tarjetas. */}
         <div className="pos-cuerpo min-h-0 flex-1">
           <section className="flex min-w-0 flex-col gap-3 overflow-hidden p-6">
-            <div
-              className="flex h-11 items-center gap-2.5 rounded-[var(--pos-r-md)] border px-3"
-              style={{ borderColor: "var(--pos-divider)" }}
-            >
+            <div className="pos-input flex h-11 items-center gap-2.5 px-3">
               <LupaIcono />
               <input
                 ref={buscadorRef}
@@ -724,14 +719,24 @@ export default function PantallaVenta() {
               {["Todo", ...categorias].map((c) => {
                 const activo = categoria === c;
                 return (
+                  // PÍLDORA y en caja normal (v2). Antes eran rectángulos de
+                  // esquina 12 con el texto en versalitas: a 11px y todo en
+                  // mayúsculas, «CHAQUETAS» y «FALDAS» se distinguen por la
+                  // silueta del bloque, no por la palabra. En caja normal se
+                  // leen de un vistazo, que es lo único que se hace con ellas.
+                  //
+                  // El estado activo no se rellena de negro: tinte + borde de
+                  // acento. Con cinco chips en fila, uno negro pesa más que el
+                  // catálogo que hay debajo.
                   <button
                     key={c}
                     onClick={() => setCategoria(c)}
-                    className="kicker h-11 rounded-[var(--pos-r-md)] border px-4 transition-colors"
+                    aria-pressed={activo}
+                    className="h-11 rounded-[var(--pos-r-pill)] border px-4 text-[14px] font-medium transition-colors"
                     style={{
                       borderColor: activo ? "var(--pos-accent)" : "var(--pos-divider)",
-                      background: activo ? "var(--pos-100)" : "transparent",
-                      color: activo ? "var(--pos-800)" : "var(--pos-600)",
+                      background: activo ? "var(--pos-100)" : "var(--pos-surface)",
+                      color: activo ? "var(--pos-800)" : "var(--pos-700)",
                     }}
                   >
                     {c}

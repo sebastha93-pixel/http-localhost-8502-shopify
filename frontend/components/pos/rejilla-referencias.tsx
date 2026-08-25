@@ -41,12 +41,11 @@ export function RejillaReferencias({
     <div
       className="pos-rejilla grid min-w-0 flex-1 auto-rows-min content-start gap-[10px] overflow-y-auto pr-1"
     >
+      {/* `blueprint` = la tarjeta del sistema: blanca, r18 y con sombra. El
+          borde de 1px se va con la v1 — sobre el gris del fondo, borde y
+          sombra juntos ensucian el canto. */}
       {referencias.map((r) => (
-        <article
-          key={r.referencia}
-          className="rounded-[var(--pos-r-md)] border p-[13.6px]"
-          style={{ borderColor: "color-mix(in srgb, var(--pos-text) 10%, transparent)" }}
-        >
+        <article key={r.referencia} className="blueprint p-4">
           <h3 className="titular text-[15px]">{r.nombre}</h3>
 
           <div className="mt-2 flex items-baseline justify-between">
@@ -89,10 +88,7 @@ export function RejillaReferencias({
                   // el control más pulsado del producto —uno por línea de cada
                   // venta, de pie y con una prenda en la otra mano— y ahí un
                   // fallo de puntería es una talla equivocada en la bolsa.
-                  className="h-11 w-full rounded-[var(--pos-r-sm)] border text-[14px] transition-colors duration-[var(--pos-transicion)] enabled:hover:border-[var(--pos-accent)] enabled:hover:bg-[var(--pos-100)]"
-                  style={{
-                    borderColor: "color-mix(in srgb, var(--pos-text) 12%, transparent)",
-                  }}
+                  className="h-11 w-full rounded-[var(--pos-r-sm)] border border-[var(--pos-divider)] text-[14px] transition-colors duration-[var(--pos-transicion)] enabled:hover:border-[var(--pos-accent)] enabled:hover:bg-[var(--pos-100)]"
                 >
                   {t.talla}
                 </button>

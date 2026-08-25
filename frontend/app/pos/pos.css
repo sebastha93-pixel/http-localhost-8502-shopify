@@ -1,82 +1,131 @@
 /**
- * Sistema de diseño del POS — "Industry" retemado a MALE'DENIM.
+ * Sistema de diseño del POS — v2 "Apple-grade".
  *
- * Los tokens salen tal cual del handoff (`docs/retail-pos/handoff/styles.css`),
- * que es la fuente de verdad del estilo. No se copia la hoja completa: sus
- * clases de componente chocarían con Tailwind, que es lo que usa este
- * codebase. Se traen los tokens y lo único que Tailwind no puede expresar —
- * las marcas de registro de `.blueprint`.
+ * Los tokens salen tal cual del handoff vigente
+ * (`docs/retail-pos/handoff-v2/styles-v2.css`), que es la fuente de verdad del
+ * estilo. No se copia la hoja completa: sus clases de componente chocarían con
+ * Tailwind, que es lo que usa este codebase. Se traen los tokens y lo único
+ * que Tailwind no puede expresar.
+ *
+ * ⚠️ LA v2 INVIERTE LA v1, Y CONVIENE SABERLO ANTES DE «ARREGLAR» ALGO.
+ * La v1 «Industry» (`docs/retail-pos/handoff/`, aplicada el 12-ago) era
+ * estética de plano: esquinas casi rectas (2/4/7 px), bordes finos, marcas de
+ * registro en las esquinas, superficie GRIS (#ededee) y Barlow. La v2 es lo
+ * contrario en todo: tarjetas BLANCAS de 18 px con sombra suave y SIN borde,
+ * botones píldora, tipografía del sistema y fondo #f5f5f7.
+ *
+ * O sea que si alguien vuelve a poner `border` en una tarjeta «porque se ve
+ * suelta», está reintroduciendo la v1 a medias: sobre #f5f5f7 el borde y la
+ * sombra juntos ensucian el canto. La separación la da la sombra.
  *
  * Van bajo `.pos-raiz` a propósito: el ERP tiene su propia paleta (Selvedge) y
  * dos sistemas sueltos en el mismo `:root` se pisan.
  */
 
 .pos-raiz {
-  --pos-bg: #f7f7f8;
-  --pos-surface: #ededee;
-  --pos-text: #1a1c1f;
-  --pos-accent: #23262b;
-  --pos-divider: color-mix(in srgb, #1d1f20 16%, transparent);
+  --pos-bg: #f5f5f7;
+  --pos-surface: #ffffff;
+  --pos-text: #1d1d1f;
+  /* UN SOLO color de marca: negro-denim. Sin gradientes ni color decorativo. */
+  --pos-accent: #1d1d1f;
+  --pos-divider: rgba(0, 0, 0, 0.08);
 
   /* La rampa neutra. Son valores de ESCALA: sirven para fondos, bordes y
      separadores. Del 100 al 500 NO se usan para texto — ver `--pos-muted`. */
-  --pos-100: #f1f2f5;
-  --pos-200: #e3e5ea;
-  --pos-300: #ccd0d8;
-  --pos-400: #a9afbb;
-  --pos-500: #7f8794;
-  --pos-600: #5e6571;
-  --pos-700: #444a54;
-  --pos-800: #2e333b;
-  --pos-900: #1b1e24;
+  --pos-100: #f5f5f7;
+  --pos-200: #e8e8ed;
+  --pos-300: #d2d2d7;
+  --pos-400: #aeaeb4;
+  --pos-500: #86868b;
+  --pos-600: #6e6e73;
+  --pos-700: #515154;
+  --pos-800: #333336;
+  --pos-900: #161617;
 
   /**
    * EL TEXTO SECUNDARIO. Token semántico, no un peldaño de la rampa.
    *
-   * `--pos-500` se estaba usando como color de texto en 18 sitios y da 3,10:1
-   * sobre el panel: por debajo del 4,5:1 que exige WCAG AA. No es una
-   * formalidad —es la hora, el nombre de la cajera, el motivo de una
-   * anulación— leído en una tienda con luz de vitrina, de pie y con prisa.
+   * El handoff dice «texto secundario = 500–700». MEDIDO, el 500 (#86868b) no
+   * sirve para texto en ningún fondo del sistema: 3,62:1 sobre blanco, 3,33
+   * sobre #f5f5f7. WCAG AA pide 4,5. No es una formalidad — es la hora, el
+   * nombre de la cajera, el motivo de una anulación, leídos en una tienda con
+   * luz de vitrina, de pie y con prisa.
    *
-   * Éste es el gris MÁS CLARO que pasa AA sobre los cuatro fondos del sistema
-   * (5,23:1 en el peor, el panel). Y sigue siendo más claro que `--pos-600`,
-   * así que la jerarquía de tres niveles —texto, secundario, terciario— se
-   * conserva tal cual la dibujó el handoff.
+   * El 600 es el más claro de la rampa que sí pasa donde de verdad cae el
+   * texto: 5,07:1 sobre la tarjeta blanca y 4,66:1 sobre el fondo. Se queda.
+   *
+   * ⚠️ PERO NO PASA SOBRE `--pos-200` (#e8e8ed): ahí da 4,15:1. Ése es el
+   * fondo de los botones secundarios y de los tintes, así que el texto que
+   * caiga encima usa `--pos-700` (6,48:1), no éste.
    *
    * La regla que se lleva de aquí: para texto se usan tokens con NOMBRE, no
    * peldaños de una escala. Un peldaño no sabe sobre qué fondo va a caer.
    */
-  --pos-muted: #5b6368;
+  --pos-muted: #6e6e73;
 
   /* Micro-interacción. Un solo valor para que nada vaya a destiempo: por
      debajo de 120ms no se percibe, por encima de 300ms se siente lento. */
   --pos-transicion: 180ms;
 
-  /* Escala 0.85× del sistema. */
-  --pos-1: 3.4px;
-  --pos-2: 6.8px;
-  --pos-3: 10.2px;
-  --pos-4: 13.6px;
-  --pos-6: 20.4px;
-  --pos-8: 27.2px;
+  /**
+   * La escala. La v1 la traía en 0,85× (3,4 / 6,8 / 10,2…) para apretar el
+   * plano; la v2 vuelve a la rejilla de 4 px, que es la del handoff y la que
+   * hace que dos huecos escritos por dos personas distintas coincidan.
+   */
+  --pos-1: 4px;
+  --pos-2: 8px;
+  --pos-3: 12px;
+  --pos-4: 16px;
+  --pos-5: 20px;
+  --pos-6: 24px;
+  --pos-7: 28px;
+  --pos-8: 36px;
 
-  /* Nunca más redondo que esto. */
-  --pos-r-sm: 2px;
-  --pos-r-md: 4px;
-  --pos-r-lg: 7px;
+  /* Radios de la v2. Las esquinas casi rectas de la v1 (2/4/7) se van. */
+  --pos-r-sm: 8px;
+  --pos-r-md: 12px;
+  --pos-r-lg: 18px;
+  /* Los diálogos son más redondos que las tarjetas, a propósito: flotan. */
+  --pos-r-dialogo: 22px;
+  /* La píldora. 980px y no 9999px: es lo que dice el handoff, y cualquier
+     número por encima de la mitad de la altura da el mismo dibujo. */
+  --pos-r-pill: 980px;
+
+  /**
+   * Las sombras. Doble capa: una de 1-2 px que dibuja el canto (la que
+   * sustituye al borde de la v1) y otra difusa que da la altura.
+   */
+  --pos-sombra-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(0, 0, 0, 0.04);
+  --pos-sombra-md: 0 2px 6px rgba(0, 0, 0, 0.05), 0 8px 24px rgba(0, 0, 0, 0.08);
+  --pos-sombra-lg: 0 8px 20px rgba(0, 0, 0, 0.1), 0 24px 60px rgba(0, 0, 0, 0.16);
 
   background: var(--pos-bg);
   color: var(--pos-text);
-  font-family: var(--font-barlow), system-ui, sans-serif;
+  /**
+   * LA FUENTE DEL SISTEMA, no una descargada.
+   *
+   * La v1 traía Barlow + Barlow Condensed por `next/font`. La v2 pide el stack
+   * del sistema y no es sólo estética: es la única tipografía que ya está en
+   * el dispositivo, así que la caja pinta el primer texto sin esperar una
+   * descarga ni saltar cuando llega. En una tablet de tienda con wifi de
+   * centro comercial eso se nota más que la forma de la «a».
+   */
+  --pos-fuente: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    Helvetica, Arial, sans-serif;
+  font-family: var(--pos-fuente);
   font-size: 15px;
-  line-height: 1.55;
+  line-height: 1.5;
 }
 
+/**
+ * El titular. Ya no cambia de familia —no hay Condensed— así que lo que lo
+ * distingue es el peso y el tracking negativo, que es como lo hace el handoff.
+ */
 .pos-raiz .titular {
-  font-family: var(--font-barlow-condensed), system-ui, sans-serif;
+  font-family: var(--pos-fuente);
   font-weight: 600;
   line-height: 1.12;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.02em;
 }
 
 /**
@@ -92,39 +141,204 @@
 .pos-raiz .kicker {
   font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.13em;
+  /* El handoff pide 0.04–0.06em; la v1 iba en 0.13em. Se toma el tope del
+     rango: en versalitas, apretarlas del todo las vuelve un bloque gris. */
+  letter-spacing: 0.06em;
   line-height: 1.25;
+  color: var(--pos-muted);
 }
 
 /**
- * Marcas de registro en las esquinas — la firma del sistema.
+ * LA TARJETA. Blanca, redonda y con sombra — sin borde.
  *
- * Van FUERA del borde (offset −6px), así que el contenedor no puede recortar:
- * cualquier `overflow:hidden` en un ancestro se las come.
+ * En la v1 esto era un marco de plano: borde de 1 px y cuatro marcas de
+ * registro colgando por fuera de las esquinas. La v2 las elimina («los
+ * `<i class="corner">` están ocultos con display:none — no implementarlos»),
+ * así que las marcas se apagan aquí en vez de ir a quitar cuatro `<i>` de cada
+ * tarjeta del producto: el markup que ya existe sigue siendo válido y el día
+ * que alguien escriba uno nuevo por costumbre, tampoco se verá.
  */
 .pos-raiz .blueprint {
   position: relative;
-  border: 1px solid var(--pos-divider);
-  border-radius: var(--pos-r-md);
+  background: var(--pos-surface);
+  border: none;
+  border-radius: var(--pos-r-lg);
+  box-shadow: var(--pos-sombra-sm);
 }
 .pos-raiz .blueprint > .corner {
-  position: absolute;
-  width: 11px;
-  height: 11px;
-  pointer-events: none;
+  display: none;
 }
-.pos-raiz .blueprint > .corner::before,
-.pos-raiz .blueprint > .corner::after {
-  content: "";
-  position: absolute;
-  background: var(--pos-400);
+
+/**
+ * ── LOS BOTONES ─────────────────────────────────────────────────────────────
+ *
+ * Existen como CLASE y no como cadena de Tailwind repetida porque el mismo
+ * botón primario estaba escrito, carácter por carácter, en siete archivos:
+ * `bg-[var(--pos-accent)] … titular … tracking-[0.12em] text-white
+ * disabled:bg-[var(--pos-divider)] …`. Es la duplicación que no falla en
+ * ningún test y que se nota el día que uno de los siete se queda con la
+ * esquina recta de la v1 y el de al lado ya es píldora.
+ *
+ * Se llaman `.pos-btn*` y no `.btn` a propósito: la hoja del handoff usa
+ * nombres genéricos (`.btn`, `.tag`, `.input`) que chocarían con cualquier
+ * cosa del ERP que se cuele en la misma página.
+ *
+ * La altura la sigue poniendo la regla de 44px de más abajo, que es más
+ * estricta que los 40 del handoff — y esa diferencia se defiende sola: esto
+ * se pulsa con el dedo, de pie, con una prenda en la otra mano.
+ */
+/**
+ * ⚠️ LA CLASE SÓLO TRAE LO QUE NO VARÍA. Nada de `font-size`, `font-weight`
+ * ni `padding` aquí.
+ *
+ * No es minimalismo: es especificidad. `.pos-raiz .pos-btn` puntúa (0,2,0) y
+ * le gana a la utilidad `.text-[13px]` de Tailwind (0,1,0), así que un
+ * `font-size` en esta regla PISARÍA EN SILENCIO el tamaño que cada botón
+ * declara en su markup — los ocho quedarían del mismo cuerpo y el que
+ * remata el cobro dejaría de destacar. Lo mismo con el relleno: hay un botón
+ * de `px-10` que se quedaría en 18px.
+ *
+ * O sea: la clase pone la forma (píldora, transición, color), el markup pone
+ * el tamaño. Si algún día hace falta un tamaño por defecto, va con `:where()`
+ * para que puntúe cero y Tailwind lo pueda pisar.
+ */
+.pos-raiz .pos-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--pos-2);
+  border: none;
+  border-radius: var(--pos-r-pill);
+  font-family: var(--pos-fuente);
+  color: var(--pos-text);
+  background: transparent;
+  transition:
+    background var(--pos-transicion) ease,
+    transform 50ms ease;
 }
-.pos-raiz .blueprint > .corner::before { left: 5px; top: 0; width: 1px; height: 100%; }
-.pos-raiz .blueprint > .corner::after  { top: 5px; left: 0; width: 100%; height: 1px; }
-.pos-raiz .blueprint > .corner.tl { top: -6px; left: -6px; }
-.pos-raiz .blueprint > .corner.tr { top: -6px; right: -6px; }
-.pos-raiz .blueprint > .corner.bl { bottom: -6px; left: -6px; }
-.pos-raiz .blueprint > .corner.br { bottom: -6px; right: -6px; }
+/* El hundido al pulsar. Es la única animación de forma del sistema y está
+   aquí porque en una pantalla táctil no hay hover: sin esto, la cajera no
+   tiene ninguna señal de que el toque entró. */
+.pos-raiz .pos-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.pos-raiz .pos-btn-primario {
+  background: var(--pos-accent);
+  color: #fff;
+  font-weight: 600;
+}
+.pos-raiz .pos-btn-primario:hover:not(:disabled) {
+  background: var(--pos-800);
+}
+/* El deshabilitado NO se pinta de gris: se baja la opacidad (regla de más
+   abajo). Pintarlo hacía que un «Cobrar» apagado y un botón secundario activo
+   se vieran igual, que es la confusión que no puede pasar en un cobro. */
+.pos-raiz .pos-btn-sec {
+  background: var(--pos-200);
+  /* 700 y no `--pos-muted`: sobre #e8e8ed el 600 se queda en 4,15:1. */
+  color: var(--pos-700);
+}
+.pos-raiz .pos-btn-sec:hover:not(:disabled) {
+  background: var(--pos-300);
+}
+.pos-raiz .pos-btn-fantasma:hover:not(:disabled) {
+  background: var(--pos-100);
+}
+
+/**
+ * ── EL CAMPO ────────────────────────────────────────────────────────────────
+ *
+ * Es la otra cadena que estaba copiada en ocho sitios:
+ * `border border-[var(--pos-divider)] bg-white … outline-none
+ * focus:border-[var(--pos-accent)]`.
+ *
+ * A diferencia de las tarjetas, los campos SÍ conservan borde en la v2 — es lo
+ * que dice dónde se puede escribir antes de tocar nada. Lo que cambia es el
+ * foco: la v1 lo marcaba poniendo el borde negro; la v2 usa el gris 500 más un
+ * halo de 3px casi transparente. El halo es lo que importa: crece hacia
+ * afuera, así que el campo no cambia de tamaño al enfocarse y la línea de
+ * abajo no da el saltito de 1px que se ve al tabular por un formulario.
+ *
+ * Sin `padding` ni `font-size` aquí, por lo mismo que en `.pos-btn`.
+ */
+.pos-raiz .pos-input {
+  border: 1px solid var(--pos-divider);
+  border-radius: var(--pos-r-md);
+  background: var(--pos-surface);
+  color: var(--pos-text);
+  outline: none;
+  transition:
+    border-color var(--pos-transicion) ease,
+    box-shadow var(--pos-transicion) ease;
+}
+/* `:focus-within` además de `:focus` porque el buscador del catálogo NO es un
+   `<input>`: es una caja con la lupa dentro y el campo al lado. Sin esto, el
+   único control que se usa en cada venta era el único que no marcaba el foco. */
+.pos-raiz .pos-input:focus,
+.pos-raiz .pos-input:focus-within {
+  border-color: var(--pos-500);
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.06);
+}
+/* El foco de teclado sigue siendo el anillo del sistema, que es más visible
+   que el halo. No se pisan: éste anula el halo para no dibujar dos cosas. */
+.pos-raiz .pos-input:focus-visible {
+  box-shadow: none;
+}
+
+/**
+ * ── EL DIÁLOGO ──────────────────────────────────────────────────────────────
+ *
+ * Los cinco diálogos del POS tenían TRES velos distintos —`bg-black/40`,
+ * `/50` y `/70`— porque cada uno se escribió en su semana. Nadie lo iba a
+ * notar comparándolos (no salen a la vez), pero sí se nota en el uso: el mismo
+ * gesto oscurece la pantalla con tres fuerzas según dónde estés.
+ *
+ * El velo de la v2 es más CLARO que la media de los tres (0,35) y a la vez
+ * separa mejor, porque lo que aísla no es la oscuridad sino el desenfoque: el
+ * catálogo de detrás deja de ser legible aunque se siga viendo. Es lo que
+ * hace que un cobro a medias no compita por la atención con la lista de
+ * precios que hay debajo.
+ */
+.pos-raiz .pos-backdrop,
+.pos-backdrop {
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+}
+/* Más redondo que una tarjeta (22 vs 18) y con la sombra grande: es lo que
+   dice que ESTO flota por encima de todo lo demás. */
+.pos-raiz .pos-dialogo,
+.pos-dialogo {
+  background: var(--pos-surface);
+  border: none;
+  border-radius: var(--pos-r-dialogo);
+  box-shadow: var(--pos-sombra-lg);
+}
+
+/**
+ * La píldora de estado (`.tag` del handoff). 24px de alto, así que lleva
+ * `.compacto` en el markup cuando es un botón — no todo lo que parece píldora
+ * se pulsa.
+ */
+.pos-raiz .pos-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: var(--pos-r-pill);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.pos-raiz .pos-tag-acento {
+  background: var(--pos-accent);
+  color: #fff;
+}
+.pos-raiz .pos-tag-neutro {
+  background: var(--pos-200);
+  color: var(--pos-700);
+}
 
 /* Foco visible del sistema. En una pantalla táctil casi no se ve, pero el POS
    también se opera con teclado y ahí es lo único que dice dónde estás.
@@ -217,7 +431,7 @@
 
 .pos-raiz [disabled],
 .pos-raiz .desactivado {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
@@ -237,7 +451,7 @@
   grid-template-columns: minmax(0, 1fr) 360px;
 }
 .pos-raiz .pos-rejilla {
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
 }
 
 @media (max-width: 1100px) {

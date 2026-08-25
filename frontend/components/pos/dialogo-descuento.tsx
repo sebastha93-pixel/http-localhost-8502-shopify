@@ -60,14 +60,14 @@ export function DialogoDescuento({
         ))}
       </div>
 
-      <label className="mt-4 block titular text-[12px] tracking-[0.12em] text-[var(--pos-600)]">
+      <label className="mt-4 block kicker">
         MOTIVO (OBLIGATORIO)
       </label>
       <input
         value={motivo}
         onChange={(e) => setMotivo(e.target.value)}
         placeholder="Prenda con defecto menor"
-        className="mt-1 w-full border border-[var(--pos-divider)] bg-[var(--pos-100)] px-3 py-2.5 text-[13px] text-[var(--pos-text)] outline-none focus:border-[var(--pos-accent)]"
+        className="mt-1 w-full border border-[var(--pos-divider)] bg-[var(--pos-100)] px-3 py-2.5 text-[13px] text-[var(--pos-text)]"
       />
 
       <div className="mt-4 flex items-baseline justify-between tabular text-[12px]">
@@ -91,7 +91,7 @@ export function DialogoDescuento({
       <button
         disabled={!motivoValido || sobreTope}
         onClick={() => onAplicar(pct, motivo.trim())}
-        className="mt-4 w-full bg-[var(--pos-accent)] py-3 titular text-[13px] font-semibold tracking-[0.12em] text-white disabled:bg-[var(--pos-divider)] disabled:text-[var(--pos-muted)]"
+        className="mt-4 w-full pos-btn pos-btn-primario py-3 text-[13px]"
       >
         APLICAR
       </button>
@@ -113,15 +113,15 @@ function Marco({
   children: React.ReactNode;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center pos-backdrop p-6">
       <div
         role="dialog"
         aria-modal="true"
         aria-label={titulo}
-        className="w-full max-w-md border border-[var(--pos-divider)] bg-[var(--pos-surface)] p-6 shadow-2xl"
+        className="pos-dialogo w-full max-w-md p-6"
       >
         <div className="mb-4 flex items-start justify-between">
-          <h2 className="titular text-[15px] tracking-[0.1em] text-[var(--pos-text)]">
+          <h2 className="titular text-[15px] text-[var(--pos-text)]">
             {titulo}
           </h2>
           <button
