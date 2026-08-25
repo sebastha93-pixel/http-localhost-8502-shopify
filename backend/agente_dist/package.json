@@ -1,0 +1,13 @@
+{
+  "name": "oyente-grupo-produccion",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Reenvia al OS lo que se dice en el grupo de WhatsApp de produccion",
+  "main": "oyente.js",
+  "scripts": { "start": "node oyente.js" },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.9",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "engines": { "node": ">=20" }
+}

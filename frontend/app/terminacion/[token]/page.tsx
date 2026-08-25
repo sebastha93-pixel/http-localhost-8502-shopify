@@ -49,6 +49,11 @@ export default function TerminacionPublicaPage() {
     enabled: !!token,
   });
 
+  // Cuántas prendas dice terminación que recibió. Se pide acá porque es la
+  // cifra que cierra la trazabilidad: comparada con lo que salió a lavandería,
+  // la diferencia es lo que se quedó en el camino. Antes esta pantalla mostraba
+  // el total esperado y no preguntaba nada, así que el faltante era invisible.
+  const [cantRecibida, setCantRecibida] = useState("");
   const [nota, setNota] = useState("");
   const [notaMsg, setNotaMsg] = useState("");
   const guardarNota = useMutation({
@@ -68,6 +73,10 @@ export default function TerminacionPublicaPage() {
   const recibir = useMutation({
     mutationFn: () => fetchJSON(`${API_BASE}/api/publico/terminacion/${token}/recibir`, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cantidad: cantRecibida.trim() === "" ? null : Number(cantRecibida),
+      }),
     }),
     onSuccess: () => {
       setErr("");
@@ -233,11 +242,33 @@ export default function TerminacionPublicaPage() {
 
         {/* Botón recibir */}
         {!yaRecibido ? (
-          <button onClick={() => recibir.mutate()} disabled={recibir.isPending}
+          <>
+            {/* Se pregunta ANTES de confirmar y se deja vacío por defecto: si
+                viniera prellenado con el total esperado, la mayoría confirmaría
+                sin contar y la cifra sería una copia del dato que ya teníamos —
+                justo lo que no sirve para cruzar. */}
+            <div className="mb-3">
+              <label className="block text-[0.7rem] uppercase tracking-widest text-graphite mb-1.5">
+                ¿Cuántas prendas recibiste? (se esperaban {l.total_unidades})
+              </label>
+              <input
+                type="number" inputMode="numeric" min={0}
+                value={cantRecibida}
+                onChange={(e) => setCantRecibida(e.target.value)}
+                placeholder="Cuenta y escribe el número"
+                className="w-full rounded-sm border border-border bg-white px-3 py-3 text-base tabular"
+              />
+              <p className="mt-1 text-[0.68rem] text-graphite">
+                Si no cuadra con lo que esperábamos, avisamos para revisarlo — no
+                es un problema tuyo, es para poder buscar las que falten.
+              </p>
+            </div>
+            <button onClick={() => recibir.mutate()} disabled={recibir.isPending}
             className="w-full inline-flex items-center justify-center gap-2 rounded-sm bg-teal px-6 py-4 text-base font-semibold uppercase tracking-[0.14em] text-white hover:bg-ink-900 disabled:opacity-40">
             {recibir.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : <CheckCircle className="h-5 w-5" />}
             Confirmar recepción
-          </button>
+            </button>
+          </>
         ) : (
           <div className="rounded-sm border border-teal bg-teal/[0.04] p-4 text-center">
             <CheckCircle className="mx-auto h-6 w-6 text-teal" />

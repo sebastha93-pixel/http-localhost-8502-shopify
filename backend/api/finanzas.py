@@ -3,6 +3,7 @@ backend.api.finanzas — Dashboard financiero + integración MercadoPago.
 """
 from __future__ import annotations
 
+import logging
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -20,6 +21,8 @@ _SRC = Path(__file__).resolve().parent.parent.parent / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+
+log = logging.getLogger("maledenim.finanzas")
 
 router = APIRouter(prefix="/api/finanzas", tags=["finanzas"])
 
@@ -71,7 +74,33 @@ class ResumenFinanzas(BaseModel):
     cod_pendientes:     float    # esperan despacho
     cod_transito:       float    # en ruta
     cod_novedades:      float    # con incidencia
-    cod_entregados:     float    # COBRADOS (deben estar en liquidación Melonn)
+    cod_entregados:     float    # entregado BRUTO en la ventana (sigue creciendo)
+    # ── Cartera real, cruzada contra las facturas de Siigo ──────────────
+    # `cod_entregados` suma TODO lo entregado en 90 días y nunca descuenta lo
+    # que Melonn ya consignó: el 2026-08-10 mostraba $168.388.033 cuando la
+    # deuda real era $36.552.345. Se dejan las dos: la bruta sirve de operación,
+    # la real es la que se le reclama a Melonn. Ver services/cartera_cod.py.
+    # OJO CON LOS NOMBRES: la primera versión decía `cod_melonn_debe` usando el
+    # `balance` de la factura como señal de cobro. Está mal: 1.328 de 1.329
+    # facturas COD se cierran contra la cuenta "CONTRA ENTREGA CREDITO 10 DIAS",
+    # así que saldo 0 = venta a crédito registrada, NO plata recibida. Cuánto
+    # consignó Melonn se mide en la conciliación. Ver services/cartera_cod.py.
+    cartera_disponible:   bool = False   # False = Siigo no respondió; NO es cero
+    cartera_motivo:       Optional[str] = None
+    cod_facturado_credito:   float = 0.0   # facturado contra la cuenta de COD
+    n_cod_facturado_credito: int = 0
+    cod_cobrado_directo:  float = 0.0      # facturado y pagado por otro medio
+    n_cod_cobrado_directo: int = 0
+    cod_sin_facturar:     float = 0.0      # SIN ninguna factura (cualquier medio)
+    n_cod_sin_facturar:   int = 0
+    cod_recaudo_medible:  bool = False
+    cod_nota_recaudo:     Optional[str] = None
+    # La deuda REAL: entregado menos lo que Melonn reporta haber recaudado.
+    # Sale del módulo de conciliación; Siigo no tiene este dato.
+    cod_melonn_debe:      float = 0.0
+    n_cod_melonn_debe:    int = 0
+    cod_melonn_recaudado: float = 0.0
+    n_cod_melonn_recaudado: int = 0
     n_cod_total:        int
     n_cod_pendientes:   int
     n_cod_transito:     int
@@ -125,7 +154,32 @@ def resumen(_: CurrentUser = Depends(get_current_user)) -> ResumenFinanzas:
     except Exception as e:
         print(f"[finanzas] MP error: {e}")
 
+    # ── Cartera real contra Siigo ────────────────────────────────────
+    # Si falla, el resumen sigue saliendo: la cartera se marca como no
+    # disponible y la pantalla lo dice. Un tablero que muestra $0 de deuda
+    # porque Siigo no contestó es peor que uno que dice "no pude consultar".
+    from backend.services import cartera_cod as cartera_svc
+    try:
+        cart = cartera_svc.cruzar(pedidos)
+    except Exception as e:
+        log.warning(f"[finanzas] cartera COD falló: {str(e)[:140]}")
+        cart = {"disponible": False, "motivo": str(e)[:120]}
+
     return ResumenFinanzas(
+        cartera_disponible=bool(cart.get("disponible")),
+        cartera_motivo=cart.get("motivo"),
+        cod_facturado_credito=cart.get("facturado_credito", 0.0),
+        n_cod_facturado_credito=cart.get("n_facturado_credito", 0),
+        cod_cobrado_directo=cart.get("cobrado_directo", 0.0),
+        n_cod_cobrado_directo=cart.get("n_cobrado_directo", 0),
+        cod_sin_facturar=cart.get("sin_facturar", 0.0),
+        n_cod_sin_facturar=cart.get("n_sin_facturar", 0),
+        cod_recaudo_medible=bool(cart.get("recaudo_medible")),
+        cod_nota_recaudo=cart.get("nota_recaudo"),
+        cod_melonn_debe=cart.get("melonn_debe", 0.0),
+        n_cod_melonn_debe=cart.get("n_melonn_debe", 0),
+        cod_melonn_recaudado=cart.get("melonn_recaudado", 0.0),
+        n_cod_melonn_recaudado=cart.get("n_melonn_recaudado", 0),
         cod_total=sum(p.get("valor_num", 0) for p in cods),
         cod_pendientes=sum(p.get("valor_num", 0) for p in cod_pend),
         cod_transito=sum(p.get("valor_num", 0) for p in cod_tran),
@@ -146,6 +200,28 @@ def resumen(_: CurrentUser = Depends(get_current_user)) -> ResumenFinanzas:
 
 
 # ── Endpoint MercadoPago ─────────────────────────────────────────────
+
+@router.get("/cartera-cod")
+def cartera_cod_detalle(
+    _: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """Detalle de la cartera de contraentrega cruzada contra Siigo.
+
+    Dos listas para perseguir plata:
+      · `abiertas`     facturas COD entregadas con saldo, de la más vieja a la
+                       más nueva — es lo que hay que reclamarle a Melonn.
+      · `sin_factura`  pedidos ENTREGADOS que no tienen factura de venta. Salió
+                       mercancía, el cliente pagó, y no hay factura: eso lo
+                       arregla contabilidad, no Melonn.
+    """
+    from backend.services import cartera_cod as cartera_svc
+    try:
+        data = melonn_svc.obtener_pedidos(forzar_refresh=False)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Melonn error: {exc}")
+    pedidos = [metricas_svc.clasificar(p) for p in data["pedidos"]]
+    return cartera_svc.cruzar(pedidos)
+
 
 @router.get("/mercadopago", response_model=PagosMPResponse)
 def listar_pagos_mp(

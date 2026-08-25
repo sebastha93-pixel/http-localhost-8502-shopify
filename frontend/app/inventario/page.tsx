@@ -615,14 +615,14 @@ export default function InventarioPage() {
 
   const activos = useQuery<ProductosResp>({
     queryKey: ["inv-prod-active"],
-    queryFn: () => api.get<ProductosResp>("/api/inventario/productos?status=active&limit=250"),
+    queryFn: () => api.get<ProductosResp>("/api/inventario/productos?status=active"),
     staleTime: 30 * 60_000,
     refetchOnWindowFocus: false,
   });
 
   const borradores = useQuery<ProductosResp>({
     queryKey: ["inv-prod-draft"],
-    queryFn: () => api.get<ProductosResp>("/api/inventario/productos?status=draft&limit=250"),
+    queryFn: () => api.get<ProductosResp>("/api/inventario/productos?status=draft"),
     staleTime: 30 * 60_000,
     refetchOnWindowFocus: false,
   });

@@ -35,15 +35,21 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 # ── Umbrales ─────────────────────────────────────────────────────────────────
-# El barrido completo del listado corre cada 2 h (_CACHE_TTL en melonn_client) y
-# el scheduler tiene tick horario. Con eso, 3 h sin barrer ya significa que un
-# barrido se saltó, y 6 h que llevan varios fallando seguidos.
+# El barrido completo se arma por TRAMOS entre varios ticks y cierra cada ~2 h
+# (_CACHE_TTL en melonn_client; el cursor no arranca una generación nueva antes).
+# Con eso, 3 h sin CERRAR un barrido significa que uno se saltó, y 6 h que llevan
+# varios fallando.
 #
 # OJO si se cambia _CACHE_TTL: estos dos números tienen que moverse con él, o el
 # semáforo empieza a mentir. Un centinela mal calibrado es peor que ninguno,
 # porque da verde sobre un tablero viejo.
 FETCH_AMARILLO_MIN = 180
 FETCH_ROJO_MIN     = 360
+# Cuánto puede pasar sin que el barrido avance NI UNA página antes de ser rojo.
+# El scheduler tiene tick horario, así que 3 h son tres ticks perdidos seguidos.
+# Es distinto de FETCH_ROJO_MIN, que mide desde el último barrido COMPLETO: el
+# barrido puede llevar horas atascado a mitad con ese reloj todavía en verde.
+TRAMO_ROJO_MIN = 180
 # Cuánto puede caer el total entre dos chequeos sin que sea sospechoso.
 CAIDA_SOSPECHOSA   = 0.25
 # A partir de esta hora de Bogotá ya debería haber pedidos del día.
@@ -110,31 +116,71 @@ def _guardar(reporte: dict) -> None:
 
 
 def _revisar_fetch(mc, marcar, medidas: dict) -> None:
-    """¿El último fetch quedó completo? ¿Se bloqueó algún guardado?
+    """¿El barrido avanza? ¿Se bloqueó algún guardado?
 
     Aparte de chequear() y no dentro, porque hay que llamarlo DESPUÉS de leer el
     tablero (leer puede disparar un refresh) y también en el camino de error.
+
+    OJO CON LO QUE ES ROJO. El barrido se arma por tramos entre varios ticks, así
+    que `completo = False` es lo NORMAL a mitad de camino: significa "va por la
+    página 22 de 44", no "se rompió". Marcar eso en rojo dejaría el semáforo rojo
+    permanente, y un semáforo siempre rojo enseña a no mirarlo — que es justo lo
+    contrario de para qué existe este módulo. Lo que sí es rojo:
+      · el barrido no avanza ni una página (barrido_atascado)
+      · topamos nuestro propio techo de páginas (tope_paginas)
+      · se bloqueó un guardado
+    Que no cierre a tiempo lo cubre el reloj de chequear(), vía _edad_fetch_api.
     """
     try:
         uf = mc.ultimo_fetch()
         medidas["ultimo_fetch"] = uf
-        if uf.get("motivo_fin") == "nunca_corrio":
-            pass   # este worker no ha corrido un fetch; no es un hallazgo
-        elif not uf.get("completo"):
-            # El motivo trae la causa real detrás del fallo (cuota agotada,
-            # ráfaga, timeout, 5xx) — sin eso hay que adivinar, y adivinar es lo
-            # que salió mal hoy. Ver `_fallo` en melonn_client.
-            marcar("rojo", "fetch_incompleto",
-                   f"El último fetch se cortó por '{uf.get('motivo_fin')}': "
-                   f"falta parte del listado. El tablero conservó los datos "
-                   f"anteriores en vez de guardar una lista mutilada.",
-                   motivo=uf.get("motivo_fin"))
+        motivo = uf.get("motivo_fin") or ""
+
+        if motivo == "nunca_corrio":
+            pass          # este worker no ha barrido todavía; no es un hallazgo
+        elif motivo == "tope_paginas":
+            marcar("rojo", "tope_paginas",
+                   f"El barrido llegó a nuestro techo de páginas sin salir de la "
+                   f"ventana (página {uf.get('pagina')}). El listado no se está "
+                   f"cortando por fecha y el tablero no puede quedar completo.",
+                   pagina=uf.get("pagina"))
+        elif motivo.startswith("fallo_get_pagina"):
+            # Con cursor esto se reintenta solo en el tramo siguiente.
+            marcar("amarillo", "tramo_fallido",
+                   f"Un tramo se cortó en la página {uf.get('pagina')} "
+                   f"({motivo}). Se reintenta en el próximo tick sin perder lo "
+                   f"ya barrido.",
+                   motivo=motivo)
+
+        if uf.get("en_curso"):
+            edad_tramo = None
+            try:
+                edad_tramo = mc._edad_tramo()
+            except Exception as e:
+                marcar("amarillo", "reloj_tramo_ilegible",
+                       f"No pude leer cuándo avanzó el barrido: {str(e)[:120]}")
+            medidas["minutos_desde_tramo"] = (
+                round(edad_tramo / 60, 1) if edad_tramo is not None else None)
+            if edad_tramo is not None and edad_tramo / 60 > TRAMO_ROJO_MIN:
+                marcar("rojo", "barrido_atascado",
+                       f"El barrido va por la página {uf.get('pagina')} de "
+                       f"~{uf.get('paginas_estimadas')} y lleva "
+                       f"{edad_tramo / 60:.0f} minutos sin avanzar ni una. El "
+                       f"reloj del último barrido completo puede verse bien y el "
+                       f"tablero estarse quedando viejo igual.",
+                       minutos=round(edad_tramo / 60, 1))
+
         try:
             medidas["ultimo_fallo_get"] = mc.ultimo_fallo_get()
-        except Exception:
-            pass
+        except Exception as e:
+            marcar("amarillo", "chequeo_roto",
+                   f"No pude leer el último fallo de GET: {str(e)[:120]}")
     except Exception as e:
-        log.info(f"[salud] sin radiografía del fetch: {str(e)[:120]}")
+        # Un sub-chequeo que no corre es un hallazgo, no un silencio. Ver el
+        # comentario del chequeo 8: 37 semáforos verdes tenían una pregunta sin
+        # hacer porque un TypeError caía en un except mudo.
+        marcar("amarillo", "chequeo_roto",
+               f"No pude leer la radiografía del barrido: {str(e)[:150]}")
 
     try:
         bloq = mc.ultimo_guardado_bloqueado()
@@ -145,8 +191,9 @@ def _revisar_fetch(mc, marcar, medidas: dict) -> None:
                    f"{bloq.get('intento')} pedidos (tenía {bloq.get('antes')}), "
                    f"fuente '{bloq.get('fuente')}'. El candado hizo su trabajo, "
                    f"pero hay que ver por qué llegó una lista tan corta.")
-    except Exception:
-        pass
+    except Exception as e:
+        marcar("amarillo", "chequeo_roto",
+               f"No pude leer el candado de guardado: {str(e)[:120]}")
 
 
 def chequear(*, avisar: bool = False) -> dict:

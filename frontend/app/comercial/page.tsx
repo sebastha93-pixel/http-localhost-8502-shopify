@@ -49,6 +49,10 @@ interface DesgloseResp {
   ticket_promedio: number;
   unidades?: number;
   upt?: number;
+  /** true cuando las tiendas físicas (Siigo) SÍ entraron en estas cifras.
+   *  Si viene falso o ausente, el backend no pudo hablar con Siigo y TODO el
+   *  desglose —neto, ticket, canales— es solo lo digital. */
+  tiendas_siigo?: boolean;
   por_canal:  Array<{ label: string;  ventas: number; num_pedidos: number; unidades: number; upt: number; pct: number }>;
   por_asesor: Array<{ nombre: string; ventas: number; num_pedidos: number; unidades: number; upt: number; pct: number }>;
 }
@@ -335,11 +339,32 @@ export default function ComercialPage() {
                 </CardContent>
               </Card>
 
+              {/* AVISO CUANDO FALTAN LAS TIENDAS FÍSICAS.
+                  El backend suma Florida y Arrayanes desde Siigo y marca
+                  `tiendas_siigo`. Si Siigo no responde, sigue adelante sin
+                  ellas — correcto para no tumbar la pantalla, pero hasta hoy
+                  nadie leía esa bandera: dos cargas seguidas podían mostrar
+                  totales distintos por millones sin nada que lo indicara, y
+                  quien mirara el KPI no tenía forma de saber si estaba viendo
+                  la compañía completa o solo lo digital. */}
+              {desg.data && !desg.data.tiendas_siigo && (
+                <div className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-4 py-3">
+                  <p className="text-xs font-semibold text-terracotta uppercase tracking-widest">
+                    Cifras incompletas: sin tiendas físicas
+                  </p>
+                  <p className="mt-1 text-xs text-ink-900">
+                    No se pudo consultar Siigo, así que Florida y Arrayanes no están
+                    sumadas. Todo lo de abajo —neto, ticket, canales— es solo venta
+                    digital. Refresca en un momento para ver el total real.
+                  </p>
+                </div>
+              )}
+
               {/* Por canal */}
               <Card>
                 <CardContent className="space-y-3 p-5">
                   <SectionHeading title="Ventas por canal" hint={
-                    <span className="inline-flex items-center gap-2">% sobre neto · tiendas físicas desde Siigo
+                    <span className="inline-flex items-center gap-2">% sobre neto · {desg.data?.tiendas_siigo ? "incluye tiendas físicas (Siigo)" : "solo digital"}
                       <ExportBtn onClick={() => exportarExcel("ventas_por_canal",
                         ["Canal", "Pedidos", "Unidades", "UPT", "Ventas", "%"],
                         desg.data!.por_canal.map((c) => [c.label, c.num_pedidos, c.unidades, c.upt, Math.round(c.ventas), c.pct]))} />

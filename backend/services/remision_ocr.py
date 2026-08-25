@@ -242,3 +242,89 @@ def extraer_remision(archivo_bytes: bytes, mime_type: str) -> dict:
     data["tipo_documento"] = tipo
 
     return {"ok": True, "data": data, "paginas_procesadas": len(archivos)}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# REMISIÓN DE LAVANDERÍA — leer de QUÉ LOTE es
+#
+# Caso distinto al de textilera, y por eso función aparte: acá no interesa el
+# detalle del documento sino UNA cosa, cuál lote. Nace de una pregunta de
+# Sebastián (2026-08-19): «si un confeccionista entrega más de un lote, ¿qué
+# pasa?». Pasa que el papel lo dice — la remisión real que revisamos traía
+# escrito «297  R 96616-1» y «SEÑOR(ES): Stone Jeans». Preguntarle al proveedor
+# algo que ya escribió en el documento es hacerlo trabajar dos veces.
+# ═══════════════════════════════════════════════════════════════════════
+
+SYSTEM_LAVANDERIA = """\
+Lees remisiones de lavandería de una empresa de jeans colombiana. Son formatos \
+preimpresos ("CUENTA DE COBRO / REMISIÓN / PEDIDO") llenados A MANO.
+
+Tu único trabajo: decir de qué LOTE es y para qué LAVANDERÍA.
+
+La referencia del lote aparece en la descripción, casi siempre con formato \
+NNNNN-N (ej. 96616-1, 45610-1) y a veces precedida de "R" o "Ref". La cantidad \
+suele ir a la izquierda. El nombre de la lavandería suele ir en "SEÑOR(ES)".
+
+Devuelve EXACTAMENTE este JSON, sin texto extra:
+{
+  "referencias": ["96616-1"],
+  "lavanderia": "STONE JEANS o null",
+  "cantidad": 297,
+  "confianza": "alta|media|baja"
+}
+
+Reglas:
+- "referencias": TODAS las que veas. Lista vacía si no distingues ninguna.
+- NO adivines. Si la letra no se entiende, deja la lista vacía y confianza "baja".
+- Es mejor decir que no sabes que inventar una referencia: con ese dato se mueve \
+producción y se paga a un proveedor.
+"""
+
+
+def leer_remision_lavanderia(archivo_bytes: bytes, mime_type: str) -> dict:
+    """¿De qué lote es esta remisión de lavandería?
+
+    Returns {"ok": True, "referencias": [...], "lavanderia": str|None,
+             "cantidad": int|None, "confianza": str} o {"ok": False, "error": ...}
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        return {"ok": False, "error": "ANTHROPIC_API_KEY no configurada"}
+
+    if mime_type == "application/pdf":
+        try:
+            paginas = _pdf_a_imagenes(archivo_bytes, max_paginas=2)
+        except Exception as e:
+            return {"ok": False, "error": f"No se pudo abrir el PDF: {e}"}
+        if not paginas:
+            return {"ok": False, "error": "PDF vacío"}
+        archivos = [(b, "image/jpeg") for b in paginas]
+    elif mime_type in ("image/jpeg", "image/jpg", "image/png", "image/webp"):
+        try:
+            archivos = [(_imagen_a_jpeg_optimizada(archivo_bytes), "image/jpeg")]
+        except Exception as e:
+            return {"ok": False, "error": f"No se pudo procesar la imagen: {e}"}
+    else:
+        return {"ok": False, "error": f"Tipo no soportado: {mime_type}"}
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        contenido = _preparar_contenido_imagenes(archivos)
+        contenido.append({"type": "text",
+                          "text": "¿De qué lote es esta remisión? Solo JSON."})
+        resp = client.messages.create(
+            model=MODELO,
+            max_tokens=500,          # la respuesta es diminuta
+            system=SYSTEM_LAVANDERIA,
+            messages=[{"role": "user", "content": contenido}],
+        )
+        data = json.loads(_limpiar_json(resp.content[0].text))
+    except Exception as e:
+        return {"ok": False, "error": f"Error IA: {str(e)[:200]}"}
+
+    refs = [str(r).strip().upper().replace("R ", "").replace("REF ", "")
+            for r in (data.get("referencias") or []) if str(r).strip()]
+    return {"ok": True, "referencias": refs,
+            "lavanderia": data.get("lavanderia") or None,
+            "cantidad": data.get("cantidad"),
+            "confianza": (data.get("confianza") or "media").lower()}

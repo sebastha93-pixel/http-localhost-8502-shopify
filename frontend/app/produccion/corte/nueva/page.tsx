@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { SelectorCortador, type Cortador } from "@/components/selector-cortador";
 import { ESPIGAS, PAREJA_TALLA, TALLAS_SUPERIOR } from "@/lib/espigas";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
@@ -68,11 +69,36 @@ export default function NuevaOrdenCortePage() {
   const [largoTrazo, setLargoTrazo] = useState("");
   const [numCapas, setNumCapas] = useState("");
   const [promedioTecnico, setPromedioTecnico] = useState("");
+  // El cortador se ELIGE, no se escribe: `responsableEmail` es la identidad y
+  // `responsable` solo el nombre que se muestra. Ver components/selector-cortador.
   const [responsable, setResponsable] = useState("");
+  const [responsableEmail, setResponsableEmail] = useState("");
   const [fechaEnvio, setFechaEnvio] = useState("");
   const [indicaciones, setIndicaciones] = useState("");
   const [destinatarios, setDestinatarios] = useState("");
   const [err, setErr] = useState("");
+
+  /**
+   * Elegir cortador llena TAMBIÉN el correo. El error del 2026-08-06 fue tener
+   * dos campos de texto pegados —nombre y correos— y escribir el correo en el
+   * del nombre: la orden quedó invisible para el cortador. Un dato que el
+   * sistema ya conoce no se vuelve a teclear.
+   *
+   * Al cambiar de cortador se saca el correo del anterior y se mete el nuevo,
+   * sin tocar los demás destinatarios que se hayan agregado a mano.
+   */
+  function elegirCortador(c: Cortador | null) {
+    const anterior = responsableEmail.trim().toLowerCase();
+    setResponsable(c?.nombre ?? "");
+    setResponsableEmail(c?.email ?? "");
+    setDestinatarios((prev) => {
+      const lista = prev.split(/[,;\s]+/g).map((s) => s.trim()).filter(Boolean)
+        .filter((d) => d.toLowerCase() !== anterior);
+      if (c && !lista.some((d) => d.toLowerCase() === c.email.toLowerCase()))
+        lista.unshift(c.email);
+      return lista.join(", ");
+    });
+  }
 
   // Referencias
   const [refs, setRefs] = useState<RefState[]>([{ key: 1, referenciaId: "", curva: nuevaCurva(), tallaje: "inferior" }]);
@@ -131,6 +157,7 @@ export default function NuevaOrdenCortePage() {
         largo_trazo: largo,
         promedio_tecnico: promedioTecnico ? parseFloat(promedioTecnico) : null,
         responsable: responsable || null,
+        responsable_email: responsableEmail || null,
         fecha_envio: fechaEnvio || null,
         indicaciones: indicaciones || null,
         destinatarios_correo: destArr,
@@ -168,7 +195,11 @@ export default function NuevaOrdenCortePage() {
                 <p className="mt-1 text-[0.68rem] text-graphite">Manual. Vacío = usa la sugerencia ({capasSugerida}).</p>
               </div>
               <Input label="Promedio técnico (m/prenda)" value={promedioTecnico} onChange={setPromedioTecnico} inputMode="decimal" placeholder="0.850" />
-              <Input label="Cortador responsable" value={responsable} onChange={setResponsable} placeholder="Ej. Iván Rodríguez" />
+              <SelectorCortador
+                email={responsableEmail}
+                nombre={responsable}
+                onSelect={elegirCortador}
+              />
               <Input label="Fecha de envío" type="date" value={fechaEnvio} onChange={setFechaEnvio} />
             </div>
             <div>

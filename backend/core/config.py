@@ -40,6 +40,15 @@ class Settings(BaseSettings):
     # aunque su token siga vigente.
     auth_jwt_expiry_min: int = Field(default=720, alias="AUTH_JWT_EXPIRY_MIN")
 
+    # Dónde vive la app para el usuario. Se usa para armar el enlace de
+    # recuperación de contraseña, que se manda por correo: tiene que apuntar al
+    # dominio que la persona abre en el navegador, no a la URL del backend.
+    app_public_url: str = Field(default="https://app.maledenim.com",
+                                alias="APP_PUBLIC_URL")
+    # Cuánto vive un enlace de recuperación. Corto a propósito: un enlace que
+    # dura horas es una llave de repuesto debajo del tapete.
+    auth_reset_ttl_min: int = Field(default=30, alias="AUTH_RESET_TTL_MIN")
+
     # Bootstrap del primer admin (solo se usa si la tabla usuarios está vacía)
     auth_bootstrap_email:    str = Field(default="", alias="AUTH_BOOTSTRAP_EMAIL")
     auth_bootstrap_password: str = Field(default="", alias="AUTH_BOOTSTRAP_PASSWORD")

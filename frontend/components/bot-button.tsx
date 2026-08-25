@@ -36,8 +36,11 @@ export function BotButton() {
   const qc = useQueryClient();
   const [showPanel, setShowPanel] = useState(false);
 
-  // Solo admin
-  if (!esAdmin(user)) return null;
+  // Solo admin. El `return null` va abajo, después de los hooks: `user` llega
+  // vacío mientras carga la sesión, y salir antes de los hooks cambia cuántos
+  // hooks ve React entre renders y tumba la pantalla completa. Lo que sí se
+  // apaga acá es el poll, con `enabled`.
+  const admin = esAdmin(user);
 
   // Poll status mientras está corriendo o el panel está abierto
   const { data: status } = useQuery({
@@ -47,7 +50,7 @@ export function BotButton() {
       const s = q.state.data as BotStatus | undefined;
       return s?.running || showPanel ? 5000 : false;
     },
-    enabled: true,
+    enabled: admin,
   });
 
   const startMut = useMutation({
@@ -68,6 +71,9 @@ export function BotButton() {
       qc.invalidateQueries({ queryKey: ["dashboard"] });
     }
   }, [status?.running, status?.finished_at, qc]);
+
+  // Ya pasaron todos los hooks: acá sí se puede salir sin desbalancear nada.
+  if (!admin) return null;
 
   const running = status?.running ?? false;
   const ok = status?.error == null;

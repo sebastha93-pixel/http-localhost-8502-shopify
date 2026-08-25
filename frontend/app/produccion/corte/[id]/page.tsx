@@ -14,10 +14,12 @@ import { api, API_BASE } from "@/lib/api";
 import { fmtFecha, hoyBogotaISO } from "@/lib/utils";
 import { TimelineNotas } from "@/components/timeline-notas";
 import { ReasignarConfeccionista } from "@/components/reasignar-confeccionista";
+import { SelectorCortador, type Cortador } from "@/components/selector-cortador";
 import { getToken, puedeAccionModulo } from "@/lib/auth";
 import { ordenarTallas, TALLAS_SUPERIOR } from "@/lib/espigas";
 import { useAuth } from "@/components/auth-provider";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
+import { type CorreoEnvio, presentacionCorreo } from "@/lib/correo-estado";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, ScanLine, Trash2, Lock, Loader2, AlertCircle, CheckCircle, Paperclip, Pencil, Send, X } from "lucide-react";
@@ -59,6 +61,41 @@ interface RolloInv {
   numero_rollo?: string;
 }
 
+/**
+ * Destinatarios que no son ni el cortador de la orden ni un usuario registrado.
+ *
+ * Existe por la orden 2607-0017: salió a barreto.corte@hotmail.com cuando el
+ * cortador tenía registrado johnj2397@hotmail.com. El sistema sabía cuál era
+ * el correo bueno y dejó escribir otro sin decir nada.
+ */
+function destinatariosRaros(
+  dest: string[],
+  responsableEmail: string | undefined,
+  usuarios: { email: string }[] | undefined,
+): string[] {
+  const conocidos = new Set(
+    [responsableEmail, ...(usuarios ?? []).map((u) => u.email)]
+      .filter(Boolean)
+      .map((e) => (e as string).trim().toLowerCase()),
+  );
+  // Sin lista de conocidos no se puede juzgar: mejor callarse que dar un falso
+  // aviso en cada envío y enseñar al diseñador a ignorarlo.
+  if (conocidos.size === 0) return [];
+  return dest.filter((d) => !conocidos.has(d.trim().toLowerCase()));
+}
+
+/** Lo que devuelve autorizar/reenviar sobre el intento de envío. */
+interface RespuestaCorreo {
+  asunto: string;
+  body: string;
+  destinatarios: string[];
+  estado: "enviado" | "error_envio";
+  error: string | null;
+  resend_id: string | null;
+  enviado_por: string | null;
+  mailto_url?: string;
+}
+
 interface OrdenCorte {
   id: string;
   consecutivo: string;
@@ -84,6 +121,8 @@ interface OrdenCorte {
   fecha_entrega?: string;
   precio_corte?: number;
   responsable?: string;
+  /** Identidad real del cortador: es la que da el permiso. */
+  responsable_email?: string;
   fecha_limite?: string;
   fecha_envio?: string;
   indicaciones?: string;
@@ -92,6 +131,8 @@ interface OrdenCorte {
   precio_corte_sugerido?: number | null;
   trazos_archivos?: { url: string; filename?: string; path?: string }[];
   destinatarios_correo?: string[];
+  /** Bitácora de envíos del correo, más reciente primero. La llena el detalle. */
+  correos?: CorreoEnvio[];
   autorizada_por?: string;
   estado: string;
   referencia?: {
@@ -582,32 +623,104 @@ export default function DetalleOrdenCortePage() {
     if (!actuales.includes(email)) setDestinatariosEdit([...actuales, email].join(", "));
   };
 
+  /** Cambiar el cortador de la orden. `null` = quitarlo. */
+  const reasignar = useMutation({
+    mutationFn: (c: Cortador | null) =>
+      api.patch(`/api/produccion/corte/${id}/responsable`, {
+        responsable_email: c?.email ?? null,
+        responsable: c?.nombre ?? null,
+      }),
+    onSuccess: (_r, c) => {
+      setErr("");
+      setMsg(c ? `Orden reasignada a ${c.nombre}.` : "Cortador quitado de la orden.");
+      qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
+    },
+    onError: (e: Error) => { setErr(e.message); setMsg(""); },
+  });
+
+  /**
+   * Avisa —no bloquea— cuando el destinatario no cuadra con el cortador.
+   * Lanza "cancelado" si el usuario se arrepiente, para abortar la mutación.
+   */
+  const confirmarDestinatarios = (dest: string[]) => {
+    const oc = q.data;
+    if (!oc) return;
+    const raros = destinatariosRaros(dest, oc.responsable_email,
+                                     usuariosCorreoQ.data?.usuarios);
+    if (raros.length === 0) return;
+    const nombre = oc.responsable || "el cortador";
+    const correoBueno = oc.responsable_email || "sin correo registrado";
+    const ok = window.confirm(
+      `Vas a enviar a ${raros.join(", ")}, que no es el correo de ${nombre} (${correoBueno}).\n\n` +
+      `Así fue como la orden 2607-0017 salió a la dirección equivocada.\n\n¿Seguro?`,
+    );
+    if (!ok) throw new Error("cancelado");
+  };
+
   const autorizar = useMutation({
     mutationFn: () => {
       const dest = destinatariosEdit
         .split(/[,;\s]+/g).map((s) => s.trim()).filter(Boolean);
+      confirmarDestinatarios(dest);
       return api.post<{
         ok: boolean;
-        correo?: { asunto: string; body: string; destinatarios: string[]; enviado_por: string; mailto_url?: string };
+        correo?: RespuestaCorreo;
       }>(`/api/produccion/corte/${id}/autorizar`, {
         destinatarios: dest.length > 0 ? dest : null,
         mensaje_extra: mensajeExtra || null,
       });
     },
     onSuccess: (data) => {
-      setErr("");
       const c = data.correo;
-      if (c?.enviado_por === "resend") {
+      if (c?.estado === "enviado") {
+        setErr("");
         setMsg(`Orden autorizada. Correo enviado a ${c.destinatarios.join(", ")}.`);
-      } else if (c?.mailto_url) {
-        setMsg("Orden autorizada. Abriendo tu cliente de correo…");
-        window.location.href = c.mailto_url;
+      } else if (c) {
+        // Antes esto hacía window.location.href = c.mailto_url, que en Chrome
+        // con Gmail web no hace NADA: el correo no salía y la pantalla decía
+        // "Orden autorizada" igual. Así fue como nadie se enteró de 2607-0017.
+        setMsg("");
+        setErr(`La orden quedó autorizada, pero el correo NO salió: ${c.error ?? "error desconocido"}`);
       } else {
+        setErr("");
         setMsg("Orden autorizada.");
+      }
+      // Se invalida SIEMPRE, también cuando el correo falló: la orden sí quedó
+      // autorizada y el intento fallido tiene que aparecer en la bitácora.
+      qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
+    },
+    onError: (e: Error) => {
+      if (e.message === "cancelado") return;   // se arrepintió en el aviso
+      setErr(e.message);
+      setMsg("");
+    },
+  });
+
+  /** Reenvío manual: casi siempre porque el destinatario estaba mal escrito. */
+  const reenviar = useMutation({
+    mutationFn: (dest: string[]) => {
+      confirmarDestinatarios(dest);
+      return api.post<{ correo?: RespuestaCorreo }>(
+        `/api/produccion/corte/${id}/reenviar-correo`,
+        { destinatarios: dest, mensaje_extra: null },
+      );
+    },
+    onSuccess: (data) => {
+      const c = data.correo;
+      if (c?.estado === "enviado") {
+        setErr("");
+        setMsg(`Correo reenviado a ${c.destinatarios.join(", ")}.`);
+      } else {
+        setMsg("");
+        setErr(`No se pudo reenviar: ${c?.error ?? "error desconocido"}`);
       }
       qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
     },
-    onError: (e: Error) => { setErr(e.message); setMsg(""); },
+    onError: (e: Error) => {
+      if (e.message === "cancelado") return;   // se arrepintió en el aviso
+      setErr(e.message);
+      setMsg("");
+    },
   });
 
   if (q.isLoading) return <LoadingState label="Cargando orden de corte…" />;
@@ -915,12 +1028,102 @@ export default function DetalleOrdenCortePage() {
                 ); })()}
               </div>
 
+              {/* Cortador responsable — se ELIGE de la lista, y se puede
+                  cambiar mientras la orden no esté cortada.
+
+                  El 2026-08-06 una orden quedó asignada mal y no había forma de
+                  corregirla: hubo que borrarla y volverla a crear con su curva,
+                  sus trazos y sus indicaciones. Un dato mal puesto no puede
+                  costar una orden entera. */}
+              {oc.estado !== "cortada" && (
+                <div>
+                  <SelectorCortador
+                    email={oc.responsable_email || ""}
+                    nombre={oc.responsable || ""}
+                    disabled={reasignar.isPending}
+                    onSelect={(c) => reasignar.mutate(c)}
+                  />
+                  {reasignar.isPending && (
+                    <p className="mt-1 flex items-center gap-1.5 text-[0.68rem] text-graphite">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Reasignando…
+                    </p>
+                  )}
+                  {!oc.responsable_email && oc.responsable && (
+                    <p className="mt-1 text-[0.68rem] text-amber-700 dark:text-amber-400">
+                      Este nombre está escrito a mano. Elige el cortador de la lista
+                      para ligarlo a su usuario — así se asegura que él vea la orden.
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Autorizar */}
               <div>
                 <p className="section-label mb-2">Autorizar orden</p>
                 {oc.estado === "autorizada" ? (
-                  <div className="rounded-sm border border-teal/40 bg-teal/5 px-3 py-2 text-xs text-teal flex items-center gap-2">
-                    <CheckCircle className="h-3.5 w-3.5" /> Autorizada por {oc.autorizada_por || "—"}
+                  <div className="space-y-2">
+                    <div className="rounded-sm border border-teal/40 bg-teal/5 px-3 py-2 text-xs text-teal flex items-center gap-2">
+                      <CheckCircle className="h-3.5 w-3.5" /> Autorizada por {oc.autorizada_por || "—"}
+                    </div>
+
+                    {/* Bitácora de envíos. Antes no existía: autorizar y que el
+                        correo saliera se veían exactamente igual. */}
+                    {(oc.correos ?? []).length > 0 ? (
+                      <div className="space-y-1">
+                        {(oc.correos ?? []).map((c) => {
+                          const e = presentacionCorreo(c.estado);
+                          return (
+                            <div key={c.id} className={`text-[0.7rem] ${e.tono}`}>
+                              <span>{e.icono} {e.texto}</span>
+                              <span className="text-graphite"> · {c.destinatarios.join(", ")}</span>
+                              {c.error && (
+                                <div className="pl-4 opacity-80 break-all">{c.error}</div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-[0.7rem] text-graphite">
+                        Sin registro de envío (orden anterior a la bitácora).
+                      </p>
+                    )}
+
+                    {/* Reenviar: se precarga el correo REGISTRADO del cortador,
+                        no el que falló. Corregir tiene que ser el camino fácil. */}
+                    <div>
+                      <input
+                        value={destinatariosEdit}
+                        onChange={(e) => setDestinatariosEdit(e.target.value)}
+                        placeholder={oc.responsable_email || "correo@destinatario.com"}
+                        className="w-full rounded-sm border border-border bg-white px-3 py-2 text-xs" />
+                      <div className="mt-1 flex gap-2">
+                        {oc.responsable_email && (
+                          <button type="button"
+                            onClick={() => setDestinatariosEdit(oc.responsable_email || "")}
+                            className="rounded-sm border border-border px-2 py-1 text-[0.7rem] text-graphite hover:text-ink-900">
+                            Usar el del cortador
+                          </button>
+                        )}
+                        <button type="button"
+                          onClick={() => {
+                            const dest = destinatariosEdit
+                              .split(/[,;\s]+/g).map((s) => s.trim()).filter(Boolean);
+                            if (dest.length === 0) {
+                              setErr("Escribe a qué correo lo reenvío.");
+                              return;
+                            }
+                            reenviar.mutate(dest);
+                          }}
+                          disabled={reenviar.isPending}
+                          className="inline-flex items-center gap-1.5 rounded-sm bg-teal px-3 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.1em] text-white hover:bg-ink-900 disabled:opacity-40">
+                          {reenviar.isPending
+                            ? <Loader2 className="h-3 w-3 animate-spin" />
+                            : <Send className="h-3 w-3" />}
+                          Reenviar correo
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 ) : (
                   <>
@@ -2003,6 +2206,21 @@ function InformeCerradoCard({ oc }: { oc: OrdenCorte }) {
 }
 
 
+/** ¿Esta URL apunta a una imagen que se pueda mostrar?
+ *
+ *  El campo `remision_lavanderia_url` guarda dos cosas distintas: a veces una
+ *  foto (la que sube la lavandería, o la que ahora entra sola desde el grupo de
+ *  WhatsApp) y a veces un número de remisión o un link a otro sistema. Solo lo
+ *  primero se puede pintar; lo demás sigue siendo un enlace.
+ *
+ *  Se ignora el query string porque las URLs firmadas de Supabase traen `?token=`
+ *  después de la extensión. */
+function esImagen(url?: string): boolean {
+  if (!url) return false;
+  const sinQuery = url.split("?")[0].toLowerCase();
+  return /\.(jpg|jpeg|png|webp|gif)$/.test(sinQuery);
+}
+
 interface RutaCorte {
   id: string;
   token_publico: string;
@@ -2100,6 +2318,15 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
     mutationFn: (etapa: string) => api.post(`/api/produccion/rutas/${q.data?.id}/etapa`, { etapa }),
     onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }); },
     onError: (e: Error) => setErrRuta(`No se pudo cambiar la etapa: ${e.message}`),
+  });
+  // DEVOLVER UNA ETAPA. Avanzar era un clic y devolverse no existía: un lote
+  // marcado por error solo se arreglaba entrando a la base de datos. El motivo
+  // es obligatorio del lado del servidor, así que acá se pide antes de mandar.
+  const devolverEtapa = useMutation({
+    mutationFn: ({ etapa, motivo }: { etapa: string; motivo: string }) =>
+      api.post(`/api/produccion/rutas/${q.data?.id}/devolver-etapa`, { etapa, motivo }),
+    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }); },
+    onError: (e: Error) => setErrRuta(`No se pudo devolver la etapa: ${e.message}`),
   });
   const guardarUrl = useMutation({
     mutationFn: () => api.patch(`/api/produccion/rutas/${q.data?.id}`, {
@@ -2307,15 +2534,64 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
               </button>
               {r.remision_lavanderia_url && (
                 <a href={r.remision_lavanderia_url} target="_blank" rel="noopener noreferrer"
-                  className="text-[0.65rem] text-navy-600 hover:underline">Ver actual</a>
+                  className="text-[0.65rem] text-navy-600 hover:underline">Abrir</a>
               )}
             </div>
+
+            {/* LA REMISIÓN SE VE, no solo se enlaza.
+                Antes había únicamente un link "Ver actual": para saber si el
+                documento correcto estaba cargado había que abrir otra pestaña,
+                y en la práctica nadie lo hacía. Ahora la foto se ve acá mismo y
+                el clic la abre en grande. Importa más desde que la remisión
+                puede entrar sola desde el grupo de WhatsApp: si el OS adjuntó la
+                foto equivocada, se nota de un vistazo en vez de descubrirse el
+                día del pago. */}
+            {r.remision_lavanderia_url && esImagen(r.remision_lavanderia_url) && (
+              <a href={r.remision_lavanderia_url} target="_blank" rel="noopener noreferrer"
+                className="mt-2 inline-block rounded-sm border border-border bg-cloud/40 p-1
+                           hover:border-navy-600 transition-colors"
+                title="Abrir la remisión en grande">
+                <img src={r.remision_lavanderia_url} alt="Remisión de lavandería"
+                  className="max-h-40 w-auto rounded-sm object-contain" />
+              </a>
+            )}
           </div>
         )}
 
         {/* Acciones + notificación */}
         <div className="border-t border-border pt-3 flex flex-wrap items-center gap-2">
           {botonSiguiente()}
+
+          {/* DEVOLVER ETAPA — discreto a propósito: es una corrección, no parte
+              del flujo normal. Solo aparece si hay una etapa anterior a la que
+              volver, y pide el motivo antes de mandar porque el servidor lo
+              exige (un retroceso sin explicación es indistinguible de un error
+              nuevo cuando alguien lo revisa dos semanas después). */}
+          {(() => {
+            const orden = ["asignado", "aceptado", "en_confeccion", "lavanderia",
+                           "terminacion_recibida", "terminacion_terminada", "despachado"];
+            const i = orden.indexOf(r.etapa);
+            if (i <= 0) return null;
+            const anterior = orden[i - 1];
+            return (
+              <button
+                onClick={() => {
+                  const motivo = window.prompt(
+                    `Devolver este lote de "${r.etapa}" a "${anterior}".\n\n` +
+                    `¿Por qué? (queda en el histórico del lote)`);
+                  if (motivo && motivo.trim().length >= 3) {
+                    devolverEtapa.mutate({ etapa: anterior, motivo: motivo.trim() });
+                  }
+                }}
+                disabled={devolverEtapa.isPending}
+                className="rounded-sm border border-border px-2.5 py-1.5 text-[0.62rem] font-semibold uppercase tracking-widest text-graphite hover:bg-cloud disabled:opacity-40"
+                title={`Corregir: devolver a ${anterior}`}
+              >
+                {devolverEtapa.isPending ? "Devolviendo…" : `↩ Devolver a ${anterior}`}
+              </button>
+            );
+          })()}
+
           <div className="flex-1" />
           <span className="text-[0.7rem] text-graphite uppercase tracking-widest">Notificar:</span>
           {ADMINS_WA.map((a) => (

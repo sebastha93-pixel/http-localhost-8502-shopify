@@ -114,8 +114,76 @@ def siigo_post(path: str, body: dict) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# DOCUMENTOS SOPORTE (DS) — pagos a confeccionistas/terminación
+# DOCUMENTOS DE COMPRA DE SERVICIOS — confección / lavandería / terminación
 # ═══════════════════════════════════════════════════════════════════════
+#
+# ESTE FILTRO FUE EL BUG DEL MÓDULO DESDE EL DÍA UNO. Se leía SOLO lo que
+# empezara por "DS" porque se creyó que los talleres se contabilizaban como
+# Documento Soporte. En esta cuenta de Siigo NO: van como FACTURA DE COMPRA
+# serie 2 (FC-2-xxxx), con descripciones "Servicio de Confección REF x" y
+# "LAVANDERIA REF x" — justo el formato que el cruce espera.
+#
+# Medido contra producción el 2026-08-06:
+#   · /purchases devuelve 3.964 documentos: TODOS FC, cero DS.
+#   · 393 traen el patrón REF, desde octubre de 2023 hasta hoy.
+#   · El tipo "Documento soporte" existe y va en el consecutivo 1532 (≈1.531
+#     emitidos), pero la API NO los expone por ninguna ruta: /purchases ignora
+#     el filtro por tipo (devuelve las 3.964 igual) y /support-documents da 404.
+#
+# O sea que este lector devolvía lista vacía SIEMPRE y todos los lotes salían
+# "sin_ds" — no porque faltara la factura, sino porque se filtraba por un
+# prefijo que en esta cuenta no existe.
+#
+# Se aceptan los dos: el día que la API exponga los DS, entran solos.
+PREFIJOS_DOC = ("FC", "DS")
+
+# ── Concepto del item ────────────────────────────────────────────────────
+# Un lote recibe facturas de VARIOS procesos y cada uno tiene su precio
+# pactado. Sin clasificar, la factura de lavandería cruzaría por REF y se
+# compararía contra el precio de confección: "precio distinto" falso en cada
+# lote. Lo que no se reconoce queda en "otro" y NO se compara con nada —suma
+# al costo real, pero no dispara alertas—: es mejor no opinar que opinar mal
+# sobre la plata.
+_CONCEPTOS = (
+    ("confeccion",  ("CONFEC",)),
+    ("lavanderia",  ("LAVAND", "LAVADO", "TEÑID", "TENID", "STONE")),
+    ("terminacion", ("TERMINA", "ARREGLO", "SATINA", "PULID", "PLANCHAD")),
+    ("bordado",     ("BORDAD", "ESTAMPAD")),
+    ("corte",       ("CORTE",)),
+)
+
+
+def clasificar_concepto(descripcion: str) -> str:
+    """'Servicio de Confección REF 36600-1' → 'confeccion'."""
+    d = (descripcion or "").upper()
+    for nombre, claves in _CONCEPTOS:
+        if any(k in d for k in claves):
+            return nombre
+    return "otro"
+
+
+# El listado de /purchases trae supplier.branch_office = 0 (un número, no un
+# nombre): el nombre del proveedor hay que resolverlo aparte. Se cachea sin
+# vencimiento —los nombres no cambian— porque si no serían decenas de llamadas
+# extra en cada refresco, contra un rate limit que no perdona.
+_NOMBRES_PROVEEDOR: dict = {}
+
+
+def nombre_proveedor(supplier_id: Optional[str]) -> str:
+    if not supplier_id:
+        return ""
+    if supplier_id in _NOMBRES_PROVEEDOR:
+        return _NOMBRES_PROVEEDOR[supplier_id]
+    nombre = ""
+    try:
+        d = siigo_get(f"/customers/{supplier_id}") or {}
+        n = d.get("name")
+        nombre = (" ".join(n) if isinstance(n, list) else str(n or "")).strip()
+    except Exception as e:
+        log.warning(f"[siigo] no pude resolver el proveedor {supplier_id}: {str(e)[:90]}")
+    _NOMBRES_PROVEEDOR[supplier_id] = nombre
+    return nombre
+
 
 # \bREF\b + separador OBLIGATORIO: sin él, "Referencia 505" matchearía
 # y extraería "ERENCIA" en vez de la referencia real.
@@ -162,6 +230,65 @@ def key_edad(hit) -> str:
     return f"hace {mins} min"
 
 
+def _fetch_soporte(desde: Optional[str]) -> list[dict]:
+    """Documentos soporte, del endpoint que SÍ los expone.
+
+    `/purchases` no devuelve ni uno —se verificó: 3.964 documentos, todos FC—.
+    Los DS viven en `/v1/purchase-support-documents`, que no aparece en la
+    documentación pública junto a los demás listados. Sin esto, la confección de
+    los lotes de la app era invisible: el DS 1525 del 2026-07-29 (LUIS FERNANDO
+    BARRERA, 230 × $12.300 por la REF 95629-1) existía y el OS no lo veía.
+
+    OJO CON LA DESCRIPCIÓN: para los DS la API devuelve el NOMBRE DEL PRODUCTO
+    del catálogo, no el texto escrito en la línea. Se revisaron los 610 items de
+    los 1.422 DS: ni uno trae texto propio. O sea que la "REF 95629-1" que sale
+    impresa en el PDF no llega por API, y estos documentos hay que casarlos por
+    huella (NIT + concepto + cantidad), no por REF. Ver `_match_por_huella`.
+    """
+    docs: list[dict] = []
+    page = 1
+    while page <= 40:
+        data = siigo_get("/purchase-support-documents",
+                         {"page": page, "page_size": 100})
+        results = data.get("results") or []
+        if not results:
+            break
+        for p in results:
+            fecha = (p.get("date") or "")[:10]
+            if desde and fecha and fecha < desde:
+                continue
+            sup = p.get("supplier") or {}
+            items = []
+            for it in (p.get("items") or []):
+                desc = it.get("description") or ""
+                cant = float(it.get("quantity") or 0)
+                precio = float(it.get("price") or 0)
+                items.append({
+                    "descripcion":    desc,
+                    "ref":            _extraer_ref(desc),   # casi siempre None
+                    "concepto":       clasificar_concepto(desc),
+                    "cantidad":       cant,
+                    "valor_unitario": precio,
+                    "total_sin_iva":  round(cant * precio, 2),
+                })
+            docs.append({
+                "id":               p.get("id"),
+                "ds":               p.get("name"),
+                "fecha":            fecha,
+                "origen":           "DS",
+                "proveedor_id":     sup.get("identification"),
+                "supplier_uuid":    sup.get("id"),
+                "proveedor_nombre": "",
+                "total":            float(p.get("total") or 0),
+                "balance":          float(p.get("balance") or 0),
+                "items":            items,
+            })
+        if len(results) < 100:
+            break
+        page += 1
+    return docs
+
+
 def _fetch_ds(desde: Optional[str]) -> list[dict]:
     """Fetch real contra Siigo (paginación + detalle de items)."""
     def _parse_items(raw: list) -> list[dict]:
@@ -173,6 +300,7 @@ def _fetch_ds(desde: Optional[str]) -> list[dict]:
             items.append({
                 "descripcion":    desc,
                 "ref":            _extraer_ref(desc),
+                "concepto":       clasificar_concepto(desc),
                 "cantidad":       cant,
                 "valor_unitario": precio,
                 "total_sin_iva":  round(cant * precio, 2),
@@ -188,7 +316,7 @@ def _fetch_ds(desde: Optional[str]) -> list[dict]:
             break
         for p in results:
             name = p.get("name") or ""
-            if not name.upper().startswith("DS"):
+            if not name.upper().startswith(PREFIJOS_DOC):
                 continue
             fecha = (p.get("date") or "")[:10]
             if desde and fecha and fecha < desde:
@@ -199,7 +327,12 @@ def _fetch_ds(desde: Optional[str]) -> list[dict]:
                 "ds":               name,
                 "fecha":            fecha,
                 "proveedor_id":     sup.get("identification"),
-                "proveedor_nombre": (sup.get("branch_office") or sup.get("name") or ""),
+                # El nombre se resuelve DESPUÉS, solo para los que quedan en
+                # ventana: `branch_office` es 0 y resolver 3.964 proveedores
+                # reventaría el rate limit.
+                "supplier_uuid":    sup.get("id"),
+                "proveedor_nombre": "",
+                "origen":           "FC",
                 "total":            float(p.get("total") or 0),
                 "balance":          float(p.get("balance") or 0),
                 "items":            _parse_items(p.get("items")),
@@ -222,8 +355,27 @@ def _fetch_ds(desde: Optional[str]) -> list[dict]:
             d["items"] = _parse_items(detalle.get("items"))
             time.sleep(0.4)
         except Exception as e:
-            log.warning(f"[siigo] detalle DS {d['ds']} fallo: {e}")
+            log.warning(f"[siigo] detalle {d['ds']} fallo: {e}")
 
+    # Los DOCUMENTOS SOPORTE van por su propio endpoint. Si esa consulta falla,
+    # se sigue con las facturas: media verdad es mejor que ninguna, pero se
+    # registra fuerte porque la confección de los lotes nuevos vive ahí.
+    try:
+        soporte = _fetch_soporte(desde)
+        docs += soporte
+        log.info(f"[siigo] {len(soporte)} documentos soporte leídos")
+    except Exception as e:
+        log.error(f"[siigo] FALLO al leer documentos soporte: {str(e)[:140]}. "
+                  f"El cruce va a quedar incompleto (la confección va por DS).")
+
+    # Nombre del proveedor: una llamada por proveedor DISTINTO de los que
+    # quedaron en ventana (no por documento), con cache de proceso.
+    for d in docs:
+        d["proveedor_nombre"] = nombre_proveedor(d.get("supplier_uuid"))
+
+    log.info(f"[siigo] {len(docs)} documentos de compra en ventana "
+             f"(desde={desde or 'todo'}); "
+             f"{sum(1 for d in docs if any(i['ref'] for i in d['items']))} con REF")
     return docs
 
 

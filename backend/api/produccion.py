@@ -9,6 +9,7 @@ FASE 1 · Bloque 2: Ingreso + Inventario.
 from __future__ import annotations
 
 import logging
+import hmac
 import os
 from typing import List, Optional
 
@@ -16,7 +17,7 @@ from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query,
                      Request, Response, UploadFile)
 from pydantic import BaseModel, Field
 
-from backend.core.security import (CurrentUser, require_role, require_permission,
+from backend.core.security import (CurrentUser, get_current_user, require_role, require_permission,
                                     require_permission_estricto, tiene_permiso_costos,
                                     require_permission_any, tiene_permiso)
 from backend.services import produccion as svc
@@ -838,6 +839,9 @@ class CrearCorteBody(BaseModel):
     num_capas:             Optional[int] = None   # capas del tendido (manual)
     largo_trazo:           float = Field(gt=0)
     responsable:           Optional[str] = None
+    # Correo del cortador ELEGIDO del selector. Es la identidad real; el backend
+    # saca de ahí el nombre para que no puedan quedar en desacuerdo.
+    responsable_email:     Optional[str] = None
     fecha_envio:           Optional[str] = None
     indicaciones:          Optional[str] = None
     destinatarios_correo:  list[str] = Field(default_factory=list)
@@ -892,6 +896,7 @@ def crear_corte(
             num_capas=body.num_capas,
             referencias=[r.model_dump() for r in body.referencias] if body.referencias else None,
             responsable=body.responsable,
+            responsable_email=body.responsable_email,
             fecha_envio=body.fecha_envio,
             indicaciones=body.indicaciones,
             destinatarios_correo=body.destinatarios_correo,
@@ -933,6 +938,36 @@ def autorizar_corte(
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(500, f"autorizar_corte: {str(e)[:200]}")
+
+
+class ReenviarCorreoBody(BaseModel):
+    destinatarios: Optional[list[str]] = None
+    mensaje_extra: Optional[str] = None
+
+
+@router.post("/corte/{oc_id}/reenviar-correo")
+def reenviar_correo_corte(
+    oc_id: str,
+    body: ReenviarCorreoBody,
+    user: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
+) -> dict:
+    """Reenvía el correo de la orden, normalmente a una dirección corregida.
+
+    No re-autoriza: `fecha_autorizacion` y `autorizada_por` quedan intactas.
+    """
+    try:
+        oc = svc.reenviar_correo_corte(
+            oc_id,
+            destinatarios=body.destinatarios,
+            mensaje_extra=body.mensaje_extra,
+            usuario=user.email,
+        )
+        return {"ok": True, **oc}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"reenviar_correo: {str(e)[:200]}")
 
 
 @router.post("/corte/{oc_id}/trazos")
@@ -987,13 +1022,57 @@ def _es_solo_cortador(user: CurrentUser) -> bool:
             and user.rol != "admin")
 
 
+def _norm_txt(s: Optional[str]) -> str:
+    """Mayúsculas, sin espacios de sobra ni dobles. ' BARRETO ' → 'BARRETO'."""
+    return " ".join((s or "").strip().upper().split())
+
+
+# Partículas de nombres compuestos: solas no identifican a nadie.
+_PARTICULAS_NOMBRE = {"DE", "DEL", "LA", "LAS", "LOS", "Y", "SAN", "SANTA", "MC"}
+
+
 def _corte_es_del_cortador(oc: dict, user: CurrentUser) -> bool:
-    """El corte le pertenece si el responsable coincide con su nombre."""
-    resp = (oc.get("responsable") or "").strip().upper()
-    nombre = (user.nombre or "").strip().upper()
-    if not resp or not nombre:
+    """¿Esta orden de corte es de este cortador?
+
+    LA IDENTIDAD MANDA SOBRE EL TEXTO. Orden de prioridad:
+
+    1. `responsable_email` — lo escribe el selector de cortadores al crear o
+       reasignar la orden. Es un usuario real del portal, no algo tecleado. Si
+       está, DECIDE: si no coincide, la orden no es suya y no se busca más.
+
+    2. Órdenes de antes del selector, donde `responsable` era texto libre: hay
+       que comparar el nombre. Se compara por PALABRAS COMPLETAS, no por
+       pedazos: con el `in` de antes, un cortador llamado "ANA" se quedaba con
+       las órdenes de "MARIANA".
+
+    3. Si en ese texto libre quedó un CORREO en vez del nombre, se compara
+       contra el correo. Pasó el 2026-08-06: la orden 2608-0001 salió con el
+       correo del cortador en el campo del nombre y quedó invisible para todos
+       —hubo que borrarla y crearla de nuevo—. Con esto, ese mismo error ya no
+       esconde una orden.
+    """
+    email_user = (user.email or "").strip().lower()
+
+    email_oc = (oc.get("responsable_email") or "").strip().lower()
+    if email_oc:
+        return bool(email_user) and email_oc == email_user
+
+    resp = _norm_txt(oc.get("responsable"))
+    if not resp:
         return False
-    return resp in nombre or nombre in resp
+    if "@" in resp:                      # el dato quedó mal puesto, pero se entiende
+        return bool(email_user) and resp.lower() == email_user
+
+    nombre = _norm_txt(user.nombre)
+    if not nombre:
+        return False
+    if resp == nombre:
+        return True
+    # Un apellido en común alcanza ('BARRETO' ↔ 'JHON JAIRO BARRETO'), pero
+    # tiene que ser la palabra entera y con cuerpo propio.
+    tokens_nombre = set(nombre.split())
+    return any(t in tokens_nombre for t in resp.split()
+               if len(t) >= 3 and t not in _PARTICULAS_NOMBRE)
 
 
 @router.get("/corte")
@@ -1032,6 +1111,46 @@ def usuarios_correo(
     return {"usuarios": out}
 
 
+@router.get("/cortadores")
+def listar_cortadores(
+    _: CurrentUser = Depends(require_permission("produccion_corte", "ver")),
+) -> dict:
+    """Cortadores con acceso al portal, para el selector de la orden de corte.
+
+    Sale de los PERMISOS: cuando entre un cortador nuevo basta con darle acceso a
+    la plataforma y aparece aquí solo, sin tocar código.
+    """
+    return {"cortadores": svc.cortadores_inscritos()}
+
+
+class ReasignarResponsableBody(BaseModel):
+    responsable_email: Optional[str] = None
+    # Solo se usa si NO viene correo (dejar un nombre a mano, como antes).
+    responsable:       Optional[str] = None
+
+
+@router.patch("/corte/{oc_id}/responsable")
+def reasignar_responsable(
+    oc_id: str,
+    body: ReasignarResponsableBody,
+    user: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
+) -> dict:
+    """Cambia el cortador de una orden que todavía no se cortó.
+
+    Antes esto no existía: una orden asignada al cortador equivocado había que
+    borrarla y volverla a crear con todo (curva, trazos, indicaciones).
+    """
+    try:
+        oc = svc.reasignar_responsable_corte(
+            oc_id, responsable_email=body.responsable_email,
+            responsable=body.responsable, usuario=user.email)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    return {"ok": True, "orden": oc}
+
+
 @router.get("/corte/{oc_id}")
 def detalle_corte(
     oc_id: str,
@@ -1042,6 +1161,10 @@ def detalle_corte(
         raise HTTPException(404, "Orden de corte no encontrada")
     if _es_solo_cortador(user) and not _corte_es_del_cortador(oc, user):
         raise HTTPException(403, "Este corte no está asignado a ti")
+    # El historial de correos solo lo necesita esta pantalla. Va aquí y no en
+    # obtener_orden_corte, que se llama en 33 sitios (uno dentro de un bucle):
+    # ahí haría que cerrar un corte o avanzar un lote consultaran a Resend.
+    oc["correos"] = svc.listar_correos_corte(oc_id)
     return oc
 
 
@@ -1764,6 +1887,35 @@ def cambiar_etapa(
         raise HTTPException(400, str(e))
 
 
+class DevolverEtapaBody(BaseModel):
+    etapa: str
+    # Obligatorio a propósito: un retroceso sin explicación es indistinguible de
+    # un error nuevo cuando alguien lo revisa dos semanas después.
+    motivo: str = Field(min_length=3, max_length=300)
+
+
+@router.post("/rutas/{ruta_id}/devolver-etapa")
+def devolver_etapa(
+    ruta_id: str,
+    body: DevolverEtapaBody,
+    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+) -> dict:
+    """Devuelve un lote a una etapa anterior y borra los sellos que se deshacen.
+
+    Avanzar era un clic y devolverse no existía: el 19-ago un lote quedó marcado
+    como recibido en terminación por error y hubo que arreglarlo por base de
+    datos. Eso le va a pasar a un cortador un martes a las 3 de la tarde, y ahí
+    no va a haber nadie mirando la base.
+    """
+    try:
+        return svc.devolver_etapa_ruta(ruta_id, body.etapa,
+                                       motivo=body.motivo, usuario=user.email)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"devolver_etapa: {str(e)[:200]}")
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # HOJA DE RUTA · público (sin auth) — para el link del confeccionista
 # ═══════════════════════════════════════════════════════════════════════
@@ -1901,18 +2053,476 @@ def terminacion_publica(token: str) -> dict:
     }
 
 
+class RecibirTerminacionBody(BaseModel):
+    # Opcional para no romper el flujo si alguien confirma sin contar, pero es
+    # LA cifra que cierra la trazabilidad: comparada con lo que dice la remisión
+    # de lavandería, la diferencia es lo que se quedó en la lavandería.
+    cantidad: Optional[int] = None
+
+
 @publico.post("/terminacion/{token}/recibir")
-def recibir_terminacion_publica(token: str) -> dict:
-    """El proveedor de terminación confirma que ya recibió el lote."""
+def recibir_terminacion_publica(token: str,
+                                body: Optional[RecibirTerminacionBody] = None) -> dict:
+    """El proveedor de terminación confirma que ya recibió el lote, y cuántas.
+
+    La CANTIDAD es lo que cierra la cadena (Sebastián, 2026-08-19: «eso lo
+    averiguamos con lo que llega a terminación»). Antes el portal mostraba el
+    total esperado y no guardaba lo real, así que las prendas que se quedaban en
+    la lavandería eran invisibles hasta el inventario.
+    """
     r = svc.obtener_ruta_por_token_terminacion(token)
     if not r:
         raise HTTPException(404, "lote_no_encontrado")
     if r.get("etapa") in ("terminacion_recibida", "terminacion_terminada", "despachado"):
         raise HTTPException(400, f"ya_recibido:{r.get('etapa')}")
+    cant = (body.cantidad if body else None)
+    if cant is not None and (cant < 0 or cant > 100000):
+        raise HTTPException(400, "cantidad_fuera_de_rango")
     try:
-        return {"ok": True, "ruta": svc.cambiar_etapa_ruta(r["id"], "terminacion_recibida")}
+        ruta = svc.cambiar_etapa_ruta(r["id"], "terminacion_recibida")
+        cruce = None
+        if cant is not None:
+            cruce = svc.registrar_cantidad_terminacion(r["id"], cant)
+        return {"ok": True, "ruta": ruta, "cruce": cruce}
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# ── Espejo del grupo de WhatsApp de producción (fase 1) ──────────────────
+#
+# El equipo ya reporta la producción en un grupo de WhatsApp. La API oficial de
+# Meta no puede leer ese grupo (exige Official Business Account, tope de 8
+# participantes, y solo entra a grupos que ella misma crea), así que un oyente
+# corriendo en el servidor MDS —el mismo que ya hospeda el agente de impresión—
+# reenvía acá lo que se dice.
+#
+# FASE 1 NO INTERPRETA NADA. Solo guarda. El objetivo es tener el dato en
+# tiempo real y poder medir qué tan legible es lo que la gente escribe de
+# verdad, antes de invertir en que una IA lo lea y mueva estados de lotes.
+
+
+class MensajeGrupoIn(BaseModel):
+    wa_message_id:  str = Field(min_length=1, max_length=200)
+    autor_telefono: str = ""
+    autor_nombre:   str = ""
+    tipo:           str = "texto"
+    texto:          Optional[str] = None
+    media_url:      Optional[str] = None
+    enviado_en:     str                     # ISO 8601 con zona
+    crudo:          Optional[dict] = None
+
+
+class LoteMensajesGrupo(BaseModel):
+    grupo_id:     str = Field(min_length=1, max_length=200)
+    grupo_nombre: str = ""
+    # En lote y no de uno en uno: cuando el oyente se reconecta después de una
+    # caída manda el atraso completo, y una petición por mensaje sería una
+    # tormenta de HTTP por algo que cabe en una.
+    mensajes:     List[MensajeGrupoIn] = Field(min_length=1, max_length=200)
+
+
+def _verificar_secreto_oyente(request: Request) -> None:
+    """Fail-closed, igual que el webhook de Melonn.
+
+    Si la env var no está puesta el endpoint responde 503 en vez de aceptar
+    todo: un receptor abierto de mensajes internos es peor que uno caído.
+    """
+    esperado = os.environ.get("GRUPO_WA_SECRET", "").strip()
+    if not esperado:
+        raise HTTPException(503, "GRUPO_WA_SECRET no configurado en Railway")
+    recibido = (request.headers.get("X-Webhook-Secret") or "").strip()
+    # compare_digest y no == : evita filtrar el secreto por tiempo de respuesta.
+    if not hmac.compare_digest(recibido, esperado):
+        raise HTTPException(401, "secreto_invalido")
+
+
+@router.post("/grupo/mensajes")
+async def recibir_mensajes_grupo(body: LoteMensajesGrupo, request: Request) -> dict:
+    """Lo llama el oyente del grupo. No requiere sesión: se autentica por secreto."""
+    _verificar_secreto_oyente(request)
+    try:
+        res = svc.guardar_mensajes_grupo(
+            grupo_id=body.grupo_id,
+            grupo_nombre=body.grupo_nombre,
+            mensajes=[m.model_dump() for m in body.mensajes],
+        )
+        return {"ok": True, **res}
+    except Exception as e:
+        raise HTTPException(500, f"guardar_mensajes_grupo: {str(e)[:200]}")
+
+
+@router.get("/grupo/mensajes")
+def listar_mensajes_grupo(
+    limite: int = Query(default=100, ge=1, le=500),
+    desde:  str = Query(default=""),
+    buscar: str = Query(default=""),
+    _: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """El espejo, para verlo desde el OS."""
+    return {"mensajes": svc.listar_mensajes_grupo(
+        limite=limite, desde=desde, buscar=buscar)}
+
+
+class LatidoOyenteIn(BaseModel):
+    codigo_pareo: str = ""
+    conectado:    Optional[bool] = None
+    error:        str = ""
+    numero:       str = ""
+    # Los grupos que ve el número dedicado. Se reportan para poder elegir el
+    # correcto desde el OS en vez de adivinar un JID.
+    grupos:       Optional[list] = None
+
+
+@router.post("/grupo/latido")
+async def latido_oyente(body: LatidoOyenteIn, request: Request) -> dict:
+    """Señal de vida del oyente, y el canal por el que publica el código de pareo.
+
+    Que el código llegue por acá es lo que evita tener que entrar al servidor:
+    WhatsApp pide un código de 8 caracteres para vincular por número, el oyente
+    lo publica y el OS lo muestra. Quien vincula lo lee en el celular que ya
+    tiene en la mano.
+    """
+    _verificar_secreto_oyente(request)
+    try:
+        return svc.latido_oyente_grupo(
+            codigo_pareo=body.codigo_pareo, conectado=body.conectado,
+            error=body.error, numero=body.numero, grupos=body.grupos)
+    except Exception as e:
+        raise HTTPException(500, f"latido_oyente: {str(e)[:200]}")
+
+
+@router.get("/grupo/estado")
+def estado_grupo(_: CurrentUser = Depends(get_current_user)) -> dict:
+    """¿Sigue vivo el oyente, y hay algo que vincular?"""
+    return svc.estado_oyente_grupo()
+
+
+class MediaGrupoIn(BaseModel):
+    wa_message_id: str = Field(min_length=1, max_length=200)
+    mime:          str = ""
+    nombre:        str = ""
+    # base64 y no multipart: el oyente es un script de Node en el servidor de la
+    # oficina, y armar multipart a mano ahí es más frágil que pagar el 33% de
+    # más que cuesta base64 en una foto de celular.
+    contenido_b64: str = Field(min_length=1)
+
+
+# Tope de tamaño. Una remisión fotografiada con un celular pesa 1-4 MB; 15 MB
+# deja margen de sobra y evita que un video suba por accidente.
+_MAX_MEDIA_MB = 15
+
+
+@router.post("/grupo/media")
+async def recibir_media_grupo(body: MediaGrupoIn, request: Request) -> dict:
+    """El archivo de un mensaje del grupo (la foto de la remisión).
+
+    Lo manda el oyente, autenticado por el mismo secreto que los mensajes. Sube
+    el archivo el backend para que la llave de Supabase no viva en el servidor
+    de la oficina.
+    """
+    _verificar_secreto_oyente(request)
+    import base64
+    try:
+        crudo = base64.b64decode(body.contenido_b64, validate=True)
+    except Exception:
+        raise HTTPException(400, "base64_invalido")
+    if len(crudo) > _MAX_MEDIA_MB * 1024 * 1024:
+        raise HTTPException(413, f"archivo_muy_grande (max {_MAX_MEDIA_MB} MB)")
+    try:
+        return {"ok": True, **svc.guardar_media_grupo(
+            wa_message_id=body.wa_message_id, file_bytes=crudo,
+            mime=body.mime, nombre=body.nombre)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"guardar_media_grupo: {str(e)[:200]}")
+
+
+class UsarComoRemisionIn(BaseModel):
+    ruta_id:     str = ""
+    consecutivo: str = ""   # consecutivo de corte o código de referencia
+
+
+@router.post("/grupo/mensajes/{wa_message_id}/usar-como-remision")
+def usar_como_remision(
+    wa_message_id: str,
+    body: UsarComoRemisionIn,
+    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+) -> dict:
+    """Declara que la foto de ese mensaje del grupo ES la remisión de un lote.
+
+    El paso lo da una persona a propósito. Una foto sin pie de foto no dice a
+    qué lote pertenece; que la IA lo adivinara movería producción con una
+    suposición. El OS captura la foto solo, el humano solo confirma cuál lote.
+    """
+    from backend.services import lavanderia_chase as lav
+    ruta_id = body.ruta_id.strip()
+    if not ruta_id and body.consecutivo.strip():
+        hallado = lav.resolver_lote(body.consecutivo.strip())
+        if hallado["ambiguo"]:
+            raise HTTPException(409, "varios_lotes_de_esa_referencia: "
+                                     + ", ".join(hallado["ambiguo"][:6]))
+        if hallado["ruta"]:
+            ruta_id = hallado["ruta"]["id"]
+    if not ruta_id:
+        raise HTTPException(404, "lote_no_encontrado")
+    try:
+        return svc.usar_media_grupo_como_remision(
+            wa_message_id=wa_message_id, ruta_id=ruta_id, usuario=user.email)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"usar_como_remision: {str(e)[:200]}")
+
+
+# ── Persecución de la remisión de lavandería · LOS DOS RELOJES ───────────
+#
+# Cuando el diseñador dice en el grupo que un lote sale para lavandería, el OS
+# abre una persecución. Son dos relojes porque «sale para lavandería» NO
+# significa que la lavandería lo tenga: primero se confirma la recogida, y solo
+# después se pide la remisión (que es la que libera el pago de la semana).
+#
+# Nada de esto mueve la etapa del lote. Leer un chat es una suposición; la etapa
+# la firma quien tiene el lote en la mano, desde su propio enlace.
+
+@router.get("/lavanderia/pendientes")
+def lavanderia_pendientes(
+    estado: str = Query(default="abierto",
+                        description="abierto | escalado | cerrado | anulado | todos"),
+    _: CurrentUser = Depends(get_current_user),
+) -> dict:
+    from backend.core import produccion_scheduler
+    from backend.services import lavanderia_chase as lav
+    return {
+        "pendientes":   lav.listar(estado=estado),
+        "resumen":      lav.resumen(),
+        "reloj":        produccion_scheduler.status_lavanderia(),
+        # Si esto viene en False, el motor calcula y registra pero NO le escribe
+        # a nadie. Sirve para verlo correr un día antes de soltarlo.
+        "envio_activo": lav.activo(),
+        "cadencia": {
+            "gracia_min":            lav.GRACIA_MIN(),
+            "intervalo_horas":       lav.INTERVALO_HORAS(),
+            "recogida_escala_dias":  lav.RECOGIDA_ESCALA_DIAS(),
+            "remision_gracia_horas": lav.REMISION_GRACIA_HORAS(),
+            "remision_escala_dias":  lav.REMISION_ESCALA_DIAS(),
+        },
+    }
+
+
+class AnularPendienteIn(BaseModel):
+    motivo: str = "la detección se equivocó"
+
+
+@router.post("/lavanderia/pendientes/{pendiente_id}/anular")
+def anular_pendiente_lavanderia(
+    pendiente_id: str,
+    body: AnularPendienteIn,
+    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+) -> dict:
+    """El lote no salió, o salió a otra parte. Se ANULA, no se cierra: cerrado
+    significa «se cumplió» y anulado «no debió existir». La diferencia importa
+    para poder medir después qué tan bien lee el grupo la detección."""
+    from backend.services import lavanderia_chase as lav
+    ok = lav.anular_pendiente(pendiente_id, motivo=body.motivo, por=user.email)
+    if not ok:
+        raise HTTPException(404, "no_encontrado_o_ya_cerrado")
+    return {"ok": True}
+
+
+class AbrirPendienteIn(BaseModel):
+    consecutivo:    str = ""
+    orden_corte_id: str = ""
+    reloj:          str = "recogida"
+
+
+@router.post("/lavanderia/pendientes")
+def abrir_pendiente_lavanderia(
+    body: AbrirPendienteIn,
+    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+) -> dict:
+    """Abrir la persecución a mano, para cuando el grupo no lo dijo (o lo dijo
+    de una forma que la detección no entendió)."""
+    from backend.services import lavanderia_chase as lav
+    if body.reloj not in ("recogida", "remision"):
+        raise HTTPException(400, "reloj_invalido")
+    ruta = None
+    if body.orden_corte_id:
+        ruta = svc.obtener_ruta_por_corte(body.orden_corte_id)
+    elif body.consecutivo.strip():
+        # Acepta consecutivo (2608-0007) o código de referencia (96616-1), que
+        # es como habla el grupo de verdad.
+        hallado = lav.resolver_lote(body.consecutivo.strip())
+        if hallado["ambiguo"]:
+            raise HTTPException(409, "varios_lotes_de_esa_referencia: "
+                                     + ", ".join(hallado["ambiguo"][:6]))
+        ruta = hallado["ruta"]
+    if not ruta:
+        raise HTTPException(404, "lote_no_encontrado")
+    r = lav.abrir_pendiente(ruta=ruta, reloj=body.reloj, origen="manual",
+                            creado_por=user.email)
+    if not r.get("abierto"):
+        raise HTTPException(409, r.get("motivo") or "no_se_pudo_abrir")
+    return r
+
+
+@router.post("/lavanderia/reprocesar-espejo")
+def reprocesar_espejo_lavanderia(
+    limite: int = Query(default=200, ge=1, le=500),
+    desde:  str = Query(default=""),
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+) -> dict:
+    """Vuelve a leer mensajes YA guardados del grupo con la detección de hoy.
+
+    Hace falta cuando la detección mejora: los mensajes que decían «Ref 96616-1»
+    entraron cuando el código solo entendía consecutivos y no abrieron nada. El
+    espejo guarda el original justamente para poder volver sobre él. Repetirlo es
+    seguro: no abre dos veces por el mismo mensaje.
+    """
+    from backend.services import lavanderia_chase as lav
+    return lav.reprocesar_espejo(limite=limite, desde=desde)
+
+
+@router.get("/lavanderia/descuadres")
+def lavanderia_descuadres(_: CurrentUser = Depends(get_current_user)) -> dict:
+    """Lotes donde las cifras no cuadran — ahí están las prendas que faltan.
+
+    Cruza tres cifras que son distintas a propósito: lo que salió de corte, lo
+    que dice la remisión, y lo que la lavandería confirma. La diferencia entre
+    dos de ellas es el número de prendas que hay que ir a buscar, y buscarlas
+    sirve mientras el rastro está fresco.
+    """
+    from backend.services import lavanderia_chase as lav
+    filas = lav.descuadres()
+    return {"descuadres": filas,
+            "total_faltantes": sum(f.get("faltan") or 0 for f in filas)}
+
+
+@router.get("/lavanderia/cruce/{ruta_id}")
+def lavanderia_cruce(ruta_id: str, _: CurrentUser = Depends(get_current_user)) -> dict:
+    from backend.services import lavanderia_chase as lav
+    return lav.cruce_cantidades(ruta_id)
+
+
+@router.post("/lavanderia/barrido")
+def correr_barrido_lavanderia(
+    _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+) -> dict:
+    """Corre los dos relojes ahora mismo, sin esperar el tick. Para probar y
+    para desatascar si el hilo del líder se cayó."""
+    from backend.services import lavanderia_chase as lav
+    return lav.barrer()
+
+
+# ── Lavandería (público) ─────────────────────────────────────────────────
+#
+# POR QUÉ EXISTE (2026-08-18). La pregunta era "¿cómo traemos la información del
+# grupo de WhatsApp?". La API oficial de grupos de Meta no sirve para el grupo
+# que ya existe: exige Official Business Account, tope de 8 participantes, y
+# solo funciona con grupos creados por la propia API. Así que en vez de leer el
+# chat, el dato entra por donde ya entra el de confección y terminación: un
+# enlace con token que la lavandería abre desde el celular.
+#
+# La diferencia con leer el grupo no es solo técnica. Acá cada hecho queda con
+# autor, hora y lote; en el chat queda un "ya salió" que hay que interpretar.
+
+
+@publico.get("/lavanderia/{token}")
+def lavanderia_publica(token: str) -> dict:
+    """Vista para la lavandería. Sin precios ni datos del confeccionista."""
+    r = svc.obtener_ruta_por_token_lavanderia(token)
+    if not r:
+        raise HTTPException(404, "lote_no_encontrado")
+
+    oc = r.get("orden_corte") or {}
+    ref = oc.get("referencia") or {}
+    total = 0
+    if oc.get("unidades_cortadas"):
+        total = sum(int(v or 0) for v in (oc.get("unidades_cortadas") or {}).values())
+    if total == 0:
+        total = int(oc.get("cantidad_programada") or 0)
+
+    return {
+        "consecutivo":       oc.get("consecutivo"),
+        "referencia_codigo": ref.get("codigo_referencia"),
+        "referencia_nombre": ref.get("nombre"),
+        "tela":              ref.get("tela"),
+        "color":             ref.get("color"),
+        "foto_url":          ref.get("foto_url"),
+        "referencia_lote":   oc.get("referencia_lote"),
+        "curva":             oc.get("curva_trazo"),
+        "unidades_cortadas": oc.get("unidades_cortadas"),
+        "total_unidades":    total,
+        "lavanderia_nombre": (r.get("lavanderia") or {}).get("nombre"),
+        "etapa":             r.get("etapa"),
+        "recibido_at":       r.get("lav_recibido_at"),
+        "entregado_at":      r.get("lav_entregado_at"),
+        "cantidad_recibida":  r.get("lav_cantidad_recibida"),
+        "cantidad_entregada": r.get("lav_cantidad_entregada"),
+        "fecha_estimada":    r.get("lav_fecha_estimada"),
+        "tiene_remision":    bool(r.get("remision_lavanderia_url")),
+    }
+
+
+class LavanderiaBody(BaseModel):
+    accion:   str                              # 'recibi' | 'entregue'
+    cantidad: Optional[int] = Field(default=None, ge=0)
+    nota:     str = Field(default="", max_length=2000)
+    # Solo tiene sentido al recibir: cuándo promete entregarlo.
+    fecha_estimada: str = Field(default="", max_length=10)
+
+
+@publico.post("/lavanderia/{token}/registrar")
+def registrar_lavanderia_publica(token: str, body: LavanderiaBody) -> dict:
+    """La lavandería confirma que recibió o que entregó el lote."""
+    r = svc.obtener_ruta_por_token_lavanderia(token)
+    if not r:
+        raise HTTPException(404, "lote_no_encontrado")
+    # Idempotente: si vuelve a tocar el botón no se duplica ni se mueve la hora
+    # original. Un doble toque en un celular es lo normal, no un error.
+    ya = r.get("lav_recibido_at") if body.accion == "recibi" else r.get("lav_entregado_at")
+    if ya:
+        raise HTTPException(400, f"ya_registrado:{body.accion}")
+    if body.accion == "entregue" and not r.get("lav_recibido_at"):
+        raise HTTPException(400, "primero_recibir")
+    try:
+        svc.lavanderia_registrar(
+            r["id"], accion=body.accion, cantidad=body.cantidad,
+            nota=body.nota, fecha_estimada=body.fecha_estimada.strip(),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"registrar_lavanderia: {str(e)[:200]}")
+    return {"ok": True}
+
+
+@publico.post("/lavanderia/{token}/remision")
+async def subir_remision_lavanderia_publica(
+    token: str,
+    archivo: UploadFile = File(...),
+) -> dict:
+    """La lavandería sube la foto o el PDF de su remisión.
+
+    Reusa el mismo servicio que usa el equipo desde adentro, así que sube al
+    mismo bucket, con el mismo nombre de archivo, y avanza la etapa igual. No
+    hay dos caminos que puedan quedar distintos.
+    """
+    r = svc.obtener_ruta_por_token_lavanderia(token)
+    if not r:
+        raise HTTPException(404, "lote_no_encontrado")
+    try:
+        datos = await archivo.read()
+        res = svc.subir_remision_lavanderia(
+            r["id"], file_bytes=datos,
+            filename=archivo.filename or "remision.jpg",
+            content_type=archivo.content_type or "image/jpeg",
+        )
+        return {"ok": True, "url": res.get("remision_lavanderia_url")}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"remision_lavanderia_publica: {str(e)[:200]}")
 
 
 # ── Notas del confeccionista y del proveedor de terminación (público)
@@ -2424,6 +3034,14 @@ _AGENTE_ARCHIVOS = {
     # Instalador de una linea: se eleva solo y deja la tarea siempre viva.
     #   irm <BASE>/api/produccion/agente/instalar.ps1 | iex
     "instalar.ps1": "text/plain; charset=utf-8",
+    # Oyente del grupo de WhatsApp. Se sirve igual que el agente de impresión
+    # para que instalarlo sea UNA línea en el servidor y no copiar carpetas:
+    #   irm <BASE>/api/produccion/agente/instalar_oyente.ps1 | iex
+    # Son scripts sin secretos: el secreto lo pide el instalador y queda solo
+    # en el .env del servidor, nunca en un archivo público.
+    "instalar_oyente.ps1": "text/plain; charset=utf-8",
+    "oyente.js":           "text/plain; charset=utf-8",
+    "package.json":        "application/json; charset=utf-8",
 }
 
 

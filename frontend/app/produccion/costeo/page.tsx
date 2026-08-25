@@ -8,6 +8,7 @@
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { api } from "@/lib/api";
+import { CasillaBusqueda, useBusqueda } from "@/components/buscador";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { KpiCard } from "@/components/kpi-card";
@@ -18,8 +19,10 @@ interface DsInfo {
   fecha: string;
   proveedor?: string;
   cantidad: number;
-  valor_unitario: number;
-  total_real: number;
+  valor_unitario: number;      // solo CONFECCIÓN: es lo comparable con el precosteo
+  total_confeccion?: number;
+  total_real: number;          // TODOS los procesos facturados del lote
+  conceptos?: string[];
   saldo_por_pagar: number;
 }
 
@@ -35,6 +38,9 @@ interface Lote {
   ds?: DsInfo | null;
   estado: string; // ok | sin_ds | sin_asignar | precio_distinto | cantidad_distinta
   desviacion?: number;
+  /** El margen real va a medias: faltan facturas de algún proceso. */
+  margen_real_parcial?: boolean;
+  conceptos_faltantes?: string[];
   // Margen planeado vs real (llega del backend cuando el precosteo tiene precio de venta).
   precio_venta_final?: number;
   costo_planeado_prenda?: number;
@@ -49,10 +55,14 @@ interface Respuesta {
   mensaje?: string;
   resumen?: {
     lotes: number; con_ds: number; ok: number; con_alerta: number;
-    total_teorico: number; total_real: number; desviacion: number;
+    total_teorico: number; total_real: number; total_procesos?: number; desviacion: number;
+    pendiente_facturar?: number; lotes_facturados?: number;
   };
   lotes?: Lote[];
-  ds_sin_lote?: { ds: string; fecha: string; proveedor?: string; descripcion: string; total: number }[];
+  ds_sin_lote?: { ds: string; fecha: string; proveedor?: string; descripcion: string;
+                  concepto?: string; ref?: string; motivo?: string; total: number }[];
+  /** Documentos que quedaron FUERA de la lista: referencias que el OS no maneja. */
+  ajenos?: { documentos: number; total: number };
   alertas?: { tipo: string; severidad: string; mensaje: string }[];
 }
 
@@ -77,6 +87,17 @@ export default function CosteoRealPage() {
     queryFn: () => api.get("/api/produccion/costeo-real"),
     staleTime: 5 * 60_000,
   });
+
+  // LOS HOOKS VAN ANTES DE CUALQUIER RETURN. Este estaba debajo del
+  // `isLoading` y eso es una llamada condicional a un hook: en el render donde
+  // llegan los datos aparece un hook que antes no estaba, y React revienta con
+  // "Rendered more hooks than during the previous render". El build NO lo marca
+  // —compila igual— y la pantalla queda en blanco: "Application error".
+  // Se lee de `q.data?` y no de `data`, que se define más abajo: acá arriba
+  // todavía no existe, y el hook tiene que quedar antes del return.
+  const lotes = q.data?.lotes || [];
+  const { q: busca, setQ: setBusca, filtrados } = useBusqueda(
+    lotes, (l) => [l.consecutivo, l.referencia, l.confeccionista, l.estado]);
 
   if (q.isLoading) return <LoadingState label="Cruzando lotes con Siigo… (puede tardar unos segundos)" />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
@@ -124,9 +145,9 @@ export default function CosteoRealPage() {
     lotes: 0, con_ds: 0, ok: 0, con_alerta: 0,
     total_teorico: 0, total_real: 0, desviacion: 0,
   };
-  const lotes = data.lotes || [];
   const alertas = data.alertas || [];
   const dsSinLote = data.ds_sin_lote || [];
+  const ajenos = data.ajenos;
 
   return (
     <PageShell title="Costeo real" subtitle="Precosteo vs Documentos Soporte de Siigo (confección)">
@@ -134,7 +155,13 @@ export default function CosteoRealPage() {
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <KpiCard label="Lotes cruzados" value={`${r.con_ds}/${r.lotes}`} meta="con documento soporte" accent="navy" />
         <KpiCard label="Costo teórico" value={money(r.total_teorico)} accent="steel" />
-        <KpiCard label="Costo real (DS)" value={money(r.total_real)} accent="teal" />
+        <KpiCard label="Real confección" value={money(r.total_real)} accent="teal" />
+        <KpiCard label="Otros procesos facturados"
+          value={money(Math.max((r.total_procesos ?? r.total_real) - r.total_real, 0))} />
+        {/* Lo que falta por facturar NO es desviación: es plata que todavía no
+            llega. Mezclarlas mostraba un "ahorro" de millones que no existe. */}
+        <KpiCard label="Confección pendiente por facturar"
+          value={money(r.pendiente_facturar ?? 0)} />
         <KpiCard label="Desviación" value={money(r.desviacion)}
           variant={Math.abs(r.desviacion) > 0.01 * Math.max(r.total_teorico, 1) ? "danger" : "success"} />
         <KpiCard label="Alertas" value={alertas.length}
@@ -161,10 +188,15 @@ export default function CosteoRealPage() {
       {/* Tabla lotes */}
       <Card>
         <CardContent className="p-0">
-          <div className="px-5 py-3 border-b border-border">
+          <div className="space-y-3 px-5 py-3 border-b border-border">
             <p className="section-label">Lotes · teórico vs contabilizado</p>
+            <CasillaBusqueda
+              valor={busca} onChange={setBusca}
+              placeholder="Buscar lote por referencia, consecutivo o confeccionista…"
+              visibles={filtrados.length} total={lotes.length}
+            />
           </div>
-          {lotes.length === 0 ? (
+          {filtrados.length === 0 ? (
             <p className="p-8 text-center text-xs text-graphite">No hay lotes cortados aún.</p>
           ) : (
             <div className="overflow-x-auto">
@@ -179,7 +211,8 @@ export default function CosteoRealPage() {
                     <th className="px-4 py-2 text-right">Total teórico</th>
                     <th className="px-4 py-2">DS Siigo</th>
                     <th className="px-4 py-2 text-right">$ Pagado</th>
-                    <th className="px-4 py-2 text-right">Total real</th>
+                    <th className="px-4 py-2 text-right">Real confección</th>
+                    <th className="px-4 py-2 text-right">Otros procesos</th>
                     <th className="px-4 py-2 text-right">Desviación</th>
                     <th className="px-4 py-2 text-right">Margen plan.</th>
                     <th className="px-4 py-2 text-right">Margen real</th>
@@ -187,7 +220,7 @@ export default function CosteoRealPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {lotes.map((l) => {
+                  {filtrados.map((l) => {
                     const ui = ESTADO_UI[l.estado] || ESTADO_UI.sin_asignar;
                     return (
                       <tr key={l.orden_corte_id} className="border-b border-border/40 hover:bg-cloud/30">
@@ -203,15 +236,34 @@ export default function CosteoRealPage() {
                         <td className="px-4 py-2 text-right tabular font-semibold">{money(l.total_teorico)}</td>
                         <td className="px-4 py-2 tabular text-graphite">{l.ds?.ds || "—"}</td>
                         <td className="px-4 py-2 text-right tabular">{l.ds ? money(l.ds.valor_unitario) : "—"}</td>
-                        <td className="px-4 py-2 text-right tabular font-semibold">{l.ds ? money(l.ds.total_real) : "—"}</td>
+                        <td className="px-4 py-2 text-right tabular font-semibold">
+                          {l.ds ? money(l.ds.total_confeccion ?? 0) : "—"}
+                        </td>
+                        <td className="px-4 py-2 text-right tabular text-graphite">
+                          {l.ds
+                            ? <span title={(l.ds.conceptos || []).join(", ")}>
+                                {money(l.ds.total_real - (l.ds.total_confeccion ?? 0))}
+                              </span>
+                            : "—"}
+                        </td>
                         <td className={`px-4 py-2 text-right tabular font-bold ${(l.desviacion || 0) > 0 ? "text-terracotta" : (l.desviacion || 0) < 0 ? "text-sage" : "text-graphite"}`}>
                           {l.desviacion != null ? money(l.desviacion) : "—"}
                         </td>
                         <td className="px-4 py-2 text-right tabular">{pct(l.margen_planeado)}</td>
                         <td className="px-4 py-2 text-right tabular font-semibold">
                           {l.margen_real == null ? <span className="text-graphite">—</span> : (
-                            <span className={l.margen_real < 0 ? "text-terracotta" : l.margen_real < 50 ? "text-amber-600" : "text-sage"}>
+                            <span
+                              className={l.margen_real_parcial
+                                ? "text-graphite"
+                                : (l.margen_real < 0 ? "text-terracotta" : l.margen_real < 50 ? "text-amber-600" : "text-sage")}
+                              title={l.margen_real_parcial
+                                ? `Provisional: faltan facturas de ${(l.conceptos_faltantes || []).join(", ")}. Mientras falten, el margen sale mejor de lo real.`
+                                : undefined}
+                            >
                               {l.margen_real.toFixed(1)}%
+                              {l.margen_real_parcial && (
+                                <span className="ml-1 text-[0.6rem] uppercase tracking-wider">prov.</span>
+                              )}
                             </span>
                           )}
                         </td>
@@ -234,7 +286,11 @@ export default function CosteoRealPage() {
       {dsSinLote.length > 0 && (
         <Card>
           <CardContent className="p-5 space-y-2">
-            <p className="section-label">Documentos soporte sin lote en el OS ({dsSinLote.length})</p>
+            <p className="section-label">Facturas de proceso sin cruzar ({dsSinLote.length})</p>
+            <p className="text-[0.68rem] leading-snug text-graphite">
+              Solo documentos que pueden ser de tus referencias. Los de producción
+              anterior al OS no se listan.
+            </p>
             <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <tbody>
@@ -243,16 +299,29 @@ export default function CosteoRealPage() {
                     <td className="py-1.5 font-semibold tabular text-navy-600">{d.ds}</td>
                     <td className="py-1.5 tabular text-graphite">{d.fecha}</td>
                     <td className="py-1.5 text-ink-900">{d.proveedor || "—"}</td>
-                    <td className="py-1.5 text-graphite truncate max-w-[300px]">{d.descripcion}</td>
+                    <td className="py-1.5 text-graphite truncate max-w-[280px]">{d.descripcion}</td>
+                    <td className="py-1.5 text-[0.65rem] uppercase tracking-wider text-graphite">
+                      {d.motivo === "sin_referencia_legible"
+                        ? <span title="La API de Siigo no devuelve la referencia escrita en los documentos soporte. Solo se puede atribuir si proveedor + proceso + cantidad señalan un único lote.">sin referencia</span>
+                        : d.motivo === "ref_del_os_sin_lote"
+                          ? <span title="La referencia existe en el OS pero no tiene lote cortado.">ref sin lote</span>
+                          : ""}
+                    </td>
                     <td className="py-1.5 text-right tabular font-semibold">{money(d.total)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
             </div>
-            <p className="text-[0.65rem] text-graphite">
-              Pueden ser lotes viejos (antes del OS), REF mal escrita en Siigo, o pagos de terminación/lavandería.
-            </p>
+            {/* Lo que se dejó fuera, contado. Una lista podada en silencio se lee
+                como "no hay nada más", que es peor que la lista larga. */}
+            {!!ajenos?.documentos && (
+              <p className="text-[0.65rem] text-graphite">
+                Además hay {ajenos.documentos} documento(s) por {money(ajenos.total)} de
+                referencias que el OS no maneja (producción anterior al sistema): no se
+                listan aquí a propósito.
+              </p>
+            )}
           </CardContent>
         </Card>
       )}

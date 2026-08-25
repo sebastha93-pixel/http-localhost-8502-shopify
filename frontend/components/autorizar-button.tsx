@@ -44,8 +44,14 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
   const [feedback, setFeedback] = useState<"idle" | "confirm" | "ok" | "error">("idle");
   const [msg, setMsg] = useState<string>("");
 
-  // Botón oculto si el usuario es solo lectura
-  if (!puedeEscribir(user)) return null;
+  // Botón oculto si el usuario es solo lectura. El `return null` va DESPUÉS de
+  // los hooks, no antes: `user` llega vacío en el primer render y se llena
+  // cuando responde la sesión, así que un return acá arriba cambia el número de
+  // hooks entre un render y el siguiente y React tumba la pantalla completa
+  // ("Rendered more hooks than during the previous render"). La consulta sí se
+  // apaga con `enabled`, que es lo que de verdad importa: sin permiso no se
+  // pide nada al backend.
+  const puede = puedeEscribir(user);
 
   const orden = pedido.orden_melonn;
 
@@ -54,7 +60,7 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
   const flowQ = useQuery<AccionFlow>({
     queryKey: ["cod-accion", orden],
     queryFn: () => api.get(`/api/cod-acciones/${orden}`),
-    enabled: !!orden,
+    enabled: !!orden && puede,
     staleTime: 5_000,
   });
 
@@ -88,6 +94,9 @@ export function AutorizarDespachoButton({ pedido }: { pedido: Pedido }) {
       setMsg(err.message);
     },
   });
+
+  // Ya pasaron todos los hooks: acá sí se puede salir sin desbalancear nada.
+  if (!puede) return null;
 
   if (feedback === "ok") {
     return (

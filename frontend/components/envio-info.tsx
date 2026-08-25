@@ -5,7 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
 import { puedeEscribir } from "@/lib/auth";
-import { Pedido } from "@/lib/types";
+import { Pedido, SubEstadoLogistico } from "@/lib/types";
 import { trackingUrl } from "@/lib/carriers";
 import {
   Truck, ExternalLink, Copy, Check, Edit3, Loader2, X,
@@ -29,15 +29,16 @@ const CARRIERS: CarrierDef[] = [
 // Etiquetas para los pedidos SIN guía (entregas locales del área metropolitana
 // de Medellín). Ahí la transportadora es un mensajero que no emite número, así
 // que lo único que se puede mostrar es en qué estado va.
-const ESTADO_ENVIO: Record<string, string> = {
+// Partial<Record<SubEstadoLogistico, …>>: "otro" cae al fallback de abajo, y
+// tipar las claves impide volver a listar estados que el backend no emite
+// (antes había "devuelto" y "cancelado", ambos muertos).
+const ESTADO_ENVIO: Partial<Record<SubEstadoLogistico, string>> = {
   pendiente_despacho: "Pendiente de despacho",
   // En la bodega de Melonn (empacando o listo), todavía NO salió.
   en_preparacion: "En preparación en bodega",
   en_transito: "En tránsito",
   entregado: "Entregado",
   novedad: "Con novedad",
-  devuelto: "Devuelto",
-  cancelado: "Cancelado",
 };
 
 

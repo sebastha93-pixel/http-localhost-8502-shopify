@@ -56,9 +56,56 @@ interface Precosteo {
   bloqueada: boolean;
   autorizada_por?: string;
   fecha_autorizacion?: string;
+  created_by?: string;
+  created_at?: string;
   es_muestra_diseno?: boolean;
   instrucciones_lavado?: string;
   items: Item[];
+}
+
+/** Quién hizo el precosteo y cuándo, quién lo autorizó y cuándo, y cuánto tardó.
+ *
+ *  POR QUÉ (Sebastián, 2026-08-20): «en los precosteos no hay trazabilidad de
+ *  fechas de cuándo se autorizó ni cuándo se hizo». El dato SÍ existía y estaba
+ *  completo —los 23 precosteos tienen las cuatro columnas llenas— pero la
+ *  pantalla solo mostraba quién autorizó, sin ninguna fecha. Viajaba desde la
+ *  base y se descartaba al pintar.
+ *
+ *  Los días que pasan sin autorizar se muestran aparte porque son los
+ *  accionables: hasta que no se autoriza, el diseñador no puede crear la orden
+ *  de corte y el lote no arranca. */
+function TrazaPrecosteo({ p }: { p: Precosteo }) {
+  const fmt = (iso?: string) =>
+    iso ? new Date(iso).toLocaleDateString("es-CO",
+      { day: "2-digit", month: "2-digit", year: "2-digit" }) : "—";
+  const dias = (a?: string, b?: string) => {
+    if (!a || !b) return null;
+    return Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86400000);
+  };
+  const tardo = dias(p.created_at, p.fecha_autorizacion);
+  const esperando = p.fecha_autorizacion ? null : dias(p.created_at, new Date().toISOString());
+
+  return (
+    <span className="text-[0.68rem] text-graphite">
+      {p.created_at && (
+        <>Creado {fmt(p.created_at)}{p.created_by ? ` · ${p.created_by.split("@")[0]}` : ""}</>
+      )}
+      {p.fecha_autorizacion && (
+        <> · Autorizado {fmt(p.fecha_autorizacion)}
+          {tardo !== null && (
+            <span className="text-ink-900 font-medium">
+              {tardo <= 0 ? " (mismo día)" : ` (${tardo} día${tardo === 1 ? "" : "s"} después)`}
+            </span>
+          )}
+        </>
+      )}
+      {esperando !== null && esperando >= 1 && (
+        <span className="text-terracotta font-semibold">
+          {" "}· sin autorizar hace {esperando} día{esperando === 1 ? "" : "s"}
+        </span>
+      )}
+    </span>
+  );
 }
 
 export default function PrecosteoDetallePage() {
@@ -298,6 +345,7 @@ export default function PrecosteoDetallePage() {
           ) : (
             <Badge tone="pendiente">Borrador · editable</Badge>
           )}
+          <TrazaPrecosteo p={p} />
           {puedeCrear && !editando && (
             <button onClick={() => duplicarMut.mutate()} disabled={duplicarMut.isPending}
               title="Crear un borrador nuevo a partir de este (para reprogramar o una referencia parecida)"

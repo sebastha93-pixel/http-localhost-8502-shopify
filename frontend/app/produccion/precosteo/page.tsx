@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { esAdmin } from "@/lib/auth";
@@ -10,6 +10,7 @@ import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Lock, Sheet, Loader2, CheckCircle, Trash2, AlertCircle } from "lucide-react";
+import { CasillaBusqueda, useBusqueda } from "@/components/buscador";
 
 interface Ref {
   id: string;
@@ -97,17 +98,34 @@ export default function PrecosteoListPage() {
     onError: (e: Error) => setSyncMsg(`Error: ${e.message}`),
   });
 
+  // LOS HOOKS VAN ANTES DE CUALQUIER RETURN. Estaban debajo del
+  // `if (isLoading) return …` y eso es una llamada condicional a un hook: en el
+  // render donde llegan los datos aparece un hook que antes no estaba y React
+  // revienta con "Rendered more hooks than during the previous render". El build
+  // NO lo marca —compila igual— y la pantalla queda en blanco con
+  // "Application error: a client-side exception has occurred".
+  const rows = q.data?.precosteos || [];
+  const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(
+    rows, (r) => [r.codigo_referencia, r.nombre, r.tela, r.color]);
+
   if (q.isLoading) return <LoadingState label="Cargando precosteos…" />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
-  const rows = q.data?.precosteos || [];
 
   return (
     <PageShell
       title="Precosteo"
-      subtitle={`${rows.length} referencias · costeo por unidad`}
+      subtitle={busca
+        ? `${filtrados.length} de ${rows.length} referencias · «${busca}»`
+        : `${rows.length} referencias · costeo por unidad`}
       onRefresh={() => q.refetch()}
     >
+      <CasillaBusqueda
+        valor={busca} onChange={setBusca}
+        placeholder="Buscar referencia por código, nombre, tela o color…"
+        visibles={filtrados.length} total={rows.length}
+      />
+
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           {["", "borrador", "autorizada"].map((e) => (
@@ -158,10 +176,29 @@ export default function PrecosteoListPage() {
 
       <Card>
         <CardContent className="p-0">
-          {rows.length === 0 ? (
-            <p className="p-8 text-center text-sm text-graphite">
-              Sin precosteos registrados. Empieza con "Nueva referencia".
-            </p>
+          {filtrados.length === 0 ? (
+            /* Dos vacíos distintos. "No hay nada" y "tu búsqueda no encontró
+               nada" se resuelven de formas opuestas: uno se arregla creando una
+               referencia, el otro borrando lo que escribiste. Un solo mensaje
+               para los dos manda a la persona al lado equivocado. */
+            busca ? (
+              <div className="p-8 text-center">
+                <p className="text-sm text-graphite">
+                  Ninguna referencia coincide con «{busca}».
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setBusca("")}
+                  className="mt-2 text-xs font-semibold uppercase tracking-wider text-navy-600 hover:underline"
+                >
+                  Ver las {rows.length} referencias
+                </button>
+              </div>
+            ) : (
+              <p className="p-8 text-center text-sm text-graphite">
+                Sin precosteos registrados. Empieza con &quot;Nueva referencia&quot;.
+              </p>
+            )
           ) : (
             <table className="w-full text-sm">
               <thead className="bg-cloud/60 border-b border-border">
@@ -173,12 +210,15 @@ export default function PrecosteoListPage() {
                   <th className="px-4 py-3 text-right">Precio venta</th>
                   <th className="px-4 py-3 text-right">Margen</th>
                   <th className="px-4 py-3">Insumos confección</th>
+                  {/* Fechas: el dato existía en la base y nunca se mostró. */}
+                  <th className="px-4 py-3">Creado</th>
+                  <th className="px-4 py-3">Autorizado</th>
                   <th className="px-4 py-3">Estado</th>
                   {admin && <th className="px-4 py-3 text-right">Acción</th>}
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {filtrados.map((r) => (
                   <tr key={r.id} className="border-b border-border hover:bg-cloud/50">
                     <td className="px-4 py-3 tabular font-medium">
                       <Link href={`/produccion/precosteo/${r.id}`} className="text-navy-600 hover:underline">
@@ -208,6 +248,22 @@ export default function PrecosteoListPage() {
                         </div>
                       ) : (
                         <span className="text-[0.7rem] text-terracotta">Sin insumos cargados</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 tabular text-graphite whitespace-nowrap">
+                      {r.created_at
+                        ? new Date(r.created_at).toLocaleDateString("es-CO",
+                            { day: "2-digit", month: "2-digit", year: "2-digit" })
+                        : "—"}
+                    </td>
+                    <td className="px-4 py-3 tabular whitespace-nowrap">
+                      {r.fecha_autorizacion ? (
+                        <span className="text-graphite">
+                          {new Date(r.fecha_autorizacion).toLocaleDateString("es-CO",
+                            { day: "2-digit", month: "2-digit", year: "2-digit" })}
+                        </span>
+                      ) : (
+                        <span className="text-terracotta font-semibold">sin autorizar</span>
                       )}
                     </td>
                     <td className="px-4 py-3">

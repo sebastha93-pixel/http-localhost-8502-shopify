@@ -11,6 +11,7 @@ import { Pedido } from "@/lib/types";
 import { formatMoneyShort } from "@/lib/utils";
 import { AutorizarDespachoButton } from "@/components/autorizar-button";
 import { PendientesCodFlow } from "@/components/pendientes-cod-flow";
+import { CarteraCod } from "@/components/cartera-cod";
 
 export default function ContraentregaPage() {
   const { data, isLoading, error, refetch, isFetching } = usePedidos();
@@ -58,6 +59,13 @@ export default function ContraentregaPage() {
           { label: "Novedades",   value: `${groups.novedades.length} · ${formatMoneyShort(valNovedades)}`, tone: groups.novedades.length > 0 ? "danger" : "default" },
         ]}
       />
+
+      {/* LO QUE MELONN DEBE DE VERDAD.
+          Los KPIs de arriba son el bruto: "Total COD" suma los 90 días y
+          "Entregados" no descuenta lo que Melonn ya consignó. Esto sale del
+          saldo de cada factura en Siigo. El 2026-08-10 el bruto entregado
+          marcaba $168 M cuando la deuda real era $36,5 M. */}
+      <CarteraCod />
 
       <Tabs defaultValue="pendientes">
         <TabsList>

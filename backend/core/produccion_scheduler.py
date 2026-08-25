@@ -197,3 +197,61 @@ def start_warmer() -> bool:
 
 def stop_warmer():
     _warm_stop.set()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# LOS DOS RELOJES DE LAVANDERÍA — persigue la remisión y escala.
+#
+# Arranca SOLO en el worker líder (main.py lo llama dentro de `es_lider`).
+# Con 4 workers Uvicorn, cuatro hilos barriendo mandarían cuatro WhatsApps al
+# mismo proveedor; además del líder, cada aviso se toma con compare-and-set en
+# la base, así que ni un despliegue raro puede duplicarlo.
+# ═══════════════════════════════════════════════════════════════════════
+
+_lav_thread: threading.Thread | None = None
+_lav_stop = threading.Event()
+LAV_INTERVALO_MIN = int(os.environ.get("LAVANDERIA_BARRIDO_MIN", "15"))
+_lav_estado: dict = {"last_run_at": None, "last_result": None}
+
+
+def _loop_lavanderia():
+    log.info(f"[lavanderia-chase] barrido activo · cada {LAV_INTERVALO_MIN} min")
+    if _lav_stop.wait(timeout=60):   # dejar que termine el arranque
+        return
+    while not _lav_stop.is_set():
+        try:
+            from backend.services import lavanderia_chase
+            _lav_estado["last_result"] = lavanderia_chase.barrer()
+            _lav_estado["last_run_at"] = datetime.now(timezone.utc).isoformat()
+        except Exception as e:
+            _lav_estado["last_result"] = {"ok": False, "error": str(e)[:300]}
+            log.exception(f"[lavanderia-chase] error en tick: {e}")
+        rem = LAV_INTERVALO_MIN * 60
+        while rem > 0 and not _lav_stop.is_set():
+            tick = min(60.0, rem)
+            if _lav_stop.wait(timeout=tick):
+                return
+            rem -= tick
+
+
+def start_lavanderia() -> bool:
+    global _lav_thread
+    if _lav_thread is not None and _lav_thread.is_alive():
+        return False
+    _lav_stop.clear()
+    _lav_thread = threading.Thread(target=_loop_lavanderia, daemon=True,
+                                  name="lavanderia-chase")
+    _lav_thread.start()
+    return True
+
+
+def stop_lavanderia():
+    _lav_stop.set()
+
+
+def status_lavanderia() -> dict:
+    return {
+        "running": _lav_thread is not None and _lav_thread.is_alive(),
+        "intervalo_min": LAV_INTERVALO_MIN,
+        **_lav_estado,
+    }

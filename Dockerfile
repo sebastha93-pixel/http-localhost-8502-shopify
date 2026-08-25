@@ -14,6 +14,20 @@ RUN python -m playwright install chromium
 # Código de la app
 COPY . .
 
+# CHEQUEO DE IMPORT EN EL BUILD (no bloqueante).
+#
+# Por qué existe: el 2026-08-18 dos deploys seguidos fallaron sin escribir NI UNA
+# línea en los logs de runtime — ni el echo del arranque. Sin traza no hay
+# diagnóstico, y "reintentar a ver" cuesta 10 minutos por vuelta. Los logs de
+# BUILD sí se leen siempre, así que el traceback se fuerza acá.
+#
+# `|| true` a propósito: importar la app en el build no tiene las variables de
+# entorno de producción, así que un fallo acá NO significa código roto y no debe
+# tumbar el build. Vale solo por el traceback que imprime.
+RUN python -c "import backend.main" \
+    && echo "SMOKE: backend.main importa OK" \
+    || echo "SMOKE: backend.main NO importa en build (mirar el traceback de arriba)"
+
 # Railway inyecta $PORT
 ENV PORT=8080
 EXPOSE 8080

@@ -12,7 +12,7 @@ import logging
 import os
 import re
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from supabase import Client, create_client
@@ -1702,6 +1702,7 @@ def crear_orden_corte(*, referencia_id: Optional[str] = None,
                        cantidad_programada: Optional[int] = None,
                        promedio_tecnico: Optional[float] = None,
                        responsable: Optional[str] = None,
+                       responsable_email: Optional[str] = None,
                        fecha_envio: Optional[str] = None,
                        indicaciones: Optional[str] = None,
                        destinatarios_correo: Optional[list[str]] = None,
@@ -1798,6 +1799,7 @@ def crear_orden_corte(*, referencia_id: Optional[str] = None,
         "metros_consumidos": metros_teo,
         "rendimiento_teorico": rendimiento,
         "responsable": responsable or None,
+        "responsable_email": None,   # se llena abajo si vino un cortador elegido
         "fecha_envio": fecha_envio or None,
         "fecha_limite": fecha_envio or None,   # retro-compat con la columna vieja
         "indicaciones": indicaciones or None,
@@ -1806,13 +1808,39 @@ def crear_orden_corte(*, referencia_id: Optional[str] = None,
         "estado": "borrador",
         "created_by": created_by,
     }
+
+    # EL CORTADOR ELEGIDO MANDA. Si vino del selector, su nombre y su correo se
+    # toman de la ficha real: así el nombre que se muestra y la identidad que da
+    # el permiso no se pueden separar (era justo lo que se separaba cuando el
+    # campo era texto libre). Y su correo entra en los destinatarios sin que
+    # nadie lo escriba: el error del 2026-08-06 fue escribir el correo a mano en
+    # el campo de al lado.
+    _ficha = resolver_cortador(responsable_email)
+    if _ficha:
+        row["responsable"] = _ficha["nombre"]
+        row["responsable_email"] = _ficha["email"]
+        _dest = list(row["destinatarios_correo"])
+        if not any((d or "").strip().lower() == _ficha["email"].lower() for d in _dest):
+            _dest.insert(0, _ficha["email"])
+        row["destinatarios_correo"] = _dest
     try:
         r = sb.table("ordenes_corte").insert(row).execute()
     except Exception as e:
         msg = str(e)
         cols_nuevas = ("cantidad_programada", "promedio_tecnico", "fecha_envio",
                        "trazos_url", "destinatarios_correo")
-        if any(c in msg for c in cols_nuevas):
+        # `responsable_email` es de 2026-08-06. Si la migración todavía no corrió,
+        # se guarda la orden SIN la identidad (el nombre ya quedó) en vez de
+        # perderla. Va en su propia rama a propósito: la lista de abajo bota
+        # varias columnas de un golpe, y botar `destinatarios_correo` mandaría el
+        # correo de autorización a nadie sin que se note.
+        if "responsable_email" in msg:
+            row.pop("responsable_email", None)
+            log.warning("[corte] falta la columna responsable_email; corre "
+                        "20260806010000_responsable_email_corte.sql en Supabase. "
+                        "La orden se guarda solo con el nombre del cortador.")
+            r = sb.table("ordenes_corte").insert(row).execute()
+        elif any(c in msg for c in cols_nuevas):
             for c in cols_nuevas:
                 row.pop(c, None)
             r = sb.table("ordenes_corte").insert(row).execute()
@@ -1824,6 +1852,111 @@ def crear_orden_corte(*, referencia_id: Optional[str] = None,
     _guardar_referencias_corte(oc["id"], specs)
     _cache_invalidate_prefix("ordenes_corte")
     return oc
+
+
+def cortadores_inscritos() -> list[dict]:
+    """Cortadores con acceso al portal, para el selector de la orden de corte.
+
+    SALE DE LOS PERMISOS, no de una lista escrita en el código: el día que entre
+    un cortador nuevo se le da acceso a la plataforma y aparece aquí solo. Ese
+    fue el pedido: "si mañana tenemos 2 cortadores más, simplemente al darles
+    acceso a la plataforma quedan visibles".
+
+    `solo_corte` distingue al cortador puro (solo ve SUS órdenes) de quien tiene
+    el módulo completo —diseño, un admin— que también puede quedar como
+    responsable pero ve todo. Se marca para que el selector lo diga y nadie
+    asigne por error a alguien que no está en la mesa de corte.
+    """
+    from backend.services import usuarios as usr
+    out: list[dict] = []
+    for u in usr.listar():
+        email = (u.get("email") or "").strip()
+        if not email or not u.get("activo"):
+            continue
+        perms = u.get("permisos") or {}
+        if not perms.get("produccion_cortador"):
+            continue
+        out.append({
+            "nombre": (u.get("nombre") or email).strip(),
+            "email": email,
+            "solo_corte": not perms.get("produccion_corte"),
+        })
+    out.sort(key=lambda x: (not x["solo_corte"], x["nombre"].upper()))
+    return out
+
+
+def resolver_cortador(email: Optional[str]) -> Optional[dict]:
+    """Convierte un correo en la ficha del cortador inscrito, o revienta.
+
+    Se valida contra la lista real de usuarios en vez de confiar en lo que llegó
+    del navegador: si se guardara un correo que no es de nadie, la orden volvería
+    a quedar sin dueño y el cortador no la vería —justo el problema que este
+    campo viene a resolver—. Un correo inventado tiene que fallar RUIDOSAMENTE al
+    guardar, no callado al leer.
+
+    Devuelve None si no vino correo (el campo sigue siendo opcional).
+    """
+    e = (email or "").strip().lower()
+    if not e:
+        return None
+    for c in cortadores_inscritos():
+        if c["email"].strip().lower() == e:
+            return c
+    raise ValueError(
+        f"cortador_no_inscrito: {e} no es un usuario activo con acceso de "
+        f"cortador. Dale acceso en Usuarios y vuelve a intentar.")
+
+
+def reasignar_responsable_corte(oc_id: str, *, responsable_email: Optional[str],
+                                responsable: Optional[str] = None,
+                                usuario: str = "") -> dict:
+    """Cambia el cortador de una orden que todavía no se cortó.
+
+    POR QUÉ EXISTE (2026-08-06): cuando una orden se asignó al cortador
+    equivocado no había NINGUNA forma de corregirlo desde la app —`responsable`
+    solo se escribía al crear—. Tocó borrar la orden completa y volverla a
+    crear, con sus trazos y su curva. Un dato mal escrito no puede costar una
+    orden entera.
+
+    Una orden ya CORTADA no se reasigna: el informe, el consumo y la remisión ya
+    quedaron a nombre de quien la cortó, y cambiarlo sería reescribir la historia.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    oc = obtener_orden_corte(oc_id)
+    if not oc:
+        raise ValueError("orden_no_encontrada")
+    if oc.get("estado") == "cortada":
+        raise ValueError("orden_ya_cortada: no se puede cambiar el cortador de "
+                         "una orden que ya tiene informe")
+
+    ficha = resolver_cortador(responsable_email)
+    if ficha:
+        # El nombre se toma de la ficha, no de lo que digan de afuera: así el
+        # nombre que se muestra y la identidad que da el permiso no se pueden
+        # separar nunca.
+        nuevo_nombre, nuevo_email = ficha["nombre"], ficha["email"]
+    else:
+        # Sin correo: queda solo el nombre (compatibilidad con el texto libre).
+        nuevo_nombre, nuevo_email = (responsable or "").strip() or None, None
+
+    update = {"responsable": nuevo_nombre, "responsable_email": nuevo_email,
+              "updated_at": _now_iso()}
+    try:
+        r = sb.table("ordenes_corte").update(update).eq("id", oc_id).execute()
+    except Exception as e:
+        if "responsable_email" in str(e):
+            raise RuntimeError(
+                "falta_migracion: corre 20260806010000_responsable_email_corte.sql "
+                "en Supabase antes de reasignar cortadores") from e
+        raise
+    if not r.data:
+        raise ValueError("no_encontrado")
+    _cache_invalidate_prefix("ordenes_corte")
+    log.info(f"[corte] {oc.get('consecutivo')}: responsable "
+             f"{oc.get('responsable')!r} -> {nuevo_nombre!r} ({nuevo_email}) por {usuario}")
+    return obtener_orden_corte(oc_id) or r.data[0]
 
 
 def reabrir_orden_corte(oc_id: str, *, usuario: str) -> dict:
@@ -2041,12 +2174,13 @@ def actualizar_indicaciones_corte(oc_id: str, indicaciones: Optional[str], *,
             res = autorizar_orden_corte(
                 oc_id, usuario=usuario or (previo.get("autorizada_por") or ""),
                 mensaje_extra="(Indicaciones actualizadas por diseño)",
+                motivo="reenvio_indicaciones",
                 solo_reenviar=True)
-            # `enviado_por` va DENTRO de res["correo"], no al nivel de arriba
-            # (la función devuelve la orden con el correo anidado). Y solo cuenta
-            # como reenviado si salió por Resend: un `mailto_url` no envía nada,
+            # El resultado va DENTRO de res["correo"], no al nivel de arriba
+            # (la función devuelve la orden con el correo anidado). Solo cuenta
+            # como reenviado si Resend lo aceptó: un `mailto_url` no envía nada,
             # necesita que alguien abra su cliente de correo.
-            reenviado = ((res.get("correo") or {}).get("enviado_por") == "resend")
+            reenviado = ((res.get("correo") or {}).get("estado") == "enviado")
             log.info(f"[corte] {previo.get('consecutivo')}: indicaciones cambiaron, "
                      f"correo reenviado={reenviado}")
         except Exception as e:
@@ -2091,8 +2225,37 @@ def listar_ordenes_corte(*, estado: Optional[str] = None,
         for oc in out:
             oc["tiene_remision_confeccion"] = oc["id"] in con_conf
             oc["tiene_remision_terminacion"] = oc["id"] in con_term
+    _anotar_estado_correo(out)
     _cache_set(cache_key, out, ttl_seg=20)
     return out
+
+
+def _anotar_estado_correo(ordenes: list[dict]) -> None:
+    """Marca cada orden con el estado de su ÚLTIMO correo, en una sola consulta.
+
+    Aquí NO se consulta a Resend: sería una llamada HTTP por orden. Se muestra
+    el último estado persistido; al abrir la orden, el detalle lo refresca.
+    """
+    ids = [o["id"] for o in ordenes if o.get("id")]
+    if not ids:
+        return
+    sb = _sb()
+    if sb is None:
+        return
+    ultimo: dict[str, str] = {}
+    try:
+        filas = (sb.table("correos_orden_corte")
+                   .select("orden_corte_id,estado,created_at")
+                   .in_("orden_corte_id", ids)
+                   .order("created_at", desc=True)
+                   .execute()).data or []
+        for f in filas:                      # ordenadas desc: la 1ª es la última
+            ultimo.setdefault(f["orden_corte_id"], f["estado"])
+    except Exception as e:
+        log.warning(f"[corte] no pude traer los estados de correo: {str(e)[:150]}")
+        return
+    for o in ordenes:
+        o["correo_estado"] = ultimo.get(o.get("id"))
 
 
 def reset_datos_produccion() -> dict:
@@ -2944,10 +3107,209 @@ def _trazos_texto(oc: dict) -> str:
     return "\n".join(f"  · {t.get('filename') or 'archivo'}: {t.get('url')}" for t in lista)
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# CORREO DE LA ORDEN DE CORTE — envío, registro y acuse de entrega
+# ═══════════════════════════════════════════════════════════════════════
+
+# `last_event` de Resend → estado interno.
+# Fuente: https://resend.com/docs/dashboard/webhooks/event-types
+#
+# `opened` y `clicked` no se muestran (dependen de que el cliente de correo
+# cargue imágenes y no son fiables), pero implican que el correo llegó: se
+# tratan como entregado. Mapearlos a 'enviado' dejaría la orden reconsultando
+# a Resend para siempre.
+_ESTADO_POR_EVENTO = {
+    "sent": "enviado",
+    "delivered": "entregado",
+    "opened": "entregado",
+    "clicked": "entregado",
+    "bounced": "rebotado",
+    "complained": "spam",
+    "delivery_delayed": "demorado",
+    "failed": "fallido",
+    "suppressed": "suprimido",
+}
+
+# Estados que ya no cambian: no se vuelve a consultar a Resend.
+# 'error_envio' es nuestro, no de Resend: la petición se rechazó y nunca
+# llegó a existir un correo que consultar.
+_ESTADOS_DEFINITIVOS = frozenset({
+    "entregado", "rebotado", "spam", "suprimido", "fallido", "error_envio",
+})
+
+
+def _estado_desde_last_event(last_event: Optional[str]) -> str:
+    """Traduce el `last_event` de Resend al estado interno.
+
+    Un evento desconocido queda como 'enviado' (en curso): nunca inventamos
+    una entrega que Resend no confirmó.
+    """
+    return _ESTADO_POR_EVENTO.get((last_event or "").strip().lower(), "enviado")
+
+
+def _enviar_por_resend(dest: list[str], asunto: str, body: str) -> dict:
+    """Manda el correo por Resend. NUNCA lanza: devuelve qué pasó.
+
+    Antes esto vivía dentro de `autorizar_orden_corte` en un `try/except` que
+    imprimía el error y caía a `mailto`. Como el frontend hacía
+    `window.location.href = mailto_url` y en Chrome con Gmail web eso no hace
+    nada, un fallo de Resend se veía exactamente igual que un envío exitoso.
+    """
+    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
+    if not resend_key:
+        return {"resend_id": None, "estado": "error_envio",
+                "error": "sin_RESEND_API_KEY"}
+    if not dest:
+        return {"resend_id": None, "estado": "error_envio",
+                "error": "sin_destinatarios"}
+    try:
+        import httpx
+        from_email = os.environ.get("RESEND_FROM", "orden-corte@maledenim.com").strip()
+        r = httpx.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {resend_key}",
+                     "Content-Type": "application/json"},
+            json={"from": from_email, "to": dest, "subject": asunto, "text": body},
+            timeout=15.0,
+        )
+        if r.status_code >= 400:
+            return {"resend_id": None, "estado": "error_envio",
+                    "error": f"resend {r.status_code}: {r.text[:300]}"}
+        return {"resend_id": ((r.json() or {}).get("id")),
+                "estado": "enviado", "error": None}
+    except Exception as e:
+        log.warning(f"[corte.correo] Resend falló: {type(e).__name__}: {str(e)[:200]}")
+        return {"resend_id": None, "estado": "error_envio",
+                "error": f"{type(e).__name__}: {str(e)[:300]}"}
+
+
+def _registrar_correo_corte(oc_id: str, *, destinatarios: list[str], asunto: str,
+                            motivo: str, resultado: dict,
+                            usuario: str) -> Optional[dict]:
+    """Deja una fila en `correos_orden_corte` por cada intento de envío.
+
+    No lanza: si el registro falla, el correo ya salió y perder la bitácora no
+    puede tumbar la autorización de la orden.
+    """
+    sb = _sb()
+    if sb is None:
+        return None
+    fila = {
+        "orden_corte_id": oc_id,
+        "destinatarios": destinatarios,
+        "asunto": asunto,
+        "motivo": motivo,
+        "resend_id": resultado.get("resend_id"),
+        "estado": resultado.get("estado") or "error_envio",
+        "error": resultado.get("error"),
+        "enviado_por": usuario,
+        "estado_actualizado_at": _now_iso(),
+    }
+    try:
+        r = (sb.table("correos_orden_corte").insert(fila).execute()).data
+        return (r or [None])[0]
+    except Exception as e:
+        log.warning(f"[corte.correo] no pude registrar el envío de {oc_id}: {str(e)[:200]}")
+        return None
+
+
+def _consultar_estado_resend(resend_id: str) -> Optional[str]:
+    """`last_event` del correo según Resend, o None si no se pudo saber.
+
+    GET /emails/{id} — https://resend.com/docs/api-reference/emails/retrieve-email
+    """
+    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
+    if not resend_key or not resend_id:
+        return None
+    try:
+        import httpx
+        r = httpx.get(f"https://api.resend.com/emails/{resend_id}",
+                      headers={"Authorization": f"Bearer {resend_key}"},
+                      timeout=10.0)
+        if r.status_code >= 400:
+            return None
+        return ((r.json() or {}).get("last_event"))
+    except Exception as e:
+        log.warning(f"[corte.correo] no pude consultar {resend_id}: {str(e)[:150]}")
+        return None
+
+
+def _guardar_estado_correo(correo_id: str, estado: str) -> None:
+    """Persiste el estado nuevo. No lanza: es caché, no es la verdad."""
+    sb = _sb()
+    if sb is None:
+        return
+    try:
+        (sb.table("correos_orden_corte")
+           .update({"estado": estado, "estado_actualizado_at": _now_iso()})
+           .eq("id", correo_id).execute())
+    except Exception as e:
+        log.warning(f"[corte.correo] no pude guardar el estado de {correo_id}: {str(e)[:150]}")
+
+
+def refrescar_estados_correo(correos: list[dict]) -> list[dict]:
+    """Actualiza contra Resend solo los envíos que todavía pueden cambiar.
+
+    Los definitivos no se consultan, y sin `resend_id` no hay nada que
+    consultar (un `error_envio` nunca llegó a crear un correo en Resend).
+    """
+    salida = []
+    for c in correos or []:
+        c = dict(c)
+        estado = c.get("estado") or "enviado"
+        rid = c.get("resend_id")
+        if rid and estado not in _ESTADOS_DEFINITIVOS:
+            evento = _consultar_estado_resend(rid)
+            if evento:
+                nuevo = _estado_desde_last_event(evento)
+                if nuevo != estado:
+                    _guardar_estado_correo(c["id"], nuevo)
+                    c["estado"] = nuevo
+        salida.append(c)
+    return salida
+
+
+def listar_correos_corte(oc_id: str) -> list[dict]:
+    """Historial de envíos de la orden, más reciente primero, ya refrescado."""
+    sb = _sb()
+    if sb is None:
+        return []
+    try:
+        r = (sb.table("correos_orden_corte")
+               .select("*")
+               .eq("orden_corte_id", oc_id)
+               .order("created_at", desc=True)
+               .execute()).data or []
+    except Exception as e:
+        log.warning(f"[corte.correo] no pude listar los correos de {oc_id}: {str(e)[:150]}")
+        return []
+    return refrescar_estados_correo(r)
+
+
+def reenviar_correo_corte(oc_id: str, *, destinatarios: Optional[list[str]],
+                          mensaje_extra: Optional[str],
+                          usuario: str) -> dict:
+    """Reenvía el correo, típicamente a OTRA dirección porque la primera estaba mal.
+
+    Va por `solo_reenviar=True` para no pisar `fecha_autorizacion`, pero sí
+    actualiza `destinatarios_correo`: la corrección queda guardada y el
+    siguiente reenvío ya sale bien por defecto.
+    """
+    return autorizar_orden_corte(
+        oc_id,
+        destinatarios=destinatarios,
+        mensaje_extra=mensaje_extra,
+        solo_reenviar=True,
+        motivo="reenvio_manual",
+        usuario=usuario,
+    )
+
+
 # ── Autorizar orden de corte y enviar correo ──────────────────────────
 def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = None,
                            mensaje_extra: Optional[str] = None,
                            solo_reenviar: bool = False,
+                           motivo: str = "autorizacion",
                            usuario: str) -> dict:
     """Marca la orden como 'autorizada' y prepara el correo para los destinatarios.
 
@@ -3029,49 +3391,27 @@ def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = No
     body += f"\nAutorizada por: {usuario}\n"
 
     dest = destinatarios if destinatarios is not None else (oc.get("destinatarios_correo") or [])
+
+    envio = _enviar_por_resend(dest, asunto, body)
+    _registrar_correo_corte(oc_id, destinatarios=dest, asunto=asunto,
+                            motivo=motivo, resultado=envio, usuario=usuario)
+
+    # El `mailto` deja de ser un redirect automático que aparenta funcionar:
+    # ahora es una salida manual que el frontend ofrece SOLO si el envío falló.
+    from urllib.parse import quote
+    mailto_url = (f"mailto:{','.join(dest) if dest else ''}"
+                  f"?subject={quote(asunto)}&body={quote(body)}")
+
     resultado = {
         "asunto": asunto,
         "body": body,
         "destinatarios": dest,
-        "enviado_por": None,   # 'resend' | 'mailto'
-        "mailto_url": None,
+        "estado": envio["estado"],            # 'enviado' | 'error_envio'
+        "error": envio["error"],
+        "resend_id": envio["resend_id"],
+        "enviado_por": "resend" if envio["estado"] == "enviado" else None,
+        "mailto_url": mailto_url,
     }
-
-    # Envío via Resend si hay API key
-    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
-    if resend_key and dest:
-        try:
-            import httpx
-            from_email = os.environ.get("RESEND_FROM", "orden-corte@maledenim.com").strip()
-            r = httpx.post(
-                "https://api.resend.com/emails",
-                headers={"Authorization": f"Bearer {resend_key}",
-                         "Content-Type": "application/json"},
-                json={
-                    "from": from_email,
-                    "to": dest,
-                    "subject": asunto,
-                    "text": body,
-                },
-                timeout=15.0,
-            )
-            if r.status_code >= 400:
-                raise RuntimeError(f"resend_error: {r.status_code} {r.text[:200]}")
-            resultado["enviado_por"] = "resend"
-        except Exception as e:
-            print(f"[corte.autorizar] Resend falló, fallback a mailto: {e}")
-
-    # Fallback mailto
-    if resultado["enviado_por"] is None:
-        from urllib.parse import quote
-        to_str = ",".join(dest) if dest else ""
-        resultado["mailto_url"] = (
-            f"mailto:{to_str}"
-            f"?subject={quote(asunto)}"
-            f"&body={quote(body)}"
-        )
-        resultado["enviado_por"] = "mailto"
-
     return {**obtener_orden_corte(oc_id), "correo": resultado}
 
 
@@ -4594,6 +4934,399 @@ def obtener_ruta_por_token_terminacion(token: str) -> Optional[dict]:
     return _con_etapas_omitidas(r[0]) if r else None
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# ESPEJO DEL GRUPO DE WHATSAPP DE PRODUCCIÓN (fase 1)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# El equipo ya reporta la producción en un grupo de WhatsApp. Esto trae esos
+# mensajes al OS TAL CUAL, sin interpretar nada: el objetivo de la fase 1 es
+# tener el dato en tiempo real y poder medir qué tan legible es lo que la gente
+# escribe de verdad, antes de invertir en que una IA lo lea.
+#
+# Nada de acá mueve el estado de un lote. Cuando eso llegue, trabajará sobre
+# esta tabla y no sobre el chat, para que un error del parser siempre se pueda
+# comparar contra lo que en realidad se dijo.
+
+
+def guardar_mensajes_grupo(*, grupo_id: str, grupo_nombre: str,
+                           mensajes: list[dict]) -> dict:
+    """Guarda los mensajes que reenvía el oyente. Idempotente por wa_message_id.
+
+    Se hace un upsert y no un insert porque el oyente REENVÍA: cuando se
+    reconecta después de una caída manda el atraso, y ahí van mensajes que ya
+    habíamos guardado. Sin idempotencia el espejo mostraría todo duplicado y
+    cualquier conteo quedaría inflado.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+
+    filas = []
+    for m in mensajes:
+        wa_id = (m.get("wa_message_id") or "").strip()
+        enviado = (m.get("enviado_en") or "").strip()
+        # Sin id no hay forma de deduplicar, y sin fecha de envío el espejo
+        # mentiría sobre el orden. Un mensaje así se descarta y se cuenta.
+        if not wa_id or not enviado:
+            continue
+        filas.append({
+            "wa_message_id":  wa_id,
+            "grupo_id":       grupo_id,
+            "grupo_nombre":   grupo_nombre or None,
+            "autor_telefono": (m.get("autor_telefono") or "").strip() or None,
+            "autor_nombre":   (m.get("autor_nombre") or "").strip() or None,
+            "tipo":           (m.get("tipo") or "texto").strip() or "texto",
+            "texto":          m.get("texto") or None,
+            "media_url":      m.get("media_url") or None,
+            "enviado_en":     enviado,
+            "crudo":          m.get("crudo") or None,
+        })
+
+    if not filas:
+        return {"guardados": 0, "descartados": len(mensajes)}
+
+    res = (sb.table("mensajes_grupo_produccion")
+             .upsert(filas, on_conflict="wa_message_id")
+             .execute())
+
+    # Recién guardado el espejo, se lee lo que dijeron. Va DESPUÉS del upsert y
+    # dentro de try: si la detección falla, el espejo ya está a salvo y el
+    # oyente no se queda sin poder subir mensajes por un bug de acá.
+    deteccion = None
+    try:
+        from backend.services import lavanderia_chase
+        deteccion = lavanderia_chase.procesar_mensajes(filas)
+    except Exception as e:
+        log.warning(f"[grupo] deteccion lavanderia falló: {str(e)[:200]}")
+
+    return {"guardados": len(res.data or []),
+            "descartados": len(mensajes) - len(filas),
+            "deteccion": deteccion}
+
+
+_BUCKET_GRUPO = "produccion-trazos"
+_EXT_POR_MIME = {
+    "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png",
+    "image/webp": "webp", "application/pdf": "pdf",
+}
+
+
+def guardar_media_grupo(*, wa_message_id: str, file_bytes: bytes,
+                        mime: str = "", nombre: str = "") -> dict:
+    """Guarda el archivo de un mensaje del grupo y le pone la URL a su fila.
+
+    POR QUÉ EXISTE (2026-08-19): la remisión de lavandería llega como FOTO al
+    grupo. La fase 1 del oyente guardaba tipo='imagen' con media_url en null, o
+    sea quedaba constancia de que alguien mandó algo y nada más — el documento
+    que de verdad mueve producción se perdía.
+
+    El archivo lo sube el BACKEND, no el oyente: así la llave de Supabase no
+    tiene que vivir en el servidor de la oficina. El oyente solo tiene el
+    secreto del webhook, que es lo único que necesita.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    wa_message_id = (wa_message_id or "").strip()
+    if not wa_message_id:
+        raise ValueError("sin_wa_message_id")
+    if not file_bytes:
+        raise ValueError("archivo_vacio")
+
+    ext = ""
+    if "." in (nombre or ""):
+        ext = nombre.rsplit(".", 1)[-1].lower()
+    if ext not in ("jpg", "jpeg", "png", "webp", "pdf"):
+        ext = _EXT_POR_MIME.get((mime or "").split(";")[0].strip().lower(), "jpg")
+
+    # El id del mensaje puede traer caracteres raros; se limpia porque va en una
+    # ruta de storage.
+    seguro = "".join(c for c in wa_message_id if c.isalnum() or c in "-_")[:120]
+    path = f"grupo/{seguro}.{ext}"
+    try:
+        try:
+            sb.storage.from_(_BUCKET_GRUPO).remove([path])
+        except Exception:
+            pass
+        sb.storage.from_(_BUCKET_GRUPO).upload(
+            path, file_bytes,
+            {"content-type": mime or "application/octet-stream", "upsert": "true"})
+    except Exception as e:
+        raise RuntimeError(f"subir_media_grupo: {str(e)[:200]}")
+
+    url = sb.storage.from_(_BUCKET_GRUPO).get_public_url(path)
+    try:
+        sb.table("mensajes_grupo_produccion").update(
+            {"media_url": url}).eq("wa_message_id", wa_message_id).execute()
+    except Exception as e:
+        log.warning(f"[grupo] no pude enlazar media a {wa_message_id}: {str(e)[:160]}")
+    log.info(f"[grupo] media guardada · {wa_message_id} · {len(file_bytes)} bytes")
+
+    # ¿Es la remisión de un lote? Se decide con el pie de foto, nunca a ciegas.
+    # Va dentro de try porque el archivo YA está guardado: si esto falla, la foto
+    # no se pierde y un humano la puede enlazar igual.
+    adjuntar = None
+    try:
+        from backend.services import lavanderia_chase
+        adjuntar = lavanderia_chase.al_llegar_media(wa_message_id)
+        # Si quedó adjuntada, se le lee la CANTIDAD al documento aprovechando
+        # que los bytes todavía están acá. Es el cruce que permite saber cuántas
+        # prendas se quedaron en el camino, y solo sirve si se captura ahora.
+        if adjuntar and adjuntar.get("hoja_ruta_id"):
+            lavanderia_chase.capturar_cantidad_remision(
+                adjuntar["hoja_ruta_id"], file_bytes, mime)
+    except Exception as e:
+        log.warning(f"[grupo] revisión de remisión falló: {str(e)[:200]}")
+
+    return {"url": url, "bytes": len(file_bytes), "path": path,
+            "remision": adjuntar}
+
+
+def usar_media_grupo_como_remision(*, wa_message_id: str, ruta_id: str,
+                                   usuario: str = "") -> dict:
+    """Una foto del grupo se declara remisión de lavandería de un lote.
+
+    Lo confirma una PERSONA, no la IA: una foto sin pie de foto no dice a qué
+    lote pertenece, y adivinarlo movería producción con una suposición. El OS la
+    captura sola; el clic humano es el que la convierte en documento del lote.
+
+    Reusa `actualizar_ruta_lote`, así que hereda el avance de etapa a
+    'lavanderia' y el cierre del pendiente de la remisión.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    fila = (sb.table("mensajes_grupo_produccion").select("media_url,tipo")
+              .eq("wa_message_id", (wa_message_id or "").strip())
+              .limit(1).execute()).data
+    if not fila:
+        raise ValueError("mensaje_no_encontrado")
+    url = (fila[0].get("media_url") or "").strip()
+    if not url:
+        raise ValueError("mensaje_sin_archivo")
+    # Ojo: `actualizar_ruta_lote(ruta_id, **campos)` recibe los campos por
+    # nombre, no un diccionario posicional.
+    ruta = actualizar_ruta_lote(ruta_id, remision_lavanderia_url=url)
+    try:
+        crear_nota_ruta(ruta_id=ruta_id, actor="admin",
+                        mensaje=(f"Remisión de lavandería tomada de una foto del "
+                                 f"grupo de WhatsApp (mensaje {wa_message_id})"),
+                        autor=usuario or "OS")
+    except Exception as e:
+        log.warning(f"[grupo] nota de remisión falló: {str(e)[:160]}")
+    return {"ok": True, "url": url, "ruta": ruta}
+
+
+def listar_mensajes_grupo(*, limite: int = 100, desde: str = "",
+                          buscar: str = "") -> list[dict]:
+    sb = _sb()
+    if sb is None:
+        return []
+    q = (sb.table("mensajes_grupo_produccion")
+           .select("id,wa_message_id,grupo_nombre,autor_nombre,autor_telefono,"
+                   "tipo,texto,media_url,enviado_en,recibido_en")
+           .order("enviado_en", desc=True)
+           .limit(min(int(limite), 500)))
+    if desde:
+        q = q.gte("enviado_en", desde)
+    if buscar.strip():
+        q = q.ilike("texto", f"%{buscar.strip()}%")
+    return (q.execute()).data or []
+
+
+def latido_oyente_grupo(*, codigo_pareo: str = "", codigo_ttl_min: int = 3,
+                        conectado: Optional[bool] = None,
+                        error: str = "", numero: str = "",
+                        grupos: Optional[list] = None) -> dict:
+    """Lo llama el oyente para decir cómo va: conectado, con error, o pidiendo
+    que se publique un código de pareo.
+
+    El código de pareo se publica ACÁ y no se deja en la consola del servidor a
+    propósito: así quien vincula el número lee el código desde el OS, en el
+    celular que tiene en la mano, sin entrar al servidor. Vive 3 minutos porque
+    es lo que WhatsApp le da antes de rotarlo.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    ahora = datetime.now(timezone.utc)
+    update: dict = {"latido_en": ahora.isoformat(),
+                    "actualizado_en": ahora.isoformat()}
+    if codigo_pareo:
+        update["codigo_pareo"] = codigo_pareo
+        update["codigo_expira"] = (ahora + timedelta(minutes=codigo_ttl_min)).isoformat()
+    if conectado is True:
+        update["conectado_en"] = ahora.isoformat()
+        # Al conectar se limpia el código: ya no sirve y dejarlo visible hace
+        # creer que falta vincular algo.
+        update["codigo_pareo"] = None
+        update["codigo_expira"] = None
+        update["ultimo_error"] = None
+    if error:
+        update["ultimo_error"] = error[:500]
+    if numero:
+        update["numero"] = numero
+    if grupos is not None:
+        update["grupos"] = grupos
+    res = (sb.table("oyente_grupo_estado").update(update)
+             .eq("id", "default").execute())
+    fila = (res.data or [{}])[0]
+    # La RESPUESTA le dice al oyente qué grupo escuchar. Así el objetivo se
+    # cambia desde el OS y surte efecto en el siguiente latido, sin entrar al
+    # servidor a editar un .env ni reiniciar el servicio.
+    return {"ok": True, "grupo_id": fila.get("grupo_id_objetivo")}
+
+
+def estado_oyente_grupo() -> dict:
+    """¿Está vivo el oyente? Se responde con el último mensaje que llegó.
+
+    No hay latido aparte a propósito: un latido puede seguir llegando de un
+    proceso que ya perdió la sesión de WhatsApp y no está viendo nada. El
+    último mensaje real es la única señal que no puede mentir — con la salvedad
+    de que un grupo callado un domingo se ve igual que un oyente muerto, y eso
+    se distingue mirando la hora contra el horario de la fábrica.
+    """
+    sb = _sb()
+    if sb is None:
+        return {"disponible": False}
+    r = (sb.table("mensajes_grupo_produccion")
+           .select("enviado_en,recibido_en,autor_nombre")
+           .order("recibido_en", desc=True).limit(1).execute()).data
+    total = (sb.table("mensajes_grupo_produccion")
+               .select("id", count="exact").execute()).count or 0
+
+    est = (sb.table("oyente_grupo_estado").select("*")
+             .eq("id", "default").limit(1).execute()).data
+    est = (est or [{}])[0]
+
+    ahora = datetime.now(timezone.utc)
+
+    def _minutos(valor) -> Optional[int]:
+        if not valor:
+            return None
+        try:
+            v = str(valor).replace("Z", "+00:00")
+            if "." in v:
+                cab, resto = v.split(".", 1)
+                dig = "".join(c for c in resto if c.isdigit())
+                v = f"{cab}.{dig.ljust(6, '0')[:6]}{resto[len(dig):]}"
+            d = datetime.fromisoformat(v)
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=timezone.utc)
+            return int((ahora - d).total_seconds() // 60)
+        except Exception:
+            return None
+
+    # El código solo se reporta si todavía sirve: mostrar uno vencido hace que
+    # alguien lo teclee y crea que el sistema está roto cuando WhatsApp lo
+    # rechaza.
+    codigo = est.get("codigo_pareo")
+    if codigo and est.get("codigo_expira"):
+        vencido = (_minutos(est["codigo_expira"]) or 0) > 0
+        if vencido:
+            codigo = None
+
+    return {
+        "disponible": True,
+        "total": total,
+        "ultimo": r[0] if r else None,
+        "minutos_desde_ultimo": _minutos(r[0]["recibido_en"]) if r else None,
+        # Vinculación
+        "codigo_pareo":         codigo,
+        "numero":               est.get("numero"),
+        "conectado_en":         est.get("conectado_en"),
+        "minutos_desde_latido": _minutos(est.get("latido_en")),
+        "ultimo_error":         est.get("ultimo_error"),
+    }
+
+
+def obtener_ruta_por_token_lavanderia(token: str) -> Optional[dict]:
+    sb = _sb()
+    if sb is None:
+        return None
+    try:
+        r = (sb.table("hoja_ruta_lote")
+               .select("*,lavanderia:lavanderia_id(nombre),"
+                       "orden_corte:orden_corte_id(consecutivo,curva_trazo,unidades_cortadas,"
+                       "cantidad_programada,referencia_lote,fecha_entrega,"
+                       "referencia:referencia_id(codigo_referencia,nombre,tela,color,foto_url))")
+               .eq("token_publico_lavanderia", token).limit(1).execute()).data
+    except Exception:
+        return None
+    return _con_etapas_omitidas(r[0]) if r else None
+
+
+def lavanderia_registrar(ruta_id: str, *, accion: str,
+                         cantidad: Optional[int] = None,
+                         nota: str = "",
+                         fecha_estimada: str = "") -> dict:
+    """Lo que la lavandería reporta desde su enlace público.
+
+    DOS HECHOS DISTINTOS, Y LA DIFERENCIA IMPORTA:
+
+    · `recibi`  → el lote está físicamente en la lavandería. Eso SÍ avanza la
+      etapa a 'lavanderia', porque es exactamente lo que esa etapa significa
+      ("el confeccionista terminó y lo envió a lavandería") y lo está
+      confirmando quien lo tiene en la mano.
+
+    · `entregue` → la lavandería dice que lo despachó. Esto NO avanza a
+      'terminacion_recibida'. Que la lavandería entregue y que terminación
+      reciba son dos cosas que pueden estar separadas por un día y por un
+      camión, y la etapa 'terminacion_recibida' la firma terminación desde su
+      propio enlace. Si la lavandería pudiera avanzarla, el tablero diría que
+      terminación ya tiene el lote cuando todavía va en camino — y nadie
+      preguntaría por él.
+    """
+    if accion not in ("recibi", "entregue"):
+        raise ValueError(f"accion_invalida:{accion}")
+
+    campo_hora = "lav_recibido_at" if accion == "recibi" else "lav_entregado_at"
+    campo_cant = ("lav_cantidad_recibida" if accion == "recibi"
+                  else "lav_cantidad_entregada")
+
+    update: dict = {campo_hora: _now_iso(), "updated_at": _now_iso()}
+    if cantidad is not None:
+        update[campo_cant] = int(cantidad)
+    if fecha_estimada:
+        update["lav_fecha_estimada"] = fecha_estimada
+
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    res = sb.table("hoja_ruta_lote").update(update).eq("id", ruta_id).execute()
+    if not res.data:
+        raise ValueError("no_encontrada")
+
+    # La nota va al timeline (no sobrescribe), igual que las del confeccionista.
+    if nota.strip():
+        try:
+            crear_nota_ruta(ruta_id=ruta_id, actor="lavanderia",
+                            mensaje=nota.strip())
+        except Exception as e:
+            log.warning(f"[lavanderia] nota al timeline fallo, guardo en campo: {e}")
+            try:
+                sb.table("hoja_ruta_lote").update(
+                    {"nota_lavanderia": nota.strip()}).eq("id", ruta_id).execute()
+            except Exception:
+                pass
+
+    if accion == "recibi":
+        try:
+            avanzar_etapa_si_antes(ruta_id, "lavanderia")
+        except Exception as e:
+            log.warning(f"[lavanderia] avance de etapa fallo: {e}")
+        # Confirmó que lo recogió → se apaga el reloj de la recogida y arranca
+        # el de la remisión. Antes de esto no tiene sentido pedirle la foto de
+        # algo que todavía no tenía en las manos.
+        try:
+            from backend.services import lavanderia_chase
+            lavanderia_chase.al_confirmar_recogida(ruta_id)
+        except Exception as e:
+            log.warning(f"[lavanderia] relevo de relojes falló: {str(e)[:160]}")
+
+    return (res.data or [{}])[0]
+
+
 def obtener_ruta_por_token(token: str) -> Optional[dict]:
     sb = _sb()
     if sb is None:
@@ -4775,6 +5508,9 @@ def actualizar_ruta_lote(ruta_id: str, **campos) -> dict:
         "precio_confeccion", "precio_terminacion",
         "fecha_entrega_confeccion", "remision_lavanderia_url",
         "notas", "nota_confeccionista", "nota_terminacion",
+        # Lo que registra la lavandería desde su enlace público.
+        "nota_lavanderia", "lav_recibido_at", "lav_entregado_at",
+        "lav_cantidad_recibida", "lav_cantidad_entregada", "lav_fecha_estimada",
     }
     update = {k: v for k, v in campos.items() if k in permitidos and v is not None}
     if not update:
@@ -4819,6 +5555,7 @@ def actualizar_ruta_lote(ruta_id: str, **campos) -> dict:
             avanzar_etapa_si_antes(ruta_id, "lavanderia")
         except Exception as e:
             log.warning(f"[ruta] avance a lavanderia (patch) fallo: {e}")
+        _cerrar_persecucion_lavanderia(ruta_id)
         r2 = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
         if r2:
             return r2[0]
@@ -4975,8 +5712,30 @@ def subir_remision_lavanderia(ruta_id: str, *, file_bytes: bytes, filename: str,
         avanzar_etapa_si_antes(ruta_id, "lavanderia")
     except Exception as e:
         log.warning(f"[ruta] avance a lavanderia fallo: {e}")
+    # Llegó la remisión → se apaga la persecución. Da igual por dónde entró
+    # (portal de la lavandería o cargada desde adentro): el hecho es el mismo.
+    _cerrar_persecucion_lavanderia(ruta_id)
     r = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
     return {"url": url, "ruta": r[0] if r else {}}
+
+
+def _cerrar_persecucion_lavanderia(ruta_id: str) -> None:
+    """Llegó la remisión → se callan los recordatorios de ese lote, en el acto.
+
+    Cierra los DOS relojes: si la remisión existe, es imposible que no hayan
+    recogido el lote. Regla de Sebastián: «si ya la remisión llegó no se sigan
+    enviando mensajes» — y un proveedor que ya cumplió y sigue recibiendo
+    recordatorios deja de leer los que sí importan.
+
+    Tolerante a fallos a propósito: el barrido periódico vuelve a cerrarlo, así
+    que un error acá atrasa el cierre unos minutos pero no rompe la operación de
+    quien acaba de subir el documento.
+    """
+    try:
+        from backend.services import lavanderia_chase
+        lavanderia_chase.cerrar_todo_por_remision(ruta_id)
+    except Exception as e:
+        log.warning(f"[lavanderia] cerrar persecucion falló: {str(e)[:160]}")
 
 
 def listar_rutas(*, etapa: Optional[str] = None,
@@ -5008,10 +5767,14 @@ def listar_rutas(*, etapa: Optional[str] = None,
 def crear_nota_ruta(*, ruta_id: str, actor: str, mensaje: str,
                      autor: Optional[str] = None) -> dict:
     """Agrega una nota al histórico de la ruta.
-    - actor: 'confeccionista' | 'terminacion' | 'admin'
+    - actor: 'confeccionista' | 'terminacion' | 'lavanderia' | 'admin'
     - autor: email o identificador (opcional)
+
+    Esta lista tiene que coincidir con el CHECK de `notas_hoja_ruta.actor` en la
+    base (migración 20260818020000). Si acá se permite un actor que allá no,
+    el insert falla y la nota se va por un camino que la UI no muestra.
     """
-    if actor not in ("confeccionista", "terminacion", "admin"):
+    if actor not in ("confeccionista", "terminacion", "lavanderia", "admin"):
         raise ValueError("actor_invalido")
     msg = (mensaje or "").strip()
     if not msg:
@@ -5215,13 +5978,17 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
     ocs = listar_ordenes_corte(estado="cortada", limit=500)
     try:
         rutas = (sb.table("hoja_ruta_lote")
-                   .select("orden_corte_id,precio_confeccion,etapa,lavanderia_at,"
-                           "confeccionista:confeccionista_id(nombre,documento)")
+                   .select("orden_corte_id,precio_confeccion,precio_terminacion,etapa,"
+                           "lavanderia_at,"
+                           "confeccionista:confeccionista_id(nombre,documento),"
+                           "terminador:terminacion_id(nombre,documento),"
+                           "lavador:lavanderia_id(nombre,documento)")
                    .limit(500).execute()).data or []
     except Exception:
         # Compat si la columna documento aún no existe
         rutas = (sb.table("hoja_ruta_lote")
-                   .select("orden_corte_id,precio_confeccion,etapa,lavanderia_at,"
+                   .select("orden_corte_id,precio_confeccion,precio_terminacion,etapa,"
+                           "lavanderia_at,"
                            "confeccionista:confeccionista_id(nombre)")
                    .limit(500).execute()).data or []
     ruta_por_oc = {r["orden_corte_id"]: r for r in rutas if r.get("orden_corte_id")}
@@ -5239,6 +6006,20 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             return False
         return a == b or a == b[:-1] or b == a[:-1]
 
+    # Referencias que el OS conoce (tengan lote cortado o no). Sirve para saber
+    # si una factura que no cruzó es NUESTRA —y entonces hay algo que revisar— o
+    # es de la producción anterior al sistema, que sigue facturándose y no tiene
+    # por qué aparecer.
+    refs_del_os: set[str] = set()
+    try:
+        for _r in ((sb.table("referencias_precosteo")
+                      .select("codigo_referencia").limit(2000).execute()).data or []):
+            cod = _norm_ref(_r.get("codigo_referencia"))
+            if cod:
+                refs_del_os.add(cod)
+    except Exception as e:
+        log.warning(f"[cruce] no pude leer el catálogo de referencias: {e}")
+
     lotes = []
     lotes_por_ref: dict[str, dict] = {}
     for oc in ocs:
@@ -5255,11 +6036,28 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             "referencia":     (oc.get("referencia") or {}).get("codigo_referencia"),
             "confeccionista": ((ruta or {}).get("confeccionista") or {}).get("nombre"),
             "documento":      _norm_doc(((ruta or {}).get("confeccionista") or {}).get("documento")),
+            # Un lote pasa por VARIOS proveedores y cada concepto se factura por
+            # el suyo. Para casar un documento soporte —que no trae REF— hace
+            # falta saber qué NIT corresponde a qué proceso.
+            # Qué procesos espera este lote según su ruta. Sirve para saber si el
+            # margen real ya es comparable o si todavía va a medias.
+            "conceptos_esperados": [c for c, hay in (
+                ("confeccion",  bool((ruta or {}).get("confeccionista"))),
+                ("terminacion", bool((ruta or {}).get("terminador"))),
+                ("lavanderia",  bool((ruta or {}).get("lavador"))),
+            ) if hay],
+            "documentos_por_concepto": {
+                "confeccion":  _norm_doc(((ruta or {}).get("confeccionista") or {}).get("documento")),
+                "terminacion": _norm_doc(((ruta or {}).get("terminador") or {}).get("documento")),
+                "lavanderia":  _norm_doc(((ruta or {}).get("lavador") or {}).get("documento")),
+            },
             # El DS se vuelve exigible cuando el confeccionista ENTREGÓ
             # (lote pasó a lavandería). Antes de eso no se alerta.
             "entregado_at":   (ruta or {}).get("lavanderia_at"),
             "unidades":       unidades,
-            "precio_teorico": precio,
+            "creada_at":      oc.get("created_at"),
+            "precio_teorico": precio,          # confección (el cruce principal)
+            "precio_terminacion": float((ruta or {}).get("precio_terminacion") or 0),
             "total_teorico":  round(unidades * precio, 2),
             "tiene_ruta":     bool(ruta),
             "ds":             None,
@@ -5299,37 +6097,125 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                 return lote_c
         return None
 
-    def _match_por_documento(doc_prov: str):
-        """Nivel 3: anclar por cédula/NIT del proveedor. Si el DS viene de
-        un proveedor con documento registrado y ese proveedor tiene UN solo
-        lote pendiente de DS, la factura llega aunque la REF esté mal
-        digitada o falte. Con varios lotes no se adivina."""
-        if not doc_prov:
+    def _match_por_huella(doc_prov: str, it: dict, doc: Optional[dict] = None):
+        """Nivel 4 — HUELLA, para los DOCUMENTOS SOPORTE.
+
+        La API de Siigo no devuelve la descripción escrita en las líneas de un
+        DS: devuelve el nombre del producto del catálogo. Se revisaron los 610
+        items de los 1.422 DS de la cuenta y NI UNO trae texto propio, así que la
+        "REF 95629-1" que sale impresa en el PDF no llega por API. Sin REF, el
+        lote se identifica por lo que sí llega:
+
+            NIT del proveedor + concepto del item + cantidad exacta de unidades
+
+        Y tiene que señalar a UN solo lote. Con dos candidatos no se adivina: un
+        cruce equivocado ensucia el costo de dos referencias a la vez y nadie lo
+        nota mirando la pantalla.
+
+        El precio NO entra en la huella a propósito: que el precio no cuadre es
+        justo lo que este cruce existe para detectar.
+        """
+        concepto = it.get("concepto") or "otro"
+        cantidad = float(it.get("cantidad") or 0)
+        if not doc_prov or cantidad <= 0 or concepto == "otro":
             return None
-        candidatos = [l for l in lotes
-                      if l.get("documento") and _doc_match(l["documento"], doc_prov)
-                      and l["estado"] == "sin_ds"]
-        return candidatos[0] if len(candidatos) == 1 else None
+        fecha_doc = (doc or {}).get("fecha") or ""
+        candidatos = []
+        for l in lotes:
+            esperado = (l.get("documentos_por_concepto") or {}).get(concepto)
+            if not esperado or not _doc_match(esperado, doc_prov):
+                continue
+            if int(l.get("unidades") or 0) != int(cantidad):
+                continue
+            # Una factura de proceso no puede ser ANTERIOR a la orden de corte.
+            # Sin este piso, un documento viejo del mismo proveedor con la misma
+            # cantidad se pegaba a un lote nuevo.
+            nacida = (l.get("creada_at") or "")[:10]
+            if fecha_doc and nacida and fecha_doc < nacida:
+                continue
+            candidatos.append(l)
+        if len(candidatos) == 1:
+            return candidatos[0]
+        if len(candidatos) > 1:
+            log.info(f"[cruce] huella ambigua: {doc_prov} {concepto} "
+                     f"{cantidad:.0f}u coincide con "
+                     f"{[c['consecutivo'] for c in candidatos]}; no se cruza")
+        return None
 
     ds_sin_lote = []
+    ajenos = {"n": 0, "total": 0.0}   # de referencias que el OS no maneja
     matches: dict[str, list] = {}   # orden_corte_id → [(doc, item)]
     for doc in docs:
         doc_prov = _norm_doc(doc.get("proveedor_id"))
         for it in doc["items"]:
+            # SOLO items de proceso productivo. Al abrir la lectura a las
+            # facturas de compra entran TODAS: Apple, Shopify, el celular, la
+            # ferretería. Reportar eso como "no cruza con ningún lote" no es
+            # información, es ruido —121 documentos en la primera corrida—.
+            # Un item cuenta si trae REF o si su descripción nombra un proceso.
+            if not it.get("ref") and (it.get("concepto") or "otro") == "otro":
+                continue
             ref = _norm_ref(it.get("ref"))
             lote = lotes_por_ref.get(ref) if ref else None
             if not lote:
+                # Busca una referencia del OS DENTRO del texto (digitación sin la
+                # palabra REF). Es evidencia, no adivinanza: aparece el código.
                 lote = _match_fallback(it.get("descripcion") or "")
             via_documento = False
-            if not lote:
-                lote = _match_por_documento(doc_prov)
+            if not lote and not ref:
+                # SOLO cuando el documento no dice a qué referencia pertenece.
+                #
+                # Antes aquí había un nivel que emparejaba por NIT a secas —
+                # "si este proveedor tiene un solo lote pendiente, es este"—.
+                # Era inofensivo mientras el lector devolvía lista vacía; al
+                # empezar a llegar documentos de verdad produjo dos cruces
+                # falsos en la primera corrida: el DS-1-1518 (2×230u a $13.300
+                # y $14.500) se pegó a un lote de 336u y generó una alerta de
+                # precio que no existía.
+                #
+                # Y si el documento SÍ trae su REF pero esa referencia no es de
+                # ningún lote del OS, la respuesta correcta es "no cruza" —son
+                # las referencias anteriores al sistema, que siguen
+                # facturándose—. Adivinar ensucia el costo de dos referencias a
+                # la vez y no se nota mirando la pantalla.
+                lote = _match_por_huella(doc_prov, it, doc)
                 via_documento = lote is not None
             if not lote:
+                # SOLO LO QUE PUEDE SER NUESTRO (2026-08-10, pedido de Sebastián:
+                # "solo debes traer los documentos de las referencias que tenemos
+                # aquí"). La lista traía 64 filas y 34 eran de referencias que el
+                # OS nunca conoció —producción anterior al sistema, que sigue
+                # facturándose—. Una lista así no se revisa: se ignora.
+                #
+                #   · trae REF y es del OS      → sí: debió cruzar, hay algo que ver
+                #   · trae REF y NO es del OS   → no: es producción vieja
+                #   · sin REF (los DS)          → solo si ese proveedor tiene algún
+                #                                 lote del OS esperando ese proceso
+                #
+                # Lo que se oculta se CUENTA y se reporta. Una lista que se poda en
+                # silencio se lee como "no hay nada más", que es peor que la
+                # lista larga.
+                if ref:
+                    nuestro = ref in refs_del_os
+                    motivo = "ref_del_os_sin_lote"
+                else:
+                    nuestro = any(
+                        _doc_match((l.get("documentos_por_concepto") or {}).get(
+                            it.get("concepto") or "") or "", doc_prov)
+                        for l in lotes)
+                    motivo = "sin_referencia_legible"
+                if not nuestro:
+                    ajenos["n"] += 1
+                    ajenos["total"] += it["total_sin_iva"]
+                    continue
                 ds_sin_lote.append({
                     "ds":         doc["ds"],
                     "fecha":      doc["fecha"],
                     "proveedor":  doc.get("proveedor_nombre") or doc.get("proveedor_id"),
                     "descripcion": it["descripcion"],
+                    "concepto":   it.get("concepto"),
+                    "ref":        it.get("ref"),
+                    "motivo":     motivo,
                     "total":      it["total_sin_iva"],
                 })
                 continue
@@ -5344,36 +6230,81 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                 }
             matches.setdefault(lote["orden_corte_id"], []).append((doc, it))
 
-    # PASO 2 — Evaluar cada lote contra la SUMA de sus DS.
+    # PASO 2 — Evaluar cada lote, CONCEPTO POR CONCEPTO.
+    #
+    # Un lote recibe facturas de confección, lavandería y terminación, y cada
+    # proceso tiene su propio precio pactado. Antes se sumaba todo junto y se
+    # comparaba contra el precio de CONFECCIÓN: apenas entrara la factura de
+    # lavandería, el lote gritaba "precio distinto" siendo que todo estaba bien.
+    #
+    # Así que se separan dos cosas que antes eran una:
+    #   · el TOTAL de procesos (todos los conceptos) → alimenta el margen real
+    #   · la COMPARACIÓN → cada concepto contra SU precio, y solo si hay precio
+    #     pactado. Lavandería no lo tiene en la ruta: se registra y no se juzga.
     for lote in lotes:
         pares = matches.get(lote["orden_corte_id"]) or []
         if not pares:
             continue
-        cantidad_total = sum(it["cantidad"] for _, it in pares)
-        total_real = round(sum(it["total_sin_iva"] for _, it in pares), 2)
-        valor_unit = round(total_real / cantidad_total, 2) if cantidad_total > 0 else 0
+
+        por_concepto: dict = {}
+        for doc, it in pares:
+            c = it.get("concepto") or "otro"
+            b = por_concepto.setdefault(
+                c, {"cantidad": 0.0, "total": 0.0, "docs": [], "proveedores": []})
+            b["cantidad"] += it["cantidad"]
+            b["total"] = round(b["total"] + it["total_sin_iva"], 2)
+            if doc["ds"] not in b["docs"]:
+                b["docs"].append(doc["ds"])
+            prov = doc.get("proveedor_nombre") or doc.get("proveedor_id")
+            if prov and prov not in b["proveedores"]:
+                b["proveedores"].append(prov)
+        for b in por_concepto.values():
+            b["valor_unitario"] = (round(b["total"] / b["cantidad"], 2)
+                                   if b["cantidad"] > 0 else 0)
+
+        total_procesos = round(sum(b["total"] for b in por_concepto.values()), 2)
+        conf = por_concepto.get("confeccion") or {}
+
+        lote["por_concepto"] = por_concepto
         lote["ds"] = {
-            "ds":              " + ".join(d["ds"] for d, _ in pares),
+            # dict.fromkeys en vez de set: conserva el orden de llegada.
+            "ds":              " + ".join(dict.fromkeys(d["ds"] for d, _ in pares)),
             "fecha":           max(d["fecha"] for d, _ in pares),
             "proveedor":       (pares[0][0].get("proveedor_nombre")
                                 or pares[0][0].get("proveedor_id")),
-            "cantidad":        cantidad_total,
-            "valor_unitario":  valor_unit,
-            "total_real":      total_real,
+            # cantidad y valor unitario son los de CONFECCIÓN: son los que se
+            # comparan contra el precosteo. `total_real` sí es todo.
+            "cantidad":        conf.get("cantidad", 0.0),
+            "valor_unitario":  conf.get("valor_unitario", 0),
+            "total_confeccion": conf.get("total", 0.0),
+            "total_real":      total_procesos,
+            "conceptos":       sorted(por_concepto.keys()),
             "saldo_por_pagar": round(sum(
                 d["balance"] for d in {d["ds"]: d for d, _ in pares}.values()), 2),
         }
-        dif_precio_pct = (
-            abs(valor_unit - lote["precio_teorico"]) / lote["precio_teorico"] * 100
-            if lote["precio_teorico"] > 0 else 0
-        )
-        if lote["precio_teorico"] > 0 and dif_precio_pct > TOLERANCIA_PRECIO_PCT:
-            lote["estado"] = "precio_distinto"
-        elif lote["unidades"] > 0 and abs(cantidad_total - lote["unidades"]) > TOLERANCIA_CANTIDAD:
-            lote["estado"] = "cantidad_distinta"
-        else:
-            lote["estado"] = "ok"
-        lote["desviacion"] = round(total_real - lote["total_teorico"], 2)
+
+        problemas = []
+        for concepto, precio_pactado in (("confeccion", lote["precio_teorico"]),
+                                         ("terminacion", lote["precio_terminacion"])):
+            b = por_concepto.get(concepto)
+            if not b or precio_pactado <= 0:
+                continue
+            dif_pct = abs(b["valor_unitario"] - precio_pactado) / precio_pactado * 100
+            if dif_pct > TOLERANCIA_PRECIO_PCT:
+                problemas.append({"tipo": "precio_distinto", "concepto": concepto,
+                                  "pactado": precio_pactado,
+                                  "facturado": b["valor_unitario"],
+                                  "docs": b["docs"]})
+            elif (lote["unidades"] > 0
+                  and abs(b["cantidad"] - lote["unidades"]) > TOLERANCIA_CANTIDAD):
+                problemas.append({"tipo": "cantidad_distinta", "concepto": concepto,
+                                  "facturado": b["cantidad"], "docs": b["docs"]})
+        lote["problemas"] = problemas
+        lote["estado"] = problemas[0]["tipo"] if problemas else "ok"
+        # Desviación comparable: confección real contra confección teórica. Antes
+        # restaba el total de TODOS los conceptos menos solo el de confección.
+        lote["desviacion"] = round(conf.get("total", 0.0) - lote["total_teorico"], 2)
+        lote["total_procesos_real"] = total_procesos
 
     # ── Alertas ──────────────────────────────────────────────────
     alertas = []
@@ -5396,23 +6327,28 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                 "tipo": "sin_ds", "severidad": "media",
                 "mensaje": f"Lote {l['consecutivo']} (REF {l['referencia']}) — "
                            f"{l['confeccionista'] or 'confección'} entregó hace {dias} día(s) "
-                           f"y aún no tiene documento soporte en Siigo.",
+                           f"y aún no tiene factura de confección en Siigo.",
             })
-        elif l["estado"] == "precio_distinto":
-            ds = l["ds"]
-            alertas.append({
-                "tipo": "precio_distinto", "severidad": "alta",
-                "mensaje": f"Lote {l['consecutivo']}: DS {ds['ds']} pagó "
-                           f"${ds['valor_unitario']:,.0f}/prenda pero el precosteo dice "
-                           f"${l['precio_teorico']:,.0f} (desviación ${l['desviacion']:,.0f}).",
-            })
-        elif l["estado"] == "cantidad_distinta":
-            ds = l["ds"]
-            alertas.append({
-                "tipo": "cantidad_distinta", "severidad": "alta",
-                "mensaje": f"Lote {l['consecutivo']}: DS {ds['ds']} contabilizó "
-                           f"{ds['cantidad']:.0f} unidades pero se cortaron {l['unidades']}.",
-            })
+        else:
+            # Una alerta por PROBLEMA, diciendo de qué proceso se trata. Sin el
+            # concepto en el mensaje, "el precio no cuadra" no dice a quién
+            # llamar: al taller de confección o al de terminación.
+            for pr in (l.get("problemas") or []):
+                docs = " + ".join(pr.get("docs") or []) or "—"
+                if pr["tipo"] == "precio_distinto":
+                    alertas.append({
+                        "tipo": "precio_distinto", "severidad": "alta",
+                        "mensaje": f"Lote {l['consecutivo']} · {pr['concepto']}: "
+                                   f"{docs} facturó ${pr['facturado']:,.0f}/prenda "
+                                   f"pero lo pactado es ${pr['pactado']:,.0f}.",
+                    })
+                elif pr["tipo"] == "cantidad_distinta":
+                    alertas.append({
+                        "tipo": "cantidad_distinta", "severidad": "alta",
+                        "mensaje": f"Lote {l['consecutivo']} · {pr['concepto']}: "
+                                   f"{docs} facturó {pr['facturado']:.0f} unidades "
+                                   f"pero se cortaron {l['unidades']}.",
+                    })
     # Proveedores de lotes activos SIN documento registrado — el ancla del
     # cruce. Aviso una sola vez por proveedor.
     sin_doc = sorted({l["confeccionista"] for l in lotes
@@ -5432,11 +6368,34 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                            f"viene de {pd['proveedor_ds']}, que NO es el proveedor asignado "
                            f"({l['confeccionista']}). Verifica en Siigo.",
             })
-    for d in ds_sin_lote:
+    # Facturas de proceso que no cruzan con ningún lote: UNA alerta con el
+    # total, no una por documento. La mayoría son de referencias anteriores al
+    # OS (la producción vieja sigue facturándose), así que veinte alertas rojas
+    # cada mañana entrenarían a ignorar el tablero. El detalle completo va en
+    # `ds_sin_lote` para quien lo quiera revisar.
+    sin_ref = [d for d in ds_sin_lote if d.get("motivo") == "sin_referencia_legible"]
+    con_ref = [d for d in ds_sin_lote if d.get("motivo") == "ref_del_os_sin_lote"]
+    if sin_ref:
+        # El caso REAL de hoy: los documentos soporte no traen referencia legible
+        # (la API de Siigo devuelve el nombre del producto, no el texto de la
+        # línea), así que solo se pueden atribuir cuando proveedor + concepto +
+        # cantidad señalan un único lote. Estos son de talleres que SÍ están
+        # trabajando lotes del OS, pero la cantidad no cuadra con ninguno.
+        alertas.append({
+            "tipo": "ds_sin_referencia", "severidad": "media",
+            "mensaje": f"{len(sin_ref)} documento(s) soporte por "
+                       f"${sum(d['total'] for d in sin_ref):,.0f} son de talleres que "
+                       f"trabajan lotes del OS, pero no se pueden atribuir: no traen "
+                       f"referencia legible y la cantidad facturada no coincide con "
+                       f"ningún lote. Revísalos en Siigo.",
+        })
+    if con_ref:
         alertas.append({
             "tipo": "ds_sin_lote", "severidad": "media",
-            "mensaje": f"DS {d['ds']} de {d['proveedor']} (\"{d['descripcion'][:60]}\") "
-                       f"por ${d['total']:,.0f} no corresponde a ningún lote del OS.",
+            "mensaje": f"{len(con_ref)} factura(s) por "
+                       f"${sum(d['total'] for d in con_ref):,.0f} traen una referencia "
+                       f"del OS que no tiene lote cortado "
+                       f"({', '.join(dict.fromkeys(str(d.get('ref')) for d in con_ref))[:60]}).",
         })
 
     # ── Margen PLANEADO vs REAL por lote ─────────────────────────
@@ -5504,12 +6463,37 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             l["procesos_real_prenda"] = round(procesos_real_prenda, 2)
             l["costo_real_prenda"] = costo_real
             l["margen_real"] = round((precio_sin - costo_real) / precio_sin * 100, 1)
+            # ¿ESTÁ COMPLETO? Cambiar el bloque entero de procesos por lo que
+            # llegó hasta ahora infla el margen mientras falten facturas: con
+            # solo la confección del lote 2607-0001 daba 72,5% real contra 62,9%
+            # planeado, que se lee como una ganancia que no existe. Se marca
+            # como parcial y se dice qué falta.
+            llegaron = set((ds.get("conceptos") or []))
+            faltan = [c for c in (l.get("conceptos_esperados") or [])
+                      if c not in llegaron]
+            l["conceptos_faltantes"] = faltan
+            l["margen_real_parcial"] = bool(faltan)
         else:
             l["costo_real_prenda"] = None
             l["margen_real"] = None
+            l["margen_real_parcial"] = False
+            l["conceptos_faltantes"] = []
 
-    total_teorico = round(sum(l["total_teorico"] for l in lotes), 2)
-    total_real = round(sum((l.get("ds") or {}).get("total_real", 0) for l in lotes), 2)
+    # DESVIACIÓN SOLO SOBRE LO YA FACTURADO. Sumar el teórico de los lotes que
+    # todavía no tienen factura y llamar a eso "desviación" da un número enorme
+    # y negativo que se lee como un ahorro —en la primera corrida: −$54,5 M—
+    # cuando en realidad es plata que falta por facturar. Son dos cosas
+    # distintas y ahora se muestran como dos cosas distintas.
+    #
+    # `total_real` es lo comparable con el teórico: solo confección. Mezclar
+    # lavandería con confección y restarle el teórico de confección daba una
+    # desviación falsa en cuanto entrara la primera factura de lavandería.
+    facturados = [l for l in lotes if (l.get("ds") or {}).get("total_confeccion")]
+    total_teorico = round(sum(l["total_teorico"] for l in facturados), 2)
+    total_real = round(sum((l.get("ds") or {}).get("total_confeccion", 0) for l in facturados), 2)
+    total_procesos = round(sum(l.get("total_procesos_real", 0) for l in lotes), 2)
+    pendiente_facturar = round(sum(l["total_teorico"] for l in lotes
+                                   if l not in facturados), 2)
 
     return {
         "ok": True,
@@ -5520,10 +6504,16 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             "con_alerta":     len(alertas),
             "total_teorico":  total_teorico,
             "total_real":     total_real,
+            "total_procesos": total_procesos,
             "desviacion":     round(total_real - total_teorico, 2),
+            "pendiente_facturar": pendiente_facturar,
+            "lotes_facturados":   len(facturados),
         },
         "lotes":       lotes,
         "ds_sin_lote": ds_sin_lote,
+        # Lo que se dejó fuera de esa lista, contado. Nunca se poda en silencio.
+        "ajenos":      {"documentos": ajenos["n"],
+                        "total": round(ajenos["total"], 2)},
         "alertas":     alertas,
     }
 
@@ -5867,3 +6857,140 @@ def guardar_separacion(ruta_id: str, *, tipo: str, items: dict,
         except Exception as e:
             log.warning(f"[separacion] liberar impresión falló OC {oc_id} ({tipo}): {e}")
     return entrada
+
+
+# Columnas de timestamp por etapa. Se declara UNA vez acá porque tanto avanzar
+# como devolver necesitan el mismo mapa, y tenerlo duplicado es la forma segura
+# de que un día alguien agregue una etapa en un sitio y no en el otro.
+TS_POR_ETAPA = {
+    "aceptado":              "aceptado_at",
+    "en_confeccion":         "confeccion_iniciada_at",
+    "lavanderia":            "lavanderia_at",
+    "terminacion_recibida":  "terminacion_recibida_at",
+    "terminacion_terminada": "terminacion_terminada_at",
+    "despachado":            "despachado_at",
+}
+
+
+def devolver_etapa_ruta(ruta_id: str, etapa_destino: str, *, motivo: str,
+                        usuario: str = "") -> dict:
+    """Devuelve un lote a una etapa ANTERIOR, borrando los sellos que se deshacen.
+
+    POR QUÉ EXISTE (2026-08-19). Avanzar de etapa es un clic; devolverse no
+    existía. Sebastián marcó por error un lote como recibido en terminación y la
+    única forma de arreglarlo fue que yo entrara a la base a mano. Eso le va a
+    pasar a un cortador un martes a las 3 de la tarde, y ahí no va a haber nadie
+    mirando la base — el lote se queda diciendo una mentira, y el tablero con él.
+
+    TRES REGLAS QUE NO SON OBVIAS:
+
+    1. Se BORRAN los timestamps de las etapas que se deshacen. Si solo se
+       cambiara `etapa`, el lote diría "estoy en lavandería" con una fecha de
+       terminación puesta: cualquier informe que mida tiempos por etapa daría
+       cifras falsas, y nadie sabría por qué.
+    2. Exige MOTIVO. Un retroceso sin explicación es indistinguible de un error
+       nuevo cuando alguien lo revisa dos semanas después.
+    3. NO borra la remisión de lavandería ni los documentos. Devolver la etapa es
+       corregir dónde está el lote, no negar que el papel llegó. Si además hay
+       que quitar el documento, es otra acción explícita.
+    """
+    orden = _ruta_orden_map()
+    if etapa_destino not in orden:
+        raise ValueError(f"etapa_invalida:{etapa_destino}")
+    if not (motivo or "").strip():
+        raise ValueError("motivo_obligatorio")
+
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    r = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
+    if not r:
+        raise ValueError("no_encontrada")
+    actual = (r[0].get("etapa") or "asignado")
+    if orden[etapa_destino] >= orden.get(actual, 0):
+        raise ValueError(f"no_es_un_retroceso:{actual}→{etapa_destino}")
+
+    update: dict = {"etapa": etapa_destino, "updated_at": _now_iso()}
+    borradas = []
+    for etapa, col in TS_POR_ETAPA.items():
+        if orden[etapa] > orden[etapa_destino] and r[0].get(col):
+            update[col] = None
+            borradas.append(etapa)
+
+    sb.table("hoja_ruta_lote").update(update).eq("id", ruta_id).execute()
+    try:
+        crear_nota_ruta(
+            ruta_id=ruta_id, actor="admin",
+            mensaje=(f"Etapa devuelta de '{actual}' a '{etapa_destino}'. "
+                     f"Motivo: {motivo.strip()}"
+                     + (f" · Sellos borrados: {', '.join(borradas)}" if borradas else "")),
+            autor=usuario or "OS")
+    except Exception as e:
+        log.warning(f"[ruta] nota de retroceso falló: {str(e)[:160]}")
+    log.info(f"[ruta {ruta_id}] devuelta {actual} → {etapa_destino} por {usuario}")
+    fresca = (sb.table("hoja_ruta_lote").select("*").eq("id", ruta_id).limit(1).execute()).data
+    return {"ok": True, "de": actual, "a": etapa_destino,
+            "sellos_borrados": borradas, "ruta": fresca[0] if fresca else {}}
+
+
+def registrar_cantidad_terminacion(ruta_id: str, cantidad: int) -> dict:
+    """Guarda cuántas prendas dice terminación que recibió, y cierra el cruce.
+
+    ESTE ES EL ESLABÓN QUE FALTABA (Sebastián, 2026-08-19: «eso lo averiguamos
+    con lo que llega a terminación»). La cadena queda:
+
+        cortadas ── remisión a lavandería ── recibidas en terminación
+
+    y la diferencia entre las dos últimas es, exactamente, lo que se quedó en la
+    lavandería. Se avisa EN EL MOMENTO en que terminación confirma, porque
+    perseguir prendas perdidas sirve mientras alguien recuerda el lote — no en el
+    inventario de fin de mes.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    sb.table("hoja_ruta_lote").update(
+        {"term_cantidad_recibida": int(cantidad), "updated_at": _now_iso()}
+    ).eq("id", ruta_id).execute()
+
+    try:
+        from backend.services import lavanderia_chase as lav
+        cruce = lav.cruce_cantidades(ruta_id)
+    except Exception as e:
+        log.warning(f"[terminacion] cruce falló: {str(e)[:160]}")
+        return {"cantidad": int(cantidad)}
+
+    esperadas = cruce.get("en_remision") or cruce.get("cortadas")
+    faltan = None if esperadas is None else int(esperadas) - int(cantidad)
+    try:
+        crear_nota_ruta(
+            ruta_id=ruta_id, actor="terminacion",
+            mensaje=(f"Terminación recibió {cantidad} prendas."
+                     + ("" if faltan is None else
+                        f" Se esperaban {esperadas}: "
+                        + ("cuadra." if faltan == 0
+                           else f"FALTAN {faltan}." if faltan > 0
+                           else f"llegaron {abs(faltan)} de más."))),
+            autor="portal de terminación")
+    except Exception as e:
+        log.warning(f"[terminacion] nota falló: {str(e)[:160]}")
+
+    if faltan:
+        try:
+            from backend.services import notificaciones as notif
+            cons = cruce.get("consecutivo") or "?"
+            notif.crear_para_modulo(
+                modulo="produccion_cortador", tipo="lavanderia_pendiente",
+                titulo=(f"Lote {cons}: {'faltan' if faltan > 0 else 'sobran'} "
+                        f"{abs(faltan)} prendas al llegar a terminación"),
+                mensaje=(f"Se enviaron {esperadas} a lavandería y terminación "
+                         f"recibió {cantidad}. Conviene revisarlo hoy, mientras "
+                         f"en la lavandería recuerdan el lote."),
+                enlace="/produccion/lavanderia", creado_por="sistema")
+        except Exception as e:
+            log.warning(f"[terminacion] aviso de descuadre falló: {str(e)[:160]}")
+
+    log.info(f"[terminacion] lote {cruce.get('consecutivo')} recibió {cantidad} "
+             f"(esperadas {esperadas}, dif {faltan})")
+    return {"cantidad": int(cantidad), "esperadas": esperadas, "faltan": faltan,
+            "cruce": cruce}

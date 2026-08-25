@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
+import os
 import time
 from datetime import datetime
 import streamlit as st
@@ -74,12 +75,51 @@ def _test_supabase() -> dict:
         return {"ok": False, "ms": int((time.time() - t0) * 1000), "msg": str(e)[:100]}
 
 
+_CLAVES_SHOPIFY = ("SHOPIFY_STORE", "SHOPIFY_CLIENT_ID", "SHOPIFY_CLIENT_SECRET",
+                   "SHOPIFY_ACCESS_TOKEN", "SHOPIFY_API_VERSION")
+
+
+def _config_shopify(clave: str, default: str = "") -> str:
+    """Config de Shopify venga de donde venga: secrets.toml o variable de entorno.
+
+    El tablero corre con `.streamlit/secrets.toml`, pero el backend y los
+    schedulers leen `os.environ`. Mirar sólo uno de los dos deja media casa a
+    oscuras según dónde esté desplegado.
+    """
+    return _secret(clave) or os.environ.get(clave, "") or default
+
+
+def _token_shopify() -> str:
+    """Token vigente, por el mismo camino que el resto del OS.
+
+    Esta página probaba con el `SHOPIFY_ACCESS_TOKEN` crudo, así que desde que
+    revocaron el legacy mostraba Shopify en rojo aunque el OS estuviera
+    hablándole a la tienda sin problema — el tablero de diagnóstico mintiendo
+    justo cuando más se lo consulta. Ahora pregunta como todos: shopify_auth
+    (client_credentials, 24h) y sólo cae al legacy si no hay app configurada.
+    """
+    # shopify_auth lee del entorno; si la config vive en secrets.toml se la
+    # pasamos (sin pisar lo que ya venga del entorno real).
+    for clave in _CLAVES_SHOPIFY:
+        valor = _secret(clave)
+        if valor and not os.environ.get(clave):
+            os.environ[clave] = valor
+    try:
+        from backend.services import shopify_auth
+        tok = shopify_auth.token() or ""
+        if tok:
+            return tok
+    except Exception:
+        pass
+    return _config_shopify("SHOPIFY_ACCESS_TOKEN")
+
+
 def _test_shopify() -> dict:
     t0 = time.time()
     try:
-        store = _secret("SHOPIFY_STORE")
-        token = _secret("SHOPIFY_ACCESS_TOKEN")
-        ver   = _secret("SHOPIFY_API_VERSION", "2024-01")
+        store = _config_shopify("SHOPIFY_STORE")
+        token = _token_shopify()
+        ver   = _config_shopify("SHOPIFY_API_VERSION", "2024-01")
         if not store or not token:
             return {"ok": False, "ms": 0, "msg": "STORE/TOKEN no configurados"}
         r = requests.get(

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { CasillaBusqueda, useBusqueda } from "@/components/buscador";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -28,10 +29,17 @@ export default function IngresosPage() {
     queryFn: () => api.get("/api/produccion/ingreso?limit=100"),
   });
 
+  // LOS HOOKS VAN ANTES DE CUALQUIER RETURN. Este estaba debajo del
+  // `isLoading` y eso es una llamada condicional a un hook: en el render donde
+  // llegan los datos aparece un hook que antes no estaba, y React revienta con
+  // "Rendered more hooks than during the previous render". El build NO lo marca
+  // —compila igual— y la pantalla queda en blanco: "Application error".
+  const ingresos = q.data?.ingresos || [];
+  const { q: busca, setQ: setBusca, filtrados, buscando } = useBusqueda(ingresos, (i) => [i.numero_ingreso, i.textilera, i.numero_documento, i.tipo_documento, i.estado]);
+
   if (q.isLoading) return <LoadingState label="Cargando ingresos…" />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
 
-  const ingresos = q.data?.ingresos || [];
 
   return (
     <PageShell
@@ -39,6 +47,12 @@ export default function IngresosPage() {
       subtitle={`${ingresos.length} órdenes de ingreso registradas`}
       onRefresh={() => q.refetch()}
     >
+      <CasillaBusqueda
+        valor={busca} onChange={setBusca}
+        placeholder="Buscar por número de ingreso, textilera o documento…"
+        visibles={filtrados.length} total={ingresos.length}
+      />
+
       <div className="flex justify-end">
         <Link
           href="/produccion/ingreso/nuevo"
@@ -68,7 +82,7 @@ export default function IngresosPage() {
                 </tr>
               </thead>
               <tbody>
-                {ingresos.map((i) => (
+                {filtrados.map((i) => (
                   <tr key={i.id}
                     onClick={() => router.push(`/produccion/ingreso/${i.id}`)}
                     className="border-b border-border hover:bg-cloud/50 cursor-pointer">

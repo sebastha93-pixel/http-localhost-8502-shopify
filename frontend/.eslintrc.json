@@ -1,0 +1,45 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// UNA SOLA REGLA, A PROPÓSITO
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// POR QUÉ EXISTE (2026-08-14): el diseñador abrió /produccion/precosteo y le
+// salió "Application error: a client-side exception has occurred". La causa era
+// un `useBusqueda(...)` puesto DEBAJO del `if (isLoading) return …`. Eso es una
+// llamada condicional a un hook: en el render de "cargando" React cuenta N
+// hooks y en el de "con datos" cuenta N+1, entonces aborta el árbol completo y
+// la pantalla queda en blanco.
+//
+// Lo peligroso es que NI `next build` NI `tsc --noEmit` lo marcan: no es un
+// error de tipos ni de sintaxis, es una regla de runtime de React. Compila
+// perfecto y revienta en la cara del usuario. Se fue a producción en 10
+// pantallas de producción a la vez.
+//
+// `react-hooks/rules-of-hooks` sí lo atrapa, y el `prebuild` de package.json lo
+// corre antes de cada build —también en Vercel—, así que un hook condicional
+// ahora ROMPE EL DEPLOY en vez de romper la pantalla.
+//
+// SE DEJA UNA SOLA REGLA A PROPÓSITO. Prender el preset completo sobre un
+// código que nunca pasó por lint traería decenas de hallazgos de estilo y
+// tumbaría deploys por cosas que no le importan a nadie hoy. Esta regla es
+// distinta: cada vez que dispara, es una pantalla en blanco.
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  "root": true,
+  "parser": "@typescript-eslint/parser",
+  "parserOptions": {
+    "ecmaVersion": 2022,
+    "sourceType": "module",
+    "ecmaFeatures": { "jsx": true }
+  },
+  "plugins": ["react-hooks", "@next/next"],
+  "rules": {
+    "react-hooks/rules-of-hooks": "error",
+
+    // Apagada, pero DECLARADA: hay archivos con `eslint-disable-next-line
+    // @next/next/no-img-element`, y ESLint falla si una directiva menciona una
+    // regla que no existe. Declararla en "off" hace que esas líneas resuelvan
+    // sin traer el preset entero de Next.
+    "@next/next/no-img-element": "off"
+  },
+  "ignorePatterns": [".next/", "node_modules/", "next-env.d.ts"]
+}

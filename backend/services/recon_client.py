@@ -176,3 +176,68 @@ def excepciones(*, limite: int = 100) -> dict:
     for x in items:
         por_tipo[x["tipo"] or "?"] = por_tipo.get(x["tipo"] or "?", 0) + 1
     return {"disponible": True, "items": items, "por_tipo": por_tipo}
+
+
+# ── Recaudos de contraentrega, pedido por pedido ────────────────────────────
+
+_TTL_RECAUDOS = 900          # 15 min: son ~1.250 filas y no cambian por minuto
+_cache_recaudos: dict = {}
+
+
+def recaudos_cod(*, desde: Optional[str] = None) -> dict:
+    """Qué pedidos de contraentrega reporta Melonn haber recaudado.
+
+    ESTA ES LA ÚNICA FUENTE del dato. El OS intentó deducirlo del saldo de las
+    facturas de Siigo y no se puede: las facturas de contraentrega se cierran
+    contra la cuenta "CONTRA ENTREGA CREDITO 10 DIAS", así que saldo 0 significa
+    "venta a crédito registrada", no "la plata llegó".
+
+    Devuelve {"disponible": bool, "por_orden": {orden: {...}}, …}. Si el servicio
+    no responde NO devuelve un mapa vacío disfrazado de éxito: un mapa vacío haría
+    ver todos los pedidos como "sin recaudo", o sea inventaría una deuda.
+    """
+    clave = desde or "default"
+    hit = _cache_recaudos.get(clave)
+    if hit and (time.time() - hit[0]) < _TTL_RECAUDOS:
+        return hit[1]
+
+    params = {"since": desde} if desde else None
+    ok, d = _get("/api/cod-collections", params=params)
+    if not ok or not isinstance(d, dict):
+        motivo = d if isinstance(d, str) else "respuesta inesperada"
+        log.warning(f"[recon] recaudos COD no disponibles: {str(motivo)[:140]}")
+        if hit:
+            viejo = dict(hit[1])
+            viejo["obsoleto"] = True
+            viejo["edad_s"] = int(time.time() - hit[0])
+            return viejo
+        return {"disponible": False, "motivo": str(motivo)[:200]}
+
+    por_orden: dict = {}
+    for r in (d.get("recaudos") or []):
+        o = str(r.get("orden") or "").strip()
+        if not o:
+            continue
+        prev = por_orden.get(o)
+        if prev:
+            prev["monto"] = round(prev["monto"] + float(r.get("monto") or 0), 2)
+            prev["liquidado"] = prev["liquidado"] or bool(r.get("liquidado"))
+            prev["fecha"] = min(prev["fecha"], r.get("fecha") or "9999")
+        else:
+            por_orden[o] = {"monto": float(r.get("monto") or 0),
+                            "fecha": r.get("fecha") or "",
+                            "estado": r.get("estado"),
+                            "liquidado": bool(r.get("liquidado"))}
+
+    out = {
+        "disponible": True,
+        "desde":      d.get("desde"),
+        "total":      d.get("total"),
+        "monto":      d.get("monto"),
+        # Si el servicio cortó la lista, la deuda calculada sería falsa por
+        # exceso. Se propaga para que la pantalla no afirme un número incompleto.
+        "truncado":   bool(d.get("truncado")),
+        "por_orden":  por_orden,
+    }
+    _cache_recaudos[clave] = (time.time(), out)
+    return out
