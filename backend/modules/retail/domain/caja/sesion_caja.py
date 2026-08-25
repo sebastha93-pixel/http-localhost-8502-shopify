@@ -210,6 +210,44 @@ class SesionCaja:
                      motivo="anulación", usuario_id=usuario_id or self.abierta_por,
                      es_efectivo=es_efectivo, venta_id=venta_id)
 
+    def registrar_devolucion(self, monto: Dinero, *, motivo: str,
+                             usuario_id: str) -> None:
+        """El efectivo que se le entrega a una clienta por una venta de otro día.
+
+        ⚠️ VA CON `medio_efectivo_id`, NO SIN MEDIO DE PAGO. Parece un detalle
+        y es el que decide si el arqueo cuadra: `_calcular` suma los
+        movimientos FILTRANDO por medio, así que uno con el medio en nulo
+        simplemente no existe para el esperado. La caja habría esperado la
+        plata que la cajera acababa de entregar, y la diferencia se la habría
+        comido ella en el cierre.
+
+        NO ES UN RETIRO, aunque se le parezca en que saca plata: un retiro
+        necesita permiso para mover caja (es una sangría hacia la caja fuerte,
+        de la que sí hay que protegerse) y una devolución no — negarla dejaría
+        a la clienta esperando a que aparezca alguien con permiso, por una
+        operación que ya está documentada, con su motivo y su nota crédito.
+
+        Lo que sí se conserva de los movimientos manuales es INV-C6: no se
+        entrega efectivo que no está en el cajón. Se comprueba ANTES de anotar,
+        para no dejar el libro en negativo.
+        """
+        self._exigir_abierta_o_en_arqueo()
+        if monto.es_cero():
+            raise ReglaDeNegocio("una devolución no puede ser de cero")
+
+        disponible = self._esperado_efectivo_actual()
+        if (disponible - monto).es_negativo():
+            raise ReglaDeNegocio(
+                f"En la caja no hay {monto.formateado()} para devolver: el "
+                f"efectivo esperado es {disponible.formateado()}. Devuélvele "
+                f"al método original o deja crédito en tienda."
+            )
+
+        self._anotar(TipoMovimiento.DEVOLUCION, -monto,
+                     medio_pago_id=self.medio_efectivo_id, motivo=motivo,
+                     usuario_id=usuario_id, es_efectivo=True,
+                     autorizado_por=usuario_id)
+
     # ── Movimientos de efectivo ─────────────────────────────────────────────
 
     def registrar_retiro(self, monto: Dinero, *, motivo: str, usuario_id: str,

@@ -643,6 +643,69 @@ export async function anularVenta(
   }
 }
 
+// ── Devoluciones y cambios ──────────────────────────────────────────────────
+
+export interface LineaDevolvible {
+  sku: string;
+  nombre: string;
+  talla: string | null;
+  cantidad_vendida: number;
+  /** Lo que ya se devolvió en visitas anteriores. */
+  cantidad_devuelta: number;
+  /** El tope real de la casilla. No es `vendida`: es `vendida − devuelta`. */
+  cantidad_devolvible: number;
+  precio_unitario_con_iva_centavos: number;
+}
+
+export interface TicketDevolucion {
+  venta_id: string;
+  numero: string;
+  fecha: string;
+  cajera: string;
+  total_centavos: number;
+  anulada: boolean;
+  /** `false` sin turno abierto en esta caja: el efectivo se desactiva ANTES
+   *  de elegirlo, en vez de dejar llegar hasta el final y fallar. */
+  puede_efectivo: boolean;
+  lineas: LineaDevolvible[];
+}
+
+export type MotivoDevolucion = "talla" | "defecto" | "no_le_gusto" | "cambio_modelo";
+export type Reembolso = "efectivo" | "metodo_original" | "credito_tienda";
+
+export interface Devolucion {
+  devolucion_id: string;
+  numero_venta: string;
+  total_centavos: number;
+  unidades: number;
+  reembolso: Reembolso;
+  salio_del_cajon: boolean;
+  sesion_id: string | null;
+}
+
+export async function buscarTicket(numero: string): Promise<TicketDevolucion> {
+  try {
+    return await api.get<TicketDevolucion>(
+      `/api/retail/devoluciones/ticket/${encodeURIComponent(numero)}`);
+  } catch (e) {
+    return traducir(e);
+  }
+}
+
+export async function registrarDevolucion(cuerpo: {
+  devolucion_id: string;
+  venta_id: string;
+  seleccion: Record<string, number>;
+  motivo: MotivoDevolucion;
+  reembolso: Reembolso;
+}): Promise<Devolucion> {
+  try {
+    return await api.post<Devolucion>("/api/retail/devoluciones", cuerpo);
+  } catch (e) {
+    return traducir(e);
+  }
+}
+
 // ── Auditoría ───────────────────────────────────────────────────────────────
 
 export interface EventoAuditoria {

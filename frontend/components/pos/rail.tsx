@@ -9,12 +9,15 @@ import { usePathname } from "next/navigation";
  * Es lo que mi diseño no tenía: sin él, cada pantalla del POS era un callejón
  * sin salida. Viene del handoff.
  *
- * Sólo lleva a lo que existe. Devoluciones queda fuera de esta fase por
- * decisión de alcance, y un enlace que no lleva a nada enseña a la cajera a
- * desconfiar de la navegación.
+ * Sólo lleva a lo que existe, y por eso «Cambios» aparece hasta ahora: estuvo
+ * fuera mientras la pantalla no estaba construida, porque un enlace que no
+ * lleva a nada enseña a la cajera a desconfiar de la navegación. Ya existe
+ * (`/pos/devoluciones`), así que entra en el orden del handoff — segundo,
+ * justo después de Venta.
  */
 const SECCIONES = [
   { href: "/pos/venta", label: "Venta", icono: BolsaIcono, listo: true },
+  { href: "/pos/devoluciones", label: "Cambios", icono: FlechasIcono, listo: true },
   { href: "/pos/inventario", label: "Stock", icono: CajaIcono, listo: true },
   { href: "/pos/cierre", label: "Cierre", icono: CandadoIcono, listo: true },
   { href: "/pos/panel", label: "Panel", icono: BarrasIcono, listo: true },
@@ -94,6 +97,15 @@ function BolsaIcono() {
     <svg {...props} aria-hidden>
       <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" />
       <path d="M3 6h18M16 10a4 4 0 0 1-8 0" />
+    </svg>
+  );
+}
+/** Las dos flechas en círculo de Lucide (`refresh-ccw`): lo que vuelve. */
+function FlechasIcono() {
+  return (
+    <svg {...props} aria-hidden>
+      <path d="M3 2v6h6M21 22v-6h-6" />
+      <path d="M21 11.5A9 9 0 0 0 6.2 5.3L3 8M3 12.5a9 9 0 0 0 14.8 6.2L21 16" />
     </svg>
   );
 }

@@ -80,7 +80,8 @@ class RepositorioInventarioSQL:
 
     async def devolver(self, *, ubicacion_id: str, variante_id: str,
                        cantidad: int, referencia_id: str,
-                       usuario_id: str, motivo: str = "anulacion") -> int:
+                       usuario_id: str, motivo: str = "anulacion",
+                       referencia_tipo: str = "venta") -> int:
         """Devuelve prenda al saldo. El libro es APPEND-ONLY.
 
         No se borra ni se edita el asiento de la venta: se escribe el
@@ -98,10 +99,16 @@ class RepositorioInventarioSQL:
         if fila is None:
             raise LookupError(
                 f"no hay saldo registrado de {variante_id} en {ubicacion_id}")
+        # `referencia_tipo` es parámetro desde que existen las devoluciones: el
+        # asiento de una devolución apunta a LA DEVOLUCIÓN, no a la venta. Si
+        # apuntara a la venta, dos devoluciones parciales de la misma venta
+        # dejarían dos asientos indistinguibles y no habría forma de saber cuál
+        # movió qué. El valor por defecto conserva el comportamiento de la
+        # anulación, que es de donde viene este método.
         await self._asentar(
             ubicacion_id=ubicacion_id, variante_id=variante_id, delta=cantidad,
             saldo_despues=fila.cantidad, motivo=motivo,
-            referencia_tipo="venta", referencia_id=referencia_id,
+            referencia_tipo=referencia_tipo, referencia_id=referencia_id,
             usuario_id=usuario_id)
         return fila.cantidad
 

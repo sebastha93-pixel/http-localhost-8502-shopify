@@ -1602,6 +1602,185 @@ async def ventas_del_turno(
         motivo_anulacion=f["motivo_anulacion"]) for f in filas]
 
 
+# ── Devoluciones y cambios (vista 5 del handoff) ────────────────────────────
+
+
+class LineaDevolvible(BaseModel):
+    sku: str
+    nombre: str
+    talla: Optional[str] = None
+    cantidad_vendida: int
+    #  Lo que YA se devolvió en visitas anteriores. Va a la pantalla para que
+    #  el tope de cada casilla sea el saldo real y no la cantidad vendida —si
+    #  no, la cajera marca 2, pulsa, y se lleva un error que podía haberse
+    #  evitado antes de tocar nada.
+    cantidad_devuelta: int
+    cantidad_devolvible: int
+    precio_unitario_con_iva_centavos: int
+
+
+class TicketDevolucion(BaseModel):
+    venta_id: str
+    numero: str
+    fecha: str
+    cajera: str
+    total_centavos: int
+    anulada: bool
+    #  `false` cuando la caja no tiene turno abierto. La pantalla usa esto para
+    #  desactivar «Efectivo» ANTES de que la cajera lo elija, en vez de
+    #  dejarla llegar hasta el final y fallar.
+    puede_efectivo: bool
+    lineas: List[LineaDevolvible]
+
+
+class DevolucionEntrada(BaseModel):
+    #  Lo genera el dispositivo, igual que el `venta_id`: hace la petición
+    #  idempotente, así que reintentarla en un mostrador con mala señal
+    #  produce UNA devolución, no tres.
+    devolucion_id: str
+    venta_id: str
+    #  {sku: cantidad}. Las que vengan en cero se ignoran (casillas sin marcar).
+    seleccion: Dict[str, int]
+    motivo: str
+    reembolso: str
+
+
+class DevolucionSalida(BaseModel):
+    devolucion_id: str
+    numero_venta: str
+    total_centavos: int
+    unidades: int
+    reembolso: str
+    salio_del_cajon: bool
+    sesion_id: Optional[str] = None
+
+
+@router.get("/devoluciones/ticket/{numero}", response_model=TicketDevolucion)
+async def buscar_ticket(
+    numero: str,
+    s=Depends(sesion_lectura),
+    _: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Busca la venta por el número impreso en la tirilla.
+
+    POR NÚMERO Y NO POR ID: lo que la clienta trae en la mano es el papel, y
+    ahí está `FL-1537`. Pedirle el ULID de 26 caracteres a alguien que tiene
+    una fila esperando no es una opción.
+    """
+    from sqlalchemy import text as _t
+
+    limpio = (numero or "").strip().upper()
+    if not limpio:
+        raise HTTPException(400, {"error": "regla_de_negocio",
+                                  "mensaje": "Escribe el número del ticket."})
+
+    cab = (await s.execute(_t("""
+        SELECT v.id, v.numero, v.total, v.estado, v.cajera_id, v.caja_id,
+               v.cerrada_en,
+               EXISTS (SELECT 1 FROM retail.sesiones_caja sc
+                        WHERE sc.caja_id = v.caja_id AND sc.estado = 'abierta')
+                 AS hay_turno
+          FROM retail.ventas v
+         WHERE upper(v.numero) = :n AND v.estado <> 'borrador'
+         ORDER BY v.cerrada_en DESC NULLS LAST
+         LIMIT 1
+    """), {"n": limpio})).mappings().first()
+
+    if cab is None:
+        raise HTTPException(404, {"error": "no_existe",
+                                  "mensaje": f"No encontramos el ticket {limpio}."})
+
+    filas = (await s.execute(_t("""
+        SELECT vl.sku, vl.descripcion, vl.cantidad,
+               CASE WHEN vl.cantidad > 0
+                    THEN (vl.total_linea / vl.cantidad)::bigint
+                    ELSE 0 END AS unitario,
+               coalesce((
+                   SELECT sum(dl.cantidad)
+                     FROM retail.devolucion_lineas dl
+                     JOIN retail.devoluciones d ON d.id = dl.devolucion_id
+                    WHERE d.venta_id = vl.venta_id AND dl.sku = vl.sku
+               ), 0) AS devuelta
+          FROM retail.venta_lineas vl
+         WHERE vl.venta_id = :v
+         ORDER BY vl.orden
+    """), {"v": cab["id"]})).mappings().all()
+
+    def _talla(sku: str) -> Optional[str]:
+        """La talla NO es una columna: vive dentro del SKU (`92611-1T10`).
+
+        Se lee con el mismo value object que usa la venta, así que un formato
+        raro no revienta la pantalla — devuelve `None` y la línea se muestra
+        con su descripción, que ya la lleva.
+        """
+        try:
+            return Sku.parsear(sku).talla or None
+        except Exception:
+            return None
+
+    return TicketDevolucion(
+        venta_id=cab["id"], numero=cab["numero"],
+        fecha=cab["cerrada_en"].isoformat() if cab["cerrada_en"] else "",
+        cajera=cab["cajera_id"] or "", total_centavos=int(cab["total"]),
+        anulada=cab["estado"] == "anulada",
+        puede_efectivo=bool(cab["hay_turno"]),
+        lineas=[
+            LineaDevolvible(
+                sku=f["sku"], nombre=f["descripcion"], talla=_talla(f["sku"]),
+                cantidad_vendida=int(f["cantidad"]),
+                cantidad_devuelta=int(f["devuelta"]),
+                cantidad_devolvible=max(0, int(f["cantidad"]) - int(f["devuelta"])),
+                precio_unitario_con_iva_centavos=int(f["unitario"]),
+            )
+            for f in filas
+        ],
+    )
+
+
+@router.post("/devoluciones", response_model=DevolucionSalida)
+async def registrar_devolucion(
+    entrada: DevolucionEntrada,
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Registra la devolución y encola el caso que emitirá la nota crédito.
+
+    La nota crédito NO sale de aquí: la emite Postventa, que lleva meses en
+    producción haciéndolo contra Siigo. Ver la cabecera del comando.
+    """
+    from datetime import datetime, timezone
+    from backend.modules.retail.application.comandos.registrar_devolucion import (
+        RegistrarDevolucion,
+    )
+
+    try:
+        r = await RegistrarDevolucion(uow).ejecutar(
+            devolucion_id=entrada.devolucion_id, venta_id=entrada.venta_id,
+            seleccion=entrada.seleccion, motivo=entrada.motivo,
+            reembolso=entrada.reembolso, usuario_id=usuario.id,
+            ahora=datetime.now(timezone.utc))
+    except RequiereAutorizacion as e:
+        raise HTTPException(403, {"error": "sin_permiso", "mensaje": str(e)})
+    except ReglaDeNegocio as e:
+        # 400 y no 500: son las guardas del agregado hablando —«de esa
+        # referencia ya se devolvió todo», «hace falta turno abierto»—, y la
+        # cajera puede resolverlas sin llamar a nadie.
+        raise HTTPException(400, {"error": "regla_de_negocio",
+                                  "mensaje": str(e)})
+    except IntegrityError:
+        # Mismo `devolucion_id` dos veces: el reintento de una pantalla con
+        # mala señal. La primera ya quedó, así que esto no es un error.
+        raise HTTPException(409, {"error": "ya_registrada",
+                                  "mensaje": "Esa devolución ya estaba registrada."})
+
+    return DevolucionSalida(
+        devolucion_id=r.devolucion_id, numero_venta=r.numero_venta,
+        total_centavos=r.total_centavos, unidades=r.unidades,
+        reembolso=r.reembolso, salio_del_cajon=r.salio_del_cajon,
+        sesion_id=r.sesion_id,
+    )
+
+
 class AnularEntrada(BaseModel):
     motivo: str = Field(min_length=5, max_length=200)
 
