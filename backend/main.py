@@ -177,6 +177,17 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"   ⚠️  Outbox retail no arrancó: {e}")
 
+        # La cadena de auditoría del POS. `verificar_cadena` llevaba meses
+        # prometiendo «lo corre el job diario» sin que ese job existiera: la
+        # única comprobación pasaba si alguien abría la pantalla.
+        try:
+            from backend.modules.retail.infrastructure import verificador_auditoria
+            if verificador_auditoria.start():
+                _h = verificador_auditoria.INTERVALO_SEGUNDOS // 3600
+                print(f"   🔗 Verificador de auditoría retail activo · cada {_h} h")
+        except Exception as e:
+            print(f"   ⚠️  Verificador de auditoría no arrancó: {e}")
+
         # One-time backfill: extraer custom_fields_values del raw JSONB
         # a las columnas dedicadas. Idempotente — marca done en sync_state
         # cuando termina para no repetir en cada arranque.
@@ -229,6 +240,11 @@ async def lifespan(app: FastAPI):
         try:
             from backend.modules.retail.infrastructure import planificador_outbox
             planificador_outbox.stop()
+        except Exception:
+            pass
+        try:
+            from backend.modules.retail.infrastructure import verificador_auditoria
+            verificador_auditoria.stop()
         except Exception:
             pass
         try:

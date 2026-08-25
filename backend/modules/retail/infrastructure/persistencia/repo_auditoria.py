@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -95,30 +95,73 @@ class RepositorioAuditoriaSQL:
         ))
         return h
 
+    #  Cuántos eslabones se traen por vuelta. Ver `verificar_cadena`.
+    LOTE_VERIFICACION = 2_000
+
     async def verificar_cadena(self, *, tienda_id: Optional[str] = None) -> dict:
-        """Recorre la cadena y dice dónde se rompe. Lo corre el job diario.
+        """Recorre la cadena y dice dónde se rompe.
 
-        Devuelve el primer eslabón malo, no sólo un booleano: "la auditoría no
-        cuadra" sin decir dónde no le sirve a nadie.
+        Devuelve el primer eslabón malo, no sólo un booleano: «la auditoría no
+        cuadra» sin decir dónde no le sirve a nadie.
+
+        ⚠️ SE RECORRE ENTERA Y POR LOTES, y las dos cosas importan.
+        **Entera** porque la amenaza es que alguien altere un evento VIEJO para
+        tapar un faltante; verificar sólo lo nuevo dejaría pasar exactamente el
+        caso del que la cadena protege. Y **por lotes** porque antes se traían
+        todas las filas de golpe a memoria: una venta escribe ~9 eventos, así
+        que una tienda normal pasa de 100.000 filas con sus `jsonb` en un año
+        — y esto lo llama la PANTALLA de auditoría en cada carga, no sólo el
+        job. Con el recorrido por lotes la memoria se queda plana pase lo que
+        pase; lo único que crece es el tiempo, y linealmente.
+
+        ⚠️ SE PAGINA POR `(ocurrido_en, id)`, NO POR `id` A SECAS. Es la clave
+        por la que ordenaba la versión anterior, y es la misma que usa
+        `_ULTIMO` al encadenar, así que cambiarla aquí alteraría en silencio
+        qué se considera «el eslabón anterior». Postgres compara tuplas
+        directamente, y el índice de la tabla es por esa pareja.
+
+        (Queda un supuesto heredado que este método no puede arreglar: al
+        registrar, `hash_anterior` sale del máximo por `(ocurrido_en, id)`. Si
+        un evento entrara con un `ocurrido_en` MÁS VIEJO que el último —una
+        venta offline sincronizada tarde—, quedaría encadenado a un eslabón
+        que no es su predecesor en ese orden, y la cadena se rompería al
+        registrarlo, no al verificarlo. Se deja anotado porque el día que eso
+        pase, el fallo va a parecer de aquí.)
         """
-        filas = (await self._s.execute(text("""
-            SELECT id, ocurrido_en, evento, payload, hash_anterior, hash
-              FROM retail.auditoria
-             WHERE tienda_id IS NOT DISTINCT FROM :tienda
-             ORDER BY ocurrido_en, id
-        """), {"tienda": tienda_id})).mappings().all()
-
         esperado = GENESIS
-        for f in filas:
-            if f["hash_anterior"] != esperado:
-                return {"integra": False, "roto_en": f["id"],
-                        "evento": f["evento"], "motivo": "eslabón_no_encadena"}
-            if calcular_hash(esperado, f["payload"]) != f["hash"]:
-                return {"integra": False, "roto_en": f["id"],
-                        "evento": f["evento"], "motivo": "payload_alterado"}
-            esperado = f["hash"]
+        vistos = 0
+        # Menor que cualquier `ocurrido_en` real; arranca la paginación.
+        cursor_fecha = datetime(1, 1, 1, tzinfo=timezone.utc)
+        cursor_id = 0
 
-        return {"integra": True, "eventos": len(filas), "ultimo_hash": esperado}
+        while True:
+            filas = (await self._s.execute(text("""
+                SELECT id, ocurrido_en, evento, payload, hash_anterior, hash
+                  FROM retail.auditoria
+                 WHERE tienda_id IS NOT DISTINCT FROM :tienda
+                   AND (ocurrido_en, id) > (:f, :i)
+                 ORDER BY ocurrido_en, id
+                 LIMIT :n
+            """), {"tienda": tienda_id, "f": cursor_fecha, "i": cursor_id,
+                   "n": self.LOTE_VERIFICACION})).mappings().all()
+            if not filas:
+                break
+
+            for f in filas:
+                if f["hash_anterior"] != esperado:
+                    return {"integra": False, "roto_en": f["id"],
+                            "evento": f["evento"], "motivo": "eslabón_no_encadena",
+                            "eventos": vistos}
+                if calcular_hash(esperado, f["payload"]) != f["hash"]:
+                    return {"integra": False, "roto_en": f["id"],
+                            "evento": f["evento"], "motivo": "payload_alterado",
+                            "eventos": vistos}
+                esperado = f["hash"]
+                vistos += 1
+
+            cursor_fecha, cursor_id = filas[-1]["ocurrido_en"], filas[-1]["id"]
+
+        return {"integra": True, "eventos": vistos, "ultimo_hash": esperado}
 
 
 class RepositorioOutboxSQL:
