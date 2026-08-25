@@ -2324,3 +2324,142 @@ async def diagnostico_comprobantes_siigo(
     _exigir_admin(usuario)
     from backend.modules.retail.infrastructure.siigo import comprobantes_siigo
     return comprobantes_siigo.diagnostico_comprobantes()
+
+
+# ── La cola hacia terceros ──────────────────────────────────────────────────
+#
+# Dos endpoints y no uno. El de DRENAR es el que hace el trabajo; el de MIRAR
+# existe porque una cola que nadie puede ver es una cola que se para en
+# silencio — y lo que se para en silencio aquí son facturas y notas crédito,
+# que es de lo que se entera uno en la declaración.
+
+
+class TrabajoEnCola(BaseModel):
+    id: int
+    tipo: str
+    agregado_tipo: str
+    agregado_id: str
+    estado: str
+    intentos: int
+    max_intentos: int
+    proximo_intento_en: str
+    ultimo_error: Optional[str] = None
+    creado_en: str
+
+
+class EstadoCola(BaseModel):
+    pendientes: int
+    procesando: int
+    fallidos: int
+    procesados: int
+    #  Los que esperan a que exista su manejador. Se cuentan APARTE de los
+    #  fallidos: no están rotos, están esperando a que alguien escriba una
+    #  función. Mezclarlos haría que el número de errores nunca baje de cero
+    #  y que, cuando aparezca uno de verdad, no se note.
+    sin_manejador: int
+    #  El más viejo sin procesar. Es EL número que hay que vigilar: la cola
+    #  puede tener mil trabajos y estar sana, o tener uno de hace tres días y
+    #  estar rota.
+    espera_maxima_minutos: Optional[float] = None
+    tipos_sin_manejador: List[str] = []
+    ultimos_fallidos: List[TrabajoEnCola] = []
+
+
+class ResumenDrenajeSalida(BaseModel):
+    tomados: int
+    procesados: int
+    reintentos: int
+    fallidos: int
+    sin_manejador: int
+    rescatados: int
+    errores: List[str] = []
+
+
+@router.get("/admin/outbox", response_model=EstadoCola)
+async def ver_cola(
+    s=Depends(sesion_lectura),
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Cómo va la cola. Sólo lectura."""
+    _exigir_admin(usuario)
+    from sqlalchemy import text as _t
+    from backend.modules.retail.infrastructure.postventa import MANEJADORES
+
+    conocidos = set(MANEJADORES)
+
+    conteos = (await s.execute(_t("""
+        SELECT estado, count(*) AS n FROM retail.outbox GROUP BY estado
+    """))).mappings().all()
+    por_estado = {c["estado"]: int(c["n"]) for c in conteos}
+
+    tipos = [r[0] for r in (await s.execute(_t("""
+        SELECT DISTINCT tipo FROM retail.outbox WHERE estado = 'pendiente'
+    """))).all()]
+    huerfanos = sorted(t for t in tipos if t not in conocidos)
+
+    sin_manejador = 0
+    if huerfanos:
+        sin_manejador = int((await s.execute(_t("""
+            SELECT count(*) FROM retail.outbox
+             WHERE estado = 'pendiente' AND tipo = ANY(:t)
+        """), {"t": huerfanos})).scalar() or 0)
+
+    espera = (await s.execute(_t("""
+        SELECT extract(epoch FROM (now() - min(creado_en))) / 60
+          FROM retail.outbox WHERE estado IN ('pendiente','procesando')
+    """))).scalar()
+
+    fallidos = (await s.execute(_t("""
+        SELECT id, tipo, agregado_tipo, agregado_id, estado, intentos,
+               max_intentos, proximo_intento_en, ultimo_error, creado_en
+          FROM retail.outbox WHERE estado = 'fallido'
+         ORDER BY id DESC LIMIT 10
+    """))).mappings().all()
+
+    return EstadoCola(
+        pendientes=por_estado.get("pendiente", 0),
+        procesando=por_estado.get("procesando", 0),
+        fallidos=por_estado.get("fallido", 0),
+        procesados=por_estado.get("procesado", 0),
+        sin_manejador=sin_manejador,
+        espera_maxima_minutos=round(float(espera), 1) if espera is not None else None,
+        tipos_sin_manejador=huerfanos,
+        ultimos_fallidos=[
+            TrabajoEnCola(
+                id=f["id"], tipo=f["tipo"], agregado_tipo=f["agregado_tipo"],
+                agregado_id=f["agregado_id"], estado=f["estado"],
+                intentos=f["intentos"], max_intentos=f["max_intentos"],
+                proximo_intento_en=f["proximo_intento_en"].isoformat(),
+                ultimo_error=f["ultimo_error"],
+                creado_en=f["creado_en"].isoformat(),
+            )
+            for f in fallidos
+        ],
+    )
+
+
+@router.post("/admin/outbox/drenar", response_model=ResumenDrenajeSalida)
+async def drenar_cola(
+    limite: int = Query(20, ge=1, le=200),
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Saca de la cola lo que ya toca intentar.
+
+    Es un endpoint y no un bucle eterno dentro del backend a propósito: así lo
+    dispara un cron —o una persona— y se puede ver qué hizo. Un hilo de fondo
+    que se muere en silencio deja la cola parada sin que nadie se entere, que
+    es exactamente el fallo del que este módulo se protege.
+    """
+    _exigir_admin(usuario)
+    from backend.modules.retail.application.comandos.drenar_outbox import DrenarOutbox
+    from backend.modules.retail.infrastructure.postventa import MANEJADORES
+
+    r = await DrenarOutbox(uow, MANEJADORES).ejecutar(
+        ahora=_ahora_utc(), limite=limite)
+
+    return ResumenDrenajeSalida(
+        tomados=r.tomados, procesados=r.procesados, reintentos=r.reintentos,
+        fallidos=r.fallidos, sin_manejador=r.sin_manejador,
+        rescatados=r.rescatados, errores=r.errores,
+    )
