@@ -164,6 +164,17 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"   ⚠️  Producción digest no arrancó: {e}")
 
+        # La cola del POS hacia terceros: notas crédito y, cuando Siigo deje
+        # usar los comprobantes de tienda, las facturas. Devuelve False —sin
+        # ruido— si RETAIL_DATABASE_URL no está puesta, que es el caso hoy en
+        # producción: el módulo retail todavía no está montado.
+        try:
+            from backend.modules.retail.infrastructure import planificador_outbox
+            if planificador_outbox.start():
+                print(f"   🧾 Outbox retail activo · cada {planificador_outbox.INTERVALO_SEGUNDOS}s")
+        except Exception as e:
+            print(f"   ⚠️  Outbox retail no arrancó: {e}")
+
         # One-time backfill: extraer custom_fields_values del raw JSONB
         # a las columnas dedicadas. Idempotente — marca done en sync_state
         # cuando termina para no repetir en cada arranque.
@@ -211,6 +222,11 @@ async def lifespan(app: FastAPI):
             from backend.core import produccion_scheduler
             produccion_scheduler.stop()
             produccion_scheduler.stop_warmer()
+        except Exception:
+            pass
+        try:
+            from backend.modules.retail.infrastructure import planificador_outbox
+            planificador_outbox.stop()
         except Exception:
             pass
         try:

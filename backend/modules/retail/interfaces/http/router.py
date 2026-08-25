@@ -2363,6 +2363,13 @@ class EstadoCola(BaseModel):
     espera_maxima_minutos: Optional[float] = None
     tipos_sin_manejador: List[str] = []
     ultimos_fallidos: List[TrabajoEnCola] = []
+    #  QUÉ HIZO EL HILO QUE DRENA, y cuándo. Es lo que convierte un hilo de
+    #  fondo mudo —que se muere en silencio y deja la cola parada hasta el
+    #  siguiente despliegue— en uno que se puede vigilar: si `corrio_en` se
+    #  queda atrás, el hilo está caído aunque la cola se vea normal.
+    #  `null` = el planificador no arrancó (sin RETAIL_DATABASE_URL, o este
+    #  worker no es el líder).
+    planificador: Optional[dict] = None
 
 
 class ResumenDrenajeSalida(BaseModel):
@@ -2416,7 +2423,11 @@ async def ver_cola(
          ORDER BY id DESC LIMIT 10
     """))).mappings().all()
 
+    from backend.modules.retail.infrastructure import planificador_outbox
+
     return EstadoCola(
+        planificador=(planificador_outbox.ultimo
+                      if planificador_outbox.ultimo.get("corrio_en") else None),
         pendientes=por_estado.get("pendiente", 0),
         procesando=por_estado.get("procesando", 0),
         fallidos=por_estado.get("fallido", 0),

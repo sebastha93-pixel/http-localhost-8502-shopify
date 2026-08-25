@@ -10,6 +10,8 @@ reintento que no puede abrir un segundo caso sobre la misma devolución.
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -333,3 +335,52 @@ def test_los_valores_traducidos_EXISTEN_en_postventa():
         assert L.validar_motivo(motivo_postventa(m.value)), m
     for r in Reembolso:
         assert L.validar_tipo(tipo_postventa(r.value)), r
+
+
+# ── El planificador ─────────────────────────────────────────────────────────
+
+def test_no_arranca_sin_base_configurada():
+    """El módulo retail hoy NO está montado en producción. Un hilo intentando
+    conectarse a una base que no existe llenaría los logs cada dos minutos."""
+    from backend.modules.retail.infrastructure import planificador_outbox
+    from backend.modules.retail.interfaces.http import dependencias
+
+    guardado = os.environ.get("RETAIL_DATABASE_URL")
+    os.environ.pop("RETAIL_DATABASE_URL", None)
+    try:
+        assert dependencias.configurado() is False
+        assert planificador_outbox.start() is False
+    finally:
+        if guardado is not None:
+            os.environ["RETAIL_DATABASE_URL"] = guardado
+
+
+def test_una_pasada_fallida_NO_mata_el_hilo():
+    """Un Postgres que se reinicia no puede dejar la cola parada hasta el
+    siguiente despliegue — que es justo lo que pasa si la excepción sube y se
+    lleva el thread por delante. Se prueba el cuerpo del bucle, no el hilo:
+    lo que importa es que la excepción se atrape y quede escrita."""
+    from backend.modules.retail.infrastructure import planificador_outbox as p
+
+    async def revienta():
+        raise RuntimeError("la base se fue")
+
+    original = p._una_pasada
+    p._una_pasada = revienta
+    p._parar.set()          # que el bucle haga UNA vuelta y salga
+    try:
+        p._parar.clear()
+        hilo = threading.Thread(target=p._bucle, daemon=True)
+        p.RETRASO_INICIAL_ORIGINAL = p.RETRASO_INICIAL
+        p.RETRASO_INICIAL = 0
+        hilo.start()
+        time.sleep(0.4)
+        p.stop()
+        hilo.join(timeout=2)
+    finally:
+        p._una_pasada = original
+        p.RETRASO_INICIAL = getattr(p, "RETRASO_INICIAL_ORIGINAL", 30)
+        p.stop()
+
+    assert p.ultimo["ok"] is False
+    assert "la base se fue" in (p.ultimo["error"] or "")
