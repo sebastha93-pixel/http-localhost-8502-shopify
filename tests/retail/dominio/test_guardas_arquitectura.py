@@ -163,3 +163,29 @@ def test_las_guardas_de_verdad_detectan_algo(tmp_path):
 
     assert importa_prohibido, "la guarda de imports no detectaría `import httpx`"
     assert tiene_float, "la guarda de float no detectaría el literal 1.5"
+
+
+# ── La URL de la base ───────────────────────────────────────────────────────
+
+def test_la_url_de_railway_se_normaliza_sola():
+    """`postgresql://` → `postgresql+psycopg://`.
+
+    ES UNA TRAMPA CON CONSECUENCIA INVISIBLE. Railway, Heroku y Supabase
+    entregan la cadena sin driver; SQLAlchemy async la rechaza. Y el error no
+    se ve: `main.py` monta el módulo dentro de un `try/except`, así que el POS
+    sencillamente NO APARECE y hay que ir a los logs del arranque.
+
+    Estaba escrito como advertencia en el documento de despliegue. Una
+    advertencia protege a quien la leyó; esto protege a quien pegue la
+    referencia de Railway tal cual — que es lo que uno hace.
+    """
+    from backend.modules.retail.infrastructure.persistencia.unidad_de_trabajo import (
+        normalizar_url,
+    )
+    assert normalizar_url("postgresql://u:p@h:5432/d") == "postgresql+psycopg://u:p@h:5432/d"
+    # El alias viejo que todavía usan varios proveedores.
+    assert normalizar_url("postgres://u:p@h:5432/d") == "postgresql+psycopg://u:p@h:5432/d"
+    # Y no se toca lo que ya trae driver: nadie quiere que esto "arregle" un
+    # asyncpg deliberado.
+    assert normalizar_url("postgresql+asyncpg://u:p@h/d") == "postgresql+asyncpg://u:p@h/d"
+    assert normalizar_url("postgresql+psycopg://u:p@h/d") == "postgresql+psycopg://u:p@h/d"

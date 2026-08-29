@@ -22,6 +22,36 @@ from sqlalchemy.ext.asyncio import (
 __all__ = ["UnidadDeTrabajoSQL", "crear_motor"]
 
 
+def normalizar_url(url: str) -> str:
+    """`postgresql://` → `postgresql+psycopg://`.
+
+    ES UNA TRAMPA CON CONSECUENCIA INVISIBLE, y por eso se arregla en código y
+    no en la documentación. Railway (y Heroku, y Supabase) entregan la cadena
+    como `postgresql://…`; SQLAlchemy en modo async necesita que diga qué
+    driver usar. Con el prefijo pelado, `create_async_engine` levanta
+    «InvalidRequestError: The asyncio extension requires an async driver».
+
+    Y ese error NO se ve: `main.py` monta el módulo retail dentro de un
+    `try/except`, así que lo único que pasa es que el POS no aparece. La caja
+    no falla — sencillamente no existe, y hay que ir a leer los logs del
+    arranque para saber por qué.
+
+    Estaba escrito como advertencia en `docs/retail-pos/despliegue.md` («ojo
+    con el prefijo… es lo primero a mirar»). Una advertencia en un documento
+    protege a quien la leyó; esto protege a quien pegue la referencia de
+    Railway tal cual, que es lo que uno hace.
+
+    `postgres://` también se acepta: es el alias viejo que todavía usan varios
+    proveedores.
+    """
+    if url.startswith("postgresql+"):          # ya trae driver explícito
+        return url
+    for prefijo in ("postgresql://", "postgres://"):
+        if url.startswith(prefijo):
+            return "postgresql+psycopg://" + url[len(prefijo):]
+    return url
+
+
 def crear_motor(url: str, *, echo: bool = False) -> AsyncEngine:
     """El motor async del módulo retail.
 
@@ -34,7 +64,8 @@ def crear_motor(url: str, *, echo: bool = False) -> AsyncEngine:
             "la URL de la base es obligatoria y no tiene valor por defecto"
         )
     return create_async_engine(
-        url, echo=echo, pool_pre_ping=True, pool_size=5, max_overflow=10
+        normalizar_url(url), echo=echo, pool_pre_ping=True,
+        pool_size=5, max_overflow=10
     )
 
 
