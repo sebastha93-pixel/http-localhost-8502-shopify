@@ -276,16 +276,27 @@ def test_el_tipo_sale_del_REEMBOLSO_no_del_motivo():
     assert tipo_postventa("credito_tienda") == "bono"
 
 
-def test_si_la_devolucion_YA_tiene_caso_no_se_abre_otro():
+def test_si_la_devolucion_YA_tiene_caso_no_se_abre_otro(monkeypatch):
     """EL RIESGO REAL DEL REINTENTO. Si el caso se creó pero el proceso se
     murió antes de marcar la fila del outbox, la siguiente pasada abriría un
     SEGUNDO caso sobre la misma devolución — y con él una segunda nota crédito
     sobre la misma factura ante la DIAN.
 
-    Se prueba sin base ni Supabase a propósito: lo que hay que verificar es que
-    la guarda corta ANTES de llamar a `crear_caso`, y eso se ve mejor con un
-    doble que estalla si lo llaman.
+    ⚠️ EL MÓDULO DE POSTVENTA SE SUSTITUYE ENTERO, no se importa para
+    parchearle una función. La primera versión hacía
+    `import backend.services.postventa as svc` y reventó en CI:
+    `postventa.py` hace `from supabase import create_client`, y `supabase` NO
+    está en `requirements-retail.txt` — a propósito, porque el módulo retail no
+    debe depender de la pila del ERP. La prueba pasaba en local sólo porque el
+    `.venv` de esta máquina sí lo tiene instalado.
+
+    O sea que el fallo de CI no era ruido: era la guarda de arquitectura
+    haciendo su trabajo. El manejador ya importa Postventa DENTRO de la
+    función justamente por esto; la prueba se lo estaba saltando.
     """
+    import sys
+    import types
+
     from backend.modules.retail.infrastructure.postventa.caso_devolucion import (
         abrir_caso_postventa,
     )
@@ -302,19 +313,21 @@ def test_si_la_devolucion_YA_tiene_caso_no_se_abre_otro():
     class _T:
         sesion = _Sesion()
 
-    import backend.services.postventa as svc
-    original = svc.crear_caso
-
     def estalla(**_):
         raise AssertionError("no debió llamarse: la devolución ya tenía caso")
 
-    svc.crear_caso = estalla
-    try:
-        # `asyncio.run` y no el `_correr` de arriba: esta prueba no pide la
-        # fixture `uow`, así que no hay bucle de eventos que reutilizar.
-        nota = asyncio.run(abrir_caso_postventa(_T(), {"devolucion_id": "D1"}))
-    finally:
-        svc.crear_caso = original
+    falso = types.ModuleType("backend.services.postventa")
+    falso.crear_caso = estalla
+    # En `sys.modules` Y como atributo del paquete: `from backend.services
+    # import postventa` mira las dos cosas, y con una sola el import real se
+    # cuela. `monkeypatch` lo deshace solo al terminar la prueba.
+    monkeypatch.setitem(sys.modules, "backend.services.postventa", falso)
+    import backend.services
+    monkeypatch.setattr(backend.services, "postventa", falso, raising=False)
+
+    # `asyncio.run` y no el `_correr` de arriba: esta prueba no pide la
+    # fixture `uow`, así que no hay bucle de eventos que reutilizar.
+    nota = asyncio.run(abrir_caso_postventa(_T(), {"devolucion_id": "D1"}))
 
     assert "ya tenía el caso PV-2026-0042" in nota
 
