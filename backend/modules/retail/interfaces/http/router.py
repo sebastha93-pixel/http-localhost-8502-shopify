@@ -1857,6 +1857,13 @@ class PaginaAuditoria(BaseModel):
     motivo_ruptura: Optional[str] = None
     evento_roto: Optional[str] = None
     eventos_verificados: int = 0
+    #  CUÁNDO SE COMPROBÓ POR ÚLTIMA VEZ DE OFICIO. `integra` de arriba lo
+    #  calcula esta misma petición, así que siempre dice «sí» mientras nadie
+    #  mire — y ese es justo el problema que tenía la cadena: se verificaba
+    #  sólo si alguien abría esta pantalla. Esto es el veredicto del job, que
+    #  corre cada seis horas mire quien mire. Si `corrio_en` se queda atrás,
+    #  el verificador está caído.
+    verificacion_programada: Optional[dict] = None
 
 
 @router.get("/auditoria", response_model=PaginaAuditoria)
@@ -1920,7 +1927,12 @@ async def leer_auditoria(
 
         veredicto = await t.auditoria.verificar_cadena(tienda_id=tienda_id)
 
+    from backend.modules.retail.infrastructure import verificador_auditoria
+
     return PaginaAuditoria(
+        verificacion_programada=(
+            verificador_auditoria.ultimo
+            if verificador_auditoria.ultimo.get("corrio_en") else None),
         eventos=[EventoAuditoria(
             id=f["id"], cuando=f["cuando"], evento=f["evento"],
             severidad=f["severidad"], quien=f["quien"], caja=f["caja"],
