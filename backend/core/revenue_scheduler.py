@@ -15,6 +15,27 @@ from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger(__name__)
 
+
+# ═══════════════════════════════════════════════════════════════════════
+# MÓDULO DADO DE BAJA (2026-08-20, decisión de Sebastián)
+#
+# Revenue IA se retiró del menú y su cron nocturno queda apagado. Los DATOS no
+# se tocan: las conversaciones las sigue escribiendo el webhook de WhatsApp, y
+# `revenue_db` la usan contraentrega, Melonn y el centro de salud — o sea que
+# "dar de baja el módulo" nunca podía significar borrar esa capa.
+#
+# Se controla con UNA variable para que revivirlo no exija tocar código:
+#     REVENUE_MODULO_ACTIVO=1   en Railway  → vuelve a correr
+#
+# La misma llave la lee salud.py, para que el centro de salud no reporte como
+# caído un cron que apagamos a propósito. Un semáforo en rojo por una decisión
+# nuestra enseña a la gente a ignorar el semáforo.
+# ═══════════════════════════════════════════════════════════════════════
+
+def modulo_activo() -> bool:
+    return (os.environ.get("REVENUE_MODULO_ACTIVO", "0").strip() or "0") != "0"
+
+
 _thread: threading.Thread | None = None
 _stop_event = threading.Event()
 

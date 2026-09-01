@@ -146,10 +146,16 @@ async def lifespan(app: FastAPI):
     else:
         print(f"   ⊘ Schedulers desactivados en este worker (WORKER_ROLE != leader)")
 
-    # Cron nocturno del módulo Revenue (rankings) — también solo en lider
+    # Cron nocturno del módulo Revenue (rankings) — también solo en lider.
+    # Revenue IA quedó DADO DE BAJA el 2026-08-20: no arranca salvo que se
+    # ponga REVENUE_MODULO_ACTIVO=1 en Railway. Se deja el arranque escrito (y
+    # no borrado) justamente para que revivirlo sea una variable, no un commit.
     if es_lider:
         try:
-            if revenue_scheduler.start():
+            if not revenue_scheduler.modulo_activo():
+                print("   ⏸  Revenue IA dado de baja — cron nocturno apagado "
+                      "(REVENUE_MODULO_ACTIVO=1 para revivirlo)")
+            elif revenue_scheduler.start():
                 print(f"   📊 Revenue cron activo · hora objetivo {revenue_scheduler.HORA_OBJETIVO_BOG}am Bogotá")
         except Exception as e:
             print(f"   ⚠️  Revenue scheduler no arrancó: {e}")

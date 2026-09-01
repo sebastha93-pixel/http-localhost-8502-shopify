@@ -60,7 +60,11 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Comercial",  href: "/comercial",  permiso: "comercial",  desc: "Ventas y asesoras" },
       { label: "Inventario", href: "/inventario", permiso: "inventario", desc: "Stock de producto" },
-      { label: "Revenue IA", href: "/revenue",    permiso: "revenue",    desc: "Conversaciones y fugas" },
+      // Revenue IA dado de baja el 2026-08-20. La pantalla y su API siguen en
+      // el repo y /revenue responde si alguien tiene el enlace; lo que se
+      // retiró es la entrada del menú y el cron nocturno. Para revivirlo:
+      // descomentar esta línea y poner REVENUE_MODULO_ACTIVO=1 en Railway.
+      // { label: "Revenue IA", href: "/revenue",    permiso: "revenue",    desc: "Conversaciones y fugas" },
     ],
   },
   {

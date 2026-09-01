@@ -118,6 +118,16 @@ def _check_mensajeria() -> dict:
 def _check_cron_nocturno() -> dict:
     """La huella real del cron de las 3 AM: calculated_at en advisor_rankings
     (el estado del hilo solo lo conoce el worker líder — no sirve aquí)."""
+    # Si el módulo está dado de baja, este cron NO está roto: está apagado
+    # porque así se decidió. Reportarlo en rojo sería una alarma falsa, y las
+    # alarmas falsas son las que hacen que nadie mire el tablero.
+    try:
+        from backend.core import revenue_scheduler as _rev_sch
+        if not _rev_sch.modulo_activo():
+            return _chk("cron_nocturno", "Cron nocturno (rankings 3 AM)", "ok",
+                        "Revenue IA dado de baja — cron apagado a propósito")
+    except Exception:
+        pass
     try:
         from backend.services.produccion import _sb
         sb = _sb()
