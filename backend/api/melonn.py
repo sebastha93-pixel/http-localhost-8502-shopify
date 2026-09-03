@@ -660,6 +660,7 @@ def autorizar_despacho(
     # respuesta no es 'aprobacion', rechazamos con 409.
     from backend.services import revenue_db as _rdb
     sb = _rdb._sb()
+    _mid_fallback = None   # M-id de cod_acciones, para que release pruebe ambos ids
     if sb is not None:
         try:
             # El path param puede ser orden_melonn (M-id) o orden_tienda
@@ -669,7 +670,7 @@ def autorizar_despacho(
             row = None
             # Primer intento: buscar por orden_melonn = path
             r1 = (sb.table("cod_acciones")
-                    .select("contacto_at,respuesta,contacto_via")
+                    .select("contacto_at,respuesta,contacto_via,orden_melonn,orden_tienda")
                     .eq("orden_melonn", orden_melonn)
                     .limit(1)
                     .execute())
@@ -678,7 +679,7 @@ def autorizar_despacho(
             else:
                 # Segundo intento: buscar por orden_tienda = path
                 r2 = (sb.table("cod_acciones")
-                        .select("contacto_at,respuesta,contacto_via")
+                        .select("contacto_at,respuesta,contacto_via,orden_melonn,orden_tienda")
                         .eq("orden_tienda", orden_melonn)
                         .limit(1)
                         .execute())
@@ -704,7 +705,7 @@ def autorizar_despacho(
                                 if str(ot) == orden_melonn and om:
                                     # Buscar por el M-id encontrado
                                     r3 = (sb.table("cod_acciones")
-                                            .select("contacto_at,respuesta,contacto_via")
+                                            .select("contacto_at,respuesta,contacto_via,orden_melonn,orden_tienda")
                                             .eq("orden_melonn", om)
                                             .limit(1)
                                             .execute())
@@ -713,7 +714,7 @@ def autorizar_despacho(
                                     break
                                 if str(om) == orden_melonn and ot:
                                     r3 = (sb.table("cod_acciones")
-                                            .select("contacto_at,respuesta,contacto_via")
+                                            .select("contacto_at,respuesta,contacto_via,orden_melonn,orden_tienda")
                                             .eq("orden_tienda", ot)
                                             .limit(1)
                                             .execute())
@@ -724,6 +725,7 @@ def autorizar_despacho(
                         log.warning(f"Lookup cache para cod_acciones falló: {_e}")
             contacto_at = (row or {}).get("contacto_at")
             respuesta   = (row or {}).get("respuesta")
+            _mid_fallback = (row or {}).get("orden_melonn")
             if not contacto_at:
                 raise HTTPException(
                     status_code=409,
@@ -755,8 +757,13 @@ def autorizar_despacho(
             else:
                 log.warning(f"Error chequeando workflow cod_acciones: {err[:200]}")
 
+    # El release recibe el id que mandó el frontend (suele ser orden_tienda) y,
+    # si lo tenemos, TAMBIÉN el M-id de la fila de cod_acciones. Melonn a veces
+    # no reconoce el external "pelado" (sin #) que guardamos, y ahí el M-id sí
+    # resuelve — release prueba ambos. Sin el M-id, un external que da 404
+    # dejaba el despacho muerto sin alternativa. (fix 2026-09-03)
     try:
-        ok, mensaje = mc.release_hold_fulfillment(orden_melonn)
+        ok, mensaje = mc.release_hold_fulfillment(orden_melonn, orden_melonn_alt=_mid_fallback)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Melonn API error: {exc}")
 
