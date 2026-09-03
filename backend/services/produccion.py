@@ -804,6 +804,22 @@ def composicion_de_tela(tela: Optional[str]) -> str:
         return ""
 
 
+def resolver_composicion(tela: Optional[str],
+                         fallback_precosteo: Optional[str] = None) -> str:
+    """La composición de una tela, en el orden oficial: primero el INVENTARIO
+    (donde el diseñador la digita al ingresar la tela), y como respaldo el campo
+    del precosteo. Devuelve "" si no hay ninguna.
+
+    Punto único para que TODO el proceso resuelva la composición igual —
+    precosteo, corte, hoja de ruta, remisión y etiqueta. Antes cada lugar la
+    resolvía a su manera y por eso una etiqueta podía salir en blanco mientras
+    el inventario sí la tenía en otro color de la misma tela."""
+    comp = composicion_de_tela(tela)
+    if comp:
+        return comp
+    return (fallback_precosteo or "").strip()
+
+
 def obtener_rollo(rollo_id: str) -> Optional[dict]:
     sb = _sb()
     if sb is None:
@@ -1464,7 +1480,11 @@ def obtener_precosteo(precosteo_id: str) -> Optional[dict]:
     items = (sb.table("precosteo_items").select("*")
                .eq("referencia_id", precosteo_id)
                .order("orden").execute()).data or []
-    return {**ref[0], "items": items}
+    # La composición de la tela, visible desde el precosteo — donde empieza el
+    # recorrido de la referencia. Es la MISMA que irá en la etiqueta de lavado.
+    comp = resolver_composicion(ref[0].get("tela") or "",
+                                ref[0].get("instrucciones_lavado") or "")
+    return {**ref[0], "items": items, "composicion_tela": comp}
 
 
 def _asegurar_bucket(sb, bucket: str) -> None:
@@ -4246,6 +4266,7 @@ def _encolar_trabajos_terminacion(rem: dict) -> int:
     if sb is None or not rem:
         return 0
     filas: list[dict] = []
+    faltan_composicion: list = []   # (codigo, tela) sin composición → no se imprime lavado
     for it in (rem.get("items") or []):
         oc_id = it.get("orden_corte_id")
         if not oc_id:
@@ -4259,43 +4280,74 @@ def _encolar_trabajos_terminacion(rem: dict) -> int:
             total = sum(unidades.values())
             if not codigo or total <= 0:
                 continue
-            # Instrucciones de lavado + tela del precosteo de ESA referencia
-            instrucciones, tela = "", ref.get("tela") or ""
+            # Tela + composición de ESA referencia. La composición manda el
+            # inventario; el precosteo es respaldo (resolver_composicion).
+            tela = ref.get("tela") or ""
+            fallback = ""
             try:
                 pr = (sb.table("referencias_precosteo")
                         .select("instrucciones_lavado,tela")
                         .eq("id", ref_id).limit(1).execute()).data
                 if pr:
-                    instrucciones = pr[0].get("instrucciones_lavado") or ""
+                    fallback = pr[0].get("instrucciones_lavado") or ""
                     tela = pr[0].get("tela") or tela
             except Exception:
                 pass
-            # La COMPOSICIÓN oficial vive en el INVENTARIO de telas (el
-            # diseñador la digita al ingresar la tela y se hereda entre
-            # llegadas). El campo del precosteo queda de respaldo.
-            comp_inv = composicion_de_tela(tela)
-            if comp_inv:
-                instrucciones = comp_inv
+            composicion = resolver_composicion(tela, fallback)
             base = {"remision_id": rem.get("id"), "orden_corte_id": oc_id,
                     "referencia_id": ref_id, "formato": "zpl"}
+            # El STICKER (código de barras) no lleva composición → siempre va.
             filas.append({**base, "tipo": "sticker_codigo", "destino": "honeywell",
                           "payload": {"codigo_referencia": codigo, "tallas": unidades}})
-            # Lavado: POR TALLA (la etiqueta lleva la talla) — 1 por prenda +1%.
-            filas.append({**base, "tipo": "instruccion_lavado", "destino": "sat",
-                          "payload": {"codigo_referencia": codigo, "tela": tela,
-                                      "instrucciones": instrucciones,
-                                      "tallas": unidades}})
+            # LA ETIQUETA DE LAVADO NO SE ENCOLA SIN COMPOSICIÓN.
+            #
+            # POR QUÉ (2026-09-03): un lote salió con etiqueta de lavado EN
+            # BLANCO porque la tela no tenía composición registrada, y el sistema
+            # la imprimió igual. La composición de fibras es un dato legal
+            # obligatorio en la prenda: una etiqueta sin ella no sirve y no se
+            # puede vender. Mejor NO imprimir y avisar, que imprimir un defecto.
+            if composicion:
+                filas.append({**base, "tipo": "instruccion_lavado", "destino": "sat",
+                              "payload": {"codigo_referencia": codigo, "tela": tela,
+                                          "instrucciones": composicion,
+                                          "tallas": unidades}})
+            else:
+                faltan_composicion.append((codigo, tela))
+    # Avisar de las etiquetas de lavado que NO se encolaron por falta de
+    # composición — antes de que alguien busque la etiqueta y no aparezca.
+    if faltan_composicion:
+        _avisar_falta_composicion(rem.get("consecutivo"), faltan_composicion)
     if not filas:
         return 0
     try:
         sb.table("impresion_trabajos").insert(filas).execute()
         log.info(f"[impresion] remisión {rem.get('consecutivo')}: "
-                 f"{len(filas)} trabajo(s) de terminación encolados")
+                 f"{len(filas)} trabajo(s) de terminación encolados"
+                 + (f" · {len(faltan_composicion)} lavado(s) SIN composición, no encolados"
+                    if faltan_composicion else ""))
         return len(filas)
     except Exception as e:
         log.warning(f"[impresion] no se pudieron encolar trabajos de terminación "
                     f"(¿falta migración impresion_trabajos?): {e}")
         return 0
+
+
+def _avisar_falta_composicion(consecutivo, faltan: list) -> None:
+    """Campanita: hay etiquetas de lavado que no salieron por falta de
+    composición de la tela. Le llega a quien tiene el módulo de corte."""
+    try:
+        from backend.services import notificaciones as notif
+        refs = ", ".join(f"{cod} ({tela})" for cod, tela in faltan[:6])
+        notif.crear_para_modulo(
+            modulo="produccion_cortador", tipo="falta_composicion",
+            titulo=f"Falta composición de tela — etiqueta de lavado no impresa ({consecutivo})",
+            mensaje=(f"No se imprimió la etiqueta de lavado de: {refs}. La tela no "
+                     f"tiene composición registrada en el inventario. Cárgala en "
+                     f"Inventario y reimprime — una etiqueta sin composición no se "
+                     f"puede poner en la prenda."),
+            enlace="/produccion/inventario", creado_por="sistema")
+    except Exception as e:
+        log.warning(f"[impresion] aviso de falta de composición falló: {str(e)[:160]}")
 
 
 def crear_trabajo_impresion_manual(*, tipo: str, referencia_id: str,
@@ -4327,9 +4379,17 @@ def crear_trabajo_impresion_manual(*, tipo: str, referencia_id: str,
     else:
         # Lavado: SIN talla (solo referencia + composición). La composición
         # sale del inventario de telas; el campo del precosteo es respaldo.
-        comp_inv = composicion_de_tela(ref.get("tela") or "")
+        composicion = resolver_composicion(ref.get("tela") or "",
+                                           ref.get("instrucciones_lavado") or "")
+        # Sin composición NO se imprime: la etiqueta legal de la prenda quedaría
+        # en blanco. Se corta acá con un error claro para que la UI lo muestre.
+        if not composicion:
+            raise ValueError(
+                f"La tela «{ref.get('tela') or '—'}» no tiene composición "
+                f"registrada. Cárgala en Inventario antes de imprimir la "
+                f"etiqueta de lavado — no puede salir en blanco.")
         payload = {"codigo_referencia": codigo, "tela": ref.get("tela") or "",
-                   "instrucciones": comp_inv or (ref.get("instrucciones_lavado") or ""),
+                   "instrucciones": composicion,
                    "cortar": bool(cortar)}
         if limpio:
             payload["tallas"] = limpio
@@ -4585,6 +4645,14 @@ def generar_contenido_trabajo(t: dict) -> bytes:
         p = t.get("payload") or {}
         codigo = (p.get("codigo_referencia") or "").strip()
         composicion = (p.get("instrucciones") or "").strip()
+        # BACKSTOP de última milla: si por cualquier camino llegó un trabajo de
+        # lavado sin composición, NO se imprime en blanco — se corta con error.
+        # El gate de encolado ya lo evita; esto es el cinturón de seguridad para
+        # que una etiqueta legal en blanco sea IMPOSIBLE, no solo improbable.
+        if not composicion:
+            raise ValueError(
+                f"trabajo de lavado {codigo or t.get('id')} sin composición — "
+                f"no se imprime en blanco; carga la composición de la tela")
         tallas_lav = p.get("tallas") or {}
         total = sum(int(v or 0) for v in tallas_lav.values()) or int(p.get("copias") or 1)
         if p.get("prueba"):
@@ -4915,7 +4983,23 @@ def obtener_ruta_por_corte(oc_id: str) -> Optional[dict]:
                    "cantidad_programada,referencia_lote,"
                    "referencia:referencia_id(codigo_referencia,nombre,tela,color,foto_url))")
            .eq("orden_corte_id", oc_id).limit(1).execute()).data
-    return _con_etapas_omitidas(r[0]) if r else None
+    if not r:
+        return None
+    ruta = _con_etapas_omitidas(r[0])
+    _añadir_composicion(ruta)
+    return ruta
+
+
+def _añadir_composicion(ruta: dict) -> None:
+    """Adjunta la composición de la tela a la referencia de la ruta, para que
+    se vea en la hoja de ruta / lote — la misma que va en la etiqueta. Que la
+    composición viaje con el lote en todo el proceso (2026-09-03)."""
+    try:
+        ref = ((ruta or {}).get("orden_corte") or {}).get("referencia") or {}
+        if ref and "composicion" not in ref:
+            ref["composicion"] = resolver_composicion(ref.get("tela") or "")
+    except Exception:
+        pass
 
 
 def obtener_ruta_por_token_terminacion(token: str) -> Optional[dict]:
