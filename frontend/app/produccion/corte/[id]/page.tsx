@@ -163,6 +163,14 @@ export default function DetalleOrdenCortePage() {
   const [metros, setMetros] = useState("");
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
+  // Para llevar la vista al error: el cortador está ABAJO (en el botón de
+  // cerrar) cuando el rechazo aparece ARRIBA, y no lo veía. Ver `mostrarError`.
+  const errRef = useRef<HTMLDivElement>(null);
+  const mostrarError = (mensaje: string) => {
+    setMsg("");
+    setErr(mensaje);
+    setTimeout(() => errRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 60);
+  };
 
   const [consumoReal, setConsumoReal] = useState("");
   const [mermaTipo, setMermaTipo] = useState("");
@@ -212,6 +220,40 @@ export default function DetalleOrdenCortePage() {
     const fplan = (d.fecha_envio || d.fecha_limite || "").slice(0, 10);
     if (fplan) setFechaEntrega((prev) => prev || fplan);
     if (d.precio_corte_sugerido != null) setPrecioCorte((prev) => prev || String(d.precio_corte_sugerido));
+
+    // PRELLENAR LAS UNIDADES CORTADAS CON LA CURVA DEL TRAZO (2026-09-03).
+    // La grilla arrancaba en blanco y el cortador la tecleaba desde cero; si la
+    // olvidaba, el cierre se rechazaba con "sin_unidades" y él creía haber
+    // guardado el informe (le pasó al 2608-0010). Ahora se siembra con la curva
+    // para que AJUSTE en vez de digitar todo. Solo siembra si aún no ha escrito
+    // nada: `prev` no vacío = ya tecleó → NO se pisa (no se pierde nada).
+    const seedGrid = (curva?: Record<string, number>): Record<string, string> => {
+      const g: Record<string, string> = {};
+      for (const [t, n] of Object.entries(curva || {})) {
+        if (Number(n) > 0) g[t] = String(n);
+      }
+      return g;
+    };
+    const refs = d.referencias || [];
+    if (refs.length > 1) {
+      setUnidadesRealRef((prev) => {
+        if (Object.keys(prev).length > 0) return prev;
+        const seed: Record<string, Record<string, string>> = {};
+        for (const rf of refs) {
+          const rid = rf.referencia_id;
+          if (!rid) continue;
+          const g = seedGrid(rf.curva_trazo);
+          if (Object.keys(g).length) seed[rid] = g;
+        }
+        return Object.keys(seed).length ? seed : prev;
+      });
+    } else {
+      setUnidadesReal((prev) => {
+        if (Object.keys(prev).length > 0) return prev;
+        const g = seedGrid(d.curva_trazo);
+        return Object.keys(g).length ? g : prev;
+      });
+    }
   }, [q.data]);
   const rollosInvQ = useQuery<{ rollos: RolloInv[] }>({
     queryKey: ["produccion", "rollos", "asignables-tela", telaRef],
@@ -458,8 +500,20 @@ export default function DetalleOrdenCortePage() {
       //   (contando capas/espigas en piso) y los digita en el informe.
       //   El promedio, si no lo escribe, se deriva de metros ÷ unidades.
       const totalUnid = Object.values(unidadesFinal).reduce((s, n) => s + n, 0);
-      const retazosM = parseFloat(retazos || "0") || 0;
+      // FRENO CLIENTE: sin unidades por talla el backend rechaza con 400 y el
+      // cortador cree que guardó. Se corta ACÁ con un mensaje claro (lo muestra
+      // el onError abajo, en rojo). Así el informe nunca se "pierde" en un
+      // rechazo silencioso — o se guarda completo, o se dice qué falta.
+      if (totalUnid <= 0) {
+        throw new Error("Llena las UNIDADES CORTADAS por talla antes de cerrar. "
+          + "El informe no se guarda sin ellas — abajo tienes la grilla.");
+      }
       const consumoFinal = parseFloat(consumoReal || "0") || 0;
+      if (consumoFinal <= 0) {
+        throw new Error("Falta el CONSUMO REAL (metros) del corte. "
+          + "El informe no se guarda sin ese dato.");
+      }
+      const retazosM = parseFloat(retazos || "0") || 0;
       const promedioManual = parseFloat(promedioReal || "0") || 0;
       const promedioDerivado = totalUnid > 0 && consumoFinal > 0 ? consumoFinal / totalUnid : 0;
       const promedioFinal = promedioManual || promedioDerivado;
@@ -517,7 +571,7 @@ export default function DetalleOrdenCortePage() {
       setErr("");
       qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
     },
-    onError: (e: Error) => { setErr(e.message); setMsg(""); },
+    onError: (e: Error) => { mostrarError(e.message); },
   });
 
   // Eliminar la orden (no cortada): libera los rollos reservados y borra.
@@ -754,8 +808,9 @@ export default function DetalleOrdenCortePage() {
         </div>
       )}
       {err && (
-        <div className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta flex items-center gap-2">
-          <AlertCircle className="h-3.5 w-3.5" /> {err}
+        <div ref={errRef}
+          className="rounded-sm border-2 border-terracotta bg-terracotta/[0.08] px-4 py-3 text-sm font-semibold text-terracotta flex items-center gap-2">
+          <AlertCircle className="h-5 w-5 flex-none" /> {err}
         </div>
       )}
 
