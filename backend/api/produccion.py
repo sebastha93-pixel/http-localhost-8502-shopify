@@ -329,6 +329,16 @@ def rollo_por_barcode(
     return r
 
 
+@router.get("/inventario/auditoria")
+def inventario_auditoria(
+    _: CurrentUser = Depends(require_permission_any(("produccion_ingreso", "produccion_cortador"), "ver")),
+) -> dict:
+    """Integridad del inventario de telas: rollos cuyo saldo no cuadra con su
+    libro de movimientos, y cortes cuyo descuento no cuadra con el consumo real.
+    Solo lista lo que NO cuadra. Para revisar cuando algo se ve raro — o de rutina."""
+    return svc.auditar_inventario()
+
+
 @router.get("/inventario/resumen")
 def inventario_resumen(
     user: CurrentUser = Depends(require_permission_any(("produccion_ingreso", "produccion_cortador"), "ver")),

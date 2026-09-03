@@ -898,6 +898,85 @@ def _buscar_rollo_exacto(c: str, *, unico: bool = False,
     return None
 
 
+def auditar_inventario(*, tolerancia_m: float = 0.1) -> dict:
+    """Chequeo de integridad del inventario de telas, para verlo cuando se
+    quiera (no solo cuando algo se ve raro).
+
+    Dos invariantes:
+      · SALDO DEL ROLLO: metros_disponible = metros_inicial + Σ movimientos
+        que NO son 'ingreso' (corte y ajuste son los deltas). Si no cuadra, el
+        saldo del rollo se movió sin dejar rastro (o al revés).
+      · DESCUENTO DEL CORTE: para cada orden 'cortada', lo que salió del
+        inventario por ese consecutivo (Σ corte+ajuste) debe igualar el consumo
+        real declarado. Si no, el corte descontó de más o de menos.
+
+    Solo devuelve lo que NO cuadra — una auditoría llena de filas OK no se lee.
+    """
+    sb = _sb()
+    if sb is None:
+        return {"ok": False, "error": "sin_supabase"}
+    out: dict = {"ok": True, "rollos_descuadrados": [], "cortes_descuadrados": []}
+
+    # ── 1. Saldo de cada rollo vs su libro de movimientos ──
+    try:
+        rollos = (sb.table("rollos_tela")
+                    .select("id,codigo_interno,descripcion_tela,metros_inicial,"
+                            "metros_disponible,estado").limit(5000).execute()).data or []
+        movs = (sb.table("movimientos_inventario")
+                  .select("rollo_id,metros,tipo").limit(50000).execute()).data or []
+        delta: dict = {}
+        for mv in movs:
+            if mv.get("tipo") == "ingreso":
+                continue   # el inicial ya está en metros_inicial
+            rid = mv.get("rollo_id")
+            if rid:
+                delta[rid] = delta.get(rid, 0.0) + float(mv.get("metros") or 0)
+        for r in rollos:
+            ini = float(r.get("metros_inicial") or 0)
+            disp = float(r.get("metros_disponible") or 0)
+            esperado = round(ini + delta.get(r["id"], 0.0), 2)
+            if abs(disp - esperado) > tolerancia_m:
+                out["rollos_descuadrados"].append({
+                    "rollo_id": r["id"],
+                    "codigo": r.get("codigo_interno") or str(r["id"])[:8],
+                    "tela": r.get("descripcion_tela"),
+                    "saldo_actual": round(disp, 2),
+                    "saldo_esperado": esperado,
+                    "diferencia": round(disp - esperado, 2),
+                })
+    except Exception as e:
+        out["ok"] = False
+        out["error_rollos"] = str(e)[:200]
+
+    # ── 2. Descuento de cada corte cerrado vs consumo real ──
+    try:
+        cortadas = (sb.table("ordenes_corte")
+                      .select("id,consecutivo,consumo_real_cortador")
+                      .eq("estado", "cortada").limit(2000).execute()).data or []
+        for oc in cortadas:
+            cons = oc.get("consecutivo")
+            real = float(oc.get("consumo_real_cortador") or 0)
+            if real <= 0:
+                continue
+            mv = (sb.table("movimientos_inventario").select("metros,tipo")
+                    .eq("doc_ref", cons).in_("tipo", ["corte", "ajuste"])
+                    .limit(500).execute()).data or []
+            salido = round(sum(-float(m.get("metros") or 0) for m in mv), 2)
+            if abs(salido - real) > 1.0:   # 1 m de holgura por redondeos/retazos
+                out["cortes_descuadrados"].append({
+                    "consecutivo": cons,
+                    "consumo_real": round(real, 2),
+                    "descontado_neto": salido,
+                    "diferencia": round(salido - real, 2),
+                })
+    except Exception as e:
+        out["ok"] = False
+        out["error_cortes"] = str(e)[:200]
+
+    out["hay_problemas"] = bool(out["rollos_descuadrados"] or out["cortes_descuadrados"])
+    return out
+
+
 def inventario_resumen() -> list[dict]:
     """Agrupa por descripcion_tela + tono con conteo rollos y metros.
 
@@ -2740,6 +2819,59 @@ def quitar_rollo_de_corte(*, oc_id: str, rollo_id: str) -> dict:
     return obtener_orden_corte(oc_id)
 
 
+def _revertir_cierre_parcial(sb, oc_id: str, doc_ref: str,
+                             aplicados: list, err: Exception) -> None:
+    """Un cierre de corte falló a mitad. Deshace los descuentos YA aplicados
+    (restaura metros y estado de cada rollo, borra los movimientos que se
+    insertaron) y devuelve la orden a 'autorizada' para reintentar limpio.
+
+    Best-effort a propósito: si la reversión TAMBIÉN falla —porque la base sigue
+    caída, que es la causa más probable— NO se traga el problema: se loggea
+    fuerte y salta campanita. Un corte a medias detectado se arregla reabriendo;
+    uno silencioso corrompe el inventario sin que nadie lo note."""
+    problemas = 0
+    for rollo_id, prev_disp, prev_estado, mov_ids in aplicados:
+        try:
+            sb.table("rollos_tela").update({
+                "metros_disponible": prev_disp,
+                "estado": prev_estado,
+                "updated_at": _now_iso(),
+            }).eq("id", rollo_id).execute()
+            for mid in mov_ids:
+                if mid:
+                    sb.table("movimientos_inventario").delete().eq("id", mid).execute()
+        except Exception:
+            problemas += 1
+    try:
+        sb.table("ordenes_corte").update({
+            "estado": "autorizada", "updated_at": _now_iso(),
+        }).eq("id", oc_id).execute()
+    except Exception:
+        problemas += 1
+    try:
+        _cache_invalidate_prefix("ordenes_corte")
+    except Exception:
+        pass
+    if problemas:
+        log.error(f"[cerrar_corte] {doc_ref} FALLÓ y la reversión quedó a medias "
+                  f"({problemas} pasos) — REVISAR el inventario de este corte")
+        try:
+            from backend.services import notificaciones as notif
+            notif.crear_para_modulo(
+                modulo="produccion_cortador", tipo="corte_a_medias",
+                titulo=f"Corte {doc_ref} quedó a medias — revisar inventario",
+                mensaje=("El cierre falló y no se pudo deshacer del todo (la base "
+                         "no respondía). Cuando la base esté estable: reabre el "
+                         "corte y ciérralo otra vez, y verifica el saldo de sus "
+                         "rollos en Inventario."),
+                enlace="/produccion/inventario", creado_por="sistema")
+        except Exception:
+            pass
+    else:
+        log.warning(f"[cerrar_corte] {doc_ref}: el cierre falló ({str(err)[:120]}) "
+                    f"y se revirtió OK — la orden vuelve a 'autorizada', reintentar")
+
+
 def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
                         merma_tipo: Optional[str] = None,
                         merma_valor: Optional[float] = None,
@@ -2905,31 +3037,53 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
     descuentos = [(rid, m, nuevo) for rid, m, nuevo, _ in descuentos_fin]
 
     # PASO 3 — Descontar (ya pre-validado; la reserva 'en_corte' se libera aquí)
-    for rollo_id, m, nuevo, retazo in descuentos_fin:
-        estado_nuevo = "agotado" if nuevo <= 0 else "disponible"
-        sb.table("rollos_tela").update({
-            "metros_disponible": nuevo,
-            "estado": estado_nuevo,
-            "fecha_ultimo_corte": _now_iso(),
-            "updated_at": _now_iso(),
-        }).eq("id", rollo_id).execute()
-        sb.table("movimientos_inventario").insert({
-            "rollo_id": rollo_id,
-            "tipo": "corte",
-            "metros": -m,
-            "doc_ref": doc_ref,
-            "usuario": usuario,
-            "nota": f"Corte {doc_ref} · consumo real",
-        }).execute()
-        if retazo > 0:
-            sb.table("movimientos_inventario").insert({
+    #
+    # BLINDADO CONTRA CAÍDAS A MITAD (2026-09-03). Antes esto era un loop de
+    # escrituras sueltas DESPUÉS de marcar la orden 'cortada': si Supabase se
+    # caía a mitad (pasó hoy, 15:35–16:21), la orden quedaba 'cortada' con la
+    # tela descontada A MEDIAS y sin forma de saberlo. Ahora se registra lo que
+    # se va aplicando y, si algo falla, se DESHACE y la orden vuelve a
+    # 'autorizada' para reintentar limpio. Si la reversión tampoco puede (base
+    # caída), se avisa fuerte — corrupción detectada, nunca silenciosa.
+    aplicados: list = []   # (rollo_id, prev_disp, prev_estado, [mov_ids])
+    try:
+        for rollo_id, m, nuevo, retazo in descuentos_fin:
+            estado_nuevo = "agotado" if nuevo <= 0 else "disponible"
+            prev = obtener_rollo(rollo_id) or {}
+            prev_disp = float(prev.get("metros_disponible") or 0)
+            prev_estado = prev.get("estado") or "disponible"
+            sb.table("rollos_tela").update({
+                "metros_disponible": nuevo,
+                "estado": estado_nuevo,
+                "fecha_ultimo_corte": _now_iso(),
+                "updated_at": _now_iso(),
+            }).eq("id", rollo_id).execute()
+            mov_ids: list = []
+            r1 = sb.table("movimientos_inventario").insert({
                 "rollo_id": rollo_id,
-                "tipo": "ajuste",
-                "metros": -retazo,
+                "tipo": "corte",
+                "metros": -m,
                 "doc_ref": doc_ref,
                 "usuario": usuario,
-                "nota": f"Retazo {retazo} m (<{UMBRAL_RETAZO} m) → fuera del inventario de telas",
+                "nota": f"Corte {doc_ref} · consumo real",
             }).execute()
+            if r1.data:
+                mov_ids.append(r1.data[0].get("id"))
+            if retazo > 0:
+                r2 = sb.table("movimientos_inventario").insert({
+                    "rollo_id": rollo_id,
+                    "tipo": "ajuste",
+                    "metros": -retazo,
+                    "doc_ref": doc_ref,
+                    "usuario": usuario,
+                    "nota": f"Retazo {retazo} m (<{UMBRAL_RETAZO} m) → fuera del inventario de telas",
+                }).execute()
+                if r2.data:
+                    mov_ids.append(r2.data[0].get("id"))
+            aplicados.append((rollo_id, prev_disp, prev_estado, mov_ids))
+    except Exception as e:
+        _revertir_cierre_parcial(sb, oc_id, doc_ref, aplicados, e)
+        raise
 
     # Calcula diferencia teórico vs real
     teorico = float(oc.get("metros_consumidos") or 0)
