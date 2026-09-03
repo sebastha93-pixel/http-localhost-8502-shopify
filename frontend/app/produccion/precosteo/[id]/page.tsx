@@ -60,6 +60,9 @@ interface Precosteo {
   created_at?: string;
   es_muestra_diseno?: boolean;
   instrucciones_lavado?: string;
+  /** Composición de la tela (del inventario). Viaja con la referencia por todo
+   *  el proceso y es la que va en la etiqueta de lavado. */
+  composicion_tela?: string;
   items: Item[];
 }
 
@@ -332,6 +335,17 @@ export default function PrecosteoDetallePage() {
 
   return (
     <PageShell title={`${p.codigo_referencia} · ${p.nombre}`} subtitle={p.tela || "—"}>
+      {/* Composición de la tela, visible desde el precosteo. Si falta, se marca
+          en rojo: es la que va en la etiqueta de lavado (dato legal) y sin ella
+          el lote se frena al imprimir. Verla acá permite cargarla a tiempo. */}
+      <div className="mb-3 text-xs">
+        <span className="uppercase tracking-widest text-graphite">Composición: </span>
+        {p.composicion_tela
+          ? <span className="font-semibold text-ink-900">{p.composicion_tela}</span>
+          : <span className="font-semibold text-terracotta">
+              sin composición — cárgala en Inventario (la etiqueta de lavado no imprime sin ella)
+            </span>}
+      </div>
       <div className="flex items-center justify-between">
         <Link href="/produccion/precosteo" className="inline-flex items-center gap-1 text-xs text-graphite hover:text-ink-900">
           <ArrowLeft className="h-3.5 w-3.5" /> Volver a precosteos
