@@ -46,7 +46,7 @@ const PLANTILLA: { categoria: string; items: string[] }[] = [
     "Cierre", "Marquilla talla",
   ]},
   { categoria: "INSUMO TERMINACION", items: [
-    "Código de barras", "Instrucción de lavado", "Bolsa",
+    "Código de barras", "Instrucción de lavado", "Etiqueta de cartón", "Bolsa",
     "Botón 27 L", "Remache", "Garra", "Pretinera",
   ]},
 ];
