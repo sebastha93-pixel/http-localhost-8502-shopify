@@ -1811,23 +1811,40 @@ def _es_404(err: str) -> bool:
     return "404" in e or "not found" in e
 
 
+def _es_5xx(err: str) -> bool:
+    """Error de servidor de Melonn (500/502/503/504) al liberar el hold.
+
+    Igual que un 404, un id distinto puede esquivarlo: la ruta de release
+    resuelve mal el external y devuelve unas veces 404, otras 500 (pasó con la
+    orden 62924 el 2026-09-04). Y si el error persiste con el id canónico, suele
+    ser un blip transitorio de Melonn que un reintento salva. En ambos casos
+    conviene NO rendirse al primer 5xx. (503 exhausto lo traduce `_post` a un
+    mensaje de "saturado", no a "HTTP 503", así que ese no cae acá.)
+    """
+    m = re.search(r"http\s+(\d{3})", (err or "").lower())
+    return bool(m and m.group(1)[0] == "5")
+
+
 def _candidatos_release(orden: str, orden_melonn_alt: str = None) -> list:
-    """Todos los identificadores con que Melonn PODRÍA conocer ESTA orden.
+    """Todos los identificadores con que Melonn PODRÍA conocer ESTA orden,
+    ORDENADOS: primero el M-id (id canónico), luego el external.
 
-    Por qué una lista y no uno solo (fix 2026-09-03): el despacho fallaba con
-    404 "Order not found" al llamar con el external "pelado" (62886). Dos causas
-    de fondo, las dos del propio código:
+    Por qué el M-id primero (fix 2026-09-04): el {id} de
+    `sell-orders/{id}/release-hold-fulfillment` es el id CANÓNICO de Melonn — el
+    M-id. El external (orden_tienda) es un alias que la ruta de release resuelve
+    mal y devuelve error: 404 con la orden 62886 (2026-09-03), 500 con la 62924
+    (2026-09-04). Probando el M-id primero, el caso COD común triunfa en la 1ª
+    llamada y ni toca esa ruta frágil. El external queda de respaldo por si
+    alguna orden solo se conociera por él.
 
-      · el sync guarda orden_tienda quitándole el "#" (`.lstrip("#")`, línea
-        ~1994), pero Melonn puede indexar el external CON "#" para las órdenes
-        de Shopify → hay que probar "#62886" también.
-      · el código ya sabe que a veces el external no resuelve y el M-id sí —
-        `_enriquecer_desde_melonn` prueba [external, internal] justo por eso.
-        release era el único que no lo hacía.
+    Por qué una LISTA y no uno solo: si un candidato falla con 404 o 5xx,
+    `release_hold_fulfillment` prueba el siguiente. El sync guarda orden_tienda
+    sin "#" (`.lstrip("#")`), pero Melonn puede indexar el external CON "#" para
+    órdenes de Shopify → por eso también va "#62924".
 
-    TODOS los candidatos derivan de ESTA orden (su external y su M-id), así que
-    ninguno puede autorizar por error el despacho de otra. Ese es el punto:
-    resiliencia sin ambigüedad.
+    TODOS los candidatos derivan de ESTA orden (su M-id y su external), así que
+    ninguno puede autorizar por error el despacho de otra: resiliencia sin
+    ambigüedad.
     """
     from urllib.parse import quote
     cands: list = []
@@ -1842,10 +1859,11 @@ def _candidatos_release(orden: str, orden_melonn_alt: str = None) -> list:
     orden = str(orden or "").strip()
     es_mid = orden.startswith("M") and orden[1:].isdigit()
 
+    # Resolver el par (M-id, external) sea cual sea el id que nos hayan dado.
+    mid = None
+    ext = None
     if es_mid:
-        # Vino un M-id: primero traducir a external (comportamiento histórico),
-        # luego el propio M-id y su variante sin "M".
-        ext = None
+        mid = orden
         detail = _get(f"sell-orders/{orden}")
         if detail:
             ext = detail.get("external_order_number")
@@ -1856,18 +1874,8 @@ def _candidatos_release(orden: str, orden_melonn_alt: str = None) -> list:
                     if p.get("orden_melonn") == orden:
                         ext = p.get("orden_tienda")
                         break
-        if ext:
-            add(ext)
-            if not str(ext).startswith("#"):
-                add(f"#{ext}")
-        add(orden)
-        add(orden.lstrip("Mm"))
     else:
-        # Vino un external (orden_tienda): probarlo tal cual, con "#", y luego el
-        # M-id que nos pasó el endpoint (o el que encontremos en cache).
-        add(orden)
-        if orden[:1].isdigit():
-            add(f"#{orden}")
+        ext = orden
         mid = orden_melonn_alt
         if not mid:
             cache_hit = _cache_leer(ignorar_ttl=True)
@@ -1876,9 +1884,17 @@ def _candidatos_release(orden: str, orden_melonn_alt: str = None) -> list:
                     if str(p.get("orden_tienda") or "").lstrip("#") == orden.lstrip("#"):
                         mid = p.get("orden_melonn")
                         break
-        if mid:
-            add(mid)
-            add(str(mid).lstrip("Mm"))
+
+    # ── M-id PRIMERO (id canónico), external de respaldo ────────────────────
+    if mid:
+        add(mid)
+        add(str(mid).lstrip("Mm"))
+    if ext:
+        add(ext)
+        if str(ext)[:1].isdigit():
+            add(f"#{ext}")
+    # Último recurso: el valor recibido tal cual, por si no resolvimos par alguno.
+    add(orden)
     return cands
 
 
@@ -1906,26 +1922,65 @@ def release_hold_fulfillment(orden: str, shipping_method_code: str = None,
     if not candidatos:
         return False, "No se pudo resolver el identificador de la orden"
 
-    ultimo_err = ""
-    for cand in candidatos:
-        ok, data, err = _post(
-            f"sell-orders/{cand}/release-hold-fulfillment",
-            body=body,
+    def _una_pasada() -> tuple:
+        """Prueba cada identificador en orden. Devuelve
+        (ok, mensaje_ok_o_terminal, hubo_5xx, ultimo_err).
+
+        Avanza al siguiente id en 404 y en 5xx — un id distinto puede resolver
+        donde el external revienta. Se DETIENE en cualquier otro error
+        (400/409/cuota/saturado): esos no se arreglan cambiando el id."""
+        hubo_5xx = False
+        ultimo = ""
+        for cand in candidatos:
+            ok, data, err = _post(
+                f"sell-orders/{cand}/release-hold-fulfillment",
+                body=body,
+            )
+            if ok:
+                log.info(f"Despacho autorizado: {orden} (identificador Melonn: {cand})")
+                melonn_msg = (data or {}).get("message", "Order released successfully")
+                return True, f"{melonn_msg} · Orden {orden}", hubo_5xx, ""
+            ultimo = err or ""
+            if _es_404(ultimo):
+                log.info(f"release: {cand} dio 404, probando el siguiente identificador")
+                continue
+            if _es_5xx(ultimo):
+                hubo_5xx = True
+                log.warning(f"release: {cand} dio error de servidor ({ultimo[:80]}), "
+                            f"probando el siguiente identificador")
+                continue
+            # 400/409/cuota/saturado → terminal, reportar tal cual (incluye el
+            # "ya está liberado" que el endpoint traduce a 409).
+            return False, ultimo or "Error al autorizar despacho", hubo_5xx, ultimo
+        return False, "", hubo_5xx, ultimo
+
+    ok, msg, hubo_5xx, ultimo_err = _una_pasada()
+    if ok:
+        return True, msg
+    if msg:               # un error terminal cortó la pasada
+        return False, msg
+
+    # Llegamos acá si TODOS los candidatos dieron 404 o 5xx.
+    if hubo_5xx:
+        # Un id malo da 404/500 limpio; que TODOS —incluido el M-id canónico—
+        # den 5xx apunta a un blip transitorio de Melonn. Un reintento tras una
+        # pausa corta salva la acción sin que la asesora tenga que reintentar a
+        # mano. Una sola vez: si sigue caído, se lo decimos claro.
+        log.warning(f"release: {orden} agotó ids con error de servidor — "
+                    f"reintento único en 6s")
+        time.sleep(6)
+        ok2, msg2, _, _ = _una_pasada()
+        if ok2:
+            return True, msg2
+        if msg2:
+            return False, msg2
+        return False, (
+            "Melonn tuvo un error temporal al liberar el hold (HTTP 500). "
+            "Espera un momento y vuelve a intentar; si sigue fallando, avísame."
         )
-        if ok:
-            log.info(f"Despacho autorizado: {orden} (identificador Melonn: {cand})")
-            melonn_msg = (data or {}).get("message", "Order released successfully")
-            return True, f"{melonn_msg} · Orden {orden}"
-        ultimo_err = err or ""
-        if _es_404(ultimo_err):
-            log.info(f"release: {cand} dio 404, probando el siguiente identificador")
-            continue
-        # Cualquier otro error NO se arregla con otro id: detenerse y reportarlo
-        # tal cual (incluye el "ya está liberado" que el endpoint traduce a 409).
-        return False, ultimo_err or "Error al autorizar despacho"
 
     # Todos los candidatos dieron 404: la orden no existe en Melonn con ninguno
-    # de sus identificadores conocidos. Es un error honesto, no un id mal armado.
+    # de sus identificadores conocidos. Error honesto, no un id mal armado.
     log.warning(f"release: ningún identificador de {orden} existe en Melonn "
                 f"(probados: {candidatos})")
     return False, (ultimo_err or
