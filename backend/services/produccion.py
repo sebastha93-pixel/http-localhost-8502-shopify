@@ -68,6 +68,45 @@ def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
+def _safe_exec(q, retries: int = 2, default=None):
+    """Ejecuta una query Supabase con reintento + backoff cuando httpx desconecta
+    una conexión reutilizada del pool a mitad de la petición
+    (`RemoteProtocolError: Server disconnected`).
+
+    Por qué existe (2026-09-04): al abrir un precosteo salía un banner rojo
+    `error_interno: RemoteProtocolError: Server disconnected` — no era un dato
+    malo, era el pooler de Supabase cerrando una conexión keep-alive que el
+    cliente reusó. httpx NO reintenta eso solo (sus `transport retries` cubren la
+    apertura de conexión, no un corte mid-stream). Es transitorio: reintentar la
+    query lo resuelve. `revenue.py` ya tenía este helper; producción lo llamaba
+    con `.execute()` pelado y por eso el error llegaba crudo al usuario.
+
+    Retorna `q.execute()` (el APIResponse) para no cambiar el contrato de quien
+    llama; en fallo definitivo relanza la excepción salvo que se dé un `default`.
+    """
+    last_exc = None
+    for i in range(retries + 1):
+        try:
+            return q.execute()
+        except Exception as e:
+            last_exc = e
+            msg = str(e).lower()
+            transitorio = ("remoteprotocol" in msg or "disconnected" in msg
+                           or "server disconnected" in msg
+                           or "connection reset" in msg or "connectionterminated" in msg)
+            if transitorio and i < retries:
+                time.sleep(0.4 * (2 ** i))   # 0.4s, 0.8s
+                continue
+            if default is not None:
+                log.warning(f"[produccion] _safe_exec agotó reintentos: {str(e)[:160]}")
+                return default
+            raise
+    if default is not None:
+        return default
+    if last_exc is not None:
+        raise last_exc
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Consecutivos (ING-2026-0001, ROLLO-2026-000001, OC-2026-0001, ...)
 # ═══════════════════════════════════════════════════════════════════════
@@ -1553,12 +1592,13 @@ def obtener_precosteo(precosteo_id: str) -> Optional[dict]:
     sb = _sb()
     if sb is None:
         return None
-    ref = (sb.table("referencias_precosteo").select("*").eq("id", precosteo_id).limit(1).execute()).data
+    ref = _safe_exec(sb.table("referencias_precosteo").select("*")
+                       .eq("id", precosteo_id).limit(1)).data
     if not ref:
         return None
-    items = (sb.table("precosteo_items").select("*")
+    items = _safe_exec(sb.table("precosteo_items").select("*")
                .eq("referencia_id", precosteo_id)
-               .order("orden").execute()).data or []
+               .order("orden")).data or []
     # La composición de la tela, visible desde el precosteo — donde empieza el
     # recorrido de la referencia. Es la MISMA que irá en la etiqueta de lavado.
     comp = resolver_composicion(ref[0].get("tela") or "",
