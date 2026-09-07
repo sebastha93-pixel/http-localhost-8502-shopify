@@ -107,6 +107,36 @@ def _safe_exec(q, retries: int = 2, default=None):
         raise last_exc
 
 
+def _metros_fisicos_tendido(largo_trazo, num_capas) -> float:
+    """Metros de tela que el tendido jala FÍSICAMENTE = largo del trazo × nº de
+    capas. Es el TECHO insuperable del consumo de un corte: no se puede cortar
+    más tela de la que se tiende.
+
+    Existe (2026-09-07) porque los metros teóricos se calculaban como
+    `promedio_tecnico × cantidad`, con el promedio digitado a mano y SIN
+    validar. Un dedazo (orden 2609-0004: 10,93 en vez de ~0,95 m/prenda) infló
+    los teóricos a 2.513,9 m y la auto-asignación reservó 33 rollos (~2.640 m,
+    casi todo el inventario de esa tela) para un corte que solo jala ~220 m.
+    Devuelve 0 si falta el largo o las capas."""
+    try:
+        l = float(largo_trazo or 0)
+        c = int(num_capas or 0)
+        return round(l * c, 2) if (l > 0 and c > 0) else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _clamp_metros_teoricos(metros, largo_trazo, num_capas) -> float:
+    """Recorta los metros teóricos al techo físico (largo×capas) + 2% de
+    tolerancia por redondeos. Si no hay techo (falta largo o capas), deja pasar
+    el valor tal cual. Blindaje contra un promedio técnico mal digitado."""
+    techo = _metros_fisicos_tendido(largo_trazo, num_capas)
+    m = float(metros or 0)
+    if techo and m > techo * 1.02:
+        return techo
+    return m
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Consecutivos (ING-2026-0001, ROLLO-2026-000001, OC-2026-0001, ...)
 # ═══════════════════════════════════════════════════════════════════════
@@ -1920,7 +1950,12 @@ def crear_orden_corte(*, referencia_id: Optional[str] = None,
     capas = int(num_capas) if num_capas is not None else calcular_capas_desde_curva(curva_comb)
     prendas_por_trazo_est = max(1, sum(1 for v in curva_comb.values() if int(v or 0) > 0))
     prom_tendido = specs[0]["_prom"] or 0
-    metros_teo   = round(prom_tendido * cant_total, 2) if (prom_tendido and cant_total) else 0
+    metros_por_prom = round(prom_tendido * cant_total, 2) if (prom_tendido and cant_total) else 0
+    # Metros teóricos = promedio × cantidad, pero NUNCA por encima del techo
+    # físico (largo × capas). Y si no vino promedio, se usa el techo físico
+    # directo (antes nacía en 0 y la auto-asignación quedaba muerta).
+    techo_fisico = _metros_fisicos_tendido(largo_trazo, capas)
+    metros_teo   = _clamp_metros_teoricos(metros_por_prom, largo_trazo, capas) or techo_fisico
     rendimiento  = round(metros_teo / cant_total, 4) if cant_total else 0
 
     primary = specs[0]
@@ -2272,7 +2307,12 @@ def actualizar_curva_corte(oc_id: str, *, curva: dict,
         update["promedio_tecnico"] = float(promedio_tecnico)
     prom = float(update.get("promedio_tecnico") or oc.get("promedio_tecnico") or 0)
     if prom > 0:
-        update["metros_consumidos"] = round(prom * cantidad_total, 2)
+        _largo = update.get("largo_trazo", oc.get("largo_trazo"))
+        _capas = update.get("num_capas", oc.get("num_capas"))
+        # Mismo techo físico que en la creación: corregir el promedio no puede
+        # re-inflar los metros por encima de largo×capas.
+        update["metros_consumidos"] = _clamp_metros_teoricos(
+            round(prom * cantidad_total, 2), _largo, _capas)
     sb.table("ordenes_corte").update(update).eq("id", oc_id).execute()
     _cache_invalidate_prefix("ordenes_corte")
     return obtener_orden_corte(oc_id) or {}
@@ -2753,21 +2793,32 @@ def auto_asignar_rollos_por_tono(*, oc_id: str,
 
     tono_target = (tono or oc.get("tono") or "").strip()
 
-    # Metros teóricos + colchón del 5% (evita quedarse corto por variaciones)
+    # Metros teóricos + colchón del 5% (evita quedarse corto por variaciones).
+    # TECHO FÍSICO: nunca reservar más tela que la que el tendido puede jalar
+    # (largo × capas). Un promedio técnico mal digitado (dedazo) inflaba esto y
+    # la auto-asignación congelaba casi todo el inventario (caso 2609-0004).
+    techo_fisico = _metros_fisicos_tendido(oc.get("largo_trazo"), oc.get("num_capas"))
     m_teoricos = float(oc.get("metros_consumidos") or 0)
+    if techo_fisico and m_teoricos > techo_fisico * 1.02:
+        log.warning(f"[auto_asignar] metros teóricos {m_teoricos} > techo físico "
+                    f"{techo_fisico} (largo×capas) en {oc_id} — se recorta al techo")
+        m_teoricos = techo_fisico
     if m_teoricos <= 0:
         # AUTO-REPARACIÓN: órdenes creadas sin promedio técnico (el campo era
-        # opcional) → derivarlo del precosteo (consumo de TELA por prenda),
-        # persistirlo en la orden y seguir. Solo falla si tampoco está allí.
+        # opcional) → primero el techo físico; si tampoco (falta largo/capas),
+        # el consumo de TELA por prenda del precosteo. Persistir y seguir.
         prom = float(oc.get("promedio_tecnico") or 0) or \
             (_promedio_desde_precosteo(oc.get("referencia_id")) or 0)
         cant = int(oc.get("cantidad_programada") or 0) or \
             sum(int(v or 0) for v in (oc.get("curva_trazo") or {}).values())
-        if prom > 0 and cant > 0:
-            m_teoricos = round(prom * cant, 2)
+        m_teoricos = techo_fisico or (
+            _clamp_metros_teoricos(round(prom * cant, 2), oc.get("largo_trazo"),
+                                   oc.get("num_capas")) if (prom > 0 and cant > 0) else 0)
+        if m_teoricos > 0:
             try:
                 sb.table("ordenes_corte").update({
-                    "promedio_tecnico": prom,
+                    "promedio_tecnico": prom if (prom > 0 and not techo_fisico) else
+                        (round(m_teoricos / cant, 4) if cant else None),
                     "metros_consumidos": m_teoricos,
                     "updated_at": _now_iso(),
                 }).eq("id", oc_id).execute()
