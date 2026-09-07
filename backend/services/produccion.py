@@ -831,11 +831,13 @@ def listar_rollos(*, tela: Optional[str] = None, estado: Optional[str] = None,
     out = []
     for r in rollos:
         libres = round(float(r.get("metros_disponible") or 0) - reservas.get(r["id"], 0.0), 2)
-        # Sigue siendo asignable mientras el sobregiro de reservas no pase la
-        # tolerancia (la diferencia se resuelve al cierre con el consumo real).
-        if libres <= -TOLERANCIA_ASIGNACION_M:
+        # Un rollo sin metros libres útiles NO debe aparecer en el picker: ni el
+        # que quedó exacto en 0 (totalmente reservado — típico tras auto-asignar,
+        # que reserva rollos enteros) ni el sobregirado. Solo se muestra el que
+        # tiene al menos un retazo cortable (≥ 0,5 m) de tela libre.
+        if libres < UMBRAL_METROS_ASIGNABLE:
             continue
-        r["metros_libres"] = max(libres, 0.0)
+        r["metros_libres"] = round(libres, 2)
         out.append(r)
     return out
 
@@ -2691,6 +2693,12 @@ def verificar_rollo_corte(oc_id: str, barcode: str) -> dict:
 # libres del rollo. La reserva es solo un plan de corte — el descuento real
 # ocurre al cerrar el informe y nunca supera el saldo físico del rollo.
 TOLERANCIA_ASIGNACION_M = 10.0
+
+# Metros libres mínimos para que un rollo aparezca como ASIGNABLE. Por debajo de
+# 0,5 m no hay tela útil para cortar (mismo umbral que el retazo), así que un
+# rollo así solo ensucia el picker. Antes se colaban los que quedaban EXACTOS en
+# 0 (totalmente reservados, típico tras auto-asignar que reserva rollos enteros).
+UMBRAL_METROS_ASIGNABLE = 0.5
 
 
 def asignar_rollo_a_corte(*, oc_id: str, barcode: str,
