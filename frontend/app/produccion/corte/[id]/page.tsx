@@ -459,7 +459,16 @@ export default function DetalleOrdenCortePage() {
     onSuccess: (data) => {
       const r = data.resultado;
       const n = r.asignados.length;
-      if (r.faltantes > 0) {
+      if (n === 0) {
+        // No se agregó ninguno: o ya estaba cubierta (lo normal al re-darle el
+        // botón), o no hay rollos de esa tela/tono. Antes decía "Asignados 0
+        // rollo(s)", que asustaba como si se hubiera perdido la tela.
+        if (r.faltantes > 0) {
+          setMsg(`No hay rollos disponibles de esa tela${tonoAuto ? "/tono" : ""} · faltan ${r.faltantes.toFixed(2)} m por asignar.`);
+        } else {
+          setMsg("La orden ya tiene su tela asignada — no hacía falta agregar más rollos.");
+        }
+      } else if (r.faltantes > 0) {
         setMsg(`Asignados ${n} rollo(s) · faltan ${r.faltantes.toFixed(2)} m (stock insuficiente del tono).`);
       } else {
         setMsg(`Asignados ${n} rollo(s) · reserva +5% de colchón. Al cerrar el informe se descuenta el consumo real y el sobrante vuelve al inventario.`);
