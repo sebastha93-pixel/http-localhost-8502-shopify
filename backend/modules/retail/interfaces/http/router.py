@@ -174,6 +174,10 @@ async def cerrar_venta(
         )
 
     try:
+        async with uow as t:
+            await _exigir_misma_tienda(
+                t, tienda_id=entrada.tienda_id, caja_id=entrada.caja_id,
+                ubicacion_id=entrada.ubicacion_id)
         venta, variante_por_sku = await _armar(entrada, uow, usuario.id)
         await _exigir_numero_arrendado(uow, venta)
         resultado = await CerrarVenta(uow, reloj=RelojDelSistema()).ejecutar(
@@ -586,6 +590,8 @@ async def abrir_turno(
             )
 
         try:
+            await _exigir_misma_tienda(t, tienda_id=entrada.tienda_id,
+                                       caja_id=entrada.caja_id)
             configurada = await t.turnos.base_de_tienda(entrada.tienda_id)
             base, esperada, conteo, diferencia_base = configurada, None, None, None
 
@@ -783,19 +789,92 @@ async def contexto_caja(
         mensaje_tirilla=fila["mensaje_tirilla"],
         tiene_resolucion=bool(fila["tiene_resolucion"]),
         denominaciones=[Denominacion(**d) for d in (await _denominaciones(sesion))],
-        medios_pago=[MedioPago(**m) for m in (await _medios_pago(sesion))],
+        medios_pago=[MedioPago(**m) for m in
+                     (await _medios_pago(sesion, fila["tienda_id"]))],
     )
 
 
-async def _medios_pago(sesion) -> list:
+async def _medios_pago(sesion, tienda_id: str) -> list:
+    """Los medios de ESTA tienda, más los que sirven en todas.
+
+    El efectivo y el datáfono son de cada tienda: en Siigo, «Caja general
+    Florida» (12243) y la caja de Arrayanes (8282) son cuentas distintas.
+    Mostrarle a Arrayanes el efectivo de Florida manda su plata a la cuenta de
+    la otra tienda — un error que no revienta, sale en el balance.
+    """
     from sqlalchemy import text as _t
     filas = (await sesion.execute(_t("""
         SELECT id, nombre, tipo, permite_vuelto, exige_referencia,
                (siigo_forma_pago_id IS NOT NULL) AS factura_lista
           FROM retail.medios_pago
-         WHERE activo ORDER BY orden, nombre
-    """))).mappings().all()
+         WHERE activo AND (tienda_id IS NULL OR tienda_id = :t)
+         ORDER BY orden, nombre
+    """), {"t": tienda_id})).mappings().all()
     return [{**dict(f), "es_efectivo": f["tipo"] == "efectivo"} for f in filas]
+
+
+class CajaDelPos(BaseModel):
+    caja_id: str
+    caja_nombre: str
+    tienda_id: str
+    tienda_nombre: str
+
+
+@router.get("/cajas", response_model=List[CajaDelPos])
+async def listar_cajas(
+    sesion=Depends(sesion_lectura),
+    _: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Las cajas que puede ser un equipo.
+
+    La caja salía de `NEXT_PUBLIC_POS_CAJA`, una variable que se hornea al
+    publicar el frontend: UNA caja para toda la app, así que Florida y
+    Arrayanes no podían usar el mismo sitio. Ahora cada tableta lo aprende de
+    su enlace (`/pos/venta?caja=…`) o, si llega sin él, lo elige de esta lista
+    una sola vez.
+
+    Sólo cajas activas de tiendas activas: ofrecer una caja dada de baja es
+    invitar a vender contra un inventario que ya nadie cuenta.
+    """
+    from sqlalchemy import text as _t
+    filas = (await sesion.execute(_t("""
+        SELECT c.id AS caja_id, c.nombre AS caja_nombre,
+               t.id AS tienda_id, t.nombre AS tienda_nombre
+          FROM retail.cajas c JOIN retail.tiendas t ON t.id = c.tienda_id
+         WHERE c.activa AND t.activa
+         ORDER BY t.nombre, c.nombre
+    """))).mappings().all()
+    return [CajaDelPos(**f) for f in filas]
+
+
+async def _exigir_misma_tienda(t, *, tienda_id: str, caja_id: str,
+                               ubicacion_id: Optional[str] = None) -> None:
+    """La caja y la ubicación tienen que ser de la tienda que dice la petición.
+
+    Las tres llegan del dispositivo. Con una sola tienda daba igual; con dos,
+    una tableta de Arrayanes con un dato viejo descontaría el inventario de
+    Florida y anotaría la venta en la tienda equivocada, sin un solo error.
+
+    Una ubicación SIN tienda (una bodega) no se rechaza: no es de otra tienda.
+    """
+    from sqlalchemy import text as _t
+    fila = (await t.sesion.execute(_t("""
+        SELECT c.tienda_id AS de_la_caja,
+               (SELECT u.tienda_id FROM retail.ubicaciones u
+                 WHERE u.id = :u) AS de_la_ubicacion
+          FROM retail.cajas c WHERE c.id = :c
+    """), {"c": caja_id, "u": ubicacion_id})).mappings().first()
+    if fila is None:
+        raise ReglaDeNegocio(f"No existe la caja {caja_id}.")
+    if fila["de_la_caja"] != tienda_id:
+        raise ReglaDeNegocio(
+            f"La caja {caja_id} es de la tienda {fila['de_la_caja']}, no de "
+            f"{tienda_id}. Vuelve a abrir el POS desde el enlace de esta caja.")
+    otra = fila["de_la_ubicacion"]
+    if ubicacion_id is not None and otra is not None and otra != tienda_id:
+        raise ReglaDeNegocio(
+            f"El inventario {ubicacion_id} es de la tienda {otra}, no de "
+            f"{tienda_id}. Vuelve a abrir el POS desde el enlace de esta caja.")
 
 
 async def _denominaciones(sesion) -> list:
@@ -1643,6 +1722,10 @@ class DevolucionEntrada(BaseModel):
     seleccion: Dict[str, int]
     motivo: str
     reembolso: str
+    #  La caja DONDE se devuelve, que puede no ser la que vendió: la clienta
+    #  compra en Florida y devuelve en Arrayanes. Sin ella se usa la de la
+    #  venta, que es lo único que existía con una sola tienda.
+    caja_id: Optional[str] = None
 
 
 class DevolucionSalida(BaseModel):
@@ -1658,6 +1741,7 @@ class DevolucionSalida(BaseModel):
 @router.get("/devoluciones/ticket/{numero}", response_model=TicketDevolucion)
 async def buscar_ticket(
     numero: str,
+    caja_id: Optional[str] = Query(None),
     s=Depends(sesion_lectura),
     _: CurrentUser = Depends(require_permission("retail", "ver")),
 ):
@@ -1677,14 +1761,17 @@ async def buscar_ticket(
     cab = (await s.execute(_t("""
         SELECT v.id, v.numero, v.total, v.estado, v.cajera_id, v.caja_id,
                v.cerrada_en,
+               -- El turno de la caja DONDE se devuelve: de ese cajón sale la
+               -- plata, no del de la caja que vendió.
                EXISTS (SELECT 1 FROM retail.sesiones_caja sc
-                        WHERE sc.caja_id = v.caja_id AND sc.estado = 'abierta')
+                        WHERE sc.caja_id = coalesce(:c, v.caja_id)
+                          AND sc.estado = 'abierta')
                  AS hay_turno
           FROM retail.ventas v
          WHERE upper(v.numero) = :n AND v.estado <> 'borrador'
          ORDER BY v.cerrada_en DESC NULLS LAST
          LIMIT 1
-    """), {"n": limpio})).mappings().first()
+    """), {"n": limpio, "c": caja_id})).mappings().first()
 
     if cab is None:
         raise HTTPException(404, {"error": "no_existe",
@@ -1758,7 +1845,7 @@ async def registrar_devolucion(
             devolucion_id=entrada.devolucion_id, venta_id=entrada.venta_id,
             seleccion=entrada.seleccion, motivo=entrada.motivo,
             reembolso=entrada.reembolso, usuario_id=usuario.id,
-            ahora=datetime.now(timezone.utc))
+            ahora=datetime.now(timezone.utc), caja_id=entrada.caja_id)
     except RequiereAutorizacion as e:
         raise HTTPException(403, {"error": "sin_permiso", "mensaje": str(e)})
     except ReglaDeNegocio as e:

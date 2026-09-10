@@ -24,6 +24,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { Rail } from "@/components/pos/rail";
+import { ElegirCaja } from "@/components/pos/elegir-caja";
+import { useCajaDelEquipo } from "@/lib/pos/caja-del-equipo";
 import { formatear } from "@/lib/pos/dinero";
 import { nuevoUlid } from "@/lib/pos/ulid";
 import {
@@ -48,7 +50,15 @@ const REEMBOLSOS: { valor: Reembolso; etiqueta: string }[] = [
   { valor: "credito_tienda", etiqueta: "Crédito tienda" },
 ];
 
-export default function PantallaDevoluciones() {
+// Se devuelve en la caja de ESTE equipo, que puede no ser la que vendió:
+// de su cajón sale la plata y a su tienda entra la prenda.
+export default function PaginaDevoluciones() {
+  const caja = useCajaDelEquipo();
+  if (caja.estado.fase !== "lista") return <ElegirCaja caja={caja} />;
+  return <PantallaDevoluciones key={caja.estado.caja} CAJA={caja.estado.caja} />;
+}
+
+function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
   const { user } = useAuth();
   const [consulta, setConsulta] = useState("");
   const [ticket, setTicket] = useState<TicketDevolucion | null>(null);
@@ -73,7 +83,7 @@ export default function PantallaDevoluciones() {
     setMotivo(null);
     setReembolso(null);
     try {
-      const t = await buscarTicket(n);
+      const t = await buscarTicket(n, CAJA);
       setTicket(t);
       if (t.anulada) {
         setError(
@@ -127,6 +137,7 @@ export default function PantallaDevoluciones() {
         seleccion,
         motivo,
         reembolso,
+        caja_id: CAJA,
       });
       setHecha(r);
     } catch (e) {

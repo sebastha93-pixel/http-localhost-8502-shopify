@@ -67,7 +67,17 @@ class RegistrarDevolucion:
     async def ejecutar(self, *, devolucion_id: str, venta_id: str,
                        seleccion: Mapping[str, int], motivo: str,
                        reembolso: str, usuario_id: str,
-                       ahora: datetime) -> ResultadoDevolucion:
+                       ahora: datetime,
+                       caja_id: Optional[str] = None) -> ResultadoDevolucion:
+        """`caja_id` es la caja DONDE se devuelve; sin ella, la de la venta.
+
+        Con dos tiendas no son la misma: la clienta compra en Florida y
+        devuelve en Arrayanes. La plata sale del cajón que la cajera tiene
+        delante y la prenda entra al inventario de la tienda donde quedó
+        físicamente. Hacerlo contra la venta descuadraría las DOS tiendas: a
+        Florida le faltaría plata que nunca entregó y le sobraría una prenda
+        que no tiene.
+        """
         # Los enums validan ANTES de abrir transacción: un motivo inventado no
         # merece un round-trip a la base.
         try:
@@ -94,6 +104,7 @@ class RegistrarDevolucion:
             """), {"i": venta_id})).mappings().first()
             if cabecera is None:
                 raise ReglaDeNegocio(f"No existe la venta {venta_id}.")
+            lugar = await self._lugar(t, caja_id, cabecera)
 
             vendidas, variantes = await self._lineas_vendidas(t, venta_id)
             ya = await self._ya_devuelto(t, venta_id)
@@ -106,7 +117,7 @@ class RegistrarDevolucion:
                 SELECT id FROM retail.sesiones_caja
                  WHERE caja_id = :c AND estado = 'abierta'
                  ORDER BY abierta_en DESC LIMIT 1
-            """), {"c": cabecera["caja_id"]})).scalar()
+            """), {"c": lugar["caja_id"]})).scalar()
 
             # Todas las guardas viven en el agregado, no aquí.
             devolucion = Devolucion.armar(
@@ -134,8 +145,8 @@ class RegistrarDevolucion:
                         :moneda, :ahora)
             """), {
                 "id": devolucion_id, "venta": venta_id,
-                "numero": cabecera["numero"], "tienda": cabecera["tienda_id"],
-                "caja": cabecera["caja_id"], "sesion": sesion_para_guardar,
+                "numero": cabecera["numero"], "tienda": lugar["tienda_id"],
+                "caja": lugar["caja_id"], "sesion": sesion_para_guardar,
                 "usuario": usuario_id, "motivo": motivo_enum.value,
                 "reembolso": reembolso_enum.value,
                 "base": devolucion.base_gravable.centavos,
@@ -157,16 +168,17 @@ class RegistrarDevolucion:
                     "precio": linea.precio_unitario_con_iva_centavos,
                 })
 
-            # 2 · La prenda vuelve al saldo, a la ubicación DE DONDE SALIÓ.
+            # 2 · La prenda vuelve al saldo de la tienda DONDE QUEDÓ, que es
+            #     la que la tiene en la mano.
             for linea in devolucion.lineas:
                 variante = variantes.get(linea.sku)
-                if not variante or not cabecera["ubicacion_id"]:
+                if not variante or not lugar["ubicacion_id"]:
                     # Sin ubicación no hay a dónde devolverla. Pasa con ventas
                     # migradas de antes del libro de inventario; el registro de
                     # la devolución sí queda, que es lo que la clienta necesita.
                     continue
                 await t.inventario.devolver(
-                    ubicacion_id=cabecera["ubicacion_id"],
+                    ubicacion_id=lugar["ubicacion_id"],
                     variante_id=variante, cantidad=linea.cantidad,
                     referencia_id=devolucion_id, usuario_id=usuario_id,
                     motivo="devolucion", referencia_tipo="devolucion")
@@ -197,10 +209,11 @@ class RegistrarDevolucion:
             # 4 · Constancia, y el caso que emitirá la nota crédito.
             await t.auditoria.registrar(
                 evento="venta.devuelta", ocurrido_en=ahora, severidad="critico",
-                tienda_id=cabecera["tienda_id"], caja_id=cabecera["caja_id"],
+                tienda_id=lugar["tienda_id"], caja_id=lugar["caja_id"],
                 sesion_id=sesion_para_guardar, usuario_id=usuario_id,
                 agregado_tipo="devolucion", agregado_id=devolucion_id,
                 payload={"numero_venta": cabecera["numero"],
+                         "tienda_venta": cabecera["tienda_id"],
                          "motivo": motivo_enum.value,
                          "reembolso": reembolso_enum.value,
                          "total": devolucion.total.centavos,
@@ -214,7 +227,11 @@ class RegistrarDevolucion:
                 payload={"devolucion_id": devolucion_id,
                          "venta_id": venta_id,
                          "numero_venta": cabecera["numero"],
-                         "tienda_id": cabecera["tienda_id"],
+                         # La tienda que ATIENDE el caso —y a cuya bodega
+                         # entra la prenda—; la de la venta va aparte, que
+                         # es la que emitió la factura que se anula.
+                         "tienda_id": lugar["tienda_id"],
+                         "tienda_venta_id": cabecera["tienda_id"],
                          "motivo": motivo_enum.value,
                          "reembolso": reembolso_enum.value,
                          "total": devolucion.total.centavos,
@@ -238,6 +255,30 @@ class RegistrarDevolucion:
         )
 
     # ── Lecturas ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    async def _lugar(t, caja_id: Optional[str], cabecera) -> dict:
+        """Dónde se hace la devolución: caja, tienda e inventario.
+
+        Sin caja, el de la venta — lo único que existía con una sola tienda.
+        Con caja, el inventario es el de SU tienda; si esa tienda no tiene
+        ubicación se usa el de la venta antes que dejar la prenda sin saldo.
+        """
+        if not caja_id or caja_id == cabecera["caja_id"]:
+            return {"caja_id": cabecera["caja_id"],
+                    "tienda_id": cabecera["tienda_id"],
+                    "ubicacion_id": cabecera["ubicacion_id"]}
+        fila = (await t.sesion.execute(text("""
+            SELECT c.id, c.tienda_id,
+                   (SELECT u.id FROM retail.ubicaciones u
+                     WHERE u.tienda_id = c.tienda_id AND u.tipo = 'tienda'
+                     LIMIT 1) AS ubicacion_id
+              FROM retail.cajas c WHERE c.id = :c
+        """), {"c": caja_id})).mappings().first()
+        if fila is None:
+            raise ReglaDeNegocio(f"No existe la caja {caja_id}.")
+        return {"caja_id": fila["id"], "tienda_id": fila["tienda_id"],
+                "ubicacion_id": fila["ubicacion_id"] or cabecera["ubicacion_id"]}
 
     @staticmethod
     async def _lineas_vendidas(t, venta_id: str):

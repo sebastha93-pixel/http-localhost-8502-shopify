@@ -32,6 +32,9 @@ import { DialogoDescuento } from "@/components/pos/dialogo-descuento";
 import { DialogoCliente } from "@/components/pos/dialogo-cliente";
 import { AbrirTurno } from "@/components/pos/abrir-turno";
 import { EstadoConexion } from "@/components/pos/estado-conexion";
+import { ElegirCaja } from "@/components/pos/elegir-caja";
+import { ApiError } from "@/lib/api";
+import { useCajaDelEquipo } from "@/lib/pos/caja-del-equipo";
 import {
   cerrarVenta,
   listarCatalogo,
@@ -65,11 +68,10 @@ import { arrancarCola, sincronizar, usarNumerador } from "@/lib/pos/sincronizaci
 import { ivaDe } from "@/lib/pos/dinero";
 import type { LineaCarrito } from "@/lib/pos/carrito";
 
-const TIENDA = process.env.NEXT_PUBLIC_POS_TIENDA || "";
-const CAJA = process.env.NEXT_PUBLIC_POS_CAJA || "";
-const UBICACION = process.env.NEXT_PUBLIC_POS_UBICACION || "";
-// El turno YA NO se cablea en una variable: se abre (o se reanuda) contra el
-// backend, con el usuario que entró por el login del ERP.
+// Ni la caja ni el turno se cablean en variables. La caja la aprende el equipo
+// de su enlace (`caja-del-equipo.ts`); la tienda y el inventario salen de ella
+// en el servidor; el turno se abre (o se reanuda) con el usuario que entró por
+// el login del ERP.
 
 type Fase = "vendiendo" | "cobrando" | "cerrada";
 
@@ -120,7 +122,21 @@ function filtrar(
 const HORAS_AVISO = 4;
 const HORAS_BLOQUEO = 24;
 
-export default function PantallaVenta() {
+export default function PaginaVenta() {
+  const caja = useCajaDelEquipo();
+  if (caja.estado.fase !== "lista") return <ElegirCaja caja={caja} />;
+  // `key`: otra caja es otra tienda. Nada del estado de la anterior —el
+  // turno, el carrito, el bloque de números— puede sobrevivir al cambio.
+  return (
+    <PantallaVenta key={caja.estado.caja} CAJA={caja.estado.caja}
+                   onOtraCaja={caja.olvidar} />
+  );
+}
+
+function PantallaVenta({ CAJA, onOtraCaja }: {
+  CAJA: string;
+  onOtraCaja: () => void;
+}) {
   const [consulta, setConsulta] = useState("");
   const [categoria, setCategoria] = useState("Todo");
   const [categorias, setCategorias] = useState<string[]>([]);
@@ -162,11 +178,18 @@ export default function PantallaVenta() {
   const [abriendo, setAbriendo] = useState(false);
   const [errorTurno, setErrorTurno] = useState<string | null>(null);
   const [contexto, setContexto] = useState<ContextoCaja | null>(null);
+  // La caja del enlace no existe en el servidor. No es falta de red: insistir
+  // no la va a crear, y el equipo tiene que poder elegir otra.
+  const [cajaDesconocida, setCajaDesconocida] = useState(false);
   const { user } = useAuth();
   const ventaId = useRef<string>(nuevoUlid());
   const buscadorRef = useRef<HTMLInputElement>(null);
 
-  const configurado = Boolean(TIENDA && CAJA && UBICACION);
+  // La tienda y el inventario salen de la CAJA, en el servidor. Eran tres
+  // variables sueltas que podían contradecirse y vender contra otro stock.
+  const TIENDA = contexto?.tienda_id ?? "";
+  const UBICACION = contexto?.ubicacion_id ?? "";
+  const configurado = Boolean(CAJA);
   const SESION = turno?.sesion_id ?? "";
   const TOPE = Number(turno?.tope_descuento_pct ?? 0);
   const CAJERA = turno?.cajera_nombre ?? "";
@@ -209,9 +232,15 @@ export default function PantallaVenta() {
         // SIN RED SE TRABAJA CON LA COPIA. Antes esto pintaba «Failed to
         // fetch» —el mensaje del navegador, en inglés— y dejaba la pantalla
         // de apertura sin billetes que contar: la cajera no podía ni empezar.
+        if (e instanceof ApiError && e.status === 404) {
+          if (vigente) setCajaDesconocida(true);
+          return;
+        }
         const guardado = await leerContexto<ContextoCaja>();
         if (!vigente) return;
-        if (guardado) {
+        // La copia sólo sirve si es DE ESTA CAJA: la de otra traería los
+        // medios de pago y el encabezado de otra tienda.
+        if (guardado && guardado.caja_id === CAJA) {
           setContexto(guardado);
           setErrorTurno(null);
         } else {
@@ -225,12 +254,19 @@ export default function PantallaVenta() {
       }
     })();
     return () => { vigente = false; };
-  }, [configurado]);
+  }, [configurado, CAJA]);
 
   async function abrir(
     conteo: Record<number, number>,
     justificacion: string,
   ) {
+    // Sin contexto no se sabe de qué tienda es la caja, y abrir el turno a
+    // ciegas lo anotaría en ninguna.
+    if (!TIENDA) {
+      setErrorTurno("Esta caja todavía no sabe de qué tienda es. Conecta el "
+                    + "equipo a internet y vuelve a entrar.");
+      return;
+    }
     setAbriendo(true);
     setErrorTurno(null);
     try {
@@ -280,7 +316,7 @@ export default function PantallaVenta() {
 
   // ── Catálogo ───────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!configurado || !turno) return;
+    if (!configurado || !turno || !UBICACION) return;
     let vigente = true;
     const temporizador = setTimeout(async () => {
       let d: { referencias: Referencia[]; categorias: string[] };
@@ -336,7 +372,7 @@ export default function PantallaVenta() {
       vigente = false;
       clearTimeout(temporizador);
     };
-  }, [consulta, categoria, configurado, turno, agregar]);
+  }, [consulta, categoria, configurado, turno, agregar, UBICACION]);
 
   // El foco vive en el buscador para que el lector escriba sin un clic — pero
   // lo SUELTA cuando hay un diálogo encima, o el motivo del descuento termina
@@ -607,7 +643,15 @@ export default function PantallaVenta() {
     return () => window.removeEventListener("keydown", alTeclado);
   });
 
-  if (!configurado) return <SinConfigurar />;
+  if (cajaDesconocida) {
+    return (
+      <SinVender titulo={`No existe la caja «${CAJA}»`} onOtraCaja={onOtraCaja}>
+        El enlace con que se abrió este equipo apunta a una caja que el
+        servidor no conoce. Puede ser un enlace mal copiado o una caja dada de
+        baja.
+      </SinVender>
+    );
+  }
 
   if (cargandoTurno) {
     return (
@@ -616,6 +660,20 @@ export default function PantallaVenta() {
           Buscando el turno de esta caja…
         </p>
       </div>
+    );
+  }
+
+  // Sin ubicación la caja no sabe de qué stock descontar. Se dice ANTES de
+  // abrir el turno: abrirlo y descubrirlo al buscar la primera prenda es
+  // haber contado el cajón para nada.
+  if (contexto && !contexto.ubicacion_id) {
+    return (
+      <SinVender titulo={`${contexto.tienda_nombre} no tiene inventario`}
+                 onOtraCaja={onOtraCaja}>
+        La tienda existe pero no tiene una ubicación de inventario, así que
+        esta caja no sabe de qué stock descontar. Hay que crearla en el
+        servidor antes de vender.
+      </SinVender>
     );
   }
 
@@ -806,24 +864,27 @@ export default function PantallaVenta() {
   );
 }
 
-function SinConfigurar() {
+/** Esta caja no puede vender, dicho con la salida a la vista: quedarse con
+ *  un equipo que apunta a una caja inservible no puede requerir soporte. */
+function SinVender({ titulo, children, onOtraCaja }: {
+  titulo: string;
+  children: React.ReactNode;
+  onOtraCaja: () => void;
+}) {
   return (
     <div className="flex min-h-screen items-center justify-center p-8">
       <Panel className="max-w-lg p-6" style={{ background: "var(--pos-surface)" }}>
-        <p className="titular text-[18px]">Punto de venta sin configurar</p>
+        <p className="titular text-[18px]">{titulo}</p>
         <p className="mt-3 text-[14px]" style={{ color: "var(--pos-700)" }}>
-          Faltan las variables del punto de venta. Sin ellas esta caja no sabe
-          desde qué tienda vende, y adivinarlo facturaría contra el inventario
-          equivocado.
+          {children}
         </p>
-        <pre
-          className="mt-4 overflow-x-auto rounded-[var(--pos-r-sm)] p-3 font-mono text-[12px]"
-          style={{ background: "var(--pos-100)", color: "var(--pos-700)" }}
+        <button
+          type="button"
+          onClick={onOtraCaja}
+          className="pos-btn pos-btn-sec mt-5 h-12 px-4 text-[15px]"
         >
-{`NEXT_PUBLIC_POS_TIENDA=florida
-NEXT_PUBLIC_POS_CAJA=florida_caja1
-NEXT_PUBLIC_POS_UBICACION=tienda:florida`}
-        </pre>
+          Elegir otra caja
+        </button>
       </Panel>
     </div>
   );

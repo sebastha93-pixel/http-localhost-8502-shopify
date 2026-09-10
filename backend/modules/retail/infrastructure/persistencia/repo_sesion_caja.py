@@ -25,18 +25,24 @@ class RepositorioSesionCajaSQL:
     def __init__(self, sesion: AsyncSession) -> None:
         self._s = sesion
 
-    async def medio_efectivo(self) -> str:
-        """Cuál medio de pago ES el efectivo.
+    async def medio_efectivo(self, tienda_id: str) -> str:
+        """Cuál medio de pago ES el efectivo de esta tienda.
 
         Se consulta, no se asume. Estaba escrito 'efectivo' a mano en dos
         sitios: el día que una tienda lo registre como 'caja' o 'cash', la
         base inicial se anotaría contra un medio que no existe y el arqueo
         saldría corto por el valor de la base, todos los días, sin error.
+
+        Es POR TIENDA: el efectivo de Florida y el de Arrayanes son cuentas
+        distintas en Siigo. Gana el de la tienda; el que no tiene tienda queda
+        como respaldo para las instalaciones de una sola.
         """
         medio = (await self._s.execute(text("""
             SELECT id FROM retail.medios_pago
-             WHERE tipo = 'efectivo' AND activo ORDER BY orden, id LIMIT 1
-        """))).scalar()
+             WHERE tipo = 'efectivo' AND activo
+               AND (tienda_id IS NULL OR tienda_id = :t)
+             ORDER BY (tienda_id IS NULL), orden, id LIMIT 1
+        """), {"t": tienda_id})).scalar()
         if medio is None:
             raise ReglaDeNegocio(
                 "No hay ningún medio de pago de tipo efectivo configurado. "
@@ -92,7 +98,7 @@ class RepositorioSesionCajaSQL:
             VALUES (:id, :s, 'base_inicial', :medio, :base,
                     'base inicial', :u, :ts)
         """), {"id": (sesion_id[:20] + "BASE000000")[:26], "s": sesion_id,
-               "medio": await self.medio_efectivo(),
+               "medio": await self.medio_efectivo(tienda_id),
                "base": base_inicial, "u": usuario_id, "ts": ahora})
 
         return {"id": sesion_id, "numero_turno": siguiente,
@@ -176,7 +182,7 @@ class RepositorioSesionCajaSQL:
             abierta_por=fila["abierta_por"], abierta_en=fila["abierta_en"],
             moneda=moneda, cierre_ciego=fila["cierre_ciego"],
             umbral_descuadre=Dinero(int(fila["umbral_descuadre"]), moneda),
-            medio_efectivo_id=await self.medio_efectivo(),
+            medio_efectivo_id=await self.medio_efectivo(fila["tienda_id"]),
         )
         # `abrir` ya anotó una base en cero; se descarta y se cargan las reales.
         sesion.movimientos.clear()
