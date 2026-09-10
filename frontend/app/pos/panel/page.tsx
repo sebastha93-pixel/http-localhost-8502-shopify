@@ -20,13 +20,18 @@ import { useAuth } from "@/components/auth-provider";
 import { Panel as Marco } from "@/components/pos/marco";
 import { Auditoria } from "@/components/pos/auditoria";
 import { Rail } from "@/components/pos/rail";
+import { ConLaCaja } from "@/components/pos/elegir-caja";
 import { formatear } from "@/lib/pos/dinero";
 import { panelDelDia, type Panel as Datos } from "@/lib/pos/api";
 
-const TIENDA = process.env.NEXT_PUBLIC_POS_TIENDA || "";
 const REFRESCO_MS = 60_000;
 
-export default function PantallaPanel() {
+// El panel es de la tienda de la caja del equipo, no de una variable.
+export default function PaginaPanel() {
+  return <ConLaCaja>{(c) => <PantallaPanel TIENDA={c.tienda_id} />}</ConLaCaja>;
+}
+
+function PantallaPanel({ TIENDA }: { TIENDA: string }) {
   const { user } = useAuth();
   const [datos, setDatos] = useState<Datos | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -40,7 +45,7 @@ export default function PantallaPanel() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo cargar el panel.");
     }
-  }, []);
+  }, [TIENDA]);
 
   useEffect(() => {
     cargar();

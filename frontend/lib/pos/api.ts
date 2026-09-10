@@ -323,6 +323,18 @@ export async function contextoCaja(cajaId: string): Promise<ContextoCaja> {
   return api.get<ContextoCaja>(`/api/retail/caja/contexto?${p}`);
 }
 
+export interface CajaDelPos {
+  caja_id: string;
+  caja_nombre: string;
+  tienda_id: string;
+  tienda_nombre: string;
+}
+
+/** Las cajas activas, para que un equipo sin enlace elija cuál es. */
+export async function listarCajas(): Promise<CajaDelPos[]> {
+  return api.get<CajaDelPos[]>("/api/retail/cajas");
+}
+
 // ── Cierre de caja ──────────────────────────────────────────────────────────
 
 export interface MedioResumen {
@@ -683,10 +695,15 @@ export interface Devolucion {
   sesion_id: string | null;
 }
 
-export async function buscarTicket(numero: string): Promise<TicketDevolucion> {
+/** `cajaId` es la caja DONDE se devuelve: de su turno depende si se puede
+ *  reembolsar en efectivo, aunque la venta haya sido en otra tienda. */
+export async function buscarTicket(
+  numero: string, cajaId: string,
+): Promise<TicketDevolucion> {
+  const p = new URLSearchParams({ caja_id: cajaId });
   try {
     return await api.get<TicketDevolucion>(
-      `/api/retail/devoluciones/ticket/${encodeURIComponent(numero)}`);
+      `/api/retail/devoluciones/ticket/${encodeURIComponent(numero)}?${p}`);
   } catch (e) {
     return traducir(e);
   }
@@ -698,6 +715,8 @@ export async function registrarDevolucion(cuerpo: {
   seleccion: Record<string, number>;
   motivo: MotivoDevolucion;
   reembolso: Reembolso;
+  /** Donde se devuelve: su cajón y el inventario de su tienda. */
+  caja_id: string;
 }): Promise<Devolucion> {
   try {
     return await api.post<Devolucion>("/api/retail/devoluciones", cuerpo);

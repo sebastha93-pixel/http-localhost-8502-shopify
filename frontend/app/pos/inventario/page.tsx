@@ -20,13 +20,25 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { Rail } from "@/components/pos/rail";
+import { ConLaCaja } from "@/components/pos/elegir-caja";
 import { formatear } from "@/lib/pos/dinero";
 import { consultarInventario, type FilaInventario, type Inventario } from "@/lib/pos/api";
 
-const TIENDA = process.env.NEXT_PUBLIC_POS_TIENDA || "";
-const UBICACION = process.env.NEXT_PUBLIC_POS_UBICACION || "";
+// La tienda y la ubicación salen de la caja del equipo, no de variables.
+export default function PaginaInventario() {
+  return (
+    <ConLaCaja>
+      {(c) => (
+        <PantallaInventario TIENDA={c.tienda_id} UBICACION={c.ubicacion_id ?? ""} />
+      )}
+    </ConLaCaja>
+  );
+}
 
-export default function PantallaInventario() {
+function PantallaInventario({ TIENDA, UBICACION }: {
+  TIENDA: string;
+  UBICACION: string;
+}) {
   const { user } = useAuth();
   const [datos, setDatos] = useState<Inventario | null>(null);
   const [consulta, setConsulta] = useState("");
@@ -55,7 +67,7 @@ export default function PantallaInventario() {
       }
     }, consulta ? 250 : 0);
     return () => { vivo = false; clearTimeout(t); };
-  }, [consulta, categoria, soloBajos]);
+  }, [consulta, categoria, soloBajos, TIENDA, UBICACION]);
 
   useEffect(() => { buscador.current?.focus(); }, []);
 

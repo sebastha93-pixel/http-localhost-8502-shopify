@@ -15,6 +15,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { Panel } from "@/components/pos/marco";
 import { Rail } from "@/components/pos/rail";
+import { ElegirCaja } from "@/components/pos/elegir-caja";
+import { useCajaDelEquipo } from "@/lib/pos/caja-del-equipo";
 import { Arqueo, DialogoDescuadre } from "@/components/pos/arqueo";
 import { DialogoMovimiento } from "@/components/pos/dialogo-movimiento";
 import { DialogoAnular, VentasDelTurno } from "@/components/pos/ventas-del-turno";
@@ -37,9 +39,14 @@ import {
 import { formatear, desdePesosTecleados } from "@/lib/pos/dinero";
 import { nuevoUlid } from "@/lib/pos/ulid";
 
-const CAJA = process.env.NEXT_PUBLIC_POS_CAJA || "";
+// Se cierra la caja de ESTE equipo: la que aprendió de su enlace.
+export default function PaginaCierre() {
+  const caja = useCajaDelEquipo();
+  if (caja.estado.fase !== "lista") return <ElegirCaja caja={caja} />;
+  return <PantallaCierre key={caja.estado.caja} CAJA={caja.estado.caja} />;
+}
 
-export default function PantallaCierre() {
+function PantallaCierre({ CAJA }: { CAJA: string }) {
   const { user } = useAuth();
   const [turno, setTurno] = useState<Turno | null>(null);
   const [resumen, setResumen] = useState<ResumenCierre | null>(null);

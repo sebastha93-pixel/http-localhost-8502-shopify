@@ -227,6 +227,25 @@ export async function leerContexto<T>(): Promise<T | undefined> {
   return g?.datos;
 }
 
+/**
+ * LO QUE ES DE UNA CAJA Y NO DE OTRA, fuera del disco.
+ *
+ * Al cambiar la caja del equipo, el contexto (medios de pago, encabezado de la
+ * tirilla), el catálogo (el stock es de una ubicación) y el carrito son de la
+ * caja anterior. Usarlos sin red sería cobrar con el efectivo de Florida desde
+ * Arrayanes.
+ *
+ * LA COLA NO SE TOCA: cada venta pendiente lleva adentro su tienda, su caja y
+ * su ubicación, y se envía tal cual. Borrarla sería perder ventas cobradas.
+ */
+export async function olvidarDatosDeCaja(): Promise<void> {
+  await Promise.all([
+    conStore(CONTEXTO, "readwrite", (s) => s.delete("caja")),
+    conStore(CATALOGO, "readwrite", (s) => s.delete("completo")),
+    conStore(CARRITO, "readwrite", (s) => s.delete("actual")),
+  ]);
+}
+
 
 // ── Cuánto lleva esta caja sin hablar con el servidor ───────────────────────
 //

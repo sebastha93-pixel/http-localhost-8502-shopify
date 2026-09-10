@@ -101,13 +101,53 @@ Comprobado el 2026-08-29 sobre la base recién migrada: **0 tiendas, 0 cajas,
 0 ubicaciones**, y de medios de pago sólo `addi`, `sumas` y `wompi_qr` (los
 que sí inserta la `0015`). Falta hasta el efectivo.
 
-O sea que después de migrar hay que sembrar a mano:
+~~O sea que después de migrar hay que sembrar a mano.~~ Ya no: **`sembrar_tiendas`**
+crea Florida (dos cajas, prefijo `FL`) y Arrayanes (una caja, `FV-6`), sus
+ubicaciones y los medios de pago. Corre en ENSAYO por defecto, no pisa nada que
+ya exista, y se puede repetir:
 
-* La **tienda**, la **caja** con su prefijo y la **ubicación** de inventario.
-* Los **medios de pago** básicos: efectivo, datáfono, transferencia.
-* El **catálogo** — con `python -m backend.modules.retail.cargar_catalogo`,
-  que lee un CSV, corre en ENSAYO por defecto y no borra nada. No confundir
-  con `semilla.py`, que hace `TRUNCATE` y sólo corre en local.
+```bash
+python -m backend.modules.retail.sembrar_tiendas            # ensayo
+python -m backend.modules.retail.sembrar_tiendas --aplicar
+```
+
+El **efectivo y el datáfono son de cada tienda** (`efectivo_florida` → Siigo
+12243, `efectivo_arrayanes` → 8282…): en Siigo son cuentas distintas, y un
+efectivo compartido mandaría la plata de una tienda a la cuenta de la otra.
+
+Lo que la siembra NO sabe de Arrayanes, y hay que completar antes de vender:
+
+* **Dirección y teléfono** — la tirilla sale sin ellos, que es mejor que con
+  los de Florida.
+* **`consecutivo_externo`** — quedó en 10703 porque `FV-6-10703` es una factura
+  real: es un piso seguro, no el número actual. Hay que subirlo con el de la
+  última tirilla de Siigo POS.
+* **La resolución** (y confirmar que `FV-6` sigue siendo su prefijo).
+
+Después, el **catálogo** — con `python -m backend.modules.retail.cargar_catalogo`,
+una vez por tienda (`RETAIL_UBICACION=tienda:arrayanes`). Lee un CSV, corre en
+ENSAYO por defecto y no borra nada. No confundir con `semilla.py`, que hace
+`TRUNCATE` y sólo corre en local.
+
+### 3b. Los enlaces de las cajas
+
+La caja ya NO sale de `NEXT_PUBLIC_POS_*` —eso dejaba UNA caja para toda la
+app—. Cada tableta la aprende de su enlace y la recuerda:
+
+| Caja | Enlace |
+|---|---|
+| Florida · Caja 1 | `https://app.maledenim.com/pos/venta?caja=florida_caja1` |
+| Florida · Caja 2 | `https://app.maledenim.com/pos/venta?caja=florida_caja2` |
+| Arrayanes · Caja 1 | `https://app.maledenim.com/pos/venta?caja=arrayanes_caja1` |
+
+Se abre UNA vez en cada tableta. Sin enlace, el POS pregunta qué caja es. Un
+equipo que ya es una caja y abre el enlace de otra **pregunta antes de
+cambiar**: cambiar de caja es cambiar de tienda y de inventario.
+
+La tienda y la ubicación salen de la caja en el servidor, y el servidor
+rechaza una venta o un turno cuya caja, tienda e inventario no sean de la misma
+tienda. Una devolución se hace en la caja DONDE ocurre: la plata sale de ese
+cajón y la prenda entra a esa tienda, aunque la venta haya sido en la otra.
 
 Y además lo que depende de la operación:
 

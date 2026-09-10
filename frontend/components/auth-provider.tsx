@@ -55,9 +55,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!hydrated) return;
     if (!token && !isPublic) {
       // Guardamos dónde estaba para devolverlo ahí después de entrar, en vez
-      // de mandarlo siempre al home y que pierda la pantalla.
+      // de mandarlo siempre al home y que pierda la pantalla. CON la búsqueda:
+      // el enlace de cada caja del POS es `/pos/venta?caja=…`, y sin ella la
+      // tableta volvía del login sin saber qué caja es.
+      const actual = pathname + window.location.search;
       const volver = pathname && pathname !== "/"
-        ? `?volver=${encodeURIComponent(pathname)}` : "";
+        ? `?volver=${encodeURIComponent(actual)}` : "";
       router.replace(`/login${volver}`);
     }
     // Si ya estás autenticado y estás en /login, mándate a la app.
