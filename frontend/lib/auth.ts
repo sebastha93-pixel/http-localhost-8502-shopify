@@ -55,6 +55,9 @@ export const GRUPOS_PERMISOS = {
   operaciones:    ["logistica", "envios", "devoluciones", "incidencias",
                    "historico", "b2b", "contraentrega", "inventario"],
   postventa:      ["postventa"],
+  // El backend ya lo tenía (core/permisos.py) y esta lista no: sin él, un
+  // admin no podía darle el POS a una cajera y sólo los admin podían vender.
+  retail:         ["retail"],
   finanzas:       ["finanzas"],
   comercial:      ["comercial", "revenue", "inteligencia"],
   produccion:     ["produccion", "produccion_ingreso", "produccion_corte",
@@ -70,6 +73,7 @@ export const GRUPO_LABEL: Record<string, string> = {
   centro_control: "Centro de control",
   operaciones:    "Operaciones (logística, envíos, devoluciones, incidencias, histórico, B2B, contraentrega, inventario)",
   postventa:      "Postventa (cambios, devoluciones y garantías con IA)",
+  retail:         "Punto de venta (vender en las tiendas Florida y Arrayanes)",
   finanzas:       "Finanzas",
   comercial:      "Comercial (ventas, revenue, inteligencia)",
   produccion:     "Producción",
