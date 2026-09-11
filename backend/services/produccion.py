@@ -4565,7 +4565,7 @@ def _encolar_trabajos_terminacion(rem: dict) -> int:
                                           "instrucciones": composicion,
                                           "tallas": unidades}})
             else:
-                faltan_composicion.append((codigo, tela))
+                faltan_composicion.append((codigo, tela, ref_id))
     # Avisar de las etiquetas de lavado que NO se encolaron por falta de
     # composición — antes de que alguien busque la etiqueta y no aparezca.
     if faltan_composicion:
@@ -4587,18 +4587,31 @@ def _encolar_trabajos_terminacion(rem: dict) -> int:
 
 def _avisar_falta_composicion(consecutivo, faltan: list) -> None:
     """Campanita: hay etiquetas de lavado que no salieron por falta de
-    composición de la tela. Le llega a quien tiene el módulo de corte."""
+    composición de la tela. Le llega a quien tiene el módulo de corte.
+
+    `faltan` = lista de (codigo, tela, ref_id). El enlace lleva al PRECOSTEO de
+    la referencia, no a Inventario: la composición se puede cargar ahí (campo
+    "Composición — etiqueta de lavado") y ESO destraba la etiqueta aunque la tela
+    ya no esté en inventario — que es justo lo que pasó con FUNKY / 96612-1
+    (2026-09-11): la tela ya se había agotado y no había dónde ponerla."""
     try:
         from backend.services import notificaciones as notif
-        refs = ", ".join(f"{cod} ({tela})" for cod, tela in faltan[:6])
+        # Compat: aceptar tuplas viejas (codigo, tela) y nuevas (codigo, tela, ref_id).
+        norm = [(t[0], t[1], (t[2] if len(t) > 2 else None)) for t in faltan]
+        refs = ", ".join(f"{cod} ({tela})" for cod, tela, _ in norm[:6])
+        # Si es una sola referencia, el enlace va directo a su precosteo.
+        ref_id = norm[0][2] if len(norm) == 1 else None
+        enlace = f"/produccion/precosteo/{ref_id}" if ref_id else "/produccion/precosteo"
         notif.crear_para_modulo(
             modulo="produccion_cortador", tipo="falta_composicion",
             titulo=f"Falta composición de tela — etiqueta de lavado no impresa ({consecutivo})",
             mensaje=(f"No se imprimió la etiqueta de lavado de: {refs}. La tela no "
-                     f"tiene composición registrada en el inventario. Cárgala en "
-                     f"Inventario y reimprime — una etiqueta sin composición no se "
-                     f"puede poner en la prenda."),
-            enlace="/produccion/inventario", creado_por="sistema")
+                     f"tiene composición registrada. Cárgala en el PRECOSTEO de la "
+                     f"referencia (campo «Composición — etiqueta de lavado») — sirve "
+                     f"aunque la tela ya no esté en inventario — o en Inventario si "
+                     f"aún hay rollos, y reimprime. Una etiqueta sin composición no "
+                     f"se puede poner en la prenda."),
+            enlace=enlace, creado_por="sistema")
     except Exception as e:
         log.warning(f"[impresion] aviso de falta de composición falló: {str(e)[:160]}")
 
