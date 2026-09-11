@@ -847,12 +847,12 @@ def _sb_cache_guardar(pedidos: list, fuente: str = "api_live"):
             "config_hash": _config_hash(),
             "pedidos":     pedidos,
         }, default=str)
-        sb.table(_SB_TABLA).upsert({
+        _exec_upsert_idempotente(sb.table(_SB_TABLA).upsert({
             "id":          1,
             "fetched_at":  datetime.utcnow().isoformat(),
             "pedidos_json": envelope,
             "total":       len(pedidos),
-        }).execute()
+        }))
         log.info(f"Supabase cache guardado: {len(pedidos)} pedidos, fuente={fuente}")
     except Exception as e:
         log.warning(f"Supabase cache guardar error: {e}")
@@ -883,12 +883,12 @@ def _marcar_fetch_api() -> None:
     try:
         sb = _sb()
         if sb:
-            sb.table(_SB_TABLA).upsert({
+            _exec_upsert_idempotente(sb.table(_SB_TABLA).upsert({
                 "id":           _SB_FILA_API,
                 "fetched_at":   ahora,
                 "pedidos_json": "{}",
                 "total":        0,
-            }).execute()
+            }))
     except Exception as e:
         log.warning(f"No pude sellar la hora del fetch: {e}")
     try:
@@ -1071,6 +1071,40 @@ def _barrido_leer_sq() -> Optional[dict]:
     return e if isinstance(e, dict) else None
 
 
+def _es_corte_conexion(e: Exception) -> bool:
+    """El corte transitorio del pool de Supabase (GOAWAY HTTP/2 → ConnectionTerminated
+    / RemoteProtocolError / Server disconnected)."""
+    blob = (type(e).__name__ + " " + str(e)).lower()
+    return any(t in blob for t in ("remoteprotocol", "connectionterminated",
+                                   "server disconnected", "disconnected",
+                                   "connection reset", "connectionclosed"))
+
+
+def _exec_upsert_idempotente(query, intentos: int = 3):
+    """Ejecuta un UPSERT de una fila de id FIJO reintentando ante el corte del
+    pool de Supabase. Seguro reintentar: re-upsertar la misma fila no duplica
+    nada (a diferencia de un insert que acumula). Úsalo SOLO para upserts de fila
+    singleton — la marca del fetch, el cursor del barrido, etc.
+
+    Por qué existe (2026-09-11): el corte transitorio de Supabase tumbaba el
+    guardado del cursor del barrido (`no pude guardar el cursor`), el barrido se
+    estancaba y la marca del fetch quedaba vieja → el panel de confiabilidad
+    disparaba la falsa alerta roja "no hay registro de un fetch". El reintento
+    sistémico de postgrest solo cubre GET; estos son POST."""
+    ultimo = None
+    for i in range(intentos):
+        try:
+            return query.execute()
+        except Exception as e:
+            ultimo = e
+            if _es_corte_conexion(e) and i < intentos - 1:
+                time.sleep(0.4 * (2 ** i))
+                continue
+            raise
+    if ultimo is not None:
+        raise ultimo
+
+
 def _barrido_guardar(estado: dict) -> None:
     """Escribe el cursor en Supabase Y en SQLite. Si Supabase falla, SQLite
     conserva el avance dentro del contenedor: peor que nada es volver a barrer
@@ -1079,12 +1113,12 @@ def _barrido_guardar(estado: dict) -> None:
     try:
         sb = _sb()
         if sb:
-            sb.table(_SB_TABLA).upsert({
+            _exec_upsert_idempotente(sb.table(_SB_TABLA).upsert({
                 "id":           _SB_FILA_BARRIDO,
                 "fetched_at":   datetime.utcnow().isoformat(),
                 "pedidos_json": blob,
                 "total":        len(estado.get("vistas") or []),
-            }).execute()
+            }))
     except Exception as e:
         log.warning(f"[barrido] no pude guardar el cursor en Supabase: {e}")
     try:
