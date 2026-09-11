@@ -35,16 +35,19 @@ async def lifespan(app: FastAPI):
     print(f"🚀 MALE'DENIM OS API · env={settings.env}")
     print(f"   CORS allowed: {settings.cors_origins_list}")
 
-    # Blindaje sistémico: que las LECTURAS de Supabase reintenten cuando el
-    # pooler corta una conexión HTTP/2 reusada (ConnectionTerminated). Va ANTES
-    # de la primera query (el bootstrap de abajo ya consulta la BD). Un solo
-    # punto para todo el app; nunca reintenta escrituras. Ver
-    # backend/core/supabase_resiliente.py.
+    # Blindaje de Supabase. VA ANTES de la primera query (el bootstrap de abajo
+    # ya consulta la BD) y antes de crear cualquier cliente (todos son perezosos
+    # dentro de _sb()). Ver backend/core/supabase_resiliente.py.
+    #   1) RAÍZ: forzar HTTP/1.1 en PostgREST — el ConnectionTerminated es un
+    #      GOAWAY de HTTP/2 sobre conexión reusada; en HTTP/1.1 no existe.
+    #   2) Red: reintentar las LECTURAS por si igual se cae una conexión.
     try:
-        from backend.core.supabase_resiliente import instalar_retry_lecturas_supabase
+        from backend.core.supabase_resiliente import (
+            forzar_http1_postgrest, instalar_retry_lecturas_supabase)
+        forzar_http1_postgrest()
         instalar_retry_lecturas_supabase()
     except Exception as e:
-        print(f"   ⚠️  Reintento de lecturas Supabase no instalado: {e}")
+        print(f"   ⚠️  Blindaje Supabase no instalado: {e}")
     # Validar configuración de seguridad — aborta boot en producción si hay
     # secrets débiles (JWT default, META_APP_SECRET vacío, etc.)
     settings.validate_security()

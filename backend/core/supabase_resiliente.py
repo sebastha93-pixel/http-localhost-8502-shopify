@@ -74,6 +74,47 @@ def exec_idempotente(query, intentos: int = 3):
         raise ultimo
 
 
+def forzar_http1_postgrest() -> bool:
+    """Fuerza HTTP/1.1 en el cliente httpx de PostgREST — el ARREGLO DE RAÍZ del
+    corte de conexión.
+
+    postgrest crea su cliente con `Client(http2=True, ...)` hardcodeado. Ese
+    HTTP/2 es la CAUSA del `ConnectionTerminated`: el pooler de Supabase manda un
+    GOAWAY sobre una conexión keep-alive reusada y la siguiente petición que la
+    toma revienta. En días malos eso pasa en ráfagas de varios segundos y ni los
+    reintentos alcanzan. En HTTP/1.1 no existe el GOAWAY: una keep-alive cerrada
+    simplemente se reabre. Elimina el problema en vez de reintentarlo.
+
+    Se parcha el símbolo `Client` del módulo de postgrest con una subclase que
+    nace en http2=False (preserva isinstance). DEBE correr ANTES de crear el
+    primer cliente — en el lifespan, antes de la primera query. Todos los
+    create_client de la app son perezosos (dentro de _sb()), así que quedan
+    cubiertos. Idempotente y a prueba de fallos: si la versión de postgrest no
+    calza, no hace nada y quedan los reintentos como red."""
+    try:
+        import postgrest._sync.client as pc
+    except Exception as e:
+        log.warning(f"[supabase-http1] no se pudo importar postgrest: {e}")
+        return False
+    orig = getattr(pc, "Client", None)
+    if orig is None:
+        log.warning("[supabase-http1] postgrest no expone Client en esta versión")
+        return False
+    if getattr(orig, "_http1_forzado", False):
+        return True  # ya instalado
+
+    class ClientHTTP1(orig):
+        _http1_forzado = True
+
+        def __init__(self, *args, **kwargs):
+            kwargs["http2"] = False
+            super().__init__(*args, **kwargs)
+
+    pc.Client = ClientHTTP1
+    log.info("[supabase-http1] PostgREST forzado a HTTP/1.1 (evita GOAWAY/ConnectionTerminated)")
+    return True
+
+
 def instalar_retry_lecturas_supabase() -> bool:
     """Parcha `postgrest._sync.request_builder.send_with_retry` para reintentar
     las LECTURAS ante un corte transitorio del pool. Idempotente y a prueba de
