@@ -1275,6 +1275,30 @@ def _puede_editar_precosteo_bloqueado(usuario_id: Optional[str]) -> bool:
     return bool(u.get("puede_autorizar_precosteo")) or (u.get("rol") == "admin")
 
 
+def _guardar_columna_precosteo(sb, precosteo_id: str, columna: str, valor) -> None:
+    """Escribe UNA columna del precosteo (update por id = idempotente) con
+    reintento ante el corte del pool de Supabase.
+
+    Por qué existe (2026-09-11): el PVP «no se actualizaba». La escritura estaba
+    en un try/except que SE TRAGABA cualquier error y el endpoint devolvía 200
+    igual — así que si el pooler de Supabase cortaba la conexión (pasó en ráfaga
+    hoy), el precio no se guardaba y el usuario no se enteraba. Ahora:
+      · se reintenta el corte transitorio (exec_idempotente), y
+      · si de verdad falla, SE PROPAGA el error (el frontend muestra que no
+        guardó) — SALVO que la columna aún no esté migrada, único caso que se
+        tolera degradando."""
+    from backend.core.supabase_resiliente import exec_idempotente
+    try:
+        exec_idempotente(
+            sb.table("referencias_precosteo").update({columna: valor}).eq("id", precosteo_id))
+    except Exception as e:
+        msg = str(e).lower()
+        if "does not exist" in msg or "42703" in msg or "42p01" in msg or "could not find" in msg:
+            log.warning(f"[precosteo] {columna} no guardada (columna sin migrar): {str(e)[:160]}")
+            return
+        raise
+
+
 def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
                          codigo_referencia: Optional[str] = None,
                          tela: Optional[str] = None, color: Optional[str] = None,
@@ -1319,25 +1343,15 @@ def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
     if foto_url is not None: update["foto_url"] = foto_url
     if es_muestra_diseno is not None: update["es_muestra_diseno"] = bool(es_muestra_diseno)
     if instrucciones_lavado is not None:
-        # Columna nueva (migración impresion_terminacion) — se aplica aparte
-        # con tolerancia por si aún no está migrada.
-        try:
-            sb.table("referencias_precosteo").update(
-                {"instrucciones_lavado": instrucciones_lavado.strip() or None}
-            ).eq("id", precosteo_id).execute()
-        except Exception as e:
-            log.warning(f"[precosteo] instrucciones_lavado no guardadas (¿falta migración?): {e}")
+        _guardar_columna_precosteo(
+            sb, precosteo_id, "instrucciones_lavado",
+            instrucciones_lavado.strip() or None)
 
     if precio_venta_final is not None:
-        # PVP con IVA que el autorizador digita para ver el margen. Columna nueva
-        # (migración precio_venta_final) — aparte y tolerante por si falta migrar.
-        try:
-            pvf = float(precio_venta_final)
-            sb.table("referencias_precosteo").update(
-                {"precio_venta_final": pvf if pvf > 0 else None}
-            ).eq("id", precosteo_id).execute()
-        except Exception as e:
-            log.warning(f"[precosteo] precio_venta_final no guardado (¿falta migración?): {e}")
+        # PVP con IVA que el autorizador digita para ver el margen.
+        pvf = float(precio_venta_final)
+        _guardar_columna_precosteo(
+            sb, precosteo_id, "precio_venta_final", pvf if pvf > 0 else None)
 
     if items is not None:
         # Reemplazar líneas: borrar y volver a insertar
