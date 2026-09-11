@@ -4126,18 +4126,18 @@ def obtener_remision(rem_id: str) -> Optional[dict]:
     sb = _sb()
     if sb is None:
         return None
-    r = (sb.table("remisiones")
+    r = _safe_exec(sb.table("remisiones")
            .select("*,confeccionista:confeccionista_id(nombre,telefono,direccion)")
-           .eq("id", rem_id).limit(1).execute()).data
+           .eq("id", rem_id).limit(1)).data
     if not r:
         return None
-    items = (sb.table("remision_items")
+    items = _safe_exec(sb.table("remision_items")
                .select("*,orden_corte:orden_corte_id("
                        "consecutivo,referencia_lote,cantidad_programada,"
                        "unidades_cortadas,fecha_entrega,promedio_real,"
                        "consumo_real_cortador,retazos_metros,retazos_cantidad,"
                        "referencia:referencia_id(codigo_referencia,nombre,tela,color))")
-               .eq("remision_id", rem_id).execute()).data or []
+               .eq("remision_id", rem_id)).data or []
     return {**r[0], "items": items}
 
 
