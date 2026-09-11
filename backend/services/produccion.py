@@ -2580,15 +2580,15 @@ def obtener_orden_corte(oc_id: str) -> Optional[dict]:
     if sb is None:
         return None
     # Sin foto_url — el detalle nunca la mostraba.
-    r = (sb.table("ordenes_corte")
+    r = _safe_exec(sb.table("ordenes_corte")
            .select("*,referencia:referencia_id(codigo_referencia,nombre,tela,color)")
-           .eq("id", oc_id).limit(1).execute()).data
+           .eq("id", oc_id).limit(1)).data
     if not r:
         return None
-    rollos = (sb.table("orden_corte_rollos")
+    rollos = _safe_exec(sb.table("orden_corte_rollos")
                 .select("*,rollo:rollo_id(codigo_interno,barcode,descripcion_tela,tono,metros_disponible,metros_inicial,costo_metro,numero_rollo,serial,lote_fabrica)")
                 .eq("orden_corte_id", oc_id)
-                .order("created_at").execute()).data or []
+                .order("created_at")).data or []
     # Precio de corte sugerido desde el precosteo firmado (para pre-llenar el
     # informe; el cortador puede ajustarlo). Mismo origen que el auto al cerrar.
     precio_sug = None
