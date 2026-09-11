@@ -49,6 +49,31 @@ def _es_corte_transitorio(exc: Exception) -> bool:
     return any(t in blob for t in _TRANSITORIO)
 
 
+def exec_idempotente(query, intentos: int = 3):
+    """Ejecuta `query.execute()` reintentando ante el corte transitorio del pool.
+
+    ⚠️ SOLO para operaciones IDEMPOTENTES: un UPSERT con on_conflict (re-aplicar
+    la misma fila no duplica) o un DELETE con WHERE determinista (borra el mismo
+    conjunto, o nada). NUNCA para un `.insert()` que acumula ni una RPC con
+    efectos: un write cortado a mitad pudo aplicarse en el servidor y reintentarlo
+    lo duplicaría. El reintento sistémico de postgrest solo cubre GET; esto es
+    para las escrituras seguras que igual se caían con el pool inestable
+    (overrides por orden, inventario por brand_id/code/bodega, etc.).
+    """
+    ultimo = None
+    for i in range(intentos):
+        try:
+            return query.execute()
+        except Exception as e:
+            ultimo = e
+            if _es_corte_transitorio(e) and i < intentos - 1:
+                time.sleep(_BACKOFF_BASE * (2 ** i))
+                continue
+            raise
+    if ultimo is not None:
+        raise ultimo
+
+
 def instalar_retry_lecturas_supabase() -> bool:
     """Parcha `postgrest._sync.request_builder.send_with_retry` para reintentar
     las LECTURAS ante un corte transitorio del pool. Idempotente y a prueba de

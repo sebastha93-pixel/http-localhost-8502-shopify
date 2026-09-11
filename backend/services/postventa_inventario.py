@@ -152,10 +152,16 @@ def sincronizar() -> dict:
     ahora = datetime.now(timezone.utc).isoformat()
     for f in filas:
         f["actualizado_en"] = ahora
-    sb.table(TABLA).upsert(filas, on_conflict="brand_id,code,bodega").execute()
+    # Reintento seguro ante el corte transitorio del pool: el upsert va por clave
+    # natural (brand_id,code,bodega) y el delete tiene un WHERE determinista
+    # (< ahora, fijo) — reintentar re-escribe/borra el mismo conjunto, no duplica.
+    # Además, primero el upsert COMPLETO y luego el delete: si el upsert se
+    # cortaba a medias, el delete borraba como agotadas filas que sí llegaron.
+    from backend.core.supabase_resiliente import exec_idempotente
+    exec_idempotente(sb.table(TABLA).upsert(filas, on_conflict="brand_id,code,bodega"))
     # Lo que ya no vino de Siigo se agotó: se borra por fecha, no por lista,
     # para no armar un DELETE gigante.
-    sb.table(TABLA).delete().eq("brand_id", _brand()).lt("actualizado_en", ahora).execute()
+    exec_idempotente(sb.table(TABLA).delete().eq("brand_id", _brand()).lt("actualizado_en", ahora))
     return {"filas": len(filas), "actualizado_en": ahora}
 
 

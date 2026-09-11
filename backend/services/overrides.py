@@ -140,7 +140,11 @@ def upsert(
         data["carrier_real"] = carrier_real.strip() or None
     if guia_real is not None:
         data["guia_real"] = guia_real.strip() or None
-    res = sb.table("pedido_overrides").upsert(data, on_conflict="orden").execute()
+    # Reintento seguro ante el corte transitorio del pool de Supabase: es un
+    # upsert por `orden` con SOLO los campos pasados (la REGLA DE ORO de arriba),
+    # así que re-aplicarlo re-escribe lo mismo y no borra ni duplica nada.
+    from backend.core.supabase_resiliente import exec_idempotente
+    res = exec_idempotente(sb.table("pedido_overrides").upsert(data, on_conflict="orden"))
     return res.data[0] if res.data else data
 
 

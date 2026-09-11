@@ -172,12 +172,15 @@ def sincronizar(*, completa: bool = False) -> dict:
     if not filas:
         return {"ok": True, "guardadas": 0, "desde": desde}
 
+    from backend.core.supabase_resiliente import exec_idempotente
     guardadas = 0
     for i in range(0, len(filas), 300):
         lote = filas[i:i + 300]
         try:
-            sb.table("siigo_facturas_cod").upsert(
-                lote, on_conflict="factura").execute()
+            # Upsert por `factura` (idempotente) → reintento seguro ante el corte
+            # transitorio del pool, para que un blip no corte toda la sincronización.
+            exec_idempotente(sb.table("siigo_facturas_cod").upsert(
+                lote, on_conflict="factura"))
             guardadas += len(lote)
         except Exception as e:
             log.error(f"[cartera_cod] fallo guardando lote: {str(e)[:160]}")
