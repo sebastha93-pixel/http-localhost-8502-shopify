@@ -2589,6 +2589,44 @@ def _ocs_con_remision(tipo: str) -> set:
     return {it["orden_corte_id"] for it in items if it.get("orden_corte_id")}
 
 
+def _lotes_con_remision(tipo: str) -> set:
+    """Pares (orden_corte_id, referencia_id) que YA tienen remisión del tipo dado.
+
+    Un corte combinado puede tener una referencia remitida y otra no — por eso el
+    check de duplicados pasa a ser por LOTE (corte+referencia), no por corte.
+    Los items viejos sin `referencia_id` (legacy) se devuelven como
+    (oc_id, None) = 'el corte entero ya se remitió', y `_lote_ya_remitido` los
+    trata como que cubren cualquier referencia de ese corte."""
+    sb = _sb()
+    if sb is None:
+        return set()
+    try:
+        rems = (sb.table("remisiones").select("id,tipo").limit(2000).execute()).data or []
+        rem_ids = [r["id"] for r in rems if (r.get("tipo") or "confeccion") == tipo]
+    except Exception:
+        if tipo != "confeccion":
+            return set()
+        rems = (sb.table("remisiones").select("id").limit(2000).execute()).data or []
+        rem_ids = [r["id"] for r in rems]
+    if not rem_ids:
+        return set()
+    try:
+        items = (sb.table("remision_items").select("orden_corte_id,referencia_id")
+                   .in_("remision_id", rem_ids).limit(5000).execute()).data or []
+    except Exception:
+        items = (sb.table("remision_items").select("orden_corte_id")
+                   .in_("remision_id", rem_ids).limit(5000).execute()).data or []
+    return {(it.get("orden_corte_id"), it.get("referencia_id"))
+            for it in items if it.get("orden_corte_id")}
+
+
+def _lote_ya_remitido(oc_id: str, ref_id: Optional[str], remitidos: set) -> bool:
+    """True si el lote (corte, referencia) ya tiene remisión. Cuenta como remitido
+    tanto el par exacto como un item legacy (oc_id, None) que cubre el corte
+    entero."""
+    return (oc_id, ref_id) in remitidos or (oc_id, None) in remitidos
+
+
 def obtener_orden_corte(oc_id: str) -> Optional[dict]:
     sb = _sb()
     if sb is None:
@@ -3985,24 +4023,55 @@ def backfill_respondio_proveedores() -> dict:
 # ═══════════════════════════════════════════════════════════════════════
 
 def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
-                    orden_corte_ids: list[str], created_by: str,
+                    orden_corte_ids: Optional[list[str]] = None,
+                    lotes: Optional[list[dict]] = None,
+                    created_by: str,
                     tipo: str = "confeccion",
                     liberar_impresion: bool = True) -> dict:
-    """Crea una remisión: entrega de N órdenes de corte cortadas a un proveedor.
-    - `tipo`: 'confeccion' o 'terminacion' — define a qué proveedor va y
-       qué campo de la hoja de ruta se actualiza (confeccionista_id vs terminacion_id).
-    - `liberar_impresion`: True = entra a la cola de la RICOH de una (flujo
-       viejo/terminación). False = se retiene hasta separar los insumos
-       (flujo nuevo de confección: imprime al completar la separación).
+    """Crea una remisión: entrega de N LOTES cortados a un proveedor.
+
+    Un lote = (orden de corte, referencia). Un corte combinado tiene un lote por
+    referencia y se pueden remitir por separado (a distinto proveedor, en
+    momentos distintos). Se acepta:
+      - `lotes`: [{orden_corte_id, referencia_id}] — explícito, por referencia.
+      - `orden_corte_ids`: [oc_id] (compat) — se EXPANDE a todas las referencias
+        del corte (un lote por referencia).
+    - `tipo`: 'confeccion' o 'terminacion'.
+    - `liberar_impresion`: True = a la cola de una (flujo viejo/terminación);
+       False = retenida hasta separar insumos (flujo nuevo).
     - Genera consecutivo `REM-YYYY-NNNN`.
     """
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
-    if not orden_corte_ids:
-        raise ValueError("sin_ordenes")
     if tipo not in ("confeccion", "terminacion"):
         raise ValueError("tipo_invalido")
+
+    # ── Normalizar a una lista de LOTES (orden_corte_id, referencia_id) ──────
+    pares: list[tuple] = []
+    _vistos: set = set()
+
+    def _agregar(oc_id, ref_id):
+        k = (oc_id, ref_id)
+        if oc_id and k not in _vistos:
+            _vistos.add(k)
+            pares.append(k)
+
+    if lotes:
+        for l in lotes:
+            _agregar(l.get("orden_corte_id"), l.get("referencia_id"))
+    elif orden_corte_ids:
+        # Compat: expandir cada corte a TODAS sus referencias (un lote c/u).
+        for oc_id in orden_corte_ids:
+            oc_row = obtener_orden_corte(oc_id) or {}
+            refs = [rr.get("referencia_id") for rr in (oc_row.get("referencias") or [])
+                    if rr.get("referencia_id")]
+            if not refs:
+                refs = [oc_row.get("referencia_id")]   # una sola referencia / legacy
+            for ref_id in refs:
+                _agregar(oc_id, ref_id)
+    if not pares:
+        raise ValueError("sin_ordenes")
 
     # Validar proveedor (puede ser confección o terminación — misma tabla)
     c = (sb.table("confeccionistas").select("id,nombre,activo,tipo")
@@ -4018,18 +4087,22 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
     if tipo == "terminacion" and prov_tipo != "terminacion":
         raise ValueError("proveedor_no_es_terminacion")
 
-    # Validar órdenes de corte
-    ya_remitidas = _ocs_con_remision(tipo)
-    for oc_id in orden_corte_ids:
-        oc = (sb.table("ordenes_corte").select("id,estado,consecutivo")
-                .eq("id", oc_id).limit(1).execute()).data
-        if not oc:
-            raise ValueError(f"orden_corte_no_encontrada:{oc_id}")
-        if oc[0].get("estado") != "cortada":
-            raise ValueError(f"orden_no_cortada:{oc[0].get('consecutivo')}")
-        # Un lote no puede tener dos remisiones del mismo tipo
-        if oc_id in ya_remitidas:
-            raise ValueError(f"lote_ya_tiene_remision_{tipo}:{oc[0].get('consecutivo')}")
+    # Validar LOTES: corte cortada + lote no remitido (por corte+referencia).
+    # Así una referencia de un combinado puede remitirse aunque otra ya lo esté.
+    ya_remitidos = _lotes_con_remision(tipo)
+    _estados: dict = {}
+    for oc_id, ref_id in pares:
+        if oc_id not in _estados:
+            oc = (sb.table("ordenes_corte").select("id,estado,consecutivo")
+                    .eq("id", oc_id).limit(1).execute()).data
+            if not oc:
+                raise ValueError(f"orden_corte_no_encontrada:{oc_id}")
+            _estados[oc_id] = oc[0]
+        oc0 = _estados[oc_id]
+        if oc0.get("estado") != "cortada":
+            raise ValueError(f"orden_no_cortada:{oc0.get('consecutivo')}")
+        if _lote_ya_remitido(oc_id, ref_id, ya_remitidos):
+            raise ValueError(f"lote_ya_tiene_remision_{tipo}:{oc0.get('consecutivo')}")
 
     codigo = next_consecutivo("REM", width=4)
     row = {
@@ -4060,42 +4133,47 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
         raise RuntimeError("no_se_pudo_crear_remision")
     rem = r.data[0]
 
-    # Items
+    # Items: uno por LOTE (corte + referencia)
     items_rows = [
-        {"remision_id": rem["id"], "orden_corte_id": oc_id}
-        for oc_id in orden_corte_ids
+        {"remision_id": rem["id"], "orden_corte_id": oc_id, "referencia_id": ref_id}
+        for oc_id, ref_id in pares
     ]
-    sb.table("remision_items").insert(items_rows).execute()
+    try:
+        sb.table("remision_items").insert(items_rows).execute()
+    except Exception as e:
+        if "referencia_id" in str(e):   # columna sin migrar → legacy por corte
+            sb.table("remision_items").insert(
+                [{"remision_id": rem["id"], "orden_corte_id": oc} for oc, _ in pares]).execute()
+        else:
+            raise
 
-    # Actualiza hoja de ruta según tipo:
-    #   confeccion → auto-crea la ruta con confeccionista_id (comportamiento original)
-    #   terminacion → busca la ruta existente y le asigna terminacion_id
-    for oc_id in orden_corte_ids:
+    # Hoja de ruta por LOTE:
+    #   confeccion  → crea el lote (corte+referencia) con confeccionista_id
+    #   terminacion → busca el lote de esa referencia y le asigna terminacion_id
+    for oc_id, ref_id in pares:
         try:
-            existente = obtener_ruta_por_corte(oc_id)
             if tipo == "confeccion":
-                if existente:
-                    continue
+                # crear_ruta_lote deduplica por (corte, referencia): si ya existe
+                # el lote de esa referencia, lo devuelve sin crear otro.
                 crear_ruta_lote(
                     orden_corte_id=oc_id,
+                    referencia_id=ref_id,
                     confeccionista_id=confeccionista_id,
                     remision_id=rem["id"],
                     created_by=created_by,
                 )
             else:  # terminacion
+                existente = obtener_ruta_por_corte(oc_id, referencia_id=ref_id) \
+                    or obtener_ruta_por_corte(oc_id)   # legacy: lote único del corte
                 if not existente:
-                    # Primero debería existir una remisión de confección para esta OC.
-                    # Igual creamos la ruta con un placeholder para que sea usable.
-                    log.warning(f"[remision-terminacion] OC {oc_id} sin ruta previa, se salta")
+                    log.warning(f"[remision-terminacion] lote {oc_id}/{ref_id} sin ruta previa, se salta")
                     continue
-                # Precio de terminación: sale del precosteo firmado (bloqueado)
-                oc_row = obtener_orden_corte(oc_id) or {}
                 precio_term = existente.get("precio_terminacion") or _precio_proceso_precosteo(
-                    oc_row.get("referencia_id"), "terminacion")
+                    ref_id, "terminacion")
                 actualizar_ruta_lote(existente["id"], terminacion_id=confeccionista_id,
                                      precio_terminacion=precio_term)
         except Exception as e:
-            log.warning(f"[remision] no se pudo actualizar ruta {oc_id}: {e}")
+            log.warning(f"[remision] no se pudo actualizar ruta {oc_id}/{ref_id}: {e}")
 
     rem_full = obtener_remision(rem["id"])
     if tipo == "terminacion" and liberar_impresion:
@@ -4336,7 +4414,7 @@ def reasignar_confeccionista_remision(*, remision_id: str,
         if not oc_id:
             continue
         try:
-            ruta = obtener_ruta_por_corte(oc_id)
+            ruta = obtener_ruta_por_corte(oc_id, referencia_id=it.get("referencia_id"))
             if not ruta:
                 continue
             notas = (ruta.get("notas") or "").strip()
@@ -4539,8 +4617,13 @@ def _encolar_trabajos_terminacion(rem: dict) -> int:
         if not oc_id:
             continue
         oc = obtener_orden_corte(oc_id) or {}
+        item_ref = it.get("referencia_id")   # lote por referencia
         for rr in (oc.get("referencias") or []):
             ref_id = rr.get("referencia_id")
+            # Si el ítem del lote apunta a UNA referencia, encolar solo esa (no
+            # las otras del tendido combinado). Sin referencia_id (legacy) → todas.
+            if item_ref and ref_id != item_ref:
+                continue
             ref = rr.get("referencia") or {}
             codigo = ref.get("codigo_referencia") or ""
             unidades = _unidades_de_referencia(rr)
@@ -5000,7 +5083,7 @@ def _notificar_remision_whatsapp(rem: dict, solo_oc_id: Optional[str] = None) ->
     for it in (rem.get("items") or []):
         if solo_oc_id and it.get("orden_corte_id") != solo_oc_id:
             continue
-        ruta = obtener_ruta_por_corte(it["orden_corte_id"])
+        ruta = obtener_ruta_por_corte(it["orden_corte_id"], referencia_id=it.get("referencia_id"))
         if not ruta:
             continue
         token = ruta.get("token_publico_terminacion") if es_term else ruta.get("token_publico")
@@ -5251,23 +5334,43 @@ def _ruta_orden_map():
     return {e: i for i, e in enumerate(ETAPAS_RUTA)}
 
 
-def obtener_ruta_por_corte(oc_id: str) -> Optional[dict]:
+_RUTA_SELECT = (
+    "*,confeccionista:confeccionista_id(nombre,telefono),"
+    "terminacion:terminacion_id(nombre,telefono),"
+    "lavanderia:lavanderia_id(nombre,telefono),"
+    # Referencia PROPIA del lote (hoja_ruta_lote.referencia_id): en un corte
+    # combinado cada lote es una referencia distinta.
+    "ref_lote:referencia_id(codigo_referencia,nombre,tela,color,foto_url),"
+    "orden_corte:orden_corte_id(consecutivo,curva_trazo,unidades_cortadas,"
+    "cantidad_programada,referencia_lote,referencia_id,"
+    "referencia:referencia_id(codigo_referencia,nombre,tela,color,foto_url))")
+
+
+def obtener_rutas_por_corte(oc_id: str) -> list[dict]:
+    """TODOS los lotes de un corte (uno por referencia en un corte combinado)."""
     sb = _sb()
     if sb is None:
+        return []
+    r = (sb.table("hoja_ruta_lote").select(_RUTA_SELECT)
+           .eq("orden_corte_id", oc_id).order("created_at").execute()).data or []
+    out = []
+    for row in r:
+        ruta = _con_etapas_omitidas(row)
+        _añadir_composicion(ruta)
+        out.append(ruta)
+    return out
+
+
+def obtener_ruta_por_corte(oc_id: str, referencia_id: Optional[str] = None) -> Optional[dict]:
+    """UN lote del corte. Con `referencia_id`, el de ESA referencia. Sin ella, el
+    primero (por created_at) — compat con los llamadores que aún piensan 'un lote
+    por corte' (en un corte de una sola referencia es el único)."""
+    rutas = obtener_rutas_por_corte(oc_id)
+    if not rutas:
         return None
-    r = (sb.table("hoja_ruta_lote")
-           .select("*,confeccionista:confeccionista_id(nombre,telefono),"
-                   "terminacion:terminacion_id(nombre,telefono),"
-                   "lavanderia:lavanderia_id(nombre,telefono),"
-                   "orden_corte:orden_corte_id(consecutivo,curva_trazo,unidades_cortadas,"
-                   "cantidad_programada,referencia_lote,"
-                   "referencia:referencia_id(codigo_referencia,nombre,tela,color,foto_url))")
-           .eq("orden_corte_id", oc_id).limit(1).execute()).data
-    if not r:
-        return None
-    ruta = _con_etapas_omitidas(r[0])
-    _añadir_composicion(ruta)
-    return ruta
+    if referencia_id:
+        return next((ru for ru in rutas if ru.get("referencia_id") == referencia_id), None)
+    return rutas[0]
 
 
 def _añadir_composicion(ruta: dict) -> None:
@@ -5829,10 +5932,17 @@ def _con_etapas_omitidas(ruta: Optional[dict]) -> Optional[dict]:
 
 
 def crear_ruta_lote(*, orden_corte_id: str, confeccionista_id: str,
+                     referencia_id: Optional[str] = None,
                      precio_confeccion: Optional[float] = None,
                      fecha_entrega_confeccion: Optional[str] = None,
                      remision_id: Optional[str] = None,
                      created_by: str) -> dict:
+    """Crea el LOTE (hoja de ruta) de un corte+referencia.
+
+    Un corte combinado tiene un lote por referencia; uno de una sola referencia
+    tiene un lote (idéntico a antes). Si no se pasa `referencia_id`, se usa la
+    referencia PRIMARIA del corte (compat/legacy). El precio de confección y las
+    etapas omitidas salen del precosteo de ESA referencia, no de la primaria."""
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
@@ -5842,15 +5952,17 @@ def crear_ruta_lote(*, orden_corte_id: str, confeccionista_id: str,
         raise ValueError("orden_no_encontrada")
     if oc.get("estado") != "cortada":
         raise ValueError("orden_no_cortada")
-    # Si ya existe hoja, devolverla (una sola por OC)
-    existente = obtener_ruta_por_corte(orden_corte_id)
+    ref_id = referencia_id or oc.get("referencia_id")
+    # Si ya existe el lote de ESTA referencia, devolverlo (dedup por corte+ref)
+    existente = obtener_ruta_por_corte(orden_corte_id, referencia_id=ref_id)
     if existente:
         return existente
-    # Precio de confección: sale del precosteo firmado (bloqueado, no se digita)
+    # Precio de confección y etapas: del precosteo firmado de ESTA referencia
     if precio_confeccion is None:
-        precio_confeccion = _precio_proceso_precosteo(oc.get("referencia_id"), "confeccion")
+        precio_confeccion = _precio_proceso_precosteo(ref_id, "confeccion")
     row = {
         "orden_corte_id":           orden_corte_id,
+        "referencia_id":            ref_id,
         "confeccionista_id":        confeccionista_id,
         "precio_confeccion":        float(precio_confeccion) if precio_confeccion is not None else None,
         "fecha_entrega_confeccion": fecha_entrega_confeccion or None,
@@ -5860,10 +5972,19 @@ def crear_ruta_lote(*, orden_corte_id: str, confeccionista_id: str,
         # Se congela al crear la ruta, no se calcula al leer: si mañana alguien
         # cambia el precosteo, el recorrido de un lote que ya arrancó no puede
         # cambiar por debajo. Es el mismo criterio que el precio de confección.
-        "etapas_omitidas":          etapas_omitidas_por_precosteo(oc.get("referencia_id")),
+        "etapas_omitidas":          etapas_omitidas_por_precosteo(ref_id),
     }
-    sb.table("hoja_ruta_lote").insert(row).execute()
-    return obtener_ruta_por_corte(orden_corte_id)
+    try:
+        sb.table("hoja_ruta_lote").insert(row).execute()
+    except Exception as e:
+        # Compat: si la columna referencia_id aún no estuviera migrada, insertar
+        # sin ella (queda 1 lote por corte, como antes).
+        if "referencia_id" in str(e):
+            row.pop("referencia_id", None)
+            sb.table("hoja_ruta_lote").insert(row).execute()
+        else:
+            raise
+    return obtener_ruta_por_corte(orden_corte_id, referencia_id=ref_id)
 
 
 def actualizar_ruta_lote(ruta_id: str, **campos) -> dict:
