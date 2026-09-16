@@ -86,14 +86,21 @@ def diag_id(ext: str = Query(...), mid: str = Query(""),
                     return {"status": 200, "body_no_json": r.text[:120]}
                 if isinstance(j, dict):
                     info["keys"] = sorted(j.keys())
-                    att = j.get("sell_order_attempt")
-                    info["tiene_attempt"] = bool(att)
-                    if isinstance(att, list) and att and isinstance(att[0], dict):
-                        info["attempt_keys"] = sorted(att[0].keys())
-                        info["ship_timestamp"] = att[0].get("ship_timestamp")
-                        info["delivery_timestamp"] = att[0].get("delivery_timestamp")
-                else:
-                    info["tipo"] = str(type(j))
+                    info["sell_order_state"] = j.get("sell_order_state")
+                    # Estructura del bloque de promesas/fechas (sin datos personales:
+                    # solo llaves y valores que parezcan fecha/estado).
+                    pi = j.get("sell_order_promise_info")
+                    def _resumen(x, prof=0):
+                        if prof > 3:
+                            return "…"
+                        if isinstance(x, dict):
+                            return {k: _resumen(v, prof+1) for k, v in x.items()
+                                    if not any(s in k.lower() for s in
+                                    ("name","email","phone","address","buyer","document"))}
+                        if isinstance(x, list):
+                            return [_resumen(x[0], prof+1)] if x else []
+                        return x
+                    info["promise_info"] = _resumen(pi)
             else:
                 info["body"] = r.text[:120]
             return info
