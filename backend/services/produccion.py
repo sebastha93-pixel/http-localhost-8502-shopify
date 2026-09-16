@@ -1965,8 +1965,15 @@ def crear_orden_corte(*, referencia_id: Optional[str] = None,
     cant_total    = sum(s["_cant"] for s in specs)
     capas = int(num_capas) if num_capas is not None else calcular_capas_desde_curva(curva_comb)
     prendas_por_trazo_est = max(1, sum(1 for v in curva_comb.values() if int(v or 0) > 0))
-    prom_tendido = specs[0]["_prom"] or 0
-    metros_por_prom = round(prom_tendido * cant_total, 2) if (prom_tendido and cant_total) else 0
+    # Metros teóricos del tendido = Σ (promedio × cantidad) de CADA referencia.
+    # Antes se tomaba solo el promedio de la PRIMERA referencia × la cantidad
+    # combinada de todas, lo que sub-estimaba la tela de un tendido combinado y
+    # hacía que el auto-asignar reservara de menos. El promedio del encabezado
+    # queda como el ponderado del tendido (para un corte de una sola referencia
+    # da idéntico a antes).
+    metros_por_prom = round(sum((s["_prom"] or 0) * s["_cant"] for s in specs), 2)
+    prom_tendido = (round(metros_por_prom / cant_total, 4)
+                    if (metros_por_prom and cant_total) else (specs[0]["_prom"] or 0))
     # Metros teóricos = promedio × cantidad, pero NUNCA por encima del techo
     # físico (largo × capas). Y si no vino promedio, se usa el techo físico
     # directo (antes nacía en 0 y la auto-asignación quedaba muerta).
@@ -6911,10 +6918,18 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
     if _ids_ref:
         try:
             _its = (sb.table("precosteo_items")
-                      .select("referencia_id,categoria,total_sin_iva")
+                      .select("referencia_id,categoria,item,total_sin_iva")
                       .in_("referencia_id", _ids_ref).execute()).data or []
             for _it in _its:
-                if "PROCESO" in (_it.get("categoria") or "").upper():
+                cat = (_it.get("categoria") or "").upper()
+                item = (_it.get("item") or "").upper()
+                # CORTE es interno: nunca llega como Documento Soporte de Siigo. Si
+                # se resta del bloque planeado sin volver a sumarse en el real, el
+                # costo real queda corto y el margen real sale inflado (~$1.400/
+                # prenda) sin marcarse como provisional. Se deja como planeado en
+                # ambos lados: solo se reemplazan los procesos que SÍ se facturan
+                # (confección, terminación, lavandería…).
+                if "PROCESO" in cat and "CORTE" not in item:
                     rid = _it.get("referencia_id")
                     procesos_plan_por_id[rid] = round(
                         procesos_plan_por_id.get(rid, 0.0) + float(_it.get("total_sin_iva") or 0), 2)

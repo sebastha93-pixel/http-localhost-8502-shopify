@@ -299,7 +299,9 @@ export default function PrecosteoDetallePage() {
   //   margen = (precio_sin_iva − costo_sin_iva) / precio_sin_iva
   // Se usa tanto en el KPI de arriba como en la tarjeta, para que sean el mismo número.
   const _ivaTop = Number(p.iva_pct || 19);
-  const _pvpTop = parseFloat((pvp || "").replace(/[^\d.]/g, "")) || 0;
+  // COP no tiene decimales: el punto es separador de miles. "189.900" → 189900,
+  // no 189,9 (que guardaba un PVP mil veces menor y un margen absurdo).
+  const _pvpTop = parseInt((pvp || "").replace(/\D/g, ""), 10) || 0;
   const _precioSinIvaTop = _pvpTop > 0 ? _pvpTop / (1 + _ivaTop / 100) : 0;
   const margenReal = _precioSinIvaTop > 0
     ? ((_precioSinIvaTop - Number(p.costo_total_sin_iva || 0)) / _precioSinIvaTop) * 100
@@ -619,7 +621,7 @@ function MargenCard({ p, pvp, setPvp, puedeEditar, onGuardar, guardando }: {
   const iva = Number(p.iva_pct || 19);
   const costoSinIva = Number(p.costo_total_sin_iva || 0);
   // El precio que se digita es PVP CON IVA → se le quita el IVA para el margen.
-  const pvpNum = parseFloat(pvp.replace(/[^\d.]/g, "")) || 0;
+  const pvpNum = parseInt(pvp.replace(/\D/g, ""), 10) || 0;
   const precioSinIva = pvpNum > 0 ? pvpNum / (1 + iva / 100) : 0;
   const utilidad = precioSinIva - costoSinIva;
   const margen = precioSinIva > 0 ? (utilidad / precioSinIva) * 100 : 0;
