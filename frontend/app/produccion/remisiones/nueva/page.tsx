@@ -148,7 +148,8 @@ export default function NuevaRemisionPage() {
   interface WaSalida { referencia: string; enviado: boolean; wa_url: string }
   interface RespuestaCrear {
     ok: boolean;
-    remision: { id: string; consecutivo?: string };
+    remision: { id: string; consecutivo?: string } | null;   // la primera (compat)
+    remisiones?: { id: string; consecutivo?: string }[];     // una por lote
     impresion?: string;          // "auto" (email) | "agente" (RICOH local) | undefined (diálogo navegador)
     whatsapp?: WaSalida[];       // links al proveedor de terminación
   }
@@ -184,24 +185,33 @@ export default function NuevaRemisionPage() {
       });
     },
     onSuccess: (data) => {
+      // Cada lote es su propia remisión. Con uno solo (caso normal) va al detalle;
+      // con varios, a la lista.
+      const rems = data.remisiones || (data.remision ? [data.remision] : []);
+      if (rems.length > 1) {
+        router.push("/produccion/remisiones");
+        return;
+      }
       if (tipo === "terminacion") {
         setCreada(data);
-        // Impresión de la remisión de insumos de terminación:
         // "auto"/"agente" = sale sola por la RICOH; sin valor = abrimos el diálogo.
-        if (data.impresion !== "auto" && data.impresion !== "agente")
+        if (data.impresion !== "auto" && data.impresion !== "agente" && data.remision)
           imprimirRemision(data.remision.id);
-      } else {
+      } else if (data.remision) {
         router.push(`/produccion/remisiones/${data.remision.id}`);
+      } else {
+        router.push("/produccion/remisiones");
       }
     },
     onError: (e: Error) => setErr(e.message),
   });
 
-  if (creada) {
+  if (creada && creada.remision) {
+    const remCreada = creada.remision;   // const → TS conserva el narrowing en los closures
     const wa = creada.whatsapp || [];
     const nombreProv = confs.find((c) => c.id === confId)?.nombre || "el proveedor";
     return (
-      <PageShell title="Remisión de terminación creada" subtitle={creada.remision.consecutivo || ""}>
+      <PageShell title="Remisión de terminación creada" subtitle={remCreada.consecutivo || ""}>
         <Card>
           <CardContent className="p-6 space-y-4">
             <div className="flex items-center gap-2 text-teal">
@@ -219,7 +229,7 @@ export default function NuevaRemisionPage() {
               ) : (
                 <>
                   <span className="text-graphite">Se abrió el PDF con el diálogo de impresión.</span>
-                  <button onClick={() => imprimirRemision(creada.remision.id)}
+                  <button onClick={() => imprimirRemision(remCreada.id)}
                     className="rounded-sm border border-border bg-white px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest hover:bg-cloud">
                     Volver a imprimir
                   </button>
@@ -251,7 +261,7 @@ export default function NuevaRemisionPage() {
             </div>
 
             <div className="flex items-center gap-2 pt-1">
-              <button onClick={() => router.push(`/produccion/remisiones/${creada.remision.id}`)}
+              <button onClick={() => router.push(`/produccion/remisiones/${remCreada.id}`)}
                 className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-5 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700">
                 Ver la remisión <ArrowRight className="h-3.5 w-3.5" />
               </button>

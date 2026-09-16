@@ -1424,7 +1424,8 @@ def cerrar_corte(
                     from datetime import datetime as _dt
                     from zoneinfo import ZoneInfo as _ZI
                     fecha_rec = _dt.now(_ZI("America/Bogota")).date().isoformat()
-                rem = svc.crear_remision(
+                # Un corte combinado genera una remisión POR REFERENCIA.
+                rems = svc.crear_remision(
                     confeccionista_id=body.confeccionista_id,
                     fecha_recogida=fecha_rec,
                     orden_corte_ids=[oc_id],
@@ -1432,12 +1433,16 @@ def cerrar_corte(
                     tipo="confeccion",
                     liberar_impresion=False,   # NO imprime hasta separar insumos
                 )
-                resp["remision"] = rem
-                try:
-                    resp["aviso_recoger"] = svc._notificar_lote_por_recoger(rem)
-                except Exception as e:
-                    import traceback; traceback.print_exc()
-                    resp["aviso_recoger_error"] = str(e)[:200]
+                resp["remision"] = rems[0] if rems else None
+                resp["remisiones"] = rems
+                avisos: list = []
+                for _rem in rems:
+                    try:
+                        avisos += svc._notificar_lote_por_recoger(_rem)
+                    except Exception as e:
+                        import traceback; traceback.print_exc()
+                        resp["aviso_recoger_error"] = str(e)[:200]
+                resp["aviso_recoger"] = avisos
             except ValueError as e:
                 # La remisión no debe tumbar el cierre: el informe ya quedó
                 # guardado. Se reporta para que el cortador la cree a mano.
@@ -1679,7 +1684,8 @@ def crear_remision(
         #     + ficha "Aceptar lote". Las etiquetas térmicas salen al SEPARAR,
         #     no al crear la remisión.
         es_confeccion = (body.tipo != "terminacion")
-        rem = svc.crear_remision(
+        # Una remisión POR LOTE (cada referencia es independiente).
+        rems = svc.crear_remision(
             confeccionista_id=body.confeccionista_id,
             fecha_recogida=body.fecha_recogida,
             orden_corte_ids=(body.orden_corte_ids or None),
@@ -1690,14 +1696,17 @@ def crear_remision(
         )
         extra: dict = {"impresion": "retenida"}
         if es_confeccion:
-            # Aviso al confeccionista de que tiene un lote por recoger.
-            try:
-                extra["aviso_recoger"] = svc._notificar_lote_por_recoger(rem)
-            except Exception as e:
-                import logging as _lg
-                _lg.getLogger(__name__).warning(f"[wa] aviso lote por recoger fallo: {e}")
-                extra["aviso_recoger"] = []
-        return {"ok": True, "remision": rem, **extra}
+            # Aviso al confeccionista por cada lote por recoger.
+            avisos: list = []
+            for _rem in rems:
+                try:
+                    avisos += svc._notificar_lote_por_recoger(_rem)
+                except Exception as e:
+                    import logging as _lg
+                    _lg.getLogger(__name__).warning(f"[wa] aviso lote por recoger fallo: {e}")
+            extra["aviso_recoger"] = avisos
+        return {"ok": True, "remision": (rems[0] if rems else None),
+                "remisiones": rems, **extra}
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:

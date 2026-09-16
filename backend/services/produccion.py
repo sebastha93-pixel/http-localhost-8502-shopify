@@ -4063,8 +4063,8 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
                     lotes: Optional[list[dict]] = None,
                     created_by: str,
                     tipo: str = "confeccion",
-                    liberar_impresion: bool = True) -> dict:
-    """Crea una remisión: entrega de N LOTES cortados a un proveedor.
+                    liberar_impresion: bool = True) -> list[dict]:
+    """Crea una remisión POR LOTE: entrega de N lotes cortados a un proveedor.
 
     Un lote = (orden de corte, referencia). Un corte combinado tiene un lote por
     referencia y se pueden remitir por separado (a distinto proveedor, en
@@ -4075,7 +4075,10 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
     - `tipo`: 'confeccion' o 'terminacion'.
     - `liberar_impresion`: True = a la cola de una (flujo viejo/terminación);
        False = retenida hasta separar insumos (flujo nuevo).
-    - Genera consecutivo `REM-YYYY-NNNN`.
+    - Genera un consecutivo `REM-YYYY-NNNN` POR LOTE.
+
+    Devuelve la LISTA de remisiones creadas (una por lote) — cada lote es una
+    remisión independiente. Para el caso normal (un lote) la lista trae uno.
     """
     sb = _sb()
     if sb is None:
@@ -4140,17 +4143,6 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
         if _lote_ya_remitido(oc_id, ref_id, ya_remitidos):
             raise ValueError(f"lote_ya_tiene_remision_{tipo}:{oc0.get('consecutivo')}")
 
-    codigo = next_consecutivo("REM", width=4)
-    row = {
-        "consecutivo":       codigo,
-        "confeccionista_id": confeccionista_id,   # el "destinatario" de la remisión
-        "fecha_recogida":    fecha_recogida,
-        "estado":            "generada",
-        "tipo":              tipo,
-        "created_by":        created_by,
-        "impresion_liberada": bool(liberar_impresion),
-    }
-
     def _insert(rw):
         # Reintenta quitando columnas que la DB aún no tenga (compat migraciones).
         for _ in range(3):
@@ -4164,64 +4156,68 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
                 if not quitada:
                     raise
         return sb.table("remisiones").insert(rw).execute()
-    r = _insert(row)
-    if not r.data:
-        raise RuntimeError("no_se_pudo_crear_remision")
-    rem = r.data[0]
 
-    # Items: uno por LOTE (corte + referencia)
-    items_rows = [
-        {"remision_id": rem["id"], "orden_corte_id": oc_id, "referencia_id": ref_id}
-        for oc_id, ref_id in pares
-    ]
-    try:
-        sb.table("remision_items").insert(items_rows).execute()
-    except Exception as e:
-        if "referencia_id" in str(e):   # columna sin migrar → legacy por corte
-            sb.table("remision_items").insert(
-                [{"remision_id": rem["id"], "orden_corte_id": oc} for oc, _ in pares]).execute()
-        else:
-            raise
-
-    # Hoja de ruta por LOTE:
-    #   confeccion  → crea el lote (corte+referencia) con confeccionista_id
-    #   terminacion → busca el lote de esa referencia y le asigna terminacion_id
-    for oc_id, ref_id in pares:
+    def _crear_una(oc_id, ref_id) -> dict:
+        """Crea UNA remisión de UN solo lote (corte+referencia). Cada lote es su
+        propia remisión: su PDF, su liberación de impresión, sus etiquetas y su
+        aviso son independientes — separar/imprimir uno nunca toca al otro."""
+        row = {
+            "consecutivo":       next_consecutivo("REM", width=4),
+            "confeccionista_id": confeccionista_id,   # el "destinatario"
+            "fecha_recogida":    fecha_recogida,
+            "estado":            "generada",
+            "tipo":              tipo,
+            "created_by":        created_by,
+            "impresion_liberada": bool(liberar_impresion),
+        }
+        r = _insert(row)
+        if not r.data:
+            raise RuntimeError("no_se_pudo_crear_remision")
+        rem = r.data[0]
+        item_row = {"remision_id": rem["id"], "orden_corte_id": oc_id, "referencia_id": ref_id}
+        try:
+            sb.table("remision_items").insert(item_row).execute()
+        except Exception as e:
+            if "referencia_id" in str(e):   # columna sin migrar → legacy por corte
+                sb.table("remision_items").insert(
+                    {"remision_id": rem["id"], "orden_corte_id": oc_id}).execute()
+            else:
+                raise
+        # Hoja de ruta del LOTE:
+        #   confeccion  → crea el lote (corte+referencia) con confeccionista_id
+        #   terminacion → busca el lote de esa referencia y le asigna terminacion_id
         try:
             if tipo == "confeccion":
-                # crear_ruta_lote deduplica por (corte, referencia): si ya existe
-                # el lote de esa referencia, lo devuelve sin crear otro.
-                crear_ruta_lote(
-                    orden_corte_id=oc_id,
-                    referencia_id=ref_id,
-                    confeccionista_id=confeccionista_id,
-                    remision_id=rem["id"],
-                    created_by=created_by,
-                )
+                crear_ruta_lote(orden_corte_id=oc_id, referencia_id=ref_id,
+                                confeccionista_id=confeccionista_id,
+                                remision_id=rem["id"], created_by=created_by)
             else:  # terminacion
                 existente = obtener_ruta_por_corte(oc_id, referencia_id=ref_id) \
                     or obtener_ruta_por_corte(oc_id)   # legacy: lote único del corte
-                if not existente:
+                if existente:
+                    precio_term = existente.get("precio_terminacion") or \
+                        _precio_proceso_precosteo(ref_id, "terminacion")
+                    actualizar_ruta_lote(existente["id"], terminacion_id=confeccionista_id,
+                                         precio_terminacion=precio_term)
+                else:
                     log.warning(f"[remision-terminacion] lote {oc_id}/{ref_id} sin ruta previa, se salta")
-                    continue
-                precio_term = existente.get("precio_terminacion") or _precio_proceso_precosteo(
-                    ref_id, "terminacion")
-                actualizar_ruta_lote(existente["id"], terminacion_id=confeccionista_id,
-                                     precio_terminacion=precio_term)
         except Exception as e:
             log.warning(f"[remision] no se pudo actualizar ruta {oc_id}/{ref_id}: {e}")
 
-    rem_full = obtener_remision(rem["id"])
-    if tipo == "terminacion" and liberar_impresion:
-        # Solo el flujo VIEJO (liberar_impresion=True) encola las etiquetas
-        # térmicas al crear la remisión. En el flujo nuevo (retenida) los
-        # stickers (Honeywell) + lavado (SAT) se encolan al SEPARAR los insumos
-        # de terminación (ver guardar_separacion). Tolerante a fallos.
-        try:
-            _encolar_trabajos_terminacion(rem_full)
-        except Exception as e:
-            log.warning(f"[impresion] encolado terminación falló: {e}")
-    return rem_full
+        rem_full = obtener_remision(rem["id"])
+        if tipo == "terminacion" and liberar_impresion:
+            # Solo el flujo VIEJO (liberar_impresion=True) encola las etiquetas al
+            # crear. En el flujo nuevo (retenida) se encolan al SEPARAR insumos.
+            try:
+                _encolar_trabajos_terminacion(rem_full)
+            except Exception as e:
+                log.warning(f"[impresion] encolado terminación falló: {e}")
+        return rem_full
+
+    # UNA REMISIÓN POR LOTE. Antes un corte combinado hacía una sola remisión con
+    # varios items, y separar/imprimir uno tocaba al otro. Ahora cada referencia
+    # es su propia remisión — 100% independiente (Sebastián, 2026-09-16).
+    return [_crear_una(oc_id, ref_id) for oc_id, ref_id in pares]
 
 
 def listar_remisiones(*, estado: Optional[str] = None,
