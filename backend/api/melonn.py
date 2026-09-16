@@ -57,6 +57,44 @@ def webhook_stats(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     return dict(_webhook_stats)
 
 
+# ── Diagnóstico TEMPORAL: qué formato de id acepta GET /sell-orders/{id} ───────
+# (2026-09-16) Entregados con M-id daban 404 por número externo y por el M-id
+# sin "M". Este endpoint prueba varios formatos DESDE Railway (la API de Melonn
+# solo responde desde su IP) para saber cuál funciona. SE QUITA luego del fix.
+@router.get("/_diag-id")
+def diag_id(ext: str = Query(...), mid: str = Query(""),
+            secret: Optional[str] = Query(None)) -> dict:
+    esperado = os.environ.get("MELONN_WEBHOOK_SECRET", "").strip()
+    if not esperado or (secret or "").strip() != esperado:
+        raise HTTPException(403, "secret invalido")
+    import requests
+    import melonn_client as mc
+    mid_raw = (mid or "").strip()
+    mid_sinM = mid_raw.lstrip("Mm").strip()
+    candidatos = [
+        ("ext",              ext,       None),
+        ("ext+fields",       ext,       {"fields": "sell_order_promises"}),
+        ("mid_con_M",        mid_raw,   None),
+        ("mid_con_M+fields", mid_raw,   {"fields": "sell_order_promises"}),
+        ("mid_sin_M",        mid_sinM,  None),
+        ("ext_hash",         f"#{ext}", None),
+    ]
+    headers = {"x-api-key": mc._api_key(), "Accept": "application/json"}
+    out: dict = {}
+    for nombre, ident, params in candidatos:
+        if not ident:
+            out[nombre] = {"skip": "sin id"}
+            continue
+        try:
+            r = requests.get(f"{mc._BASE_URL}/sell-orders/{ident}",
+                             headers=headers, params=params, timeout=(5, 30))
+            out[nombre] = {"id": ident, "params": params,
+                           "status": r.status_code, "body": r.text[:200]}
+        except Exception as e:
+            out[nombre] = {"id": ident, "error": str(e)[:200]}
+    return {"ext": ext, "mid": mid_raw, "resultados": out}
+
+
 # ── Webhook receiver (público, validado por secret) ──────────────────────────
 @router.post("/webhook")
 async def webhook_receiver(request: Request, secret: Optional[str] = Query(None)) -> dict:
