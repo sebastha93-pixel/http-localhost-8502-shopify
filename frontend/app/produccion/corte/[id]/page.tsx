@@ -1712,7 +1712,7 @@ export default function DetalleOrdenCortePage() {
       {/* Tras confirmar el informe, el cortador (o el encargado de remisiones)
           genera la remisión de confección, la imprime y la marca recogida. */}
       {cerrada && <GenerarRemisionCard ordenCorteId={oc.id} esCortador={esCortador} />}
-      {cerrada && !esCortador && <HojaRutaCard ordenCorteId={oc.id} consecutivo={oc.consecutivo} />}
+      {cerrada && !esCortador && <HojaRutaLotes ordenCorteId={oc.id} consecutivo={oc.consecutivo} />}
     </PageShell>
   );
 }
@@ -2290,6 +2290,9 @@ interface RutaCorte {
   token_publico: string;
   token_publico_terminacion?: string;
   remision_id?: string;   // para poder reasignar el confeccionista del lote
+  // Referencia PROPIA del lote (en un corte combinado cada lote es una ref).
+  referencia_id?: string;
+  ref_lote?: { codigo_referencia?: string; nombre?: string; tela?: string; color?: string };
   etapa: string;
   precio_confeccion?: number;
   precio_terminacion?: number;
@@ -2325,15 +2328,42 @@ const ADMINS_WA = [
   { nombre: "Alejandro", tel: "573008740405" },
 ];
 
-function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; consecutivo: string }) {
+/** Muestra TODAS las hojas de ruta de un corte: un corte combinado tiene una
+ *  por referencia. Si aún no hay ninguna (sin remisión), no muestra nada — el
+ *  atajo para crearla lo pone GenerarRemisionCard. */
+function HojaRutaLotes({ ordenCorteId, consecutivo }: { ordenCorteId: string; consecutivo: string }) {
+  const q = useQuery<{ rutas: RutaCorte[] }>({
+    queryKey: ["rutas-corte-todas", ordenCorteId],
+    queryFn: () => api.get(`/api/produccion/rutas/por-corte/${ordenCorteId}/todas`),
+    enabled: !!ordenCorteId,
+  });
+  const rutas = q.data?.rutas || [];
+  if (rutas.length === 0) return null;
+  return (
+    <>
+      {rutas.map((rt) => (
+        <HojaRutaCard key={rt.id} ordenCorteId={ordenCorteId} consecutivo={consecutivo}
+          referenciaId={rt.referencia_id} referenciaCodigo={rt.ref_lote?.codigo_referencia} />
+      ))}
+    </>
+  );
+}
+
+function HojaRutaCard({ ordenCorteId, consecutivo, referenciaId, referenciaCodigo }: {
+  ordenCorteId: string; consecutivo: string; referenciaId?: string; referenciaCodigo?: string;
+}) {
   const qc = useQueryClient();
   const [urlLav, setUrlLav] = useState("");
   const [errRuta, setErrRuta] = useState("");
   const [lavanderiaId, setLavanderiaId] = useState("");
 
+  // Un corte combinado tiene una hoja de ruta por referencia: la clave y la URL
+  // incluyen la referencia para no mezclar los lotes.
+  const rutaKey = ["ruta-corte", ordenCorteId, referenciaId ?? ""];
   const q = useQuery<RutaCorte>({
-    queryKey: ["ruta-corte", ordenCorteId],
-    queryFn: () => api.get(`/api/produccion/rutas/por-corte/${ordenCorteId}`),
+    queryKey: rutaKey,
+    queryFn: () => api.get(`/api/produccion/rutas/por-corte/${ordenCorteId}`
+      + (referenciaId ? `?referencia_id=${referenciaId}` : "")),
     enabled: !!ordenCorteId,
     retry: false,
   });
@@ -2370,7 +2400,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
         const d = await r.json().catch(() => ({}));
         throw new Error(d.detail || `HTTP ${r.status}`);
       }
-      qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] });
+      qc.invalidateQueries({ queryKey: rutaKey });
     } catch (e) {
       setErrRuta(`No se pudo subir la remisión de lavandería: ${e instanceof Error ? e.message : "error"}`);
     } finally {
@@ -2380,7 +2410,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
 
   const cambiarEtapa = useMutation({
     mutationFn: (etapa: string) => api.post(`/api/produccion/rutas/${q.data?.id}/etapa`, { etapa }),
-    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }); },
+    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: rutaKey }); },
     onError: (e: Error) => setErrRuta(`No se pudo cambiar la etapa: ${e.message}`),
   });
   // DEVOLVER UNA ETAPA. Avanzar era un clic y devolverse no existía: un lote
@@ -2389,14 +2419,14 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
   const devolverEtapa = useMutation({
     mutationFn: ({ etapa, motivo }: { etapa: string; motivo: string }) =>
       api.post(`/api/produccion/rutas/${q.data?.id}/devolver-etapa`, { etapa, motivo }),
-    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }); },
+    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: rutaKey }); },
     onError: (e: Error) => setErrRuta(`No se pudo devolver la etapa: ${e.message}`),
   });
   const guardarUrl = useMutation({
     mutationFn: () => api.patch(`/api/produccion/rutas/${q.data?.id}`, {
       remision_lavanderia_url: urlLav || null,
     }),
-    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }); },
+    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: rutaKey }); },
     onError: (e: Error) => setErrRuta(`No se pudo guardar la remisión de lavandería: ${e.message}`),
   });
 
@@ -2530,7 +2560,14 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
     <Card>
       <CardContent className="p-5 space-y-4">
         <div className="flex items-center justify-between">
-          <p className="section-label">Hoja de ruta del lote</p>
+          <p className="section-label">
+            Hoja de ruta del lote
+            {(referenciaCodigo || r.ref_lote?.codigo_referencia) && (
+              <span className="ml-2 rounded-sm bg-navy-600/10 px-1.5 py-0.5 text-[0.62rem] font-bold uppercase tracking-wider text-navy-600 align-middle">
+                REF {referenciaCodigo || r.ref_lote?.codigo_referencia}
+              </span>
+            )}
+          </p>
           <a href={linkPublico} target="_blank" rel="noopener noreferrer"
             className="text-[0.65rem] text-navy-600 hover:underline">Ver ficha pública</a>
         </div>

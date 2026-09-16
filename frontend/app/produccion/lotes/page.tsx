@@ -34,6 +34,9 @@ interface OrdenCorte {
 interface Ruta {
   id: string;
   orden_corte_id: string;
+  // Referencia PROPIA del lote (un corte combinado tiene una por referencia).
+  referencia_id?: string;
+  ref_lote?: { codigo_referencia?: string; nombre?: string; tela?: string };
   etapa: string;
   asignado_at?: string;
   aceptado_at?: string;
@@ -141,13 +144,25 @@ export default function LotesPage() {
     queryFn: () => api.get("/api/produccion/rutas?limit=500"),
   });
 
-  // Merge: cada OC con su ruta opcional
+  // Merge: un lote por RUTA (un corte combinado tiene una por referencia, así
+  // que sale una tarjeta por referencia). Un corte cortado pero AÚN sin remitir
+  // no tiene ruta todavía y sale como una sola tarjeta.
   const lotes = useMemo<LoteRow[]>(() => {
     const cortes = cortesQ.data?.ordenes || [];
     const rutas = rutasQ.data?.rutas || [];
-    const rutaMap = new Map<string, Ruta>();
-    for (const r of rutas) if (r.orden_corte_id) rutaMap.set(r.orden_corte_id, r);
-    return cortes.map((oc) => ({ oc, ruta: rutaMap.get(oc.id) }));
+    const rutasPorCorte = new Map<string, Ruta[]>();
+    for (const r of rutas) {
+      if (!r.orden_corte_id) continue;
+      const arr = rutasPorCorte.get(r.orden_corte_id);
+      if (arr) arr.push(r); else rutasPorCorte.set(r.orden_corte_id, [r]);
+    }
+    const out: LoteRow[] = [];
+    for (const oc of cortes) {
+      const rs = rutasPorCorte.get(oc.id);
+      if (rs && rs.length) rs.forEach((ruta) => out.push({ oc, ruta }));
+      else out.push({ oc });
+    }
+    return out;
   }, [cortesQ.data, rutasQ.data]);
 
   const filtrados = useMemo(() => {
@@ -168,6 +183,7 @@ export default function LotesPage() {
   // El texto filtra DENTRO de la pestaña elegida, no por encima de ella.
   const { q: busca, setQ: setBusca, filtrados: visibles } = useBusqueda(
     filtrados, (l) => [l.oc.consecutivo, l.oc.referencia_lote,
+                       l.ruta?.ref_lote?.codigo_referencia, l.ruta?.ref_lote?.nombre,
                        l.oc.referencia?.codigo_referencia, l.oc.referencia?.nombre,
                        l.ruta?.confeccionista?.nombre, l.oc.estado, l.ruta?.etapa]);
 
@@ -232,7 +248,7 @@ export default function LotesPage() {
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           {visibles.map(({ oc, ruta }) => (
-            <LoteCard key={oc.id} oc={oc} ruta={ruta} />
+            <LoteCard key={ruta ? ruta.id : oc.id} oc={oc} ruta={ruta} />
           ))}
         </div>
       )}
@@ -247,6 +263,11 @@ function LoteCard({ oc, ruta }: { oc: OrdenCorte; ruta?: Ruta }) {
   const actual = pasoActual(oc, ruta);
   const estado = etiquetaEstado(oc, ruta);
   const siguiente = siguienteAccion(oc, ruta);
+  // La referencia PROPIA del lote manda (un combinado tiene una por referencia);
+  // si el lote aún no tiene ruta, se cae a la referencia primaria del corte.
+  const refCod = ruta?.ref_lote?.codigo_referencia || oc.referencia?.codigo_referencia;
+  const refNom = ruta?.ref_lote?.nombre || oc.referencia?.nombre;
+  const refTela = ruta?.ref_lote?.tela || oc.referencia?.tela;
 
   return (
     <Link href={`/produccion/corte/${oc.id}`} className="group block">
@@ -264,14 +285,14 @@ function LoteCard({ oc, ruta }: { oc: OrdenCorte; ruta?: Ruta }) {
                 memoria en cada tarjeta. */}
             <div className="min-w-0">
               <p className="font-display text-lg font-semibold text-navy-600 group-hover:underline leading-none truncate">
-                {oc.referencia?.codigo_referencia || oc.consecutivo}
+                {refCod || oc.consecutivo}
               </p>
               <p className="mt-1.5 text-sm font-semibold text-ink-900 truncate">
-                {oc.referencia?.nombre || "sin nombre de referencia"}
+                {refNom || "sin nombre de referencia"}
               </p>
               <p className="text-[0.68rem] text-graphite truncate">
                 <span className="tabular">{oc.consecutivo}</span>
-                {oc.referencia?.tela ? ` · ${oc.referencia.tela}` : " · sin tela"}
+                {refTela ? ` · ${refTela}` : " · sin tela"}
                 {/* El "Lote X" solo aporta cuando es DISTINTO del consecutivo.
                     En la tarjeta que mostró Sebastián decía «Lote 2608-0007»
                     justo debajo del 2608-0007: la misma cifra dos veces. */}

@@ -5121,9 +5121,11 @@ def marcar_remision_recogida(rem_id: str, usuario: str = "sistema") -> dict:
     return rem
 
 
-def _notificar_remision_whatsapp(rem: dict, solo_oc_id: Optional[str] = None) -> list[dict]:
+def _notificar_remision_whatsapp(rem: dict, solo_oc_id: Optional[str] = None,
+                                 solo_ref_id: Optional[str] = None) -> list[dict]:
     """Arma (y si se puede, ENVÍA) el WhatsApp por cada lote de la remisión.
-    Con `solo_oc_id` envía únicamente el lote indicado (botón por lote)."""
+    Con `solo_oc_id` (+ opcional `solo_ref_id`) envía únicamente ESE lote —
+    necesario en un corte combinado, donde un mismo corte tiene varios items."""
     from urllib.parse import quote
     from backend.services import whatsapp_cloud as wa
 
@@ -5134,6 +5136,8 @@ def _notificar_remision_whatsapp(rem: dict, solo_oc_id: Optional[str] = None) ->
     salidas = []
     for it in (rem.get("items") or []):
         if solo_oc_id and it.get("orden_corte_id") != solo_oc_id:
+            continue
+        if solo_ref_id and it.get("referencia_id") != solo_ref_id:
             continue
         ruta = obtener_ruta_por_corte(it["orden_corte_id"], referencia_id=it.get("referencia_id"))
         if not ruta:
@@ -6283,6 +6287,8 @@ def listar_rutas(*, etapa: Optional[str] = None,
            .select("*,confeccionista:confeccionista_id(nombre),"
                    "terminacion:terminacion_id(nombre),"
                    "lavanderia:lavanderia_id(nombre),"
+                   # Referencia PROPIA del lote (un combinado tiene una por ref).
+                   "ref_lote:referencia_id(codigo_referencia,nombre,tela),"
                    "orden_corte:orden_corte_id(consecutivo,"
                    "referencia:referencia_id(codigo_referencia,nombre,tela))")
            .order("created_at", desc=True).limit(limit))

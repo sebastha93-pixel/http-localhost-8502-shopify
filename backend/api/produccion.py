@@ -1718,6 +1718,7 @@ def detalle_remision(
 
 class WhatsAppRemisionBody(BaseModel):
     orden_corte_id: Optional[str] = None   # enviar solo este lote (botón por lote)
+    referencia_id:  Optional[str] = None   # en un combinado, la referencia del lote
 
 
 @router.post("/remisiones/{rem_id}/whatsapp")
@@ -1732,7 +1733,8 @@ def remision_whatsapp(
     if not rem:
         raise HTTPException(404, "no_encontrada")
     try:
-        envios = svc._notificar_remision_whatsapp(rem, solo_oc_id=body.orden_corte_id)
+        envios = svc._notificar_remision_whatsapp(rem, solo_oc_id=body.orden_corte_id,
+                                                  solo_ref_id=body.referencia_id)
     except Exception as e:
         raise HTTPException(500, f"whatsapp: {str(e)[:200]}")
     return {"ok": True, "envios": envios}
@@ -1849,12 +1851,25 @@ def crear_ruta(
 @router.get("/rutas/por-corte/{oc_id}")
 def ruta_por_corte(
     oc_id: str,
+    referencia_id: Optional[str] = None,
     _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ) -> dict:
-    r = svc.obtener_ruta_por_corte(oc_id)
+    # Un corte combinado tiene una ruta por referencia: con `referencia_id` se
+    # pide la de ESA referencia (sin él, la primera — compat).
+    r = svc.obtener_ruta_por_corte(oc_id, referencia_id=referencia_id)
     if not r:
         raise HTTPException(404, "no_encontrada")
     return r
+
+
+@router.get("/rutas/por-corte/{oc_id}/todas")
+def rutas_por_corte(
+    oc_id: str,
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+) -> dict:
+    """Todas las hojas de ruta (lotes) de un corte — un combinado tiene una por
+    referencia. Lista vacía si aún no se ha remitido ninguna."""
+    return {"rutas": svc.obtener_rutas_por_corte(oc_id)}
 
 
 @router.patch("/rutas/{ruta_id}")
