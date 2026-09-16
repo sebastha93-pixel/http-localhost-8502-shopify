@@ -1718,8 +1718,14 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
             return data
 
         except requests.HTTPError as e:
-            log.warning(f"HTTP {e.response.status_code} en {url}")
-            _fallo(f"http_{e.response.status_code}", path)
+            code = e.response.status_code
+            # Un 404 en un GET de detalle casi siempre es "el pedido no está en
+            # Melonn con ese id" (backlog histórico de entregados, pedidos POS/
+            # manuales que nunca pasaron por Melonn). Es ruido ESPERADO, no una
+            # falla: se registra en INFO para no disparar alarma en Railway. Los
+            # 5xx (Melonn caído/errando) sí se avisan como warning.
+            (log.info if code == 404 else log.warning)(f"HTTP {code} en {url}")
+            _fallo(f"http_{code}", path)
             return None
         except Exception as e:
             log.warning(f"Request error en {url}: {e}")
@@ -3070,7 +3076,9 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
         resultado[idx] = p
 
         if not detail:
-            log.warning(f"Sin detalle Melonn para {ext} / {internal}")
+            # Esperado para el backlog histórico (pedidos que Melonn no resuelve
+            # por ningún id): se marcó el intento arriba y no se vuelve a preguntar.
+            log.info(f"Sin detalle Melonn para {ext} / {internal}")
             continue
 
         # Schema real Melonn API:
