@@ -6515,7 +6515,7 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
     ocs = listar_ordenes_corte(estado="cortada", limit=500)
     try:
         rutas = (sb.table("hoja_ruta_lote")
-                   .select("orden_corte_id,precio_confeccion,precio_terminacion,etapa,"
+                   .select("orden_corte_id,referencia_id,precio_confeccion,precio_terminacion,etapa,"
                            "lavanderia_at,"
                            "confeccionista:confeccionista_id(nombre,documento),"
                            "terminador:terminacion_id(nombre,documento),"
@@ -6524,11 +6524,26 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
     except Exception:
         # Compat si la columna documento aún no existe
         rutas = (sb.table("hoja_ruta_lote")
-                   .select("orden_corte_id,precio_confeccion,precio_terminacion,etapa,"
+                   .select("orden_corte_id,referencia_id,precio_confeccion,precio_terminacion,etapa,"
                            "lavanderia_at,"
                            "confeccionista:confeccionista_id(nombre)")
                    .limit(500).execute()).data or []
-    ruta_por_oc = {r["orden_corte_id"]: r for r in rutas if r.get("orden_corte_id")}
+    # Una ruta (LOTE) por (corte, referencia): un corte combinado tiene una por ref.
+    ruta_por_lote = {(r["orden_corte_id"], r.get("referencia_id")): r
+                     for r in rutas if r.get("orden_corte_id")}
+    # Referencias de cada corte (tabla hija) con sus unidades POR referencia.
+    refs_por_corte: dict[str, list] = {}
+    _oc_ids = [oc["id"] for oc in ocs if oc.get("id")]
+    if _oc_ids:
+        try:
+            _fref = (sb.table("orden_corte_referencias")
+                       .select("orden_corte_id,referencia_id,unidades_cortadas,cantidad_programada,"
+                               "referencia:referencia_id(codigo_referencia)")
+                       .in_("orden_corte_id", _oc_ids).execute()).data or []
+            for _f in _fref:
+                refs_por_corte.setdefault(_f["orden_corte_id"], []).append(_f)
+        except Exception as e:
+            log.warning(f"[cruce] no pude traer las referencias de los cortes: {e}")
 
     def _norm_ref(s: Optional[str]) -> str:
         return (s or "").upper().replace(" ", "").strip("-")
@@ -6563,46 +6578,68 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
         d = (oc.get("created_at") or "")[:10]
         if desde and d and d < desde:
             continue
-        ref = _norm_ref((oc.get("referencia") or {}).get("codigo_referencia"))
-        ruta = ruta_por_oc.get(oc["id"])
-        unidades = sum(_int0(v) for v in (oc.get("unidades_cortadas") or {}).values())
-        precio = float((ruta or {}).get("precio_confeccion") or 0)
-        lote = {
-            "orden_corte_id": oc["id"],
-            "consecutivo":    oc.get("consecutivo"),
-            "referencia":     (oc.get("referencia") or {}).get("codigo_referencia"),
-            "confeccionista": ((ruta or {}).get("confeccionista") or {}).get("nombre"),
-            "documento":      _norm_doc(((ruta or {}).get("confeccionista") or {}).get("documento")),
-            # Un lote pasa por VARIOS proveedores y cada concepto se factura por
-            # el suyo. Para casar un documento soporte —que no trae REF— hace
-            # falta saber qué NIT corresponde a qué proceso.
-            # Qué procesos espera este lote según su ruta. Sirve para saber si el
-            # margen real ya es comparable o si todavía va a medias.
-            "conceptos_esperados": [c for c, hay in (
-                ("confeccion",  bool((ruta or {}).get("confeccionista"))),
-                ("terminacion", bool((ruta or {}).get("terminador"))),
-                ("lavanderia",  bool((ruta or {}).get("lavador"))),
-            ) if hay],
-            "documentos_por_concepto": {
-                "confeccion":  _norm_doc(((ruta or {}).get("confeccionista") or {}).get("documento")),
-                "terminacion": _norm_doc(((ruta or {}).get("terminador") or {}).get("documento")),
-                "lavanderia":  _norm_doc(((ruta or {}).get("lavador") or {}).get("documento")),
-            },
-            # El DS se vuelve exigible cuando el confeccionista ENTREGÓ
-            # (lote pasó a lavandería). Antes de eso no se alerta.
-            "entregado_at":   (ruta or {}).get("lavanderia_at"),
-            "unidades":       unidades,
-            "creada_at":      oc.get("created_at"),
-            "precio_teorico": precio,          # confección (el cruce principal)
-            "precio_terminacion": float((ruta or {}).get("precio_terminacion") or 0),
-            "total_teorico":  round(unidades * precio, 2),
-            "tiene_ruta":     bool(ruta),
-            "ds":             None,
-            "estado":         "sin_ds" if ruta else "sin_asignar",
-        }
-        lotes.append(lote)
-        if ref:
-            lotes_por_ref[ref] = lote
+        oc_refs = refs_por_corte.get(oc["id"])
+        if not oc_refs:
+            # Corte de una sola referencia sin fila hija (legacy): se sintetiza
+            # del padre para no perderlo.
+            oc_refs = [{
+                "referencia_id":       oc.get("referencia_id"),
+                "referencia":          oc.get("referencia"),
+                "unidades_cortadas":   oc.get("unidades_cortadas"),
+                "cantidad_programada": oc.get("cantidad_programada"),
+            }]
+        es_combinado = len(oc_refs) > 1
+        for rr in oc_refs:
+            ref_id = rr.get("referencia_id")
+            cod = ((rr.get("referencia") or {}).get("codigo_referencia")
+                   or (oc.get("referencia") or {}).get("codigo_referencia"))
+            ref = _norm_ref(cod)
+            # La ruta (LOTE) de ESTA referencia. En un corte de una sola
+            # referencia se cae a la única del corte (rutas viejas backfilleadas).
+            ruta = ruta_por_lote.get((oc["id"], ref_id))
+            if ruta is None and not es_combinado:
+                ruta = next((r for (o, _), r in ruta_por_lote.items() if o == oc["id"]), None)
+            # Unidades de ESTA referencia; si la fila hija no las trae y el corte
+            # es de una sola referencia, se usan las del padre.
+            unidades = sum(_int0(v) for v in (rr.get("unidades_cortadas") or {}).values())
+            if unidades == 0 and not es_combinado:
+                unidades = sum(_int0(v) for v in (oc.get("unidades_cortadas") or {}).values())
+            precio = float((ruta or {}).get("precio_confeccion") or 0)
+            lote = {
+                "orden_corte_id": oc["id"],
+                "referencia_id":  ref_id,
+                "consecutivo":    oc.get("consecutivo"),
+                "referencia":     cod,
+                "confeccionista": ((ruta or {}).get("confeccionista") or {}).get("nombre"),
+                "documento":      _norm_doc(((ruta or {}).get("confeccionista") or {}).get("documento")),
+                # Un lote pasa por VARIOS proveedores y cada concepto se factura
+                # por el suyo. Para casar un DS —que no trae REF— hace falta saber
+                # qué NIT corresponde a qué proceso.
+                "conceptos_esperados": [c for c, hay in (
+                    ("confeccion",  bool((ruta or {}).get("confeccionista"))),
+                    ("terminacion", bool((ruta or {}).get("terminador"))),
+                    ("lavanderia",  bool((ruta or {}).get("lavador"))),
+                ) if hay],
+                "documentos_por_concepto": {
+                    "confeccion":  _norm_doc(((ruta or {}).get("confeccionista") or {}).get("documento")),
+                    "terminacion": _norm_doc(((ruta or {}).get("terminador") or {}).get("documento")),
+                    "lavanderia":  _norm_doc(((ruta or {}).get("lavador") or {}).get("documento")),
+                },
+                # El DS se vuelve exigible cuando el confeccionista ENTREGÓ
+                # (lote pasó a lavandería). Antes de eso no se alerta.
+                "entregado_at":   (ruta or {}).get("lavanderia_at"),
+                "unidades":       unidades,
+                "creada_at":      oc.get("created_at"),
+                "precio_teorico": precio,          # confección (el cruce principal)
+                "precio_terminacion": float((ruta or {}).get("precio_terminacion") or 0),
+                "total_teorico":  round(unidades * precio, 2),
+                "tiene_ruta":     bool(ruta),
+                "ds":             None,
+                "estado":         "sin_ds" if ruta else "sin_asignar",
+            }
+            lotes.append(lote)
+            if ref:
+                lotes_por_ref[ref] = lote
 
     # ── Documentos soporte de Siigo ──────────────────────────────
     # Sin `desde` explícito, solo traer DS desde el primer lote del OS —
@@ -6681,7 +6718,7 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
 
     ds_sin_lote = []
     ajenos = {"n": 0, "total": 0.0}   # de referencias que el OS no maneja
-    matches: dict[str, list] = {}   # orden_corte_id → [(doc, item)]
+    matches: dict = {}   # (orden_corte_id, referencia_id) → [(doc, item)]
     for doc in docs:
         doc_prov = _norm_doc(doc.get("proveedor_id"))
         for it in doc["items"]:
@@ -6765,7 +6802,7 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                     "ds": doc["ds"],
                     "proveedor_ds": doc.get("proveedor_nombre") or doc_prov,
                 }
-            matches.setdefault(lote["orden_corte_id"], []).append((doc, it))
+            matches.setdefault((lote["orden_corte_id"], lote.get("referencia_id")), []).append((doc, it))
 
     # PASO 2 — Evaluar cada lote, CONCEPTO POR CONCEPTO.
     #
@@ -6779,7 +6816,7 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
     #   · la COMPARACIÓN → cada concepto contra SU precio, y solo si hay precio
     #     pactado. Lavandería no lo tiene en la ruta: se registra y no se juzga.
     for lote in lotes:
-        pares = matches.get(lote["orden_corte_id"]) or []
+        pares = matches.get((lote["orden_corte_id"], lote.get("referencia_id"))) or []
         if not pares:
             continue
 
@@ -6875,14 +6912,14 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
                 if pr["tipo"] == "precio_distinto":
                     alertas.append({
                         "tipo": "precio_distinto", "severidad": "alta",
-                        "mensaje": f"Lote {l['consecutivo']} · {pr['concepto']}: "
+                        "mensaje": f"Lote {l['consecutivo']} (REF {l['referencia']}) · {pr['concepto']}: "
                                    f"{docs} facturó ${pr['facturado']:,.0f}/prenda "
                                    f"pero lo pactado es ${pr['pactado']:,.0f}.",
                     })
                 elif pr["tipo"] == "cantidad_distinta":
                     alertas.append({
                         "tipo": "cantidad_distinta", "severidad": "alta",
-                        "mensaje": f"Lote {l['consecutivo']} · {pr['concepto']}: "
+                        "mensaje": f"Lote {l['consecutivo']} (REF {l['referencia']}) · {pr['concepto']}: "
                                    f"{docs} facturó {pr['facturado']:.0f} unidades "
                                    f"pero se cortaron {l['unidades']}.",
                     })
@@ -6901,9 +6938,9 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
         if pd:
             alertas.append({
                 "tipo": "proveedor_distinto", "severidad": "alta",
-                "mensaje": f"Lote {l['consecutivo']}: el DS {pd['ds']} matcheó por REF pero "
-                           f"viene de {pd['proveedor_ds']}, que NO es el proveedor asignado "
-                           f"({l['confeccionista']}). Verifica en Siigo.",
+                "mensaje": f"Lote {l['consecutivo']} (REF {l['referencia']}): el DS {pd['ds']} "
+                           f"matcheó por REF pero viene de {pd['proveedor_ds']}, que NO es el "
+                           f"proveedor asignado ({l['confeccionista']}). Verifica en Siigo.",
             })
     # Facturas de proceso que no cruzan con ningún lote: UNA alerta con el
     # total, no una por documento. La mayoría son de referencias anteriores al

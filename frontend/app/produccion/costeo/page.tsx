@@ -28,6 +28,7 @@ interface DsInfo {
 
 interface Lote {
   orden_corte_id: string;
+  referencia_id?: string;   // un corte combinado tiene un lote por referencia
   consecutivo: string;
   referencia?: string;
   confeccionista?: string;
@@ -223,7 +224,7 @@ export default function CosteoRealPage() {
                   {filtrados.map((l) => {
                     const ui = ESTADO_UI[l.estado] || ESTADO_UI.sin_asignar;
                     return (
-                      <tr key={l.orden_corte_id} className="border-b border-border/40 hover:bg-cloud/30">
+                      <tr key={`${l.orden_corte_id}-${l.referencia_id ?? ""}`} className="border-b border-border/40 hover:bg-cloud/30">
                         <td className="px-4 py-2 font-semibold tabular text-navy-600">
                           <Link href={`/produccion/corte/${l.orden_corte_id}`} className="hover:underline">
                             {l.consecutivo}
