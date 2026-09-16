@@ -71,28 +71,41 @@ def diag_id(ext: str = Query(...), mid: str = Query(""),
     from urllib.parse import quote
     import melonn_client as mc
     mid_raw = (mid or "").strip()
-    # En Melonn el external_order_number lleva "#" (ej. "#62531"); nuestro
-    # orden_tienda no. Probamos: path con "#" URL-encoded, y filtrar la LISTA
-    # por external_order_number (con y sin "#").
-    hash_ext = quote(f"#{ext}", safe="")   # "%2362531"
-    candidatos = [
-        # (nombre, url_completa, params)
-        ("path_hash_enc",   f"{mc._BASE_URL}/sell-orders/{hash_ext}", None),
-        ("path_hash_enc+f", f"{mc._BASE_URL}/sell-orders/{hash_ext}", {"fields": "sell_order_promises"}),
-        ("filtro_con_hash", f"{mc._BASE_URL}/sell-orders", {"external_order_number": f"#{ext}"}),
-        ("filtro_sin_hash", f"{mc._BASE_URL}/sell-orders", {"external_order_number": ext}),
-        ("filtro_con_hash+f", f"{mc._BASE_URL}/sell-orders",
-         {"external_order_number": f"#{ext}", "fields": "sell_order_promises"}),
-    ]
+    hash_ext = quote(f"#{ext}", safe="")   # "%2362531" — el formato que SÍ resuelve
     headers = {"x-api-key": mc._api_key(), "Accept": "application/json"}
-    out: dict = {}
-    for nombre, url, params in candidatos:
+
+    def _probe(params):
         try:
-            r = requests.get(url, headers=headers, params=params, timeout=(5, 30))
-            out[nombre] = {"url": r.url, "status": r.status_code, "body": r.text[:220]}
+            r = requests.get(f"{mc._BASE_URL}/sell-orders/{hash_ext}",
+                             headers=headers, params=params, timeout=(5, 30))
+            info: dict = {"status": r.status_code}
+            if r.status_code == 200:
+                try:
+                    j = r.json()
+                except Exception:
+                    return {"status": 200, "body_no_json": r.text[:120]}
+                if isinstance(j, dict):
+                    info["keys"] = sorted(j.keys())
+                    att = j.get("sell_order_attempt")
+                    info["tiene_attempt"] = bool(att)
+                    if isinstance(att, list) and att and isinstance(att[0], dict):
+                        info["attempt_keys"] = sorted(att[0].keys())
+                        info["ship_timestamp"] = att[0].get("ship_timestamp")
+                        info["delivery_timestamp"] = att[0].get("delivery_timestamp")
+                else:
+                    info["tipo"] = str(type(j))
+            else:
+                info["body"] = r.text[:120]
+            return info
         except Exception as e:
-            out[nombre] = {"error": str(e)[:200]}
-    return {"ext": ext, "mid": mid_raw, "resultados": out}
+            return {"error": str(e)[:150]}
+
+    return {"ext": ext, "id_correcto": f"sell-orders/{hash_ext} (#{ext})", "resultados": {
+        "sin_fields":       _probe(None),
+        "fields_promises":  _probe({"fields": "sell_order_promises"}),
+        "fields_attempt":   _probe({"fields": "sell_order_attempt"}),
+        "fields_ambos":     _probe({"fields": "sell_order_promises,sell_order_attempt"}),
+    }}
 
 
 # ── Webhook receiver (público, validado por secret) ──────────────────────────
