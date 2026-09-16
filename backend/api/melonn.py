@@ -68,30 +68,30 @@ def diag_id(ext: str = Query(...), mid: str = Query(""),
     if not esperado or (secret or "").strip() != esperado:
         raise HTTPException(403, "secret invalido")
     import requests
+    from urllib.parse import quote
     import melonn_client as mc
     mid_raw = (mid or "").strip()
-    mid_sinM = mid_raw.lstrip("Mm").strip()
+    # En Melonn el external_order_number lleva "#" (ej. "#62531"); nuestro
+    # orden_tienda no. Probamos: path con "#" URL-encoded, y filtrar la LISTA
+    # por external_order_number (con y sin "#").
+    hash_ext = quote(f"#{ext}", safe="")   # "%2362531"
     candidatos = [
-        ("ext",              ext,       None),
-        ("ext+fields",       ext,       {"fields": "sell_order_promises"}),
-        ("mid_con_M",        mid_raw,   None),
-        ("mid_con_M+fields", mid_raw,   {"fields": "sell_order_promises"}),
-        ("mid_sin_M",        mid_sinM,  None),
-        ("ext_hash",         f"#{ext}", None),
+        # (nombre, url_completa, params)
+        ("path_hash_enc",   f"{mc._BASE_URL}/sell-orders/{hash_ext}", None),
+        ("path_hash_enc+f", f"{mc._BASE_URL}/sell-orders/{hash_ext}", {"fields": "sell_order_promises"}),
+        ("filtro_con_hash", f"{mc._BASE_URL}/sell-orders", {"external_order_number": f"#{ext}"}),
+        ("filtro_sin_hash", f"{mc._BASE_URL}/sell-orders", {"external_order_number": ext}),
+        ("filtro_con_hash+f", f"{mc._BASE_URL}/sell-orders",
+         {"external_order_number": f"#{ext}", "fields": "sell_order_promises"}),
     ]
     headers = {"x-api-key": mc._api_key(), "Accept": "application/json"}
     out: dict = {}
-    for nombre, ident, params in candidatos:
-        if not ident:
-            out[nombre] = {"skip": "sin id"}
-            continue
+    for nombre, url, params in candidatos:
         try:
-            r = requests.get(f"{mc._BASE_URL}/sell-orders/{ident}",
-                             headers=headers, params=params, timeout=(5, 30))
-            out[nombre] = {"id": ident, "params": params,
-                           "status": r.status_code, "body": r.text[:200]}
+            r = requests.get(url, headers=headers, params=params, timeout=(5, 30))
+            out[nombre] = {"url": r.url, "status": r.status_code, "body": r.text[:220]}
         except Exception as e:
-            out[nombre] = {"id": ident, "error": str(e)[:200]}
+            out[nombre] = {"error": str(e)[:200]}
     return {"ext": ext, "mid": mid_raw, "resultados": out}
 
 
