@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * Nueva remisión a confeccionista.
- * - Escoge confeccionista (combobox con lupa).
- * - Elige N órdenes de corte en estado 'cortada' (checkboxes).
+ * Nueva remisión a confeccionista / terminación.
+ * - Escoge proveedor (combobox con lupa).
+ * - Elige N LOTES (corte + referencia) en estado 'cortada'. Un corte combinado
+ *   se despliega en una fila por referencia y cada una se remite por separado.
  * - Fecha de recogida.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -23,6 +24,14 @@ interface Confeccionista {
   activo: boolean;
 }
 
+interface RefLote {
+  referencia_id?: string;
+  cantidad_programada?: number;
+  referencia?: { codigo_referencia: string; nombre: string; tela?: string };
+  tiene_remision_confeccion?: boolean;
+  tiene_remision_terminacion?: boolean;
+}
+
 interface OrdenCorte {
   id: string;
   consecutivo: string;
@@ -31,8 +40,29 @@ interface OrdenCorte {
   cantidad_programada?: number;
   fecha_entrega?: string;
   referencia?: { codigo_referencia: string; nombre: string; tela?: string };
+  // Un corte combinado trae varias referencias; cada una es un LOTE que se
+  // remite por separado. Lo llena el backend con marcar_remisiones=true.
+  referencias?: RefLote[];
   tiene_remision_confeccion?: boolean;
   tiene_remision_terminacion?: boolean;
+}
+
+// Una fila de la tabla = un LOTE (corte + referencia).
+interface LoteFila {
+  key: string;            // `${orden_corte_id}::${referencia_id}`
+  orden_corte_id: string;
+  referencia_id: string | null;
+  consecutivo: string;
+  referencia_lote?: string;
+  fecha_entrega?: string;
+  cantidad?: number;
+  codigo?: string;
+  nombre?: string;
+  tela?: string;
+  yaRemitida: boolean;
+  tieneConf: boolean;
+  tieneTerm: boolean;
+  combinado: boolean;
 }
 
 export default function NuevaRemisionPage() {
@@ -42,7 +72,7 @@ export default function NuevaRemisionPage() {
   const [tipo, setTipo] = useState<"confeccion" | "terminacion">("confeccion");
   const [confId, setConfId] = useState("");
   const [fechaRecogida, setFechaRecogida] = useState(hoy);
-  const [ordenesSeleccionadas, setOrdenesSeleccionadas] = useState<Set<string>>(new Set());
+  const [seleccion, setSeleccion] = useState<Set<string>>(new Set());  // claves de LOTE
   const [err, setErr] = useState("");
 
   // Proveedores activos del tipo seleccionado (confección o terminación)
@@ -62,9 +92,33 @@ export default function NuevaRemisionPage() {
   const confs = confQ.data?.confeccionistas || [];
   const ordenes = (ocQ.data?.ordenes || []).filter((o) => o.estado === "cortada");
 
-  function yaRemitida(o: OrdenCorte): boolean {
-    return tipo === "terminacion" ? !!o.tiene_remision_terminacion : !!o.tiene_remision_confeccion;
-  }
+  // Una fila por LOTE (corte + referencia). Un corte combinado se despliega en
+  // varias filas y cada referencia se remite por separado; uno de una sola
+  // referencia queda igual que antes.
+  const lotes: LoteFila[] = ordenes.flatMap((o) => {
+    const refs: RefLote[] = (o.referencias && o.referencias.length
+      ? o.referencias
+      : [{ referencia_id: undefined, referencia: o.referencia,
+           tiene_remision_confeccion: o.tiene_remision_confeccion,
+           tiene_remision_terminacion: o.tiene_remision_terminacion }]);
+    const combinado = refs.length > 1;
+    return refs.map((rf) => ({
+      key: `${o.id}::${rf.referencia_id ?? ""}`,
+      orden_corte_id: o.id,
+      referencia_id: rf.referencia_id ?? null,
+      consecutivo: o.consecutivo,
+      referencia_lote: o.referencia_lote,
+      fecha_entrega: o.fecha_entrega,
+      cantidad: rf.cantidad_programada ?? o.cantidad_programada,
+      codigo: rf.referencia?.codigo_referencia,
+      nombre: rf.referencia?.nombre,
+      tela: rf.referencia?.tela,
+      yaRemitida: tipo === "terminacion" ? !!rf.tiene_remision_terminacion : !!rf.tiene_remision_confeccion,
+      tieneConf: !!rf.tiene_remision_confeccion,
+      tieneTerm: !!rf.tiene_remision_terminacion,
+      combinado,
+    }));
+  });
 
   // Combobox confeccionista con lupa
   const [confBuscar, setConfBuscar] = useState("");
@@ -83,10 +137,10 @@ export default function NuevaRemisionPage() {
     if (confOpen) { document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }
   }, [confOpen]);
 
-  function toggleOrden(id: string) {
-    setOrdenesSeleccionadas((prev) => {
+  function toggleLote(key: string) {
+    setSeleccion((prev) => {
       const s = new Set(prev);
-      if (s.has(id)) s.delete(id); else s.add(id);
+      if (s.has(key)) s.delete(key); else s.add(key);
       return s;
     });
   }
@@ -117,11 +171,15 @@ export default function NuevaRemisionPage() {
   const mut = useMutation({
     mutationFn: () => {
       if (!confId) throw new Error(tipo === "terminacion" ? "Selecciona un proveedor de terminación" : "Selecciona un confeccionista");
-      if (ordenesSeleccionadas.size === 0) throw new Error("Selecciona al menos una orden de corte");
+      if (seleccion.size === 0) throw new Error("Selecciona al menos un lote");
+      const lotesBody = Array.from(seleccion).map((k) => {
+        const [orden_corte_id, referencia_id] = k.split("::");
+        return { orden_corte_id, referencia_id: referencia_id || null };
+      });
       return api.post<RespuestaCrear>("/api/produccion/remisiones", {
         confeccionista_id: confId,
         fecha_recogida: fechaRecogida,
-        orden_corte_ids: Array.from(ordenesSeleccionadas),
+        lotes: lotesBody,
         tipo,
       });
     },
@@ -225,12 +283,12 @@ export default function NuevaRemisionPage() {
               {/* Toggle tipo de remisión */}
               <div className="inline-flex rounded-sm border border-border overflow-hidden">
                 <button type="button"
-                  onClick={() => { setTipo("confeccion"); setConfId(""); setOrdenesSeleccionadas(new Set()); }}
+                  onClick={() => { setTipo("confeccion"); setConfId(""); setSeleccion(new Set()); }}
                   className={`px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest ${tipo === "confeccion" ? "bg-navy-600 text-white" : "bg-white text-graphite hover:bg-cloud"}`}>
                   Confección
                 </button>
                 <button type="button"
-                  onClick={() => { setTipo("terminacion"); setConfId(""); setOrdenesSeleccionadas(new Set()); }}
+                  onClick={() => { setTipo("terminacion"); setConfId(""); setSeleccion(new Set()); }}
                   className={`px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest border-l border-border ${tipo === "terminacion" ? "bg-navy-600 text-white" : "bg-white text-graphite hover:bg-cloud"}`}>
                   Terminación
                 </button>
@@ -295,10 +353,10 @@ export default function NuevaRemisionPage() {
         <Card>
           <CardContent className="p-0">
             <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-              <p className="section-label">Órdenes cortadas ({ordenesSeleccionadas.size} seleccionadas)</p>
-              <p className="text-[0.65rem] text-graphite">Selecciona las que van a este confeccionista</p>
+              <p className="section-label">Lotes cortados ({seleccion.size} seleccionado{seleccion.size === 1 ? "" : "s"})</p>
+              <p className="text-[0.65rem] text-graphite">Un corte combinado se remite por referencia (una fila por lote)</p>
             </div>
-            {ordenes.length === 0 ? (
+            {lotes.length === 0 ? (
               <div className="p-8 text-center text-xs text-graphite">
                 No hay órdenes de corte cerradas disponibles.
               </div>
@@ -317,34 +375,41 @@ export default function NuevaRemisionPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {ordenes.map((o) => {
-                    const bloqueada = yaRemitida(o);
+                  {lotes.map((l) => {
+                    const bloqueada = l.yaRemitida;
                     return (
-                      <tr key={o.id}
-                        className={`border-b border-border/40 ${bloqueada ? "opacity-50 bg-cloud/20" : ordenesSeleccionadas.has(o.id) ? "bg-teal/5" : "hover:bg-cloud/30"}`}>
+                      <tr key={l.key}
+                        className={`border-b border-border/40 ${bloqueada ? "opacity-50 bg-cloud/20" : seleccion.has(l.key) ? "bg-teal/5" : "hover:bg-cloud/30"}`}>
                         <td className="px-4 py-2">
-                          <input type="checkbox" checked={ordenesSeleccionadas.has(o.id)}
+                          <input type="checkbox" checked={seleccion.has(l.key)}
                             disabled={bloqueada}
-                            onChange={() => toggleOrden(o.id)} />
+                            onChange={() => toggleLote(l.key)} />
                         </td>
-                        <td className="px-4 py-2 font-semibold tabular text-navy-600">{o.consecutivo}</td>
+                        <td className="px-4 py-2 font-semibold tabular text-navy-600">
+                          {l.consecutivo}
+                          {l.combinado && (
+                            <span className="ml-1.5 rounded-sm bg-ochre/15 px-1.5 py-0.5 text-[0.6rem] font-bold uppercase tracking-wider text-ochre align-middle">
+                              combinado
+                            </span>
+                          )}
+                        </td>
                         <td className="px-4 py-2 text-ink-900">
-                          {o.referencia?.codigo_referencia || "—"}
+                          {l.codigo || "—"}
                           <div className="text-[0.7rem] text-graphite">
-                            {o.referencia?.nombre} {o.referencia?.tela ? `· ${o.referencia.tela}` : ""}
+                            {l.nombre} {l.tela ? `· ${l.tela}` : ""}
                           </div>
                         </td>
-                        <td className="px-4 py-2 text-graphite">{o.referencia_lote || "—"}</td>
-                        <td className="px-4 py-2 text-right tabular">{o.cantidad_programada || "—"}</td>
-                        <td className="px-4 py-2 text-graphite tabular text-[0.65rem]">{fmtFecha(o.fecha_entrega)}</td>
+                        <td className="px-4 py-2 text-graphite">{l.referencia_lote || "—"}</td>
+                        <td className="px-4 py-2 text-right tabular">{l.cantidad || "—"}</td>
+                        <td className="px-4 py-2 text-graphite tabular text-[0.65rem]">{fmtFecha(l.fecha_entrega)}</td>
                         <td className="px-4 py-2">
                           <div className="flex flex-wrap gap-1 justify-end">
-                            {o.tiene_remision_confeccion && (
+                            {l.tieneConf && (
                               <span className="rounded-sm bg-navy-600/10 px-1.5 py-0.5 text-[0.68rem] font-bold uppercase tracking-widest text-navy-600">
                                 ✓ Confección
                               </span>
                             )}
-                            {o.tiene_remision_terminacion && (
+                            {l.tieneTerm && (
                               <span className="rounded-sm bg-teal/10 px-1.5 py-0.5 text-[0.68rem] font-bold uppercase tracking-widest text-teal">
                                 ✓ Terminación
                               </span>
@@ -371,7 +436,7 @@ export default function NuevaRemisionPage() {
           <p className="text-xs text-graphite">
             Se generará el consecutivo <span className="font-semibold text-ink-900">REM-YYYY-NNNN</span>.
           </p>
-          <button type="submit" disabled={mut.isPending || !confId || ordenesSeleccionadas.size === 0}
+          <button type="submit" disabled={mut.isPending || !confId || seleccion.size === 0}
             className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-6 py-2.5 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-navy-700 disabled:opacity-40">
             {mut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             Crear remisión

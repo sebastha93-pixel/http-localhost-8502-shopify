@@ -2422,11 +2422,40 @@ def listar_ordenes_corte(*, estado: Optional[str] = None,
         ya = _ocs_con_remision(sin_remision)
         out = [oc for oc in out if oc["id"] not in ya]
     if marcar_remisiones:
-        con_conf = _ocs_con_remision("confeccion")
-        con_term = _ocs_con_remision("terminacion")
+        # Por LOTE (corte+referencia), no por corte: un combinado puede tener una
+        # referencia remitida y otra no. Se anota cada referencia del tendido y,
+        # por compat, el flag del corte = TODAS sus referencias ya remitidas.
+        con_conf = _lotes_con_remision("confeccion")
+        con_term = _lotes_con_remision("terminacion")
+        ids = [oc["id"] for oc in out if oc.get("id")]
+        refs_por_corte: dict[str, list] = {}
+        if ids:
+            try:
+                filas = (sb.table("orden_corte_referencias")
+                           .select("orden_corte_id,referencia_id,orden,cantidad_programada,"
+                                   "referencia:referencia_id(codigo_referencia,nombre,tela,color)")
+                           .in_("orden_corte_id", ids).order("orden").execute()).data or []
+                for f in filas:
+                    refs_por_corte.setdefault(f["orden_corte_id"], []).append(f)
+            except Exception as e:
+                log.warning(f"[corte] no pude traer las referencias del tendido: {str(e)[:150]}")
         for oc in out:
-            oc["tiene_remision_confeccion"] = oc["id"] in con_conf
-            oc["tiene_remision_terminacion"] = oc["id"] in con_term
+            refs = refs_por_corte.get(oc["id"])
+            if not refs:
+                # Una sola referencia / legacy: se sintetiza del padre.
+                refs = [{
+                    "referencia_id":       oc.get("referencia_id"),
+                    "referencia":          oc.get("referencia"),
+                    "cantidad_programada": oc.get("cantidad_programada"),
+                    "orden": 0,
+                }]
+            for rr in refs:
+                rid = rr.get("referencia_id")
+                rr["tiene_remision_confeccion"] = _lote_ya_remitido(oc["id"], rid, con_conf)
+                rr["tiene_remision_terminacion"] = _lote_ya_remitido(oc["id"], rid, con_term)
+            oc["referencias"] = refs
+            oc["tiene_remision_confeccion"] = all(r["tiene_remision_confeccion"] for r in refs)
+            oc["tiene_remision_terminacion"] = all(r["tiene_remision_terminacion"] for r in refs)
     _anotar_estado_correo(out)
     _cache_set(cache_key, out, ttl_seg=20)
     return out
@@ -4204,7 +4233,9 @@ def listar_remisiones(*, estado: Optional[str] = None,
     # La lista muestra los LOTES con su referencia (al proveedor y al equipo
     # se les habla por la referencia de la prenda, no por el código interno).
     sel = ("*,confeccionista:confeccionista_id(nombre),"
-           "items:remision_items(orden_corte:orden_corte_id(consecutivo,"
+           "items:remision_items(referencia_id,"
+           "ref_item:referencia_id(codigo_referencia),"
+           "orden_corte:orden_corte_id(consecutivo,"
            "referencia:referencia_id(codigo_referencia)))")
     def _consulta(s: str):
         q = (sb.table("remisiones").select(s)
@@ -4231,7 +4262,8 @@ def obtener_remision(rem_id: str) -> Optional[dict]:
     if not r:
         return None
     items = _safe_exec(sb.table("remision_items")
-               .select("*,orden_corte:orden_corte_id("
+               .select("*,ref_item:referencia_id(codigo_referencia,nombre,tela,color),"
+                       "orden_corte:orden_corte_id("
                        "consecutivo,referencia_lote,cantidad_programada,"
                        "unidades_cortadas,fecha_entrega,promedio_real,"
                        "consumo_real_cortador,retazos_metros,retazos_cantidad,"
@@ -4460,6 +4492,20 @@ def reasignar_confeccionista_remision(*, remision_id: str,
     }
 
 
+def _ref_de_item(it: dict) -> str:
+    """Código de referencia del LOTE (el del item), no el primario del corte.
+
+    En un corte combinado cada item es una referencia distinta. Se usa
+    `remision_items.referencia_id` (traído como `ref_item`); si está en NULL
+    (items legacy) se cae a la referencia primaria del corte o al consecutivo."""
+    ri = it.get("ref_item") or {}
+    if ri.get("codigo_referencia"):
+        return str(ri["codigo_referencia"])
+    oc = it.get("orden_corte") or {}
+    return str((oc.get("referencia") or {}).get("codigo_referencia")
+               or oc.get("consecutivo") or "")
+
+
 def _wa_url_reasignacion(anterior: dict, rem: dict, nuevo_nombre: str) -> dict:
     """Link de WhatsApp LISTO para avisarle al confeccionista anterior que el
     lote ya no es suyo. No se manda solo: si se reasignó por error de digitación
@@ -4468,10 +4514,9 @@ def _wa_url_reasignacion(anterior: dict, rem: dict, nuevo_nombre: str) -> dict:
     from urllib.parse import quote
     refs = []
     for it in (rem.get("items") or []):
-        oc = it.get("orden_corte") or {}
-        ref = (oc.get("referencia") or {}).get("codigo_referencia") or oc.get("consecutivo")
+        ref = _ref_de_item(it)
         if ref:
-            refs.append(str(ref))
+            refs.append(ref)
     refs_txt = ", ".join(refs) if refs else "—"
     nombre = anterior.get("nombre") or "equipo"
     msg = (f"Hola {nombre}, el lote de referencia *{refs_txt}* que te habíamos "
@@ -5097,8 +5142,7 @@ def _notificar_remision_whatsapp(rem: dict, solo_oc_id: Optional[str] = None) ->
         if not token:
             continue
         link = f"{base}/{'terminacion' if es_term else 'lote'}/{token}"
-        oc = it.get("orden_corte") or {}
-        ref = (oc.get("referencia") or {}).get("codigo_referencia") or oc.get("consecutivo") or ""
+        ref = _ref_de_item(it)
         mensaje = (f"Hola {prov.get('nombre') or ''}, MALE'DENIM te despachó el lote "
                    f"referencia *{ref}*. Verifica cantidades e insumos en tu ficha y "
                    f"confirma con \"Aceptar lote\":\n\n{link}")
@@ -5140,10 +5184,9 @@ def _notificar_lote_por_recoger(rem: dict) -> list[dict]:
     # Referencias del lote (para que sepa qué va a recoger).
     refs = []
     for it in (rem.get("items") or []):
-        oc = it.get("orden_corte") or {}
-        ref = (oc.get("referencia") or {}).get("codigo_referencia") or oc.get("consecutivo")
+        ref = _ref_de_item(it)
         if ref:
-            refs.append(str(ref))
+            refs.append(ref)
     refs_txt = ", ".join(refs) if refs else "—"
     fecha = rem.get("fecha_recogida") or ""
     mensaje = (f"Hola {nombre}, MALE'DENIM tiene un lote listo para que lo recojas: "

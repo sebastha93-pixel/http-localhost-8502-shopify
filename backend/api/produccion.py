@@ -1486,10 +1486,19 @@ class ConfeccionistaUpdate(BaseModel):
     tipo:      Optional[str] = None
 
 
+class LoteRefIn(BaseModel):
+    orden_corte_id: str
+    referencia_id:  Optional[str] = None
+
+
 class RemisionIn(BaseModel):
     confeccionista_id: str
     fecha_recogida:    str
-    orden_corte_ids:   list[str] = Field(min_length=1)
+    # Un corte combinado se remite POR REFERENCIA: `lotes` = [{orden_corte_id,
+    # referencia_id}]. `orden_corte_ids` (compat) remite el corte entero (todas
+    # sus referencias). Debe venir al menos uno de los dos.
+    orden_corte_ids:   list[str] = Field(default_factory=list)
+    lotes:             Optional[list[LoteRefIn]] = None
     tipo:              str = "confeccion"  # 'confeccion' | 'terminacion'
 
 
@@ -1648,10 +1657,15 @@ def crear_remision(
     # El cortador puro solo genera la remisión CONFECCIONISTA de SUS cortes
     # (después de guardar y confirmar el informe). No puede tocar terminación
     # ni cortes de otros.
+    # Órdenes involucradas (por lotes explícitos o por corte completo).
+    oc_ids_body = ([l.orden_corte_id for l in body.lotes] if body.lotes
+                   else list(body.orden_corte_ids))
+    if not oc_ids_body:
+        raise HTTPException(400, "Manda al menos un lote u orden de corte.")
     if _es_solo_cortador(user):
         if body.tipo != "confeccion":
             raise HTTPException(403, "El cortador solo genera remisiones de confección.")
-        for oc_id in body.orden_corte_ids:
+        for oc_id in dict.fromkeys(oc_ids_body):
             oc_check = svc.obtener_orden_corte(oc_id)
             if not oc_check or not _corte_es_del_cortador(oc_check, user):
                 raise HTTPException(403, "Solo puedes generar remisiones de los cortes asignados a ti.")
@@ -1668,7 +1682,8 @@ def crear_remision(
         rem = svc.crear_remision(
             confeccionista_id=body.confeccionista_id,
             fecha_recogida=body.fecha_recogida,
-            orden_corte_ids=body.orden_corte_ids,
+            orden_corte_ids=(body.orden_corte_ids or None),
+            lotes=([l.model_dump() for l in body.lotes] if body.lotes else None),
             created_by=user.email,
             tipo=body.tipo,
             liberar_impresion=False,   # retenida hasta separar insumos (ambos tipos)
