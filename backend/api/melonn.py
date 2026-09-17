@@ -340,11 +340,9 @@ def debug_pagos_probe(k: str = Query(default="")) -> dict:
     import requests
 
     candidatos = [
-        "openapi.json", "swagger.json", "docs", "",
-        "payments", "payments/cod", "cod-payments", "payments-on-delivery",
-        "payment-on-delivery", "collections", "cash-on-delivery", "cod",
-        "payouts", "settlements", "balance", "wallet", "sell-orders/payments",
-        "cod/summary", "payments/summary", "contra-entrega",
+        "v1/payments", "v1/cod", "v1/sell-orders", "v1", "api/payments",
+        "reports", "reports/cod", "reports/payments", "me", "account",
+        "seller", "store", "invoices", "orders/payments", "sell-orders/cod",
     ]
     key = mc._api_key()
     base = mc._BASE_URL
@@ -353,12 +351,41 @@ def debug_pagos_probe(k: str = Query(default="")) -> dict:
         url = f"{base}/{p}"
         try:
             r = requests.get(url, headers={"x-api-key": key, "Accept": "application/json"}, timeout=8)
-            body = (r.text or "")[:400]
-            out.append({"path": p or "(root)", "status": r.status_code, "len": len(r.text or ""), "snippet": body})
+            out.append({"path": p or "(root)", "status": r.status_code, "len": len(r.text or ""), "snippet": (r.text or "")[:300]})
         except Exception as e:
             out.append({"path": p or "(root)", "status": None, "error": str(e)[:160]})
         _t.sleep(0.25)
-    return {"base": base, "tiene_key": bool(key), "resultados": out}
+
+    # Detalle real de una orden COD entregada: ¿qué campos de pago trae?
+    orden_muestra = "63471"
+    detalle = None
+    try:
+        d = mc._get(f"sell-orders/%23{orden_muestra}")  # #{orden} URL-encoded
+        if isinstance(d, dict):
+            # aplanar y quedarnos con claves relevantes de pago
+            def _flat(o, pref=""):
+                items = {}
+                if isinstance(o, dict):
+                    for kk, vv in o.items():
+                        items.update(_flat(vv, f"{pref}{kk}."))
+                elif isinstance(o, list):
+                    if o and isinstance(o[0], (dict, list)):
+                        items.update(_flat(o[0], f"{pref}0."))
+                    else:
+                        items[pref[:-1]] = o
+                else:
+                    items[pref[:-1]] = o
+                return items
+            plano = _flat(d)
+            relev = {kk: vv for kk, vv in plano.items()
+                     if any(t in kk.lower() for t in
+                            ("pay", "cod", "collect", "recaud", "amount", "delivery", "cash", "total", "price", "settle", "payout"))}
+            detalle = {"top_keys": list(d.keys()), "campos_pago": relev}
+    except Exception as e:
+        detalle = {"error": str(e)[:200]}
+
+    return {"base": base, "tiene_key": bool(key), "resultados": out,
+            "orden_muestra": orden_muestra, "detalle_pago": detalle}
 
 
 @router.post("/sync-completo", response_model=SyncResponse)
