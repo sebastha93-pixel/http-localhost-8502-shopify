@@ -322,6 +322,45 @@ def debug_detalle(
         raise HTTPException(502, f"Error: {e}")
 
 
+# ── TEMPORAL: sonda de endpoints de "Pagos contra entrega" ───────────────
+# Tantea si el API de Melonn (api.orbita.melonn.com) expone los totales de
+# pagos contra entrega (pendiente por recaudar / por pagar) o su spec. Sin auth
+# de sesión (para poder llamarlo desde fuera) pero gateado por secreto en la
+# URL. BORRAR después del diagnóstico.
+@router.get("/debug/pagos-probe")
+def debug_pagos_probe(k: str = Query(default="")) -> dict:
+    if k != "pg_probe_9f3k2x7q":
+        raise HTTPException(403, "no")
+    import sys, time as _t
+    from pathlib import Path
+    _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+    import melonn_client as mc
+    import requests
+
+    candidatos = [
+        "openapi.json", "swagger.json", "docs", "",
+        "payments", "payments/cod", "cod-payments", "payments-on-delivery",
+        "payment-on-delivery", "collections", "cash-on-delivery", "cod",
+        "payouts", "settlements", "balance", "wallet", "sell-orders/payments",
+        "cod/summary", "payments/summary", "contra-entrega",
+    ]
+    key = mc._api_key()
+    base = mc._BASE_URL
+    out = []
+    for p in candidatos:
+        url = f"{base}/{p}"
+        try:
+            r = requests.get(url, headers={"x-api-key": key, "Accept": "application/json"}, timeout=8)
+            body = (r.text or "")[:400]
+            out.append({"path": p or "(root)", "status": r.status_code, "len": len(r.text or ""), "snippet": body})
+        except Exception as e:
+            out.append({"path": p or "(root)", "status": None, "error": str(e)[:160]})
+        _t.sleep(0.25)
+    return {"base": base, "tiene_key": bool(key), "resultados": out}
+
+
 @router.post("/sync-completo", response_model=SyncResponse)
 def sync_completo_endpoint(
     user: CurrentUser = Depends(require_permission("operaciones", "modificar")),
