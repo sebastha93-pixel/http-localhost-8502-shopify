@@ -235,8 +235,8 @@ def cartera_cod_ordenes(
     if sb is None:
         raise HTTPException(status_code=503, detail="Supabase no configurado")
     filas = (sb.table("cruce_cod_siigo")
-               .select("orden,estado,clasificacion,facturas,fecha_factura,facturado,"
-                       "saldo,a_credito,medio,valor_melonn,entrega,ciudad,dias")
+               .select("orden,estado,clasificacion,fuente_pago,facturas,fecha_factura,"
+                       "facturado,saldo,a_credito,medio,valor_melonn,entrega,ciudad,dias")
                .order("saldo", desc=True).limit(3000).execute()).data or []
     # Resumen por la VERDAD operativa (clasificacion), no por el saldo contable.
     resumen: dict = {}
@@ -250,11 +250,12 @@ def cartera_cod_ordenes(
         "ordenes": filas,
         "resumen": resumen,
         "total": len(filas),
-        "nota": ("El 'saldo' es el balance contable de Siigo, NO deuda: las "
-                 "facturas de contraentrega se cancelan contra la cuenta "
-                 "CRÉDITO 10 DÍAS y el recibo se postea con 1-3 meses de atraso. "
-                 "'en_transito' = ya recaudado por Melonn, recibo pendiente de "
-                 "postear. Solo 'revisar' y 'sin_factura' son accionables."),
+        "nota": ("El OS lleva su propio estado de recaudo. 'pagado' = conciliado "
+                 "por el archivo de Melonn o con recibo ya posteado en Siigo. "
+                 "'pendiente' = entregado y sin conciliar (pendiente de pago). "
+                 "El 'saldo' de Siigo NO es deuda: se cancela con 1-3 meses de "
+                 "atraso, por eso el OS se apoya en el archivo de conciliación, "
+                 "no en Siigo."),
     }
 
 

@@ -59,7 +59,7 @@ interface ResumenCartera {
 // a 10 días y el recibo se postea con 1-3 meses de atraso). Ver backend
 // cartera_cod._clasificar.
 interface OrdenCruce {
-  orden: string; estado: string; clasificacion?: string;
+  orden: string; estado: string; clasificacion?: string; fuente_pago?: string | null;
   facturado: number; saldo: number; a_credito: boolean; medio?: string | null;
   entrega?: string | null; ciudad?: string | null; dias?: number | null;
   facturas?: string[];
@@ -71,18 +71,18 @@ interface OrdenesResp {
   nota?: string;
 }
 
-type Clasif = "recaudado" | "en_transito" | "revisar" | "sin_factura";
+type Clasif = "pendiente" | "pagado" | "revisar" | "sin_factura";
 const CLASIF_META: Record<Clasif, { label: string; chip: string; hint: string }> = {
-  recaudado:   { label: "Recaudado",        chip: "bg-sage/15 text-sage",
-                 hint: "Recibo ya posteado en Siigo — plata confirmada" },
-  en_transito: { label: "En tránsito",      chip: "bg-amber-500/15 text-amber-600",
-                 hint: "Melonn ya recaudó; recibo pendiente de postear — NO es deuda" },
-  revisar:     { label: "A revisar",        chip: "bg-terracotta/15 text-terracotta",
-                 hint: "Saldo abierto que ya debió postearse — anomalía real" },
-  sin_factura: { label: "Sin factura",      chip: "bg-terracotta/15 text-terracotta",
+  pendiente:   { label: "Pendiente de pago", chip: "bg-amber-500/15 text-amber-600",
+                 hint: "Entregado y sin conciliar — pendiente de pago/recaudo por Melonn" },
+  pagado:      { label: "Pagado",            chip: "bg-sage/15 text-sage",
+                 hint: "Conciliado por el archivo de Melonn, o recibo ya posteado en Siigo" },
+  revisar:     { label: "A revisar",         chip: "bg-terracotta/15 text-terracotta",
+                 hint: "Sin conciliar y ya viejo (o medio directo con saldo) — anomalía real" },
+  sin_factura: { label: "Sin factura",       chip: "bg-terracotta/15 text-terracotta",
                  hint: "Salió mercancía sin factura de venta — lo cierra contabilidad" },
 };
-const CLASIF_ORDEN: Clasif[] = ["revisar", "sin_factura", "en_transito", "recaudado"];
+const CLASIF_ORDEN: Clasif[] = ["pendiente", "revisar", "sin_factura", "pagado"];
 
 export function CarteraCod() {
   const [abierto, setAbierto] = useState(false);
@@ -280,12 +280,12 @@ export function CarteraCod() {
                 </p>
               )}
 
-              {/* Clasificación verídica: recaudado / en tránsito / a revisar /
-                  sin factura. Se puede filtrar la tabla haciendo clic. */}
+              {/* Clasificación operativa: pendiente de pago / pagado / a
+                  revisar / sin factura. Se filtra la tabla haciendo clic. */}
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 {CLASIF_ORDEN.map((c) => {
                   const b = ords.resumen[c] ?? { n: 0, facturado: 0, saldo: 0 };
-                  const monto = c === "recaudado" ? b.facturado : b.saldo;
+                  const monto = c === "pagado" ? b.facturado : b.saldo;
                   const activo = fEst === c;
                   return (
                     <button
@@ -347,15 +347,20 @@ export function CarteraCod() {
                   </thead>
                   <tbody>
                     {filtradas.map((o) => {
-                      const c = (o.clasificacion ?? "recaudado") as Clasif;
-                      const meta = CLASIF_META[c] ?? CLASIF_META.recaudado;
+                      const c = (o.clasificacion ?? "pendiente") as Clasif;
+                      const meta = CLASIF_META[c] ?? CLASIF_META.pendiente;
                       return (
                         <tr key={o.orden} className="border-b border-border/40">
                           <td className="py-1.5 pr-2 font-semibold tabular-nums text-ink-900 dark:text-foreground">#{o.orden}</td>
-                          <td className="py-1.5 pr-2">
+                          <td className="py-1.5 pr-2 whitespace-nowrap">
                             <span className={`inline-block rounded-full px-1.5 py-0.5 text-[0.58rem] font-semibold ${meta.chip}`}>
                               {meta.label}
                             </span>
+                            {c === "pagado" && o.fuente_pago && (
+                              <span className="ml-1 text-[0.55rem] text-graphite">
+                                {o.fuente_pago === "archivo" ? "· archivo" : "· Siigo"}
+                              </span>
+                            )}
                           </td>
                           <td className="py-1.5 pr-2 text-right tabular-nums text-graphite">
                             {o.dias == null ? "—" : `${o.dias}d`}

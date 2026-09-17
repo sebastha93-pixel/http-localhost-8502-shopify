@@ -412,25 +412,30 @@ def cruzar(pedidos: list[dict], *, desde: Optional[str] = None) -> dict:
 _DIAS_ATRASO_NORMAL = 60
 
 
-def _clasificar(estado: str, saldo: float, dias) -> str:
-    """Traduce (estado, saldo, antigüedad) a la VERDAD operativa, no al saldo
-    contable de Siigo —que para COD miente porque el recibo se postea tarde.
+def _clasificar(estado: str, saldo: float, dias, conciliado: bool = False) -> str:
+    """Traduce (estado, saldo, antigüedad, conciliación) a la VERDAD operativa.
+
+    El OS lleva su PROPIO estado de recaudo, sin depender del atraso de Siigo:
+    cuando se sube el archivo de conciliación de Melonn, la orden aparece en
+    `liquidaciones_cod` (`conciliado=True`) y pasa a pagada AL INSTANTE, aunque
+    Siigo todavía no haya posteado el recibo.
 
       · sin_factura → salió mercancía sin factura de venta (hueco real).
-      · recaudado   → saldo 0: Siigo ya posteó el recibo. Plata confirmada.
-      · en_transito → saldo>0 y entrega ≤60 días: Melonn ya recaudó, recibo
-                      pendiente de postear. NO es deuda; se cancela solo.
-      · revisar     → saldo>0 y entrega >60 días (o medio directo con saldo):
-                      debió haberse posteado hace rato. Anomalía real.
+      · pagado      → conciliado por archivo de Melonn, O saldo 0 en Siigo
+                      (el recibo ya se posteó). Plata confirmada.
+      · pendiente   → entregado, saldo>0 y SIN conciliar, entrega ≤60 días:
+                      pendiente de pago/recaudo. Este es el número a vigilar.
+      · revisar     → sin conciliar y entrega >60 días (o medio directo con
+                      saldo): debió estar pago hace rato. Anomalía real.
     """
     if estado == "sin_factura":
         return "sin_factura"
-    if saldo <= 0:
-        return "recaudado"
+    if conciliado or saldo <= 0:
+        return "pagado"
     if estado == "cobrada_directo":
         return "revisar"          # medio no-crédito con saldo abierto: mirar
     if dias is None or dias <= _DIAS_ATRASO_NORMAL:
-        return "en_transito"
+        return "pendiente"
     return "revisar"
 
 
@@ -459,6 +464,15 @@ def persistir_cruce_por_orden(pedidos: list[dict]) -> dict:
         for n in _numeros_orden(p.get("orden_tienda")):
             entregados.setdefault(n, p)
 
+    # Órdenes ya conciliadas por el archivo de Melonn (tabla liquidaciones_cod).
+    # Estas pasan a "pagado" al instante, sin esperar a que Siigo postee.
+    conciliadas: set[str] = set()
+    try:
+        lc = sb.table("liquidaciones_cod").select("orden").execute().data or []
+        conciliadas = {str(r.get("orden")) for r in lc if r.get("orden")}
+    except Exception as e:
+        log.warning(f"[cartera_cod] no se pudo leer liquidaciones_cod: {str(e)[:120]}")
+
     hoy = datetime.now(timezone.utc).date()
     def _dias(s):
         try:
@@ -477,10 +491,14 @@ def persistir_cruce_por_orden(pedidos: list[dict]) -> dict:
         dias = _dias(entrega)
         estado = ("sin_factura" if not facs
                   else "facturada_credito" if a_credito else "cobrada_directo")
+        conciliado = n in conciliadas
+        fuente_pago = ("archivo" if conciliado
+                       else "siigo" if (facs and saldo <= 0) else None)
         filas.append({
             "orden":         n,
             "estado":        estado,
-            "clasificacion": _clasificar(estado, saldo, dias),
+            "clasificacion": _clasificar(estado, saldo, dias, conciliado),
+            "fuente_pago":   fuente_pago,
             "facturas":      [f["factura"] for f in facs],
             "fecha_factura": min((f["fecha"] for f in facs if f.get("fecha")), default=None),
             "facturado":     total,
