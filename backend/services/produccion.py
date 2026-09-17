@@ -1416,6 +1416,65 @@ def firmar_precosteo(precosteo_id: str, *, usuario_id: str) -> dict:
     return obtener_precosteo(precosteo_id)
 
 
+def aprobar_muestra(precosteo_id: str, *, codigo_referencia: str,
+                    usuario_id: str) -> dict:
+    """Aprueba una MUESTRA DE DISEÑO asignándole su referencia definitiva, en un
+    solo paso: fija `codigo_referencia`, autoriza y bloquea. La referencia queda
+    lista para corte de producción, con la MISMA id de la muestra (así el corte
+    y todo el proceso siguen colgando de ella — trazabilidad de punta a punta).
+
+    Es el equivalente a `firmar_precosteo` pero para muestras, donde la
+    referencia definitiva no existía al crearla y se asigna al aprobar.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    cod = (codigo_referencia or "").strip()
+    if not cod:
+        raise ValueError("codigo_referencia_requerido")
+
+    from backend.services import usuarios as _usuarios
+    u = _usuarios.obtener_por_id(usuario_id)
+    if not u:
+        raise ValueError("usuario_no_encontrado")
+    if not u.get("puede_autorizar_precosteo"):
+        raise ValueError("sin_permiso_autorizar_precosteo")
+
+    actual = obtener_precosteo(precosteo_id)
+    if not actual:
+        raise ValueError("no_encontrado")
+    if not actual.get("es_muestra_diseno"):
+        raise ValueError("no_es_muestra")
+    if actual.get("bloqueada"):
+        raise ValueError("ya_bloqueado")
+
+    # La referencia definitiva no puede chocar con otra ya existente: es la llave
+    # humana con la que se persigue el proceso. Se permite conservar el mismo
+    # código de la muestra (por eso se excluye su propia id).
+    dup = (sb.table("referencias_precosteo").select("id")
+             .eq("codigo_referencia", cod).neq("id", precosteo_id)
+             .limit(1).execute()).data
+    if dup:
+        raise ValueError("codigo_referencia_duplicado")
+
+    now = _now_iso()
+    sb.table("referencias_precosteo").update({
+        "codigo_referencia": cod,
+        "estado": "autorizada",
+        "bloqueada": True,
+        "autorizada_por": u.get("email") or usuario_id,
+        "fecha_autorizacion": now,
+        "updated_at": now,
+    }).eq("id", precosteo_id).execute()
+    _cache_invalidate_prefix("precosteos")
+    actualizado = obtener_precosteo(precosteo_id)
+    try:
+        _sync_precosteo_drive(actualizado)
+    except Exception as e:
+        log.warning(f"[precosteo] muestra aprobada pero no se sincronizó a Drive: {str(e)[:120]}")
+    return actualizado
+
+
 def usos_de_referencia(referencia_id: str) -> list[str]:
     """Motivos, en lenguaje claro, por los que una referencia YA se usó en
     producción y por tanto NO se debe borrar. Lista vacía = se puede borrar.

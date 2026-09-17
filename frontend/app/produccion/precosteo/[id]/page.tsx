@@ -156,6 +156,23 @@ export default function PrecosteoDetallePage() {
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
   });
 
+  // Aprobación guiada de una MUESTRA de diseño: en un paso captura la referencia
+  // definitiva, autoriza y bloquea (deja lista para corte, misma id = misma
+  // trazabilidad). `aprobando` abre el panel; `refDefinitiva` es el código.
+  const [aprobando, setAprobando] = useState(false);
+  const [refDefinitiva, setRefDefinitiva] = useState("");
+  const aprobarMuestraMut = useMutation({
+    mutationFn: (codigo_referencia: string) =>
+      api.post(`/api/produccion/precosteo/${id}/aprobar-muestra`, { codigo_referencia }),
+    onSuccess: () => {
+      setMsg("Muestra aprobada y referencia asignada. Lista para corte.");
+      setErr("");
+      setAprobando(false);
+      qc.invalidateQueries({ queryKey: ["produccion", "precosteo"] });
+    },
+    onError: (e: Error) => { setErr(e.message); setMsg(""); },
+  });
+
   // Eliminar la referencia que NO se aprueba. Solo admin (el backend también
   // lo exige). `forzar` = confirmación extra cuando ya está autorizada.
   const eliminarMut = useMutation({
@@ -585,6 +602,55 @@ export default function PrecosteoDetallePage() {
         </CardContent>
       </Card>
 
+      {/* Panel guiado: aprobar la muestra asignando su referencia definitiva.
+          Un solo paso — autoriza, bloquea y deja la referencia lista para
+          corte, conservando la id (y por tanto la trazabilidad). */}
+      {aprobando && !p.bloqueada && p.es_muestra_diseno && (
+        <Card>
+          <CardContent className="space-y-3 py-4">
+            <div>
+              <p className="text-sm font-semibold text-ink-900 dark:text-foreground">
+                Aprobar muestra y asignar referencia definitiva
+              </p>
+              <p className="mt-0.5 text-xs leading-snug text-graphite">
+                Al aprobar, la muestra queda autorizada y bloqueada con esta
+                referencia — lista para enviar a corte. Se conserva la
+                trazabilidad (misma id de la muestra). Este paso no se puede
+                deshacer sin permiso de administrador.
+              </p>
+            </div>
+            <div>
+              <label className="mb-1 block text-[0.68rem] uppercase tracking-widest text-graphite">
+                Referencia definitiva
+              </label>
+              <input
+                value={refDefinitiva}
+                onChange={(e) => setRefDefinitiva(e.target.value)}
+                placeholder="Código de referencia definitivo"
+                autoFocus
+                onKeyDown={(e) => { if (e.key === "Enter" && refDefinitiva.trim()) aprobarMuestraMut.mutate(refDefinitiva.trim()); }}
+                className="w-full rounded-sm border border-border/60 bg-transparent px-3 py-2 text-sm text-ink-900 outline-none focus:border-teal dark:text-foreground"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => aprobarMuestraMut.mutate(refDefinitiva.trim())}
+                disabled={aprobarMuestraMut.isPending || !refDefinitiva.trim()}
+                className="inline-flex items-center gap-2 rounded-sm bg-teal px-5 py-2 text-sm font-semibold text-white hover:bg-ink-900 disabled:opacity-40">
+                {aprobarMuestraMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                Aprobar y bloquear
+              </button>
+              <button
+                onClick={() => { setAprobando(false); setErr(""); }}
+                disabled={aprobarMuestraMut.isPending}
+                className="inline-flex items-center gap-1.5 rounded-sm border border-border/60 px-3 py-2 text-xs font-medium text-graphite hover:bg-cloud/40 disabled:opacity-50">
+                Cancelar
+              </button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {(esAdmin(user) || !p.bloqueada) && (
         <div className="flex flex-wrap items-center justify-between gap-3">
           {/* Eliminar la que NO se aprueba. Solo admin: es irreversible. */}
@@ -598,11 +664,18 @@ export default function PrecosteoDetallePage() {
           ) : <span />}
 
           {!p.bloqueada && (
-            <button onClick={() => firmarMut.mutate()} disabled={firmarMut.isPending}
-              className="inline-flex items-center gap-2 rounded-sm bg-teal px-6 py-2.5 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-ink-900 disabled:opacity-40">
-              {firmarMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
-              Firmar y bloquear
-            </button>
+            p.es_muestra_diseno ? (
+              <button onClick={() => { setRefDefinitiva(p.codigo_referencia); setAprobando(true); setErr(""); }}
+                className="inline-flex items-center gap-2 rounded-sm bg-teal px-6 py-2.5 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-ink-900 disabled:opacity-40">
+                <CheckCircle className="h-4 w-4" /> Aprobar y asignar referencia
+              </button>
+            ) : (
+              <button onClick={() => firmarMut.mutate()} disabled={firmarMut.isPending}
+                className="inline-flex items-center gap-2 rounded-sm bg-teal px-6 py-2.5 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-ink-900 disabled:opacity-40">
+                {firmarMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
+                Firmar y bloquear
+              </button>
+            )
           )}
         </div>
       )}

@@ -728,6 +728,46 @@ def firmar_precosteo(
         raise HTTPException(400, msg)
 
 
+class AprobarMuestraBody(BaseModel):
+    codigo_referencia: str
+
+
+@router.post("/precosteo/{precosteo_id}/aprobar-muestra")
+def aprobar_muestra_endpoint(
+    precosteo_id: str,
+    body: AprobarMuestraBody,
+    user: CurrentUser = Depends(require_permission_estricto("produccion_costos", "modificar")),
+) -> dict:
+    """Aprueba una muestra de diseño asignándole su referencia definitiva en un
+    solo paso (autoriza + bloquea, lista para corte). Requiere flag
+    `puede_autorizar_precosteo`."""
+    try:
+        p = svc.aprobar_muestra(precosteo_id, codigo_referencia=body.codigo_referencia,
+                                usuario_id=user.id)
+        # El aviso va DESPUÉS y no puede tumbar la aprobación (igual que firmar).
+        try:
+            from backend.services import avisos_produccion as avisos
+            avisos.avisar_precosteo_autorizado(p, autorizado_por=user.email)
+        except Exception:
+            pass
+        return p
+    except ValueError as e:
+        msg = str(e)
+        if msg == "sin_permiso_autorizar_precosteo":
+            raise HTTPException(403, "No tienes permiso para autorizar precosteo. Pide a un admin activar el flag.")
+        if msg == "no_encontrado":
+            raise HTTPException(404, "Precosteo no encontrado")
+        if msg == "no_es_muestra":
+            raise HTTPException(400, "Esta referencia no es una muestra de diseño.")
+        if msg == "ya_bloqueado":
+            raise HTTPException(400, "Esta muestra ya fue aprobada.")
+        if msg == "codigo_referencia_requerido":
+            raise HTTPException(400, "Escribe la referencia definitiva antes de aprobar.")
+        if msg == "codigo_referencia_duplicado":
+            raise HTTPException(409, "Ya existe otra referencia con ese código. Usa uno distinto.")
+        raise HTTPException(400, msg)
+
+
 @router.get("/precosteo-drive/estado")
 def estado_drive(
     _: CurrentUser = Depends(require_permission_estricto("produccion_costos", "ver")),
