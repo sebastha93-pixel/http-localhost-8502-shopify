@@ -57,66 +57,6 @@ def webhook_stats(_: CurrentUser = Depends(require_role("admin"))) -> dict:
     return dict(_webhook_stats)
 
 
-# ── Diagnóstico TEMPORAL: qué formato de id acepta GET /sell-orders/{id} ───────
-# (2026-09-16) Entregados con M-id daban 404 por número externo y por el M-id
-# sin "M". Este endpoint prueba varios formatos DESDE Railway (la API de Melonn
-# solo responde desde su IP) para saber cuál funciona. SE QUITA luego del fix.
-@router.get("/_diag-id")
-def diag_id(ext: str = Query(...), mid: str = Query(""),
-            secret: Optional[str] = Query(None)) -> dict:
-    esperado = os.environ.get("MELONN_WEBHOOK_SECRET", "").strip()
-    if not esperado or (secret or "").strip() != esperado:
-        raise HTTPException(403, "secret invalido")
-    import requests
-    from urllib.parse import quote
-    import melonn_client as mc
-    mid_raw = (mid or "").strip()
-    hash_ext = quote(f"#{ext}", safe="")   # "%2362531" — el formato que SÍ resuelve
-    headers = {"x-api-key": mc._api_key(), "Accept": "application/json"}
-
-    def _probe(params):
-        try:
-            r = requests.get(f"{mc._BASE_URL}/sell-orders/{hash_ext}",
-                             headers=headers, params=params, timeout=(5, 30))
-            info: dict = {"status": r.status_code}
-            if r.status_code == 200:
-                try:
-                    j = r.json()
-                except Exception:
-                    return {"status": 200, "body_no_json": r.text[:120]}
-                if isinstance(j, dict):
-                    info["keys"] = sorted(j.keys())
-                    info["sell_order_state"] = j.get("sell_order_state")
-                    # Estructura del bloque de promesas/fechas (sin datos personales:
-                    # solo llaves y valores que parezcan fecha/estado).
-                    pi = j.get("sell_order_promise_info")
-                    def _resumen(x, prof=0):
-                        if prof > 3:
-                            return "…"
-                        if isinstance(x, dict):
-                            return {k: _resumen(v, prof+1) for k, v in x.items()
-                                    if not any(s in k.lower() for s in
-                                    ("name","email","phone","address","buyer","document"))}
-                        if isinstance(x, list):
-                            return [_resumen(x[0], prof+1)] if x else []
-                        return x
-                    info["promise_info"] = _resumen(pi)
-                    info["sell_order_package"] = _resumen(j.get("sell_order_package"))
-                    info["shipping_method"] = _resumen(j.get("shipping_method"))
-            else:
-                info["body"] = r.text[:120]
-            return info
-        except Exception as e:
-            return {"error": str(e)[:150]}
-
-    return {"ext": ext, "id_correcto": f"sell-orders/{hash_ext} (#{ext})", "resultados": {
-        "sin_fields":       _probe(None),
-        "fields_promises":  _probe({"fields": "sell_order_promises"}),
-        "fields_attempt":   _probe({"fields": "sell_order_attempt"}),
-        "fields_ambos":     _probe({"fields": "sell_order_promises,sell_order_attempt"}),
-    }}
-
-
 # ── Webhook receiver (público, validado por secret) ──────────────────────────
 @router.post("/webhook")
 async def webhook_receiver(request: Request, secret: Optional[str] = Query(None)) -> dict:

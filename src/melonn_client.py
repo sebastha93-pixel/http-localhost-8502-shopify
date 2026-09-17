@@ -3146,22 +3146,22 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
         if direccion and not p.get("direccion"):
             p["direccion"] = direccion
 
-        # ── Fechas reales, desde sell_order_attempt ──────────────────────────
-        # ANTES leía `dispatch_date`, `delivery_date` y `promise_date`. NINGUNO
-        # DE LOS TRES EXISTE en las respuestas de Melonn — verificado volcando
-        # todas las claves de pedidos reales en varios estados. Por eso
-        # `fecha_despacho_confiable` nunca se marcaba y los pedidos en tránsito
-        # se re-consultaban en cada ciclo, para siempre (el bucle de las 130).
-        #
-        # Los campos de verdad viven en sell_order_attempt[], que SOLO llega si
-        # se pide ?fields=sell_order_promises (arriba). Cada attempt es un
-        # intento de entrega; `current: true` marca el vigente.
-        attempts = detail.get("sell_order_attempt") or []
-        if isinstance(attempts, list) and attempts:
-            act = next((a for a in attempts
-                        if isinstance(a, dict) and a.get("current")), None)
-            if act is None:
-                act = attempts[-1] if isinstance(attempts[-1], dict) else {}
+        # ── Fechas reales (ship_timestamp / delivery_timestamp) ──────────────
+        # Melonn REESTRUCTURÓ su API (verificado 2026-09-16): los intentos ya no
+        # están en `sell_order_attempt` (desapareció) sino en
+        # `sell_order_package[].sell_order_package_attempt[]`, con los MISMOS
+        # campos (ship_timestamp, delivery_timestamp, current). Se aplanan los
+        # intentos de todos los paquetes; `current: true` marca el vigente.
+        attempts: list = []
+        for _pkg in (detail.get("sell_order_package") or []):
+            if isinstance(_pkg, dict):
+                attempts.extend(a for a in (_pkg.get("sell_order_package_attempt") or [])
+                                if isinstance(a, dict))
+        # Compat: si el bloque viejo volviera a aparecer.
+        attempts.extend(a for a in (detail.get("sell_order_attempt") or [])
+                        if isinstance(a, dict))
+        if attempts:
+            act = next((a for a in attempts if a.get("current")), None) or attempts[-1]
 
             def _dia(v) -> str:
                 return str(v).split("T")[0] if v else ""
