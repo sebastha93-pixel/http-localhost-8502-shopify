@@ -395,6 +395,122 @@ def cruzar(pedidos: list[dict], *, desde: Optional[str] = None) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Cruce PERSISTIDO por orden (tabla cruce_cod_siigo)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# `cruzar()` calcula el cruce en vivo y CAPA las listas a 300, así que de ~920
+# entregados solo se ven las primeras. Esta función hace el MISMO cruce pero
+# COMPLETO y lo guarda por orden en `cruce_cod_siigo`, para que el OS muestre el
+# estado verídico de CADA contraentrega (facturada a crédito / cobrada directo /
+# sin factura) sin recalcular ni capar. La llama el scheduler.
+
+# Umbral de "atraso normal": los datos muestran que lo entregado hace 61-90 días
+# ya está 100% en saldo 0 (el recibo de caja que cancela la cuenta "CONTRA
+# ENTREGA CRÉDITO 10 DÍAS" se postea con 1-3 meses de atraso). Lo entregado hace
+# ≤60 días con saldo NO es deuda: es plata que Melonn ya recaudó y contabilidad
+# aún no ha posteado. Pasado ese punto, un saldo sí es anomalía real a revisar.
+_DIAS_ATRASO_NORMAL = 60
+
+
+def _clasificar(estado: str, saldo: float, dias) -> str:
+    """Traduce (estado, saldo, antigüedad) a la VERDAD operativa, no al saldo
+    contable de Siigo —que para COD miente porque el recibo se postea tarde.
+
+      · sin_factura → salió mercancía sin factura de venta (hueco real).
+      · recaudado   → saldo 0: Siigo ya posteó el recibo. Plata confirmada.
+      · en_transito → saldo>0 y entrega ≤60 días: Melonn ya recaudó, recibo
+                      pendiente de postear. NO es deuda; se cancela solo.
+      · revisar     → saldo>0 y entrega >60 días (o medio directo con saldo):
+                      debió haberse posteado hace rato. Anomalía real.
+    """
+    if estado == "sin_factura":
+        return "sin_factura"
+    if saldo <= 0:
+        return "recaudado"
+    if estado == "cobrada_directo":
+        return "revisar"          # medio no-crédito con saldo abierto: mirar
+    if dias is None or dias <= _DIAS_ATRASO_NORMAL:
+        return "en_transito"
+    return "revisar"
+
+
+def persistir_cruce_por_orden(pedidos: list[dict]) -> dict:
+    """Cruza CADA contraentrega ENTREGADA contra su(s) factura(s) de Siigo y
+    guarda el resultado por orden en `cruce_cod_siigo` (completo, sin capar)."""
+    sb = _sb()
+    if sb is None:
+        return {"ok": False, "motivo": "Supabase no configurado"}
+    try:
+        fv = facturas_cod()
+    except Exception as e:
+        log.warning(f"[cartera_cod] cruce por orden: Siigo no respondió: {str(e)[:120]}")
+        return {"ok": False, "motivo": f"Siigo: {str(e)[:120]}"}
+
+    entregados: dict[str, dict] = {}
+    for p in pedidos:
+        if _norm(p.get("tipo_recaudo")) != "CONTRAENTREGA":
+            continue
+        try:
+            code = int(p.get("estado_melonn_code") or 0)
+        except (TypeError, ValueError):
+            code = 0
+        if code not in _CODES_ENTREGADO:
+            continue
+        for n in _numeros_orden(p.get("orden_tienda")):
+            entregados.setdefault(n, p)
+
+    hoy = datetime.now(timezone.utc).date()
+    def _dias(s):
+        try:
+            return (hoy - date.fromisoformat((s or "")[:10])).days
+        except (TypeError, ValueError):
+            return None
+    ahora = datetime.now(timezone.utc).isoformat()
+
+    filas: list[dict] = []
+    for n, p in entregados.items():
+        facs = fv.get(n, [])
+        total = round(sum(f["total"] for f in facs), 2)
+        saldo = round(sum(f["saldo"] for f in facs), 2)
+        a_credito = any(f.get("a_credito") for f in facs)
+        entrega = (p.get("fecha_entrega") or "")[:10] or None
+        dias = _dias(entrega)
+        estado = ("sin_factura" if not facs
+                  else "facturada_credito" if a_credito else "cobrada_directo")
+        filas.append({
+            "orden":         n,
+            "estado":        estado,
+            "clasificacion": _clasificar(estado, saldo, dias),
+            "facturas":      [f["factura"] for f in facs],
+            "fecha_factura": min((f["fecha"] for f in facs if f.get("fecha")), default=None),
+            "facturado":     total,
+            "saldo":         saldo,
+            "a_credito":     a_credito,
+            "medio":         (facs[0].get("medio") if facs else None),
+            "valor_melonn":  float(p.get("valor_num") or 0),
+            "entrega":       entrega,
+            "ciudad":        p.get("ciudad_destino"),
+            "dias":          dias,
+            "actualizado_en": ahora,
+        })
+    if not filas:
+        return {"ok": True, "guardadas": 0}
+
+    from backend.core.supabase_resiliente import exec_idempotente
+    guardadas = 0
+    for i in range(0, len(filas), 300):
+        lote = filas[i:i + 300]
+        try:
+            exec_idempotente(sb.table("cruce_cod_siigo").upsert(lote, on_conflict="orden"))
+            guardadas += len(lote)
+        except Exception as e:
+            log.error(f"[cartera_cod] fallo guardando cruce por orden: {str(e)[:160]}")
+            break
+    log.info(f"[cartera_cod] cruce por orden persistido: {guardadas} de {len(filas)} órdenes")
+    return {"ok": True, "guardadas": guardadas, "total": len(filas)}
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # ALERTA POR ANTIGÜEDAD
 # ═══════════════════════════════════════════════════════════════════════
 #

@@ -53,22 +53,41 @@ interface ResumenCartera {
   cod_entregados?: number;
 }
 
-interface Abierta {
-  factura: string; fecha: string; orden: string; saldo: number; total: number;
-  dias: number | null; entrega: string; ciudad?: string | null; url?: string | null;
+// Cruce PERSISTIDO por orden (tabla cruce_cod_siigo) — completo, sin capar.
+// `clasificacion` traduce el saldo contable de Siigo a la VERDAD operativa:
+// para COD el saldo NO es deuda (la factura se cierra contra la cuenta crédito
+// a 10 días y el recibo se postea con 1-3 meses de atraso). Ver backend
+// cartera_cod._clasificar.
+interface OrdenCruce {
+  orden: string; estado: string; clasificacion?: string;
+  facturado: number; saldo: number; a_credito: boolean; medio?: string | null;
+  entrega?: string | null; ciudad?: string | null; dias?: number | null;
+  facturas?: string[];
 }
-interface SinFactura {
-  orden: string; valor: number; entrega: string; ciudad?: string | null;
+interface OrdenesResp {
+  ordenes: OrdenCruce[];
+  resumen: Record<string, { n: number; facturado: number; saldo: number }>;
+  total: number;
+  nota?: string;
 }
-interface Detalle {
-  disponible: boolean;
-  antiguedad?: Record<string, number>;
-  abiertas?: Abierta[];
-  sin_factura?: SinFactura[];
-}
+
+type Clasif = "recaudado" | "en_transito" | "revisar" | "sin_factura";
+const CLASIF_META: Record<Clasif, { label: string; chip: string; hint: string }> = {
+  recaudado:   { label: "Recaudado",        chip: "bg-sage/15 text-sage",
+                 hint: "Recibo ya posteado en Siigo — plata confirmada" },
+  en_transito: { label: "En tránsito",      chip: "bg-amber-500/15 text-amber-600",
+                 hint: "Melonn ya recaudó; recibo pendiente de postear — NO es deuda" },
+  revisar:     { label: "A revisar",        chip: "bg-terracotta/15 text-terracotta",
+                 hint: "Saldo abierto que ya debió postearse — anomalía real" },
+  sin_factura: { label: "Sin factura",      chip: "bg-terracotta/15 text-terracotta",
+                 hint: "Salió mercancía sin factura de venta — lo cierra contabilidad" },
+};
+const CLASIF_ORDEN: Clasif[] = ["revisar", "sin_factura", "en_transito", "recaudado"];
 
 export function CarteraCod() {
   const [abierto, setAbierto] = useState(false);
+  const [busca, setBusca] = useState("");
+  const [fEst, setFEst] = useState<"todas" | Clasif>("todas");
 
   const { data: res, isLoading } = useQuery<ResumenCartera>({
     queryKey: ["finanzas", "resumen"],
@@ -92,19 +111,20 @@ export function CarteraCod() {
   const nRecaudado     = res?.n_cod_melonn_recaudado ?? 0;
   const brutoEntregado = res?.cod_entregados ?? 0;
 
-  // El detalle solo se pide cuando se despliega: son ~90 páginas de Siigo del
-  // lado del backend y no tiene sentido pagarlas si nadie va a mirar la lista.
-  const { data: det } = useQuery<Detalle>({
-    queryKey: ["finanzas", "cartera-cod"],
-    queryFn: () => api.get<Detalle>("/api/finanzas/cartera-cod"),
+  // Cruce COMPLETO por orden (tabla persistida cruce_cod_siigo) — 0 llamadas a
+  // Siigo/Melonn, ya clasificado por la verdad operativa. Reemplaza al viejo
+  // detalle en vivo, que capaba a 300 y pintaba el saldo como si fuera deuda.
+  const { data: ords } = useQuery<OrdenesResp>({
+    queryKey: ["finanzas", "cartera-cod", "ordenes"],
+    queryFn: () => api.get<OrdenesResp>("/api/finanzas/cartera-cod/ordenes"),
     enabled: abierto,
     staleTime: 10 * 60_000,
   });
 
-  // Los dos `useQuery` van ANTES de cualquier return: un hook detrás de un
-  // `if` cambia el orden de hooks entre renders y React revienta con
-  // "Rendered more hooks than during the previous render". El build no lo
-  // marca; el navegador sí, en cuanto llegan los datos.
+  // El `useQuery` va ANTES de cualquier return: un hook detrás de un `if`
+  // cambia el orden de hooks entre renders y React revienta con "Rendered more
+  // hooks than during the previous render". El build no lo marca; el navegador
+  // sí, en cuanto llegan los datos.
   if (isLoading || !res) return null;
 
   // Siigo no respondió: se dice. NO se pintan ceros — un tablero de plata en
@@ -130,8 +150,19 @@ export function CarteraCod() {
     );
   }
 
-  const tramos = det?.antiguedad ?? {};
-  const viejo = (tramos["31-60"] ?? 0) + (tramos["60+"] ?? 0);
+  // Filtrado de la tabla por orden desde el cruce persistido, ya clasificado.
+  const ordenes = ords?.ordenes ?? [];
+  const q = busca.trim().toLowerCase();
+  const filtradas = ordenes.filter((o) => {
+    const c = (o.clasificacion ?? "") as Clasif;
+    if (fEst !== "todas" && c !== fEst) return false;
+    if (!q) return true;
+    return (
+      o.orden.toLowerCase().includes(q) ||
+      (o.ciudad ?? "").toLowerCase().includes(q) ||
+      (o.facturas ?? []).some((f) => f.toLowerCase().includes(q))
+    );
+  });
 
   return (
     <div className="space-y-3">
@@ -232,98 +263,121 @@ export function CarteraCod() {
             className="flex items-center gap-1.5 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-navy-600 hover:underline"
           >
             <ChevronDown className={`h-3.5 w-3.5 transition-transform ${abierto ? "rotate-180" : ""}`} />
-            {abierto ? "Ocultar detalle" : "Ver qué reclamar"}
+            {abierto ? "Ocultar detalle" : "Ver detalle por orden"}
           </button>
 
-          {abierto && !det && (
-            <p className="text-xs text-graphite">Consultando Siigo…</p>
+          {abierto && !ords && (
+            <p className="text-xs text-graphite">Cargando cruce por orden…</p>
           )}
 
-          {abierto && det && (
-            <div className="space-y-5 border-t border-border/60 pt-4">
-              {/* Antigüedad: una deuda de 5 días es el ciclo normal de Melonn;
-                  una de 60 es plata que alguien tiene que ir a buscar. */}
-              <div>
-                <p className="mb-2 text-[0.68rem] uppercase tracking-widest text-graphite">
-                  Antigüedad de la deuda
+          {abierto && ords && (
+            <div className="space-y-4 border-t border-border/60 pt-4">
+              {/* La aclaración que evita leer el saldo como deuda. */}
+              {ords.nota && (
+                <p className="flex items-start gap-2 rounded-sm border border-border/60 bg-cloud/40 px-3 py-2 text-[0.7rem] leading-snug text-graphite dark:bg-ink-800/40">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />
+                  {ords.nota}
                 </p>
-                <div className="flex flex-wrap gap-4 text-xs">
-                  {["0-15", "16-30", "31-60", "60+"].map((k) => (
-                    <span key={k} className="tabular-nums">
-                      <span className="text-graphite">{k} días: </span>
-                      <span className={k === "31-60" || k === "60+"
-                        ? "font-semibold text-terracotta"
-                        : "font-semibold text-ink-900 dark:text-foreground"}>
-                        {formatMoneyShort(tramos[k] ?? 0)}
+              )}
+
+              {/* Clasificación verídica: recaudado / en tránsito / a revisar /
+                  sin factura. Se puede filtrar la tabla haciendo clic. */}
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {CLASIF_ORDEN.map((c) => {
+                  const b = ords.resumen[c] ?? { n: 0, facturado: 0, saldo: 0 };
+                  const monto = c === "recaudado" ? b.facturado : b.saldo;
+                  const activo = fEst === c;
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      title={CLASIF_META[c].hint}
+                      onClick={() => setFEst(activo ? "todas" : c)}
+                      className={`rounded-md border px-2.5 py-2 text-left transition ${
+                        activo ? "border-navy-600 ring-1 ring-navy-600/40" : "border-border/60 hover:border-navy-600/50"
+                      }`}
+                    >
+                      <span className={`inline-block rounded-full px-1.5 py-0.5 text-[0.6rem] font-semibold ${CLASIF_META[c].chip}`}>
+                        {CLASIF_META[c].label}
                       </span>
-                    </span>
-                  ))}
-                </div>
-                {viejo > 0 && (
-                  <p className="mt-1.5 flex items-center gap-1.5 text-[0.7rem] text-terracotta">
-                    <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
-                    {formatMoney(viejo)} llevan más de 30 días facturados contra una
-                    cuenta cuyo plazo pactado es 10. Verifica en la conciliación si
-                    Melonn ya consignó.
-                  </p>
+                      <p className="mt-1 font-display text-lg tabular-nums text-ink-900 dark:text-foreground">{b.n}</p>
+                      <p className="text-[0.62rem] tabular-nums text-graphite">
+                        {monto > 0 ? formatMoneyShort(monto) : "—"}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Buscador por orden / ciudad / factura. */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="search"
+                  value={busca}
+                  onChange={(e) => setBusca(e.target.value)}
+                  placeholder="Buscar orden, ciudad o factura…"
+                  className="w-full rounded-md border border-border/60 bg-transparent px-3 py-1.5 text-xs text-ink-900 outline-none focus:border-navy-600 dark:text-foreground"
+                />
+                {(fEst !== "todas" || q) && (
+                  <button
+                    type="button"
+                    onClick={() => { setFEst("todas"); setBusca(""); }}
+                    className="shrink-0 text-[0.68rem] font-semibold text-navy-600 hover:underline"
+                  >
+                    Limpiar
+                  </button>
                 )}
               </div>
 
-              {!!det.abiertas?.length && (
-                <div>
-                  <p className="mb-2 text-[0.68rem] uppercase tracking-widest text-graphite">
-                    Facturas a crédito COD, de la más vieja ({det.abiertas.length})
-                  </p>
-                  <div className="max-h-72 overflow-y-auto">
-                    <table className="w-full text-xs">
-                      <tbody>
-                        {det.abiertas.map((f) => (
-                          <tr key={f.factura} className="border-b border-border/40">
-                            <td className="py-1.5 pr-3 font-semibold tabular-nums text-navy-600">{f.factura}</td>
-                            <td className="py-1.5 pr-3 tabular-nums text-graphite">{f.fecha}</td>
-                            <td className={`py-1.5 pr-3 text-right tabular-nums ${(f.dias ?? 0) > 30 ? "font-semibold text-terracotta" : "text-graphite"}`}>
-                              {f.dias == null ? "—" : `${f.dias}d`}
-                            </td>
-                            <td className="py-1.5 pr-3 tabular-nums text-graphite">#{f.orden}</td>
-                            <td className="py-1.5 pr-3 truncate text-graphite">{f.ciudad || "—"}</td>
-                            <td className="py-1.5 text-right tabular-nums font-semibold text-ink-900 dark:text-foreground">
-                              {formatMoney(f.total)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
+              <p className="text-[0.68rem] text-graphite">
+                {filtradas.length} de {ords.total} órdenes
+              </p>
 
-              {!!det.sin_factura?.length && (
-                <div>
-                  <p className="mb-1 text-[0.68rem] uppercase tracking-widest text-terracotta">
-                    Entregados SIN factura de venta ({det.sin_factura.length})
-                  </p>
-                  <p className="mb-2 text-[0.68rem] leading-snug text-graphite">
-                    Salió mercancía y el cliente pagó, pero no hay factura en Siigo.
-                    Esto no lo debe Melonn: lo debe cerrar contabilidad.
-                  </p>
-                  <div className="max-h-56 overflow-y-auto">
-                    <table className="w-full text-xs">
-                      <tbody>
-                        {det.sin_factura.map((s) => (
-                          <tr key={s.orden} className="border-b border-border/40">
-                            <td className="py-1.5 pr-3 tabular-nums font-semibold text-ink-900 dark:text-foreground">#{s.orden}</td>
-                            <td className="py-1.5 pr-3 tabular-nums text-graphite">{s.entrega || "—"}</td>
-                            <td className="py-1.5 pr-3 truncate text-graphite">{s.ciudad || "—"}</td>
-                            <td className="py-1.5 text-right tabular-nums text-ink-900 dark:text-foreground">
-                              {formatMoney(s.valor)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
+              <div className="max-h-96 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-background">
+                    <tr className="text-left text-[0.62rem] uppercase tracking-wider text-graphite">
+                      <th className="py-1 pr-2 font-medium">Orden</th>
+                      <th className="py-1 pr-2 font-medium">Estado</th>
+                      <th className="py-1 pr-2 text-right font-medium">Días</th>
+                      <th className="py-1 pr-2 font-medium">Ciudad</th>
+                      <th className="py-1 pr-2 text-right font-medium">Facturado</th>
+                      <th className="py-1 text-right font-medium">Saldo Siigo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtradas.map((o) => {
+                      const c = (o.clasificacion ?? "recaudado") as Clasif;
+                      const meta = CLASIF_META[c] ?? CLASIF_META.recaudado;
+                      return (
+                        <tr key={o.orden} className="border-b border-border/40">
+                          <td className="py-1.5 pr-2 font-semibold tabular-nums text-ink-900 dark:text-foreground">#{o.orden}</td>
+                          <td className="py-1.5 pr-2">
+                            <span className={`inline-block rounded-full px-1.5 py-0.5 text-[0.58rem] font-semibold ${meta.chip}`}>
+                              {meta.label}
+                            </span>
+                          </td>
+                          <td className="py-1.5 pr-2 text-right tabular-nums text-graphite">
+                            {o.dias == null ? "—" : `${o.dias}d`}
+                          </td>
+                          <td className="py-1.5 pr-2 max-w-[7rem] truncate text-graphite">{o.ciudad || "—"}</td>
+                          <td className="py-1.5 pr-2 text-right tabular-nums text-graphite">{formatMoney(o.facturado)}</td>
+                          <td className={`py-1.5 text-right tabular-nums font-semibold ${
+                            o.saldo > 0 ? (c === "revisar" ? "text-terracotta" : "text-amber-600") : "text-sage"
+                          }`}>
+                            {formatMoney(o.saldo)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {!filtradas.length && (
+                      <tr>
+                        <td colSpan={6} className="py-4 text-center text-graphite">Sin resultados</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </CardContent>

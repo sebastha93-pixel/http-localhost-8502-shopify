@@ -223,6 +223,41 @@ def cartera_cod_detalle(
     return cartera_svc.cruzar(pedidos)
 
 
+@router.get("/cartera-cod/ordenes")
+def cartera_cod_ordenes(
+    _: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """Cruce PERSISTIDO por orden (tabla cruce_cod_siigo): cada contraentrega
+    ENTREGADA con su estado verídico contra Siigo — COMPLETO, sin capar a 300.
+    Lo llena el scheduler; acá solo se lee (0 llamadas a Siigo/Melonn)."""
+    from backend.services import cartera_cod as cartera_svc
+    sb = cartera_svc._sb()
+    if sb is None:
+        raise HTTPException(status_code=503, detail="Supabase no configurado")
+    filas = (sb.table("cruce_cod_siigo")
+               .select("orden,estado,clasificacion,facturas,fecha_factura,facturado,"
+                       "saldo,a_credito,medio,valor_melonn,entrega,ciudad,dias")
+               .order("saldo", desc=True).limit(3000).execute()).data or []
+    # Resumen por la VERDAD operativa (clasificacion), no por el saldo contable.
+    resumen: dict = {}
+    for f in filas:
+        c = f.get("clasificacion") or "sin_clasificar"
+        b = resumen.setdefault(c, {"n": 0, "facturado": 0.0, "saldo": 0.0})
+        b["n"] += 1
+        b["facturado"] += float(f.get("facturado") or 0)
+        b["saldo"] += float(f.get("saldo") or 0)
+    return {
+        "ordenes": filas,
+        "resumen": resumen,
+        "total": len(filas),
+        "nota": ("El 'saldo' es el balance contable de Siigo, NO deuda: las "
+                 "facturas de contraentrega se cancelan contra la cuenta "
+                 "CRÉDITO 10 DÍAS y el recibo se postea con 1-3 meses de atraso. "
+                 "'en_transito' = ya recaudado por Melonn, recibo pendiente de "
+                 "postear. Solo 'revisar' y 'sin_factura' son accionables."),
+    }
+
+
 @router.get("/mercadopago", response_model=PagosMPResponse)
 def listar_pagos_mp(
     desde: Optional[str] = Query(default=None, description="YYYY-MM-DD, default últimos 30d"),

@@ -247,6 +247,14 @@ def _chequear_cartera() -> None:
         pedidos = [metricas.clasificar(x) for x in (data.get("pedidos") or [])]
         if not pedidos:
             return
+        # Persistir el cruce COMPLETO por orden (cruce_cod_siigo) para que el OS
+        # muestre el estado verídico de CADA contraentrega, sin capar a 300.
+        try:
+            cp = cartera_cod.persistir_cruce_por_orden(pedidos)
+            if cp.get("ok"):
+                log.info(f"[cartera] cruce por orden persistido: {cp.get('guardadas')} órdenes")
+        except Exception as e:
+            log.warning(f"[cartera] cruce por orden falló (no afecta el resto): {str(e)[:140]}")
         r = cartera_cod.revisar_y_avisar(pedidos)
         if r.get("avisos"):
             log.warning(f"[cartera] avisos enviados: {r['avisos']}")
