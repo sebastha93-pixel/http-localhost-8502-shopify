@@ -3040,30 +3040,32 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
     resultado = list(pedidos)
     completados = 0
 
+    from urllib.parse import quote
     for idx in indices:
         p = pedidos[idx]
-        # Probar primero external_order_number; si falla, probar internal
-        # (orden_melonn sin "M") — útil para órdenes manuales con códigos
-        # cortos como "0031" que el external no resuelve.
-        ext = p.get("orden_tienda")
+        # EL ID CORRECTO DEL GET (verificado contra Melonn 2026-09-16): el
+        # external_order_number se guarda CON "#" (ej. "#62531") y hay que
+        # pedirlo URL-encoded (%23). Antes se mandaba sin "#" y también el M-id,
+        # y AMBOS daban 404 "Order not found" — de ahí la tanda de 404/500 en los
+        # logs y que nunca se enriquecieran estos pedidos. Fallback sin "#" por
+        # si algún pedido manual no lo lleva.
+        ext = str(p.get("orden_tienda") or "").strip()
         internal = str(p.get("orden_melonn") or "").lstrip("Mm").strip()
 
         detail = None
-        for candidato in [ext, internal]:
-            if not candidato:
-                continue
+        base_ext = ext.lstrip("#")
+        candidatos = [quote(f"#{base_ext}", safe=""), base_ext] if base_ext else []
+        for ident in candidatos:
             try:
-                # ?fields=sell_order_promises trae el bloque sell_order_attempt
-                # con las fechas REALES (ship_timestamp, delivery_timestamp) y
-                # las ventanas prometidas. SIN este parámetro esos campos NO
-                # vienen — y eso era la causa del bucle infinito: buscábamos
-                # `dispatch_date`, que no existe en ninguna respuesta.
-                detail = _get(f"sell-orders/{candidato}",
+                # ?fields=sell_order_promises añade sell_order_promise_info (Melonn
+                # ya no devuelve el viejo sell_order_attempt). El detalle base ya
+                # trae buyer/shipping_info/line_items para enriquecer el cliente.
+                detail = _get(f"sell-orders/{ident}",
                               params={"fields": "sell_order_promises"})
                 if detail:
                     break
             except Exception as e:
-                log.debug(f"detail {candidato}: {e}")
+                log.debug(f"detail {ident}: {e}")
                 continue
 
         # Registrar el intento ANTES de mirar el resultado. Si el detalle no

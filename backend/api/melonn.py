@@ -101,6 +101,8 @@ def diag_id(ext: str = Query(...), mid: str = Query(""),
                             return [_resumen(x[0], prof+1)] if x else []
                         return x
                     info["promise_info"] = _resumen(pi)
+                    info["sell_order_package"] = _resumen(j.get("sell_order_package"))
+                    info["shipping_method"] = _resumen(j.get("shipping_method"))
             else:
                 info["body"] = r.text[:120]
             return info
