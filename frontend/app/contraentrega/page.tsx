@@ -22,8 +22,10 @@ export default function ContraentregaPage() {
     return {
       todos:      cods,
       pendientes: cods.filter((p) => [26, 29].includes(code(p)) && !p.es_novedad_visible),
-      // En proceso: alistamiento → empacado → preparado, ANTES de transportadora
-      proceso:    cods.filter((p) => [1, 2, 5, 24, 28].includes(code(p)) && !p.es_novedad_visible),
+      // En proceso: alistamiento → empacado → preparado, ANTES de transportadora.
+      // 23 (Packed - on hold) y 39 (Packed at warehouse) son bodega: sin ellos
+      // esos pedidos caían fuera de TODAS las pestañas (aviso de confiabilidad).
+      proceso:    cods.filter((p) => [1, 2, 5, 23, 24, 28, 39].includes(code(p)) && !p.es_novedad_visible),
       // En tránsito: ya entregado a la transportadora (en ruta al cliente)
       transito:   cods.filter((p) => code(p) === 7 && !p.es_novedad_visible),
       novedades:  cods.filter((p) => p.es_novedad_visible),

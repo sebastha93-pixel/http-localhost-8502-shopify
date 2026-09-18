@@ -576,7 +576,7 @@ CODIGOS_PROCESO_INTERNO = {3, 4, 10, 12, 22, 25, 27}
 
 # ── Whitelist por código ───────────────────────────────────────────────────────
 #   Pendiente seller → 26, 29      "Alistamiento en espera · Seller"
-#   En preparación   → 1,2,5,24,28 "En bodega de Melonn, todavía NO salió"
+#   En preparación   → 1,2,5,23,24,28,39 "En bodega de Melonn, todavía NO salió"
 #   En tránsito      → 7           "Con la transportadora, en la calle"
 #   Entregado        → 6, 8        "Picked-up by buyer" / "Delivered to buyer"
 #   Novedades ext.   → 20 + NOMBRE (código no confirmado en API docs)
@@ -597,7 +597,10 @@ CODIGOS_PENDIENTE_DESPACHO = {26, 29}
 # los conjuntos, así que caía en "otro" y el pedido DESAPARECÍA del tablero sin
 # dejar rastro. Encontrado 2026-08-01 con el pedido #61358, contraentrega,
 # invisible desde el 30 de julio.
-CODIGOS_EN_PREPARACION     = {1, 2, 5, 23, 24, 28}
+# 39 = "Packed at warehouse": empacada en bodega, lista para despachar (aún NO
+# salió). Mismo hueco que el 23 — la app no lo sabía clasificar y el aviso de
+# confiabilidad lo cazó (2026-09-18). Es preparación, va con 5/24.
+CODIGOS_EN_PREPARACION     = {1, 2, 5, 23, 24, 28, 39}
 CODIGOS_EN_TRANSITO        = {7}
 CODIGOS_ENTREGADO          = {6, 8}
 CODIGOS_NOVEDAD            = {20}
@@ -674,6 +677,7 @@ ESTADOS_EN_PREPARACION = {
     "Packed - on hold", "Empacada - retenida",                           # 23
     "Prepared for dispatch", "Preparada para despacho",                  # 24
     "Ready For Packing", "Lista para empaque",                           # 28
+    "Packed at warehouse", "Empacada en bodega",                         # 39
 }
 
 # Proceso interno puro — nunca se muestra (alistado, picking, packing interno)
@@ -2092,7 +2096,7 @@ def _sub_estado_logistico(estado: str, codigo: int = 0, es_cod: bool = False) ->
     Clasifica el estado Melonn en las categorías operativas del dashboard.
     Códigos confirmados en producción (corregido 2026-07-31):
       pendiente_despacho → 26, 29   esperando que el seller libere
-      en_preparacion     → 1,2,5,24,28  en la bodega de Melonn, NO salió
+      en_preparacion     → 1,2,5,23,24,28,39  en la bodega de Melonn, NO salió
       en_transito        → 7        con la transportadora, en la calle
       novedad            → 20 + novedades externas por nombre
       entregado          → 6, 8
