@@ -2154,12 +2154,14 @@ def editar_orden_corte(oc_id: str, *, referencia_id: Optional[str] = None,
     oc = obtener_orden_corte(oc_id)
     if not oc:
         raise ValueError("orden_no_encontrada")
+    # Solo se bloquea si YA se cortó: ahí las unidades reales están registradas y
+    # editar el plan no tiene sentido (para eso está actualizar_unidades_cortadas,
+    # admin). Con rollos asignados SÍ se puede editar: la reserva es un PLAN, no
+    # un descuento —el consumo real se resuelve al cerrar—, así que cambiar el
+    # plan no descuadra el inventario; el cortador reajusta los rollos si hace
+    # falta. (Antes se bloqueaba con rollos; se relajó a pedido de Sebastián.)
     if oc.get("estado") == "cortada":
         raise ValueError("orden_ya_cortada")
-    # No se edita si el cortador ya reservó tela: primero hay que liberar rollos.
-    if (sb.table("orden_corte_rollos").select("id")
-          .eq("orden_corte_id", oc_id).limit(1).execute()).data:
-        raise ValueError("tiene_rollos_asignados")
 
     if largo_trazo is None:
         largo_trazo = oc.get("largo_trazo")

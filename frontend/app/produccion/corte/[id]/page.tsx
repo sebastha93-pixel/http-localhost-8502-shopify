@@ -805,11 +805,11 @@ export default function DetalleOrdenCortePage() {
           <ArrowLeft className="h-3.5 w-3.5" /> Volver a órdenes
         </Link>
         <div className="flex items-center gap-2">
-          {/* Editar la orden completa (referencia, tallas, cantidades, largo,
-              cortador…) — por si el diseñador metió mal un dato. Solo mientras
-              no esté cortada y el cortador NO haya asignado rollos (después
-              descuadraría las reservas de tela). */}
-          {puedeEditarNotas && !cerrada && (oc.rollos || []).length === 0 && (
+          {/* Editar TODA la orden en una (referencia, tallas, cantidades, largo,
+              capas, cortador…). Disponible mientras no esté cortada — con rollos
+              asignados también, porque la reserva es un plan que se reconcilia al
+              cerrar. Reemplaza tener que corregir ítem por ítem. */}
+          {puedeEditarNotas && !cerrada && (
             <Link href={`/produccion/corte/nueva?editar=${id}`}
               className="inline-flex items-center gap-1.5 rounded-sm border border-navy-600/40 bg-card px-3 py-1.5 text-xs font-semibold text-navy-600 hover:bg-navy-600/[0.06]">
               <Pencil className="h-3.5 w-3.5" /> Editar orden

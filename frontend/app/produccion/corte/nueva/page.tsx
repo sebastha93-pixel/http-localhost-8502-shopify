@@ -237,6 +237,15 @@ export default function NuevaOrdenCortePage() {
       title={editarId ? `Editar orden ${(orden?.consecutivo as string) || ""}`.trim() : "Nueva orden de corte"}
       subtitle={editarId ? "Corrige los datos del corte (antes de asignar rollos)" : "Un tendido · varias referencias"}>
       <form onSubmit={(e) => { e.preventDefault(); setErr(""); mut.mutate(); }} className="space-y-4">
+        {editarId && (((orden?.rollos as unknown[]) || []).length > 0) && (
+          <div className="rounded-sm border border-amber-400/50 bg-amber-50 px-3 py-2 text-xs text-amber-700 flex items-start gap-2">
+            <AlertCircle className="h-3.5 w-3.5 flex-none mt-0.5" />
+            <span>Este corte ya tiene tela asignada (rollos). Puedes editarlo igual
+              —la reserva es un plan que se reconcilia al cerrar—, pero si cambias
+              tallas o cantidades, revisa con el cortador que los rollos reservados
+              sigan cuadrando.</span>
+          </div>
+        )}
         {/* ── Tendido (compartido) ── */}
         <Card>
           <CardContent className="p-5 space-y-4">
