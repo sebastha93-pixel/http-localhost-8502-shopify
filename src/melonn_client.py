@@ -416,14 +416,19 @@ def _marcar_despacho_observado(p: dict, prev: dict) -> bool:
     No pisa una fecha propia ya existente: el despacho pasa una sola vez, y si el
     pedido vuelve a "en tránsito" tras una novedad eso no es un despacho nuevo.
     """
-    if p.get("fecha_despacho_observada"):
+    # Ya tiene fecha observada propia o heredable de prev: no re-estampar.
+    if p.get("fecha_despacho_observada") or prev.get("fecha_despacho_observada"):
         return False
     antes = prev.get("sub_estado_logistico") or ""
     ahora = p.get("sub_estado_logistico") or ""
     transicion = antes in _NO_DESPACHADO and ahora in _YA_DESPACHADO
-    piso = (ahora in _YA_DESPACHADO
-            and not p.get("fecha_despacho")
-            and not p.get("fecha_despacho_confiable"))
+    # CRÍTICO: este observador corre sobre el pedido CRUDO (el listado no trae
+    # fecha) ANTES de heredar los campos enriquecidos de prev (ver _fusionar_tramo
+    # y _heredar_enriquecidos). Por eso el piso mira TAMBIÉN prev: sin eso pisaría
+    # con "hoy" el ship_timestamp real que ya tenía el caché, en cada sweep.
+    ya_tiene_fecha = (p.get("fecha_despacho") or prev.get("fecha_despacho")
+                      or p.get("fecha_despacho_confiable") or prev.get("fecha_despacho_confiable"))
+    piso = ahora in _YA_DESPACHADO and not ya_tiene_fecha
     if not (transicion or piso):
         return False
     from datetime import datetime as _dt
