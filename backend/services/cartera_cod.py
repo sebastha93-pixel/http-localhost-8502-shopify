@@ -304,11 +304,17 @@ def cruzar(pedidos: list[dict], *, desde: Optional[str] = None) -> dict:
                 cobrado_directo += f["total"]
                 n_directo += 1
 
+    # Órdenes combinadas: si un número del pedido tiene factura, su hermano NO es
+    # "sin factura" (misma entrega, dos números de Shopify).
+    cubiertos: set = set()
+    for n, p in entregados.items():
+        if fv.get(n):
+            cubiertos.update(_numeros_orden(p.get("orden_tienda")))
     sin_facturar = [{"orden": n,
                      "valor": p.get("valor_num") or 0,
                      "entrega": (p.get("fecha_entrega") or "")[:10],
                      "ciudad": p.get("ciudad_destino")}
-                    for n, p in entregados.items() if n not in fv]
+                    for n, p in entregados.items() if n not in fv and n not in cubiertos]
 
     a_credito.sort(key=lambda x: (x["dias"] is None, -(x["dias"] or 0)))
     total_credito = round(sum(f["total"] for f in a_credito), 2)
@@ -487,9 +493,19 @@ def persistir_cruce_por_orden(pedidos: list[dict]) -> dict:
             return None
     ahora = datetime.now(timezone.utc).isoformat()
 
+    # Órdenes combinadas ("60822#60821" = una entrega, dos números de Shopify):
+    # si UN número tiene factura, el otro NO es "sin factura". Se recogen todos
+    # los números de esos pedidos para no emitir filas fantasma ni doble conteo.
+    cubiertos: set[str] = set()
+    for n, p in entregados.items():
+        if fv.get(n):
+            cubiertos.update(_numeros_orden(p.get("orden_tienda")))
+
     filas: list[dict] = []
     for n, p in entregados.items():
         facs = fv.get(n, [])
+        if not facs and n in cubiertos:
+            continue          # cubierto por la factura de su pedido combinado
         total = round(sum(f["total"] for f in facs), 2)
         saldo = round(sum(f["saldo"] for f in facs), 2)
         a_credito = any(f.get("a_credito") for f in facs)

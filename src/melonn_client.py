@@ -2209,7 +2209,7 @@ def _normalizar(raw: dict) -> dict:
         # ── Flags de estado ───────────────────────────────────────────────────
         "dias_en_transito":       0,   # calculado dinámicamente en shared._dias_reales()
         "esta_en_transito":       estado in ESTADOS_EN_TRANSITO,
-        "entregado":              estado in ESTADOS_EXCLUIR,
+        "entregado":              estado in ESTADOS_ENTREGADO,
         "incidencia":             "NINGUNO",
         "promesa_vencida":        False,
     }

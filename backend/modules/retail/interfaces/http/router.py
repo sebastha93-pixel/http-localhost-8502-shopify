@@ -273,9 +273,15 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
             SELECT coalesce(tope_descuento_pct, 0) FROM retail.permisos_pos
              WHERE usuario_id = :u AND activo
         """), {"u": usuario_id})).scalar() or 0))
-    variante_por_sku = {f["sku"]: f["id"] for f in filas}
+    # Se indexa por el SKU NORMALIZADO (Sku.parsear → strip+upper), el mismo que
+    # usa CerrarVenta para el lookup (linea.sku.codigo). Antes se indexaba por el
+    # SKU crudo de la BD y el guardián comparaba crudo: si un SKU guardado tenía
+    # minúsculas/espacios el guardián pasaba, pero el lookup normalizado reventaba
+    # con KeyError (500). Ahora guardián y lookup usan la misma llave.
+    variante_por_sku = {Sku.parsear(f["sku"]).codigo: f["id"] for f in filas}
 
-    faltan = [s for s in skus if s not in variante_por_sku]
+    faltan = [el.sku for el in entrada.lineas
+              if Sku.parsear(el.sku).codigo not in variante_por_sku]
     if faltan:
         raise ReglaDeNegocio(
             f"Estas referencias no están en el catálogo: {', '.join(faltan)}")

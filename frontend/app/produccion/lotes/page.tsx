@@ -238,11 +238,16 @@ export default function LotesPage() {
         })}
       </div>
 
-      {filtrados.length === 0 ? (
+      {visibles.length === 0 ? (
         <Card>
           <CardContent className="p-12 text-center">
             <Scissors className="mx-auto h-8 w-8 text-graphite" />
-            <p className="mt-3 text-sm text-graphite">Sin lotes en este filtro.</p>
+            {/* Se mide sobre `visibles` (lo que de verdad se pinta): antes se
+                medía `filtrados` y una búsqueda sin coincidencias dejaba la
+                grilla en blanco sin mensaje. */}
+            <p className="mt-3 text-sm text-graphite">
+              {busca.trim() ? "Ningún lote coincide con la búsqueda." : "Sin lotes en este filtro."}
+            </p>
           </CardContent>
         </Card>
       ) : (
