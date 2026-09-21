@@ -400,17 +400,31 @@ _YA_DESPACHADO = ("en_transito", "novedad", "entregado", "resuelto", "devuelto")
 
 
 def _marcar_despacho_observado(p: dict, prev: dict) -> bool:
-    """Anota la fecha de despacho si ACABAMOS DE VER la transición.
+    """Anota la fecha de despacho de un pedido despachado.
 
-    Devuelve True si se anotó. No pisa una fecha propia ya existente: el
-    despacho pasa una sola vez, y si el pedido vuelve a "en tránsito" tras una
-    novedad eso no es un despacho nuevo.
+    Dos caminos:
+      · TRANSICIÓN — acabamos de ver el paso no-despachado → despachado. Es la
+        fecha buena observada, marca confiable.
+      · PISO — el pedido aparece YA despachado la primera vez (sin transición
+        observable) y NADIE le puso fecha: ni el ship_timestamp del detalle (aún
+        sin enriquecer) ni una observación previa. Sin esto quedaba
+        `despachado_sin_fecha` e IMPOSIBLE de trabajar hasta que el
+        enriquecimiento —rate-limited— lo alcanzara. Se estampa HOY como piso
+        para que sea trabajable YA; NO marca confiable, así el ship_timestamp
+        real lo pisa después (el detalle sobrescribe siempre).
+
+    No pisa una fecha propia ya existente: el despacho pasa una sola vez, y si el
+    pedido vuelve a "en tránsito" tras una novedad eso no es un despacho nuevo.
     """
     if p.get("fecha_despacho_observada"):
         return False
     antes = prev.get("sub_estado_logistico") or ""
     ahora = p.get("sub_estado_logistico") or ""
-    if antes not in _NO_DESPACHADO or ahora not in _YA_DESPACHADO:
+    transicion = antes in _NO_DESPACHADO and ahora in _YA_DESPACHADO
+    piso = (ahora in _YA_DESPACHADO
+            and not p.get("fecha_despacho")
+            and not p.get("fecha_despacho_confiable"))
+    if not (transicion or piso):
         return False
     from datetime import datetime as _dt
     try:
@@ -419,11 +433,12 @@ def _marcar_despacho_observado(p: dict, prev: dict) -> bool:
     except Exception:
         hoy = _dt.now().date().isoformat()
     p["fecha_despacho_observada"] = hoy
-    # Si no había fecha fiable, esta manda: la vimos nosotros.
+    # Si no había fecha fiable, esta manda. La TRANSICIÓN es confiable (la vimos);
+    # el PISO no (es un estimado que el ship_timestamp real reemplazará).
     if not p.get("fecha_despacho_confiable"):
         p["fecha_despacho"] = hoy
-        p["fecha_despacho_confiable"] = True
-        p["fecha_despacho_origen"] = "transicion_observada"
+        p["fecha_despacho_confiable"] = bool(transicion)
+        p["fecha_despacho_origen"] = "transicion_observada" if transicion else "visto_despachado"
     return True
 
 
@@ -2504,6 +2519,32 @@ def _tam_tramo(estado: dict) -> int:
     return max(_TRAMO_MIN, min(_TRAMO_MAX, -(-previo // 2)))   # ceil(previo/2)
 
 
+def _traer_pagina_partida(pagina: int) -> Optional[list]:
+    """Reintenta una página que Melonn NO DIGIERE (500 tras agotar los reintentos
+    de _get) partiéndola en sub-páginas de la mitad de tamaño. Un `per_page`
+    menor suele pasar donde el grande revienta —por eso 'un tramo se cortó en la
+    página N: http_500' se repetía cada tick—. Devuelve los items combinados
+    (mismo rango de offset que la página entera), o None si aun partida falla
+    (ahí el barrido difiere al próximo tick, como siempre)."""
+    sub = _PAGE_SIZE // 2
+    if sub < 1 or _PAGE_SIZE % sub != 0:
+        return None                        # tamaño no divisible limpio → no arriesgar
+    factor = _PAGE_SIZE // sub              # 2
+    base = pagina * factor                 # primera sub-página que cubre esta página
+    combinado: list = []
+    for j in range(factor):
+        r = _get("sell-orders", params={"per_page": sub, "page": base + j})
+        if r is None:
+            return None                    # también revienta partida → difiere
+        chunk = r.get("data") or []
+        combinado.extend(chunk)
+        if len(chunk) < sub:
+            break                          # última página real: no hay más
+    log.warning(f"[barrido] página {pagina} no digerida entera; RECUPERADA partida "
+                f"en sub-páginas de {sub} ({len(combinado)} pedidos)")
+    return combinado
+
+
 def _barrido_tick(worker: str = "") -> dict:
     """Avanza UN TRAMO del barrido. Es lo que llama el scheduler en cada tick.
 
@@ -2574,9 +2615,15 @@ def _barrido_tick(worker: str = "") -> dict:
     while p < min(inicio + tam + solo_fusion, _MAX_PAGES):
         resp = _get("sell-orders", params={"per_page": _PAGE_SIZE, "page": p})
         if resp is None:
-            causa = (ultimo_fallo_get().get("motivo") or "sin_causa_registrada")
-            motivo = f"fallo_get_pagina_{p}:{causa}"
-            break
+            # La página revienta (500 tras reintentos): intentar recuperarla
+            # PARTIDA en sub-páginas más pequeñas antes de cortar el tramo. Solo
+            # si aun así falla se difiere al próximo tick.
+            partida = _traer_pagina_partida(p)
+            if partida is None:
+                causa = (ultimo_fallo_get().get("motivo") or "sin_causa_registrada")
+                motivo = f"fallo_get_pagina_{p}:{causa}"
+                break
+            resp = {"data": partida}
         items = resp.get("data") or []
         if not items:
             # Una página vacía significa "se acabó el listado" — pero SOLO si es
