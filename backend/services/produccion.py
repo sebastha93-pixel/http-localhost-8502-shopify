@@ -5294,6 +5294,7 @@ MARGEN_SEPARACION_INSUMOS = 0.01
 def calcular_insumos_requeridos_corte(
     oc_id: str,
     categorias: Optional[tuple[str, ...]] = None,
+    referencia_id: Optional[str] = None,
 ) -> dict:
     """Dado un corte, calcula los insumos que se necesitan multiplicando la
     cantidad de cada insumo del precosteo por la cantidad de prendas a cortar.
@@ -5313,28 +5314,58 @@ def calcular_insumos_requeridos_corte(
     if not oc:
         raise ValueError("orden_no_encontrada")
 
-    # Cantidad base para el cálculo
-    if oc.get("estado") == "cortada":
-        unidades = oc.get("unidades_cortadas") or {}
-        cantidad_base = sum(int(v or 0) for v in unidades.values())
-        origen = "unidades_cortadas"
-        if cantidad_base <= 0:
-            # Cierre histórico sin grilla de unidades → caer a lo programado
-            # para no dejar ciegos remisiones e insumos.
-            cantidad_base = int(oc.get("cantidad_programada") or 0) or \
-                sum(int(v or 0) for v in (oc.get("curva_trazo") or {}).values())
-            origen = "programada_fallback"
-    else:
-        cantidad_base = int(oc.get("cantidad_programada") or 0)
-        if cantidad_base <= 0:
-            curva = oc.get("curva_trazo") or {}
-            cantidad_base = sum(int(v or 0) for v in curva.values())
-            origen = "suma_curva"
-        else:
-            origen = "cantidad_programada"
+    # Corte COMBINADO con una referencia específica: los insumos se calculan
+    # SOLO para esa referencia —su curva de unidades y su propio precosteo—, no
+    # para el tendido entero. Sin esto, con una remisión por referencia cada
+    # descuento tomaba el corte COMPLETO y el precosteo de la PRIMARIA → doble
+    # descuento y con la referencia equivocada. La curva de la hija ya es la REAL
+    # tras el cierre (ver actualización de orden_corte_referencias al cerrar).
+    hija = None
+    if referencia_id:
+        try:
+            _hh = (_sb().table("orden_corte_referencias")
+                     .select("referencia_id,curva_trazo")
+                     .eq("orden_corte_id", oc_id)
+                     .eq("referencia_id", referencia_id).limit(1).execute()).data or []
+            hija = _hh[0] if _hh else None
+        except Exception:
+            hija = None
 
-    ref = oc.get("referencia") or {}
-    ref_id = oc.get("referencia_id")
+    unid_talla_fuente = None
+    if hija is not None:
+        # Por referencia: unidades y precosteo de ESA referencia.
+        ref_id = hija.get("referencia_id")
+        curva_ref = {str(t): int(v or 0)
+                     for t, v in (hija.get("curva_trazo") or {}).items() if int(v or 0) > 0}
+        cantidad_base = sum(curva_ref.values())
+        origen = "referencia_curva"
+        unid_talla_fuente = curva_ref
+        _pref = obtener_precosteo(ref_id) if ref_id else None
+        ref = {"codigo_referencia": (_pref or {}).get("codigo_referencia"),
+               "nombre": (_pref or {}).get("nombre")} if _pref else {}
+    else:
+        # Tendido completo (una sola referencia): comportamiento original.
+        if oc.get("estado") == "cortada":
+            unidades = oc.get("unidades_cortadas") or {}
+            cantidad_base = sum(int(v or 0) for v in unidades.values())
+            origen = "unidades_cortadas"
+            if cantidad_base <= 0:
+                # Cierre histórico sin grilla de unidades → caer a lo programado
+                # para no dejar ciegos remisiones e insumos.
+                cantidad_base = int(oc.get("cantidad_programada") or 0) or \
+                    sum(int(v or 0) for v in (oc.get("curva_trazo") or {}).values())
+                origen = "programada_fallback"
+        else:
+            cantidad_base = int(oc.get("cantidad_programada") or 0)
+            if cantidad_base <= 0:
+                curva = oc.get("curva_trazo") or {}
+                cantidad_base = sum(int(v or 0) for v in curva.values())
+                origen = "suma_curva"
+            else:
+                origen = "cantidad_programada"
+        ref = oc.get("referencia") or {}
+        ref_id = oc.get("referencia_id")
+
     if not ref_id or cantidad_base <= 0:
         return {
             "cantidad_base": cantidad_base,
@@ -5358,11 +5389,14 @@ def calcular_insumos_requeridos_corte(
 
     # Unidades POR TALLA (reales; si el cierre no las registró, programadas).
     # Para insumos que se separan talla por talla: cierres y marquillas.
-    unid_talla = {str(t): int(v or 0)
-                  for t, v in (oc.get("unidades_cortadas") or {}).items() if int(v or 0) > 0}
-    if not unid_talla:
+    if unid_talla_fuente is not None:
+        unid_talla = unid_talla_fuente
+    else:
         unid_talla = {str(t): int(v or 0)
-                      for t, v in (oc.get("curva_trazo") or {}).items() if int(v or 0) > 0}
+                      for t, v in (oc.get("unidades_cortadas") or {}).items() if int(v or 0) > 0}
+        if not unid_talla:
+            unid_talla = {str(t): int(v or 0)
+                          for t, v in (oc.get("curva_trazo") or {}).items() if int(v or 0) > 0}
     items = []
     total_costo = 0.0
     for it in (p.get("items") or []):
@@ -7398,7 +7432,11 @@ def descontar_insumos_remision(rem: dict, usuario: str) -> list[dict]:
     descontados = []
     for it in (rem.get("items") or []):
         try:
-            calc = calcular_insumos_requeridos_corte(it["orden_corte_id"], categorias=cats)
+            # referencia_id: en cortes combinados descuenta SOLO esa referencia,
+            # no el tendido entero (evita el doble descuento por remisión).
+            calc = calcular_insumos_requeridos_corte(
+                it["orden_corte_id"], categorias=cats,
+                referencia_id=it.get("referencia_id"))
         except Exception as e:
             log.warning(f"[insumos] calculo fallo OC {it.get('orden_corte_id')}: {e}")
             continue

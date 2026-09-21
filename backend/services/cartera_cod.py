@@ -468,8 +468,14 @@ def persistir_cruce_por_orden(pedidos: list[dict]) -> dict:
     # Estas pasan a "pagado" al instante, sin esperar a que Siigo postee.
     conciliadas: set[str] = set()
     try:
-        lc = sb.table("liquidaciones_cod").select("orden").execute().data or []
-        conciliadas = {str(r.get("orden")) for r in lc if r.get("orden")}
+        inicio = 0
+        while inicio < 50000:            # paginar: PostgREST corta en 1000 filas
+            lc = (sb.table("liquidaciones_cod").select("orden")
+                    .range(inicio, inicio + 999).execute()).data or []
+            conciliadas |= {str(r.get("orden")) for r in lc if r.get("orden")}
+            if len(lc) < 1000:
+                break
+            inicio += 1000
     except Exception as e:
         log.warning(f"[cartera_cod] no se pudo leer liquidaciones_cod: {str(e)[:120]}")
 
@@ -546,6 +552,29 @@ UMBRAL_DIAS_VENCIDA = 30
 UMBRAL_DIAS_SIN_FACTURAR = 15
 RECORDAR_CADA_H = 24          # un recordatorio al día, no uno por tick
 
+# Guarda anti-falso-positivo: si "sin factura" supera esta fracción del total,
+# casi seguro el espejo de Siigo quedó a medio sincronizar (un blip de Supabase
+# durante el sync deja facturas faltantes → entregados que SÍ tienen factura se
+# ven "sin factura"). En ese caso NO se avisa: mejor callar que alarmar con
+# basura. Nació del falso "171 entregados sin factura" (2026-09) cuando el cruce
+# real tenía 2. Ver historia en architecture_cod_saldo_siigo_no_es_deuda.
+FRACCION_SOSPECHOSA_SIN_FACTURA = 0.15
+
+
+def _leer_cruce_completo(sb) -> list[dict]:
+    """Lee TODO el cruce persistido (`cruce_cod_siigo`) paginando de a 1000.
+    Sin paginar, PostgREST corta en 1000 filas en silencio."""
+    out, inicio = [], 0
+    while inicio < 20000:
+        r = (sb.table("cruce_cod_siigo")
+               .select("orden,clasificacion,saldo,facturado,dias,entrega,ciudad,valor_melonn,facturas")
+               .range(inicio, inicio + 999).execute()).data or []
+        out += r
+        if len(r) < 1000:
+            break
+        inicio += 1000
+    return out
+
 
 def _ultimo_aviso(tipo: str) -> Optional[dict]:
     """La última notificación de ese tipo. La tabla de avisos ES la memoria:
@@ -587,85 +616,92 @@ def _debe_avisar(tipo: str, claves: list[str]) -> bool:
         return True               # fecha ilegible: mejor avisar que callarse
 
 
-def revisar_y_avisar(pedidos: list[dict]) -> dict:
-    """Revisa la cartera y avisa a la campanita de finanzas si hay plata vieja.
+def revisar_y_avisar(pedidos: list[dict] | None = None) -> dict:
+    """Avisa a la campanita de finanzas SOLO por lo accionable, leyendo la
+    clasificación VERÍDICA del cruce persistido (`cruce_cod_siigo`), no el saldo
+    crudo de Siigo —que para COD es atraso de posteo, no deuda—.
 
-    Manda hasta DOS avisos, con tipos distintos a propósito: uno se le reclama a
-    Melonn y el otro lo cierra contabilidad. Mezclarlos en un solo mensaje haría
-    que nadie sepa a quién le toca.
+    Manda hasta DOS avisos, con tipos distintos a propósito:
+      · 'revisar'     → entregado con saldo abierto que ya debió recaudarse
+                        (>60 días sin conciliar, o cobrado por otro medio con
+                        saldo). Es la plata que de verdad hay que mirar.
+      · 'sin_factura' → salió mercancía sin factura de venta: lo cierra
+                        contabilidad.
+    Lo 'pendiente' (atraso de posteo normal, ≤60 días) NO se avisa: era la fuente
+    del falso "$53M vencidas". `pedidos` se ignora (se conserva por compat con el
+    scheduler, que corre `persistir_cruce_por_orden` justo antes).
     """
-    res = cruzar(pedidos)
-    if not res.get("disponible"):
-        return {"ok": False, "motivo": res.get("motivo")}
+    sb = _sb()
+    if sb is None:
+        return {"ok": False, "motivo": "Supabase no configurado"}
+    try:
+        filas = _leer_cruce_completo(sb)
+    except Exception as e:
+        log.warning(f"[cartera_cod] no pude leer el cruce para avisar: {str(e)[:120]}")
+        return {"ok": False, "motivo": str(e)[:120]}
+    if not filas:
+        return {"ok": True, "avisos": []}
+
+    total = len(filas)
+    revisar = [f for f in filas if f.get("clasificacion") == "revisar"]
+    sin_fac = [f for f in filas if f.get("clasificacion") == "sin_factura"]
 
     from backend.services import notificaciones
     salida = {"ok": True, "avisos": []}
 
-    # ── 1. Facturado a crédito contraentrega y ya viejo ─────────────────
-    # NO dice "Melonn no ha consignado": eso no se sabe desde Siigo. Dice que la
-    # factura lleva N días abierta contra una cuenta cuyo plazo pactado es 10.
-    # Quien lo revise cruza con la conciliación y decide si reclamar.
-    vencidas = [f for f in (res.get("abiertas") or [])
-                if (f.get("dias") or 0) > UMBRAL_DIAS_VENCIDA]
-    if vencidas:
-        claves = sorted(f["factura"] for f in vencidas)
-        monto = sum(f["total"] for f in vencidas)
+    # ── 1. A revisar: saldo abierto viejo / medio directo con saldo ──────
+    if revisar:
+        claves = sorted(str(f["orden"]) for f in revisar)
+        monto = sum(float(f.get("saldo") or 0) for f in revisar)
         if _debe_avisar("cartera_cod_vencida", claves):
-            vieja = max(vencidas, key=lambda f: f.get("dias") or 0)
+            vieja = max(revisar, key=lambda f: f.get("dias") or 0)
             n = notificaciones.crear_para_modulo(
                 modulo="finanzas",
                 tipo="cartera_cod_vencida",
-                titulo=(f"Contraentrega: {len(vencidas)} factura(s) a crédito con "
-                        f"más de {UMBRAL_DIAS_VENCIDA} días"),
-                mensaje=(f"${monto:,.0f} facturados contra la cuenta de "
-                         f"contraentrega a 10 días que llevan más de "
-                         f"{UMBRAL_DIAS_VENCIDA}. La más vieja es la "
-                         f"{vieja['factura']} con {vieja['dias']} días "
-                         f"(pedido #{vieja['orden']}, entregado {vieja['entrega']}). "
-                         f"Verifica en la conciliación si Melonn ya consignó."),
+                titulo=f"Contraentrega: {len(revisar)} orden(es) a revisar",
+                mensaje=(f"${monto:,.0f} en contraentregas entregadas con saldo "
+                         f"abierto que ya deberían estar recaudadas (más de 60 días "
+                         f"sin conciliar, o cobradas por otro medio con saldo). La "
+                         f"más vieja es el pedido #{vieja['orden']} "
+                         f"({vieja.get('dias')} días). Revisa en la conciliación."),
                 enlace="/finanzas",
-                meta={"claves": claves, "monto": round(monto, 2),
-                      "umbral_dias": UMBRAL_DIAS_VENCIDA},
+                meta={"claves": claves, "monto": round(monto, 2)},
                 creado_por="centinela",
             )
-            log.warning(f"[cartera_cod] {len(vencidas)} facturas vencidas "
-                        f"(${monto:,.0f}); avisé a {n} persona(s)")
+            log.info(f"[cartera_cod] {len(revisar)} órdenes a revisar "
+                     f"(${monto:,.0f}); avisé a {n}")
             salida["avisos"].append({"tipo": "cartera_cod_vencida",
-                                     "facturas": len(vencidas),
+                                     "ordenes": len(revisar),
                                      "monto": round(monto, 2), "destinatarios": n})
 
-    # ── 2. Entregado y sin factura → lo cierra contabilidad ──────────────
-    hoy = datetime.now(timezone.utc).date()
-    def _dias_entrega(s):
-        try:
-            return (hoy - date.fromisoformat(s)).days
-        except (TypeError, ValueError):
-            return None
-    sin_fac = [s for s in (res.get("sin_factura") or [])
-               if (_dias_entrega(s.get("entrega")) or 0) > UMBRAL_DIAS_SIN_FACTURAR]
-    if sin_fac:
-        claves = sorted(str(s["orden"]) for s in sin_fac)
-        monto = sum(s["valor"] for s in sin_fac)
+    # ── 2. Entregado sin factura → lo cierra contabilidad ────────────────
+    # Guarda: un exceso de "sin factura" delata un espejo a medio sincronizar;
+    # ahí NO se avisa (evita el falso "171 sin factura").
+    umbral_sospecha = max(20, int(total * FRACCION_SOSPECHOSA_SIN_FACTURA))
+    if sin_fac and len(sin_fac) > umbral_sospecha:
+        log.warning(f"[cartera_cod] {len(sin_fac)} de {total} sin factura: se ve "
+                    f"como espejo de Siigo incompleto, NO aviso (evito falso positivo)")
+    elif sin_fac:
+        claves = sorted(str(f["orden"]) for f in sin_fac)
+        monto = sum(float(f.get("valor_melonn") or 0) for f in sin_fac)
         if _debe_avisar("cod_sin_facturar", claves):
             n = notificaciones.crear_para_modulo(
                 modulo="finanzas",
                 tipo="cod_sin_facturar",
                 titulo=f"{len(sin_fac)} pedido(s) entregados sin factura de venta",
-                mensaje=(f"${monto:,.0f} en pedidos entregados hace más de "
-                         f"{UMBRAL_DIAS_SIN_FACTURAR} días sin NINGUNA factura en "
-                         f"Siigo —se buscó con cualquier medio de pago, no solo "
-                         f"contraentrega—. Salió mercancía y el cliente pagó. "
-                         f"Esto lo cierra contabilidad."),
+                mensaje=(f"{len(sin_fac)} pedido(s) entregados sin NINGUNA factura "
+                         f"en Siigo —se buscó con cualquier medio de pago—. Salió "
+                         f"mercancía y el cliente pagó. Esto lo cierra contabilidad."
+                         + (f" Valor estimado ${monto:,.0f}." if monto else "")),
                 enlace="/finanzas",
                 meta={"claves": claves, "monto": round(monto, 2)},
                 creado_por="centinela",
             )
-            log.warning(f"[cartera_cod] {len(sin_fac)} entregados sin factura "
-                        f"(${monto:,.0f}); avisé a {n} persona(s)")
+            log.info(f"[cartera_cod] {len(sin_fac)} entregados sin factura; avisé a {n}")
             salida["avisos"].append({"tipo": "cod_sin_facturar",
                                      "pedidos": len(sin_fac),
                                      "monto": round(monto, 2), "destinatarios": n})
 
-    salida["vencidas"] = len(vencidas)
-    salida["sin_facturar_viejos"] = len(sin_fac)
+    salida["revisar"] = len(revisar)
+    salida["sin_factura"] = len(sin_fac)
     return salida

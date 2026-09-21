@@ -259,8 +259,8 @@ def _chequear_cartera() -> None:
         if r.get("avisos"):
             log.warning(f"[cartera] avisos enviados: {r['avisos']}")
         else:
-            log.info(f"[cartera] sin novedades · vencidas={r.get('vencidas')} "
-                     f"sin_facturar={r.get('sin_facturar_viejos')}")
+            log.info(f"[cartera] sin novedades · revisar={r.get('revisar')} "
+                     f"sin_factura={r.get('sin_factura')}")
     except Exception as e:
         log.warning(f"[cartera] la revisión falló (no afecta el refresh): {str(e)[:180]}")
 
