@@ -969,6 +969,53 @@ def crear_corte(
         raise HTTPException(500, f"crear_corte: {str(e)[:200]}")
 
 
+@router.patch("/corte/{oc_id}")
+def editar_corte(
+    oc_id: str,
+    body: CrearCorteBody,
+    user: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
+) -> dict:
+    """Corrige los datos de una orden de corte (por si el diseñador metió mal
+    algo). Solo antes de que el cortador asigne rollos y de que se corte."""
+    try:
+        oc = svc.editar_orden_corte(
+            oc_id,
+            referencia_id=body.referencia_id,
+            largo_trazo=body.largo_trazo,
+            curva_trazo=body.curva_trazo,
+            cantidad_programada=body.cantidad_programada,
+            promedio_tecnico=body.promedio_tecnico,
+            num_capas=body.num_capas,
+            referencias=[r.model_dump() for r in body.referencias] if body.referencias else None,
+            responsable=body.responsable,
+            responsable_email=body.responsable_email,
+            fecha_envio=body.fecha_envio,
+            indicaciones=body.indicaciones,
+            destinatarios_correo=body.destinatarios_correo,
+            trazos_url=body.trazos_url,
+        )
+        return {"ok": True, "orden_corte": oc}
+    except ValueError as e:
+        msg = str(e)
+        if msg.startswith("precosteo_ya_tiene_corte:"):
+            ref = msg.split(":", 1)[1]
+            raise HTTPException(409, f"La referencia {ref} ya está en otra orden de corte.")
+        amigable = {
+            "tiene_rollos_asignados": "No se puede editar: el cortador ya asignó tela (rollos). "
+                                      "Libera los rollos primero.",
+            "orden_ya_cortada": "No se puede editar: la orden ya está cortada.",
+            "precosteo_no_firmado": "Una de las referencias tiene el precosteo sin autorizar.",
+            "precosteo_no_encontrado": "No se encontró el precosteo de una referencia.",
+            "sin_referencias": "Falta al menos una referencia.",
+        }
+        if msg == "orden_no_encontrada":
+            raise HTTPException(404, "Orden de corte no encontrada.")
+        raise HTTPException(400, amigable.get(msg, msg))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"editar_corte: {str(e)[:200]}")
+
+
 @router.post("/corte/{oc_id}/autorizar")
 def autorizar_corte(
     oc_id: str,

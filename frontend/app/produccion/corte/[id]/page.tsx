@@ -800,15 +800,27 @@ export default function DetalleOrdenCortePage() {
       title={oc.consecutivo}
       subtitle={`${oc.referencia?.codigo_referencia || ""} · ${oc.referencia?.nombre || ""}`}
     >
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <Link href="/produccion/corte" className="inline-flex items-center gap-1 text-xs text-graphite hover:text-ink-900">
           <ArrowLeft className="h-3.5 w-3.5" /> Volver a órdenes
         </Link>
-        <Badge tone={cerrada ? "normal" : "pendiente"}>
-          {cerrada
-            ? <><Lock className="inline h-2.5 w-2.5 mr-1" />Cortada</>
-            : ({ borrador: "Borrador", autorizada: "Autorizada", en_proceso: "En proceso" }[oc.estado] || oc.estado)}
-        </Badge>
+        <div className="flex items-center gap-2">
+          {/* Editar la orden completa (referencia, tallas, cantidades, largo,
+              cortador…) — por si el diseñador metió mal un dato. Solo mientras
+              no esté cortada y el cortador NO haya asignado rollos (después
+              descuadraría las reservas de tela). */}
+          {puedeEditarNotas && !cerrada && (oc.rollos || []).length === 0 && (
+            <Link href={`/produccion/corte/nueva?editar=${id}`}
+              className="inline-flex items-center gap-1.5 rounded-sm border border-navy-600/40 bg-card px-3 py-1.5 text-xs font-semibold text-navy-600 hover:bg-navy-600/[0.06]">
+              <Pencil className="h-3.5 w-3.5" /> Editar orden
+            </Link>
+          )}
+          <Badge tone={cerrada ? "normal" : "pendiente"}>
+            {cerrada
+              ? <><Lock className="inline h-2.5 w-2.5 mr-1" />Cortada</>
+              : ({ borrador: "Borrador", autorizada: "Autorizada", en_proceso: "En proceso" }[oc.estado] || oc.estado)}
+          </Badge>
+        </div>
       </div>
 
       {msg && (

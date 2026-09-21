@@ -55,15 +55,45 @@ function capasDeCurva(curva: Record<string, number>): number {
 export default function NuevaOrdenCortePage() {
   const router = useRouter();
 
+  // Modo EDICIÓN: `?editar=<oc_id>` precarga una orden existente y hace PATCH en
+  // vez de POST. Se lee de la URL sin useSearchParams para no exigir un Suspense
+  // boundary (Next 15).
+  const [editarId, setEditarId] = useState<string | null>(null);
+  useEffect(() => {
+    setEditarId(new URLSearchParams(window.location.search).get("editar"));
+  }, []);
+
   const q = useQuery<{ precosteos?: Precosteo[] } | Precosteo[]>({
     queryKey: ["produccion", "precosteos", "disponibles-corte"],
     queryFn: () => api.get("/api/produccion/precosteo?disponibles_para_corte=true"),
   });
+
+  // La orden a editar (con sus referencias/curvas/rollos) — solo en modo edición.
+  const ordenQ = useQuery<Record<string, unknown>>({
+    queryKey: ["produccion", "corte", editarId],
+    queryFn: () => api.get(`/api/produccion/corte/${editarId}`),
+    enabled: !!editarId,
+  });
+  const orden = ordenQ.data as Record<string, any> | undefined;
+
   const precosteos = useMemo<Precosteo[]>(() => {
-    if (!q.data) return [];
-    const arr = Array.isArray(q.data) ? q.data : ((q.data as { precosteos?: Precosteo[] }).precosteos || []);
-    return arr.filter((p) => p.bloqueada || p.es_muestra_diseno);
-  }, [q.data]);
+    const arr = !q.data ? [] : (Array.isArray(q.data)
+      ? q.data : ((q.data as { precosteos?: Precosteo[] }).precosteos || []));
+    const base = arr.filter((p) => p.bloqueada || p.es_muestra_diseno);
+    // En edición, las referencias del corte YA tienen corte, así que no vienen
+    // en "disponibles": se agregan para que el selector las muestre.
+    if (editarId && orden) {
+      const ids = new Set(base.map((p) => p.id));
+      for (const r of ((orden.referencias as any[]) || [])) {
+        if (r.referencia_id && !ids.has(r.referencia_id)) {
+          base.push({ id: r.referencia_id, codigo_referencia: r.referencia?.codigo_referencia || r.referencia_id,
+                      nombre: r.referencia?.nombre || "", tela: r.referencia?.tela, color: r.referencia?.color,
+                      bloqueada: true, estado: "autorizada" });
+        }
+      }
+    }
+    return base;
+  }, [q.data, editarId, orden]);
 
   // Tendido (compartido)
   const [largoTrazo, setLargoTrazo] = useState("");
@@ -123,6 +153,33 @@ export default function NuevaOrdenCortePage() {
     }));
   }
 
+  // Precarga del modo edición (una sola vez cuando llega la orden).
+  const [precargado, setPrecargado] = useState(false);
+  useEffect(() => {
+    if (!editarId || !orden || precargado) return;
+    setLargoTrazo(orden.largo_trazo != null ? String(orden.largo_trazo) : "");
+    setNumCapas(orden.num_capas != null ? String(orden.num_capas) : "");
+    setPromedioTecnico(orden.promedio_tecnico != null ? String(orden.promedio_tecnico) : "");
+    setResponsable((orden.responsable as string) || "");
+    setResponsableEmail((orden.responsable_email as string) || "");
+    setFechaEnvio(((orden.fecha_envio as string) || "").slice(0, 10));
+    setIndicaciones((orden.indicaciones as string) || "");
+    setDestinatarios(((orden.destinatarios_correo as string[]) || []).join(", "));
+    const refsOc: any[] = ((orden.referencias as any[]) && (orden.referencias as any[]).length)
+      ? (orden.referencias as any[])
+      : [{ referencia_id: orden.referencia_id, curva_trazo: orden.curva_trazo }];
+    setRefs(refsOc.map((r, i) => {
+      const claves = Object.keys(r.curva_trazo || {});
+      const tj: Tallaje = claves.some((t) => TALLAS_SUPERIOR.includes(t)) ? "superior" : "inferior";
+      const curva = nuevaCurva(tj);
+      for (const [t, v] of Object.entries((r.curva_trazo as Record<string, unknown>) || {}))
+        if (t in curva) curva[t] = String(v);
+      return { key: i + 1, referenciaId: r.referencia_id as string, curva, tallaje: tj };
+    }));
+    nextKey.current = refsOc.length + 1;
+    setPrecargado(true);
+  }, [editarId, orden, precargado]);
+
   const idsUsados = refs.map((r) => r.referenciaId).filter(Boolean);
   const prendasDe = (rf: RefState) => Object.values(rf.curva).reduce((s, v) => s + (parseInt(v || "0", 10) || 0), 0);
   const totalPrendas = refs.reduce((s, rf) => s + prendasDe(rf), 0);
@@ -151,7 +208,7 @@ export default function NuevaOrdenCortePage() {
         if (Object.keys(r.curva_trazo).length === 0)
           throw new Error("Cada referencia necesita al menos una talla en la curva.");
       const destArr = destinatarios.split(/[,;\s]+/g).map((s) => s.trim()).filter(Boolean);
-      return api.post<{ ok: boolean; orden_corte: { id: string } }>("/api/produccion/corte", {
+      const payload = {
         referencias,
         num_capas: numCapas ? parseInt(numCapas, 10) : capasSugerida,
         largo_trazo: largo,
@@ -161,18 +218,24 @@ export default function NuevaOrdenCortePage() {
         fecha_envio: fechaEnvio || null,
         indicaciones: indicaciones || null,
         destinatarios_correo: destArr,
-        trazos_url: null,
-      });
+        trazos_url: editarId ? ((orden?.trazos_url as string) ?? null) : null,
+      };
+      return editarId
+        ? api.patch<{ ok: boolean; orden_corte: { id: string } }>(`/api/produccion/corte/${editarId}`, payload)
+        : api.post<{ ok: boolean; orden_corte: { id: string } }>("/api/produccion/corte", payload);
     },
-    onSuccess: (data) => router.push(`/produccion/corte/${data.orden_corte.id}`),
+    onSuccess: (data) => router.push(`/produccion/corte/${editarId || data.orden_corte.id}`),
     onError: (e: Error) => setErr(e.message),
   });
 
-  if (q.isLoading) return <LoadingState label="Cargando referencias…" />;
+  if (q.isLoading || (editarId && ordenQ.isLoading)) return <LoadingState label="Cargando…" />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
+  if (editarId && ordenQ.isError) return <ErrorState error={ordenQ.error} onRetry={() => ordenQ.refetch()} />;
 
   return (
-    <PageShell title="Nueva orden de corte" subtitle="Un tendido · varias referencias">
+    <PageShell
+      title={editarId ? `Editar orden ${(orden?.consecutivo as string) || ""}`.trim() : "Nueva orden de corte"}
+      subtitle={editarId ? "Corrige los datos del corte (antes de asignar rollos)" : "Un tendido · varias referencias"}>
       <form onSubmit={(e) => { e.preventDefault(); setErr(""); mut.mutate(); }} className="space-y-4">
         {/* ── Tendido (compartido) ── */}
         <Card>
@@ -261,12 +324,14 @@ export default function NuevaOrdenCortePage() {
 
         <div className="sticky bottom-0 bg-white/95 backdrop-blur border-t border-border py-3 flex items-center justify-between gap-3">
           <p className="text-xs text-graphite">
-            Se guardará como <span className="font-semibold text-ink-900">borrador</span>. Luego pistoleas los rollos (compartidos) en el detalle.
+            {editarId
+              ? "Se guardan los cambios. Solo se puede editar antes de que el cortador asigne rollos."
+              : <>Se guardará como <span className="font-semibold text-ink-900">borrador</span>. Luego pistoleas los rollos (compartidos) en el detalle.</>}
           </p>
           <button type="submit" disabled={mut.isPending}
             className="inline-flex items-center gap-2 rounded-sm bg-navy-600 px-6 py-2.5 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-navy-700 disabled:opacity-40">
             {mut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            Crear orden
+            {editarId ? "Guardar cambios" : "Crear orden"}
           </button>
         </div>
       </form>

@@ -1867,18 +1867,25 @@ def calcular_capas_desde_curva(curva: dict) -> int:
     return total
 
 
-def _referencia_ya_tiene_corte(referencia_id: str) -> bool:
+def _referencia_ya_tiene_corte(referencia_id: str, *,
+                               excluir_oc_id: Optional[str] = None) -> bool:
     """Un precosteo = un lote: True si ya está en un corte (como primaria o
-    como referencia de un tendido con varias)."""
+    como referencia de un tendido con varias). `excluir_oc_id` salta la propia
+    orden que se está editando (si no, editar chocaría consigo misma)."""
     sb = _sb()
     if sb is None:
         return False
-    if (sb.table("ordenes_corte").select("id")
-          .eq("referencia_id", referencia_id).limit(1).execute()).data:
+    q = sb.table("ordenes_corte").select("id").eq("referencia_id", referencia_id)
+    if excluir_oc_id:
+        q = q.neq("id", excluir_oc_id)
+    if q.limit(1).execute().data:
         return True
     try:
-        if (sb.table("orden_corte_referencias").select("id")
-              .eq("referencia_id", referencia_id).limit(1).execute()).data:
+        q2 = (sb.table("orden_corte_referencias").select("id")
+                .eq("referencia_id", referencia_id))
+        if excluir_oc_id:
+            q2 = q2.neq("orden_corte_id", excluir_oc_id)
+        if q2.limit(1).execute().data:
             return True
     except Exception:
         pass  # tabla hija aún sin migrar
@@ -1940,6 +1947,93 @@ def _referencias_de_corte(oc_id: str, oc_row: dict) -> list[dict]:
     return rows
 
 
+def _preparar_corte(*, referencia_id, curva_trazo, cantidad_programada,
+                    promedio_tecnico, referencias, largo_trazo, num_capas,
+                    excluir_oc_id: Optional[str] = None) -> tuple[list[dict], dict]:
+    """Normaliza las referencias de un tendido, valida sus precosteos y calcula
+    los campos DERIVADOS de la fila (curva combinada, metros teóricos, promedio
+    ponderado, rendimiento). Compartido por `crear_orden_corte` y
+    `editar_orden_corte` para que ambos deriven idéntico. `excluir_oc_id` salta la
+    regla "un precosteo = un corte" para la propia orden que se edita.
+    Devuelve (specs_enriquecidos, campos_calculados_de_la_fila)."""
+    # 1) Normalizar a una lista de referencias
+    if referencias:
+        specs = []
+        for r in referencias:
+            rid = (r.get("referencia_id") or "").strip()
+            if rid:
+                specs.append({"referencia_id": rid,
+                              "curva_trazo": r.get("curva_trazo") or {},
+                              "cantidad_programada": r.get("cantidad_programada"),
+                              # El promedio general del tendido cae a cada
+                              # referencia que no traiga el suyo (si no, metros
+                              # teóricos 0 → auto-asignar no asigna nada).
+                              "promedio_tecnico": r.get("promedio_tecnico")
+                                  if r.get("promedio_tecnico") is not None
+                                  else promedio_tecnico})
+    elif referencia_id:
+        specs = [{"referencia_id": referencia_id, "curva_trazo": curva_trazo or {},
+                  "cantidad_programada": cantidad_programada, "promedio_tecnico": promedio_tecnico}]
+    else:
+        specs = []
+    if not specs:
+        raise ValueError("sin_referencias")
+
+    # 2) Validar cada precosteo + regla "un precosteo = un lote" + enriquecer
+    for s in specs:
+        p = obtener_precosteo(s["referencia_id"])
+        if not p:
+            raise ValueError("precosteo_no_encontrado")
+        if not p.get("bloqueada") and not p.get("es_muestra_diseno"):
+            raise ValueError("precosteo_no_firmado")
+        if _referencia_ya_tiene_corte(s["referencia_id"], excluir_oc_id=excluir_oc_id):
+            raise ValueError(f"precosteo_ya_tiene_corte:{p.get('codigo_referencia') or ''}")
+        curva = s["curva_trazo"] or {}
+        s["_curva"]   = curva
+        s["_prendas"] = sum(int(n or 0) for n in curva.values())
+        s["_cant"]    = int(s["cantidad_programada"]) if s["cantidad_programada"] else s["_prendas"]
+        s["_prom"]    = float(s["promedio_tecnico"]) if s["promedio_tecnico"] is not None else None
+        # RED DE SEGURIDAD: si nadie digitó el promedio, se toma el consumo de
+        # TELA por prenda del propio precosteo (MATERIA PRIMA).
+        if s["_prom"] is None:
+            s["_prom"] = _promedio_desde_precosteo(s["referencia_id"])
+        try:
+            s["_precio"] = _precio_proceso_precosteo(s["referencia_id"], "corte")
+        except Exception:
+            s["_precio"] = None
+
+    # 3) Curva combinada del tendido + totales
+    curva_comb: dict = {}
+    for s in specs:
+        for t, n in (s["_curva"] or {}).items():
+            curva_comb[str(t)] = int(curva_comb.get(str(t), 0)) + int(n or 0)
+    prendas_total = sum(s["_prendas"] for s in specs)
+    cant_total    = sum(s["_cant"] for s in specs)
+    capas = int(num_capas) if num_capas is not None else calcular_capas_desde_curva(curva_comb)
+    prendas_por_trazo_est = max(1, sum(1 for v in curva_comb.values() if int(v or 0) > 0))
+    # Metros teóricos = Σ (promedio × cantidad) de CADA referencia, con techo
+    # físico (largo × capas). El promedio del encabezado es el ponderado.
+    metros_por_prom = round(sum((s["_prom"] or 0) * s["_cant"] for s in specs), 2)
+    prom_tendido = (round(metros_por_prom / cant_total, 4)
+                    if (metros_por_prom and cant_total) else (specs[0]["_prom"] or 0))
+    techo_fisico = _metros_fisicos_tendido(largo_trazo, capas)
+    metros_teo   = _clamp_metros_teoricos(metros_por_prom, largo_trazo, capas) or techo_fisico
+    rendimiento  = round(metros_teo / cant_total, 4) if cant_total else 0
+
+    calc = {
+        "largo_trazo": float(largo_trazo),
+        "prendas_por_trazo": prendas_por_trazo_est,
+        "curva_trazo": curva_comb,                    # combinada del tendido
+        "num_capas": capas,
+        "cantidad_programada": cant_total,
+        "promedio_tecnico": prom_tendido or None,
+        "prendas_estimadas": prendas_total,
+        "metros_consumidos": metros_teo,
+        "rendimiento_teorico": rendimiento,
+    }
+    return specs, calc
+
+
 def crear_orden_corte(*, referencia_id: Optional[str] = None,
                        largo_trazo: float,
                        curva_trazo: Optional[dict] = None,
@@ -1967,93 +2061,17 @@ def crear_orden_corte(*, referencia_id: Optional[str] = None,
     if sb is None:
         raise RuntimeError("Supabase no configurado")
 
-    # 1) Normalizar a una lista de referencias
-    if referencias:
-        specs = []
-        for r in referencias:
-            rid = (r.get("referencia_id") or "").strip()
-            if rid:
-                specs.append({"referencia_id": rid,
-                              "curva_trazo": r.get("curva_trazo") or {},
-                              "cantidad_programada": r.get("cantidad_programada"),
-                              # BUG FIX: el formulario manda el promedio como campo
-                              # GENERAL del tendido — si la referencia no trae el
-                              # suyo, cae al general (antes se ignoraba → metros
-                              # teóricos 0 → auto-asignar no asignaba nada).
-                              "promedio_tecnico": r.get("promedio_tecnico")
-                                  if r.get("promedio_tecnico") is not None
-                                  else promedio_tecnico})
-    elif referencia_id:
-        specs = [{"referencia_id": referencia_id, "curva_trazo": curva_trazo or {},
-                  "cantidad_programada": cantidad_programada, "promedio_tecnico": promedio_tecnico}]
-    else:
-        specs = []
-    if not specs:
-        raise ValueError("sin_referencias")
-
-    # 2) Validar cada precosteo + regla "un precosteo = un lote" + enriquecer
-    for s in specs:
-        p = obtener_precosteo(s["referencia_id"])
-        if not p:
-            raise ValueError("precosteo_no_encontrado")
-        if not p.get("bloqueada") and not p.get("es_muestra_diseno"):
-            raise ValueError("precosteo_no_firmado")
-        if _referencia_ya_tiene_corte(s["referencia_id"]):
-            raise ValueError(f"precosteo_ya_tiene_corte:{p.get('codigo_referencia') or ''}")
-        curva = s["curva_trazo"] or {}
-        s["_curva"]   = curva
-        s["_prendas"] = sum(int(n or 0) for n in curva.values())
-        s["_cant"]    = int(s["cantidad_programada"]) if s["cantidad_programada"] else s["_prendas"]
-        s["_prom"]    = float(s["promedio_tecnico"]) if s["promedio_tecnico"] is not None else None
-        # RED DE SEGURIDAD: si nadie digitó el promedio, se toma el consumo
-        # de TELA por prenda del propio precosteo (MATERIA PRIMA). Sin esto,
-        # metros teóricos nace en 0 y el auto-asignar queda muerto.
-        if s["_prom"] is None:
-            s["_prom"] = _promedio_desde_precosteo(s["referencia_id"])
-        try:
-            s["_precio"] = _precio_proceso_precosteo(s["referencia_id"], "corte")
-        except Exception:
-            s["_precio"] = None
-
-    # 3) Curva combinada del tendido + totales
-    curva_comb: dict = {}
-    for s in specs:
-        for t, n in (s["_curva"] or {}).items():
-            curva_comb[str(t)] = int(curva_comb.get(str(t), 0)) + int(n or 0)
-    prendas_total = sum(s["_prendas"] for s in specs)
-    cant_total    = sum(s["_cant"] for s in specs)
-    capas = int(num_capas) if num_capas is not None else calcular_capas_desde_curva(curva_comb)
-    prendas_por_trazo_est = max(1, sum(1 for v in curva_comb.values() if int(v or 0) > 0))
-    # Metros teóricos del tendido = Σ (promedio × cantidad) de CADA referencia.
-    # Antes se tomaba solo el promedio de la PRIMERA referencia × la cantidad
-    # combinada de todas, lo que sub-estimaba la tela de un tendido combinado y
-    # hacía que el auto-asignar reservara de menos. El promedio del encabezado
-    # queda como el ponderado del tendido (para un corte de una sola referencia
-    # da idéntico a antes).
-    metros_por_prom = round(sum((s["_prom"] or 0) * s["_cant"] for s in specs), 2)
-    prom_tendido = (round(metros_por_prom / cant_total, 4)
-                    if (metros_por_prom and cant_total) else (specs[0]["_prom"] or 0))
-    # Metros teóricos = promedio × cantidad, pero NUNCA por encima del techo
-    # físico (largo × capas). Y si no vino promedio, se usa el techo físico
-    # directo (antes nacía en 0 y la auto-asignación quedaba muerta).
-    techo_fisico = _metros_fisicos_tendido(largo_trazo, capas)
-    metros_teo   = _clamp_metros_teoricos(metros_por_prom, largo_trazo, capas) or techo_fisico
-    rendimiento  = round(metros_teo / cant_total, 4) if cant_total else 0
+    specs, calc = _preparar_corte(
+        referencia_id=referencia_id, curva_trazo=curva_trazo,
+        cantidad_programada=cantidad_programada, promedio_tecnico=promedio_tecnico,
+        referencias=referencias, largo_trazo=largo_trazo, num_capas=num_capas)
 
     primary = specs[0]
     codigo = next_consecutivo_mensual("OC", width=4)
     row = {
         "consecutivo": codigo,
         "referencia_id": primary["referencia_id"],   # primaria (retro-compat de joins)
-        "largo_trazo": float(largo_trazo),
-        "prendas_por_trazo": prendas_por_trazo_est,
-        "curva_trazo": curva_comb,                    # combinada del tendido
-        "num_capas": capas,
-        "cantidad_programada": cant_total,
-        "promedio_tecnico": prom_tendido or None,
-        "prendas_estimadas": prendas_total,
-        "metros_consumidos": metros_teo,
-        "rendimiento_teorico": rendimiento,
+        **calc,
         "responsable": responsable or None,
         "responsable_email": None,   # se llena abajo si vino un cortador elegido
         "fecha_envio": fecha_envio or None,
@@ -2108,6 +2126,93 @@ def crear_orden_corte(*, referencia_id: Optional[str] = None,
     _guardar_referencias_corte(oc["id"], specs)
     _cache_invalidate_prefix("ordenes_corte")
     return oc
+
+
+def editar_orden_corte(oc_id: str, *, referencia_id: Optional[str] = None,
+                        largo_trazo: Optional[float] = None,
+                        curva_trazo: Optional[dict] = None,
+                        cantidad_programada: Optional[int] = None,
+                        promedio_tecnico: Optional[float] = None,
+                        responsable: Optional[str] = None,
+                        responsable_email: Optional[str] = None,
+                        fecha_envio: Optional[str] = None,
+                        indicaciones: Optional[str] = None,
+                        destinatarios_correo: Optional[list[str]] = None,
+                        trazos_url: Optional[str] = None,
+                        num_capas: Optional[int] = None,
+                        referencias: Optional[list[dict]] = None) -> dict:
+    """Corrige los datos de una orden de corte que el diseñador metió mal.
+
+    SOLO mientras el corte NO tenga tela asignada (el cortador no ha pistoleado
+    rollos) y no esté cortado: cambiar tallas/cantidades/largo después
+    descuadraría las reservas de tela. Re-deriva TODO igual que crear (curva
+    combinada, metros teóricos, hijas por referencia) y reconstruye las hijas.
+    """
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    oc = obtener_orden_corte(oc_id)
+    if not oc:
+        raise ValueError("orden_no_encontrada")
+    if oc.get("estado") == "cortada":
+        raise ValueError("orden_ya_cortada")
+    # No se edita si el cortador ya reservó tela: primero hay que liberar rollos.
+    if (sb.table("orden_corte_rollos").select("id")
+          .eq("orden_corte_id", oc_id).limit(1).execute()).data:
+        raise ValueError("tiene_rollos_asignados")
+
+    if largo_trazo is None:
+        largo_trazo = oc.get("largo_trazo")
+
+    specs, calc = _preparar_corte(
+        referencia_id=referencia_id, curva_trazo=curva_trazo,
+        cantidad_programada=cantidad_programada, promedio_tecnico=promedio_tecnico,
+        referencias=referencias, largo_trazo=largo_trazo, num_capas=num_capas,
+        excluir_oc_id=oc_id)
+
+    primary = specs[0]
+    update = {
+        "referencia_id": primary["referencia_id"],
+        **calc,
+        "indicaciones": indicaciones or None,
+        "trazos_url": trazos_url if trazos_url is not None else oc.get("trazos_url"),
+        "fecha_envio": fecha_envio or None,
+        "fecha_limite": fecha_envio or None,
+    }
+    # Cortador: la ficha manda (mismo criterio que crear). Si no se cambia el
+    # cortador (sin responsable_email), se conserva el actual (no se toca).
+    _ficha = resolver_cortador(responsable_email)
+    if _ficha:
+        update["responsable"] = _ficha["nombre"]
+        update["responsable_email"] = _ficha["email"]
+        _dest = list(destinatarios_correo or oc.get("destinatarios_correo") or [])
+        if not any((d or "").strip().lower() == _ficha["email"].lower() for d in _dest):
+            _dest.insert(0, _ficha["email"])
+        update["destinatarios_correo"] = _dest
+    elif destinatarios_correo is not None:
+        update["destinatarios_correo"] = destinatarios_correo
+
+    def _aplicar(u: dict):
+        sb.table("ordenes_corte").update(u).eq("id", oc_id).execute()
+    try:
+        _aplicar(update)
+    except Exception as e:
+        # Degrada igual que crear si una columna nueva aún no está migrada.
+        msg = str(e)
+        for c in ("responsable_email", "trazos_url", "fecha_envio",
+                  "destinatarios_correo", "promedio_tecnico"):
+            if c in msg:
+                update.pop(c, None)
+        _aplicar(update)
+
+    # Reconstruir las hijas por referencia (borrar y volver a insertar).
+    try:
+        sb.table("orden_corte_referencias").delete().eq("orden_corte_id", oc_id).execute()
+    except Exception:
+        pass
+    _guardar_referencias_corte(oc_id, specs)
+    _cache_invalidate_prefix("ordenes_corte")
+    return obtener_orden_corte(oc_id)
 
 
 def cortadores_inscritos() -> list[dict]:
