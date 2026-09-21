@@ -211,8 +211,19 @@ def _headers() -> dict:
 
 
 # ── HTTP helpers ──────────────────────────────────────────────────────────────
+# ── KILL-SWITCH: Kommo DESACTIVADO ────────────────────────────────────────────
+# Kommo se quitó de la app a pedido de Sebastián (2026-09-21) — se manejará por
+# otra vía. Se apaga en el ORIGEN: `_get`/`_post` no hacen NINGUNA llamada y
+# devuelven None, exactamente el mismo valor que ya devolvían en fallo, así que
+# ningún caller (meta.py, revenue, sync_*, _paginar) se rompe. Con esto se acaba
+# la tanda de 401 en los logs y no sale más tráfico a Kommo. Revertir = True.
+KOMMO_HABILITADO = False
+
+
 def _get(path: str, params: Optional[dict] = None) -> Optional[dict]:
     """GET con rate limit + retry en 429/503. Retorna None en error final."""
+    if not KOMMO_HABILITADO:
+        return None
     url = f"{_base_url()}/{path.lstrip('/')}"
     for attempt, backoff in enumerate([0] + _RETRY_BACKOFF):
         if backoff:
@@ -245,6 +256,8 @@ def _get(path: str, params: Optional[dict] = None) -> Optional[dict]:
 
 def _post(path: str, body: dict | list) -> Optional[dict]:
     """POST a Kommo con rate limit + retry. Retorna respuesta JSON o None."""
+    if not KOMMO_HABILITADO:
+        return None
     url = f"{_base_url()}/{path.lstrip('/')}"
     for attempt, backoff in enumerate([0] + _RETRY_BACKOFF):
         if backoff:
@@ -312,6 +325,9 @@ def verificar_conexion() -> dict:
     Health check: llama GET /account y devuelve info básica.
     Útil para validar credenciales sin disparar sync completo.
     """
+    if not KOMMO_HABILITADO:
+        return {"ok": False, "desactivado": True,
+                "error": "Kommo desactivado en la app (se maneja por otra vía)"}
     try:
         info = _get("account")
     except RuntimeError as e:
