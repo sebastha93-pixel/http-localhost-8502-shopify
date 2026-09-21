@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, field_validator
 
 from backend.core.security import CurrentUser, get_current_user, require_role, require_permission
@@ -419,3 +419,136 @@ def conciliacion_excepciones(
     """Lo que el motor no pudo cuadrar — la lista de trabajo real."""
     from backend.services import recon_client
     return recon_client.excepciones(limite=limite)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CAJA MENOR · fondo fijo con soporte fotográfico por gasto
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Fondo fijo: la caja tiene una BASE, cada gasto exige descripción + foto del
+# recibo, y `saldo = base − gastos abiertos`. Al reponer se cierra el periodo y
+# el saldo vuelve a la base. Ver services/caja_menor.py.
+
+class BaseBody(BaseModel):
+    base: float
+
+
+class MotivoBody(BaseModel):
+    motivo: str = ""
+
+
+@router.get("/caja-menor")
+def caja_menor_resumen(
+    _: CurrentUser = Depends(require_permission("finanzas", "ver")),
+) -> dict:
+    """Estado de la caja: base, saldo disponible y lo gastado en el periodo."""
+    from backend.services import caja_menor as svc
+    try:
+        return svc.resumen()
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+
+
+@router.get("/caja-menor/movimientos")
+def caja_menor_movimientos(
+    incluir_cerrados: bool = Query(default=False),
+    limit: int = Query(default=200, ge=1, le=2000),
+    _: CurrentUser = Depends(require_permission("finanzas", "ver")),
+) -> dict:
+    """Gastos del periodo abierto (default) o el histórico completo."""
+    from backend.services import caja_menor as svc
+    try:
+        return svc.listar_movimientos(incluir_cerrados=incluir_cerrados, limit=limit)
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+
+
+@router.post("/caja-menor/base")
+def caja_menor_set_base(
+    body: BaseBody,
+    user: CurrentUser = Depends(require_permission("finanzas", "modificar")),
+) -> dict:
+    """Fija/ajusta la base (fondo fijo) de la caja."""
+    from backend.services import caja_menor as svc
+    try:
+        return svc.set_base(body.base, usuario_id=user.id, usuario_nombre=user.nombre)
+    except ValueError:
+        raise HTTPException(400, "La base debe ser un número mayor o igual a cero.")
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+
+
+@router.post("/caja-menor/gasto")
+async def caja_menor_gasto(
+    monto: float = Form(...),
+    descripcion: str = Form(...),
+    categoria: str = Form(default=""),
+    fecha: str = Form(default=""),
+    file: UploadFile = File(...),
+    user: CurrentUser = Depends(require_permission("finanzas", "modificar")),
+) -> dict:
+    """Registra un gasto con su soporte fotográfico (obligatorio)."""
+    from backend.services import caja_menor as svc
+    content = await file.read()
+    if len(content) > 15 * 1024 * 1024:
+        raise HTTPException(400, "La foto no puede pesar más de 15 MB.")
+    try:
+        return svc.registrar_gasto(
+            monto=monto,
+            descripcion=descripcion,
+            categoria=categoria,
+            fecha=fecha or None,
+            file_bytes=content,
+            filename=file.filename or "recibo.jpg",
+            content_type=file.content_type or "image/jpeg",
+            usuario_id=user.id,
+            usuario_nombre=user.nombre,
+        )
+    except ValueError as e:
+        mensajes = {
+            "monto_invalido": "El monto debe ser un número mayor a cero.",
+            "descripcion_requerida": "La descripción es obligatoria.",
+            "foto_requerida": "La foto del recibo es obligatoria.",
+            "formato_imagen_no_soportado": "Formato de imagen no soportado (usa JPG o PNG).",
+        }
+        raise HTTPException(400, mensajes.get(str(e), str(e)))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+
+
+@router.post("/caja-menor/movimiento/{mov_id}/anular")
+def caja_menor_anular(
+    mov_id: str,
+    body: MotivoBody,
+    user: CurrentUser = Depends(require_permission("finanzas", "modificar")),
+) -> dict:
+    """Anula un gasto abierto (corregir una mala carga)."""
+    from backend.services import caja_menor as svc
+    try:
+        return svc.anular_gasto(mov_id, motivo=body.motivo,
+                                usuario_id=user.id, usuario_nombre=user.nombre)
+    except ValueError as e:
+        mensajes = {
+            "no_encontrado": "No se encontró el gasto.",
+            "solo_gastos": "Solo se pueden anular gastos.",
+            "periodo_cerrado": "Ese gasto ya fue repuesto; no se puede anular.",
+        }
+        raise HTTPException(400, mensajes.get(str(e), str(e)))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+
+
+@router.post("/caja-menor/reponer")
+def caja_menor_reponer(
+    user: CurrentUser = Depends(require_permission("finanzas", "modificar")),
+) -> dict:
+    """Repone el fondo: cierra el periodo y devuelve el saldo a la base."""
+    from backend.services import caja_menor as svc
+    try:
+        return svc.reponer_caja(usuario_id=user.id, usuario_nombre=user.nombre)
+    except ValueError as e:
+        if str(e) == "nada_por_reponer":
+            raise HTTPException(400, "No hay gastos por reponer.")
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))

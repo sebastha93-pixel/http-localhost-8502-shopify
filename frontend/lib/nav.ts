@@ -50,6 +50,7 @@ export const NAV_GROUPS: NavGroup[] = [
     title: "Finanzas",
     items: [
       { label: "Finanzas",     href: "/finanzas",     permiso: "finanzas", desc: "Panorama financiero" },
+      { label: "Caja menor",   href: "/finanzas/caja-menor", permiso: "finanzas", desc: "Base y gastos con foto del recibo" },
       { label: "Conciliación", href: "/conciliacion", permiso: "finanzas", desc: "Cruce de pagos" },
       { label: "Facturación",  href: "/facturacion",  permiso: "finanzas", desc: "Facturas emitidas" },
       { label: "MercadoPago",  href: "/mercadopago",  permiso: "finanzas", desc: "Pagos MercadoPago" },
