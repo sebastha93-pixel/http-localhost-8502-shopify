@@ -224,8 +224,17 @@ function EditarEnvio({
   pedido, onClose, onSaved,
 }: { pedido: Pedido; onClose: () => void; onSaved: () => void }) {
   const orden = pedido.orden_tienda || pedido.orden_melonn;
+  const OPCIONES_CARRIER = ["Coordinadora Mercantil", "Envía", "Interrapidísimo", "TCC", "Servientrega"];
   const [carrier, setCarrier] = useState((pedido.carrier_real as string) || "");
   const [guia, setGuia] = useState((pedido.guia_real as string) || "");
+  // "Otra" se rastrea aparte: si el input custom dependiera de carrier==="Otra",
+  // su onChange cambiaría carrier, el input se desmontaría y se perdería el foco
+  // tras 1 carácter. Arranca abierto si la transportadora guardada no está en la
+  // lista (transportadora custom ya registrada).
+  const [otra, setOtra] = useState(() => {
+    const c = (pedido.carrier_real as string) || "";
+    return c !== "" && !OPCIONES_CARRIER.includes(c);
+  });
 
   const mut = useMutation({
     mutationFn: () => api.post(`/api/pedidos/${orden}/guia`, { carrier, guia }),
@@ -249,8 +258,12 @@ function EditarEnvio({
             Transportadora
           </label>
           <select
-            value={carrier}
-            onChange={(e) => setCarrier(e.target.value)}
+            value={otra ? "Otra" : carrier}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === "Otra") { if (!otra) setCarrier(""); setOtra(true); }
+              else { setOtra(false); setCarrier(v); }
+            }}
             className="w-full rounded-md border border-border bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-steel"
           >
             <option value="">— Seleccionar —</option>
@@ -263,10 +276,11 @@ function EditarEnvio({
           </select>
         </div>
 
-        {carrier === "Otra" && (
+        {otra && (
           <div>
             <input
               autoFocus
+              value={carrier}
               placeholder="Nombre exacto de la transportadora"
               onChange={(e) => setCarrier(e.target.value)}
               className="w-full rounded-md border border-border bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-steel"

@@ -154,7 +154,10 @@ def obtener_transacciones(
     try:
         r = requests.get(url, headers=_auth_headers(), params=params, timeout=30)
         if r.status_code == 401:
-            # Token expirado → refresh y reintentar una vez
+            # Token expirado → FORZAR refresh y reintentar una vez. Sin el
+            # forzar_refresh, _auth_headers() devolvía el mismo token vencido del
+            # caché y el reintento daba 401 otra vez.
+            get_token(forzar_refresh=True)
             r = requests.get(url, headers=_auth_headers(), params=params, timeout=30)
         if r.status_code >= 400:
             print(f"[addi] GET {url} → {r.status_code}: {r.text[:200]}")

@@ -146,7 +146,9 @@ def resumen(_: CurrentUser = Depends(get_current_user)) -> ResumenFinanzas:
     try:
         import mp_client as mp
         desde = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-        pagos = mp.obtener_pagos(fecha_desde=desde, limit_total=1000)
+        # limit_total 1000 truncaba la cifra de plata si había más pagos en 30
+        # días (obtener_pagos ya pagina solo; el tope solo cortaba el total).
+        pagos = mp.obtener_pagos(fecha_desde=desde, limit_total=5000)
         n_mp = len(pagos)
         mp_total = sum(p.get("valor_bruto", 0) for p in pagos)
         mp_neto  = sum(p.get("valor_neto", 0)  for p in pagos)

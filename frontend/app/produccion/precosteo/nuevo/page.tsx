@@ -331,7 +331,10 @@ export default function NuevoPrecosteoPage() {
                 </thead>
                 <tbody>
                   {gruposUI.map((g) => (
-                    <Fragment key={g.categoria}>
+                    // La key incluye el 1er índice del grupo: al agregar una
+                    // línea "MATERIA PRIMA" al final aparece un 2º grupo con esa
+                    // misma categoría, y `key={g.categoria}` colisionaba.
+                    <Fragment key={`${g.categoria}-${g.indices[0]}`}>
                       <tr className="bg-cloud/60 border-b border-border">
                         <td colSpan={7} className="px-2 py-1.5 text-[0.7rem] font-bold uppercase tracking-[0.16em] text-ink-900">
                           {g.categoria}
