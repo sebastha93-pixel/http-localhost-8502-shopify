@@ -1152,7 +1152,8 @@ def _calcular_totales_precosteo(items: list[dict], iva_pct: float, margen: float
 
 def crear_precosteo(*, codigo_referencia: str, nombre: str, tela: str, color: str,
                     iva_pct: float, margen: float, items: list[dict],
-                    created_by: str, es_muestra_diseno: bool = False) -> dict:
+                    created_by: str, es_muestra_diseno: bool = False,
+                    descripcion: Optional[str] = None) -> dict:
     """Crea un precosteo en estado 'borrador' con sus líneas.
 
     Si es_muestra_diseno=True, el precosteo puede usarse para generar
@@ -1174,6 +1175,7 @@ def crear_precosteo(*, codigo_referencia: str, nombre: str, tela: str, color: st
         "nombre": nombre.strip(),
         "tela": (tela or "").strip() or None,
         "color": (color or "").strip() or None,
+        "descripcion": (descripcion or "").strip() or None,
         "iva_pct": iva_pct,
         "margen": margen,
         "costo_total_sin_iva": totales["costo_total_sin_iva"],
@@ -1187,9 +1189,14 @@ def crear_precosteo(*, codigo_referencia: str, nombre: str, tela: str, color: st
     try:
         r = sb.table("referencias_precosteo").insert(row).execute()
     except Exception as e:
-        # Compat: si la migración aún no corrió, quita el flag y reintenta
-        if "es_muestra_diseno" in str(e):
-            row.pop("es_muestra_diseno", None)
+        # Compat: si la migración aún no corrió, quita la columna nueva y reintenta
+        msg = str(e)
+        quitada = False
+        for col in ("es_muestra_diseno", "descripcion"):
+            if col in msg and col in row:
+                row.pop(col, None)
+                quitada = True
+        if quitada:
             r = sb.table("referencias_precosteo").insert(row).execute()
         else:
             raise
@@ -1307,6 +1314,7 @@ def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
                          foto_url: Optional[str] = None,
                          es_muestra_diseno: Optional[bool] = None,
                          instrucciones_lavado: Optional[str] = None,
+                         descripcion: Optional[str] = None,
                          precio_venta_final: Optional[float] = None,
                          usuario_id: Optional[str] = None) -> dict:
     """Actualiza un precosteo.
@@ -1325,7 +1333,7 @@ def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
     # cambiar algo del costo/ficha sin privilegio.
     solo_precio = (precio_venta_final is not None and all(x is None for x in (
         nombre, codigo_referencia, tela, color, iva_pct, margen, items,
-        foto_url, es_muestra_diseno, instrucciones_lavado)))
+        foto_url, es_muestra_diseno, instrucciones_lavado, descripcion)))
     if (actual.get("bloqueada") and not _puede_editar_precosteo_bloqueado(usuario_id)
             and not solo_precio):
         raise ValueError("precosteo_bloqueado")
@@ -1346,6 +1354,10 @@ def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
         _guardar_columna_precosteo(
             sb, precosteo_id, "instrucciones_lavado",
             instrucciones_lavado.strip() or None)
+    if descripcion is not None:
+        _guardar_columna_precosteo(
+            sb, precosteo_id, "descripcion",
+            descripcion.strip() or None)
 
     if precio_venta_final is not None:
         # PVP con IVA que el autorizador digita para ver el margen.

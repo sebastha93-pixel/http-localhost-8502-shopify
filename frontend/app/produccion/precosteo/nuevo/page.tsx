@@ -94,6 +94,7 @@ export default function NuevoPrecosteoPage() {
   const [nombre, setNombre] = useState("");
   const [tela, setTela] = useState("");
   const [color, setColor] = useState("");
+  const [descripcion, setDescripcion] = useState("");
   const [iva, setIva] = useState("19");
   const [precioVenta, setPrecioVenta] = useState("");
   const [esMuestra, setEsMuestra] = useState(false);
@@ -183,6 +184,7 @@ export default function NuevoPrecosteoPage() {
         nombre: nombre.trim(),
         tela: telaFinal || null,
         color: color.trim() || null,
+        descripcion: descripcion.trim() || null,
         iva_pct: ivaPct,
         margen,
         items,
@@ -289,6 +291,16 @@ export default function NuevoPrecosteoPage() {
               <Input label="Color"                value={color} onChange={setColor} placeholder="Índigo" />
               <Input label="IVA %"                value={iva} onChange={setIva} inputMode="decimal" />
               <Input label="Precio de venta (con IVA)" value={precioVenta} onChange={setPrecioVenta} inputMode="decimal" placeholder="120000" />
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                Descripción <span className="text-graphite/60 normal-case tracking-normal">(opcional)</span>
+              </label>
+              <textarea value={descripcion} onChange={(e) => setDescripcion(e.target.value)}
+                rows={3}
+                placeholder="Detalle de la referencia: características, terminación, notas del diseño…"
+                className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm text-ink-900 placeholder:text-graphite/50" />
             </div>
 
             <label className={`flex items-start gap-3 rounded-sm border p-3 cursor-pointer ${esMuestra ? "border-navy-600 bg-navy-600/[0.04]" : "border-border bg-cloud/30"}`}>

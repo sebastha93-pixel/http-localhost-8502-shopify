@@ -582,6 +582,7 @@ class PrecosteoIn(BaseModel):
     nombre:            str = Field(min_length=1)
     tela:              Optional[str] = None
     color:             Optional[str] = None
+    descripcion:       Optional[str] = None
     iva_pct:           float = 19
     margen:            float = 0
     items:             list[PrecosteoItemIn] = []
@@ -593,6 +594,7 @@ class PrecosteoUpdate(BaseModel):
     codigo_referencia: Optional[str] = None
     tela:    Optional[str] = None
     color:   Optional[str] = None
+    descripcion: Optional[str] = None  # detalle libre de la referencia
     iva_pct: Optional[float] = None
     margen:  Optional[float] = None
     items:   Optional[list[PrecosteoItemIn]] = None
@@ -617,6 +619,7 @@ def crear_precosteo(
             nombre=body.nombre,
             tela=body.tela or "",
             color=body.color or "",
+            descripcion=body.descripcion,
             iva_pct=body.iva_pct,
             margen=body.margen,
             items=[i.model_dump() for i in body.items],
@@ -668,6 +671,7 @@ def actualizar_precosteo(
             codigo_referencia=body.codigo_referencia,
             tela=body.tela,
             color=body.color,
+            descripcion=body.descripcion,
             iva_pct=body.iva_pct,
             margen=body.margen,
             items=[i.model_dump() for i in body.items] if body.items is not None else None,
