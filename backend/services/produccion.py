@@ -3386,10 +3386,15 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
     if not claim.data:
         raise ValueError("orden_ya_cortada")
 
-    # Restos MENORES A 0.5 m no son sobrante utilizable → van a RETAZOS y el
+    # Restos MENORES A 2 m no son sobrante utilizable → van a RETAZOS y el
     # rollo sale del inventario de telas (agotado). Se suman a los retazos de
     # la orden y dejan rastro propio en movimientos.
-    UMBRAL_RETAZO = 0.5
+    #
+    # Subido de 0.5 a 2 m (2026-09-28): la liquidación por rollo dejó de pedirse
+    # a mano en el cierre — ahora el descuento secuencial + este umbral hacen que
+    # los pedacitos se agoten solos, sin que el cortador marque rollos uno por uno.
+    # Un restante >= 2 m sí se conserva (es tela usable de verdad).
+    UMBRAL_RETAZO = 2.0
     retazos_auto = 0.0
     descuentos_fin: list[tuple[str, float, float, float]] = []
     for rollo_id, m, nuevo in descuentos:
