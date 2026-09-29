@@ -990,15 +990,34 @@ def auditar_inventario(*, tolerancia_m: float = 0.1) -> dict:
 
     # ── 1. Saldo de cada rollo vs su libro de movimientos ──
     try:
-        rollos = (sb.table("rollos_tela")
-                    .select("id,codigo_interno,descripcion_tela,metros_inicial,"
-                            "metros_disponible,estado").limit(5000).execute()).data or []
-        movs = (sb.table("movimientos_inventario")
-                  .select("rollo_id,metros,tipo").limit(50000).execute()).data or []
+        # PostgREST corta en 1.000 filas: hay que paginar (.limit(50000) traía
+        # un subconjunto arbitrario y sin ordenar, así que la auditoría medía
+        # sobre datos incompletos y marcaba rollos sanos como descuadrados).
+        def _leer_paginado(tabla: str, columnas: str) -> list:
+            filas: list = []
+            inicio = 0
+            while True:
+                chunk = (sb.table(tabla).select(columnas)
+                           .range(inicio, inicio + 999).execute()).data or []
+                filas.extend(chunk)
+                if len(chunk) < 1000:
+                    break
+                inicio += 1000
+            return filas
+        rollos = _leer_paginado(
+            "rollos_tela",
+            "id,codigo_interno,descripcion_tela,metros_inicial,metros_disponible,estado")
+        movs = _leer_paginado("movimientos_inventario", "rollo_id,metros,tipo")
         delta: dict = {}
         for mv in movs:
-            if mv.get("tipo") == "ingreso":
-                continue   # el inicial ya está en metros_inicial
+            # SOLO 'corte' y 'ajuste' mueven saldo (allowlist, igual que la 2ª
+            # parte del audit). 'correccion_metraje' y 'anulacion_no_recibido'
+            # son notas de auditoría que YA ajustaron metros_inicial en su
+            # origen — contarlas aquí las aplicaría DOS veces y descuadraría el
+            # rollo para siempre (falso positivo). El denylist anterior (todo
+            # menos 'ingreso') las contaba.
+            if mv.get("tipo") not in ("corte", "ajuste"):
+                continue
             rid = mv.get("rollo_id")
             if rid:
                 delta[rid] = delta.get(rid, 0.0) + float(mv.get("metros") or 0)
@@ -2028,6 +2047,11 @@ def _preparar_corte(*, referencia_id, curva_trazo, cantidad_programada,
     metros_por_prom = round(sum((s["_prom"] or 0) * s["_cant"] for s in specs), 2)
     prom_tendido = (round(metros_por_prom / cant_total, 4)
                     if (metros_por_prom and cant_total) else (specs[0]["_prom"] or 0))
+    # Blindaje: una OC legacy sin largo_trazo (None) reventaba con TypeError al
+    # editarla (float(None)). Se cae a 0 — cálculo degradado, no crash; el
+    # diseñador re-ingresa el largo.
+    largo_trazo = float(largo_trazo or 0)
+    capas = int(capas or 0)
     techo_fisico = _metros_fisicos_tendido(largo_trazo, capas)
     metros_teo   = _clamp_metros_teoricos(metros_por_prom, largo_trazo, capas) or techo_fisico
     rendimiento  = round(metros_teo / cant_total, 4) if cant_total else 0
@@ -2780,26 +2804,62 @@ def despachos_por_corte(limit: int = 200) -> list[dict]:
     return out
 
 
-def _ocs_con_remision(tipo: str) -> set:
-    """IDs de órdenes de corte que ya tienen una remisión del tipo dado.
-    Compat: si la columna `tipo` no existe aún, toda remisión cuenta como
-    confección (comportamiento pre-migración).
-    """
+def _leer_remisiones_paginado() -> tuple:
+    """Todas las remisiones (id, tipo), PAGINADO (.limit(2000) lo topaba
+    PostgREST en 1.000). Devuelve (filas, tiene_tipo); si la columna `tipo` no
+    existe aún, tiene_tipo=False y todo cuenta como confección (pre-migración)."""
     sb = _sb()
     if sb is None:
-        return set()
+        return [], True
+    # ¿Existe la columna `tipo`? Se decide una vez con la primera página.
     try:
-        rems = (sb.table("remisiones").select("id,tipo").limit(2000).execute()).data or []
-        rem_ids = [r["id"] for r in rems if (r.get("tipo") or "confeccion") == tipo]
+        primera = (sb.table("remisiones").select("id,tipo")
+                     .range(0, 999).execute()).data or []
+        tiene_tipo = True
     except Exception:
-        if tipo != "confeccion":
-            return set()
-        rems = (sb.table("remisiones").select("id").limit(2000).execute()).data or []
-        rem_ids = [r["id"] for r in rems]
+        tiene_tipo = False
+        primera = (sb.table("remisiones").select("id").range(0, 999).execute()).data or []
+    filas = list(primera)
+    inicio = 1000
+    while len(filas) == inicio:  # la última página llena → puede haber más
+        cols = "id,tipo" if tiene_tipo else "id"
+        chunk = (sb.table("remisiones").select(cols)
+                   .range(inicio, inicio + 999).execute()).data or []
+        filas.extend(chunk)
+        if len(chunk) < 1000:
+            break
+        inicio += 1000
+    return filas, tiene_tipo
+
+
+def _items_de_remisiones(rem_ids: list, columnas: str) -> list:
+    """remision_items de esos rem_ids, en lotes de 100 (evita URL larga y el
+    tope de 1.000 de un solo .in_)."""
+    sb = _sb()
+    if sb is None or not rem_ids:
+        return []
+    out: list = []
+    for i in range(0, len(rem_ids), 100):
+        lote = rem_ids[i:i + 100]
+        out.extend((sb.table("remision_items").select(columnas)
+                      .in_("remision_id", lote).execute()).data or [])
+    return out
+
+
+def _rem_ids_de_tipo(tipo: str) -> Optional[list]:
+    """rem_ids de un tipo; None si el tipo no aplica (sin columna y tipo≠confeccion)."""
+    rems, tiene_tipo = _leer_remisiones_paginado()
+    if not tiene_tipo:
+        return [r["id"] for r in rems] if tipo == "confeccion" else None
+    return [r["id"] for r in rems if (r.get("tipo") or "confeccion") == tipo]
+
+
+def _ocs_con_remision(tipo: str) -> set:
+    """IDs de órdenes de corte que ya tienen una remisión del tipo dado."""
+    rem_ids = _rem_ids_de_tipo(tipo)
     if not rem_ids:
         return set()
-    items = (sb.table("remision_items").select("orden_corte_id")
-               .in_("remision_id", rem_ids).limit(5000).execute()).data or []
+    items = _items_de_remisiones(rem_ids, "orden_corte_id")
     return {it["orden_corte_id"] for it in items if it.get("orden_corte_id")}
 
 
@@ -2811,25 +2871,13 @@ def _lotes_con_remision(tipo: str) -> set:
     Los items viejos sin `referencia_id` (legacy) se devuelven como
     (oc_id, None) = 'el corte entero ya se remitió', y `_lote_ya_remitido` los
     trata como que cubren cualquier referencia de ese corte."""
-    sb = _sb()
-    if sb is None:
-        return set()
-    try:
-        rems = (sb.table("remisiones").select("id,tipo").limit(2000).execute()).data or []
-        rem_ids = [r["id"] for r in rems if (r.get("tipo") or "confeccion") == tipo]
-    except Exception:
-        if tipo != "confeccion":
-            return set()
-        rems = (sb.table("remisiones").select("id").limit(2000).execute()).data or []
-        rem_ids = [r["id"] for r in rems]
+    rem_ids = _rem_ids_de_tipo(tipo)
     if not rem_ids:
         return set()
     try:
-        items = (sb.table("remision_items").select("orden_corte_id,referencia_id")
-                   .in_("remision_id", rem_ids).limit(5000).execute()).data or []
+        items = _items_de_remisiones(rem_ids, "orden_corte_id,referencia_id")
     except Exception:
-        items = (sb.table("remision_items").select("orden_corte_id")
-                   .in_("remision_id", rem_ids).limit(5000).execute()).data or []
+        items = _items_de_remisiones(rem_ids, "orden_corte_id")
     return {(it.get("orden_corte_id"), it.get("referencia_id"))
             for it in items if it.get("orden_corte_id")}
 
@@ -2839,6 +2887,48 @@ def _lote_ya_remitido(oc_id: str, ref_id: Optional[str], remitidos: set) -> bool
     tanto el par exacto como un item legacy (oc_id, None) que cubre el corte
     entero."""
     return (oc_id, ref_id) in remitidos or (oc_id, None) in remitidos
+
+
+def _lotes_remitidos_de(tipo: str, oc_ids: list) -> set:
+    """Pares (oc_id, ref_id) YA remitidos del `tipo`, SOLO para los cortes en
+    `oc_ids`. Consulta ACOTADA por orden_corte_id (lotes de 100): no trae toda
+    la tabla, así que PostgREST no la topa en 1.000 filas. Es el candado real
+    anti-duplicados de crear_remision — sin esto, con remision_items > 1.000 un
+    lote ya remitido podía quedar fuera del set y se creaba una 2ª remisión
+    (doble descuento de insumos + doble WhatsApp al proveedor + doble impresión).
+    Los _lotes_con_remision completos quedan solo para las vistas."""
+    sb = _sb()
+    ids = list({o for o in (oc_ids or []) if o})
+    if sb is None or not ids:
+        return set()
+    items: list = []
+    for i in range(0, len(ids), 100):
+        lote = ids[i:i + 100]
+        try:
+            r = (sb.table("remision_items")
+                   .select("orden_corte_id,referencia_id,remision_id")
+                   .in_("orden_corte_id", lote).execute()).data or []
+        except Exception:
+            r = (sb.table("remision_items").select("orden_corte_id,remision_id")
+                   .in_("orden_corte_id", lote).execute()).data or []
+        items.extend(r)
+    if not items:
+        return set()
+    rem_ids = list({it.get("remision_id") for it in items if it.get("remision_id")})
+    # Tipo de cada remisión (compat: sin columna `tipo` → todo confección).
+    tipos: dict = {}
+    for i in range(0, len(rem_ids), 100):
+        lote = rem_ids[i:i + 100]
+        try:
+            for rr in (sb.table("remisiones").select("id,tipo")
+                         .in_("id", lote).execute()).data or []:
+                tipos[rr["id"]] = (rr.get("tipo") or "confeccion")
+        except Exception:
+            for rid in lote:
+                tipos[rid] = "confeccion"
+    return {(it.get("orden_corte_id"), it.get("referencia_id"))
+            for it in items
+            if it.get("orden_corte_id") and tipos.get(it.get("remision_id")) == tipo}
 
 
 def obtener_orden_corte(oc_id: str) -> Optional[dict]:
@@ -4311,7 +4401,9 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
 
     # Validar LOTES: corte cortada + lote no remitido (por corte+referencia).
     # Así una referencia de un combinado puede remitirse aunque otra ya lo esté.
-    ya_remitidos = _lotes_con_remision(tipo)
+    # Candado ACOTADO a los cortes de esta remisión (no la tabla entera): sin
+    # tope de 1.000 filas → no crea remisiones duplicadas al crecer la tabla.
+    ya_remitidos = _lotes_remitidos_de(tipo, [oc_id for oc_id, _ in pares])
     _estados: dict = {}
     for oc_id, ref_id in pares:
         if oc_id not in _estados:

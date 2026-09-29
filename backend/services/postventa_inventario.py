@@ -169,8 +169,22 @@ def _edad(fila: dict) -> Optional[float]:
     val = fila.get("actualizado_en")
     if not val:
         return None
+    s = str(val).replace("Z", "+00:00").strip()
+    # Py 3.10: fromisoformat SOLO acepta fracciones de segundo de 3 o 6 dígitos,
+    # pero Postgres recorta los ceros finales (1/2/4/5 dígitos) → ValueError, y
+    # toda la fila salía "sin actualizar" ~10% de los sync (falso "stale" que
+    # confundía a la asesora). Se quita la fracción (no hace falta para la edad
+    # en segundos) conservando el offset de zona horaria.
+    if "." in s:
+        cabeza, resto = s.split(".", 1)
+        tz = ""
+        for i, ch in enumerate(resto):
+            if ch in "+-":
+                tz = resto[i:]
+                break
+        s = cabeza + tz
     try:
-        t = datetime.fromisoformat(str(val).replace("Z", "+00:00")[:32])
+        t = datetime.fromisoformat(s)
     except ValueError:
         return None
     if t.tzinfo is None:

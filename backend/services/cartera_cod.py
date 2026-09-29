@@ -304,17 +304,24 @@ def cruzar(pedidos: list[dict], *, desde: Optional[str] = None) -> dict:
                 cobrado_directo += f["total"]
                 n_directo += 1
 
-    # Órdenes combinadas: si un número del pedido tiene factura, su hermano NO es
-    # "sin factura" (misma entrega, dos números de Shopify).
-    cubiertos: set = set()
-    for n, p in entregados.items():
-        if fv.get(n):
-            cubiertos.update(_numeros_orden(p.get("orden_tienda")))
-    sin_facturar = [{"orden": n,
-                     "valor": p.get("valor_num") or 0,
-                     "entrega": (p.get("fecha_entrega") or "")[:10],
-                     "ciudad": p.get("ciudad_destino")}
-                    for n, p in entregados.items() if n not in fv and n not in cubiertos]
+    # Pedidos ÚNICOS: una entrega COMBINADA ("60822#60821") crea DOS llaves en
+    # `entregados` que apuntan al MISMO pedido (mismo valor_num). Sumar plata
+    # iterando por número contaría la entrega dos veces (deuda y sin-factura
+    # inflados al doble). Se deduplica por pedido (identidad del objeto) y se
+    # decide por el CONJUNTO de sus números.
+    pedidos_entregados = list({id(p): p for p in entregados.values()}.values())
+
+    # "Sin factura": el pedido no tiene factura en NINGUNO de sus números (si un
+    # hermano de la combinada la tiene, la entrega ya está facturada).
+    sin_facturar = []
+    for p in pedidos_entregados:
+        nums = _numeros_orden(p.get("orden_tienda"))
+        if any(x in fv for x in nums):
+            continue
+        sin_facturar.append({"orden": p.get("orden_tienda") or (nums[0] if nums else ""),
+                             "valor": p.get("valor_num") or 0,
+                             "entrega": (p.get("fecha_entrega") or "")[:10],
+                             "ciudad": p.get("ciudad_destino")})
 
     a_credito.sort(key=lambda x: (x["dias"] is None, -(x["dias"] or 0)))
     total_credito = round(sum(f["total"] for f in a_credito), 2)
@@ -334,11 +341,14 @@ def cruzar(pedidos: list[dict], *, desde: Optional[str] = None) -> dict:
     monto_recaudado = 0.0
     if recaudo_ok:
         por_orden = rec.get("por_orden") or {}
-        for n, p in entregados.items():
-            r = por_orden.get(n)
-            if r:
+        # Por PEDIDO único (no por número): una entrega combinada se cuenta una
+        # sola vez. Recaudada si CUALQUIERA de sus números tiene recaudo.
+        for p in pedidos_entregados:
+            nums = _numeros_orden(p.get("orden_tienda"))
+            recaudos = [por_orden[x] for x in nums if x in por_orden]
+            if recaudos:
                 con_recaudo += 1
-                monto_recaudado += r["monto"]
+                monto_recaudado += sum(float(r.get("monto") or 0) for r in recaudos)
             else:
                 valor = float(p.get("valor_num") or 0)
                 melonn_debe += valor
@@ -348,7 +358,7 @@ def cruzar(pedidos: list[dict], *, desde: Optional[str] = None) -> dict:
                 except (TypeError, ValueError):
                     dias_e = None
                 sin_recaudo.append({
-                    "orden":   n,
+                    "orden":   p.get("orden_tienda") or (nums[0] if nums else ""),
                     "valor":   valor,
                     "entrega": (p.get("fecha_entrega") or "")[:10],
                     "dias":    dias_e,

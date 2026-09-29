@@ -81,17 +81,56 @@ async def lifespan(app: FastAPI):
     # Solo UNO debe correr los crons (auditorías, sync_tasks, transcripción).
     # Mecanismo: file lock atómico — el primer worker que cree el archivo gana.
     LEADER_LOCK = "/tmp/maledenim-leader.lock"
+
+    def _pid_vivo(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False           # el dueño murió
+        except PermissionError:
+            return True            # existe (otro dueño) → vivo, no reclamar
+        except Exception:
+            return False
+
+    def _crear_lock() -> bool:
+        # O_EXCL atomic: falla si el archivo ya existe (otro worker ganó).
+        try:
+            fd = os.open(LEADER_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, f"pid={os.getpid()}".encode())
+            os.close(fd)
+            return True
+        except FileExistsError:
+            return False
+
     es_lider = False
     try:
-        # O_EXCL atomic: falla si el archivo ya existe (otro worker ganó).
-        fd = os.open(LEADER_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, f"pid={os.getpid()}".encode())
-        os.close(fd)
-        es_lider = True
-        print(f"   👑 Worker {os.getpid()} es LÍDER (corre schedulers)")
-    except FileExistsError:
-        es_lider = False
-        print(f"   🤝 Worker {os.getpid()} es seguidor (solo sirve HTTP)")
+        if _crear_lock():
+            es_lider = True
+        else:
+            # El lock ya existe. Si el dueño MURIÓ sin limpiar (OOM/crash sin
+            # shutdown limpio), el archivo queda HUÉRFANO y ningún worker vuelve
+            # a ser líder → los crons (Melonn, cartera, salud, lavandería, bot,
+            # digest) se callan hasta un redeploy: la clase "motor mudo". Se
+            # reclama el lock SOLO cuando su PID dueño ya no vive.
+            try:
+                raw = open(LEADER_LOCK).read().strip()        # "pid=12345"
+                pid = int(raw.split("=", 1)[1]) if "=" in raw else 0
+            except Exception:
+                pid = 0
+            if pid > 0 and _pid_vivo(pid):
+                es_lider = False   # el líder sigue vivo, este es seguidor
+            else:
+                try:
+                    os.unlink(LEADER_LOCK)   # huérfano → borrar y reintentar
+                except FileNotFoundError:
+                    pass
+                # Reintento atómico: si otro worker lo reclama primero, ese gana.
+                es_lider = _crear_lock()
+        if es_lider:
+            print(f"   👑 Worker {os.getpid()} es LÍDER (corre schedulers)")
+        else:
+            print(f"   🤝 Worker {os.getpid()} es seguidor (solo sirve HTTP)")
     except Exception as e:
         # Fallback conservador: si falla el lock por permisos u otro motivo,
         # asume líder si WEB_CONCURRENCY=1, no-líder si >1.

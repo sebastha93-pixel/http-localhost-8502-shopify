@@ -749,13 +749,30 @@ def autorizar_despacho(
         except HTTPException:
             raise
         except Exception as e:
-            # Si la tabla no existe aún (DDL pendiente), no bloqueamos —
-            # log warning y continuamos. Pero esto NO debería pasar en prod.
             err = str(e)
+            # La tabla ausente (DDL pendiente) es el ÚNICO bypass legítimo
+            # (ventana de migración; no pasa en prod).
             if "does not exist" in err or "42P01" in err:
                 log.warning(f"cod_acciones tabla ausente — skip gate ({orden_melonn})")
             else:
+                # Cualquier otro error (timeout / 5xx / pool cortado de Supabase)
+                # = NO pudimos verificar la confirmación del cliente. FALLAR
+                # CERRADO: antes se tragaba el error y liberaba el hold igual →
+                # se despachaba un COD sin confirmar (causa #1 de devoluciones).
+                # Mejor pedir reintento que soltar mercancía a ciegas.
                 log.warning(f"Error chequeando workflow cod_acciones: {err[:200]}")
+                raise HTTPException(
+                    status_code=503,
+                    detail="No se pudo verificar la confirmación del cliente (base no disponible). Reintenta en un momento.",
+                )
+    else:
+        # Sin base para verificar la confirmación → FALLAR CERRADO (no liberar
+        # el hold). Antes, con sb None (creds en rotación) se saltaba el gate
+        # entero y se despachaba sin confirmar.
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo verificar la confirmación del cliente (base no disponible). Reintenta en un momento.",
+        )
 
     # El release recibe el id que mandó el frontend (suele ser orden_tienda) y,
     # si lo tenemos, TAMBIÉN el M-id de la fila de cod_acciones. Melonn a veces

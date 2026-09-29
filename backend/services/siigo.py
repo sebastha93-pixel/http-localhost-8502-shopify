@@ -670,8 +670,12 @@ def ventas_tiendas(desde: str, hasta: str) -> list[dict]:
                 float(i.get("price") or 0) * float(i.get("quantity") or 0)
                 for i in items)
             agg[cc]["descuentos"] += sum(_desc_item(i) for i in items)
-        total = ((data.get("pagination") or {}).get("total_results") or 0)
-        if page * 100 >= total or not results:
+        # Paginar por el TAMAÑO de la página, no por total_results: Siigo a veces
+        # OMITE pagination.total_results, y `or 0` cortaba tras la página 1 en
+        # silencio — así las ventas de tienda se truncaban a 100 facturas y el
+        # total salía corto sin avisar. El resto del código ya usa este patrón
+        # seguro (len<100 = última página); _fetch_ds documenta el mismo riesgo.
+        if len(results) < 100:
             break
         page += 1
         if page > 40:  # tope de seguridad (~4.000 facturas)

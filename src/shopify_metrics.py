@@ -293,10 +293,17 @@ def top_productos(n: int = 5, dias: int = 30) -> list:
         desde_tp = hoy - timedelta(days=max(dias - 1, 0))
         orders = _fetch_orders_rango(desde_tp, hoy, "id,line_items,cancelled_at")
         for o in orders:
+            # Excluir cancelados y descontar IVA proporcional, IGUAL que todas las
+            # demás métricas (ventas_del_dia, fit/talla, ubicación). Antes este
+            # era el único revenue del tablero que sumaba cancelados y venía CON
+            # IVA (~19% inflado) — incoherente con el resto.
+            if o.get("cancelled_at"):
+                continue
+            f = _factor_sin_iva(o)
             for it in o.get("line_items") or []:
                 sku = (it.get("sku") or "").strip() or it.get("title") or "—"
                 nombre = it.get("title") or sku
-                precio = float(it.get("price") or 0)
+                precio = float(it.get("price") or 0) * f
                 qty    = int(it.get("quantity") or 0)
                 agregado[sku]["sku"]      = sku
                 agregado[sku]["nombre"]   = nombre
