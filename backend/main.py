@@ -118,15 +118,21 @@ async def lifespan(app: FastAPI):
                 pid = int(raw.split("=", 1)[1]) if "=" in raw else 0
             except Exception:
                 pid = 0
-            if pid > 0 and _pid_vivo(pid):
-                es_lider = False   # el líder sigue vivo, este es seguidor
-            else:
+            if pid > 0 and not _pid_vivo(pid):
+                # Dueño MUERTO y confirmado → reclamar (borrar huérfano y
+                # reintentar de forma atómica; si otro lo reclama primero, gana).
                 try:
-                    os.unlink(LEADER_LOCK)   # huérfano → borrar y reintentar
+                    os.unlink(LEADER_LOCK)
                 except FileNotFoundError:
                     pass
-                # Reintento atómico: si otro worker lo reclama primero, ese gana.
                 es_lider = _crear_lock()
+            else:
+                # Dueño VIVO, o PID aún ILEGIBLE: un sibling pudo crear el lock
+                # microsegundos antes y todavía no escribió su pid (archivo vacío
+                # en esa ventana). Reclamar a ciegas ahí haría que DOS workers se
+                # creyeran líderes en el arranque → schedulers duplicados. Ante la
+                # duda, SEGUIDOR: solo se reclama con un PID legible y muerto.
+                es_lider = False
         if es_lider:
             print(f"   👑 Worker {os.getpid()} es LÍDER (corre schedulers)")
         else:
