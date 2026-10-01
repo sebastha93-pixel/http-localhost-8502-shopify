@@ -57,6 +57,7 @@ ultimo: dict = {
     "roto_en": None,
     "motivo": None,
     "evento": None,
+    "particiones_creadas": [],
     "error": None,
 }
 
@@ -76,9 +77,21 @@ async def verificar_ahora() -> dict:
     """
     from sqlalchemy import text as _t
     from backend.modules.retail.interfaces.http import dependencias
+    from backend.modules.retail.infrastructure.persistencia.particiones import (
+        asegurar_particiones,
+    )
 
     uow = await dependencias.unidad_de_trabajo()
     async with uow as t:
+        # ANTES DE VERIFICAR, EL CALENDARIO. La auditoría está particionada por
+        # mes y el 2026-10-01 se acabaron las particiones sembradas: toda venta
+        # empezó a fallar, porque su constancia va en la misma transacción.
+        # Crear los meses por delante es parte de mantener viva la cadena.
+        creadas = await asegurar_particiones(
+            t.sesion, datetime.now(timezone.utc))
+        if creadas:
+            await t.commit()
+
         tiendas = [f[0] for f in (await t.sesion.execute(_t(
             "SELECT DISTINCT tienda_id FROM retail.auditoria"))).all()]
 
@@ -102,6 +115,7 @@ async def verificar_ahora() -> dict:
         "motivo": None if integra else rota[1].get("motivo"),
         "evento": None if integra else rota[1].get("evento"),
         "tienda_rota": None if integra else rota[0],
+        "particiones_creadas": creadas,
         "error": None,
     })
 
