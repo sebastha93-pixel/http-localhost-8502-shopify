@@ -115,19 +115,43 @@ El **efectivo y el datáfono son de cada tienda** (`efectivo_florida` → Siigo
 12243, `efectivo_arrayanes` → 8282…): en Siigo son cuentas distintas, y un
 efectivo compartido mandaría la plata de una tienda a la cuenta de la otra.
 
-Lo que la siembra NO sabe de Arrayanes, y hay que completar antes de vender:
+**Arrayanes quedó completo el 2026-10-01**, con una tirilla real
+(`TARR-11389`, 30/09/2026): dirección `CR 50A 36 90 LC 231, Itagüí`, teléfono,
+y su resolución. **Su prefijo NO era `FV-6`** —ese es el tipo de documento
+viejo de Siigo— **sino `TARR`**, autorización 18764083761292 del 1 al
+1.000.000. Pedir la tirilla fue lo que lo descubrió; `FV-6` habría salido
+impreso en cada papel.
 
-* **Dirección y teléfono** — la tirilla sale sin ellos, que es mejor que con
-  los de Florida.
-* **`consecutivo_externo`** — quedó en 10703 porque `FV-6-10703` es una factura
-  real: es un piso seguro, no el número actual. Hay que subirlo con el de la
-  última tirilla de Siigo POS.
-* **La resolución** (y confirmar que `FV-6` sigue siendo su prefijo).
+⚠️ **Esa resolución vence el 2026-11-20** (aprobada el 2024-11-20, vigencia 24
+meses). Hay que pedir la nueva a la DIAN; no es algo del POS.
+
+**La caja de Arrayanes numera `ARRPOS`, no `TARR`, durante el piloto.** Mientras
+Siigo POS siga facturando ahí, los dos imprimirían papeles distintos con el
+mismo número y nadie sabría cuál buscar cuando la clienta vuelva a cambiar. El
+día que el POS emita de verdad: cambiar el prefijo a `TARR` y subir
+`consecutivo_externo` al número que vaya Siigo. Mientras tanto, **no hay que
+tocar el consecutivo antes de cada jornada**.
 
 Después, el **catálogo** — con `python -m backend.modules.retail.cargar_catalogo`,
 una vez por tienda (`RETAIL_UBICACION=tienda:arrayanes`). Lee un CSV, corre en
 ENSAYO por defecto y no borra nada. No confundir con `semilla.py`, que hace
 `TRUNCATE` y sólo corre en local.
+
+**El CSV sale de Siigo**, que es donde vive el inventario de la tienda física:
+una fila por SKU con existencia en su bodega (Florida 48, Arrayanes 37), con
+el precio de la lista —que viene CON IVA cuando el producto está marcado
+`tax_included`, y hay que multiplicar cuando no—. Arrayanes se cargó así el
+2026-10-01: **681 SKU, 174 referencias, 1.830 unidades, $288.806.100** a
+precio de etiqueta.
+
+Lo que queda FUERA y hay que mirar a mano: productos sin precio en Siigo (la
+referencia 94609-1 completa) y los que están marcados sin IVA cuando todos sus
+hermanos lo traen incluido (`H31503-1`, que daba $190.281 — el único precio
+que no terminaba en 900). El cargador no adivina precios.
+
+⚠️ El ENSAYO no toca la base: valida el CSV y calcula el valor, nada más. Dos
+fallos que sólo aparecen al aplicar —la URL de Railway sin normalizar y una
+columna `color` vacía contra un `NOT NULL`— se arreglaron el 2026-10-01.
 
 ### 3b. Los enlaces de las cajas
 
@@ -220,7 +244,10 @@ En este orden, porque cada uno desbloquea al siguiente:
   respeta el piso (arranca en 1537) y el techo de la resolución (avisa al
   agotarse), pero no sabe cuánto facturó Siigo POS ayer. Eso se sincroniza solo
   el día que exista el emisor.
-* **Nunca ha corrido en una tableta ni con impresora térmica real.**
+* **Nunca ha corrido en una tableta ni con impresora térmica real.** La
+  tirilla sale por `window.print()` con `@page 80mm`, así que depende de que
+  la impresora esté instalada en la tableta. Es lo primero que hay que probar
+  en el local, antes de que haya una clienta esperando.
 
 Por eso el primer día en tienda va **en paralelo** con lo que se usa hoy, no
 reemplazándolo.
