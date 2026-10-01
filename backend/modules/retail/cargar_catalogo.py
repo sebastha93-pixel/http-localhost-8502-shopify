@@ -46,6 +46,10 @@ __all__ = ["cargar", "leer_csv", "ProblemaCatalogo"]
 
 COLUMNAS = ["referencia", "nombre", "color", "categoria", "talla",
             "precio", "cantidad"]
+#  Opcional: el código IMPRESO en la etiqueta, cuando no es el SKU. En Siigo
+#  hay prendas cuyo código perdió la «T» (`42606-110`) o apunta a otra
+#  referencia; sin esta columna, esas etiquetas se escanean y no pasa nada.
+OPCIONALES = ["codigo_barras"]
 
 #  Crockford base32 SIN I, L, O ni U — el mismo alfabeto del dominio
 #  `retail.ulid`. Las cuatro se excluyen para que nadie confunda un 1 con una
@@ -159,6 +163,8 @@ def leer_csv(ruta: str) -> Tuple[List[dict], List[str]]:
                 "categoria": (fila.get("categoria") or "").strip() or "Sin categoría",
                 "precio_con_iva": precio * 100,       # pesos → centavos
                 "cantidad": cantidad,
+                # Vacío = la etiqueta lleva el SKU, que es el caso normal.
+                "codigo_barras": (fila.get("codigo_barras") or "").strip() or None,
             })
 
     if not filas and not problemas:
@@ -209,19 +215,26 @@ def cargar(url: str, ruta_csv: str, *, ubicacion_id: str,
                 nuevo = c.execute(text("""
                     INSERT INTO retail.variantes
                         (id, sku, referencia, talla, color, nombre, categoria,
-                         precio_con_iva)
-                    VALUES (:id, :sku, :ref, :talla, :color, :nom, :cat, :p)
+                         precio_con_iva, codigo_barras)
+                    VALUES (:id, :sku, :ref, :talla, :color, :nom, :cat, :p,
+                            :barras)
                     ON CONFLICT (sku) DO UPDATE
                        SET nombre = EXCLUDED.nombre,
                            color = EXCLUDED.color,
                            categoria = EXCLUDED.categoria,
                            precio_con_iva = EXCLUDED.precio_con_iva,
+                           -- Un CSV sin la columna NO borra el código que ya
+                           -- estaba: se escribió por algo y perderlo deja esa
+                           -- etiqueta sin escanear.
+                           codigo_barras = coalesce(EXCLUDED.codigo_barras,
+                                                    retail.variantes.codigo_barras),
                            actualizado_en = now()
                  RETURNING (xmax = 0) AS insertado, id
                 """), {"id": vid, "sku": f["sku"], "ref": f["referencia"],
                        "talla": f["talla"], "color": f["color"],
                        "nom": f["nombre"], "cat": f["categoria"],
-                       "p": f["precio_con_iva"]}).mappings().one()
+                       "p": f["precio_con_iva"],
+                       "barras": f["codigo_barras"]}).mappings().one()
 
                 vid = nuevo["id"]     # si ya existía, manda SU id, no el mío
                 if nuevo["insertado"]:

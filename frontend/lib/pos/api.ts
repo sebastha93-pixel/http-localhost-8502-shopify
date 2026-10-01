@@ -34,6 +34,9 @@ export interface Cliente {
 export interface Talla {
   variante_id: string;
   sku: string;
+  /** El código IMPRESO en la etiqueta, cuando no es el SKU. Es lo que escribe
+   *  la pistola. */
+  codigo_barras?: string | null;
   talla: string;
   disponible: number;
 }

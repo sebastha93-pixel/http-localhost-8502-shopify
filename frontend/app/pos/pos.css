@@ -279,10 +279,25 @@
   border-color: var(--pos-500);
   box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.06);
 }
-/* El foco de teclado sigue siendo el anillo del sistema, que es más visible
-   que el halo. No se pisan: éste anula el halo para no dibujar dos cosas. */
-.pos-raiz .pos-input:focus-visible {
-  box-shadow: none;
+/* EL ANILLO DEL SISTEMA SE QUITA, y es un cambio de opinión con motivo. Antes
+   se dejaba por ser «más visible que el halo», pero el buscador del catálogo
+   tiene el foco PERMANENTE —vive ahí para que el lector escriba sin un clic—,
+   así que ese rectángulo negro de esquinas rectas no marca un foco pasajero:
+   está siempre, encima de una caja redondeada, y se lee como un defecto de la
+   pantalla. Lo reportó Sebastián con una captura.
+
+   NO se queda sin marca: el halo sube a 0,10 y el borde se oscurece, que es
+   indicador suficiente y además consistente con el resto del POS. Quitar el
+   foco sin poner nada en su lugar dejaría a quien navega con teclado sin saber
+   dónde escribe. */
+.pos-raiz .pos-input:focus-visible,
+.pos-raiz .pos-input:has(:focus-visible) {
+  outline: none;
+  border-color: var(--pos-600);
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.10);
+}
+.pos-raiz .pos-input :focus-visible {
+  outline: none;
 }
 
 /**
