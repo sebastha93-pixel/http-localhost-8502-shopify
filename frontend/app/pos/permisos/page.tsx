@@ -23,6 +23,8 @@ import { Rail } from "@/components/pos/rail";
 import {
   guardarPermisos,
   listarPermisos,
+  usuariosCandidatos,
+  type CandidataPos,
   type PermisosUsuario,
 } from "@/lib/pos/api";
 
@@ -45,13 +47,21 @@ export default function PantallaPermisos() {
   const [error, setError] = useState<string | null>(null);
   const [guardando, setGuardando] = useState<string | null>(null);
   const [cargando, setCargando] = useState(true);
+  // Quién puede entrar al POS y todavía no está aquí. Sin esta lista, dar de
+  // alta a una cajera obligaba a escribir su fila con `psql`.
+  const [candidatas, setCandidatas] = useState<CandidataPos[]>([]);
 
   useEffect(() => {
     let vivo = true;
     (async () => {
       try {
-        const l = await listarPermisos();
-        if (vivo) { setUsuarios(l); setError(null); }
+        const [l, c] = await Promise.all([
+          listarPermisos(),
+          // Que falle el directorio no puede dejar la pantalla sin lo que ya
+          // funciona: editar a quien ya está dado de alta.
+          usuariosCandidatos().catch(() => [] as CandidataPos[]),
+        ]);
+        if (vivo) { setUsuarios(l); setCandidatas(c); setError(null); }
       } catch (e) {
         if (vivo) setError(e instanceof Error ? e.message : "No se pudo leer.");
       } finally {
@@ -60,6 +70,32 @@ export default function PantallaPermisos() {
     })();
     return () => { vivo = false; };
   }, []);
+
+  /** Da de alta a alguien SIN ningún permiso extra y con tope 0.
+   *
+   *  Lo que se concede se concede a mano, uno por uno, y queda en la
+   *  auditoría. Dar de alta con permisos puestos convertiría un clic en una
+   *  autorización que nadie leyó. */
+  async function darDeAlta(c: CandidataPos) {
+    setGuardando(c.usuario_id);
+    setError(null);
+    try {
+      const alta = await guardarPermisos(c.usuario_id, {
+        nombre: c.nombre, rol: "Cajera", tiendas: [],
+        tope_descuento_pct: "0",
+        puede_anular_venta: false, puede_cerrar_con_descuadre: false,
+        puede_ver_esperado: false, puede_mover_caja: false,
+        puede_ver_auditoria: false, activo: true,
+      });
+      setUsuarios((l) => [...l, alta].sort(
+        (a, b) => a.nombre.localeCompare(b.nombre)));
+      setCandidatas((l) => l.filter((x) => x.usuario_id !== c.usuario_id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo dar de alta.");
+    } finally {
+      setGuardando(null);
+    }
+  }
 
   async function cambiar(u: PermisosUsuario, cambios: Partial<PermisosUsuario>) {
     setGuardando(u.usuario_id);
@@ -105,6 +141,53 @@ export default function PantallaPermisos() {
 
         {cargando && (
           <p className="text-[13px] text-[var(--pos-600)]">Cargando…</p>
+        )}
+
+        {!cargando && candidatas.length > 0 && (
+          <Panel className="flex flex-col gap-3 p-6">
+            <div>
+              <p className="titular text-[16px] font-semibold">
+                Dar de alta en el POS
+              </p>
+              <p className="mt-1 text-[12px] text-[var(--pos-600)]">
+                Entran sin ningún permiso extra y con tope de descuento 0. Lo
+                que necesiten se les da abajo, uno por uno.
+              </p>
+            </div>
+            <div className="flex flex-col gap-2">
+              {candidatas.map((c) => (
+                <div key={c.usuario_id}
+                     className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[14px]">{c.nombre}</p>
+                    <p className="tabular text-[12px] text-[var(--pos-600)]">
+                      {c.email}{c.rol ? ` · ${c.rol}` : ""}
+                    </p>
+                  </div>
+                  <button
+                    disabled={guardando === c.usuario_id}
+                    onClick={() => void darDeAlta(c)}
+                    className="pos-btn pos-btn-sec h-10 px-4 text-[13px] disabled:opacity-50"
+                  >
+                    Añadir al POS
+                  </button>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        )}
+
+        {!cargando && candidatas.length === 0 && usuarios.length === 0 && (
+          <Panel className="p-6">
+            <p className="titular text-[16px] font-semibold">
+              Todavía no hay nadie que pueda entrar al POS
+            </p>
+            <p className="mt-2 text-[13px] leading-relaxed text-[var(--pos-700)]">
+              Las cuentas se crean en <b>Usuarios</b>, con el permiso
+              «Punto de venta». Las que lo tengan aparecen aquí para darlas de
+              alta.
+            </p>
+          </Panel>
         )}
 
         {usuarios.map((u) => (

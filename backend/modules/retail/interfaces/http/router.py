@@ -2177,6 +2177,67 @@ def _exigir_admin(usuario: CurrentUser) -> None:
                        "del sistema, no de la caja."})
 
 
+class CandidataPos(BaseModel):
+    usuario_id: str
+    nombre: str
+    email: str
+    rol: str
+
+
+@router.get("/admin/usuarios-candidatos", response_model=List[CandidataPos])
+async def usuarios_candidatos(
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Quién del sistema puede entrar al POS y todavía no está dado de alta.
+
+    SIN ESTO NO SE PODÍA DAR DE ALTA A NADIE desde la pantalla: sólo editar a
+    quien ya estaba, y la primera fila de cada persona había que escribirla con
+    `psql` — justo lo que esa pantalla existe para evitar. Se descubrió
+    preparando el piloto, contando los pasos que quedaban para que una cajera
+    pudiera cobrar.
+
+    Y la fila no es un adorno: el NOMBRE de la tirilla sale de ahí. Sin ella,
+    el papel de la clienta dice el identificador de la cajera.
+
+    El import es LOCAL a propósito: `backend.services.usuarios` habla con
+    Supabase al importarse y el módulo retail tiene que poder cargarse sin él
+    (`requirements-retail.txt` no lo trae, y hay una guarda que lo comprueba).
+    """
+    from sqlalchemy import text as _t
+    _exigir_admin(usuario)
+
+    try:
+        from backend.core.security import _check_permiso
+        from backend.services import usuarios as _erp
+        gente = _erp.listar()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(503, {
+            "error": "sin_directorio",
+            "mensaje": f"No se pudo leer los usuarios del sistema: {e}"})
+
+    async with uow as t:
+        ya = {f[0] for f in (await t.sesion.execute(_t(
+            "SELECT usuario_id FROM retail.permisos_pos"))).all()}
+
+    salida: List[CandidataPos] = []
+    for u in gente:
+        uid = str(u.get("id") or "")
+        if not uid or uid in ya or not u.get("activo", True):
+            continue
+        # Quien no puede entrar al POS no es candidata: darla de alta aquí
+        # prometería un acceso que el servidor le va a negar.
+        ficha = CurrentUser(id=uid, email=u.get("email") or "",
+                            nombre=u.get("nombre") or "", rol=u.get("rol") or "user",
+                            permisos=u.get("permisos") or {})
+        if not _check_permiso(ficha, "retail", "ver"):
+            continue
+        salida.append(CandidataPos(
+            usuario_id=uid, nombre=u.get("nombre") or u.get("email") or uid,
+            email=u.get("email") or "", rol=u.get("rol") or "user"))
+    return salida
+
+
 @router.get("/admin/permisos", response_model=List[PermisosUsuario])
 async def listar_permisos(
     uow=Depends(unidad_de_trabajo),
