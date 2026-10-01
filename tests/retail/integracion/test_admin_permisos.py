@@ -329,3 +329,27 @@ def test_sin_directorio_lo_dice_en_vez_de_mentir(entorno, monkeypatch):
     r = c.get("/api/retail/admin/usuarios-candidatos")
     assert r.status_code == 503
     assert "usuarios del sistema" in r.json()["detail"]["mensaje"]
+
+
+def test_cambiar_la_tienda_queda_en_la_auditoria(entorno):
+    """Desde que la tienda decide desde QUÉ INVENTARIO vende esa persona,
+    cambiarla es conceder un permiso. Antes se excluía de la foto —era una
+    etiqueta— y el cambio no dejaba rastro."""
+    c, motor, entrar_como = entorno
+    entrar_como("jefe", "admin")
+
+    r = c.patch("/api/retail/admin/permisos/maria",
+                json={**CUERPO, "nombre": "María R.", "tiendas": ["arrayanes"]})
+    assert r.status_code == 200, r.text
+
+    async def leer():
+        async with motor.connect() as cn:
+            return (await cn.execute(text("""
+                SELECT payload->'antes'->'tiendas'   AS antes,
+                       payload->'despues'->'tiendas' AS despues
+                  FROM retail.auditoria WHERE evento = 'permisos.cambiados'
+                 ORDER BY ocurrido_en DESC LIMIT 1
+            """))).mappings().first()
+
+    f = asyncio.get_event_loop().run_until_complete(leer())
+    assert f["antes"] == ["florida"] and f["despues"] == ["arrayanes"]

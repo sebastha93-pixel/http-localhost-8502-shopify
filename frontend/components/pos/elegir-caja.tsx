@@ -72,8 +72,16 @@ function Preparando() {
   );
 }
 
-export function ElegirCaja({ caja }: { caja: CajaDelEquipo }) {
+export function ElegirCaja({ caja, alElegir }: {
+  caja: CajaDelEquipo;
+  /** Qué hacer después de elegir — la puerta `/pos` entra a la venta. */
+  alElegir?: () => void;
+}) {
   const { estado, elegir, conservar } = caja;
+  const tomar = async (id: string) => {
+    await elegir(id);
+    alElegir?.();
+  };
   const [cajas, setCajas] = useState<CajaDelPos[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pregunta = estado.fase === "sin_caja" || estado.fase === "cambiar";
@@ -116,7 +124,7 @@ export function ElegirCaja({ caja }: { caja: CajaDelEquipo }) {
         <div className="mt-5 flex flex-col gap-2">
           <button
             type="button"
-            onClick={() => void elegir(estado.nueva)}
+            onClick={() => void tomar(estado.nueva)}
             className="pos-btn pos-btn-primario h-12 px-4 text-[15px]"
           >
             Sí, este equipo es {nombre(estado.nueva)}
@@ -139,8 +147,8 @@ export function ElegirCaja({ caja }: { caja: CajaDelEquipo }) {
     <Centro>
       <p className="titular text-[18px]">¿Qué caja es este equipo?</p>
       <p className="mt-3 text-[14px]" style={{ color: "var(--pos-700)" }}>
-        Se elige una sola vez: el equipo lo recuerda. Con el enlace de la caja
-        no hace falta elegir.
+        Se elige una sola vez: el equipo lo recuerda. Aparecen sólo las cajas
+        de tu tienda.
       </p>
 
       {error && (
@@ -154,8 +162,10 @@ export function ElegirCaja({ caja }: { caja: CajaDelEquipo }) {
         </p>
       )}
       {cajas && cajas.length === 0 && (
-        <p className="mt-4 text-[13px]" style={{ color: "var(--pos-700)" }}>
-          Todavía no hay ninguna caja creada.
+        <p className="mt-4 text-[13px] leading-relaxed" style={{ color: "var(--pos-700)" }}>
+          No hay ninguna caja para tu usuario. Si administras el sistema,
+          revisa que la tienda tenga caja creada; si no, pide que te asignen
+          tu tienda en <b>Permisos del POS</b>.
         </p>
       )}
 
@@ -167,7 +177,7 @@ export function ElegirCaja({ caja }: { caja: CajaDelEquipo }) {
               <button
                 key={c.caja_id}
                 type="button"
-                onClick={() => void elegir(c.caja_id)}
+                onClick={() => void tomar(c.caja_id)}
                 className="pos-btn pos-btn-sec h-12 px-4 text-[15px]"
               >
                 {c.caja_nombre}
