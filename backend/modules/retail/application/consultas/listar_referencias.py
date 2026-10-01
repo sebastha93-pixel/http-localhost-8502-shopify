@@ -35,6 +35,10 @@ __all__ = ["ListarReferencias", "Referencia", "TallaDisponible"]
 class TallaDisponible:
     variante_id: str
     sku: str
+    #  El de la ETIQUETA, que no siempre es el SKU: en Siigo hay prendas cuyo
+    #  código de barras perdió la «T» (`42606-110`) o apunta a otra referencia.
+    #  Sin él, esas etiquetas se escanean y no pasa nada.
+    codigo_barras: str | None
     talla: str
     disponible: int
     precio_con_iva_centavos: int
@@ -71,7 +75,7 @@ class ListarReferencias:
 
         filas = (await self._s.execute(text(f"""
             SELECT v.referencia, v.nombre, v.color, v.categoria, v.sku, v.id,
-                   v.talla, v.precio_con_iva, v.tasa_iva,
+                   v.talla, v.precio_con_iva, v.tasa_iva, v.codigo_barras,
                    coalesce(s.cantidad - s.reservado, 0) AS disponible
               FROM retail.catalogo_busqueda c
               JOIN retail.variantes v ON v.id = c.variante_id
@@ -103,7 +107,8 @@ class ListarReferencias:
                     tasa_iva=str(f["tasa_iva"]), tallas=[],
                 )
             agrupadas[ref].tallas.append(TallaDisponible(
-                variante_id=f["id"], sku=f["sku"], talla=f["talla"],
+                variante_id=f["id"], sku=f["sku"],
+                codigo_barras=f["codigo_barras"], talla=f["talla"],
                 disponible=int(f["disponible"]),
                 precio_con_iva_centavos=int(f["precio_con_iva"]),
                 tasa_iva=str(f["tasa_iva"]),

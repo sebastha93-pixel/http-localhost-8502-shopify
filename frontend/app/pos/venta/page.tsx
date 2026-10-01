@@ -353,17 +353,28 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
         setCategorias(d.categorias);
         setReferencias(d.referencias);
 
-        // Un escaneo no es una búsqueda: si lo tecleado es EXACTAMENTE un SKU,
-        // la prenda entra sola. Ése es el camino de los 30 segundos.
+        // Un escaneo no es una búsqueda: si lo tecleado es EXACTAMENTE un SKU
+        // —o el código impreso en la etiqueta, que no siempre es el mismo— la
+        // prenda entra sola. Ése es el camino de los 30 segundos.
+        //
+        // SE MIRAN TODAS LAS COINCIDENCIAS, no la primera: si un código casa
+        // con el SKU de una prenda y con la etiqueta de otra, agregar
+        // cualquiera de las dos sería adivinar con la clienta enfrente. En ese
+        // caso no se agrega nada y quedan las dos a la vista para tocar.
         const texto = consulta.trim().toUpperCase();
         if (texto.length >= 6) {
+          const casan: { r: Referencia; t: Talla }[] = [];
           for (const r of d.referencias) {
-            const talla = r.tallas.find((x) => x.sku.toUpperCase() === texto);
-            if (talla) {
-              agregar(r, talla);
-              setConsulta("");
-              break;
+            for (const t of r.tallas) {
+              if (t.sku.toUpperCase() === texto ||
+                  (t.codigo_barras || "").toUpperCase() === texto) {
+                casan.push({ r, t });
+              }
             }
+          }
+          if (casan.length === 1) {
+            agregar(casan[0].r, casan[0].t);
+            setConsulta("");
           }
         }
       }
@@ -379,14 +390,23 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
   // apareciendo en la caja de búsqueda. (Me pasó.)
   useEffect(() => {
     if (hayDialogo || fase !== "vendiendo") return;
-    const el = buscadorRef.current;
-    el?.focus();
-    const t = setInterval(() => {
+    // EL CAMPO SE BUSCA EN CADA PASADA, no una sola vez. Antes se leía la
+    // `ref` al montar el efecto y se guardaba: cuando esta pantalla aparece
+    // todavía NO hay buscador —está la de abrir turno—, así que lo que se
+    // guardaba era `null`, y el intervalo seguía enfocando la nada el resto
+    // del día. El foco nunca llegaba al buscador y la pistola escribía en el
+    // vacío: había que tocar el campo antes de cada escaneo. El camino de los
+    // 30 segundos llevaba roto desde que el turno se abre en pantalla.
+    const enfocar = () => {
+      const el = buscadorRef.current;
+      if (!el) return;
       const activo = document.activeElement;
       if (activo?.tagName === "INPUT" || activo?.tagName === "TEXTAREA") return;
       if (activo?.closest?.("[role=dialog]")) return;
-      el?.focus();
-    }, 800);
+      el.focus();
+    };
+    enfocar();
+    const t = setInterval(enfocar, 800);
     return () => clearInterval(t);
   }, [hayDialogo, fase]);
 

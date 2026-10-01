@@ -325,6 +325,9 @@ def _descuento(l: LineaEntrada, moneda: str) -> Descuento:
 class TallaSalida(BaseModel):
     variante_id: str
     sku: str
+    #  El código impreso en la etiqueta cuando NO es el SKU. Es lo que la
+    #  pistola escribe, y sin esto esas prendas no entran solas.
+    codigo_barras: Optional[str] = None
     talla: str
     disponible: int
 
@@ -371,6 +374,7 @@ async def listar_referencias(
                 tasa_iva=r.tasa_iva,
                 tallas=[
                     TallaSalida(variante_id=t.variante_id, sku=t.sku,
+                                codigo_barras=t.codigo_barras,
                                 talla=t.talla, disponible=t.disponible)
                     for t in r.tallas
                 ],

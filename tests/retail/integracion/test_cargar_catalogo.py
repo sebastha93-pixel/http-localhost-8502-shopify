@@ -249,3 +249,55 @@ def test_un_csv_sin_color_se_carga_igual(tmp_path):
             "SELECT color FROM retail.variantes WHERE sku='99999-1T10'")).scalar()
     motor.dispose()
     assert color == ""
+
+
+@pytest.mark.skipif(not URL, reason="Sin RETAIL_TEST_DATABASE_URL")
+def test_el_codigo_de_la_etiqueta_se_guarda_cuando_no_es_el_sku(tmp_path):
+    """EN SIIGO HAY ETIQUETAS QUE NO LLEVAN EL SKU: a `42606-1T10` le falta la
+    «T» (`42606-110`) y a toda la referencia `13625-2` le pusieron el código de
+    la `13625-1`. Son 11 de 687 en Arrayanes. Sin guardar ese código, la
+    pistola escanea esas prendas y no pasa nada — y la cajera las busca a mano
+    con la clienta enfrente."""
+    from backend.modules.retail.semilla import sembrar
+    sembrar(URL)
+
+    ruta = _csv(tmp_path,
+                "referencia,nombre,color,categoria,talla,precio,cantidad,codigo_barras\n"
+                "42606-1,Jean Flare,Azul,Jeans,10,149900,2,42606-110\n")
+    assert cargar(URL, ruta, ubicacion_id=UBICACION, aplicar=True)["nuevos"] == 1
+
+    motor = create_engine(URL)
+    with motor.begin() as c:
+        barras = c.execute(text(
+            "SELECT codigo_barras FROM retail.variantes WHERE sku='42606-1T10'"
+        )).scalar()
+        # Y entra en el texto de búsqueda: escanear eso tiene que ENCONTRARLO.
+        busca = c.execute(text(
+            "SELECT texto_busqueda LIKE '%42606-110%' FROM retail.catalogo_busqueda cb "
+            " JOIN retail.variantes v ON v.id = cb.variante_id WHERE v.sku='42606-1T10'"
+        )).scalar()
+    motor.dispose()
+    assert barras == "42606-110"
+    assert busca is True
+
+
+@pytest.mark.skipif(not URL, reason="Sin RETAIL_TEST_DATABASE_URL")
+def test_recargar_sin_esa_columna_no_borra_el_codigo(tmp_path):
+    """El CSV de un día sin la columna no puede dejar mudas las etiquetas que
+    ya se habían corregido."""
+    from backend.modules.retail.semilla import sembrar
+    sembrar(URL)
+
+    cargar(URL, _csv(tmp_path,
+                     "referencia,nombre,color,categoria,talla,precio,cantidad,codigo_barras\n"
+                     "42606-1,Jean Flare,Azul,Jeans,10,149900,2,42606-110\n"),
+           ubicacion_id=UBICACION, aplicar=True)
+    cargar(URL, _csv(tmp_path, CABECERA + "42606-1,Jean Flare,Azul,Jeans,10,149900,3\n"),
+           ubicacion_id=UBICACION, aplicar=True)
+
+    motor = create_engine(URL)
+    with motor.begin() as c:
+        barras = c.execute(text(
+            "SELECT codigo_barras FROM retail.variantes WHERE sku='42606-1T10'")).scalar()
+    motor.dispose()
+    assert barras == "42606-110"
