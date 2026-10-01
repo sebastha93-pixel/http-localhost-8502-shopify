@@ -38,6 +38,10 @@ from typing import Dict, List, Tuple
 
 from sqlalchemy import create_engine, text
 
+from backend.modules.retail.infrastructure.persistencia.unidad_de_trabajo import (
+    normalizar_url,
+)
+
 __all__ = ["cargar", "leer_csv", "ProblemaCatalogo"]
 
 COLUMNAS = ["referencia", "nombre", "color", "categoria", "talla",
@@ -148,7 +152,10 @@ def leer_csv(ruta: str) -> Tuple[List[dict], List[str]]:
 
             filas.append({
                 "sku": sku, "referencia": ref, "talla": talla, "nombre": nombre,
-                "color": (fila.get("color") or "").strip() or None,
+                # Cadena vacía y NO `None`: la columna es NOT NULL, así que un
+                # CSV sin color —el que sale de Siigo, que lo lleva dentro del
+                # nombre— reventaba la carga entera en la primera fila.
+                "color": (fila.get("color") or "").strip(),
                 "categoria": (fila.get("categoria") or "").strip() or "Sin categoría",
                 "precio_con_iva": precio * 100,       # pesos → centavos
                 "cantidad": cantidad,
@@ -181,7 +188,9 @@ def cargar(url: str, ruta_csv: str, *, ubicacion_id: str,
     if not aplicar:
         return resumen
 
-    motor = create_engine(url, future=True)
+    # Railway entrega `postgresql://…` y SQLAlchemy entonces busca psycopg2,
+    # que no está instalado: `ModuleNotFoundError` a mitad de una carga.
+    motor = create_engine(normalizar_url(url), future=True)
     try:
         with motor.begin() as c:
             existe = c.execute(text(
