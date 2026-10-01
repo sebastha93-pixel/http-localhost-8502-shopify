@@ -222,8 +222,10 @@ def test_la_base_de_cada_tienda_entra_a_SU_efectivo(entorno):
 
     r = _abrir_arrayanes(c)
     assert r.status_code == 200, r.text
-    assert r.json()["prefijo"] == "FV-6"
-    assert r.json()["consecutivo_siguiente"] == 10704   # sobre el piso
+    # ARRPOS y no TARR: durante el piloto, Siigo POS sigue facturando en
+    # Arrayanes y dos papeles con el mismo número no se pueden distinguir.
+    assert r.json()["prefijo"] == "ARRPOS"
+    assert r.json()["consecutivo_siguiente"] == 11390   # sobre el piso
 
     base = dict(_leer(motor, "SELECT sesion_id, medio_pago_id "
                              "FROM retail.movimientos_caja "

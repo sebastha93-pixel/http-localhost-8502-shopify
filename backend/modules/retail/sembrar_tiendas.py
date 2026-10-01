@@ -62,26 +62,34 @@ TIENDAS = [
         **_EMPRESA,
         "id": "arrayanes", "nombre": "Arrayanes",
         "siigo_bodega_id": 37, "siigo_centro_costo_id": 677,
-        "direccion": None, "telefono": None,
-        "autorizacion_numero": None,
-        "autorizacion_desde": None, "autorizacion_hasta": None,
-        "autorizacion_aprobada": None, "autorizacion_meses": None,
-        # FV-6-10703 es una factura real de Arrayanes: de ahí para abajo, los
-        # números ya están gastados. Es un PISO seguro, no el número actual —
-        # hay que subirlo con el de la última tirilla antes de la primera venta.
-        "consecutivo_externo": 10703,
+        "direccion": "CR 50A 36 90 LC 231, Itagüí",
+        "telefono": "3005654971",
+        # De la factura TARR-11389 del 30/09/2026. OJO: aprobada el
+        # 2024-11-20 con vigencia 24 meses, o sea que VENCE EL 2026-11-20.
+        "autorizacion_numero": "18764083761292",
+        "autorizacion_desde": 1, "autorizacion_hasta": 1000000,
+        "autorizacion_aprobada": date(2024, 11, 20), "autorizacion_meses": 24,
+        # El último número que Siigo POS ya emitió en Arrayanes.
+        "consecutivo_externo": 11389,
     },
 ]
 
 #  Un prefijo POR TIENDA: las dos cajas de Florida numeran del mismo rango
 #  (`repo_consecutivos` bloquea por prefijo, no por caja).
+#
+#  ARRAYANES VA CON UN PREFIJO PROPIO DEL PILOTO (`ARRPOS`) Y NO CON EL SUYO
+#  REAL (`TARR`, que decía `FV-6` hasta que llegó una tirilla de verdad).
+#  Mientras Siigo POS siga facturando ahí, los dos sistemas imprimirían papeles
+#  distintos con el mismo número, y el día que una clienta vuelva a cambiar
+#  nadie sabría cuál buscar. El día que el POS emita, se cambia a `TARR` y se
+#  sube `consecutivo_externo` al número que vaya Siigo.
 CAJAS = [
     {"id": "florida_caja1", "tienda_id": "florida", "nombre": "Caja 1",
      "prefijo_factura": "FL"},
     {"id": "florida_caja2", "tienda_id": "florida", "nombre": "Caja 2",
      "prefijo_factura": "FL"},
     {"id": "arrayanes_caja1", "tienda_id": "arrayanes", "nombre": "Caja 1",
-     "prefijo_factura": "FV-6"},
+     "prefijo_factura": "ARRPOS"},
 ]
 
 UBICACIONES = [
