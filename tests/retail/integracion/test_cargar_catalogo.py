@@ -226,3 +226,26 @@ def test_una_ubicacion_que_no_existe_se_dice_antes_de_escribir(tmp_path):
     ruta = _csv(tmp_path, CABECERA + "99999-1,Prenda,Rojo,Otros,10,50000,3\n")
     with pytest.raises(ProblemaCatalogo, match="No existe la ubicación"):
         cargar(URL, ruta, ubicacion_id="tienda:inventada", aplicar=True)
+
+
+@pytest.mark.skipif(not URL, reason="Sin RETAIL_TEST_DATABASE_URL")
+def test_un_csv_sin_color_se_carga_igual(tmp_path):
+    """EL CATÁLOGO DE SIIGO NO TRAE COLOR: va dentro del nombre de la prenda.
+
+    La columna vacía se guardaba como NULL y `variantes.color` es NOT NULL, así
+    que la carga entera reventaba en la PRIMERA fila —con la base de producción
+    ya abierta y 681 prendas esperando—. Vacío no es desconocido: es vacío.
+    """
+    from backend.modules.retail.semilla import sembrar
+    sembrar(URL)
+
+    ruta = _csv(tmp_path, CABECERA + "99999-1,JEAN FLARE GRIS HUMO,,Campana,10,149900,2\n")
+    r = cargar(URL, ruta, ubicacion_id=UBICACION, aplicar=True)
+    assert r["nuevos"] == 1
+
+    motor = create_engine(URL)
+    with motor.begin() as c:
+        color = c.execute(text(
+            "SELECT color FROM retail.variantes WHERE sku='99999-1T10'")).scalar()
+    motor.dispose()
+    assert color == ""
