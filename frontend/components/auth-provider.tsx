@@ -51,9 +51,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Redirige a /login si no hay token y no es ruta pública.
   // GATE: solo después de hidratar para no expulsar usuarios con sesión.
+  //
+  // SE LEE EL TOKEN VIVO, NO EL DEL ESTADO. `setToken` escribe en localStorage
+  // y el estado de aquí sólo se refresca al cambiar de ruta, un render
+  // después. En ese render intermedio —el primero de la ruta a la que acabas
+  // de entrar— el estado todavía dice `null` y esta compuerta expulsaba al
+  // login a quien se acababa de autenticar. El rebote era invisible porque el
+  // login, viéndote ya con sesión, te mandaba a tu página de inicio: el
+  // destino equivocado coincidía con el de siempre. Con `?volver=` deja de
+  // coincidir, y el enlace de una caja del POS terminaba en Centro de Control.
   useEffect(() => {
     if (!hydrated) return;
-    if (!token && !isPublic) {
+    const vivo = getToken();
+    if (!vivo && !isPublic) {
       // Guardamos dónde estaba para devolverlo ahí después de entrar, en vez
       // de mandarlo siempre al home y que pierda la pantalla. CON la búsqueda:
       // el enlace de cada caja del POS es `/pos/venta?caja=…`, y sin ella la
@@ -66,8 +76,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Si ya estás autenticado y estás en /login, mándate a la app.
     // No aplicamos esta regla a las otras rutas públicas (/lote/, /terminacion/)
     // porque un admin puede necesitar ver esas vistas estando logueado.
-    if (token && pathname === "/login" && meQ.data) {
-      router.replace(homePath(meQ.data));
+    //
+    // RESPETA `?volver=`, igual que el formulario: quien llegó al login desde
+    // un enlace concreto —la caja de una tienda— tiene que volver ahí, no a la
+    // página de inicio. Sólo rutas internas; un `volver` con http:// o //otro
+    // sería un redirect abierto.
+    if (vivo && pathname === "/login" && meQ.data) {
+      const pedido = new URLSearchParams(window.location.search).get("volver") || "";
+      const destino = pedido.startsWith("/") && !pedido.startsWith("//")
+        ? pedido : homePath(meQ.data);
+      router.replace(destino);
     }
   }, [hydrated, token, pathname, isPublic, router, meQ.data]);
 
