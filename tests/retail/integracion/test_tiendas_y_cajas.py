@@ -182,6 +182,7 @@ def test_florida_queda_con_los_datos_de_su_tirilla(base_vacia):
 
 def test_la_lista_trae_las_cajas_activas(entorno):
     c, motor = entorno
+    # `maria` está asignada a las dos tiendas (ver la siembra del entorno).
     ids = [x["caja_id"] for x in c.get("/api/retail/cajas").json()]
     assert ids == ["arrayanes_caja1", "florida_caja1", "florida_caja2"]
 
@@ -309,3 +310,74 @@ def test_lo_comprado_en_florida_se_devuelve_en_arrayanes(entorno):
     assert salida == [(SESION, "efectivo_arrayanes", -PRECIO)]
     donde = _leer(motor, "SELECT tienda_id, caja_id FROM retail.devoluciones")
     assert donde == [("arrayanes", "arrayanes_caja1")]
+
+
+# ── La tienda sale de QUIEN ENTRA ───────────────────────────────────────────
+
+def _asignar(motor, tiendas, usuario="maria"):
+    async def ir():
+        async with motor.begin() as c:
+            await c.execute(text(
+                "UPDATE retail.permisos_pos SET tiendas = :t WHERE usuario_id = :u"),
+                {"t": tiendas, "u": usuario})
+    asyncio.get_event_loop().run_until_complete(ir())
+
+
+def test_solo_se_ven_las_cajas_de_su_tienda(entorno):
+    """Un enlace se reenvía por WhatsApp y acaba abierto en la tableta de la
+    otra tienda. La persona no: por eso la lista se filtra por ella."""
+    c, motor = entorno
+    _asignar(motor, ["arrayanes"])
+    ids = [x["caja_id"] for x in c.get("/api/retail/cajas").json()]
+    assert ids == ["arrayanes_caja1"]
+
+
+def test_sin_tienda_asignada_no_ve_ninguna(entorno):
+    """Enseñárselas todas sería invitarla a elegir mal, y elegir mal es vender
+    contra el inventario de otra tienda."""
+    c, motor = entorno
+    _asignar(motor, [])
+    assert c.get("/api/retail/cajas").json() == []
+
+
+def test_no_abre_turno_en_una_tienda_que_no_es_suya(entorno):
+    """La puerta va en el TURNO: es lo único que siempre ocurre con red y
+    antes de cualquier venta."""
+    c, motor = entorno
+    _asignar(motor, ["arrayanes"])
+
+    r = c.post("/api/retail/caja/turno", json={
+        "sesion_id": "01JQ8X4T5N6P006R8S9V0W1X2Y", "tienda_id": "florida",
+        "caja_id": "florida_caja1"})
+    assert r.status_code == 400, r.text
+    assert "no estás asignada" in r.json()["detail"]["mensaje"].lower()
+
+    assert _abrir_arrayanes(c).status_code == 200      # la suya, sí
+
+
+def test_tampoco_reanudando_el_turno_de_otra_tienda(entorno):
+    """Sin esto la puerta se salta abriendo una caja que YA tenía turno, que es
+    el caso más fácil de encontrar."""
+    c, motor = entorno
+    r = c.post("/api/retail/caja/turno", json={
+        "sesion_id": "01JQ8X4T5N6P007R8S9V0W1X2Y", "tienda_id": "florida",
+        "caja_id": "florida_caja1"})
+    assert r.status_code == 200, r.text          # maria aún tiene las dos
+
+    _asignar(motor, ["arrayanes"])
+    r = c.post("/api/retail/caja/turno", json={
+        "sesion_id": "01JQ8X4T5N6P008R8S9V0W1X2Y", "tienda_id": "florida",
+        "caja_id": "florida_caja1"})
+    assert r.status_code == 400, r.text
+
+
+def test_un_administrador_las_ve_todas_sin_estar_asignado(entorno, monkeypatch):
+    """Quien configura no tiene por qué estar asignado a una tienda."""
+    from backend.core.security import CurrentUser, get_current_user
+    c, motor = entorno
+    _asignar(motor, [])
+    c.app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        id="jefe", email="jefe@male.com", nombre="Jefe", rol="admin",
+        permisos={})
+    ids = [x["caja_id"] for x in c.get("/api/retail/cajas").json()]
+    assert len(ids) == 3

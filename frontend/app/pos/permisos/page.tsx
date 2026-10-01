@@ -22,8 +22,10 @@ import { Panel } from "@/components/pos/marco";
 import { Rail } from "@/components/pos/rail";
 import {
   guardarPermisos,
+  listarCajas,
   listarPermisos,
   usuariosCandidatos,
+  type CajaDelPos,
   type CandidataPos,
   type PermisosUsuario,
 } from "@/lib/pos/api";
@@ -50,18 +52,29 @@ export default function PantallaPermisos() {
   // Quién puede entrar al POS y todavía no está aquí. Sin esta lista, dar de
   // alta a una cajera obligaba a escribir su fila con `psql`.
   const [candidatas, setCandidatas] = useState<CandidataPos[]>([]);
+  // Las tiendas que existen, para poder asignarlas. Salen de las cajas: un
+  // administrador las ve todas.
+  const [tiendas, setTiendas] = useState<{ id: string; nombre: string }[]>([]);
 
   useEffect(() => {
     let vivo = true;
     (async () => {
       try {
-        const [l, c] = await Promise.all([
+        const [l, c, cajas] = await Promise.all([
           listarPermisos(),
           // Que falle el directorio no puede dejar la pantalla sin lo que ya
           // funciona: editar a quien ya está dado de alta.
           usuariosCandidatos().catch(() => [] as CandidataPos[]),
+          listarCajas().catch(() => [] as CajaDelPos[]),
         ]);
-        if (vivo) { setUsuarios(l); setCandidatas(c); setError(null); }
+        if (vivo) {
+          setUsuarios(l);
+          setCandidatas(c);
+          const vistas = new Map<string, string>();
+          for (const x of cajas) vistas.set(x.tienda_id, x.tienda_nombre);
+          setTiendas([...vistas].map(([id, nombre]) => ({ id, nombre })));
+          setError(null);
+        }
       } catch (e) {
         if (vivo) setError(e instanceof Error ? e.message : "No se pudo leer.");
       } finally {
@@ -208,7 +221,6 @@ export default function PantallaPermisos() {
                 <p className="tabular text-[12px] text-[var(--pos-600)]">
                   {u.usuario_id}
                   {u.rol ? ` · ${u.rol}` : ""}
-                  {u.tiendas.length ? ` · ${u.tiendas.join(", ")}` : ""}
                 </p>
               </div>
 
@@ -227,6 +239,38 @@ export default function PantallaPermisos() {
                 />
                 <span className="text-[var(--pos-600)]">%</span>
               </label>
+            </div>
+
+            {/* LA TIENDA ES LO PRIMERO: de ella sale el inventario desde el
+                que vende y la caja que ve al entrar. Sin tienda no puede
+                abrir turno, y conviene que se lea antes que los permisos. */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[12px] text-[var(--pos-700)]">Tienda</span>
+              {tiendas.map((t) => {
+                const suya = u.tiendas.includes(t.id);
+                return (
+                  <button
+                    key={t.id}
+                    disabled={guardando === u.usuario_id}
+                    onClick={() => void cambiar(u, {
+                      tiendas: suya ? u.tiendas.filter((x) => x !== t.id)
+                                    : [...u.tiendas, t.id],
+                    })}
+                    className={`border px-3 py-1.5 text-[12px] transition-colors disabled:opacity-50 ${
+                      suya
+                        ? "border-[var(--pos-800)] bg-[var(--pos-800)] text-white"
+                        : "border-[var(--pos-divider)] text-[var(--pos-700)]"
+                    }`}
+                  >
+                    {t.nombre}
+                  </button>
+                );
+              })}
+              {u.tiendas.length === 0 && (
+                <span role="status" className="text-[12px] text-[var(--pos-900)]">
+                  sin tienda · no puede abrir turno
+                </span>
+              )}
             </div>
 
             <div className="flex flex-wrap gap-2">

@@ -153,20 +153,37 @@ que no terminaba en 900). El cargador no adivina precios.
 fallos que sólo aparecen al aplicar —la URL de Railway sin normalizar y una
 columna `color` vacía contra un `NOT NULL`— se arreglaron el 2026-10-01.
 
-### 3b. Los enlaces de las cajas
+### 3b. El enlace, y de dónde sale la tienda
 
-La caja ya NO sale de `NEXT_PUBLIC_POS_*` —eso dejaba UNA caja para toda la
-app—. Cada tableta la aprende de su enlace y la recuerda:
+**Un solo enlace para todas las tiendas: `https://app.maledenim.com/pos`.**
 
-| Caja | Enlace |
+LA TIENDA SALE DE QUIEN ENTRA, no del enlace. Un enlace por caja se reenvía
+por WhatsApp y acaba abierto en la tableta de la otra tienda, vendiendo contra
+un inventario ajeno — y eso no se descubre hasta el conteo. Una persona no se
+reenvía: la asesora entra con su correo y el POS lee sus tiendas de
+`permisos_pos.tiendas`, que se asignan en **Permisos del POS**.
+
+Lo que sí decide el EQUIPO es cuál de las cajas de esa tienda es: Florida
+tiene dos mostradores y eso es propiedad de la tableta, no de la persona. Se
+pregunta una vez y se recuerda. Donde hay una sola caja no se pregunta nada.
+
+| Quién entra | Qué pasa |
 |---|---|
-| Florida · Caja 1 | `https://app.maledenim.com/pos/venta?caja=florida_caja1` |
-| Florida · Caja 2 | `https://app.maledenim.com/pos/venta?caja=florida_caja2` |
-| Arrayanes · Caja 1 | `https://app.maledenim.com/pos/venta?caja=arrayanes_caja1` |
+| Asignada a una tienda de una caja | entra directo a vender |
+| Asignada a Florida (dos cajas) | elige el mostrador una vez, por tableta |
+| Sin tienda asignada | «Todavía no tienes caja», con qué pedir |
+| Administrador | ve todas: es quien configura |
 
-Se abre UNA vez en cada tableta. Sin enlace, el POS pregunta qué caja es. Un
-equipo que ya es una caja y abre el enlace de otra **pregunta antes de
-cambiar**: cambiar de caja es cambiar de tienda y de inventario.
+**La puerta está en el TURNO**: abrir turno en una tienda que no es tuya se
+rechaza, también al reanudar uno ya abierto. Va ahí y no en cada venta porque
+abrir turno siempre ocurre con red y antes de cobrar; comprobarlo en la venta
+rechazaría una cobrada sin conexión si reasignaron a esa persona mientras
+tanto, y esa venta ya pasó.
+
+Los enlaces por caja siguen existiendo
+(`/pos/venta?caja=florida_caja2`) y sirven para **asignar una tableta** a un
+mostrador concreto sin preguntar. Lo que ya no hacen es decidir la tienda: si
+la caja del enlace no es de las tuyas, el servidor no te deja abrir turno.
 
 La tienda y la ubicación salen de la caja en el servidor, y el servidor
 rechaza una venta o un turno cuya caja, tienda e inventario no sean de la misma

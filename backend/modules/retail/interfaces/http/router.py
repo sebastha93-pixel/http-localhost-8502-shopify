@@ -567,6 +567,13 @@ async def abrir_turno(
     async with uow as t:
         ya = await t.turnos.abierta_de(entrada.caja_id)
         if ya is not None:
+            # También al REANUDAR: si no, la puerta se salta abriendo una caja
+            # que ya tenía turno, que es el caso más fácil de encontrar.
+            try:
+                await _exigir_tienda_de_la_persona(t, usuario, ya["tienda_id"])
+            except ReglaDeNegocio as e:
+                raise HTTPException(400, {"error": "regla_de_negocio",
+                                          "mensaje": str(e)})
             # Otra persona con el turno abierto NO se sobreescribe: el arqueo
             # es suyo y cerrarlo es su responsabilidad (o la de un supervisor).
             tope = (await t.sesion.execute(_t(
@@ -592,6 +599,7 @@ async def abrir_turno(
         try:
             await _exigir_misma_tienda(t, tienda_id=entrada.tienda_id,
                                        caja_id=entrada.caja_id)
+            await _exigir_tienda_de_la_persona(t, usuario, entrada.tienda_id)
             configurada = await t.turnos.base_de_tienda(entrada.tienda_id)
             base, esperada, conteo, diferencia_base = configurada, None, None, None
 
@@ -823,15 +831,22 @@ class CajaDelPos(BaseModel):
 @router.get("/cajas", response_model=List[CajaDelPos])
 async def listar_cajas(
     sesion=Depends(sesion_lectura),
-    _: CurrentUser = Depends(require_permission("retail", "ver")),
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
 ):
-    """Las cajas que puede ser un equipo.
+    """Las cajas que ESTA persona puede operar.
 
-    La caja salía de `NEXT_PUBLIC_POS_CAJA`, una variable que se hornea al
-    publicar el frontend: UNA caja para toda la app, así que Florida y
-    Arrayanes no podían usar el mismo sitio. Ahora cada tableta lo aprende de
-    su enlace (`/pos/venta?caja=…`) o, si llega sin él, lo elige de esta lista
-    una sola vez.
+    LA TIENDA SALE DE QUIEN ENTRA, no del enlace. Un enlace se reenvía por
+    WhatsApp y acaba abierto en la tableta de la otra tienda; una persona, no.
+    Así que la lista se filtra por las tiendas de su fila (`permisos_pos`), y
+    el equipo sólo decide CUÁL de las cajas de esa tienda es —que sí es una
+    propiedad del mostrador, no de la persona.
+
+    Un administrador las ve todas: es quien configura, y no tiene por qué
+    estar asignado a ninguna tienda para poder mirar.
+
+    Quien no tenga tiendas asignadas no ve ninguna, y la pantalla lo dice. Es
+    preferible a enseñárselas todas: elegir mal es vender contra el inventario
+    de otra tienda, y eso no se descubre hasta el conteo.
 
     Sólo cajas activas de tiendas activas: ofrecer una caja dada de baja es
     invitar a vender contra un inventario que ya nadie cuenta.
@@ -842,9 +857,36 @@ async def listar_cajas(
                t.id AS tienda_id, t.nombre AS tienda_nombre
           FROM retail.cajas c JOIN retail.tiendas t ON t.id = c.tienda_id
          WHERE c.activa AND t.activa
+           AND (:todas OR t.id = ANY(coalesce((
+                 SELECT p.tiendas FROM retail.permisos_pos p
+                  WHERE p.usuario_id = :u AND p.activo), '{}')))
          ORDER BY t.nombre, c.nombre
-    """))).mappings().all()
+    """), {"todas": usuario.rol == "admin", "u": usuario.id})).mappings().all()
     return [CajaDelPos(**f) for f in filas]
+
+
+async def _exigir_tienda_de_la_persona(t, usuario: CurrentUser,
+                                       tienda_id: str) -> None:
+    """Esta persona trabaja en esta tienda — o no abre turno aquí.
+
+    Es la puerta, y va en el TURNO a propósito: abrir turno es lo único que
+    siempre ocurre con red y antes de cualquier venta. Ponerla también en cada
+    venta rechazaría una cobrada sin conexión si a esa persona la reasignaron
+    mientras tanto, y la venta ya pasó: lo que hay que impedir es empezar a
+    vender en la tienda equivocada, no sincronizar lo que ya se cobró.
+    """
+    from sqlalchemy import text as _t
+    if usuario.rol == "admin":
+        return
+    suyas = (await t.sesion.execute(_t("""
+        SELECT coalesce(tiendas, '{}') FROM retail.permisos_pos
+         WHERE usuario_id = :u AND activo
+    """), {"u": usuario.id})).scalar()
+    if suyas and tienda_id in list(suyas):
+        return
+    raise ReglaDeNegocio(
+        "No estás asignada a esta tienda, así que no puedes abrir turno en "
+        "ella. Pídele a un administrador que te asigne en Permisos del POS.")
 
 
 async def _exigir_misma_tienda(t, *, tienda_id: str, caja_id: str,
@@ -2052,8 +2094,14 @@ def _foto_permisos(fila) -> dict:
     foto = {}
     for k, v in dict(fila).items():
         clave = _ALIAS_PERMISOS.get(k, k)
-        if clave in ("usuario_id", "nombre", "tiendas", "rol",
+        # `tiendas` SÍ entra: desde que la tienda decide desde qué inventario
+        # vende esa persona —y qué caja ve al entrar—, cambiarla es conceder un
+        # permiso, no editar una etiqueta.
+        if clave in ("usuario_id", "nombre", "rol",
                      "intentos_fallidos", "creado_en", "actualizado_en"):
+            continue
+        if clave == "tiendas":
+            foto[clave] = sorted(v or [])
             continue
         if v in ("True", "False"):          # eventos viejos, ya encadenados
             v = v == "True"
@@ -2313,7 +2361,7 @@ async def guardar_permisos(
         antes = (await t.sesion.execute(_t("""
             SELECT tope_descuento_pct, puede_anular_venta,
                    puede_cerrar_con_descuadre, puede_ver_esperado,
-                   puede_mover_caja, puede_ver_auditoria, activo
+                   puede_mover_caja, puede_ver_auditoria, activo, tiendas
               FROM retail.permisos_pos WHERE usuario_id = :u
         """), {"u": usuario_id})).mappings().first()
 
@@ -2361,7 +2409,10 @@ async def guardar_permisos(
                                  "esperado": entrada.puede_ver_esperado,
                                  "caja": entrada.puede_mover_caja,
                                  "auditoria": entrada.puede_ver_auditoria,
-                                 "activo": entrada.activo}})
+                                 "activo": entrada.activo,
+                                 # La tienda decide el inventario desde el que
+                                 # vende: cambiarla es conceder, no etiquetar.
+                                 "tiendas": sorted(entrada.tiendas)}})
         await t.commit()
 
     return PermisosUsuario(
