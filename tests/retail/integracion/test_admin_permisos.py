@@ -246,3 +246,86 @@ def test_un_alta_nueva_no_tiene_ANTES(entorno):
 
     p = asyncio.get_event_loop().run_until_complete(leer())
     assert p["antes"] is None
+
+
+# ── Dar de alta: la mitad que faltaba ───────────────────────────────────────
+
+def _directorio(monkeypatch, gente):
+    """Finge el directorio del ERP sin instalar supabase.
+
+    `backend.services.usuarios` habla con Supabase al importarse; el módulo
+    retail tiene que poder cargarse sin él, así que el endpoint lo importa
+    DENTRO de la función. Aquí se sustituye por un módulo de mentira.
+    """
+    import sys
+    import types
+
+    falso = types.ModuleType("backend.services.usuarios")
+    falso.listar = lambda: gente
+    monkeypatch.setitem(sys.modules, "backend.services.usuarios", falso)
+    import backend.services
+    monkeypatch.setattr(backend.services, "usuarios", falso, raising=False)
+
+
+def test_se_ofrece_a_quien_puede_entrar_y_no_esta_dado_de_alta(entorno, monkeypatch):
+    """La lista que hacía falta para no volver a `psql`.
+
+    `maria` ya tiene fila: no se vuelve a ofrecer. `laura` sí.
+    """
+    c, _, entrar_como = entorno
+    entrar_como("jefe", "admin")
+    _directorio(monkeypatch, [
+        {"id": "maria", "email": "maria@male.com", "nombre": "María R.",
+         "rol": "user", "permisos": {"retail": ["ver", "modificar"]}, "activo": True},
+        {"id": "laura", "email": "laura@male.com", "nombre": "Laura M.",
+         "rol": "user", "permisos": {"retail": ["ver", "modificar"]}, "activo": True},
+    ])
+
+    r = c.get("/api/retail/admin/usuarios-candidatos")
+    assert r.status_code == 200, r.text
+    assert [u["usuario_id"] for u in r.json()] == ["laura"]
+    assert r.json()[0]["email"] == "laura@male.com"
+
+
+def test_no_se_ofrece_a_quien_el_servidor_va_a_rechazar(entorno, monkeypatch):
+    """Sin el permiso «retail» del ERP, el POS le niega TODO a esa persona.
+
+    Ofrecerla aquí prometería un acceso que no existe: la darían de alta, la
+    cajera entraría y vería un 403 en la primera pantalla.
+    """
+    c, _, entrar_como = entorno
+    entrar_como("jefe", "admin")
+    _directorio(monkeypatch, [
+        {"id": "sofia", "email": "sofia@male.com", "nombre": "Sofía L.",
+         "rol": "user", "permisos": {"logistica": ["ver"]}, "activo": True},
+        {"id": "exempleada", "email": "ex@male.com", "nombre": "Ex Empleada",
+         "rol": "user", "permisos": {"retail": ["ver"]}, "activo": False},
+        {"id": "jefa", "email": "jefa@male.com", "nombre": "La Jefa",
+         "rol": "admin", "permisos": {}, "activo": True},
+    ])
+
+    ids = [u["usuario_id"] for u in c.get(
+        "/api/retail/admin/usuarios-candidatos").json()]
+    assert ids == ["jefa"]          # admin entra a todo; las otras dos no
+
+
+def test_la_lista_es_solo_para_administradores(entorno, monkeypatch):
+    """Misma puerta que el resto del panel: saber quién puede entrar al POS ya
+    es información de personal."""
+    c, _, _ = entorno                      # entra como `maria`, rol user
+    _directorio(monkeypatch, [])
+    assert c.get("/api/retail/admin/usuarios-candidatos").status_code == 403
+
+
+def test_sin_directorio_lo_dice_en_vez_de_mentir(entorno, monkeypatch):
+    """Si no se puede leer el directorio del ERP, la respuesta NO es una lista
+    vacía: «no hay nadie» y «no pude preguntar» son cosas distintas."""
+    import sys
+
+    c, _, entrar_como = entorno
+    entrar_como("jefe", "admin")
+    monkeypatch.setitem(sys.modules, "backend.services.usuarios", None)
+
+    r = c.get("/api/retail/admin/usuarios-candidatos")
+    assert r.status_code == 503
+    assert "usuarios del sistema" in r.json()["detail"]["mensaje"]

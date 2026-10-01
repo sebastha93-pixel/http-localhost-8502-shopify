@@ -794,6 +794,22 @@ export async function listarPermisos(): Promise<PermisosUsuario[]> {
 
 /** Crea o actualiza. Queda como CRÍTICO en la auditoría con el antes y el
  *  después: conceder permisos es la operación que habilita todas las demás. */
+export interface CandidataPos {
+  usuario_id: string;
+  nombre: string;
+  email: string;
+  rol: string;
+}
+
+/** Quién puede entrar al POS y todavía no está dado de alta en él. */
+export async function usuariosCandidatos(): Promise<CandidataPos[]> {
+  try {
+    return await api.get<CandidataPos[]>("/api/retail/admin/usuarios-candidatos");
+  } catch (e) {
+    return traducir(e);
+  }
+}
+
 export async function guardarPermisos(
   usuarioId: string,
   datos: Omit<PermisosUsuario, "usuario_id">,
