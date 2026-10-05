@@ -148,6 +148,14 @@ interface OrdenCorte {
     precio_corte?: number | null;
     cantidad_programada?: number | null;
     referencia?: { codigo_referencia?: string; nombre?: string; tela?: string; color?: string };
+    /** Forro de bolsillo + telas complementarias del precosteo, con color y metros.
+     *  Informativo para el cortador; la complementaria solo viene si el precosteo la tiene. */
+    telas_adicionales?: {
+      item: string;
+      color?: string | null;
+      metros_por_prenda?: number | null;
+      metros_estimados?: number | null;
+    }[];
   }[];
   rollos: RolloLink[];
 }
@@ -892,6 +900,56 @@ export default function DetalleOrdenCortePage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Telas adicionales: forro de bolsillo + complementarias del precosteo,
+          con su color y metros. Además de la tela principal; la complementaria
+          solo aparece si el precosteo la contiene. */}
+      {(() => {
+        const multi = (oc.referencias?.length || 0) > 1;
+        const adic: { ref?: string; item: string; color?: string | null; mpp?: number | null; tot?: number | null }[] = [];
+        for (const rf of oc.referencias || []) {
+          for (const t of rf.telas_adicionales || []) {
+            adic.push({
+              ref: multi ? (rf.referencia?.codigo_referencia || "") : undefined,
+              item: t.item, color: t.color,
+              mpp: t.metros_por_prenda, tot: t.metros_estimados,
+            });
+          }
+        }
+        if (!adic.length) return null;
+        return (
+          <Card>
+            <CardContent className="p-5 space-y-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="section-label">Telas adicionales</p>
+                <span className="text-xs text-graphite">Forro de bolsillo y telas complementarias del precosteo — además de la tela principal.</span>
+              </div>
+              <div className="space-y-2">
+                {adic.map((a, i) => (
+                  <div key={i} className="flex items-center justify-between gap-2 flex-wrap rounded-sm border border-border bg-cloud/30 px-3 py-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {a.ref && (
+                        <span className="rounded-sm bg-navy-600/10 px-2 py-0.5 text-[0.62rem] font-bold uppercase tracking-widest text-navy-600">{a.ref}</span>
+                      )}
+                      <span className="font-semibold text-ink-900 text-sm">{a.item}</span>
+                      {a.color && (
+                        <span className="rounded-sm border border-border bg-white px-2 py-0.5 text-[0.7rem] text-graphite">
+                          Color: <span className="font-semibold text-ink-900">{a.color}</span>
+                        </span>
+                      )}
+                    </div>
+                    {(a.mpp || a.tot) && (
+                      <span className="text-xs text-graphite tabular">
+                        {a.mpp ? `${a.mpp} m/prenda` : ""}{a.mpp && a.tot ? " · " : ""}{a.tot ? `≈${a.tot} m` : ""}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       <Card>
         <CardContent className="p-5">

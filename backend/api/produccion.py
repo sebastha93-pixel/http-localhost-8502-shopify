@@ -575,6 +575,10 @@ class PrecosteoItemIn(BaseModel):
     valor_unitario: float = Field(ge=0)
     cantidad:       float = Field(gt=0)
     iva:            float = Field(ge=0, default=0)
+    # Color de la tela (solo aplica a MATERIA PRIMA: tela principal, forro de
+    # bolsillo, tela complementaria). Viaja a la orden de corte como dato
+    # informativo para el cortador. Opcional.
+    color:          Optional[str] = None
 
 
 class PrecosteoIn(BaseModel):

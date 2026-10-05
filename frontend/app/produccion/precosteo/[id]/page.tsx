@@ -23,6 +23,7 @@ const CATEGORIAS = ["MATERIA PRIMA", "PROCESO EN MATERIA PRIMA", "INSUMO CONFECC
 interface LineaEdit {
   categoria: string;
   item: string;
+  color: string;   // solo MATERIA PRIMA (tela): color de esa tela
   valor_unitario: string;
   cantidad: string;
   iva: string;
@@ -32,6 +33,7 @@ interface Item {
   id: string;
   categoria: string;
   item: string;
+  color?: string;
   valor_unitario: number;
   cantidad: number;
   iva: number;
@@ -137,6 +139,7 @@ export default function PrecosteoDetallePage() {
     return items.map((it) => ({
       categoria: it.categoria,
       item: it.item,
+      color: it.color ?? "",
       valor_unitario: String(it.valor_unitario ?? ""),
       cantidad: String(it.cantidad ?? ""),
       iva: String(it.iva ?? "0"),
@@ -207,16 +210,21 @@ export default function PrecosteoDetallePage() {
 
   const guardarMut = useMutation({
     mutationFn: () => {
-      // Los totales por línea y globales los recalcula el backend.
+      // Los totales por línea y globales los recalcula el backend. Ordenamos por
+      // categoría para que lo guardado quede agrupado (plantilla: MATERIA PRIMA,
+      // PROCESO, INSUMO CONFECCION, INSUMO TERMINACION).
+      const rank = (c: string) => { const i = CATEGORIAS.indexOf(c); return i < 0 ? CATEGORIAS.length : i; };
       const items = editLineas
         .filter((l) => l.item.trim() && (parseFloat(l.valor_unitario || "0") > 0 || parseFloat(l.cantidad || "0") > 0))
         .map((l) => ({
           categoria: l.categoria,
           item: l.item.trim(),
+          color: l.categoria === "MATERIA PRIMA" ? (l.color.trim() || null) : null,
           valor_unitario: parseFloat(l.valor_unitario || "0") || 0,
           cantidad: parseFloat(l.cantidad || "0") || 1,
           iva: parseFloat(l.iva || "0") || 0,
-        }));
+        }))
+        .sort((a, b) => rank(a.categoria) - rank(b.categoria));
       if (items.length === 0) throw new Error("El costeo necesita al menos una línea con valor.");
       return api.patch(`/api/produccion/precosteo/${id}`, {
         nombre: form.nombre.trim(),
@@ -529,7 +537,7 @@ export default function PrecosteoDetallePage() {
             <p className="section-label">Líneas ({editando ? editLineas.length : p.items.length})</p>
             {editando && (
               <button
-                onClick={() => setEditLineas((ls) => [...ls, { categoria: CATEGORIAS[0], item: "", valor_unitario: "", cantidad: "1", iva: "0" }])}
+                onClick={() => setEditLineas((ls) => [...ls, { categoria: CATEGORIAS[0], item: "", color: "", valor_unitario: "", cantidad: "1", iva: "0" }])}
                 className="inline-flex items-center gap-1 rounded-sm border border-border bg-card px-3 py-1.5 text-[0.68rem] font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud">
                 <Plus className="h-3.5 w-3.5" /> Agregar línea
               </button>
@@ -564,6 +572,13 @@ export default function PrecosteoDetallePage() {
                           <input value={l.item} onChange={(e) => setLinea(i, "item", e.target.value)}
                             placeholder="Nombre del insumo/proceso"
                             className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs" />
+                          {/* Color de la tela — solo MATERIA PRIMA. Viaja a la orden
+                              de corte (forro / tela complementaria por color). */}
+                          {l.categoria === "MATERIA PRIMA" && (
+                            <input value={l.color} onChange={(e) => setLinea(i, "color", e.target.value)}
+                              placeholder="Color de la tela (opcional)"
+                              className="mt-1 w-full rounded-sm border border-border bg-white px-2 py-1 text-[0.7rem] text-graphite placeholder:text-graphite/50" />
+                          )}
                         </td>
                         <td className="px-2 py-1">
                           <input value={l.valor_unitario} onChange={(e) => setLinea(i, "valor_unitario", e.target.value)}
@@ -622,7 +637,12 @@ export default function PrecosteoDetallePage() {
               {p.items.map((it) => (
                 <tr key={it.id} className="border-b border-border/40 hover:bg-cloud/50">
                   <td className="px-3 py-1.5 text-graphite">{it.categoria}</td>
-                  <td className="px-3 py-1.5 text-ink-900">{it.item}</td>
+                  <td className="px-3 py-1.5 text-ink-900">
+                    {it.item}
+                    {it.categoria === "MATERIA PRIMA" && it.color
+                      ? <span className="text-graphite"> · {it.color}</span>
+                      : null}
+                  </td>
                   <td className="px-3 py-1.5 text-right tabular">${it.valor_unitario.toLocaleString("es-CO", { maximumFractionDigits: 0 })}</td>
                   <td className="px-3 py-1.5 text-right tabular">{it.cantidad}</td>
                   <td className="px-3 py-1.5 text-right tabular">${it.iva.toLocaleString("es-CO", { maximumFractionDigits: 0 })}</td>

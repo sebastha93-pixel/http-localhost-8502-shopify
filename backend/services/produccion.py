@@ -1169,6 +1169,23 @@ def _calcular_totales_precosteo(items: list[dict], iva_pct: float, margen: float
     }
 
 
+def _insertar_items_precosteo(sb, rows_items: list[dict]) -> None:
+    """Inserta las líneas del precosteo. Si la columna `color` aún no existe
+    (migración sin correr), la quita y reintenta — mismo criterio defensivo que
+    la cabecera con es_muestra_diseno/descripcion."""
+    if not rows_items:
+        return
+    try:
+        sb.table("precosteo_items").insert(rows_items).execute()
+    except Exception as e:
+        if "color" in str(e):
+            for rr in rows_items:
+                rr.pop("color", None)
+            sb.table("precosteo_items").insert(rows_items).execute()
+        else:
+            raise
+
+
 def crear_precosteo(*, codigo_referencia: str, nombre: str, tela: str, color: str,
                     iva_pct: float, margen: float, items: list[dict],
                     created_by: str, es_muestra_diseno: bool = False,
@@ -1232,6 +1249,7 @@ def crear_precosteo(*, codigo_referencia: str, nombre: str, tela: str, color: st
                 "referencia_id": ref_id,
                 "categoria": (it.get("categoria") or "").upper().strip(),
                 "item": (it.get("item") or "").strip(),
+                "color": (it.get("color") or "").strip() or None,
                 "valor_unitario": it.get("valor_unitario") or 0,
                 "cantidad": it.get("cantidad") or 1,
                 "iva": it.get("iva") or 0,
@@ -1239,7 +1257,7 @@ def crear_precosteo(*, codigo_referencia: str, nombre: str, tela: str, color: st
                 "total_con_iva": it.get("total_con_iva") or 0,
                 "orden": i,
             })
-        sb.table("precosteo_items").insert(rows_items).execute()
+        _insertar_items_precosteo(sb, rows_items)
 
     _cache_invalidate_prefix("precosteos")
     creado = obtener_precosteo(ref_id)
@@ -1269,6 +1287,7 @@ def duplicar_precosteo(precosteo_id: str, *, created_by: str) -> dict:
     items = [{
         "categoria":      it.get("categoria"),
         "item":           it.get("item"),
+        "color":          it.get("color"),
         "valor_unitario": it.get("valor_unitario") or 0,
         "cantidad":       it.get("cantidad") or 1,
         "iva":            it.get("iva") or 0,
@@ -1395,6 +1414,7 @@ def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
                 "referencia_id": precosteo_id,
                 "categoria": (it.get("categoria") or "").upper().strip(),
                 "item": (it.get("item") or "").strip(),
+                "color": (it.get("color") or "").strip() or None,
                 "valor_unitario": it.get("valor_unitario") or 0,
                 "cantidad": it.get("cantidad") or 1,
                 "iva": it.get("iva") or 0,
@@ -1402,8 +1422,7 @@ def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
                 "total_con_iva": it.get("total_con_iva") or 0,
                 "orden": i,
             })
-        if rows_items:
-            sb.table("precosteo_items").insert(rows_items).execute()
+        _insertar_items_precosteo(sb, rows_items)
 
     if update:
         update["updated_at"] = _now_iso()
@@ -1724,6 +1743,68 @@ def _promedio_desde_precosteo(ref_id: Optional[str]) -> Optional[float]:
         return None
 
 
+def _clasificar_telas_precosteo(items: list[dict]) -> tuple[Optional[dict], list[dict]]:
+    """Separa las líneas de MATERIA PRIMA en (principal, adicionales).
+
+    La PRINCIPAL es la tela que marca el consumo del trazo —misma regla que
+    `_promedio_desde_precosteo`: entre las que contienen 'TELA', la de mayor
+    cantidad; si ninguna la contiene, la de mayor cantidad del grupo—. El resto
+    de MATERIA PRIMA (forro de bolsillo y telas complementarias) son
+    'adicionales': datos informativos para el cortador, cada una con su color.
+    Así la complementaria aparece SOLO si el precosteo la tiene."""
+    mp = [it for it in (items or [])
+          if (it.get("categoria") or "").upper().strip() == "MATERIA PRIMA"
+          and (it.get("item") or "").strip()]
+    if not mp:
+        return None, []
+
+    def _cant(it: dict) -> float:
+        try:
+            return float(it.get("cantidad") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    con_tela = [it for it in mp if "TELA" in (it.get("item") or "").upper()]
+    principal = max(con_tela or mp, key=_cant)
+    adicionales = [it for it in mp if it is not principal]
+    return principal, adicionales
+
+
+def _tela_adicional_out(it: dict, unidades: Optional[float]) -> dict:
+    """Formatea una tela adicional (forro/complementaria) para la orden de corte:
+    nombre, color y metros (por prenda y el estimado total si hay unidades)."""
+    try:
+        cant = float(it.get("cantidad") or 0)
+    except (TypeError, ValueError):
+        cant = 0.0
+    out = {
+        "item": (it.get("item") or "").strip(),
+        "color": (it.get("color") or "").strip() or None,
+        "metros_por_prenda": round(cant, 4) if cant > 0 else None,
+    }
+    try:
+        u = float(unidades or 0)
+    except (TypeError, ValueError):
+        u = 0.0
+    if u > 0 and cant > 0:
+        out["metros_estimados"] = round(cant * u, 2)
+    return out
+
+
+def _telas_adicionales_de_referencia(referencia_id: Optional[str],
+                                     unidades: Optional[float]) -> list[dict]:
+    """Forro de bolsillo + telas complementarias del precosteo de una referencia,
+    listas para mostrar/enviar en la orden de corte. Lista vacía si no aplica."""
+    if not referencia_id:
+        return []
+    try:
+        pre = obtener_precosteo(referencia_id) or {}
+        _, adicionales = _clasificar_telas_precosteo(pre.get("items") or [])
+        return [_tela_adicional_out(a, unidades) for a in adicionales]
+    except Exception:
+        return []
+
+
 def obtener_precosteo(precosteo_id: str) -> Optional[dict]:
     sb = _sb()
     if sb is None:
@@ -1947,7 +2028,11 @@ def _guardar_referencias_corte(oc_id: str, specs: list[dict]) -> None:
 
 def _referencias_de_corte(oc_id: str, oc_row: dict) -> list[dict]:
     """Referencias del tendido (tabla hija) enriquecidas con el precosteo.
-    Si la tabla no existe aún, cae a la referencia primaria del padre."""
+    Si la tabla no existe aún, cae a la referencia primaria del padre.
+
+    Cada referencia trae `telas_adicionales`: el forro de bolsillo y las telas
+    complementarias del precosteo (con su color y metros), para mostrarlas en el
+    detalle y enviarlas en el correo al cortador."""
     sb = _sb()
     if sb is None:
         return []
@@ -1959,7 +2044,7 @@ def _referencias_de_corte(oc_id: str, oc_row: dict) -> list[dict]:
     except Exception:
         rows = []
     if not rows:
-        return [{
+        rows = [{
             "referencia_id":       oc_row.get("referencia_id"),
             "referencia":          oc_row.get("referencia"),
             "curva_trazo":         oc_row.get("curva_trazo") or {},
@@ -1975,6 +2060,15 @@ def _referencias_de_corte(oc_id: str, oc_row: dict) -> list[dict]:
                 rr["precio_corte"] = _precio_proceso_precosteo(rr.get("referencia_id"), "corte")
             except Exception:
                 pass
+        # Unidades para estimar metros: las programadas, o la suma de la curva.
+        unidades = rr.get("cantidad_programada")
+        if not unidades:
+            try:
+                unidades = sum(float(n or 0) for n in (rr.get("curva_trazo") or {}).values())
+            except Exception:
+                unidades = None
+        rr["telas_adicionales"] = _telas_adicionales_de_referencia(
+            rr.get("referencia_id"), unidades)
     return rows
 
 
@@ -4004,12 +4098,35 @@ def autorizar_orden_corte(oc_id: str, *, destinatarios: Optional[list[str]] = No
                       f"{indicaciones}\n"
                       f"────────────────────────────────────\n")
 
+    # TELAS ADICIONALES (forro de bolsillo + complementarias) desde el precosteo,
+    # con su color y metros. El cortador necesita saber qué MÁS cortar aparte de
+    # la tela principal. Solo salen si el precosteo las tiene (la complementaria
+    # aparece únicamente cuando existe en el precosteo).
+    refs_oc = oc.get("referencias") or []
+    multi = len(refs_oc) > 1
+    adic_lineas: list[str] = []
+    for rr in refs_oc:
+        etiqueta_ref = ((rr.get("referencia") or {}).get("codigo_referencia") or "").strip()
+        for a in (rr.get("telas_adicionales") or []):
+            partes = [a.get("item") or "tela"]
+            if a.get("color"):
+                partes.append(f"color {a['color']}")
+            if a.get("metros_por_prenda"):
+                m = f"{a['metros_por_prenda']} m/prenda"
+                if a.get("metros_estimados"):
+                    m += f" · ≈{a['metros_estimados']} m total"
+                partes.append(m)
+            prefijo = f"[{etiqueta_ref}] " if (multi and etiqueta_ref) else ""
+            adic_lineas.append(f"  · {prefijo}" + " — ".join(partes))
+    bloque_telas = ("Telas adicionales:\n" + "\n".join(adic_lineas) + "\n") if adic_lineas else ""
+
     # Cuerpo del correo
     filas_curva = "\n".join(f"  · Talla {t}: {n} und" for t, n in (oc.get("curva_trazo") or {}).items())
     body = (
         f"Orden de corte {oc.get('consecutivo')}\n"
         f"Referencia: {codigo_ref} · {ref.get('nombre','')}\n"
         f"Tela: {ref.get('tela','—')}\n"
+        + bloque_telas
         + bloque_ind +
         f"Largo trazo: {oc.get('largo_trazo')} m\n"
         f"Número de capas: {oc.get('num_capas')}\n"

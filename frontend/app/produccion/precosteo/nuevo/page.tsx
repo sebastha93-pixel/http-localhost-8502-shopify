@@ -23,6 +23,7 @@ interface TelaStock {
 interface LineaForm {
   categoria: string;
   item: string;
+  color?: string;        // solo MATERIA PRIMA (tela): color de esa tela → viaja a la orden de corte
   valor_unitario: string;
   cantidad: string;
   aplica_iva: boolean;   // si true, IVA se calcula automático con iva_pct global
@@ -156,16 +157,21 @@ export default function NuevoPrecosteoPage() {
 
   const mut = useMutation({
     mutationFn: () => {
-      // Solo mandamos líneas con valor > 0 o cantidad > 0 (evita renglones vacíos de plantilla)
+      // Solo mandamos líneas con valor > 0 o cantidad > 0 (evita renglones vacíos de plantilla).
+      // Ordenamos por categoría (orden de la plantilla) para que lo guardado quede
+      // agrupado —y que un "+ Otro" caiga en su bloque, no suelto al final—.
+      const rank = (c: string) => { const i = CATEGORIAS.indexOf(c); return i < 0 ? CATEGORIAS.length : i; };
       const items = lineas
         .filter((l) => l.item.trim() && (pesos(l.valor_unitario) > 0 || parseFloat(l.cantidad || "0") > 0))
         .map((l) => ({
           categoria: l.categoria,
           item: l.item.trim(),
+          color: l.categoria === "MATERIA PRIMA" ? (l.color?.trim() || null) : null,
           valor_unitario: pesos(l.valor_unitario),
           cantidad: parseFloat(l.cantidad || "0") || 1,
           iva: ivaDeLinea(l, ivaPct),
-        }));
+        }))
+        .sort((a, b) => rank(a.categoria) - rank(b.categoria));
       // Al menos un renglón con VALOR real. Antes se pedía items.length>0, pero
       // las líneas de plantilla nacen con cantidad "1" y siempre pasaban el
       // filtro → un precosteo entero en $0 se colaba sin avisar.
@@ -218,13 +224,22 @@ export default function NuevoPrecosteoPage() {
   const utilidad = precioNetoVenta > 0 && totalSin > 0 ? precioNetoVenta - totalSin : 0;
   const utilidadPct = precioNetoVenta > 0 && totalSin > 0 ? (utilidad / totalSin) * 100 : 0;
 
-  // Agrupamos por categoría para dibujar sub-encabezados en la tabla
+  // Agrupamos por categoría: UNA sola sección por categoría, en el orden de la
+  // plantilla. Así un renglón "+ Otro" cae DENTRO del bloque de la categoría que
+  // elijas en su select (y salta de bloque si la cambias), en vez de quedar
+  // suelto al final. Las categorías fuera de la plantilla van al final.
+  const catOrden = [
+    ...CATEGORIAS,
+    ...Array.from(new Set(lineas.map((l) => l.categoria))).filter((c) => !CATEGORIAS.includes(c)),
+  ];
   const gruposUI: { categoria: string; indices: number[] }[] = [];
-  lineas.forEach((l, i) => {
-    const last = gruposUI[gruposUI.length - 1];
-    if (last && last.categoria === l.categoria) last.indices.push(i);
-    else gruposUI.push({ categoria: l.categoria, indices: [i] });
-  });
+  for (const cat of catOrden) {
+    const indices = lineas.reduce<number[]>((acc, l, i) => {
+      if (l.categoria === cat) acc.push(i);
+      return acc;
+    }, []);
+    if (indices.length) gruposUI.push({ categoria: cat, indices });
+  }
 
   return (
     <PageShell title="Nuevo precosteo" subtitle="Plantilla estándar · llena valor y cantidad">
@@ -343,10 +358,9 @@ export default function NuevoPrecosteoPage() {
                 </thead>
                 <tbody>
                   {gruposUI.map((g) => (
-                    // La key incluye el 1er índice del grupo: al agregar una
-                    // línea "MATERIA PRIMA" al final aparece un 2º grupo con esa
-                    // misma categoría, y `key={g.categoria}` colisionaba.
-                    <Fragment key={`${g.categoria}-${g.indices[0]}`}>
+                    // Una sección por categoría (ver gruposUI): la categoría es
+                    // única, así que sirve de key directamente.
+                    <Fragment key={g.categoria}>
                       <tr className="bg-cloud/60 border-b border-border">
                         <td colSpan={7} className="px-2 py-1.5 text-[0.7rem] font-bold uppercase tracking-[0.16em] text-ink-900">
                           {g.categoria}
@@ -376,6 +390,13 @@ export default function NuevoPrecosteoPage() {
                                     placeholder="Item"
                                     className="flex-1 rounded-sm border border-border bg-white px-2 py-1 text-xs" />
                                 </div>
+                              )}
+                              {/* Color de la tela — solo MATERIA PRIMA. Viaja a la orden de
+                                  corte (forro de bolsillo / tela complementaria por color). */}
+                              {l.categoria === "MATERIA PRIMA" && (
+                                <input value={l.color || ""} onChange={(e) => actualizar(idx, "color", e.target.value)}
+                                  placeholder="Color de la tela (opcional)"
+                                  className="mt-1 w-full rounded-sm border border-border bg-white px-2 py-1 text-[0.7rem] text-graphite placeholder:text-graphite/50" />
                               )}
                             </td>
                             <td className="px-2 py-1.5">
