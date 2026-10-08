@@ -9,11 +9,15 @@ papel tiene que decir lo que quedó, no lo que la pantalla creía.
 También es lo que permite reimprimir tres días después, que es cuando la
 clienta vuelve a cambiar la prenda.
 
-**LO QUE ESTA TIRILLA NO ES.** No es una factura electrónica. Mientras la
-tienda no tenga resolución DIAN y Siigo no haya emitido (Fase 3), esto es un
-comprobante interno de venta y va impreso diciéndolo. Imprimir un papel con
-pinta de documento fiscal sin serlo no es un detalle de redacción: es lo que
-convierte un problema de software en un problema con la DIAN.
+**CUÁNDO ES UNA FACTURA Y CUÁNDO NO.** Una factura electrónica existe cuando
+la DIAN la valida: ahí nace el CUFE. Hasta ese momento este papel es un
+comprobante interno y va impreso diciéndolo. Imprimir un papel con pinta de
+documento fiscal sin serlo no es un detalle de redacción: es lo que convierte
+un problema de software en un problema con la DIAN.
+
+Cuando sí lo es, el número que manda es EL DE SIIGO (`TARR-11451`), que es el
+que la DIAN validó bajo la resolución de la tienda. El del POS (`ARRPOS-…`)
+pasa a ser una referencia interna.
 """
 from __future__ import annotations
 
@@ -104,6 +108,15 @@ class Tirilla:
     documento_fiscal: Optional[str] = None
     cufe: Optional[str] = None
     anulada: bool = False
+    # Cuándo la validó la DIAN, en hora de la tienda. La tirilla real imprime
+    # dos fechas —generación y expedición— y ésta es la segunda.
+    fecha_expedicion: Optional[str] = None
+    # «Responsable de IVA - Actividad económica 4782.» Va impreso en la factura.
+    regimen: Optional[str] = None
+    # La tienda emite y esta venta todavía no tiene su factura: la pantalla
+    # espera unos segundos antes de imprimir, para entregar la factura y no
+    # un comprobante.
+    factura_en_camino: bool = False
 
     # El QR se dibuja en el servidor, junto a los datos fiscales. `qr_ruta` es
     # el atributo `d` de un <path> SVG: se pinta nítido a cualquier tamaño, no
@@ -115,13 +128,16 @@ class Tirilla:
 
     @property
     def es_documento_fiscal(self) -> bool:
-        """Sólo cuando existe de verdad: hay resolución Y el documento salió.
+        """Sólo cuando existe de verdad. Tres condiciones, y las tres:
 
-        Las dos condiciones. Con resolución pero sin emitir, el papel todavía
-        no ampara nada; emitido sin resolución no puede pasar, pero si pasara
-        sería un dato corrupto y tampoco hay que creerle.
+        * el documento salió (`emitido`);
+        * **tiene CUFE** — es la prueba de que la DIAN lo validó. Un documento
+          creado en Siigo en modo prueba queda `emitido` y sin CUFE: existe
+          allá, pero no es una factura y este papel no lo llama así;
+        * hay resolución que imprimir, y es la que ampara ESE número.
         """
-        return bool(self.resolucion_dian) and self.estado_fiscal == "emitido"
+        return (self.estado_fiscal == "emitido" and bool(self.cufe)
+                and bool(self.resolucion_dian))
 
 
 class ArmarTirilla:
@@ -139,7 +155,11 @@ class ArmarTirilla:
                    coalesce(t.telefono, '')   AS telefono,
                    t.nombre                   AS tienda_nombre,
                    t.resolucion_dian, t.mensaje_tirilla,
-                   t.zona_horaria,
+                   t.zona_horaria, t.regimen_iva, t.actividad_economica,
+                   t.autorizacion_numero, t.autorizacion_prefijo,
+                   t.autorizacion_desde, t.autorizacion_hasta,
+                   t.autorizacion_aprobada, t.autorizacion_meses,
+                   c.siigo_documento_id,
                    coalesce(c.nombre, v.caja_id)   AS caja_nombre,
                    coalesce(p.nombre, v.cajera_id) AS cajera_nombre
               FROM retail.ventas v
@@ -183,16 +203,22 @@ class ArmarTirilla:
             """), {"i": v["cliente_id"]})).mappings().first()
 
         doc = (await self._s.execute(text("""
-            SELECT numero, cufe, qr_datos FROM retail.documentos_fiscales
+            SELECT numero, cufe, qr_datos,
+                   to_char(emitido_en AT TIME ZONE :tz, 'DD/MM/YYYY HH24:MI')
+                       AS expedida
+              FROM retail.documentos_fiscales
              WHERE venta_id = :i AND estado = 'emitido'
+               AND tipo <> 'nota_credito'
              ORDER BY emitido_en DESC LIMIT 1
-        """), {"i": venta_id})).mappings().first()
+        """), {"i": venta_id, "tz": tz})).mappings().first()
+
+        resolucion = _resolucion(v, doc["numero"] if doc else None)
 
         tirilla = Tirilla(
             razon_social=v["razon_social"], nit=v["nit"],
             direccion=v["direccion"], telefono=v["telefono"],
             tienda_nombre=v["tienda_nombre"],
-            resolucion_dian=v["resolucion_dian"],
+            resolucion_dian=resolucion,
             mensaje=v["mensaje_tirilla"],
             numero=v["numero"], fecha=fecha,
             caja_nombre=v["caja_nombre"], cajera_nombre=v["cajera_nombre"],
@@ -222,9 +248,70 @@ class ArmarTirilla:
             documento_fiscal=doc["numero"] if doc else None,
             cufe=doc["cufe"] if doc else None,
             anulada=v["estado"] == "anulada",
+            fecha_expedicion=doc["expedida"] if doc else None,
+            regimen=_regimen(v),
+            factura_en_camino=_en_camino(v),
         )
-        _poner_qr(tirilla, doc, con_resolucion=bool(v["resolucion_dian"]))
+        _poner_qr(tirilla, doc, con_resolucion=tirilla.es_documento_fiscal)
         return tirilla
+
+
+def _resolucion(v, numero_factura: Optional[str]) -> Optional[str]:
+    """El texto de la autorización de numeración, como lo imprime Siigo:
+
+        Número Autorización 18764083761292 aprobado en 20241120
+        prefijo TARR desde el número 1 al 1000000 Vigencia: 24 meses
+
+    SÓLO SI AMPARA ESE NÚMERO. La resolución es de un prefijo; si la factura
+    que devolvió Siigo trae otro —la caja apuntando al comprobante que no
+    es—, pegarle esta resolución sería imprimir un dato falso en un papel
+    fiscal. Sin texto, la tirilla no se presenta como factura.
+
+    `resolucion_dian` a mano manda: es la salida para un caso que este
+    armado no contemple.
+    """
+    if (v["resolucion_dian"] or "").strip():
+        return v["resolucion_dian"].strip()
+    # Sin factura no hay número que amparar, y no se imprime la resolución
+    # «por si acaso»: en un comprobante interno sólo le daría pinta de fiscal.
+    if not numero_factura:
+        return None
+    prefijo = (v["autorizacion_prefijo"] or "").strip()
+    if not (v["autorizacion_numero"] and prefijo and v["autorizacion_aprobada"]):
+        return None
+    if numero_factura.rsplit("-", 1)[0].strip().upper() != prefijo.upper():
+        return None
+    texto = (f"Número Autorización {v['autorizacion_numero']} aprobado en "
+             f"{v['autorizacion_aprobada']:%Y%m%d} prefijo {prefijo}")
+    if v["autorizacion_desde"] is not None and v["autorizacion_hasta"] is not None:
+        texto += (f" desde el número {v['autorizacion_desde']} al "
+                  f"{v['autorizacion_hasta']}")
+    if v["autorizacion_meses"]:
+        texto += f" Vigencia: {v['autorizacion_meses']} meses"
+    return texto
+
+
+def _regimen(v) -> Optional[str]:
+    partes = [(v["regimen_iva"] or "").strip()]
+    if (v["actividad_economica"] or "").strip():
+        partes.append(f"Actividad económica {v['actividad_economica'].strip()}")
+    return " - ".join(p for p in partes if p) or None
+
+
+def _en_camino(v) -> bool:
+    """¿Vale la pena esperar la factura antes de imprimir?
+
+    Sólo si de verdad viene: la facturación está encendida EN PRODUCCIÓN (en
+    prueba no hay DIAN ni CUFE que esperar), la caja tiene comprobante y la
+    venta no ha terminado su trámite.
+    """
+    import os
+    # La misma variable que gobierna al emisor (`RETAIL_FISCAL_MODO`).
+    en_produccion = os.environ.get(
+        "RETAIL_FISCAL_MODO", "").strip().lower() == "produccion"
+    return (en_produccion and bool(v["siigo_documento_id"])
+            and v["estado"] != "anulada"
+            and v["estado_fiscal"] in ("pendiente", "enviando"))
 
 
 # ── El QR ───────────────────────────────────────────────────────────────────

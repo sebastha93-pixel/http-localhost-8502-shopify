@@ -23,9 +23,16 @@ import { Tirilla } from "@/components/pos/tirilla";
  * «imprimir» delante de cada clienta serían dos segundos de los treinta, cien
  * veces al día.
  *
- * El estado fiscal se muestra como lo que es —«emitiendo»— y no se espera. La
- * clienta ya se fue con su prenda y su papel (ADR-002).
+ * SI LA TIENDA FACTURA, SE ESPERA LA FACTURA — unos segundos. La factura es
+ * lo que hay que entregar, y la DIAN la valida en lo que la cajera empaca. Se
+ * espera con tope: si Siigo o la DIAN tardan, sale el comprobante (que dice
+ * que la factura está en trámite) y la venta sigue. La venta nunca depende de
+ * que un tercero conteste (ADR-002); el papel sí puede esperarlo un momento.
  */
+
+/** Cuánto se espera la factura antes de imprimir el comprobante. */
+const ESPERA_FACTURA_MS = 20_000;
+const CADA_MS = 1_500;
 export function TicketCerrado({
   ticket,
   onNueva,
@@ -42,14 +49,44 @@ export function TicketCerrado({
   const [tirilla, setTirilla] = useState<DatosTirilla | null>(null);
   const [errorImpresion, setErrorImpresion] = useState<string | null>(null);
   const [imprimiendo, setImprimiendo] = useState(true);
+  const [esperandoFactura, setEsperandoFactura] = useState(false);
   const yaImprimio = useRef(false);
+  const noEsperar = useRef(false);
+  // Si la cajera pasa a la venta siguiente mientras se espera la factura,
+  // este componente ya no está: imprimir entonces sacaría por el papel la
+  // pantalla de venta en vez de la tirilla.
+  const vivo = useRef(true);
+  useEffect(() => {
+    vivo.current = true;
+    return () => { vivo.current = false; noEsperar.current = true; };
+  }, []);
 
-  const imprimir = useCallback(async () => {
+  const imprimir = useCallback(async (esperar = false) => {
     setImprimiendo(true);
     setErrorImpresion(null);
     try {
-      const d = tirillaLocal ?? (await pedirTirilla(ticket.venta_id));
+      let d = tirillaLocal ?? (await pedirTirilla(ticket.venta_id));
       setTirilla(d);
+      if (esperar && !tirillaLocal) {
+        // Con `Date.now()` y no contando vueltas: una petición lenta no puede
+        // estirar la espera más allá del tope.
+        const tope = Date.now() + ESPERA_FACTURA_MS;
+        noEsperar.current = false;
+        while (d.factura_en_camino && !d.es_documento_fiscal
+               && Date.now() < tope && !noEsperar.current) {
+          setEsperandoFactura(true);
+          await new Promise((r) => setTimeout(r, CADA_MS));
+          try {
+            d = await pedirTirilla(ticket.venta_id);
+            setTirilla(d);
+          } catch {
+            // Se cayó la red esperando: se imprime lo que ya se tenía.
+            break;
+          }
+        }
+        setEsperandoFactura(false);
+      }
+      if (!vivo.current) return;
       // Una pausa para que React pinte la tirilla antes de abrir el diálogo:
       // sin ella el navegador manda una hoja en blanco.
       //
@@ -65,6 +102,7 @@ export function TicketCerrado({
         e instanceof Error ? e.message : "No se pudo preparar la tirilla.",
       );
     } finally {
+      setEsperandoFactura(false);
       setImprimiendo(false);
     }
   }, [ticket.venta_id, tirillaLocal]);
@@ -72,7 +110,7 @@ export function TicketCerrado({
   useEffect(() => {
     if (yaImprimio.current) return;
     yaImprimio.current = true;
-    imprimir();
+    imprimir(true);
   }, [imprimir]);
 
   useEffect(() => {
@@ -92,7 +130,9 @@ export function TicketCerrado({
       {/* EL PAPEL, al ancho real de 80 mm. Se ve, no se adivina. */}
       <div className="hidden shrink-0 pt-2 md:block">
         <p className="kicker mb-2 text-center text-[var(--pos-600)]">
-          {imprimiendo ? "Saliendo por la impresora" : "Lo que salió por el papel"}
+          {esperandoFactura
+            ? "Esperando la factura"
+            : imprimiendo ? "Saliendo por la impresora" : "Lo que salió por el papel"}
         </p>
         <div
           className="w-[302px] border bg-white p-1"
@@ -132,7 +172,9 @@ export function TicketCerrado({
         <div className="mt-6 space-y-1.5 text-[12px] text-[var(--pos-600)]">
           <Estado
             texto={
-              imprimiendo
+              esperandoFactura
+                ? "Esperando la factura…"
+                : imprimiendo
                 ? "Imprimiendo tirilla…"
                 : errorImpresion
                   ? "La tirilla no salió"
@@ -144,16 +186,20 @@ export function TicketCerrado({
             texto={
               ticket.pendiente_de_envio
                 ? "Guardada sin conexión · se envía sola"
-                : ticket.estado_fiscal === "emitido"
-                  ? "Factura electrónica emitida"
-                  // «Emitiendo…» sólo si la tienda EMITE. Sin resolución no
-                  // hay nada en camino: decirlo deja a la cajera esperando
-                  // —y prometiéndole a la clienta— una factura que no llega.
-                  : tirilla && !tirilla.resolucion_dian
-                    ? "Comprobante interno · sin factura electrónica"
-                    : "Factura electrónica: emitiendo…"
+                : tirilla?.es_documento_fiscal
+                  ? `Factura electrónica ${tirilla.documento_fiscal ?? ""}`
+                  // «En trámite» sólo si de verdad viene. Decirlo cuando la
+                  // tienda no emite deja a la cajera prometiéndole a la
+                  // clienta una factura que no llega.
+                  : tirilla?.factura_en_camino
+                    ? esperandoFactura
+                      ? "Factura electrónica: validando en la DIAN…"
+                      : "Factura en trámite · salió el comprobante. Reimprime en un momento."
+                    : "Comprobante interno · sin factura electrónica"
             }
-            alerta={Boolean(ticket.pendiente_de_envio)}
+            alerta={Boolean(ticket.pendiente_de_envio)
+                    || Boolean(tirilla?.factura_en_camino && !esperandoFactura
+                               && !imprimiendo)}
           />
           {ticket.duplicada && <Estado texto="Esta venta ya estaba registrada" />}
         </div>
@@ -172,13 +218,23 @@ export function TicketCerrado({
         )}
 
         <div className="mt-8 flex flex-wrap justify-center gap-3">
-          <button
-            onClick={imprimir}
-            disabled={imprimiendo}
-            className="pos-btn pos-btn-sec px-6 py-3.5 text-[13.5px] transition-colors duration-[var(--pos-transicion)] disabled:opacity-50"
-          >
-            {errorImpresion ? "REINTENTAR" : "REIMPRIMIR"}
-          </button>
+          {esperandoFactura ? (
+            // La salida para cuando hay fila: no se obliga a nadie a esperar.
+            <button
+              onClick={() => { noEsperar.current = true; }}
+              className="pos-btn pos-btn-sec px-6 py-3.5 text-[13.5px] transition-colors duration-[var(--pos-transicion)]"
+            >
+              IMPRIMIR YA
+            </button>
+          ) : (
+            <button
+              onClick={() => imprimir(false)}
+              disabled={imprimiendo}
+              className="pos-btn pos-btn-sec px-6 py-3.5 text-[13.5px] transition-colors duration-[var(--pos-transicion)] disabled:opacity-50"
+            >
+              {errorImpresion ? "REINTENTAR" : "REIMPRIMIR"}
+            </button>
+          )}
           <button
             onClick={onNueva}
             className="pos-btn pos-btn-primario px-10 py-3.5 text-[13.5px]"

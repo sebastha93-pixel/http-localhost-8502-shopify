@@ -36,7 +36,8 @@ from typing import Optional
 
 log = logging.getLogger("retail.outbox")
 
-__all__ = ["start", "stop", "ultimo", "INTERVALO_SEGUNDOS"]
+__all__ = ["start", "stop", "ultimo", "INTERVALO_SEGUNDOS", "empujar",
+           "habilitar_empuje"]
 
 #  Cada dos minutos. No es un número redondo por gusto: lo que espera en la
 #  cola es una factura electrónica, y el margen entre «la clienta se va con su
@@ -117,6 +118,53 @@ def _bucle() -> None:
             })
             log.error("[retail-outbox] pasada fallida: %s", e)
         _parar.wait(INTERVALO_SEGUNDOS)
+
+
+# ── La pasada inmediata ─────────────────────────────────────────────────────
+#
+#  Dos minutos es mucho cuando la clienta está en el mostrador esperando su
+#  factura. Al cerrar una venta se lanza una pasada YA, en el mismo proceso
+#  que atendió la venta — que puede no ser el líder, y por eso no basta con
+#  despertar al hilo: los demás workers no lo tienen.
+#
+#  Es seguro que coincida con el hilo o con otra pasada inmediata: el drenador
+#  toma con `FOR UPDATE SKIP LOCKED`. El hilo de cada dos minutos sigue siendo
+#  la red: si esta pasada falla o el proceso muere, la factura sale igual.
+
+_empuje = False
+_tareas: set = set()
+
+
+def habilitar_empuje() -> bool:
+    """Lo llama el arranque del backend en TODOS los workers. Sin esto
+    `empujar` no hace nada — que es lo que pasa en las pruebas, donde no hay
+    un Siigo al que llamar."""
+    global _empuje
+    from backend.modules.retail.interfaces.http import dependencias
+    _empuje = dependencias.configurado()
+    return _empuje
+
+
+async def _pasada_segura() -> None:
+    try:
+        await _una_pasada()
+    except Exception as e:  # noqa: BLE001 — nunca tumba la petición que la lanzó
+        log.error("[retail-outbox] pasada inmediata fallida: %s", e)
+
+
+def empujar() -> bool:
+    """Lanza una pasada ahora, sin esperar al reloj. No bloquea."""
+    if not _empuje:
+        return False
+    try:
+        tarea = asyncio.get_running_loop().create_task(_pasada_segura())
+    except RuntimeError:
+        return False
+    # Se guarda la referencia: una tarea sin dueño la puede recoger el
+    # recolector a medio camino.
+    _tareas.add(tarea)
+    tarea.add_done_callback(_tareas.discard)
+    return True
 
 
 def start() -> bool:

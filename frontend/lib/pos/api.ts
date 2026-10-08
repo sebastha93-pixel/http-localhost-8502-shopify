@@ -581,6 +581,13 @@ export interface Tirilla {
    *  COMPROBANTE y lo dice: un papel con pinta de factura que no lo es es
    *  peor que no imprimir. */
   es_documento_fiscal: boolean;
+  /** Cuándo la validó la DIAN, en hora de la tienda. */
+  fecha_expedicion?: string | null;
+  /** «Responsable de IVA - Actividad económica 4782». */
+  regimen?: string | null;
+  /** La tienda emite y la factura de esta venta todavía no llega: la pantalla
+   *  espera unos segundos antes de imprimir. */
+  factura_en_camino?: boolean;
 }
 
 /** Lo que se imprime, LEÍDO DE LA BASE — no del carrito que la pantalla

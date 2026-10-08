@@ -35,20 +35,24 @@ por correo, y el caso de Postventa que llegaba sin ticket ni clienta.
   manejador, y aunque lo tuviera Siigo rechazaría el documento: `FL`, `TARR`
   y `FV-6` no salen en `/document-types` (verificado ese mismo día). La
   tirilla es un comprobante interno y lo dice.
-* **La nota crédito automática.** Una devolución abre un caso en Postventa
-  —ahora con ticket, prendas, valor y clienta— que nace esperando a que una
-  persona lo apruebe. Y como la venta del POS no tiene factura propia en
-  Siigo, no hay qué acreditar: la nota crédito se hace contra la factura que
-  emitió Siigo POS.
+* **La nota crédito automática de una DEVOLUCIÓN.** Una devolución abre un
+  caso en Postventa —con ticket, prendas, valor, clienta y, si el POS la
+  emitió, el número de la factura— que nace esperando a que una persona lo
+  apruebe. La de una ANULACIÓN sí es automática (ver más abajo).
 
 Por eso el piloto va **en paralelo**: Siigo POS sigue emitiendo el documento
 legal y el POS lleva la venta, la caja y el inventario.
 
 ### El emisor de facturas (2026-10-08) — construido y APAGADO
 
-La decisión fue no pelear por los comprobantes de tienda: se crean
-resoluciones nuevas de **factura electrónica de venta normal**, que Siigo sí
-expone por API. Con eso el POS emite. El emisor ya existe
+**Cambio de plan el mismo día:** NO se crean resoluciones nuevas. Se usa la
+de cada tienda (`FL`, `TARR`) y Siigo la reconfigura por dentro para que
+acepte documentos por API. Al cierre del día todavía no aparecen en
+`/document-types`. Consecuencia: el día que una tienda emita desde el POS,
+Siigo POS deja de facturar en ella — misma numeración, un solo emisor. Y la
+resolución `TARR` vence el 2026-11-20.
+
+El emisor ya existe
 (`infrastructure/siigo/emisor_factura.py`) y atiende
 `emitir_documento_fiscal`; lo gobierna `RETAIL_FISCAL_MODO`:
 
@@ -70,9 +74,49 @@ Para encender una tienda hacen falta, y mientras falten el trabajo ESPERA:
   NO es el id; sale de `/document-types`).
 * `tiendas.siigo_vendedor_id` — un usuario de Siigo a cuyo nombre queda la
   venta.
-* Que la clienta exista en Siigo. Las ventas sin clienta van a consumidor
-  final (222222222222). **Crear terceros desde el POS todavía no existe**: una
-  venta a una clienta que no está en Siigo espera.
+* `tiendas.autorizacion_prefijo` (migración 0025) — el prefijo que ampara la
+  resolución. La tirilla sólo imprime la resolución si la factura trae ESE
+  prefijo.
+
+Las ventas sin clienta van a consumidor final (222222222222). La clienta que
+Siigo no conoce **se crea** (`tercero_siigo.py`, con las reglas que el Portal
+Mayoristas midió contra la cuenta); si su ficha tiene un solo nombre, la venta
+espera con el motivo a la vista y sale sola cuando se complete. Un cliente
+que ya existe en Siigo nunca se actualiza.
+
+**Cuándo es una factura.** Creada en Siigo no basta: es factura cuando la
+DIAN la valida y hay CUFE. El documento pasa por `verificando` y se le
+pregunta a Siigo —cuatro veces ahí mismo, luego cada minuto desde la cola—
+hasta que el sello diga `Accepted`. Rechazada → `rechazado`; más de 6 h sin
+validar → `discrepante`; las dos quedan `fallido` en la cola para que alguien
+mire, y ninguna reenvía.
+
+**El número.** El legal es `prefix`-`number` de Siigo (`TARR-11451`), NO
+`name` (`FV-6-11451`, código interno; medido contra la cuenta). El número del
+POS (`ARRPOS-…`) es referencia interna y **no se cambia al prefijo real**.
+
+**El papel.** Con CUFE la tirilla es «FACTURA ELECTRÓNICA DE VENTA»: número de
+Siigo, fechas de generación y expedición, adquiriente (consumidor final si no
+hay clienta), forma de pago, QR, CUFE, calidad tributaria, la autorización de
+numeración y el proveedor tecnológico (Siigo). Sin CUFE es un comprobante
+interno y lo dice — incluido el modo `prueba`, que deja el documento
+`emitido` pero sin CUFE.
+
+**La nota crédito** (`emisor_nota_credito.py`, mismo interruptor). Sólo para
+ANULACIONES completas: copia ítems y pagos de la factura tal cual los
+devuelve Siigo, con `reason: 2` y el comprobante `tiendas.siigo_nc_documento_id`
+(11817, el de Postventa; migración 0026). La plata sale por las mismas cuentas
+por las que entró —la caja de la tienda, el datáfono—, no queda como saldo a
+favor. Si la venta se anula con la factura en camino, el emisor de facturas
+termina de resolverla y encola la nota crédito él mismo; si el envío nunca
+llegó a Siigo, no se manda. Una factura de modo `prueba` no lleva nota
+crédito: se borra en Siigo. La devolución de una prenda sigue yendo a
+Postventa (ahora con el número de la factura en el caso).
+
+**En el mostrador.** Al cerrar la venta se lanza una pasada de la cola en el
+mismo worker (`planificador_outbox.empujar`), y la pantalla espera la factura
+hasta 20 s antes de imprimir (sólo en `produccion`). Si no llega, sale el
+comprobante diciendo que la factura está en trámite; hay botón «IMPRIMIR YA».
 
 Lo que NO se ha probado, porque sólo lo prueba Siigo: que acepte el documento.
 En particular el redondeo —Siigo redondea la base de cada línea, y dos prendas
