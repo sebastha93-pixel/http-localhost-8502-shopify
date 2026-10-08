@@ -33,7 +33,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -62,6 +62,19 @@ MODOS = ("apagado", "prueba", "produccion")
 def modo() -> str:
     m = os.environ.get("RETAIL_FISCAL_MODO", "apagado").strip().lower()
     return m if m in MODOS else "apagado"
+
+
+def _zona(nombre: Optional[str]):
+    """La zona de la tienda, para que la factura lleve la fecha en que se
+    vendió y no la de UTC — una venta de las 8 p. m. caería al día siguiente.
+
+    Si el servidor no trae la base de zonas horarias, `ZoneInfo` revienta al
+    usarse. Colombia no tiene horario de verano: UTC−5 fijo da lo mismo.
+    """
+    try:
+        return ZoneInfo(nombre or "America/Bogota")
+    except Exception:  # noqa: BLE001
+        return timezone(timedelta(hours=-5))
 
 
 class RechazoDeSiigo(Exception):
@@ -187,7 +200,7 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
         raise RechazoDefinitivo("Siigo ya la rechazó; hay que corregirla a mano")
 
     fecha = v["cerrada_en"].astimezone(
-        ZoneInfo(v["zona_horaria"] or "America/Bogota")).date().isoformat()
+        _zona(v["zona_horaria"])).date().isoformat()
     marca = marca_de(v["id"], v["numero"])
     documento_id = int(v["siigo_documento_id"])
 
