@@ -161,8 +161,8 @@ def test_dice_cuales_NO_pueden_facturar_todavia(entorno):
     # Addi (12245 «ADDI FLORIDA») y Sumas (12218 «SUMAS PAY TIENDA») YA tienen
     # su id: se leyeron de la cuenta real en la migración 0019. Wompi lo
     # recibió en la 0022 (8353 «WOMPI», confirmado por Sebastián: había dos
-    # candidatos y no se adivinó). El único que sigue sin él es transferencia,
-    # que este entorno no siembra.
+    # candidatos y no se adivinó). Transferencia se desactivó en la 0023:
+    # las tiendas no la reciben.
     assert listas == {"efectivo": True, "datafono": True, "addi": True,
                       "sumas": True, "wompi_qr": True}
 

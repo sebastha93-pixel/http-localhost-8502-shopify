@@ -103,9 +103,9 @@ UBICACIONES = [
 ]
 
 #  El efectivo y el datáfono son DE CADA TIENDA: en Siigo son cuentas
-#  distintas. La transferencia no tiene forma de pago a propósito (0019: el
-#  único candidato es la cuenta bancaria, no un medio de cobro) — se cobra
-#  igual y su factura queda pendiente.
+#  distintas. NO HAY TRANSFERENCIA: las tiendas no la reciben (Sebastián,
+#  2026-10-08). Addi, Sumas y el QR de Wompi los siembra la migración 0015 y
+#  son uno solo para todas las tiendas.
 MEDIOS = [
     {"id": "efectivo_florida", "nombre": "Efectivo", "tipo": "efectivo",
      "tienda_id": "florida", "siigo_forma_pago_id": 12243,
@@ -119,9 +119,6 @@ MEDIOS = [
     {"id": "datafono_arrayanes", "nombre": "Datáfono", "tipo": "tarjeta",
      "tienda_id": "arrayanes", "siigo_forma_pago_id": 8987,
      "permite_vuelto": False, "orden": 1},
-    {"id": "transferencia", "nombre": "Transferencia", "tipo": "transferencia",
-     "tienda_id": None, "siigo_forma_pago_id": None,
-     "permite_vuelto": False, "orden": 2},
 ]
 
 

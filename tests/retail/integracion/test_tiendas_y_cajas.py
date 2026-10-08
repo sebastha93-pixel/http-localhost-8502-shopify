@@ -200,8 +200,10 @@ def test_arrayanes_ve_su_efectivo_y_no_el_de_florida(entorno):
     d = c.get("/api/retail/caja/contexto",
               params={"caja_id": "arrayanes_caja1"}).json()
     medios = {m["id"] for m in d["medios_pago"]}
-    assert {"efectivo_arrayanes", "datafono_arrayanes",
-            "transferencia"} <= medios
+    # Los suyos, más los que sirven en todas (Addi, Sumas, QR). Transferencia
+    # no: las tiendas no la reciben.
+    assert {"efectivo_arrayanes", "datafono_arrayanes", "addi"} <= medios
+    assert "transferencia" not in medios
     assert not medios & {"efectivo_florida", "datafono_florida"}
     assert d["ubicacion_id"] == "tienda:arrayanes"
     assert d["tienda_id"] == "arrayanes"
