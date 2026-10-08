@@ -840,6 +840,7 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
                 <PanelCobro
                   total={totales.total}
                   medios={contexto?.medios_pago ?? []}
+                  emiteFactura={Boolean(contexto?.tiene_resolucion)}
                   onCancelar={() => setFase("vendiendo")}
                   onConfirmar={cobrar}
                 />

@@ -223,13 +223,13 @@ export function DialogoCliente({
               valor={correo}
               onCambio={setCorreo}
               tipo="email"
-              ayuda="A este correo llega la factura electrónica."
+              ayuda="Lo pide la factura electrónica."
             />
             <Campo
               etiqueta="Dirección (opcional)"
               valor={direccion}
               onCambio={setDireccion}
-              ayuda="La factura electrónica la imprime. Se puede dejar en blanco."
+              ayuda="Lo pide la factura electrónica. Se puede dejar en blanco."
             />
             <Campo etiqueta="Ciudad (opcional)" valor={ciudad} onCambio={setCiudad} />
 
