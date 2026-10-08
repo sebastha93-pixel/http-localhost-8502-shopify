@@ -206,6 +206,14 @@ async def cerrar_venta(
                        f"nueva; la venta no se registró.",
             "accion_sugerida": "reabrir_turno"})
 
+    # La factura no espera al reloj de dos minutos: la clienta está ahí. No
+    # bloquea la respuesta —el ticket sale ya— y si falla, el reloj la recoge.
+    try:
+        from backend.modules.retail.infrastructure import planificador_outbox
+        planificador_outbox.empujar()
+    except Exception:  # noqa: BLE001 — la venta ya quedó; esto es cortesía
+        pass
+
     return TicketSalida(
         venta_id=resultado.venta_id, numero=resultado.numero,
         total_centavos=resultado.total_centavos,
@@ -1452,6 +1460,11 @@ class TirillaSalida(BaseModel):
     # COMPROBANTE INTERNO y lo dice: un papel con pinta de documento fiscal
     # que no lo es convierte un problema de software en uno con la DIAN.
     es_documento_fiscal: bool
+    fecha_expedicion: Optional[str] = None
+    regimen: Optional[str] = None
+    # La factura viene en camino: la pantalla espera unos segundos antes de
+    # imprimir para entregar la factura y no un comprobante.
+    factura_en_camino: bool = False
 
 
 @router.get("/ventas/{venta_id}/tirilla", response_model=TirillaSalida)
@@ -1507,6 +1520,8 @@ async def tirilla(
         qr_contenido=d.qr_contenido, qr_ruta=d.qr_ruta,
         qr_modulos=d.qr_modulos,
         es_documento_fiscal=d.es_documento_fiscal,
+        fecha_expedicion=d.fecha_expedicion, regimen=d.regimen,
+        factura_en_camino=d.factura_en_camino,
     )
 
 

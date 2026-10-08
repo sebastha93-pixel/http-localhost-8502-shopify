@@ -65,7 +65,8 @@ def construir_factura(*, venta: dict, lineas: List[dict], pagos: List[dict],
                       identificacion: Optional[str] = None,
                       bodega_id: Optional[int] = None,
                       centro_costo_id: Optional[int] = None,
-                      estampar: bool = False) -> dict:
+                      estampar: bool = False,
+                      enviar_correo: bool = False) -> dict:
     """El cuerpo de `POST /invoices`. No emite nada.
 
     `lineas`: sku, descripcion, cantidad, precio_unitario y descuento_monto en
@@ -146,6 +147,9 @@ def construir_factura(*, venta: dict, lineas: List[dict], pagos: List[dict],
     # revisable y borrable. Es lo que permite probar sin consecuencias.
     if estampar:
         payload["stamp"] = {"send": True}
+    if enviar_correo:
+        # Siigo le manda la factura al correo que la clienta tiene en su ficha.
+        payload["mail"] = {"send": True}
 
     # Un peso de diferencia ya no es redondeo: es que se tradujo mal una
     # línea. Mejor no emitir que emitir por otro valor.

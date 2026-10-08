@@ -40,12 +40,44 @@ DOC_SIIGO = 40001
 class SiigoFalso:
     """Lo que la red real hace mal, a pedido."""
 
+    # Sin pausas y con una sola consulta inmediata: las pruebas no esperan.
+    consultas_inmediatas = 1
+    pausa = 0
+
     def __init__(self):
         self.enviadas = []          # cuerpos que llegaron a `crear_factura`
         self.en_siigo = []          # facturas que SÍ existen allá
         self.al_crear = "ok"        # ok | rechazo | sin_respuesta | crea_y_muere
         self.tipo = {"id": DOC_SIIGO, "active": True, "discount_type": "Value"}
         self.clientes = {"222222222222"}
+        # Lo que contesta la DIAN cuando se le pregunta por una factura.
+        self.dian = "accepted"      # accepted | draft | rejected
+        self.lecturas = 0
+        self.clientes_creados = []
+        self.al_crear_cliente = "ok"   # ok | rechazo | ya_existia
+
+    async def leer_factura(self, siigo_id):
+        self.lecturas += 1
+        f = dict(next(x for x in self.en_siigo if x["id"] == siigo_id))
+        f["stamp"] = {
+            "accepted": {"status": "Accepted", "cufe": "c" * 96},
+            "draft": {"status": "Draft"},
+            "rejected": {"status": "Rejected", "errors": "FAD06 valor inválido"},
+        }[self.dian]
+        return f
+
+    async def crear_cliente(self, cuerpo):
+        from backend.modules.retail.infrastructure.siigo.emisor_factura import (
+            RechazoDeSiigo,
+        )
+        self.clientes_creados.append(cuerpo)
+        if self.al_crear_cliente == "rechazo":
+            raise RechazoDeSiigo('HTTP 400: {"Code":"invalid_reference"}')
+        if self.al_crear_cliente == "ya_existia":
+            self.clientes.add(cuerpo["identification"])
+            raise RechazoDeSiigo('HTTP 400: {"Code":"already_exists"}')
+        self.clientes.add(cuerpo["identification"])
+        return {"id": "cli-siigo-1", "identification": cuerpo["identification"]}
 
     async def tipo_documento(self, documento_id):
         return self.tipo
@@ -66,8 +98,11 @@ class SiigoFalso:
             raise RechazoDeSiigo('HTTP 400: {"Code":"invalid_total_payments"}')
         if self.al_crear == "sin_respuesta":
             raise RuntimeError("timeout")
+        # COMO RESPONDE LA CUENTA (medido el 2026-10-08): `name` es el código
+        # interno del comprobante; el número legal es `prefix` + `number`.
+        n = 11452 + len(self.en_siigo)
         creada = {"id": f"siigo-{len(self.en_siigo) + 1}",
-                  "name": f"FE-{100 + len(self.en_siigo)}",
+                  "name": f"FV-6-{n}", "prefix": "TARR", "number": n,
                   "observations": cuerpo["observations"],
                   "stamp": {"status": "Draft", "cufe": None}}
         self.en_siigo.append(creada)
@@ -194,7 +229,7 @@ def test_la_venta_se_factura_y_queda_anotada(entorno):
     r = _drenar(siigo)
     assert (r.procesados, r.fallidos) == (1, 0), r.errores
 
-    assert _estado(entorno) == ("emitido", ("procesado", 1), [("emitido", "FE-100")])
+    assert _estado(entorno) == ("emitido", ("procesado", 1), [("emitido", "TARR-11452")])
     [cuerpo] = siigo.enviadas
     assert cuerpo["document"] == {"id": DOC_SIIGO}
     assert cuerpo["seller"] == 842
@@ -232,7 +267,7 @@ def test_si_siigo_la_creo_y_no_alcanzo_a_avisar_NO_se_emite_otra(entorno):
     assert r.procesados == 1, r.errores
     assert len(siigo.enviadas) == 1, "se envió por segunda vez"
     assert len(siigo.en_siigo) == 1
-    assert _estado(entorno)[2] == [("emitido", "FE-100")]
+    assert _estado(entorno)[2] == [("emitido", "TARR-11452")]
 
 
 def test_si_nunca_llego_el_reintento_si_la_envia(entorno):
@@ -303,6 +338,255 @@ def test_en_produccion_si_se_estampa(entorno, monkeypatch):
     siigo = SiigoFalso()
     _drenar(siigo)
     assert siigo.enviadas[0]["stamp"] == {"send": True}
+
+
+# ── CREADA EN SIIGO NO ES FACTURA: falta la DIAN ────────────────────────────
+
+def _doc(motor):
+    return tuple(_leer(motor, "SELECT estado, numero, cufe "
+                              "FROM retail.documentos_fiscales")[0])
+
+
+def test_el_numero_de_la_factura_es_prefijo_y_consecutivo_NO_el_name(entorno):
+    """`name` es «FV-6-11452», el código interno de Siigo. Lo que la DIAN
+    validó, y lo que va impreso, es «TARR-11452»."""
+    _drenar(SiigoFalso())
+    assert _doc(entorno)[1] == "TARR-11452"
+
+
+def test_en_produccion_solo_queda_emitida_cuando_la_dian_valida(entorno, monkeypatch):
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    siigo = SiigoFalso()
+    r = _drenar(siigo)
+    assert r.procesados == 1, r.errores
+    assert _doc(entorno) == ("emitido", "TARR-11452", "c" * 96)
+    assert _estado(entorno)[0] == "emitido"
+    assert siigo.lecturas == 1
+
+
+def test_si_la_dian_tarda_la_venta_NO_figura_emitida_y_no_se_reenvia(entorno, monkeypatch):
+    """Lo que estaba mal: creada en Siigo = `emitido`. Con la DIAN todavía
+    pensando, la tirilla habría dicho «factura» de un borrador."""
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    siigo = SiigoFalso()
+    siigo.dian = "draft"
+    r = _drenar(siigo)
+    assert (r.procesados, r.fallidos, r.reintentos) == (0, 0, 0)
+    assert _doc(entorno) == ("verificando", "TARR-11452", None)
+    venta, cola, _ = _estado(entorno)
+    assert venta == "enviando"
+    assert cola == ("pendiente", 0)          # esperar NO gasta intentos
+
+    # Vuelve a mirar en un minuto, no en una hora: la clienta está ahí.
+    espera = _leer(entorno, "SELECT extract(epoch FROM "
+                            "(proximo_intento_en - now())) FROM retail.outbox")[0][0]
+    assert float(espera) < 300
+
+    siigo.dian = "accepted"
+    r = _drenar(siigo, dentro_de=timedelta(minutes=5))
+    assert r.procesados == 1, r.errores
+    assert len(siigo.enviadas) == 1, "se reenvió una factura que ya estaba en Siigo"
+    assert _doc(entorno) == ("emitido", "TARR-11452", "c" * 96)
+
+
+def test_si_la_dian_la_rechaza_queda_a_la_vista_y_no_se_reenvia(entorno, monkeypatch):
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    siigo = SiigoFalso()
+    siigo.dian = "rejected"
+    r = _drenar(siigo)
+    assert r.fallidos == 1 and "FAD06" in r.errores[0]
+    venta, cola, docs = _estado(entorno)
+    assert venta == "rechazado" and cola[0] == "fallido"
+    assert docs == [("rechazado", "TARR-11452")]
+
+    _drenar(siigo, dentro_de=timedelta(hours=9))
+    assert len(siigo.enviadas) == 1
+
+
+def test_horas_sin_validar_deja_de_insistir_y_pide_que_alguien_mire(entorno, monkeypatch):
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    siigo = SiigoFalso()
+    siigo.dian = "draft"
+    _drenar(siigo)
+    _ejecutar(entorno, "UPDATE retail.documentos_fiscales "
+                       "SET creado_en = now() - interval '7 hours'")
+    r = _drenar(siigo, dentro_de=timedelta(minutes=5))
+    assert r.fallidos == 1 and "revisar en Siigo" in r.errores[0]
+    assert _estado(entorno)[0] == "discrepante"
+    assert len(siigo.enviadas) == 1
+
+
+def test_en_prueba_el_documento_existe_pero_la_tirilla_NO_lo_llama_factura(entorno):
+    """Modo prueba: se crea en Siigo sin estampar. No hay CUFE, no hay DIAN,
+    y un papel que dijera «FACTURA ELECTRÓNICA» sería falso."""
+    from backend.modules.retail.application.consultas.tirilla import ArmarTirilla
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    _drenar(SiigoFalso())
+    assert _doc(entorno) == ("emitido", "TARR-11452", None)
+
+    async def ir():
+        async with AsyncSession(entorno) as s:
+            return await ArmarTirilla(s).ejecutar(VENTA)
+    t = _correr(ir())
+    assert t.es_documento_fiscal is False
+    assert t.qr_ruta is None
+
+
+def test_la_tirilla_de_una_factura_validada_lleva_lo_que_pide_la_norma(entorno, monkeypatch):
+    from backend.modules.retail.application.consultas.tirilla import ArmarTirilla
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+
+    async def ir():
+        async with AsyncSession(entorno) as s:
+            return await ArmarTirilla(s).ejecutar(VENTA)
+
+    # Antes de emitir: viene en camino, y todavía no es factura.
+    antes = _correr(ir())
+    assert antes.factura_en_camino is True and antes.es_documento_fiscal is False
+    assert antes.resolucion_dian is None
+
+    _drenar(SiigoFalso())
+    t = _correr(ir())
+    assert t.es_documento_fiscal is True
+    assert t.factura_en_camino is False
+    assert t.documento_fiscal == "TARR-11452"
+    assert t.numero.startswith("ARRPOS-")          # el del POS, como referencia
+    assert t.cufe == "c" * 96 and t.qr_ruta
+    assert t.fecha_expedicion
+    assert t.regimen == "Responsable de IVA - Actividad económica 4782"
+    assert t.resolucion_dian == (
+        "Número Autorización 18764083761292 aprobado en 20241120 prefijo TARR "
+        "desde el número 1 al 1000000 Vigencia: 24 meses")
+
+
+def test_la_resolucion_NO_se_le_pega_a_un_numero_que_no_ampara(entorno, monkeypatch):
+    """La caja apuntando al comprobante que no es: Siigo devuelve una factura
+    con otro prefijo. Imprimirle la resolución de la tienda sería un dato
+    falso en un papel fiscal — sin resolución, el papel no se llama factura."""
+    from backend.modules.retail.application.consultas.tirilla import ArmarTirilla
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    _drenar(SiigoFalso())
+    _ejecutar(entorno, "UPDATE retail.documentos_fiscales SET numero = 'FE-67701'")
+
+    async def ir():
+        async with AsyncSession(entorno) as s:
+            return await ArmarTirilla(s).ejecutar(VENTA)
+    t = _correr(ir())
+    assert t.resolucion_dian is None
+    assert t.es_documento_fiscal is False
+
+
+def test_con_la_facturacion_apagada_nada_viene_en_camino(entorno, monkeypatch):
+    from backend.modules.retail.application.consultas.tirilla import ArmarTirilla
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    async def ir():
+        async with AsyncSession(entorno) as s:
+            return await ArmarTirilla(s).ejecutar(VENTA)
+    for m in ("apagado", "prueba"):
+        monkeypatch.setenv("RETAIL_FISCAL_MODO", m)
+        assert _correr(ir()).factura_en_camino is False
+
+
+# ── La clienta que Siigo no conoce ──────────────────────────────────────────
+
+CLIENTA = "01JQ8X4T5NCK0F1R8S9V0W1X2Y"
+
+
+def _con_clienta(motor, *, nombre="Laura", apellido="Gómez Ríos",
+                 correo="laura@correo.com"):
+    _ejecutar(motor, """
+        INSERT INTO retail.clientes (id, tipo_documento, numero_documento,
+            nombre, apellido, telefono, correo, ciudad, direccion)
+        VALUES (:i, 'CC', '1037000111', :n, :a, '+573001112233', :c,
+                'Itagüí', 'CL 50 # 40-20')
+    """, {"i": CLIENTA, "n": nombre, "a": apellido, "c": correo})
+    _ejecutar(motor, "UPDATE retail.ventas SET cliente_id = :i", {"i": CLIENTA})
+
+
+def test_la_clienta_nueva_se_crea_en_siigo_y_se_le_factura_A_ELLA(entorno, monkeypatch):
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    _con_clienta(entorno)
+    siigo = SiigoFalso()
+    r = _drenar(siigo)
+    assert r.procesados == 1, r.errores
+
+    [c] = siigo.clientes_creados
+    assert c["person_type"] == "Person" and c["id_type"] == "13"
+    assert c["identification"] == "1037000111"
+    assert c["name"] == ["Laura", "Gómez Ríos"]
+    assert c["phones"] == [{"number": "3001112233"}]      # sin el +57
+    assert c["address"]["city"] == {"country_code": "Co", "state_code": "05",
+                                    "city_code": "05360"}
+    assert c["contacts"][0]["email"] == "laura@correo.com"
+
+    [f] = siigo.enviadas
+    assert f["customer"]["identification"] == "1037000111"
+    assert f["mail"] == {"send": True}       # dejó correo: Siigo se la manda
+    assert _leer(entorno, "SELECT siigo_customer_id FROM retail.clientes"
+                 )[0][0] == "cli-siigo-1"
+
+
+def test_la_clienta_que_siigo_ya_tiene_NO_se_vuelve_a_crear(entorno):
+    _con_clienta(entorno)
+    siigo = SiigoFalso()
+    siigo.clientes.add("1037000111")
+    assert _drenar(siigo).procesados == 1
+    assert siigo.clientes_creados == []
+
+
+def test_una_clienta_con_un_solo_nombre_espera_y_NO_sale_a_nombre_de_otra(entorno):
+    _con_clienta(entorno, nombre="Laura", apellido="")
+    siigo = SiigoFalso()
+    r = _drenar(siigo)
+    assert r.sin_manejador == 1
+    assert siigo.clientes_creados == [] and siigo.enviadas == []
+    motivo = _leer(entorno, "SELECT ultimo_error FROM retail.outbox")[0][0]
+    assert "nombre y apellido" in motivo
+    assert _estado(entorno)[1] == ("pendiente", 0)
+
+    # Se completa la ficha y sale sola, sin que nadie la reencole.
+    _ejecutar(entorno, "UPDATE retail.clientes SET apellido = 'Gómez'")
+    assert _drenar(siigo, dentro_de=timedelta(hours=3)).procesados == 1
+    assert siigo.enviadas[0]["customer"]["identification"] == "1037000111"
+
+
+def test_si_siigo_no_deja_crearla_la_venta_espera(entorno):
+    _con_clienta(entorno)
+    siigo = SiigoFalso()
+    siigo.al_crear_cliente = "rechazo"
+    assert _drenar(siigo).sin_manejador == 1
+    assert siigo.enviadas == []
+    assert "no dejó crear" in _leer(entorno, "SELECT ultimo_error FROM retail.outbox")[0][0]
+
+
+def test_si_otra_caja_la_creo_un_segundo_antes_se_sigue(entorno):
+    _con_clienta(entorno)
+    siigo = SiigoFalso()
+    siigo.al_crear_cliente = "ya_existia"
+    assert _drenar(siigo).procesados == 1
+    assert len(siigo.enviadas) == 1
+
+
+def test_sin_correo_no_se_le_pide_a_siigo_que_mande_nada(entorno, monkeypatch):
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    _con_clienta(entorno, correo=None)
+    siigo = SiigoFalso()
+    _drenar(siigo)
+    assert "mail" not in siigo.enviadas[0]
+    assert "email" not in siigo.clientes_creados[0]["contacts"][0]
+
+
+def test_cerrar_una_venta_no_llama_a_siigo_si_el_empuje_no_esta_habilitado():
+    """En las pruebas —y en cualquier proceso que no sea el backend real— la
+    pasada inmediata no existe: no hay un Siigo al que llamar."""
+    from backend.modules.retail.infrastructure import planificador_outbox
+    assert planificador_outbox.empujar() is False
 
 
 def test_una_venta_anulada_antes_no_se_factura(entorno):

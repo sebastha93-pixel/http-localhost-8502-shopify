@@ -21,6 +21,15 @@ Si al volver hay un «voy a enviar» sin resultado, lo primero es BUSCAR la
 factura en Siigo por su marca (`observations`). Si está, se adopta. Sólo si no
 está se vuelve a enviar.
 
+CREADA EN SIIGO NO ES FACTURA TODAVÍA. Una factura electrónica existe cuando
+la DIAN la valida y le pone el CUFE; antes de eso es un borrador con número.
+Por eso hay un cuarto paso: el documento queda en `verificando` y se le
+pregunta a Siigo hasta que el sello diga «Accepted». Sólo entonces la venta
+pasa a `emitido` — y sólo entonces la tirilla puede decir «factura».
+
+EL NÚMERO LO PONE SIIGO, bajo la resolución de la tienda. El número del POS
+(`ARRPOS-…`) es una referencia interna y nunca se presenta como el fiscal.
+
 EL MODO manda (`RETAIL_FISCAL_MODO`):
   · `apagado` (por defecto) — no emite; los trabajos esperan sin gastarse.
   · `prueba`  — crea el documento en Siigo SIN estamparlo: no va a la DIAN,
@@ -49,6 +58,10 @@ from backend.modules.retail.infrastructure.siigo.factura_venta import (
     construir_factura,
     marca_de,
 )
+from backend.modules.retail.infrastructure.siigo.tercero_siigo import (
+    ClienteIncompleto,
+    cuerpo_de_cliente,
+)
 
 log = logging.getLogger("retail.fiscal")
 
@@ -57,6 +70,10 @@ __all__ = ["TIPO", "emitir_factura", "crear_manejador", "modo", "SiigoIO",
 
 TIPO = "emitir_documento_fiscal"
 MODOS = ("apagado", "prueba", "produccion")
+
+#  Cuánto se espera a la DIAN antes de pedir que alguien mire. Lo normal son
+#  segundos; horas ya es que algo se quedó atascado entre Siigo y la DIAN.
+HORAS_SIN_VALIDAR = 6
 
 
 def modo() -> str:
@@ -89,6 +106,35 @@ class SiigoIO:
     Los imports son LOCALES: `backend.services.siigo` es del ERP y el módulo
     retail tiene que poder cargarse sin él.
     """
+
+    #  La DIAN suele validar en segundos. Se le pregunta unas pocas veces ahí
+    #  mismo —la clienta está esperando su factura en el mostrador— y si no,
+    #  se sigue preguntando desde la cola. La pausa respeta el ~1 req/s.
+    consultas_inmediatas = 4
+    pausa = 2.0
+
+    async def leer_factura(self, siigo_id: str) -> dict:
+        def ir():
+            from backend.services.siigo import siigo_get
+            return siigo_get(f"/invoices/{siigo_id}")
+        return await asyncio.to_thread(ir)
+
+    async def crear_cliente(self, cuerpo: dict) -> dict:
+        """UN intento, como la factura: un cliente repetido en la
+        contabilidad se arregla fusionando a mano."""
+        def ir():
+            import httpx
+            from backend.services import siigo as s
+            r = httpx.post(s.SIIGO_BASE + "/customers", json=cuerpo, timeout=60,
+                           headers={"Authorization": f"Bearer {s._get_token()}",
+                                    "Partner-Id": os.getenv("SIIGO_PARTNER_ID", ""),
+                                    "Content-Type": "application/json"})
+            if r.status_code in (200, 201):
+                return r.json()
+            if 400 <= r.status_code < 500 and r.status_code != 429:
+                raise RechazoDeSiigo(f"HTTP {r.status_code}: {r.text[:400]}")
+            raise RuntimeError(f"Siigo HTTP {r.status_code}: {r.text[:200]}")
+        return await asyncio.to_thread(ir)
 
     async def tipo_documento(self, documento_id: int) -> Optional[dict]:
         def ir():
@@ -171,7 +217,8 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
                v.tienda_id, v.caja_id, v.sesion_id,
                c.siigo_documento_id, ti.siigo_vendedor_id, ti.siigo_bodega_id,
                ti.siigo_centro_costo_id, ti.zona_horaria,
-               cl.numero_documento AS cliente_documento
+               cl.id AS cliente_id, cl.numero_documento AS cliente_documento,
+               cl.correo AS cliente_correo
           FROM retail.ventas v
           JOIN retail.cajas c    ON c.id = v.caja_id
           JOIN retail.tiendas ti ON ti.id = v.tienda_id
@@ -190,14 +237,22 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
         raise Aplazar(f"la tienda {v['tienda_id']} no tiene vendedor de Siigo")
 
     doc = (await t.sesion.execute(text("""
-        SELECT id, estado, payload_snapshot FROM retail.documentos_fiscales
+        SELECT id, estado, numero, documento_externo_id, creado_en
+          FROM retail.documentos_fiscales
          WHERE venta_id = :v AND tipo = 'factura_electronica'
          ORDER BY creado_en DESC LIMIT 1
     """), {"v": venta_id})).mappings().first()
     if doc and doc["estado"] == "emitido":
         return "ya estaba emitida"
-    if doc and doc["estado"] == "rechazado":
-        raise RechazoDefinitivo("Siigo ya la rechazó; hay que corregirla a mano")
+    if doc and doc["estado"] in ("rechazado", "discrepante"):
+        raise RechazoDefinitivo("Siigo o la DIAN ya la rechazaron; hay que "
+                                "corregirla a mano")
+    if doc and doc["estado"] == "verificando":
+        # YA ESTÁ EN SIIGO. De aquí en adelante sólo se PREGUNTA: no hay
+        # camino por el que esta rama vuelva a enviar.
+        return await _esperar_dian(
+            t, v, io, en_modo=en_modo, siigo_id=doc["documento_externo_id"],
+            numero=doc["numero"], desde=doc["creado_en"])
 
     fecha = v["cerrada_en"].astimezone(
         _zona(v["zona_horaria"])).date().isoformat()
@@ -244,8 +299,94 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
         # Cualquier otra cosa (timeout, 5xx) sube tal cual: el trabajo se
         # reintenta y, como quedó «enviando», primero verifica.
 
-    numero = creada.get("name") or str(creada.get("number") or "")
-    sello = creada.get("stamp") or {}
+    numero = _numero_de(creada)
+    siigo_id = str(creada.get("id") or "")
+
+    if en_modo != "produccion":
+        # Sin estampar no hay DIAN que esperar: el documento existe en Siigo
+        # y ahí se queda, revisable. NO es una factura y la tirilla no lo dice
+        # (no tiene CUFE).
+        return await _anotar_emitida(t, v, creada, en_modo=en_modo)
+
+    # Se deja escrito QUE YA ESTÁ EN SIIGO antes de esperar a la DIAN: si el
+    # proceso muere esperando, el reintento pregunta por este id, no reenvía.
+    await t.sesion.execute(text("""
+        UPDATE retail.documentos_fiscales
+           SET estado = 'verificando', numero = :n, documento_externo_id = :ext,
+               respuesta_cruda = CAST(:cruda AS jsonb), ultimo_error = NULL
+         WHERE venta_id = :v AND tipo = 'factura_electronica'
+    """), {"v": venta_id, "n": numero, "ext": siigo_id,
+           "cruda": json.dumps(creada, default=str)})
+    await t.commit()
+    return await _esperar_dian(t, v, io, en_modo=en_modo, siigo_id=siigo_id,
+                               numero=numero, desde=datetime.now(timezone.utc),
+                               ya_leida=creada)
+
+
+def _numero_de(factura: dict) -> str:
+    """El número LEGAL: prefijo de la resolución + consecutivo.
+
+    NO es `name`. Medido contra la cuenta el 2026-10-08: una factura de
+    Arrayanes trae `name: "FV-6-11451"` —el código interno del comprobante en
+    Siigo— y `prefix: "TARR"`, `number: 11451`. Lo que la DIAN validó y lo que
+    va impreso es `TARR-11451`.
+    """
+    prefijo = (factura.get("prefix") or "").strip()
+    numero = factura.get("number")
+    if prefijo and numero is not None:
+        return f"{prefijo}-{numero}"
+    return factura.get("name") or str(numero or "")
+
+
+def _sello(factura: dict) -> tuple:
+    """(estado en minúsculas, cufe). Siigo responde `Accepted` cuando la DIAN
+    validó; mientras tanto `Draft` o lo que esté haciendo."""
+    sello = factura.get("stamp") or {}
+    return (str(sello.get("status") or "").strip().lower(),
+            (sello.get("cufe") or "").strip() or None)
+
+
+async def _esperar_dian(t, v, io: SiigoIO, *, en_modo: str, siigo_id: str,
+                        numero: str, desde: datetime,
+                        ya_leida: Optional[dict] = None) -> str:
+    """Pregunta hasta que la DIAN valide. Nunca envía nada."""
+    factura = ya_leida
+    for vuelta in range(io.consultas_inmediatas + 1):
+        if factura is None:
+            factura = await io.leer_factura(siigo_id)
+        estado, cufe = _sello(factura)
+        if estado == "accepted" and cufe:
+            return await _anotar_emitida(t, v, factura, en_modo=en_modo)
+        if estado == "rejected":
+            motivo = json.dumps((factura.get("stamp") or {}), default=str)[:400]
+            await _cerrar(t, v["id"], "rechazado",
+                          error=f"la DIAN rechazó {numero}: {motivo}")
+            await t.commit()
+            raise RechazoDefinitivo(
+                f"la DIAN rechazó la factura {numero}: {motivo}")
+        if vuelta == io.consultas_inmediatas:
+            break
+        await asyncio.sleep(io.pausa)
+        factura = None
+
+    if datetime.now(timezone.utc) - desde > timedelta(hours=HORAS_SIN_VALIDAR):
+        # Existe en Siigo con número, pero la DIAN no la ha validado en horas.
+        # No se reintenta sola para siempre: alguien tiene que mirarla.
+        await _cerrar(t, v["id"], "discrepante",
+                      error=f"{numero} lleva más de {HORAS_SIN_VALIDAR} h en "
+                            f"Siigo sin validación de la DIAN")
+        await t.commit()
+        raise RechazoDefinitivo(
+            f"la factura {numero} está en Siigo pero la DIAN no la ha validado "
+            f"en {HORAS_SIN_VALIDAR} h: revisar en Siigo")
+    raise Aplazar(f"{numero} creada en Siigo; esperando la validación de la "
+                  f"DIAN", minutos=1)
+
+
+async def _anotar_emitida(t, v, factura: dict, *, en_modo: str) -> str:
+    numero = _numero_de(factura)
+    _, cufe = _sello(factura)
+    siigo_id = str(factura.get("id") or "")
     ahora = datetime.now(timezone.utc)
     await t.sesion.execute(text("""
         UPDATE retail.documentos_fiscales
@@ -254,19 +395,29 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
                respuesta_cruda = CAST(:cruda AS jsonb),
                emitido_en = :ts, ultimo_error = NULL
          WHERE venta_id = :v AND tipo = 'factura_electronica'
-    """), {"v": venta_id, "n": numero, "cufe": sello.get("cufe"),
-           "ext": str(creada.get("id") or ""), "ts": ahora,
-           "cruda": json.dumps(creada, default=str)})
+    """), {"v": v["id"], "n": numero, "cufe": cufe, "ext": siigo_id,
+           "ts": ahora, "cruda": json.dumps(factura, default=str)})
     await t.sesion.execute(text(
         "UPDATE retail.ventas SET estado_fiscal = 'emitido' WHERE id = :v"),
-        {"v": venta_id})
+        {"v": v["id"]})
+    # LO QUE COBRÓ LA CAJA CONTRA LO QUE FACTURÓ SIIGO. Deberían ser iguales
+    # salvo, como mucho, un centavo de redondeo. Queda escrito en la auditoría
+    # para que un descuadre se vea el mismo día y no en la declaración.
+    diferencia = None
+    if factura.get("total") is not None:
+        diferencia = round(float(factura["total"]) * 100 - int(v["total"]))
+        if abs(diferencia) > 1:
+            log.warning("[retail-fiscal] %s: Siigo facturó %s y la caja cobró "
+                        "%s centavos", numero, factura["total"], v["total"])
     await t.auditoria.registrar(
         evento="factura.emitida", ocurrido_en=ahora,
         tienda_id=v["tienda_id"], caja_id=v["caja_id"],
         sesion_id=v["sesion_id"], usuario_id="sistema",
-        agregado_tipo="venta", agregado_id=venta_id,
+        agregado_tipo="venta", agregado_id=v["id"],
         payload={"numero_venta": v["numero"], "factura": numero,
-                 "modo": en_modo, "siigo_id": str(creada.get("id") or "")})
+                 "modo": en_modo, "siigo_id": siigo_id,
+                 "validada_dian": bool(cufe),
+                 "diferencia_centavos": diferencia})
     log.info("[retail-fiscal] %s → %s (%s)", v["numero"], numero, en_modo)
     return f"factura {numero} ({en_modo})"
 
@@ -301,12 +452,9 @@ async def _armar(t, v, io: SiigoIO, *, documento_id: int, fecha: str,
         p["neto"] = neto
 
     identificacion = (v["cliente_documento"] or "").strip() or None
-    if identificacion and identificacion != CONSUMIDOR_FINAL:
-        if not await io.existe_cliente(identificacion):
-            # Crear terceros en Siigo es otro documento con sus propias
-            # trampas; mientras no exista, la venta ESPERA en vez de salir a
-            # nombre de otra persona.
-            raise Aplazar(f"la clienta {identificacion} no existe en Siigo")
+    con_clienta = bool(identificacion and identificacion != CONSUMIDOR_FINAL)
+    if con_clienta and not await io.existe_cliente(identificacion):
+        await _crear_clienta(t, v, io, identificacion)
 
     try:
         return construir_factura(
@@ -316,9 +464,45 @@ async def _armar(t, v, io: SiigoIO, *, documento_id: int, fecha: str,
             vendedor_id=int(v["siigo_vendedor_id"]), fecha=fecha,
             identificacion=identificacion,
             bodega_id=v["siigo_bodega_id"],
-            centro_costo_id=v["siigo_centro_costo_id"], estampar=estampar)
+            centro_costo_id=v["siigo_centro_costo_id"], estampar=estampar,
+            # La entrega de la factura: a quien dejó correo, Siigo se la manda.
+            enviar_correo=bool(estampar and con_clienta
+                               and (v["cliente_correo"] or "").strip()))
     except FacturaInvalida as e:
         raise RechazoDefinitivo(str(e)) from e
+
+
+async def _crear_clienta(t, v, io: SiigoIO, identificacion: str) -> None:
+    """La clienta que el POS registró y Siigo no conoce.
+
+    Lo que falle aquí ESPERA, no rechaza: una ficha con un solo nombre se
+    completa en diez segundos y la factura sale sola en la siguiente vuelta.
+    Lo que nunca pasa es facturarle a otra persona.
+    """
+    c = (await t.sesion.execute(text("""
+        SELECT tipo_documento, numero_documento, dv, nombre, apellido,
+               telefono, correo, ciudad, direccion
+          FROM retail.clientes WHERE id = :i
+    """), {"i": v["cliente_id"]})).mappings().first()
+    try:
+        cuerpo = cuerpo_de_cliente(dict(c))
+    except ClienteIncompleto as e:
+        raise Aplazar(f"clienta {identificacion}: {e}") from e
+
+    try:
+        creada = await io.crear_cliente(cuerpo)
+    except RechazoDeSiigo as e:
+        # Puede ser que otra caja la creara un segundo antes. Si ya está,
+        # se sigue; si no, se espera con el motivo a la vista.
+        if not await io.existe_cliente(identificacion):
+            raise Aplazar(f"Siigo no dejó crear a la clienta "
+                          f"{identificacion}: {e}") from e
+        return
+    if creada.get("id"):
+        await t.sesion.execute(text(
+            "UPDATE retail.clientes SET siigo_customer_id = :s WHERE id = :i"),
+            {"s": str(creada["id"]), "i": v["cliente_id"]})
+    log.info("[retail-fiscal] clienta %s creada en Siigo", identificacion)
 
 
 async def _cerrar(t, venta_id: str, estado: str, *, error: str) -> None:

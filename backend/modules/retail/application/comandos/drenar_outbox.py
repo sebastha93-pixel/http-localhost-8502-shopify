@@ -75,7 +75,16 @@ class ResumenDrenaje:
 
 
 class Aplazar(Exception):
-    """El manejador dice «todavía no»: no gasta intento y se reintenta luego."""
+    """El manejador dice «todavía no»: no gasta intento y se reintenta luego.
+
+    `minutos` es cuánto esperar. Por defecto una hora, que es lo que tarda en
+    cambiar una configuración. Quien espera algo que llega en segundos —la
+    DIAN validando una factura— pide menos.
+    """
+
+    def __init__(self, motivo: str = "", *, minutos: Optional[float] = None):
+        super().__init__(motivo)
+        self.minutos = minutos
 
 
 class RechazoDefinitivo(Exception):
@@ -174,7 +183,8 @@ class DrenarOutbox:
             # comprobante, o la facturación está apagada. Se guarda sin gastar
             # intentos, igual que un tipo sin manejador, y el día que se
             # configure sale solo.
-            await self._aplazar_sin_manejador(trabajo, ahora, f"aplazado: {e}")
+            await self._aplazar_sin_manejador(trabajo, ahora, f"aplazado: {e}",
+                                              minutos=e.minutos)
             resumen.sin_manejador += 1
         except RechazoDefinitivo as e:
             # Siigo dijo que NO, o la venta no se puede facturar así. No
@@ -204,7 +214,8 @@ class DrenarOutbox:
             resumen.errores.append(f"#{trabajo['id']} {trabajo['tipo']}: {detalle}")
 
     async def _aplazar_sin_manejador(self, trabajo: dict, ahora: datetime,
-                                     motivo: Optional[str] = None) -> None:
+                                     motivo: Optional[str] = None, *,
+                                     minutos: Optional[float] = None) -> None:
         """Vuelve a `pendiente` SIN gastar un intento.
 
         Es la diferencia entre «esto falló» y «esto todavía no se puede
@@ -219,7 +230,8 @@ class DrenarOutbox:
                        ultimo_error = :err
                  WHERE id = :i
             """), {"i": trabajo["id"],
-                   "cuando": ahora + timedelta(minutes=SIN_MANEJADOR_MINUTOS),
+                   "cuando": ahora + timedelta(
+                       minutes=SIN_MANEJADOR_MINUTOS if minutos is None else minutos),
                    "err": motivo
                           or f"sin manejador para «{trabajo['tipo']}» todavía"})
             await t.commit()

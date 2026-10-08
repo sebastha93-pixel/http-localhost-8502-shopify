@@ -147,6 +147,14 @@ async def lifespan(app: FastAPI):
         print(f"   ⊘ Schedulers desactivados en este worker (WORKER_ROLE != leader)")
 
     # Cron nocturno del módulo Revenue (rankings) — también solo en lider.
+    # POS: al cerrar una venta se factura de inmediato, en el worker que la
+    # atendió (no sólo en el líder). Sin RETAIL_DATABASE_URL no hace nada.
+    try:
+        from backend.modules.retail.infrastructure import planificador_outbox as _po
+        _po.habilitar_empuje()
+    except Exception as e:
+        print(f"   ⚠️  Facturación inmediata del POS no disponible: {e}")
+
     # Revenue IA quedó DADO DE BAJA el 2026-08-20: no arranca salvo que se
     # ponga REVENUE_MODULO_ACTIVO=1 en Railway. Se deja el arranque escrito (y
     # no borrado) justamente para que revivirlo sea una variable, no un commit.

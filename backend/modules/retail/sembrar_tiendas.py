@@ -52,7 +52,7 @@ TIENDAS = [
         "direccion": "CALLE 71 65 150 SEGUNDA ETAPA LC 221",
         "telefono": "3122851520",
         # «prefijo FL desde el número 1 al 10000», aprobada el 2026-04-10.
-        "autorizacion_numero": "18764108303738",
+        "autorizacion_numero": "18764108303738", "autorizacion_prefijo": "FL",
         "autorizacion_desde": 1, "autorizacion_hasta": 10000,
         "autorizacion_aprobada": date(2026, 4, 10), "autorizacion_meses": 24,
         # La tirilla de la foto era la FL-1536: el POS arranca en la 1537.
@@ -66,7 +66,7 @@ TIENDAS = [
         "telefono": "3005654971",
         # De la factura TARR-11389 del 30/09/2026. OJO: aprobada el
         # 2024-11-20 con vigencia 24 meses, o sea que VENCE EL 2026-11-20.
-        "autorizacion_numero": "18764083761292",
+        "autorizacion_numero": "18764083761292", "autorizacion_prefijo": "TARR",
         "autorizacion_desde": 1, "autorizacion_hasta": 1000000,
         "autorizacion_aprobada": date(2024, 11, 20), "autorizacion_meses": 24,
         # El último número que Siigo POS ya emitió en Arrayanes.
@@ -77,15 +77,15 @@ TIENDAS = [
 #  Un prefijo POR TIENDA: las dos cajas de Florida numeran del mismo rango
 #  (`repo_consecutivos` bloquea por prefijo, no por caja).
 #
-#  LAS DOS TIENDAS VAN CON UN PREFIJO PROPIO DEL PILOTO —`FLPOS` y `ARRPOS`— Y
-#  NO CON EL REAL DE SU RESOLUCIÓN (`FL` y `TARR`; este último decía `FV-6`
-#  hasta que llegó una tirilla de verdad). Mientras Siigo POS siga facturando
-#  en la tienda, los dos sistemas imprimirían papeles distintos con el mismo
-#  número, y el día que una clienta vuelva a cambiar nadie sabría cuál buscar.
+#  EL NÚMERO DEL POS ES UNA REFERENCIA INTERNA, Y SE QUEDA ASÍ. Va con un
+#  prefijo propio —`FLPOS`, `ARRPOS`— y NUNCA con el de la resolución (`FL`,
+#  `TARR`). El número de la factura lo asigna Siigo al emitirla, bajo la
+#  resolución de la tienda, y es el único que vale ante la DIAN. Si el POS
+#  numerara con `TARR`, habría dos «TARR-11400» distintos: el que la caja
+#  imprimió y el que Siigo le puso a otra venta.
 #
-#  El día que el POS emita: se cambia el prefijo al real y se sube
-#  `consecutivo_externo` al número que vaya Siigo. La resolución de cada
-#  tienda ya está guardada en `tiendas` para ese momento.
+#  Por eso NO hay que cambiar este prefijo el día que el POS emita. La tirilla
+#  muestra el número de Siigo como «Factura No.» y éste como referencia.
 CAJAS = [
     {"id": "florida_caja1", "tienda_id": "florida", "nombre": "Caja 1",
      "prefijo_factura": "FLPOS"},

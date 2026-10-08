@@ -20,9 +20,14 @@
 import { formatear } from "@/lib/pos/dinero";
 import type { Tirilla as Datos } from "@/lib/pos/api";
 
+/** El «tercero» de las ventas sin clienta. Una factura siempre lleva
+ *  adquiriente; cuando nadie dio sus datos, es éste. */
+const CONSUMIDOR_FINAL = { nombre: "Consumidor final", documento: "222222222222" };
+
 export function Tirilla({ datos }: { datos: Datos }) {
+  const fiscal = datos.es_documento_fiscal;
   return (
-    <div className="tirilla" aria-label="Comprobante de venta">
+    <div className="tirilla" aria-label={fiscal ? "Factura electrónica de venta" : "Comprobante de venta"}>
       <style>{ESTILOS}</style>
 
       <header className="t-centro">
@@ -39,14 +44,15 @@ export function Tirilla({ datos }: { datos: Datos }) {
           emitido, esto no ampara nada ante la DIAN y va escrito. Un papel con
           pinta de factura que no lo es es un problema peor que no imprimir. */}
       <div className="t-centro t-fuerte">
-        {datos.es_documento_fiscal
-          ? "FACTURA ELECTRÓNICA DE VENTA"
-          : "COMPROBANTE DE VENTA"}
+        {fiscal ? "FACTURA ELECTRÓNICA DE VENTA" : "COMPROBANTE DE VENTA"}
       </div>
-      {datos.es_documento_fiscal && datos.resolucion_dian && (
-        <div className="t-centro t-chico">{datos.resolucion_dian}</div>
-      )}
-      {!datos.es_documento_fiscal && (
+      {fiscal ? (
+        // EL NÚMERO DE LA FACTURA ES EL DE SIIGO, el que la DIAN validó bajo
+        // la resolución de la tienda. El del POS baja a referencia interna:
+        // dos números con la misma jerarquía en un papel fiscal es la forma
+        // de que alguien cite el que no es.
+        <div className="t-centro t-fuerte t-grande">No. {datos.documento_fiscal}</div>
+      ) : (
         <div className="t-centro t-chico">
           Documento interno · no válido como factura
         </div>
@@ -54,14 +60,33 @@ export function Tirilla({ datos }: { datos: Datos }) {
 
       <div className="t-sep" />
 
-      <div className="t-fila">
-        <span>No.</span>
-        <span className="t-fuerte">{datos.numero}</span>
-      </div>
-      <div className="t-fila">
-        <span>Fecha</span>
-        <span>{datos.fecha}</span>
-      </div>
+      {fiscal ? (
+        <>
+          <div className="t-fila">
+            <span>Fecha generación</span>
+            <span>{datos.fecha}</span>
+          </div>
+          <div className="t-fila">
+            <span>Fecha expedición</span>
+            <span>{datos.fecha_expedicion || datos.fecha}</span>
+          </div>
+          <div className="t-fila t-chico">
+            <span>Ref. interna</span>
+            <span>{datos.numero}</span>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="t-fila">
+            <span>No.</span>
+            <span className="t-fuerte">{datos.numero}</span>
+          </div>
+          <div className="t-fila">
+            <span>Fecha</span>
+            <span>{datos.fecha}</span>
+          </div>
+        </>
+      )}
       <div className="t-fila">
         <span>Caja</span>
         <span>{datos.caja_nombre}</span>
@@ -70,20 +95,33 @@ export function Tirilla({ datos }: { datos: Datos }) {
         <span>Atendió</span>
         <span>{datos.cajera_nombre}</span>
       </div>
-      {datos.cliente_nombre && (
+      {datos.cliente_nombre ? (
         <>
           <div className="t-fila">
-            <span>Clienta</span>
+            <span>Cliente</span>
             <span>{datos.cliente_nombre}</span>
           </div>
           {datos.cliente_documento && (
             <div className="t-fila">
-              <span>Documento</span>
+              <span>C.C / NIT</span>
               <span>{datos.cliente_documento}</span>
             </div>
           )}
         </>
-      )}
+      ) : fiscal ? (
+        // Una factura no sale «sin cliente»: sale a consumidor final, que es
+        // exactamente a quien se le emitió en Siigo.
+        <>
+          <div className="t-fila">
+            <span>Cliente</span>
+            <span>{CONSUMIDOR_FINAL.nombre}</span>
+          </div>
+          <div className="t-fila">
+            <span>C.C / NIT</span>
+            <span>{CONSUMIDOR_FINAL.documento}</span>
+          </div>
+        </>
+      ) : null}
 
       {datos.anulada && (
         <div className="t-anulada t-centro t-fuerte">*** ANULADA ***</div>
@@ -169,6 +207,14 @@ export function Tirilla({ datos }: { datos: Datos }) {
 
       <div className="t-sep-fino" />
 
+      {fiscal && (
+        // FORMA y MEDIO son dos cosas en una factura: contado o crédito, y
+        // con qué se pagó. En el mostrador siempre es de contado.
+        <div className="t-fila">
+          <span>Forma de pago</span>
+          <span>Contado</span>
+        </div>
+      )}
       {datos.pagos.map((p, i) => (
         <div key={i} className="t-fila">
           <span>
@@ -191,11 +237,8 @@ export function Tirilla({ datos }: { datos: Datos }) {
         {datos.unidades} {datos.unidades === 1 ? "prenda" : "prendas"}
       </div>
 
-      {datos.es_documento_fiscal ? (
+      {fiscal ? (
         <>
-          {datos.documento_fiscal && (
-            <div className="t-centro t-chico">DIAN {datos.documento_fiscal}</div>
-          )}
           {datos.qr_ruta && (
             // El QR es lo que la gente escanea; el CUFE en texto es el
             // respaldo para cuando el papel térmico se borra y el código deja
@@ -230,18 +273,30 @@ export function Tirilla({ datos }: { datos: Datos }) {
               ))}
             </div>
           )}
+          {/* LO QUE LA NORMA PIDE AL PIE, en el orden de la tirilla que MALE
+              ya imprime desde Siigo: calidad tributaria, la autorización de
+              numeración que ampara este número, y quién es el proveedor
+              tecnológico. Ver docs/retail-pos/tirilla-real-siigo.md */}
+          <div className="t-sep-fino" />
+          {datos.regimen && <div className="t-centro t-chico">{datos.regimen}.</div>}
+          {datos.resolucion_dian && (
+            <div className="t-centro t-chico">{datos.resolucion_dian}</div>
+          )}
+          <div className="t-centro t-chico t-legal">
+            Fabricante de software y proveedor tecnológico: Siigo S.A.S. - Nit:
+            830.048.145-8. Nombre del software: Siigo Nube
+          </div>
         </>
-      ) : datos.resolucion_dian ? (
+      ) : datos.factura_en_camino ? (
+        // SÓLO SI DE VERDAD VIENE. Este papel decía «la factura electrónica
+        // se envía por correo» en CADA venta, cuando la tienda no emitía: una
+        // promesa falsa impresa. Ahora sale únicamente cuando la factura está
+        // en trámite, y dice qué hacer con este papel mientras tanto.
         <div className="t-centro t-chico">
-          {datos.estado_fiscal === "pendiente" || datos.estado_fiscal === "enviando"
-            ? "La factura electrónica se envía por correo."
-            : "Sin factura electrónica asociada."}
+          Factura electrónica en trámite ante la DIAN. Este comprobante no la
+          reemplaza: pídala en caja.
         </div>
-      ) : null /* SIN RESOLUCIÓN NO SE PROMETE NADA. Este papel decía «la
-                  factura electrónica se envía por correo» en CADA venta, y la
-                  tienda todavía no emite desde el POS: era una promesa falsa
-                  impresa y entregada a la clienta. El encabezado ya dice lo
-                  que es —documento interno—, y eso basta. */}
+      ) : null}
 
       {datos.mensaje && (
         <>
@@ -251,7 +306,9 @@ export function Tirilla({ datos }: { datos: Datos }) {
       )}
 
       <div className="t-centro t-chico t-pie">
-        Conserve este comprobante para cambios.
+        {fiscal
+          ? "Conserve esta factura para cambios."
+          : "Conserve este comprobante para cambios."}
       </div>
       {/* Papel de sobra al final: sin corte automático, la térmica deja el
           último renglón dentro del mecanismo y hay que tirar del papel. */}
@@ -292,6 +349,7 @@ const ESTILOS = `
    Más pequeño deja de escanearse; más grande se come el papel. */
 .tirilla .t-qr       { text-align: center; margin: 2mm 0 1mm; }
 .tirilla .t-qr svg   { display: block; margin: 0 auto 1mm; }
+.tirilla .t-legal    { margin-top: 1mm; }
 .tirilla .t-pie      { margin-top: 2mm; }
 .tirilla .t-avance   { height: 12mm; }
 
