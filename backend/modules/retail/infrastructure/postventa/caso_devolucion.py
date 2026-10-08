@@ -36,7 +36,8 @@ from sqlalchemy import text
 
 log = logging.getLogger("retail.postventa")
 
-__all__ = ["abrir_caso_postventa", "TIPO", "motivo_postventa", "tipo_postventa"]
+__all__ = ["abrir_caso_postventa", "TIPO", "motivo_postventa", "tipo_postventa",
+           "resumen_para_el_caso"]
 
 #  El `tipo` del trabajo en el outbox. Vive aquí, junto a su manejador, para
 #  que registrarlo sea imposible de olvidar al leer este archivo.
@@ -65,6 +66,37 @@ def tipo_postventa(reembolso_pos: str) -> str:
     return _TIPOS.get(reembolso_pos, "reembolso")
 
 
+def _pesos(centavos) -> str:
+    return "$" + f"{int(centavos or 0) // 100:,}".replace(",", ".")
+
+
+def resumen_para_el_caso(payload: dict) -> str:
+    """Lo que necesita leer quien abre el caso para hacer la nota crédito.
+
+    EL CASO LLEGABA VACÍO: «reembolso · producto defectuoso · florida», y nada
+    más. Ni de qué venta, ni qué prenda, ni cuánto. Quien lo abría para hacer
+    la nota crédito no tenía por dónde empezar — y la información estaba toda
+    aquí, en el mensaje de la cola; sencillamente no se pasaba.
+
+    Va en `subreason`, que es el texto libre que Postventa enseña en el caso.
+    Se nombra la tienda que VENDIÓ cuando no es la que recibe: la factura que
+    hay que anular es de aquélla.
+    """
+    partes = [f"POS · {payload.get('motivo', '')}",
+              f"ticket {payload.get('numero_venta', '?')}"]
+    lineas = payload.get("lineas") or []
+    if lineas:
+        partes.append(" + ".join(
+            f"{l.get('cantidad', 1)}× {l.get('sku', '?')}" for l in lineas))
+    if payload.get("total"):
+        partes.append(f"{_pesos(payload['total'])} en {payload.get('reembolso', '')}"
+                      .replace("_", " "))
+    vendio, recibe = payload.get("tienda_venta_id"), payload.get("tienda_id")
+    if vendio and recibe and vendio != recibe:
+        partes.append(f"vendido en {vendio}")
+    return " · ".join(p for p in partes if p)
+
+
 async def abrir_caso_postventa(t, payload: dict) -> Optional[str]:
     """Abre el caso y guarda su número en la devolución.
 
@@ -87,12 +119,28 @@ async def abrir_caso_postventa(t, payload: dict) -> Optional[str]:
     # que permite que las pruebas de dominio corran sin red.
     from backend.services import postventa as svc
 
+    # LA CLIENTA, si la venta la tenía. Con la cédula Postventa localiza sus
+    # compras en Siigo — que es como se encuentra la factura que hay que
+    # acreditar mientras el POS no emita la suya.
+    clienta = (await t.sesion.execute(text("""
+        SELECT trim(concat_ws(' ', c.nombre, c.apellido)) AS nombre,
+               c.numero_documento, c.telefono, c.correo
+          FROM retail.ventas v
+          JOIN retail.clientes c ON c.id = v.cliente_id
+         WHERE v.id = :v
+    """), {"v": payload.get("venta_id")})).mappings().first() or {}
+
     caso = svc.crear_caso(
         tipo=tipo_postventa(payload["reembolso"]),
         reason=motivo_postventa(payload["motivo"]),
-        # El motivo del POS viaja literal. Es lo que rescata el caso de
-        # `talla`: el `reason` dice «otro», pero aquí queda escrito qué fue.
-        subreason=f"POS · {payload['motivo']}",
+        # El motivo del POS viaja literal —es lo que rescata el caso de
+        # `talla`, que en `reason` dice «otro»— y con él todo lo que hace
+        # falta para saber de qué venta se habla.
+        subreason=resumen_para_el_caso(payload),
+        customer_name=clienta.get("nombre") or "",
+        customer_cedula=clienta.get("numero_documento") or "",
+        customer_phone=clienta.get("telefono") or "",
+        customer_email=clienta.get("correo") or "",
         tienda=payload.get("tienda_id", ""),
         # `source` distingue esta puerta de entrada de las demás. Sin él, en
         # el tablero de Postventa un caso nacido en la caja se ve igual que

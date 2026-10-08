@@ -157,6 +157,34 @@ def test_la_cajera_no_ve_cuanto_deberia_haber(cliente):
     assert d["base_inicial_centavos"] == BASE
 
 
+def test_el_esperado_tampoco_se_cuela_por_OTRO_campo(cliente):
+    """EL CONTEO CIEGO ESTABA ROTO, y la prueba de arriba no lo veía.
+
+    `esperado_por_medio` venía en `None`, como debe. Pero la misma respuesta
+    traía `medios[].total_centavos`, que es la suma de los movimientos de ese
+    medio CON LA BASE — o sea, exactamente lo que debería haber en el cajón. Y
+    la pantalla lo pintaba como «Efectivo $369.900 (con base)», encima del
+    formulario donde se cuenta.
+
+    Se comprobaba el campo por su nombre y no el DATO. Aquí se busca la cifra
+    en toda la respuesta, la traiga el campo que la traiga.
+    """
+    import json
+
+    c, _ = cliente
+    _vender(c, 1, medio="efectivo", monto=16990000)
+    d = _resumen(c)
+
+    en_el_cajon = BASE + 16990000
+    assert str(en_el_cajon) not in json.dumps(d), (
+        "la respuesta trae lo que debería haber en el cajón: el conteo ya no "
+        "mide nada")
+    efectivo = next(m for m in d["medios"] if m["es_efectivo"])
+    assert efectivo["total_centavos"] is None
+    # El medio sigue en la lista: la pantalla necesita saber QUÉ declarar.
+    assert efectivo["entra_al_arqueo"] is True
+
+
 def test_un_supervisor_si_puede_verlo(cliente):
     """Laura tiene `puede_ver_esperado`: para revisar una caja ajena hay que
     poder ver el esperado sin declarar nada."""
@@ -169,6 +197,9 @@ def test_un_supervisor_si_puede_verlo(cliente):
     _vender(c, 1, medio="efectivo", monto=16990000)
     d = _resumen(c)
     assert d["esperado_por_medio"]["efectivo"] == BASE + 16990000
+    # Y con permiso, el desglose también llega completo.
+    efectivo = next(m for m in d["medios"] if m["es_efectivo"])
+    assert efectivo["total_centavos"] == BASE + 16990000
 
 
 # ── El camino normal: cuadra ────────────────────────────────────────────────

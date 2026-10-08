@@ -456,7 +456,12 @@ function Exito({
             : "Se reversa por el mismo medio con el que pagó. No sale plata del cajón."}
       </p>
       <p className="mx-auto mt-2 max-w-[42ch] text-[12px] leading-relaxed text-[var(--pos-muted)]">
-        La nota crédito la emite Postventa; el caso ya quedó en cola.
+        {/* NO «la emite Postventa»: eso sonaba a que sale sola. El caso nace
+            esperando a que una persona lo apruebe, y es ella quien hace la
+            nota crédito. Decirle a la cajera que ya está resuelto la deja
+            prometiéndole a la clienta un documento que nadie ha hecho. */}
+        Quedó un caso en Postventa con el ticket y las prendas. La nota
+        crédito no sale sola: la hace quien apruebe ese caso.
       </p>
 
       <button onClick={onNueva} className="pos-btn pos-btn-primario mt-6 h-12 w-full text-[14px]">

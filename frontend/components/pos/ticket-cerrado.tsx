@@ -146,7 +146,12 @@ export function TicketCerrado({
                 ? "Guardada sin conexión · se envía sola"
                 : ticket.estado_fiscal === "emitido"
                   ? "Factura electrónica emitida"
-                  : "Factura electrónica: emitiendo…"
+                  // «Emitiendo…» sólo si la tienda EMITE. Sin resolución no
+                  // hay nada en camino: decirlo deja a la cajera esperando
+                  // —y prometiéndole a la clienta— una factura que no llega.
+                  : tirilla && !tirilla.resolucion_dian
+                    ? "Comprobante interno · sin factura electrónica"
+                    : "Factura electrónica: emitiendo…"
             }
             alerta={Boolean(ticket.pendiente_de_envio)}
           />

@@ -271,11 +271,20 @@ class RepositorioSesionCajaSQL:
         return [dict(f) for f in filas]
 
     async def resumen(self, sesion_id: str) -> dict:
-        """Lo que se imprime al cerrar el día."""
+        """Lo que se imprime al cerrar el día.
+
+        LAS BRUTAS INCLUYEN LO ANULADO, y es lo que hace que el resumen sume:
+        brutas − anuladas = netas. Antes `brutas` ya venía sin las anuladas y
+        la pantalla se las volvía a restar: vender $119.920 y anularlo daba
+        «Ventas netas −$119.920» en vez de $0. Lo anulado se restaba dos veces.
+        """
         cab = (await self._s.execute(text("""
             SELECT count(*) FILTER (WHERE estado = 'cerrada')       AS transacciones,
-                   coalesce(sum(total) FILTER (WHERE estado='cerrada'), 0) AS brutas,
-                   coalesce(sum(descuento_total) FILTER (WHERE estado='cerrada'), 0)
+                   coalesce(sum(total)
+                            FILTER (WHERE estado IN ('cerrada','anulada')), 0)
+                       AS brutas,
+                   coalesce(sum(descuento_total)
+                            FILTER (WHERE estado IN ('cerrada','anulada')), 0)
                        AS descuentos,
                    count(*) FILTER (WHERE estado = 'anulada')       AS anuladas,
                    coalesce(sum(total) FILTER (WHERE estado='anulada'), 0) AS anulado
