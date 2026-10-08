@@ -175,7 +175,7 @@ def test_florida_queda_con_los_datos_de_su_tirilla(base_vacia):
     assert (nit, techo, piso) == ("901680460-1", 10000, 1536)
     prefijos = _leer_sync(base_vacia, "SELECT DISTINCT prefijo_factura "
                                  "FROM retail.cajas WHERE tienda_id='florida'")
-    assert prefijos == [("FL",)]      # un prefijo por tienda, las dos cajas
+    assert prefijos == [("FLPOS",)]      # un prefijo por tienda, las dos cajas
 
 
 # ── Qué ve cada tienda ──────────────────────────────────────────────────────
@@ -219,7 +219,7 @@ def test_la_base_de_cada_tienda_entra_a_SU_efectivo(entorno):
         "sesion_id": florida, "tienda_id": "florida",
         "caja_id": "florida_caja1"})
     assert r.status_code == 200, r.text
-    assert (r.json()["prefijo"], r.json()["consecutivo_siguiente"]) == ("FL", 1537)
+    assert (r.json()["prefijo"], r.json()["consecutivo_siguiente"]) == ("FLPOS", 1537)
 
     r = _abrir_arrayanes(c)
     assert r.status_code == 200, r.text

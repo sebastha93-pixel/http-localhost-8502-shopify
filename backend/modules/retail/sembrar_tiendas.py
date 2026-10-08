@@ -77,17 +77,20 @@ TIENDAS = [
 #  Un prefijo POR TIENDA: las dos cajas de Florida numeran del mismo rango
 #  (`repo_consecutivos` bloquea por prefijo, no por caja).
 #
-#  ARRAYANES VA CON UN PREFIJO PROPIO DEL PILOTO (`ARRPOS`) Y NO CON EL SUYO
-#  REAL (`TARR`, que decía `FV-6` hasta que llegó una tirilla de verdad).
-#  Mientras Siigo POS siga facturando ahí, los dos sistemas imprimirían papeles
-#  distintos con el mismo número, y el día que una clienta vuelva a cambiar
-#  nadie sabría cuál buscar. El día que el POS emita, se cambia a `TARR` y se
-#  sube `consecutivo_externo` al número que vaya Siigo.
+#  LAS DOS TIENDAS VAN CON UN PREFIJO PROPIO DEL PILOTO —`FLPOS` y `ARRPOS`— Y
+#  NO CON EL REAL DE SU RESOLUCIÓN (`FL` y `TARR`; este último decía `FV-6`
+#  hasta que llegó una tirilla de verdad). Mientras Siigo POS siga facturando
+#  en la tienda, los dos sistemas imprimirían papeles distintos con el mismo
+#  número, y el día que una clienta vuelva a cambiar nadie sabría cuál buscar.
+#
+#  El día que el POS emita: se cambia el prefijo al real y se sube
+#  `consecutivo_externo` al número que vaya Siigo. La resolución de cada
+#  tienda ya está guardada en `tiendas` para ese momento.
 CAJAS = [
     {"id": "florida_caja1", "tienda_id": "florida", "nombre": "Caja 1",
-     "prefijo_factura": "FL"},
+     "prefijo_factura": "FLPOS"},
     {"id": "florida_caja2", "tienda_id": "florida", "nombre": "Caja 2",
-     "prefijo_factura": "FL"},
+     "prefijo_factura": "FLPOS"},
     {"id": "arrayanes_caja1", "tienda_id": "arrayanes", "nombre": "Caja 1",
      "prefijo_factura": "ARRPOS"},
 ]
