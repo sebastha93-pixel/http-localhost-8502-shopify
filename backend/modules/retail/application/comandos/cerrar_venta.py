@@ -112,12 +112,17 @@ class CerrarVenta:
                     cantidad=linea.cantidad, referencia_id=venta.id,
                     usuario_id=usuario_id)
 
-            # 4
-            for pago in venta.pagos:
+            # 4. A la caja va lo que ENTRA, no lo que la clienta entregó: el
+            #    vuelto ya salió del cajón. Anotar lo entregado hacía que el
+            #    arqueo esperara plata devuelta, y cada venta en efectivo con
+            #    vuelto dejaba a la cajera corta por ese vuelto.
+            for pago, neto in venta.cobros_netos():
+                if neto.es_cero():
+                    continue        # todo ese efectivo se devolvió como vuelto
                 await t.caja.registrar_cobro(
                     sesion_id=venta.sesion_id, venta_id=venta.id,
                     medio_pago_id=pago.medio_pago_id,
-                    monto_centavos=pago.monto.centavos,
+                    monto_centavos=neto.centavos,
                     usuario_id=usuario_id, ahora=ahora)
 
             # 5. Los descuentos autorizados van aparte y como CRÍTICOS: son los

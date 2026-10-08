@@ -329,6 +329,47 @@ def test_pago_mixto():
     assert v.vuelto() == Dinero.cero(COP)
 
 
+def test_a_la_caja_entra_lo_que_QUEDA_no_lo_que_la_clienta_entrego():
+    """EL VUELTO YA SALIÓ DEL CAJÓN.
+
+    Paga $200.000 por $169.900: al cajón entran $169.900. Anotar los $200.000
+    hacía que el arqueo esperara plata devuelta, y con el conteo exacto el
+    cierre decía «no cuadró» — de la cajera. Se encontró cerrando un turno de
+    prueba con el cajón contado al peso: faltaban justo los $200 del vuelto.
+    """
+    v = nueva_venta()
+    con_una_linea(v)  # $169.900
+    v.registrar_pago("efectivo", pesos("200000"), es_efectivo=True)
+
+    [(pago, neto)] = v.cobros_netos()
+    assert pago.monto == pesos("200000")      # lo entregado, para la tirilla
+    assert neto == pesos("169900")            # lo que entra, para la caja
+
+
+def test_el_vuelto_sale_del_efectivo_y_no_del_datafono():
+    """Mitad con tarjeta y sobra en efectivo: el datáfono entra completo —no
+    da vuelto— y lo que se descuenta es el billete."""
+    v = nueva_venta()
+    con_una_linea(v)  # $169.900
+    v.registrar_pago("datafono_florida", pesos("100000"), es_efectivo=False)
+    v.registrar_pago("efectivo", pesos("100000"), es_efectivo=True)
+    assert v.vuelto() == pesos("30100")
+
+    netos = {p.medio_pago_id: n for p, n in v.cobros_netos()}
+    assert netos == {"datafono_florida": pesos("100000"),
+                     "efectivo": pesos("69900")}
+    # Y lo que entra en total es exactamente lo que vale la venta.
+    assert sum((n for n in netos.values()), Dinero.cero(COP)) == v.total()
+
+
+def test_sin_vuelto_el_neto_es_lo_entregado():
+    v = nueva_venta()
+    con_una_linea(v)
+    v.registrar_pago("efectivo", pesos("169900"), es_efectivo=True)
+    [(_, neto)] = v.cobros_netos()
+    assert neto == pesos("169900")
+
+
 def test_no_se_cierra_con_menos_plata_de_la_debida():
     """INV-V3. Cerrar con un faltante es un faltante garantizado en el arqueo."""
     v = nueva_venta()

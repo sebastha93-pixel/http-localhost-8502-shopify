@@ -125,11 +125,11 @@ async def _ok(t, payload):
 # ── El tipo sin manejador ───────────────────────────────────────────────────
 
 def test_un_tipo_sin_manejador_NO_gasta_intentos(uow):
-    """`emitir_factura` se encola desde antes de que exista su manejador.
+    """`emitir_documento_fiscal` se encola desde antes de que exista su manejador.
     Contarlo como fallo lo mandaría a `fallido` en ocho pasadas — o sea, tirar
     un documento fiscal a la basura por una función que no se ha escrito."""
     u, motor = uow
-    _correr(_encolar(u, "emitir_factura"))
+    _correr(_encolar(u, "emitir_documento_fiscal"))
 
     # El reloj avanza entre pasadas: sin eso, la segunda no toma nada —el
     # trabajo quedó aplazado una hora— y la prueba pasaría por la razón
@@ -149,11 +149,11 @@ def test_cuando_el_manejador_aparece_el_trabajo_viejo_se_ejecuta(uow):
     """La consecuencia de lo anterior, que es lo que de verdad importa: el
     documento encolado hace meses sale solo el día que hay con qué."""
     u, _ = uow
-    _correr(_encolar(u, "emitir_factura"))
+    _correr(_encolar(u, "emitir_documento_fiscal"))
     _drenar(u, {})                       # sin manejador: se aplaza
 
     # Pasa una hora y ya existe el manejador.
-    r = _drenar(u, {"emitir_factura": _ok}, ahora=AHORA + timedelta(hours=2))
+    r = _drenar(u, {"emitir_documento_fiscal": _ok}, ahora=AHORA + timedelta(hours=2))
     assert r.procesados == 1
 
 

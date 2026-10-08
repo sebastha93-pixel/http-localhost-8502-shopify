@@ -161,7 +161,14 @@ async def test_la_plata_entra_a_la_caja_del_turno(entorno):
 
     async with UnidadDeTrabajoSQL(fabrica) as t:
         esperado = await t.caja.esperado_por_medio(SESION)
-    assert esperado == {"efectivo": 40000000}   # los $400.000 cobrados
+    # $339.800 —lo que vale la venta— y NO los $400.000 que entregó la
+    # clienta: los $60.200 de diferencia se le devolvieron como vuelto y ya
+    # no están en el cajón.
+    #
+    # ESTA ASERCIÓN DECÍA 40000000, con el comentario «los $400.000 cobrados».
+    # El bug no se le escapó a la prueba: estaba escrito en ella como el
+    # resultado correcto. Por eso nunca falló.
+    assert esperado == {"efectivo": 33980000}
 
 
 # ── Auditoría: lo que alguien querría hacer desaparecer ─────────────────────
