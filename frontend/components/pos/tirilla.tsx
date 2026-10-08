@@ -19,6 +19,17 @@
  */
 import { formatear } from "@/lib/pos/dinero";
 import type { Tirilla as Datos } from "@/lib/pos/api";
+// IMPORTADO, no servido desde `/public`: así Next lo deja bajo
+// `/_next/static/`, que es lo único que el service worker guarda. Desde
+// `/public` el logo desaparecería de la tirilla justo cuando no hay red.
+import logo from "./logo-male-denim.png";
+
+// Se pide al cargar la pantalla de venta, no al imprimir: la tirilla se manda
+// a la impresora 60 ms después de pintarse, y una imagen que todavía viene en
+// camino sale como un hueco en blanco en el papel.
+if (typeof window !== "undefined") {
+  new window.Image().src = logo.src;
+}
 
 /** El «tercero» de las ventas sin clienta. Una factura siempre lleva
  *  adquiriente; cuando nadie dio sus datos, es éste. */
@@ -31,6 +42,12 @@ export function Tirilla({ datos }: { datos: Datos }) {
       <style>{ESTILOS}</style>
 
       <header className="t-centro">
+        {/* `<img>` a secas: `next/image` lo cargaría perezoso y con su propio
+            optimizador, dos cosas que en un papel que sale en 60 ms sobran.
+            La razón social va debajo SIEMPRE: el logo es la marca, y quien
+            factura es la sociedad. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img className="t-logo" src={logo.src} alt="MALE DENIM" />
         <div className="t-fuerte t-grande">{datos.razon_social}</div>
         {datos.nit && <div>NIT {datos.nit}</div>}
         <div>{datos.tienda_nombre}</div>
@@ -331,6 +348,10 @@ const ESTILOS = `
   background: #fff;
 }
 .tirilla .t-centro   { text-align: center; }
+/* 34 mm de ancho: en una térmica de 203 dpi son ~270 puntos, de sobra para
+   que el trazo fino de «MALE» no se rompa, sin comerse el papel. */
+.tirilla .t-logo     { display: block; width: 34mm; height: auto;
+                       margin: 0 auto 1.5mm; }
 .tirilla .t-fuerte   { font-weight: 700; }
 .tirilla .t-grande   { font-size: 13px; letter-spacing: .03em; }
 .tirilla .t-chico    { font-size: 9.5px; }
