@@ -36,7 +36,7 @@ from typing import Awaitable, Callable, Dict, List, Optional
 
 from sqlalchemy import text
 
-__all__ = ["DrenarOutbox", "ResumenDrenaje", "Manejador"]
+__all__ = ["Aplazar", "RechazoDefinitivo", "DrenarOutbox", "ResumenDrenaje", "Manejador"]
 
 # Un manejador recibe la sesión abierta (para poder escribir en la MISMA
 # transacción que cierra el trabajo) y el payload. Devuelve una nota corta
@@ -72,6 +72,14 @@ class ResumenDrenaje:
     sin_manejador: int = 0
     rescatados: int = 0
     errores: List[str] = field(default_factory=list)
+
+
+class Aplazar(Exception):
+    """El manejador dice «todavía no»: no gasta intento y se reintenta luego."""
+
+
+class RechazoDefinitivo(Exception):
+    """El manejador dice «así nunca»: va a `fallido` sin reintentos."""
 
 
 class DrenarOutbox:
@@ -161,6 +169,28 @@ class DrenarOutbox:
                 """), {"i": trabajo["id"], "ahora": ahora, "nota": nota})
                 await t.commit()
             resumen.procesados += 1
+        except Aplazar as e:
+            # «Todavía no se puede» NO es un fallo: la tienda no tiene
+            # comprobante, o la facturación está apagada. Se guarda sin gastar
+            # intentos, igual que un tipo sin manejador, y el día que se
+            # configure sale solo.
+            await self._aplazar_sin_manejador(trabajo, ahora, f"aplazado: {e}")
+            resumen.sin_manejador += 1
+        except RechazoDefinitivo as e:
+            # Siigo dijo que NO, o la venta no se puede facturar así. No
+            # mejora por insistir, y ocho reintentos sólo retrasan que alguien
+            # lo vea: va a `fallido` de una vez, con el motivo.
+            detalle = f"rechazado: {e}"[:500]
+            async with self._uow as t:
+                await t.sesion.execute(text("""
+                    UPDATE retail.outbox
+                       SET estado = 'fallido', intentos = intentos + 1,
+                           ultimo_error = :err
+                     WHERE id = :i
+                """), {"i": trabajo["id"], "err": detalle})
+                await t.commit()
+            resumen.fallidos += 1
+            resumen.errores.append(f"#{trabajo['id']} {trabajo['tipo']}: {detalle}")
         except Exception as e:  # noqa: BLE001 — cualquier fallo del tercero
             # El texto del error se guarda TRUNCADO pero completo en lo que
             # importa: una traza de Siigo entera en una columna hace ilegible
@@ -173,8 +203,8 @@ class DrenarOutbox:
                 resumen.reintentos += 1
             resumen.errores.append(f"#{trabajo['id']} {trabajo['tipo']}: {detalle}")
 
-    async def _aplazar_sin_manejador(self, trabajo: dict,
-                                     ahora: datetime) -> None:
+    async def _aplazar_sin_manejador(self, trabajo: dict, ahora: datetime,
+                                     motivo: Optional[str] = None) -> None:
         """Vuelve a `pendiente` SIN gastar un intento.
 
         Es la diferencia entre «esto falló» y «esto todavía no se puede
@@ -190,7 +220,8 @@ class DrenarOutbox:
                  WHERE id = :i
             """), {"i": trabajo["id"],
                    "cuando": ahora + timedelta(minutes=SIN_MANEJADOR_MINUTOS),
-                   "err": f"sin manejador para «{trabajo['tipo']}» todavía"})
+                   "err": motivo
+                          or f"sin manejador para «{trabajo['tipo']}» todavía"})
             await t.commit()
 
     async def _marcar_error(self, trabajo: dict, ahora: datetime,
