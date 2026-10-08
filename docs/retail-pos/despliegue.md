@@ -1,19 +1,52 @@
 # Poner el POS en línea
 
-Estado a **2026-08-29: la base ya existe, migrada y asociada.**
+Estado a **2026-10-08: las dos tiendas pueden vender. Lo que no existe es
+la factura electrónica.**
 
 | | |
 |---|---|
 | Servicio | `Postgres` en el proyecto `vivacious-perception` |
 | Versión | PostgreSQL 18.6 (`ghcr.io/railwayapp-templates/postgres-ssl:18`) |
 | Volumen | `86b1e1a6-63ad-4434-91e7-f2b7baa70a5b` en `/var/lib/postgresql/data` |
-| Migraciones | `0001` → `0020`, 28 tablas |
+| Migraciones | `0001` → `0021` |
 | Variable | `RETAIL_DATABASE_URL = ${{Postgres.DATABASE_URL}}` en `backend` |
 | Respaldos | PITR continuo + programación diaria y mensual |
+| Enlace | `https://app.maledenim.com/pos` — uno solo; la tienda sale de quien entra |
+| Arrayanes | 680 SKU · 1.828 unidades · prefijo de piloto `ARRPOS` |
+| Florida | 615 SKU · 2.209 unidades · prefijo de piloto `FLPOS` |
 
-**Lo que falta para vender: los datos operativos.** Ver «Sembrar la tienda»
-más abajo — la base está migrada pero no tiene tienda, ni caja, ni ubicación,
-ni los medios de pago básicos.
+## Qué se probó y qué no (2026-10-08)
+
+Un turno completo recorrido a mano en cada tienda, contra una base local con
+el catálogo real: abrir con el cajón corto, vender con descuento y pago mixto
+con vuelto, cobrar con QR y su número de aprobación, crear clienta, devolver
+en una tienda lo vendido en la otra, anular, contar a ciegas y cerrar. **Cerró
+con diferencia $0.** También vender sin servidor y que la venta suba sola.
+
+Ese recorrido encontró, y quedó corregido: el vuelto contado como faltante de
+la cajera (el más grave), el conteo ciego que mostraba lo esperado, las ventas
+netas que restaban lo anulado dos veces, la tirilla que prometía una factura
+por correo, y el caso de Postventa que llegaba sin ticket ni clienta.
+
+**LO QUE NO SE PUEDE PROBAR PORQUE NO EXISTE:**
+
+* **La factura electrónica.** No es que esté sin probar: no hay emisor. Al
+  cerrar una venta se encola `emitir_documento_fiscal`, que no tiene
+  manejador, y aunque lo tuviera Siigo rechazaría el documento: `FL`, `TARR`
+  y `FV-6` no salen en `/document-types` (verificado ese mismo día). La
+  tirilla es un comprobante interno y lo dice.
+* **La nota crédito automática.** Una devolución abre un caso en Postventa
+  —ahora con ticket, prendas, valor y clienta— que nace esperando a que una
+  persona lo apruebe. Y como la venta del POS no tiene factura propia en
+  Siigo, no hay qué acreditar: la nota crédito se hace contra la factura que
+  emitió Siigo POS.
+
+Por eso el piloto va **en paralelo**: Siigo POS sigue emitiendo el documento
+legal y el POS lleva la venta, la caja y el inventario.
+
+**Falta probar con las manos**, en la tienda: la impresora térmica (la tirilla
+sale por `window.print()` a 80 mm; sin impresión directa configurada, el
+navegador abre su diálogo en cada venta) y el lector de códigos.
 
 ## Lo que hace que este despliegue sea seguro
 
@@ -125,12 +158,13 @@ impreso en cada papel.
 ⚠️ **Esa resolución vence el 2026-11-20** (aprobada el 2024-11-20, vigencia 24
 meses). Hay que pedir la nueva a la DIAN; no es algo del POS.
 
-**La caja de Arrayanes numera `ARRPOS`, no `TARR`, durante el piloto.** Mientras
-Siigo POS siga facturando ahí, los dos imprimirían papeles distintos con el
-mismo número y nadie sabría cuál buscar cuando la clienta vuelva a cambiar. El
-día que el POS emita de verdad: cambiar el prefijo a `TARR` y subir
-`consecutivo_externo` al número que vaya Siigo. Mientras tanto, **no hay que
-tocar el consecutivo antes de cada jornada**.
+**Las dos tiendas numeran con un prefijo de piloto —`ARRPOS` y `FLPOS`—, no
+con el de su resolución** (`TARR` y `FL`). Mientras Siigo POS siga facturando
+en la tienda, los dos imprimirían papeles distintos con el mismo número y
+nadie sabría cuál buscar cuando la clienta vuelva a cambiar. El día que el POS
+emita de verdad: cambiar el prefijo al real y subir `consecutivo_externo` al
+número que vaya Siigo. Mientras tanto, **no hay que tocar el consecutivo
+antes de cada jornada**.
 
 Después, el **catálogo** — con `python -m backend.modules.retail.cargar_catalogo`,
 una vez por tienda (`RETAIL_UBICACION=tienda:arrayanes`). Lee un CSV, corre en
