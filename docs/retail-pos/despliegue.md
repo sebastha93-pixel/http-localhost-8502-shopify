@@ -35,11 +35,10 @@ por correo, y el caso de Postventa que llegaba sin ticket ni clienta.
   manejador, y aunque lo tuviera Siigo rechazaría el documento: `FL`, `TARR`
   y `FV-6` no salen en `/document-types` (verificado ese mismo día). La
   tirilla es un comprobante interno y lo dice.
-* **La nota crédito automática.** Una devolución abre un caso en Postventa
-  —ahora con ticket, prendas, valor y clienta— que nace esperando a que una
-  persona lo apruebe. Y como la venta del POS no tiene factura propia en
-  Siigo, no hay qué acreditar: la nota crédito se hace contra la factura que
-  emitió Siigo POS.
+* **La nota crédito automática de una DEVOLUCIÓN.** Una devolución abre un
+  caso en Postventa —con ticket, prendas, valor, clienta y, si el POS la
+  emitió, el número de la factura— que nace esperando a que una persona lo
+  apruebe. La de una ANULACIÓN sí es automática (ver más abajo).
 
 Por eso el piloto va **en paralelo**: Siigo POS sigue emitiendo el documento
 legal y el POS lleva la venta, la caja y el inventario.
@@ -102,6 +101,17 @@ hay clienta), forma de pago, QR, CUFE, calidad tributaria, la autorización de
 numeración y el proveedor tecnológico (Siigo). Sin CUFE es un comprobante
 interno y lo dice — incluido el modo `prueba`, que deja el documento
 `emitido` pero sin CUFE.
+
+**La nota crédito** (`emisor_nota_credito.py`, mismo interruptor). Sólo para
+ANULACIONES completas: copia ítems y pagos de la factura tal cual los
+devuelve Siigo, con `reason: 2` y el comprobante `tiendas.siigo_nc_documento_id`
+(11817, el de Postventa; migración 0026). La plata sale por las mismas cuentas
+por las que entró —la caja de la tienda, el datáfono—, no queda como saldo a
+favor. Si la venta se anula con la factura en camino, el emisor de facturas
+termina de resolverla y encola la nota crédito él mismo; si el envío nunca
+llegó a Siigo, no se manda. Una factura de modo `prueba` no lleva nota
+crédito: se borra en Siigo. La devolución de una prenda sigue yendo a
+Postventa (ahora con el número de la factura en el caso).
 
 **En el mostrador.** Al cerrar la venta se lanza una pasada de la cola en el
 mismo worker (`planificador_outbox.empujar`), y la pantalla espera la factura

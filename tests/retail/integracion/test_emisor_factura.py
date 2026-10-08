@@ -55,10 +55,60 @@ class SiigoFalso:
         self.lecturas = 0
         self.clientes_creados = []
         self.al_crear_cliente = "ok"   # ok | rechazo | ya_existia
+        self.nc_enviadas = []
+        self.nc_en_siigo = []
+        self.al_crear_nc = "ok"     # ok | rechazo | sin_respuesta | crea_y_muere
+        self.dian_nc = "accepted"
+
+    # ── Notas crédito ──
+    async def crear_nota_credito(self, cuerpo):
+        from backend.modules.retail.infrastructure.siigo.emisor_factura import (
+            RechazoDeSiigo,
+        )
+        self.nc_enviadas.append(cuerpo)
+        if self.al_crear_nc == "rechazo":
+            raise RechazoDeSiigo('HTTP 400: {"Code":"invalid_document"}')
+        if self.al_crear_nc == "sin_respuesta":
+            raise RuntimeError("timeout")
+        # Como la cuenta: sin `prefix`, el número es `name`.
+        nc = {"id": f"nc-{len(self.nc_en_siigo) + 1}",
+              "name": f"NC-1-{7505 + len(self.nc_en_siigo)}", "prefix": None,
+              "observations": cuerpo["observations"],
+              "stamp": {"status": "Draft"}}
+        self.nc_en_siigo.append(nc)
+        if self.al_crear_nc == "crea_y_muere":
+            raise RuntimeError("se cortó después de crear")
+        return nc
+
+    async def leer_nota_credito(self, siigo_id):
+        nc = dict(next(x for x in self.nc_en_siigo if x["id"] == siigo_id))
+        nc["stamp"] = {"accepted": {"status": "Accepted", "cude": "d" * 96},
+                       "draft": {"status": "Draft"},
+                       "rejected": {"status": "Rejected", "errors": "CAD01"},
+                       }[self.dian_nc]
+        return nc
+
+    async def buscar_nc_por_marca(self, *, desde, marca):
+        return next((n for n in self.nc_en_siigo
+                     if marca in n["observations"]), None)
 
     async def leer_factura(self, siigo_id):
         self.lecturas += 1
         f = dict(next(x for x in self.en_siigo if x["id"] == siigo_id))
+        # COMO LO DEVUELVE EL GET: bodega, centro de costo e impuestos
+        # EXPANDIDOS. La nota crédito tiene que aplanarlos.
+        c = f["_cuerpo"]
+        f.update({
+            "items": [{**it, "warehouse": {"id": it["warehouse"], "name": "ARRAYANES"},
+                       "taxes": [{"id": 6352, "name": "IVA 19%", "percentage": 19}]}
+                      for it in c["items"]],
+            "payments": [{"id": p["id"], "name": "Caja general Arrayanes",
+                          "value": p["value"]} for p in c["payments"]],
+            "customer": {"id": "x", "identification": c["customer"]["identification"],
+                         "branch_office": 0},
+            "seller": c["seller"], "cost_center": c.get("cost_center"),
+            "total": sum(p["value"] for p in c["payments"]),
+        })
         f["stamp"] = {
             "accepted": {"status": "Accepted", "cufe": "c" * 96},
             "draft": {"status": "Draft"},
@@ -104,11 +154,16 @@ class SiigoFalso:
         creada = {"id": f"siigo-{len(self.en_siigo) + 1}",
                   "name": f"FV-6-{n}", "prefix": "TARR", "number": n,
                   "observations": cuerpo["observations"],
-                  "stamp": {"status": "Draft", "cufe": None}}
+                  "stamp": {"status": "Draft", "cufe": None},
+                  "_cuerpo": cuerpo}
         self.en_siigo.append(creada)
         if self.al_crear == "crea_y_muere":
             raise RuntimeError("se cortó después de crear")
         return creada
+
+
+#  El cliente HTTP de la prueba en curso, para las que anulan por la API.
+_CLIENTE: dict = {}
 
 
 def _correr(c):
@@ -155,8 +210,9 @@ async def entorno(monkeypatch):
             "INSERT INTO retail.stock_ubicacion (ubicacion_id,variante_id,cantidad) "
             "VALUES ('tienda:arrayanes',:v,9)"), {"v": VARIANTE})
         await c.execute(text(
-            "INSERT INTO retail.permisos_pos (usuario_id,nombre,tiendas) "
-            "VALUES ('maria','María R.','{arrayanes}')"))
+            "INSERT INTO retail.permisos_pos "
+            "(usuario_id,nombre,tiendas,puede_anular_venta) "
+            "VALUES ('maria','María R.','{arrayanes}',true)"))
         # La tienda YA configurada para facturar: comprobante y vendedor.
         await c.execute(text(
             "UPDATE retail.cajas SET siigo_documento_id = :d "
@@ -172,6 +228,7 @@ async def entorno(monkeypatch):
         permisos={"retail": ["ver", "modificar"]})
 
     with TestClient(app) as c:
+        _CLIENTE["c"] = c
         t = c.post("/api/retail/caja/turno", json={
             "sesion_id": SESION, "tienda_id": "arrayanes",
             "caja_id": "arrayanes_caja1"}).json()
@@ -202,13 +259,17 @@ def _drenar(siigo, *, dentro_de=timedelta(minutes=1)):
     from backend.modules.retail.infrastructure.siigo.emisor_factura import (
         crear_manejador,
     )
+    from backend.modules.retail.infrastructure.siigo.emisor_nota_credito import (
+        crear_manejador as manejador_nc,
+    )
 
     async def ir():
         m = crear_motor(URL)
         try:
             return await DrenarOutbox(
                 UnidadDeTrabajoSQL(crear_fabrica(m)),
-                {"emitir_documento_fiscal": crear_manejador(siigo)},
+                {"emitir_documento_fiscal": crear_manejador(siigo),
+                 "emitir_nota_credito": manejador_nc(siigo)},
             ).ejecutar(ahora=datetime.now(timezone.utc) + dentro_de, limite=20)
         finally:
             await m.dispose()
@@ -594,3 +655,186 @@ def test_una_venta_anulada_antes_no_se_factura(entorno):
     siigo = SiigoFalso()
     assert _drenar(siigo).procesados == 1
     assert siigo.enviadas == []
+
+
+# ── ANULAR UNA VENTA QUE YA TENÍA FACTURA ───────────────────────────────────
+
+def _anular():
+    r = _CLIENTE["c"].post(f"/api/retail/ventas/{VENTA}/anular",
+                           json={"motivo": "cobrada dos veces"})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _docs(motor):
+    return [tuple(f) for f in _leer(
+        motor, "SELECT tipo, estado, numero FROM retail.documentos_fiscales "
+               "ORDER BY creado_en, tipo")]
+
+
+def _cola(motor):
+    return [tuple(f) for f in _leer(
+        motor, "SELECT tipo, estado FROM retail.outbox ORDER BY id")]
+
+
+def test_anular_una_venta_facturada_emite_su_nota_credito(entorno, monkeypatch):
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    siigo = SiigoFalso()
+    _drenar(siigo)
+    assert _anular()["exige_nota_credito"] is True
+
+    r = _drenar(siigo, dentro_de=timedelta(minutes=5))
+    assert r.procesados == 1, r.errores
+    assert _docs(entorno) == [("factura_electronica", "emitido", "TARR-11452"),
+                              ("nota_credito", "emitido", "NC-1-7505")]
+
+    [nc] = siigo.nc_enviadas
+    assert nc["invoice"] == "siigo-1"                 # contra ESA factura
+    assert nc["document"] == {"id": 11817}
+    assert nc["reason"] == 2                          # anulación, no devolución
+    assert nc["stamp"] == {"send": True}
+    # Copiada de la factura, no recalculada — y APLANADA: el GET devuelve la
+    # bodega y los impuestos expandidos, y así Siigo los descarta en silencio.
+    [f] = siigo.enviadas
+    assert nc["items"] == f["items"]
+    assert nc["items"][0]["warehouse"] == 37
+    assert nc["items"][0]["taxes"] == [{"id": 6352}]
+    assert nc["seller"] == 842 and nc["cost_center"] == 677
+    # La plata sale por donde entró: la caja de la tienda, no un saldo a favor.
+    assert nc["payments"] == [{"id": 8282, "value": 299800.01,
+                               "due_date": nc["date"]}]
+    assert nc["customer"]["identification"] == "222222222222"
+
+
+def test_la_nota_credito_tampoco_se_emite_dos_veces(entorno, monkeypatch):
+    """El mismo caso que justifica el diseño de la factura: Siigo la crea y la
+    respuesta se pierde. Dos notas crédito sobre una factura es acreditar el
+    doble de lo que se vendió."""
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    siigo = SiigoFalso()
+    _drenar(siigo)
+    _anular()
+
+    siigo.al_crear_nc = "crea_y_muere"
+    assert _drenar(siigo, dentro_de=timedelta(minutes=5)).reintentos == 1
+    siigo.al_crear_nc = "ok"
+    r = _drenar(siigo, dentro_de=timedelta(hours=3))
+    assert r.procesados == 1, r.errores
+    assert len(siigo.nc_enviadas) == 1 and len(siigo.nc_en_siigo) == 1
+    assert _docs(entorno)[1] == ("nota_credito", "emitido", "NC-1-7505")
+
+    _drenar(siigo, dentro_de=timedelta(hours=9))
+    assert len(siigo.nc_enviadas) == 1
+
+
+def test_la_nota_credito_espera_a_la_dian_sin_reenviar(entorno, monkeypatch):
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    siigo = SiigoFalso()
+    _drenar(siigo)
+    _anular()
+    siigo.dian_nc = "draft"
+    r = _drenar(siigo, dentro_de=timedelta(minutes=5))
+    assert (r.procesados, r.fallidos) == (0, 0)
+    assert _docs(entorno)[1] == ("nota_credito", "verificando", "NC-1-7505")
+
+    siigo.dian_nc = "accepted"
+    assert _drenar(siigo, dentro_de=timedelta(minutes=30)).procesados == 1
+    assert len(siigo.nc_enviadas) == 1
+    cude = _leer(entorno, "SELECT cufe FROM retail.documentos_fiscales "
+                          "WHERE tipo = 'nota_credito'")[0][0]
+    assert cude == "d" * 96
+
+
+def test_un_rechazo_de_la_nota_credito_queda_a_la_vista(entorno, monkeypatch):
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    siigo = SiigoFalso()
+    _drenar(siigo)
+    _anular()
+    siigo.al_crear_nc = "rechazo"
+    r = _drenar(siigo, dentro_de=timedelta(minutes=5))
+    assert r.fallidos == 1 and "invalid_document" in r.errores[0]
+    assert _docs(entorno)[1][:2] == ("nota_credito", "rechazado")
+    # La factura sigue siendo la factura: el rechazo de la NC no la toca.
+    assert _docs(entorno)[0] == ("factura_electronica", "emitido", "TARR-11452")
+    assert _estado(entorno)[0] == "emitido"
+
+
+def test_anular_antes_de_facturar_no_emite_ni_factura_ni_nota_credito(entorno, monkeypatch):
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    assert _anular()["exige_nota_credito"] is False
+    siigo = SiigoFalso()
+    _drenar(siigo)
+    assert siigo.enviadas == [] and siigo.nc_enviadas == []
+    assert _docs(entorno) == []
+
+
+def test_anulada_CON_LA_FACTURA_EN_CAMINO_no_queda_una_factura_viva(entorno, monkeypatch):
+    """El hueco: la factura está en Siigo esperando a la DIAN, y en ese minuto
+    la cajera anula. `AnularVenta` no ve factura y no encola nota crédito; el
+    emisor soltaba la venta por «anulada». Resultado: una factura validada de
+    una venta que no existe, y nadie que la anule."""
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    siigo = SiigoFalso()
+    siigo.dian = "draft"
+    _drenar(siigo)
+    assert _docs(entorno) == [("factura_electronica", "verificando", "TARR-11452")]
+
+    assert _anular()["exige_nota_credito"] is False      # todavía no había factura
+
+    siigo.dian = "accepted"
+    _drenar(siigo, dentro_de=timedelta(minutes=5))       # la factura termina…
+    assert ("emitir_nota_credito", "pendiente") in _cola(entorno)   # …y se encola su NC
+    r = _drenar(siigo, dentro_de=timedelta(minutes=10))
+    assert r.procesados == 1, r.errores
+    assert _docs(entorno) == [("factura_electronica", "emitido", "TARR-11452"),
+                              ("nota_credito", "emitido", "NC-1-7505")]
+    assert len(siigo.enviadas) == 1
+
+
+def test_anulada_con_el_envio_perdido_NO_se_envia_la_factura(entorno, monkeypatch):
+    """«Enviando» sin respuesta, y la venta se anula. Si la factura no llegó a
+    Siigo, mandarla ahora sería facturar una venta que ya no existe."""
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    siigo = SiigoFalso()
+    siigo.al_crear = "sin_respuesta"
+    _drenar(siigo)
+    _anular()
+    siigo.al_crear = "ok"
+    r = _drenar(siigo, dentro_de=timedelta(hours=3))
+    assert r.procesados == 1, r.errores
+    assert len(siigo.enviadas) == 1 and siigo.en_siigo == []
+    assert _docs(entorno) == [("factura_electronica", "fallido", None)]
+    assert _estado(entorno)[0] == "no_aplica"
+
+
+def test_una_factura_de_prueba_no_lleva_nota_credito(entorno):
+    """En modo prueba la factura no fue a la DIAN: Siigo no la deja acreditar.
+    Se borra allá."""
+    siigo = SiigoFalso()
+    _drenar(siigo)
+    _anular()
+    r = _drenar(siigo, dentro_de=timedelta(minutes=5))
+    assert siigo.nc_enviadas == []
+    nota = _leer(entorno, "SELECT ultimo_error FROM retail.outbox "
+                          "WHERE tipo = 'emitir_nota_credito'")[0][0]
+    assert "se borra en Siigo" in nota
+
+
+def test_sin_comprobante_de_nota_credito_espera(entorno, monkeypatch):
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    siigo = SiigoFalso()
+    _drenar(siigo)
+    _anular()
+    _ejecutar(entorno, "UPDATE retail.tiendas SET siigo_nc_documento_id = NULL")
+    assert _drenar(siigo, dentro_de=timedelta(minutes=5)).sin_manejador == 1
+    assert siigo.nc_enviadas == []
+
+
+def test_con_todo_apagado_la_nota_credito_tambien_espera(entorno, monkeypatch):
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    siigo = SiigoFalso()
+    _drenar(siigo)
+    _anular()
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "apagado")
+    assert _drenar(siigo, dentro_de=timedelta(minutes=5)).sin_manejador == 1
+    assert siigo.nc_enviadas == []

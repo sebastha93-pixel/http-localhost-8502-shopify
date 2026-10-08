@@ -1948,9 +1948,9 @@ class AnulacionSalida(BaseModel):
     numero: str
     total_revertido_centavos: int
     unidades_devueltas: int
-    # Si la factura ya salió, anular aquí NO la revierte ante la DIAN: hace
-    # falta una nota crédito. Se dice en la respuesta para que la pantalla lo
-    # muestre en vez de dejar creer que quedó todo deshecho.
+    # Si la factura ya salió, anular aquí no basta ante la DIAN: se encola
+    # su nota crédito (`emisor_nota_credito`). Se dice en la respuesta para
+    # que la pantalla lo muestre.
     exige_nota_credito: bool
 
 
@@ -2160,7 +2160,7 @@ def _resumir(evento: str, p: dict) -> str:
     if evento == "venta.cerrada":
         return f"{p.get('numero','')} · {pesos(p.get('total'))} · {p.get('unidades','?')} u"
     if evento == "venta.anulada":
-        aviso = " · falta nota crédito" if p.get("exige_nota_credito") else ""
+        aviso = " · lleva nota crédito" if p.get("exige_nota_credito") else ""
         return f"{p.get('numero','')} · {pesos(p.get('total'))} · {p.get('motivo','')}{aviso}"
     if evento == "descuento.aplicado":
         return f"{p.get('numero','')} · −{pesos(p.get('monto'))} · {p.get('motivo','')}"

@@ -21,14 +21,20 @@ __all__ = ["TIPO_CASO_DEVOLUCION", "abrir_caso_postventa", "MANEJADORES"]
 #  manejador APLAZA el trabajo sin gastarle intentos, así que encenderlo es
 #  cambiar una variable y lo que estaba en cola sale solo.
 #
-#  Lo que sigue SIN manejador: `emitir_nota_credito`. El drenador lo guarda
-#  igual, sin gastarle intentos.
+#  `emitir_nota_credito` anula ante la DIAN la factura de una venta ANULADA
+#  (`emisor_nota_credito`), bajo el mismo interruptor. La devolución de una
+#  prenda no pasa por ahí: abre un caso en Postventa y lo aprueba una persona.
 from backend.modules.retail.infrastructure.siigo.emisor_factura import (  # noqa: E402
     TIPO as TIPO_FACTURA,
     emitir_factura,
+)
+from backend.modules.retail.infrastructure.siigo.emisor_nota_credito import (  # noqa: E402
+    TIPO as TIPO_NOTA_CREDITO,
+    emitir_nota_credito,
 )
 
 MANEJADORES = {
     TIPO_CASO_DEVOLUCION: abrir_caso_postventa,
     TIPO_FACTURA: emitir_factura,
+    TIPO_NOTA_CREDITO: emitir_nota_credito,
 }

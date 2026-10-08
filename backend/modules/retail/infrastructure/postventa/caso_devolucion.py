@@ -88,6 +88,10 @@ def resumen_para_el_caso(payload: dict) -> str:
     if lineas:
         partes.append(" + ".join(
             f"{l.get('cantidad', 1)}× {l.get('sku', '?')}" for l in lineas))
+    if payload.get("factura"):
+        # LA FACTURA QUE HAY QUE ACREDITAR, con el número de Siigo. Cuando el
+        # POS la emitió, es el dato que ahorra buscarla por cédula.
+        partes.append(f"factura {payload['factura']}")
     if payload.get("total"):
         partes.append(f"{_pesos(payload['total'])} en {payload.get('reembolso', '')}"
                       .replace("_", " "))
@@ -129,6 +133,15 @@ async def abrir_caso_postventa(t, payload: dict) -> Optional[str]:
           JOIN retail.clientes c ON c.id = v.cliente_id
          WHERE v.id = :v
     """), {"v": payload.get("venta_id")})).mappings().first() or {}
+
+    factura = (await t.sesion.execute(text("""
+        SELECT numero FROM retail.documentos_fiscales
+         WHERE venta_id = :v AND tipo = 'factura_electronica'
+           AND estado = 'emitido' AND cufe IS NOT NULL
+         ORDER BY emitido_en DESC LIMIT 1
+    """), {"v": payload.get("venta_id")})).scalar()
+    if factura:
+        payload = {**payload, "factura": factura}
 
     caso = svc.crear_caso(
         tipo=tipo_postventa(payload["reembolso"]),

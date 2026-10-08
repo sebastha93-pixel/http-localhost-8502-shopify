@@ -119,13 +119,13 @@ class SiigoIO:
             return siigo_get(f"/invoices/{siigo_id}")
         return await asyncio.to_thread(ir)
 
-    async def crear_cliente(self, cuerpo: dict) -> dict:
-        """UN intento, como la factura: un cliente repetido en la
-        contabilidad se arregla fusionando a mano."""
+    async def _post_una_vez(self, ruta: str, cuerpo: dict) -> dict:
+        """UN intento. `siigo_post` reintenta solo ante un 502, y si el
+        documento sí se creó, ese reintento crea el segundo."""
         def ir():
             import httpx
             from backend.services import siigo as s
-            r = httpx.post(s.SIIGO_BASE + "/customers", json=cuerpo, timeout=60,
+            r = httpx.post(s.SIIGO_BASE + ruta, json=cuerpo, timeout=60,
                            headers={"Authorization": f"Bearer {s._get_token()}",
                                     "Partner-Id": os.getenv("SIIGO_PARTNER_ID", ""),
                                     "Content-Type": "application/json"})
@@ -134,6 +134,37 @@ class SiigoIO:
             if 400 <= r.status_code < 500 and r.status_code != 429:
                 raise RechazoDeSiigo(f"HTTP {r.status_code}: {r.text[:400]}")
             raise RuntimeError(f"Siigo HTTP {r.status_code}: {r.text[:200]}")
+        return await asyncio.to_thread(ir)
+
+    async def crear_cliente(self, cuerpo: dict) -> dict:
+        """Un cliente repetido en la contabilidad se arregla fusionando a
+        mano: tampoco se reintenta."""
+        return await self._post_una_vez("/customers", cuerpo)
+
+    # ── Notas crédito ───────────────────────────────────────────────────────
+
+    async def crear_nota_credito(self, cuerpo: dict) -> dict:
+        return await self._post_una_vez("/credit-notes", cuerpo)
+
+    async def leer_nota_credito(self, siigo_id: str) -> dict:
+        def ir():
+            from backend.services.siigo import siigo_get
+            return siigo_get(f"/credit-notes/{siigo_id}")
+        return await asyncio.to_thread(ir)
+
+    async def buscar_nc_por_marca(self, *, desde: str, marca: str) -> Optional[dict]:
+        def ir():
+            from backend.services.siigo import siigo_get
+            for pagina in range(1, 21):
+                r = siigo_get("/credit-notes", {
+                    "created_start": desde, "page": pagina, "page_size": 100})
+                filas = r.get("results", []) if isinstance(r, dict) else []
+                for f in filas:
+                    if marca in (f.get("observations") or ""):
+                        return f
+                if len(filas) < 100:
+                    return None
+            return None
         return await asyncio.to_thread(ir)
 
     async def tipo_documento(self, documento_id: int) -> Optional[dict]:
@@ -173,21 +204,7 @@ class SiigoIO:
         return await asyncio.to_thread(ir)
 
     async def crear_factura(self, cuerpo: dict) -> dict:
-        """UN intento. `siigo_post` reintenta solo ante un 502, y si la
-        factura sí se creó, ese reintento crea la segunda."""
-        def ir():
-            import httpx
-            from backend.services import siigo as s
-            r = httpx.post(s.SIIGO_BASE + "/invoices", json=cuerpo, timeout=60,
-                           headers={"Authorization": f"Bearer {s._get_token()}",
-                                    "Partner-Id": os.getenv("SIIGO_PARTNER_ID", ""),
-                                    "Content-Type": "application/json"})
-            if r.status_code in (200, 201):
-                return r.json()
-            if 400 <= r.status_code < 500 and r.status_code != 429:
-                raise RechazoDeSiigo(f"HTTP {r.status_code}: {r.text[:400]}")
-            raise RuntimeError(f"Siigo HTTP {r.status_code}: {r.text[:200]}")
-        return await asyncio.to_thread(ir)
+        return await self._post_una_vez("/invoices", cuerpo)
 
 
 # ── El manejador ────────────────────────────────────────────────────────────
@@ -227,14 +244,6 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
     """), {"v": venta_id})).mappings().first()
     if v is None:
         raise RechazoDefinitivo(f"no existe la venta {venta_id}")
-    if v["estado"] == "anulada":
-        return "venta anulada antes de facturarse: no se emite"
-
-    # Lo que falta de CONFIGURACIÓN no es un fallo de la venta: se espera.
-    if not v["siigo_documento_id"]:
-        raise Aplazar(f"la caja {v['caja_id']} no tiene comprobante de Siigo")
-    if not v["siigo_vendedor_id"]:
-        raise Aplazar(f"la tienda {v['tienda_id']} no tiene vendedor de Siigo")
 
     doc = (await t.sesion.execute(text("""
         SELECT id, estado, numero, documento_externo_id, creado_en
@@ -242,6 +251,20 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
          WHERE venta_id = :v AND tipo = 'factura_electronica'
          ORDER BY creado_en DESC LIMIT 1
     """), {"v": venta_id})).mappings().first()
+
+    anulada = v["estado"] == "anulada"
+    if anulada and (doc is None or doc["estado"] not in ("enviando", "verificando")):
+        # Se anuló antes de que saliera nada hacia Siigo: no se emite.
+        return "venta anulada antes de facturarse: no se emite"
+    # SI SE ANULÓ CON LA FACTURA EN CAMINO, NO SE SUELTA. Puede que ya exista
+    # en Siigo: hay que terminar de averiguarlo, y si existe, anularla con
+    # nota crédito. Lo que no se hace es enviarla (más abajo).
+
+    # Lo que falta de CONFIGURACIÓN no es un fallo de la venta: se espera.
+    if not v["siigo_documento_id"]:
+        raise Aplazar(f"la caja {v['caja_id']} no tiene comprobante de Siigo")
+    if not v["siigo_vendedor_id"]:
+        raise Aplazar(f"la tienda {v['tienda_id']} no tiene vendedor de Siigo")
     if doc and doc["estado"] == "emitido":
         return "ya estaba emitida"
     if doc and doc["estado"] in ("rechazado", "discrepante"):
@@ -267,6 +290,19 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
         if creada:
             log.warning("[retail-fiscal] %s ya estaba en Siigo: se adopta, "
                         "no se reenvía", v["numero"])
+
+    if creada is None and anulada:
+        # El envío nunca llegó a Siigo y la venta ya no existe: no se manda.
+        await t.sesion.execute(text("""
+            UPDATE retail.documentos_fiscales
+               SET estado = 'fallido',
+                   ultimo_error = 'la venta se anuló antes de que la factura llegara a Siigo'
+             WHERE venta_id = :v AND tipo = 'factura_electronica'
+        """), {"v": venta_id})
+        await t.sesion.execute(text(
+            "UPDATE retail.ventas SET estado_fiscal = 'no_aplica' WHERE id = :v"),
+            {"v": venta_id})
+        return "venta anulada y la factura no llegó a Siigo: no se emite"
 
     if creada is None:
         cuerpo = await _armar(t, v, io, documento_id=documento_id, fecha=fecha,
@@ -419,6 +455,17 @@ async def _anotar_emitida(t, v, factura: dict, *, en_modo: str) -> str:
                  "validada_dian": bool(cufe),
                  "diferencia_centavos": diferencia})
     log.info("[retail-fiscal] %s → %s (%s)", v["numero"], numero, en_modo)
+
+    if v["estado"] == "anulada":
+        # La venta se anuló mientras su factura estaba en camino. `AnularVenta`
+        # no encoló la nota crédito —en ese momento no había factura— y sin
+        # esto quedaría una factura viva de una venta que no existe.
+        await t.outbox.encolar(
+            tipo="emitir_nota_credito", agregado_tipo="venta",
+            agregado_id=v["id"],
+            payload={"venta_id": v["id"],
+                     "motivo": "anulada con la factura en trámite"})
+        return f"factura {numero} ({en_modo}) de una venta ANULADA: se encola su nota crédito"
     return f"factura {numero} ({en_modo})"
 
 

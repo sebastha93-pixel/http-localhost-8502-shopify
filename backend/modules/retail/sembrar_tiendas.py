@@ -49,6 +49,8 @@ TIENDAS = [
         **_EMPRESA,
         "id": "florida", "nombre": "Florida",
         "siigo_bodega_id": 48, "siigo_centro_costo_id": 774,
+        # «Nota Crédito Electrónica», el que usa Postventa. Ver migración 0026.
+        "siigo_nc_documento_id": 11817,
         "direccion": "CALLE 71 65 150 SEGUNDA ETAPA LC 221",
         "telefono": "3122851520",
         # «prefijo FL desde el número 1 al 10000», aprobada el 2026-04-10.
@@ -62,6 +64,8 @@ TIENDAS = [
         **_EMPRESA,
         "id": "arrayanes", "nombre": "Arrayanes",
         "siigo_bodega_id": 37, "siigo_centro_costo_id": 677,
+        # «Nota Crédito Electrónica», el que usa Postventa. Ver migración 0026.
+        "siigo_nc_documento_id": 11817,
         "direccion": "CR 50A 36 90 LC 231, Itagüí",
         "telefono": "3005654971",
         # De la factura TARR-11389 del 30/09/2026. OJO: aprobada el

@@ -15,10 +15,11 @@ EL LIBRO DE INVENTARIO ES APPEND-ONLY. No se borra el asiento de la venta: se
 escribe el contrario. Un libro que se puede editar no sirve para cuadrar nada,
 porque cualquier diferencia se puede hacer desaparecer.
 
-LO QUE ESTO NO HACE, y hay que decirlo: **no emite nota crédito**. Si la venta
-ya tenía factura electrónica emitida, anularla aquí la deja anulada en el POS y
-viva ante la DIAN. Eso se resuelve en la Fase 3; mientras tanto se encola en el
-outbox y el endpoint avisa.
+LA NOTA CRÉDITO NO SE EMITE AQUÍ, SE ENCOLA. Si la venta ya tenía factura
+electrónica, anularla en el POS la deja viva ante la DIAN hasta que salga su
+nota crédito: la emite `emisor_nota_credito` desde la cola, con las mismas
+garantías que la factura. Si la factura todavía estaba en camino, quien encola
+la nota crédito es el emisor de facturas, cuando termina.
 """
 from __future__ import annotations
 
@@ -40,8 +41,8 @@ class ResultadoAnulacion:
     numero: str
     total_revertido_centavos: int
     unidades_devueltas: int
-    #  True si la venta ya tenía documento fiscal emitido. La anulación en el
-    #  POS NO lo revierte: hace falta una nota crédito, que es Fase 3.
+    #  True si la venta ya tenía documento fiscal emitido: se encoló su nota
+    #  crédito.
     exige_nota_credito: bool
 
 
@@ -145,7 +146,7 @@ class AnularVenta:
 
             if exige_nc:
                 # La factura sigue viva ante la DIAN hasta que salga la nota
-                # crédito. Se encola para la Fase 3 en vez de dejarlo al aire.
+                # crédito: se encola aquí, en la misma transacción.
                 await t.outbox.encolar(
                     tipo="emitir_nota_credito", agregado_tipo="venta",
                     agregado_id=venta_id,

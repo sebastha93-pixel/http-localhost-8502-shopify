@@ -149,8 +149,8 @@ export function DialogoAnular({
             <>
               {" "}
               <strong>
-                La factura ya salió: esto no la revierte ante la DIAN, hace
-                falta una nota crédito.
+                La factura ya salió: al anular se genera su nota crédito
+                ante la DIAN. Puede tardar unos minutos.
               </strong>
             </>
           )}
