@@ -44,6 +44,43 @@ por correo, y el caso de Postventa que llegaba sin ticket ni clienta.
 Por eso el piloto va **en paralelo**: Siigo POS sigue emitiendo el documento
 legal y el POS lleva la venta, la caja y el inventario.
 
+### El emisor de facturas (2026-10-08) — construido y APAGADO
+
+La decisión fue no pelear por los comprobantes de tienda: se crean
+resoluciones nuevas de **factura electrónica de venta normal**, que Siigo sí
+expone por API. Con eso el POS emite. El emisor ya existe
+(`infrastructure/siigo/emisor_factura.py`) y atiende
+`emitir_documento_fiscal`; lo gobierna `RETAIL_FISCAL_MODO`:
+
+| Modo | Qué hace |
+|---|---|
+| `apagado` (por defecto) | No emite. Los trabajos esperan sin gastar intentos. |
+| `prueba` | Crea el documento en Siigo **sin estamparlo**: no va a la DIAN, queda revisable y se puede borrar. |
+| `produccion` | Estampa. Irreversible. |
+
+**Una venta, una factura.** Siigo no tiene llave de idempotencia: si el envío
+se corta sin respuesta, no se sabe si la factura se creó. Por eso antes de
+enviar se confirma en la base un «voy a enviar», se envía UNA vez, y al
+reintentar primero se busca la factura en Siigo por su marca
+(`observations: POS <número> · <venta>`). Un 4xx no se reintenta.
+
+Para encender una tienda hacen falta, y mientras falten el trabajo ESPERA:
+
+* `cajas.siigo_documento_id` — el id del comprobante nuevo (el número visible
+  NO es el id; sale de `/document-types`).
+* `tiendas.siigo_vendedor_id` — un usuario de Siigo a cuyo nombre queda la
+  venta.
+* Que la clienta exista en Siigo. Las ventas sin clienta van a consumidor
+  final (222222222222). **Crear terceros desde el POS todavía no existe**: una
+  venta a una clienta que no está en Siigo espera.
+
+Lo que NO se ha probado, porque sólo lo prueba Siigo: que acepte el documento.
+En particular el redondeo —Siigo redondea la base de cada línea, y dos prendas
+de $149.900 le dan $299.800,01; los pagos se cuadran contra ESE total— está
+deducido, no verificado. La primera emisión va en `prueba`.
+
+Sigue sin manejador: `emitir_nota_credito`.
+
 **Falta probar con las manos**, en la tienda: la impresora térmica (la tirilla
 sale por `window.print()` a 80 mm; sin impresión directa configurada, el
 navegador abre su diálogo en cada venta) y el lector de códigos.

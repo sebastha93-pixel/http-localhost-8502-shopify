@@ -16,12 +16,19 @@ __all__ = ["TIPO_CASO_DEVOLUCION", "abrir_caso_postventa", "MANEJADORES"]
 #  EL REGISTRO. Una sola tabla `tipo → manejador`, para que «qué sabe hacer el
 #  drenador» se responda leyendo cinco líneas y no rastreando llamadas.
 #
-#  Lo que NO está aquí y se encola desde hoy: `emitir_documento_fiscal` y
-#  `emitir_nota_credito`. No es un olvido — los comprobantes de tienda (FL,
-#  FV-6, FV-11, FV-12) no salen en `/document-types` de Siigo, así que
-#  `POST /invoices` los rechaza. Es una gestión con Siigo, no código. Mientras
-#  tanto el drenador los deja en la cola SIN gastarles intentos (ver
-#  `drenar_outbox.py`), así que el día que se resuelva se emiten solos.
+#  `emitir_documento_fiscal` ya tiene quien lo atienda (`emisor_factura`).
+#  Con `RETAIL_FISCAL_MODO` apagado —el valor por defecto— no emite nada: el
+#  manejador APLAZA el trabajo sin gastarle intentos, así que encenderlo es
+#  cambiar una variable y lo que estaba en cola sale solo.
+#
+#  Lo que sigue SIN manejador: `emitir_nota_credito`. El drenador lo guarda
+#  igual, sin gastarle intentos.
+from backend.modules.retail.infrastructure.siigo.emisor_factura import (  # noqa: E402
+    TIPO as TIPO_FACTURA,
+    emitir_factura,
+)
+
 MANEJADORES = {
     TIPO_CASO_DEVOLUCION: abrir_caso_postventa,
+    TIPO_FACTURA: emitir_factura,
 }
