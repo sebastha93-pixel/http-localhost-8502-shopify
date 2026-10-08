@@ -381,3 +381,47 @@ def test_un_administrador_las_ve_todas_sin_estar_asignado(entorno, monkeypatch):
         permisos={})
     ids = [x["caja_id"] for x in c.get("/api/retail/cajas").json()]
     assert len(ids) == 3
+
+
+# ── El vuelto no es un faltante ─────────────────────────────────────────────
+
+def test_una_venta_con_vuelto_CUADRA_con_el_cajon_contado(entorno):
+    """LA PRUEBA QUE FALTABA, y que habría evitado el peor bug del módulo.
+
+    Todas las ventas de prueba pagaban el valor exacto. En la tienda casi
+    ninguna lo hace. La clienta entrega $120.000 por una prenda de $100.000,
+    se lleva $20.000 de vuelto, y al cajón entran $100.000.
+
+    El movimiento de caja se anotaba por lo ENTREGADO, así que el arqueo
+    esperaba $320.000 donde había $300.000: con el cajón contado al peso, el
+    cierre decía «faltan $20.000» — y se lo decía a la cajera, todos los días,
+    por la suma de todos los vueltos del turno.
+    """
+    c, motor = entorno
+    turno = _abrir_arrayanes(c).json()           # base $200.000
+    r = c.post("/api/retail/ventas/cerrar", json={
+        "venta_id": VENTA,
+        "numero": f"{turno['prefijo']}-{turno['consecutivo_siguiente']}",
+        "tienda_id": "arrayanes", "caja_id": "arrayanes_caja1",
+        "sesion_id": SESION, "ubicacion_id": "tienda:arrayanes",
+        "lineas": [{"sku": "92611-1T10", "cantidad": 1,
+                    "precio_unitario_centavos": PRECIO,
+                    "descripcion": "Jean · 10"}],
+        "pagos": [{"medio_pago_id": "efectivo_arrayanes",
+                   "monto_centavos": 12_000_000, "es_efectivo": True}]})
+    assert r.status_code == 200, r.text
+    assert r.json()["vuelto_centavos"] == 2_000_000
+
+    # A la caja entró lo que QUEDA; la tirilla conserva lo entregado.
+    assert _leer(motor, "SELECT monto FROM retail.movimientos_caja "
+                        "WHERE tipo = 'venta'") == [(PRECIO,)]
+    assert _leer(motor, "SELECT monto FROM retail.venta_pagos") == [(12_000_000,)]
+
+    # El cajón de verdad: $200.000 de base + $100.000 = seis billetes de $50.000.
+    cierre = c.post("/api/retail/caja/cierre", json={
+        "sesion_id": SESION,
+        "conteos": [{"medio_pago_id": "efectivo_arrayanes",
+                     "piezas": {"5000000": 6}}]})
+    assert cierre.status_code == 200, cierre.text
+    assert cierre.json()["diferencia_centavos"] == 0
+    assert cierre.json()["cuadro"] is True

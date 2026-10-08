@@ -17,7 +17,7 @@ TRES TRAMPAS CLÁSICAS DE UN OUTBOX, y cómo se resuelven aquí:
    declaración. Por eso lo primero que hace cada pasada es RESCATAR lo que
    lleva demasiado tiempo en `procesando`.
 
-3. **Un tipo sin manejador tratado como un fallo.** `emitir_factura` está
+3. **Un tipo sin manejador tratado como un fallo.** `emitir_documento_fiscal` está
    encolándose desde antes de que exista su manejador. Contarlo como intento
    fallido lo llevaría a `fallido` en ocho pasadas — o sea, tirar un documento
    fiscal a la basura por una función que todavía no se ha escrito. Aquí se

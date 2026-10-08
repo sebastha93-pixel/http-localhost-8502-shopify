@@ -335,6 +335,33 @@ class Venta:
         sobra = self.pagado() - self.total()
         return sobra if sobra.es_positivo() else self._cero()
 
+    def cobros_netos(self) -> list:
+        """Lo que de verdad ENTRA por cada pago: `[(pago, neto), …]`.
+
+        EL VUELTO SALE DEL EFECTIVO, y por eso lo que queda en el cajón no es
+        lo que la clienta entregó. Paga $300.000 por una venta de $299.800: al
+        cajón entran $299.800, no $300.000.
+
+        Antes el movimiento de caja se anotaba por lo ENTREGADO, y el arqueo
+        esperaba plata que ya se había devuelto: cada venta en efectivo con
+        vuelto dejaba a la cajera «corta» por el vuelto. Con un conteo exacto,
+        el cierre decía «no cuadró» — y lo decía de ella.
+
+        `venta_pagos` sigue guardando lo entregado, que es lo que va en la
+        tirilla («efectivo $300.000 · cambio $200»). Esto es sólo para la
+        caja.
+        """
+        pendiente = self.vuelto()
+        netos = []
+        for pago in self.pagos:
+            neto = pago.monto
+            if pago.es_efectivo and pendiente.es_positivo():
+                sale = pendiente if pendiente <= neto else neto
+                neto = neto - sale
+                pendiente = pendiente - sale
+            netos.append((pago, neto))
+        return netos
+
     # ── Cierre ──────────────────────────────────────────────────────────────
 
     def cerrar(self, ahora: datetime) -> VentaCerrada:

@@ -16,7 +16,7 @@ __all__ = ["TIPO_CASO_DEVOLUCION", "abrir_caso_postventa", "MANEJADORES"]
 #  EL REGISTRO. Una sola tabla `tipo → manejador`, para que «qué sabe hacer el
 #  drenador» se responda leyendo cinco líneas y no rastreando llamadas.
 #
-#  Lo que NO está aquí y se encola desde hoy: `emitir_factura` y
+#  Lo que NO está aquí y se encola desde hoy: `emitir_documento_fiscal` y
 #  `emitir_nota_credito`. No es un olvido — los comprobantes de tienda (FL,
 #  FV-6, FV-11, FV-12) no salen en `/document-types` de Siigo, así que
 #  `POST /invoices` los rechaza. Es una gestión con Siigo, no código. Mientras

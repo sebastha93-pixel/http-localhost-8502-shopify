@@ -249,7 +249,7 @@ En este orden, porque cada uno desbloquea al siguiente:
 
 * **No se puede facturar.** ~~No existe el consumidor del outbox.~~ El
   consumidor SÍ existe y corre cada dos minutos; lo que falta es el manejador
-  de `emitir_factura`, y eso está bloqueado en SIIGO, no aquí: los comprobantes
+  de `emitir_documento_fiscal`, y eso está bloqueado en SIIGO, no aquí: los comprobantes
   de tienda (FL, FV-6, FV-11, FV-12) no salen en `/document-types`, así que
   `POST /invoices` los rechaza. Mientras tanto la cola guarda esos trabajos
   **sin gastarles intentos**, así que el día que se destrabe se emiten solos.

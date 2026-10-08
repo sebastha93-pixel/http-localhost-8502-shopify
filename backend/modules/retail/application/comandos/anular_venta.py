@@ -111,10 +111,15 @@ class AnularVenta:
 
             # 3 · La plata sale del arqueo, un movimiento por medio de pago.
             sesion = await t.turnos.cargar(fila["sesion_id"])
-            for pago in venta.pagos:
+            # Se devuelve el NETO, el mismo que entró al cobrar. Si pagó
+            # $300.000 por $299.800 se le devuelven $299.800: los otros $200
+            # ya se los llevó como vuelto.
+            for pago, neto in venta.cobros_netos():
+                if neto.es_cero():
+                    continue
                 sesion.registrar_anulacion(
                     medio_pago_id=pago.medio_pago_id,
-                    monto=Dinero(pago.monto.centavos, venta.moneda),
+                    monto=Dinero(neto.centavos, venta.moneda),
                     es_efectivo=pago.es_efectivo, venta_id=venta_id,
                     usuario_id=usuario_id)
                 await t.turnos.anotar_movimiento(
@@ -122,7 +127,7 @@ class AnularVenta:
                     # confunda un 1 con una l al leer un número en voz alta.
                     movimiento_id=f"{venta_id[:20]}AN9{pago.numero:03d}"[:26],
                     sesion_id=fila["sesion_id"], tipo="anulacion",
-                    monto=-pago.monto.centavos, motivo=f"anulación {venta.numero}",
+                    monto=-neto.centavos, motivo=f"anulación {venta.numero}",
                     usuario_id=usuario_id, medio_pago_id=pago.medio_pago_id,
                     autorizado_por=usuario_id, ahora=ahora)
 

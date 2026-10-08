@@ -6,6 +6,8 @@ ahora sería escribir código para un caso de uso que todavía no existe.
 """
 from __future__ import annotations
 
+import hashlib
+
 from datetime import datetime
 from typing import Optional
 
@@ -26,7 +28,14 @@ class RepositorioCajaSQL:
                               usuario_id: str, ahora: datetime) -> None:
         # El id se deriva de la venta y el medio para que reintentar el mismo
         # cierre no sume dos veces la misma plata al arqueo.
-        mov_id = f"{venta_id[:20]}{abs(hash(medio_pago_id)) % 10**6:06d}"[:26].upper()
+        #
+        # CON SHA-256, NO CON `hash()`. El `hash()` de Python lleva una sal
+        # distinta en cada proceso: el mismo medio daba un id diferente en
+        # cada worker y tras cada despliegue, así que el reintento que esto
+        # dice impedir habría sumado dos veces. No pasó porque la venta ya se
+        # protege por su propia llave — pero el código no hacía lo que afirma.
+        huella = int(hashlib.sha256(medio_pago_id.encode()).hexdigest(), 16)
+        mov_id = f"{venta_id[:20]}{huella % 10**6:06d}"[:26].upper()
         await self._s.execute(T.movimientos_caja.insert().values(
             id=mov_id, sesion_id=sesion_id, tipo="venta",
             medio_pago_id=medio_pago_id, monto=monto_centavos, motivo="venta",
