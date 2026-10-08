@@ -348,7 +348,9 @@ export interface MedioResumen {
   /** Un medio que no entra al arqueo (crédito) igual hay que declararlo, pero
    *  no hay nada físico que contar: se prellena y se bloquea. */
   entra_al_arqueo: boolean;
-  total_centavos: number;
+  /** `null` en cierre ciego para lo que se cuenta: incluye la base, así que es
+   *  justo lo que debería haber en el cajón. Se revela al cerrar. */
+  total_centavos: number | null;
 }
 
 export interface ResumenCierre {

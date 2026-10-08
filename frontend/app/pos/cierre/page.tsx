@@ -112,7 +112,7 @@ function PantallaCierre({ CAJA }: { CAJA: string }) {
                 medio_pago_id: m.medio_pago_id,
                 contado_centavos: m.entra_al_arqueo
                   ? desdePesosTecleados(contados[m.medio_pago_id] ?? "")
-                  : m.total_centavos,
+                  : m.total_centavos ?? 0,
               },
         );
 
@@ -356,14 +356,23 @@ function ResumenTurno({
           <span className="text-[var(--pos-700)]">{m.nombre}</span>
           {/* Ojo: el efectivo INCLUYE la base. Mostrarlo sin decirlo haría que
               la cajera lo leyera como «vendí esto en efectivo» y contara mal. */}
-          <span className="tabular font-semibold">
-            {formatear(m.total_centavos)}
-            {m.es_efectivo && (
-              <span className="ml-1.5 font-normal text-[var(--pos-600)]">
-                (con base)
-              </span>
-            )}
-          </span>
+          {m.total_centavos === null ? (
+            // CIERRE CIEGO. Este total lleva la base: es lo que debería haber
+            // en el cajón. Pintarlo aquí, encima del formulario donde se
+            // cuenta, hacía que el conteo no midiera nada.
+            <span className="text-[12px] text-[var(--pos-600)]">
+              se ve al cerrar
+            </span>
+          ) : (
+            <span className="tabular font-semibold">
+              {formatear(m.total_centavos)}
+              {m.es_efectivo && (
+                <span className="ml-1.5 font-normal text-[var(--pos-600)]">
+                  (con base)
+                </span>
+              )}
+            </span>
+          )}
         </div>
       ))}
 
@@ -461,7 +470,7 @@ function CajaCerrada({
                 ? totalDe(piezas)
                 : m.entra_al_arqueo
                   ? desdePesosTecleados(contados[m.medio_pago_id] ?? "")
-                  : m.total_centavos,
+                  : m.total_centavos ?? 0,
             )}
           />
         ))}

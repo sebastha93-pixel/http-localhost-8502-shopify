@@ -627,10 +627,15 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
             : null,
         }));
       }
+      // EL VUELTO SE CALCULA AQUÍ, igual que con red. Estaba fijo en cero: sin
+      // conexión la pantalla de venta cerrada no decía cuánto devolver —el
+      // papel sí—, y es el número que la cajera mira con el billete en la mano.
+      const entregado = pagos.reduce((a, p) => a + p.monto_centavos, 0);
       setTicket({
         venta_id: ventaId.current, numero,
-        total_centavos: totales.total, pagado_centavos: totales.total,
-        vuelto_centavos: 0, iva_centavos: totales.iva,
+        total_centavos: totales.total, pagado_centavos: entregado,
+        vuelto_centavos: Math.max(0, entregado - totales.total),
+        iva_centavos: totales.iva,
         descuento_centavos: totales.descuento,
         estado_fiscal: "pendiente", duplicada: false,
         pendiente_de_envio: true,
@@ -835,6 +840,7 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
                 <PanelCobro
                   total={totales.total}
                   medios={contexto?.medios_pago ?? []}
+                  emiteFactura={Boolean(contexto?.tiene_resolucion)}
                   onCancelar={() => setFase("vendiendo")}
                   onConfirmar={cobrar}
                 />

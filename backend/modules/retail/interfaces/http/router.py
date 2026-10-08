@@ -950,7 +950,12 @@ class MedioResumen(BaseModel):
     # declararlo, pero no se cuenta: no hay nada físico. La pantalla lo
     # prellena con el total del sistema y lo deja de sólo lectura.
     entra_al_arqueo: bool
-    total_centavos: int
+    # `None` en cierre ciego, para los medios que SE CUENTAN. Este total
+    # incluye la base: es, literalmente, lo que debería haber en el cajón.
+    # Mandarlo equivale a mandar el esperado con otro nombre — que es lo que
+    # pasaba: `esperado_por_medio` se ocultaba con cuidado y esta cifra, que es
+    # la misma, salía en la respuesta y se pintaba encima del formulario.
+    total_centavos: Optional[int] = None
 
 
 class MovimientoManual(BaseModel):
@@ -1076,7 +1081,12 @@ async def resumen_cierre(
                              nombre=m["nombre"], tipo=m.get("tipo", "otro"),
                              es_efectivo=m["es_efectivo"],
                              entra_al_arqueo=m["entra_al_arqueo"],
-                             total_centavos=int(m["total"]))
+                             # Lo que NO se cuenta (un crédito a 30 días) sí
+                             # viaja: la pantalla lo necesita para declararlo
+                             # y no hay nada que medir con él.
+                             total_centavos=(int(m["total"])
+                                             if puede_ver or not m["entra_al_arqueo"]
+                                             else None))
                 for m in datos["medios"]],
         base_inicial_centavos=int(cab["base_inicial"]),
         ventas_en_borrador=borradores,

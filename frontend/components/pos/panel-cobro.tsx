@@ -38,11 +38,16 @@ interface PagoLocal {
 export function PanelCobro({
   total,
   medios,
+  emiteFactura = false,
   onCancelar,
   onConfirmar,
 }: {
   total: number;
   medios: MedioPago[];
+  /** ¿Esta tienda EMITE factura desde el POS? Sin eso, avisar que «la
+   *  factura de este medio queda pendiente» da a entender que con los demás
+   *  sí sale — y hoy no sale con ninguno. */
+  emiteFactura?: boolean;
   onCancelar: () => void;
   onConfirmar: (
     pagos: {
@@ -204,7 +209,7 @@ export function PanelCobro({
           La venta se cobra igual —la caja nunca se bloquea por Siigo— pero
           quien cobra tiene derecho a saber que ese documento va a quedar
           esperando, en vez de descubrirlo cuando la clienta reclame factura. */}
-      {!medio.factura_lista && (
+      {emiteFactura && !medio.factura_lista && (
         <p className="mb-3 border-l-2 border-[var(--pos-accent)] bg-[var(--pos-accent)]/10 py-2 pl-3 text-[12px] leading-relaxed text-[var(--pos-900)]">
           <b>{medio.nombre}</b> todavía no tiene forma de pago configurada en
           Siigo. La venta se registra y se cobra normal; la factura electrónica

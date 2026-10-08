@@ -199,3 +199,46 @@ def test_las_lineas_devueltas_conservan_su_precio_unitario():
     assert d.lineas[0] == LineaDevuelta(
         sku="MD1042-10", cantidad=2,
         precio_unitario_con_iva_centavos=10_000_000)
+
+
+# ── El caso que llega a Postventa ───────────────────────────────────────────
+
+def test_el_caso_dice_de_que_venta_se_trata():
+    """EL CASO LLEGABA VACÍO: «reembolso · producto defectuoso · florida».
+
+    Ni el ticket, ni la prenda, ni el valor. Quien lo abría para hacer la nota
+    crédito no tenía por dónde empezar, y todo eso viajaba ya en el mensaje de
+    la cola — no se pasaba. Se vio procesando una devolución de prueba y
+    mirando lo que recibía Postventa.
+    """
+    from backend.modules.retail.infrastructure.postventa.caso_devolucion import (
+        resumen_para_el_caso,
+    )
+
+    texto = resumen_para_el_caso({
+        "motivo": "defecto", "numero_venta": "ARRPOS-11390",
+        "reembolso": "efectivo", "total": 14990000,
+        "tienda_id": "florida", "tienda_venta_id": "arrayanes",
+        "lineas": [{"sku": "12617-2T6", "cantidad": 1}],
+    })
+    assert "ticket ARRPOS-11390" in texto
+    assert "1× 12617-2T6" in texto
+    assert "$149.900 en efectivo" in texto
+    # Se devolvió en Florida lo vendido en Arrayanes: la factura que hay que
+    # anular es de Arrayanes, y eso tiene que estar escrito.
+    assert "vendido en arrayanes" in texto
+
+
+def test_si_se_devuelve_donde_se_compro_no_se_repite_la_tienda():
+    from backend.modules.retail.infrastructure.postventa.caso_devolucion import (
+        resumen_para_el_caso,
+    )
+
+    texto = resumen_para_el_caso({
+        "motivo": "talla", "numero_venta": "FL-1537", "reembolso": "credito_tienda",
+        "total": 11992000, "tienda_id": "florida", "tienda_venta_id": "florida",
+        "lineas": [{"sku": "12617-2T6", "cantidad": 2}],
+    })
+    assert "vendido en" not in texto
+    assert "$119.920 en credito tienda" in texto
+    assert texto.startswith("POS · talla")        # el motivo sigue adelante

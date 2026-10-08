@@ -231,13 +231,17 @@ export function Tirilla({ datos }: { datos: Datos }) {
             </div>
           )}
         </>
-      ) : (
+      ) : datos.resolucion_dian ? (
         <div className="t-centro t-chico">
           {datos.estado_fiscal === "pendiente" || datos.estado_fiscal === "enviando"
             ? "La factura electrónica se envía por correo."
             : "Sin factura electrónica asociada."}
         </div>
-      )}
+      ) : null /* SIN RESOLUCIÓN NO SE PROMETE NADA. Este papel decía «la
+                  factura electrónica se envía por correo» en CADA venta, y la
+                  tienda todavía no emite desde el POS: era una promesa falsa
+                  impresa y entregada a la clienta. El encabezado ya dice lo
+                  que es —documento interno—, y eso basta. */}
 
       {datos.mensaje && (
         <>

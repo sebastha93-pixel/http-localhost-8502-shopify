@@ -175,6 +175,15 @@ def test_anular_marca_devuelve_stock_y_saca_la_plata(entorno):
                params={"sesion_id": SESION}).json()
     assert d2["esperado_por_medio"]["efectivo"] == BASE
 
+    # 3b · Y EL RESUMEN SUMA. Vender y anular tiene que dar ventas netas en
+    # CERO: brutas − anuladas. `brutas` venía ya sin las anuladas y la pantalla
+    # se las volvía a restar, así que el cierre mostraba «Ventas netas
+    # −$339.800» por una venta que sencillamente no ocurrió.
+    assert d2["ventas_brutas_centavos"] == PRECIO * 2
+    assert d2["monto_anulado_centavos"] == PRECIO * 2
+    assert d2["ventas_brutas_centavos"] - d2["monto_anulado_centavos"] == 0
+    assert d2["transacciones"] == 0          # ninguna venta vigente
+
     # 4 · la auditoría
     a = _leer(motor, "SELECT severidad, payload FROM retail.auditoria "
                      " WHERE evento='venta.anulada'")

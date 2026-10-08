@@ -161,7 +161,7 @@ export function Arqueo({
               // que lo teclee invita a teclear cualquier cosa.
               <input
                 readOnly
-                value={formatear(m.total_centavos)}
+                value={formatear(m.total_centavos ?? 0)}
                 className="mt-1.5 h-12 w-full border border-[var(--pos-divider)] bg-[var(--pos-100)] px-3 titular text-[18px] tabular text-[var(--pos-600)]"
               />
             )}
