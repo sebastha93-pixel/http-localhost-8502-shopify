@@ -23,7 +23,11 @@ from __future__ import annotations
 
 from typing import Iterator, Optional
 
-__all__ = ["muestra", "paginar", "a_cliente", "TIPOS_DOCUMENTO"]
+__all__ = ["muestra", "paginar", "a_cliente", "TIPOS_DOCUMENTO",
+           "buscar_por_documento"]
+
+#  Los que acepta `retail.clientes.tipo_documento`.
+_TIPOS_DEL_POS = {"CC", "NIT", "CE", "PP", "TI"}
 
 # Siigo identifica el tipo de documento por CÓDIGO, no por nombre.
 # Fuente: catálogo de la DIAN que usa Siigo. Si la cuenta de MALE devolviera
@@ -196,3 +200,34 @@ def a_cliente(c: dict) -> dict:
         "ciudad": ciudad.strip(),
         "activo_en_siigo": bool(c.get("active", True)),
     }
+
+
+def buscar_por_documento(documento: str) -> Optional[dict]:
+    """UNA clienta de Siigo por su identificación, ya en nuestras columnas.
+
+    `None` si no existe, si está inactiva o si no se puede guardar aquí.
+
+    SE COMPRUEBA QUE LA FILA SEA LA PEDIDA. El filtro `identification` es de
+    igualdad exacta, pero con el valor vacío no filtra nada y devuelve la
+    cuenta entera: tomar `results[0]` sería asignarle la venta a una
+    desconocida (medido por el Portal Mayoristas).
+    """
+    from backend.services import siigo
+
+    documento = (documento or "").strip()
+    if not documento or not siigo.siigo_configurado():
+        return None
+    r = siigo.siigo_get("/customers", {"identification": documento})
+    filas = r.get("results") or [] if isinstance(r, dict) else []
+    cruda = next((f for f in filas
+                  if str(f.get("identification") or "").strip() == documento),
+                 None)
+    if cruda is None:
+        return None
+    c = a_cliente(cruda)
+    if not c["activo_en_siigo"] or not c["nombre"]:
+        return None
+    if c["tipo_documento"] not in _TIPOS_DEL_POS:
+        # Un tipo que la tabla no acepta: se deja que la cajera la cree.
+        return None
+    return c
