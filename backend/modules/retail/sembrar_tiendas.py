@@ -93,13 +93,25 @@ TIENDAS = [
 CAJAS = [
     {"id": "florida_caja1", "tienda_id": "florida", "nombre": "Caja 1",
      "prefijo_factura": "FLPOS",
-     "autorizacion_prefijo": "TFL"},
+     "autorizacion_prefijo": "TFL",
+     # Resolución DIAN del 2026-10-08, vigente 24 meses (pantalla de Siigo).
+     "autorizacion_numero": "18764116899253", "autorizacion_desde": 1,
+     "autorizacion_hasta": 1000000,
+     "autorizacion_aprobada": date(2026, 10, 8), "autorizacion_meses": 24},
     {"id": "florida_caja2", "tienda_id": "florida", "nombre": "Caja 2",
      "prefijo_factura": "FLPOS",
-     "autorizacion_prefijo": "TFP"},
+     "autorizacion_prefijo": "TFP",
+     # Resolución DIAN del 2026-10-08, vigente 24 meses (pantalla de Siigo).
+     "autorizacion_numero": "18764116899665", "autorizacion_desde": 1,
+     "autorizacion_hasta": 1000000,
+     "autorizacion_aprobada": date(2026, 10, 8), "autorizacion_meses": 24},
     {"id": "arrayanes_caja1", "tienda_id": "arrayanes", "nombre": "Caja 1",
      "prefijo_factura": "ARRPOS",
-     "autorizacion_prefijo": "ARRT"},
+     "autorizacion_prefijo": "ARRT",
+     # Resolución DIAN del 2026-10-08, vigente 24 meses (pantalla de Siigo).
+     "autorizacion_numero": "18764116899001", "autorizacion_desde": 1,
+     "autorizacion_hasta": 1000000,
+     "autorizacion_aprobada": date(2026, 10, 8), "autorizacion_meses": 24},
 ]
 
 UBICACIONES = [
