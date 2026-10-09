@@ -1,28 +1,49 @@
 """Armar la factura de una venta del POS para Siigo. Puro: sin red y sin base.
 
 Aquí vive la traducción entre dos formas de contar la misma plata, y casi
-todo lo que puede salir mal en una factura sale de ahí:
+todo lo que puede salir mal en una factura sale de ahí.
 
-* **El POS piensa en precios CON IVA**, que es lo que dice la etiqueta y lo
-  que paga la clienta. **Siigo recibe el precio SIN IVA** y calcula el
-  impuesto él. $149.900 viaja como $125.966,39.
+**LA FACTURA TIENE QUE DAR EXACTAMENTE LO QUE COBRÓ LA CAJA.** No «casi»: la
+DIAN valida el valor que calcule Siigo, y si es $434.710,01 cuando la clienta
+pagó $434.710, la factura dice una cosa y la tirilla y el arqueo otra. Pasó
+con la primera factura de prueba (`ARRT-1`, 2026-10-09): mandando la base
+redondeada a dos decimales, dos jeans de $149.900 dieron $299.800,01.
 
-* **Siigo redondea a centavos, y un centavo rechaza la factura.** Dos jeans
-  de $149.900 son $299.800 para el POS; Siigo llega a $299.800,01, porque
-  redondea la base de cada línea antes de aplicar el 19 %. Si los pagos suman
-  $299.800,00, la factura no entra. Por eso los pagos se cuadran contra el
-  total QUE VA A CALCULAR SIIGO (`total_siigo`), no contra el del POS. La
-  diferencia es de centavos y queda escrita en el resumen.
+LA ARITMÉTICA DE SIIGO, verificada contra la API por el Portal Mayoristas
+(`lib/siigo/aritmetica.ts`, 2026-08-03) y aquí en ENTEROS por la misma razón
+—un centavo decide si la factura entra—:
+
+    base     = precio con IVA / 1,19, a SEIS decimales
+    bruto    = cantidad · base
+    desc     = redondear(bruto · pct / 100, centavos)
+    subtotal = bruto − desc
+    iva      = redondear(subtotal · 0,19, centavos)
+    total    = redondear(subtotal, centavos) + iva
+
+De ahí salen las tres formas en que viaja una línea:
+
+* **Sin descuento → `taxed_price`**: el precio CON IVA, tal cual la etiqueta.
+  Siigo deriva la base con sus seis decimales y el total da `cantidad ×
+  precio` exactos.
+
+* **Descuento que es un porcentaje ENTERO → `price` + `discount`**. Siigo sólo
+  acepta el porcentaje entero (`25.0000119` → 400), y con el precio de lista
+  casi nunca cuadra al centavo. Se BUSCA una base a millonésimas de la
+  nominal con la que el total dé exacto — sin que `base × 1,19` deje de ser
+  el precio de lista de verdad.
+
+* **Cualquier otro descuento («$20.000 menos») → el precio ya rebajado**, en
+  `taxed_price` y sin campo de descuento. La factura dice lo que se cobró,
+  que es lo que importa; el descuento queda en el POS, con su motivo.
+
+Lo demás:
 
 * **A Siigo van los pagos NETOS.** Si la clienta entregó $300.000 por
   $299.800, la factura dice $299.800 en efectivo: el vuelto no es un pago.
 
-* **El descuento depende del comprobante.** Unos lo esperan en pesos y otros
-  en porcentaje (`discount_type` del tipo de documento). Escribirlo fijo saca
-  una factura con el monto equivocado y SIN error. Ante un tipo desconocido
-  no se emite: una factura mal descontada ya salió a la DIAN.
-
-Todo se calcula con `Decimal`; los `float` aparecen sólo al final, en el JSON.
+* **Los pagos suman lo que va a calcular Siigo**, que con lo de arriba es lo
+  mismo que cobró la caja. Si alguna vez difieren en centavos, se ajusta el
+  pago más grande y queda escrito en el resumen; más de un peso, no se emite.
 """
 from __future__ import annotations
 
@@ -30,7 +51,8 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import List, Optional
 
 __all__ = ["construir_factura", "FacturaInvalida", "CONSUMIDOR_FINAL",
-           "IVA_19_ID", "marca_de"]
+           "IVA_19_ID", "marca_de", "base6_de", "total_linea",
+           "base_con_descuento"]
 
 #  El «tercero» de las ventas sin clienta. Existe en la cuenta de Siigo
 #  (verificado 2026-10-08: «Consumidor Final», sucursal 0).
@@ -40,6 +62,12 @@ IVA_19_ID = 6352
 
 _CENT = Decimal("0.01")
 
+#  Millonésimas de peso por centavo: Siigo guarda `price` con 6 decimales.
+_POR_CENTAVO = 10_000
+#  Cuánto se puede mover la base buscando el encaje: 0,02 pesos. Con eso
+#  `base × 1,19` sigue redondeando al mismo precio de lista.
+_VENTANA = 20_000
+
 
 class FacturaInvalida(Exception):
     """Esta venta no se puede facturar tal como está. No mejora por insistir."""
@@ -47,6 +75,47 @@ class FacturaInvalida(Exception):
 
 def _c(valor) -> Decimal:
     return Decimal(str(valor)).quantize(_CENT, rounding=ROUND_HALF_UP)
+
+
+def _div(n: int, d: int) -> int:
+    """División entera con redondeo HALF-UP (positivos)."""
+    q, r = divmod(n, d)
+    return q + 1 if 2 * r >= d else q
+
+
+def base6_de(precio_centavos: int) -> int:
+    """La base sin IVA que Siigo deriva de un precio con IVA, en millonésimas."""
+    return _div(precio_centavos * _POR_CENTAVO * 100, 119)
+
+
+def total_linea(cantidad: int, base6: int, pct: int = 0) -> int:
+    """El total de UNA línea, en centavos, como lo calcula Siigo."""
+    bruto = cantidad * base6
+    desc = _div(bruto * pct, 100 * _POR_CENTAVO)              # centavos
+    subtotal = bruto - desc * _POR_CENTAVO                    # millonésimas
+    iva = _div(subtotal * 19, 100 * _POR_CENTAVO)             # centavos
+    return _div(subtotal, _POR_CENTAVO) + iva
+
+
+def base_con_descuento(cantidad: int, precio: int, neto_linea: int,
+                       pct: int) -> Optional[int]:
+    """Una base (millonésimas) con la que Siigo, aplicando `pct`, calcule
+    EXACTAMENTE `neto_linea` centavos. `None` si no hay encaje.
+
+    Se comprueba además que `base × 1,19` siga siendo el precio de lista: el
+    documento declara ese `price`, y no puede decirle a la DIAN un precio de
+    venta que la marca no tiene.
+    """
+    nominal = base6_de(precio)
+    for paso in range(_VENTANA + 1):
+        for signo in ((0,) if paso == 0 else (1, -1)):
+            b = nominal + signo * paso
+            if b <= 0 or total_linea(cantidad, b, pct) != neto_linea:
+                continue
+            if _div(b * 119, 100 * _POR_CENTAVO) != precio:
+                continue
+            return b
+    return None
 
 
 def marca_de(venta_id: str, numero: str) -> str:
@@ -80,8 +149,9 @@ def construir_factura(*, venta: dict, lineas: List[dict], pagos: List[dict],
     if not lineas:
         raise FacturaInvalida("la venta no tiene líneas")
 
+    porcentaje = (tipo_descuento or "").strip().lower() == "percentage"
     items = []
-    total_siigo = Decimal("0")
+    total_cent = 0
     for l in lineas:
         tasa = Decimal(str(l.get("tasa_iva", "19")))
         if tasa != Decimal("19"):
@@ -89,36 +159,56 @@ def construir_factura(*, venta: dict, lineas: List[dict], pagos: List[dict],
             # id del 19 cuadra en todo menos en lo declarado a la DIAN.
             raise FacturaInvalida(
                 f"{l['sku']}: IVA del {tasa} % sin impuesto de Siigo asignado")
-        factor = Decimal("1") + tasa / Decimal("100")
         cantidad = int(l["cantidad"])
-
-        precio_base = _c(Decimal(int(l["precio_unitario"])) / 100 / factor)
-        if precio_base <= 0:
+        precio = int(l["precio_unitario"])
+        if precio <= 0 or cantidad <= 0:
             raise FacturaInvalida(
                 f"{l['sku']}: precio en cero. Un obsequio no se factura así.")
-        bruto = _c(precio_base * cantidad)
-        descuento_base = _c(Decimal(int(l.get("descuento_monto") or 0)) / 100 / factor)
-        if descuento_base > bruto:
-            raise FacturaInvalida(f"{l['sku']}: el descuento supera el precio")
+        descuento = int(l.get("descuento_monto") or 0)
+        neto = cantidad * precio - descuento
+        if neto <= 0:
+            raise FacturaInvalida(
+                f"{l['sku']}: el descuento se lleva todo el precio. Un "
+                f"obsequio no se factura así.")
 
-        item = {
-            "code": l["sku"],
-            "description": (l.get("descripcion") or l["sku"])[:150],
-            "quantity": cantidad,
-            "price": float(precio_base),
-            "taxes": [{"id": IVA_19_ID}],
-        }
-        if descuento_base > 0:
-            item["discount"] = _descuento(tipo_descuento, bruto, descuento_base,
-                                          l["sku"])
-        if bodega_id is not None:
-            # NÚMERO, no `{"id": …}`: mal formado, Siigo lo descarta sin
-            # error y el inventario no se mueve.
-            item["warehouse"] = int(bodega_id)
-        items.append(item)
+        def item(cant: int, **precio_kw) -> dict:
+            it = {"code": l["sku"],
+                  "description": (l.get("descripcion") or l["sku"])[:150],
+                  "quantity": cant, **precio_kw,
+                  "taxes": [{"id": IVA_19_ID}]}
+            if bodega_id is not None:
+                # NÚMERO, no `{"id": …}`: mal formado, Siigo lo descarta sin
+                # error y el inventario no se mueve.
+                it["warehouse"] = int(bodega_id)
+            return it
 
-        neto = bruto - descuento_base
-        total_siigo += neto + _c(neto * tasa / Decimal("100"))
+        if descuento == 0:
+            items.append(item(cantidad, taxed_price=precio / 100))
+            total_cent += total_linea(cantidad, base6_de(precio))
+            continue
+
+        # ¿Es un porcentaje entero? Sólo así Siigo acepta el campo `discount`.
+        bruto = cantidad * precio
+        pct = descuento * 100 // bruto if descuento * 100 % bruto == 0 else 0
+        base = (base_con_descuento(cantidad, precio, neto, pct)
+                if porcentaje and 0 < pct < 100 else None)
+        if base is not None:
+            items.append(item(cantidad, price=base / 1_000_000, discount=pct))
+            total_cent += total_linea(cantidad, base, pct)
+            continue
+
+        # El precio YA REBAJADO, sin campo de descuento. Si no divide exacto
+        # entre las unidades, cada unidad va en su línea con su centavo.
+        if neto % cantidad == 0:
+            reparto = [(cantidad, neto // cantidad)]
+        else:
+            reparto = [(1, neto // cantidad + (1 if u < neto % cantidad else 0))
+                       for u in range(cantidad)]
+        for cant, unitario in reparto:
+            items.append(item(cant, taxed_price=unitario / 100))
+            total_cent += total_linea(cant, base6_de(unitario))
+
+    total_siigo = Decimal(total_cent) / 100
 
     payments, ajuste = _pagos(pagos, total_siigo, fecha)
 
@@ -158,19 +248,6 @@ def construir_factura(*, venta: dict, lineas: List[dict], pagos: List[dict],
             f"el total para Siigo ({total_siigo}) no coincide con el de la "
             f"venta ({total_pos})")
     return payload
-
-
-def _descuento(tipo: Optional[str], bruto: Decimal, descuento: Decimal,
-               sku: str):
-    t = (tipo or "").strip().lower()
-    if t == "value":
-        return float(descuento)
-    if t == "percentage":
-        return float((descuento * 100 / bruto).quantize(Decimal("0.0001"),
-                                                        rounding=ROUND_HALF_UP))
-    raise FacturaInvalida(
-        f"{sku}: el comprobante no dice si el descuento va en pesos o en "
-        f"porcentaje ({tipo!r}). No se emite a ciegas.")
 
 
 def _pagos(pagos: List[dict], total_siigo: Decimal, fecha: str):

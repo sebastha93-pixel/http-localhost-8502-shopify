@@ -99,7 +99,9 @@ class SiigoFalso:
         # EXPANDIDOS. La nota crédito tiene que aplanarlos.
         c = f["_cuerpo"]
         f.update({
-            "items": [{**it, "warehouse": {"id": it["warehouse"], "name": "ARRAYANES"},
+            "items": [{"code": it["code"], "description": it["description"],
+                       "quantity": float(it["quantity"]), "price": 125966.386555,
+                       "warehouse": {"id": it["warehouse"], "name": "ARRAYANES"},
                        "taxes": [{"id": 6352, "name": "IVA 19%", "percentage": 19}]}
                       for it in c["items"]],
             "payments": [{"id": p["id"], "name": "Caja general Arrayanes",
@@ -296,8 +298,8 @@ def test_la_venta_se_factura_y_queda_anotada(entorno):
     assert cuerpo["seller"] == 842
     assert cuerpo["customer"]["identification"] == "222222222222"
     assert cuerpo["items"][0]["warehouse"] == 37          # bodega de Arrayanes
-    # A Siigo va lo que ENTRÓ ($299.800,01 con su centavo), no los $300.000.
-    assert cuerpo["payments"] == [{"id": 8282, "value": 299800.01,
+    # A Siigo va lo que ENTRÓ ($299.800 exactos), no los $300.000 entregados.
+    assert cuerpo["payments"] == [{"id": 8282, "value": 299800.0,
                                    "due_date": cuerpo["date"]}]
     # En modo prueba NO se estampa: no va a la DIAN.
     assert "stamp" not in cuerpo
@@ -732,12 +734,13 @@ def test_anular_una_venta_facturada_emite_su_nota_credito(entorno, monkeypatch):
     # Copiada de la factura, no recalculada — y APLANADA: el GET devuelve la
     # bodega y los impuestos expandidos, y así Siigo los descarta en silencio.
     [f] = siigo.enviadas
-    assert nc["items"] == f["items"]
+    assert [(i["code"], i["quantity"]) for i in nc["items"]] == [
+        (i["code"], i["quantity"]) for i in f["items"]]
     assert nc["items"][0]["warehouse"] == 37
     assert nc["items"][0]["taxes"] == [{"id": 6352}]
     assert nc["seller"] == 842 and nc["cost_center"] == 677
     # La plata sale por donde entró: la caja de la tienda, no un saldo a favor.
-    assert nc["payments"] == [{"id": 8282, "value": 299800.01,
+    assert nc["payments"] == [{"id": 8282, "value": 299800.0,
                                "due_date": nc["date"]}]
     assert nc["customer"]["identification"] == "222222222222"
 
