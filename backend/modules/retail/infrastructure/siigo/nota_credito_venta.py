@@ -52,6 +52,18 @@ def _numero_plano(valor) -> Optional[int]:
         return None
 
 
+def _descuento_plano(valor):
+    """El GET devuelve el descuento EXPANDIDO (`{"percentage": 10.0, "value":
+    12596.64}`) y el POST lo quiere como un número pelado, que es el
+    PORCENTAJE. Con el objeto Siigo responde 400 «Invalid data type:
+    discount» (visto el 2026-10-09 contra la factura de prueba ARRT-1)."""
+    if isinstance(valor, dict):
+        valor = valor.get("percentage")
+    if not valor:
+        return None
+    return int(valor) if float(valor) == int(valor) else float(valor)
+
+
 def construir_nota_credito(*, factura: dict, documento_id: int, fecha: str,
                            marca: str, bodega_id: Optional[int] = None,
                            estampar: bool = False) -> dict:
@@ -85,8 +97,9 @@ def construir_nota_credito(*, factura: dict, documento_id: int, fecha: str,
                                else it.get("warehouse"))
         if bodega is not None:
             linea["warehouse"] = bodega
-        if it.get("discount"):
-            linea["discount"] = it["discount"]
+        descuento = _descuento_plano(it.get("discount"))
+        if descuento is not None:
+            linea["discount"] = descuento
         lineas.append(linea)
 
     cliente = factura.get("customer") or {}
