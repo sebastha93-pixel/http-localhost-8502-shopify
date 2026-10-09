@@ -20,7 +20,7 @@ import { useCajaDelEquipo } from "@/lib/pos/caja-del-equipo";
 import { Arqueo, DialogoDescuadre } from "@/components/pos/arqueo";
 import { DialogoMovimiento } from "@/components/pos/dialogo-movimiento";
 import { DialogoAnular, VentasDelTurno } from "@/components/pos/ventas-del-turno";
-import { Tirilla } from "@/components/pos/tirilla";
+import { TirillaImpresa } from "@/components/pos/tirilla";
 import { totalDe } from "@/components/pos/contador-denominaciones";
 import {
   anularVenta,
@@ -269,12 +269,8 @@ function PantallaCierre({ CAJA }: { CAJA: string }) {
         )}
       </main>
 
-      {/* Fuera de pantalla, no `display:none`: lo oculto no se imprime. */}
-      {tirillaAImprimir && (
-        <div className="absolute -left-[9999px] top-0" aria-hidden>
-          <Tirilla datos={tirillaAImprimir} />
-        </div>
-      )}
+      {/* La copia para la impresora cuelga de <body>: ver TirillaImpresa. */}
+      <TirillaImpresa datos={tirillaAImprimir} />
 
       {anulando && (
         <DialogoAnular

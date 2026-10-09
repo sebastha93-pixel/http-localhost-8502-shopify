@@ -17,6 +17,8 @@
  * **80 mm útiles son 72 mm.** El resto es margen mecánico del cabezal. Todo
  * lo que se pase de ahí sale cortado, y eso no se ve hasta que se imprime.
  */
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { formatear } from "@/lib/pos/dinero";
 import type { Tirilla as Datos } from "@/lib/pos/api";
 // IMPORTADO, no servido desde `/public`: así Next lo deja bajo
@@ -374,18 +376,53 @@ const ESTILOS = `
 .tirilla .t-pie      { margin-top: 2mm; }
 .tirilla .t-avance   { height: 12mm; }
 
+/* LA COPIA QUE SE IMPRIME vive colgada directamente de <body>, fuera de la
+   pantalla que la pidió (ver TirillaImpresa). En pantalla no existe. */
+.pos-impresion { display: none; }
+
 @media print {
   /* Alto automático: la tirilla mide lo que mida la venta. Fijarlo cortaría
      las ventas largas o desperdiciaría papel en las de una prenda. */
   @page { size: 80mm auto; margin: 0; }
   html, body { width: 80mm; margin: 0 !important; padding: 0 !important;
                background: #fff !important; }
-  /* Sólo el papel. Sin esto se imprime el POS entero detrás. */
-  body * { visibility: hidden; }
-  .tirilla, .tirilla * { visibility: visible; }
-  .tirilla { position: absolute; left: 0; top: 0; }
+  /* SÓLO EL PAPEL, y con display, no con visibility. Lo oculto con
+     visibility sigue ocupando su sitio: la impresora sacaba el alto de la
+     pantalla entera en blanco antes o después de la tirilla. */
+  body > *:not(.pos-impresion) { display: none !important; }
+  .pos-impresion { display: block !important; }
 }
 `;
+
+/**
+ * La tirilla que va a la impresora.
+ *
+ * POR QUÉ NO SE IMPRIME LA QUE SE VE EN PANTALLA. Salió EN BLANCO en la
+ * primera venta real (Arrayanes, 2026-10-09), y por dos caminos distintos:
+ *
+ *  · En la venta cerrada, la vista previa va en un contenedor `hidden
+ *    md:block`. Al imprimir, la página mide 80 mm de ancho — por debajo de
+ *    `md` — y el contenedor pasa a `display: none`.
+ *  · En el cierre, iba fuera de pantalla con `left: -9999px`, y la regla de
+ *    impresión la posicionaba respecto a ESE contenedor: seguía fuera.
+ *
+ * Las dos son la misma trampa: lo que se imprime dependía de dónde estuviera
+ * puesto en la pantalla. Esta copia cuelga directo de `<body>` y la hoja de
+ * impresión esconde todo lo demás, así que ninguna maqueta la puede tapar.
+ */
+export function TirillaImpresa({ datos }: { datos: Datos | null }) {
+  const [destino, setDestino] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    const nodo = document.createElement("div");
+    nodo.className = "pos-impresion";
+    document.body.appendChild(nodo);
+    setDestino(nodo);
+    return () => { nodo.remove(); };
+  }, []);
+  if (!destino || !datos) return null;
+  return createPortal(<Tirilla datos={datos} />, destino);
+}
+
 
 /** «19.00» → «19». La tarifa llega como NUMERIC(5,2) de la base y los ceros de
  *  la escala son ruido en un papel de 80 mm — la tirilla real dice «IVA 19%».

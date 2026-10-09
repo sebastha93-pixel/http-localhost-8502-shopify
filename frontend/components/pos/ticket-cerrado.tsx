@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatear } from "@/lib/pos/dinero";
 import { pedirTirilla, type Ticket, type Tirilla as DatosTirilla } from "@/lib/pos/api";
-import { Tirilla } from "@/components/pos/tirilla";
+import { Tirilla, TirillaImpresa } from "@/components/pos/tirilla";
 
 /**
  * Venta cerrada — con la tirilla A LA VISTA.
@@ -127,6 +127,8 @@ export function TicketCerrado({
 
   return (
     <div className="flex min-h-screen items-start justify-center gap-10 overflow-y-auto p-8">
+      {/* Lo que va a la impresora. La de abajo es sólo para mirarla. */}
+      <TirillaImpresa datos={tirilla} />
       {/* EL PAPEL, al ancho real de 80 mm. Se ve, no se adivina. */}
       <div className="hidden shrink-0 pt-2 md:block">
         <p className="kicker mb-2 text-center text-[var(--pos-600)]">
