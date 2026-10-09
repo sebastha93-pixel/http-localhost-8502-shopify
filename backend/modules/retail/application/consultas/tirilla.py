@@ -355,7 +355,17 @@ def _poner_qr(tirilla: Tirilla, doc, *, con_resolucion: bool) -> None:
             return
         contenido = f"{_CATALOGO_DIAN}{doc['cufe']}"
 
-    import segno
+    # EL QR NO PUEDE TUMBAR LA TIRILLA. Si la librería falta en el servidor
+    # —pasó en producción el primer día—, el papel sale igual, con su CUFE en
+    # texto, que también sirve para verificar. Una factura sin QR se puede
+    # reimprimir; una venta sin papel deja a la clienta esperando.
+    try:
+        import segno
+    except ImportError:
+        import logging
+        logging.getLogger("retail.tirilla").error(
+            "falta `segno`: la tirilla sale SIN código QR")
+        return
 
     # Corrección M (~15 %). En papel térmico, que se borra con el calor y el
     # roce del bolsillo, L deja el código ilegible en semanas; Q y H lo hacen

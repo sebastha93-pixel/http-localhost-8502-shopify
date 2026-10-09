@@ -43,3 +43,7 @@ alembic>=1.13
 # Tests
 pytest>=8.0
 pytest-asyncio>=0.24   # pruebas de la unidad de trabajo async del modulo retail
+# El QR de la factura electrónica en la tirilla del POS. Estaba sólo en
+# `requirements-retail.txt` (el de las pruebas): en producción la tirilla de
+# toda venta ya facturada respondía 500 y no se imprimía (2026-10-09).
+segno>=1.6
