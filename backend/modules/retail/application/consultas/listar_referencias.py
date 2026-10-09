@@ -19,6 +19,20 @@ adapta.
 **Agotado no se esconde.** Viene con `disponible: 0` para que el chip se pinte
 deshabilitado, tal como pide el handoff. Ocultarlo haría creer que esa talla
 no existe, cuando lo que pasa es que hoy no hay.
+
+**LA REJILLA ES LA TIENDA, ENTERA.** Dos errores que salieron el primer día de
+venta real (Arrayanes, 2026-10-09), cuando «había referencias que no
+aparecían»:
+
+  · Se cortaba en 60 referencias, por orden de código. Una tienda tiene unas
+    doscientas: las demás existían y no se veían.
+  · No se filtraba por tienda: salían también las referencias que sólo tiene
+    la OTRA, en cero, ocupando puestos dentro de esas 60.
+
+Ahora, sin búsqueda, sale TODO lo que esta tienda tiene con existencia —la
+referencia completa, con sus tallas agotadas en gris—. Con búsqueda sale
+también lo que está en cero: quien busca una referencia por su código tiene
+que verla y ver que no hay, no concluir que no existe.
 """
 from __future__ import annotations
 
@@ -61,17 +75,29 @@ class ListarReferencias:
         self._s = sesion
 
     async def ejecutar(self, *, ubicacion_id: str, texto: str = "",
-                       categoria: str = "", limite: int = 60) -> List[Referencia]:
+                       categoria: str = "", limite: int = 2000) -> List[Referencia]:
         condiciones = ["v.activa"]
-        params: dict = {"u": ubicacion_id, "n": min(limite, 120)}
+        # El tope es una red de seguridad contra una respuesta desbocada, no
+        # un tamaño de página: nadie pagina la rejilla de una caja.
+        params: dict = {"u": ubicacion_id, "n": min(limite, 5000)}
 
         if categoria and categoria.lower() not in ("todo", "todas"):
             condiciones.append("c.categoria = :cat")
             params["cat"] = categoria
 
-        for i, token in enumerate([t for t in texto.lower().split() if t][:6]):
+        tokens = [t for t in texto.lower().split() if t][:6]
+        for i, token in enumerate(tokens):
             condiciones.append(f"c.texto_busqueda LIKE :t{i}")
             params[f"t{i}"] = f"%{token}%"
+        if not tokens:
+            # Sin búsqueda: sólo las referencias que ESTA tienda tiene. Por
+            # referencia y no por talla, para que las tallas agotadas de una
+            # referencia que sí hay sigan saliendo en gris.
+            condiciones.append("""EXISTS (
+                SELECT 1 FROM retail.stock_ubicacion s2
+                  JOIN retail.variantes v2 ON v2.id = s2.variante_id
+                 WHERE s2.ubicacion_id = :u AND v2.referencia = v.referencia
+                   AND s2.cantidad - s2.reservado > 0)""")
 
         filas = (await self._s.execute(text(f"""
             SELECT v.referencia, v.nombre, v.color, v.categoria, v.sku, v.id,

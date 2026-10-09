@@ -360,7 +360,7 @@ async def listar_referencias(
     ubicacion_id: str = Query(),
     q: str = Query(default=""),
     categoria: str = Query(default=""),
-    limite: int = Query(default=60, le=120),
+    limite: int = Query(default=2000, le=5000),
     sesion=Depends(sesion_lectura),
     _: CurrentUser = Depends(require_permission("retail", "ver")),
 ):
@@ -431,9 +431,76 @@ async def buscar_clientes(
 ):
     """Sólo por número de identificación, por decisión del diseño — y es la
     correcta: buscar por nombre en un mostrador devuelve seis «María González»
-    y la cajera tiene que adivinar."""
+    y la cajera tiene que adivinar.
+
+    SI NO ESTÁ AQUÍ, SE LE PREGUNTA A SIIGO. MALE lleva años facturando: casi
+    toda clienta que entra a la tienda ya existe allá con su correo y su
+    dirección. Sin esto la cajera la vuelve a digitar entera. Lo que se
+    encuentra se guarda, así que la segunda vez ya no hay viaje.
+    """
     encontradas = await BuscarClientes(sesion).ejecutar(documento)
+    if not encontradas and await _traer_clienta_de_siigo(documento):
+        # Otra sesión: la de arriba es de lectura y abrió antes de que la
+        # clienta existiera aquí.
+        from backend.modules.retail.interfaces.http import dependencias
+        async with await dependencias.unidad_de_trabajo() as t:
+            encontradas = await BuscarClientes(t.sesion).ejecutar(documento)
     return [ClienteSalida(**c.__dict__) for c in encontradas]
+
+
+#  Documentos que Siigo ya dijo que no conoce, y cuándo. La pantalla busca
+#  mientras se teclea: sin esto, cada tecla de más sería otra petición a una
+#  cuenta que aguanta una por segundo.
+_NO_ESTA_EN_SIIGO: Dict[str, float] = {}
+_OLVIDAR_TRAS = 120.0
+
+
+async def _traer_clienta_de_siigo(documento: str) -> bool:
+    """Busca la cédula en Siigo y, si está, la guarda. True si la trajo.
+
+    NUNCA TUMBA LA BÚSQUEDA. Siigo lento, caído o sin configurar equivale a
+    «no está»: la cajera la crea a mano, como antes. Y no espera más de cuatro
+    segundos, que con la clienta enfrente ya son muchos.
+    """
+    import asyncio
+    import re
+    import time
+
+    digitos = re.sub(r"\D", "", documento or "")
+    # Siigo sólo encuentra el documento COMPLETO. Con menos de seis dígitos
+    # todavía se está tecleando.
+    if len(digitos) < 6:
+        return False
+    visto = _NO_ESTA_EN_SIIGO.get(digitos)
+    if visto and time.monotonic() - visto < _OLVIDAR_TRAS:
+        return False
+
+    try:
+        from backend.modules.retail.infrastructure.siigo import clientes_siigo
+        clienta = await asyncio.wait_for(
+            asyncio.to_thread(clientes_siigo.buscar_por_documento, digitos),
+            timeout=4.0)
+    except Exception:  # noqa: BLE001 — ver la cabecera
+        return False
+    if not clienta:
+        _NO_ESTA_EN_SIIGO[digitos] = time.monotonic()
+        if len(_NO_ESTA_EN_SIIGO) > 2000:
+            _NO_ESTA_EN_SIIGO.clear()
+        return False
+
+    from backend.modules.retail.application.comandos.importar_clientes import (
+        ImportarClientes,
+    )
+    from backend.modules.retail.interfaces.http import dependencias
+    try:
+        async with await dependencias.unidad_de_trabajo() as t:
+            r = await ImportarClientes(t.sesion).ejecutar(
+                [clienta], usuario_id="busqueda_en_caja", dry_run=False,
+                nuevo_id=_nuevo_ulid)
+            await t.commit()
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(r.creadas or r.enlazadas or r.completadas)
 
 
 @router.post("/clientes", response_model=ClienteSalida)
