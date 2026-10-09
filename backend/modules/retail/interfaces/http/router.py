@@ -2689,6 +2689,33 @@ async def ver_cola(
     )
 
 
+@router.get("/admin/inventario")
+async def estado_inventario(
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Cuándo se trajo el inventario de Siigo por última vez, y qué cambió."""
+    _exigir_admin(usuario)
+    from backend.modules.retail.infrastructure import planificador_inventario
+    return planificador_inventario.ultimo
+
+
+@router.post("/admin/inventario/sincronizar")
+async def sincronizar_inventario(
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Trae YA el inventario de Siigo, sin esperar a la hora. Tarda un minuto
+    largo: lee el catálogo entero de Siigo."""
+    _exigir_admin(usuario)
+    import asyncio
+    from backend.modules.retail.infrastructure import planificador_inventario
+    try:
+        r = await asyncio.to_thread(planificador_inventario.correr_ahora)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(409, {"error": "no_se_pudo_sincronizar",
+                                  "mensaje": str(e)[:300]})
+    return r
+
+
 @router.post("/admin/outbox/drenar", response_model=ResumenDrenajeSalida)
 async def drenar_cola(
     limite: int = Query(20, ge=1, le=200),

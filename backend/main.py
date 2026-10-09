@@ -191,6 +191,14 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"   ⚠️  Outbox retail no arrancó: {e}")
 
+        # El inventario de las tiendas, igual al de Siigo, cada hora.
+        try:
+            from backend.modules.retail.infrastructure import planificador_inventario
+            if planificador_inventario.start():
+                print(f"   📦 Inventario POS ← Siigo · cada {planificador_inventario.INTERVALO_SEGUNDOS}s")
+        except Exception as e:
+            print(f"   ⚠️  Inventario del POS no arrancó: {e}")
+
         # La cadena de auditoría del POS. `verificar_cadena` llevaba meses
         # prometiendo «lo corre el job diario» sin que ese job existiera: la
         # única comprobación pasaba si alguien abría la pantalla.
@@ -254,6 +262,8 @@ async def lifespan(app: FastAPI):
         try:
             from backend.modules.retail.infrastructure import planificador_outbox
             planificador_outbox.stop()
+            from backend.modules.retail.infrastructure import planificador_inventario
+            planificador_inventario.stop()
         except Exception:
             pass
         try:

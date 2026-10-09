@@ -22,8 +22,12 @@ LO QUE SE APRENDIÓ CARGANDO ARRAYANES (681 SKU, 2026-10-01), y que esto hace:
   «T» (`42606-110`) o llevan el código de otra referencia. Va en su columna:
   sin eso, la pistola escanea y no pasa nada.
 
-* **Hay códigos que no son prendas** (`010`, `5353`, `P004`): insumos y
-  empaques. No se pueden partir en referencia y talla, y se reportan.
+* **Hay códigos que no son prendas** (`5353` bolsa pequeña, `5354` bolsa
+  grande, `P004` pañoleta). No tienen talla que extraer, pero SE VENDEN: la
+  bolsa va cobrada en casi todas las facturas de la tienda. Entran con su
+  código tal cual como SKU —es el que Siigo espera en la factura— y talla
+  «U». Los que no tienen precio, o lo tienen sin IVA incluido (`010`, `101`),
+  se siguen reportando.
 
 * Sólo entra lo que TIENE EXISTENCIA en esa bodega. Un catálogo con todo el
   inventario de la marca hace que la cajera ofrezca lo que no tiene.
@@ -36,7 +40,8 @@ import sys
 import time
 from typing import Dict, List, Tuple
 
-__all__ = ["filas_de_productos", "escribir_csv", "ref_talla", "IVA_PORCENTAJE"]
+__all__ = ["filas_de_productos", "escribir_csv", "ref_talla", "IVA_PORCENTAJE",
+           "PRECIO_MINIMO"]
 
 IVA_PORCENTAJE = 19.0
 #  Tallas numéricas (4, 10, 12) o de letra (S, M, XL). Lo que no calce no es
@@ -76,8 +81,15 @@ def _nombre_limpio(producto: dict, code: str) -> str:
     return nombre.rstrip(".").strip() or code
 
 
-def filas_de_productos(productos: List[dict], bodega: str) -> Tuple[List[dict], List[str]]:
-    """Las filas del CSV y los problemas, SIN tocar la red.
+#  Por debajo de esto no es un precio de venta: es un código de control
+#  (`002LLAVERO` a $1). El mismo piso que usa `cargar_catalogo`.
+PRECIO_MINIMO = 1_000
+
+
+def filas_de_productos(productos: List[dict], bodega) -> Tuple[List[dict], List[str]]:
+    """Las filas del catálogo y los problemas, SIN tocar la red.
+
+    `bodega` es el NOMBRE de la bodega en Siigo («Arrayanes») o su id (37).
 
     Devuelve los dos: un cargador que sólo devuelve filas esconde lo que dejó
     fuera, y lo que queda fuera es justo lo que alguien tiene que mirar.
@@ -91,14 +103,14 @@ def filas_de_productos(productos: List[dict], bodega: str) -> Tuple[List[dict], 
             continue
         cantidad = sum(float(w.get("quantity") or 0)
                        for w in (pr.get("warehouses") or [])
-                       if w.get("name") == bodega)
+                       if bodega in (w.get("name"), w.get("id")))
         if cantidad <= 0:
             continue
 
         code = (pr.get("code") or "").strip()
         ref, talla = ref_talla(code)
-        if not ref or not talla:
-            problemas.append(f"{code}: no se puede separar referencia y talla")
+        es_prenda = bool(ref and talla)
+        if not code:
             continue
 
         precio, con_iva = _precio_con_iva(pr)
@@ -114,9 +126,20 @@ def filas_de_productos(productos: List[dict], bodega: str) -> Tuple[List[dict], 
                 + " — revísalo antes de cargarlo")
             continue
 
-        sku = f"{ref}T{talla}"
+        if precio < PRECIO_MINIMO:
+            problemas.append(f"{code}: precio de ${round(precio)}, no es un "
+                             f"precio de venta")
+            continue
+
+        if es_prenda:
+            sku = f"{ref}T{talla}"
+        else:
+            # Bolsas, pañoletas: el código de Siigo ES el SKU. Inventarle una
+            # «T» haría que la factura pidiera un producto que no existe.
+            sku, ref, talla = code, code, "U"
         vistos[sku] = vistos.get(sku, 0) + 1
         filas.append({
+            "sku": sku,
             "referencia": ref,
             "nombre": _nombre_limpio(pr, code),
             "color": "",          # Siigo no lo tiene aparte: va en el nombre.
@@ -139,13 +162,17 @@ def escribir_csv(filas: List[dict], ruta: str) -> None:
     with open(ruta, "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=[
             "referencia", "nombre", "color", "categoria", "talla", "precio",
-            "cantidad", "codigo_barras"])
+            "cantidad", "codigo_barras", "sku"])
         w.writeheader()
         w.writerows(filas)
 
 
-def _traer_productos(max_paginas: int = 80) -> List[dict]:
-    """Todo el catálogo de Siigo, paginado.
+def _traer_productos(max_paginas: int = 200) -> List[dict]:
+    """Todo el catálogo de Siigo, paginado — COMPLETO o nada.
+
+    Una lectura que se corta a la mitad se ve igual que una completa, y quien
+    sincroniza con ella pone en cero media tienda. Por eso se compara lo leído
+    contra `pagination.total_results` y, si no cuadra, se lanza.
 
     Import LOCAL: `backend.services.siigo` es del ERP y el módulo retail tiene
     que poder cargarse sin él.
@@ -153,15 +180,22 @@ def _traer_productos(max_paginas: int = 80) -> List[dict]:
     from backend.services.siigo import siigo_get
 
     todos: List[dict] = []
+    total = None
     pagina = 1
     while pagina <= max_paginas:
         datos = siigo_get("/products", {"page": pagina, "page_size": 100})
         resultados = datos.get("results") or []
+        if total is None:
+            total = (datos.get("pagination") or {}).get("total_results")
         todos.extend(resultados)
         if len(resultados) < 100:
             break
         pagina += 1
         time.sleep(0.4)       # la cuenta de Siigo tiene límite de peticiones
+    if total is None or len(todos) < int(total):
+        raise RuntimeError(
+            f"Siigo dice que hay {total} productos y se leyeron {len(todos)}: "
+            f"lectura incompleta, no se usa.")
     return todos
 
 
@@ -181,8 +215,7 @@ def main(argv: List[str]) -> int:
     valor = sum(f["precio"] * f["cantidad"] for f in filas)
     raros = sorted({f["codigo_barras"] for f in filas
                     if f["codigo_barras"]
-                    and f["codigo_barras"].upper()
-                    != f"{f['referencia']}T{f['talla']}".upper()})
+                    and f["codigo_barras"].upper() != f["sku"].upper()})
 
     print(f"\n  bodega {bodega}: {len(filas)} SKU · {refs} referencias · "
           f"{unidades} unidades")
