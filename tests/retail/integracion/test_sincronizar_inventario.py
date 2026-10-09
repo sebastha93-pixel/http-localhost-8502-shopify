@@ -44,6 +44,7 @@ def base():
 
 def _sinc(productos, **kw):
     from backend.modules.retail.sincronizar_inventario import sincronizar
+    kw.setdefault("precios_de_lista", lambda codigos: {})   # sin salir a Shopify
     return sincronizar(URL, productos=productos, aplicar=True, **kw)
 
 
@@ -164,7 +165,7 @@ def test_una_lectura_que_dejaria_media_tienda_en_cero_NO_se_aplica(base):
 def test_el_ensayo_no_escribe(base):
     from backend.modules.retail.sincronizar_inventario import sincronizar
     r = sincronizar(URL, productos=[_p("26602-1T6", "JEAN", arrayanes=2)],
-                    aplicar=False)
+                    aplicar=False, precios_de_lista=lambda c: {})
     assert r["tiendas"]["arrayanes"]["nuevos"] == 1 and r["aplicado"] is False
     assert _saldos(base) == {}
 
@@ -176,3 +177,31 @@ def test_dos_prendas_con_la_misma_etiqueta_no_tumban_la_sincronizacion(base):
            _p("26602-1T8", "JEAN", arrayanes=1,
               additional_fields={"barcode": "26602-1T6"})])
     assert _saldos(base) == {"26602-1T6": 2, "26602-1T8": 1}
+
+
+def test_la_prenda_con_precio_en_cero_en_siigo_ENTRA_con_el_de_la_tienda_en_linea(base):
+    """`94609-1`: sin esto la caja no la encuentra aunque esté colgada."""
+    pedidos = []
+
+    def lista(codigos):
+        pedidos.append(list(codigos))
+        return {"94609-1T6": 149900}
+
+    r = _sinc([_p("94609-1T6", "JEAN WIDE LEG", arrayanes=4, florida=3, precio=0),
+               _p("26602-1T6", "JEAN", arrayanes=2)], precios_de_lista=lista)
+    assert pedidos == [["94609-1T6"]]            # una sola consulta, sólo lo que falta
+    assert _saldos(base) == {"94609-1T6": 4, "26602-1T6": 2}
+    assert _saldos(base, "tienda:florida") == {"94609-1T6": 3}
+    with base.connect() as c:
+        assert c.execute(text("SELECT precio_con_iva FROM retail.variantes "
+                              "WHERE sku = '94609-1T6'")).scalar() == 14990000
+    assert r["tiendas"]["arrayanes"]["precio_prestado"] == [
+        "94609-1T6 $149.900 (tienda_en_linea)"]
+
+
+def test_si_la_tienda_en_linea_no_contesta_lo_demas_se_sincroniza_igual(base):
+    r = _sinc([_p("94609-1T6", "JEAN", arrayanes=4, precio=0),
+               _p("26602-1T6", "JEAN", arrayanes=2)],
+              precios_de_lista=lambda codigos: {})
+    assert _saldos(base) == {"26602-1T6": 2}
+    assert r["tiendas"]["arrayanes"]["fuera"] == 1

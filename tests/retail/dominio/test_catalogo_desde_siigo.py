@@ -103,14 +103,14 @@ def test_un_producto_SIN_iva_incluido_no_se_carga_a_ciegas():
                      prices=[{"price_list": [{"value": 159900}]}])
     filas, problemas = filas_de_productos([raro], "Arrayanes")
     assert filas == []
-    assert "SIN IVA incluido" in problemas[0] and "190.281" in problemas[0]
+    assert "SIN IVA incluido" in problemas[0]
 
 
 def test_sin_precio_no_se_carga():
     """Pasa con la referencia 94609-1 entera. Sin precio no hay venta."""
     filas, problemas = filas_de_productos(
         [_producto(code="94609-1T4", prices=[])], "Arrayanes")
-    assert filas == [] and "sin precio" in problemas[0]
+    assert filas == [] and "precio en $0" in problemas[0]
 
 
 # ── EL CÓDIGO DE BARRAS, que es lo que escanea la pistola ───────────────────
@@ -142,3 +142,73 @@ def test_ref_talla_entiende_numeros_y_letras():
     assert ref_talla("70112-2TM") == ("70112-2", "M")
     assert ref_talla("010") == ("", "")
     assert ref_talla("") == ("", "")
+
+
+# ── UNA PRENDA CON EXISTENCIA NO SE QUEDA FUERA POR UN PRECIO EN $0 ─────────
+
+def _sin_precio(code, **kw):
+    return _producto(code=code, name=f"{code} JEAN",
+                     prices=[{"price_list": [{"value": 0.0}]}], **kw)
+
+
+def test_la_talla_sin_precio_toma_el_de_las_otras_tallas_de_su_referencia():
+    """`H31503-1T28` en $0 y la T30 a $159.900: una referencia vale lo mismo
+    en todas sus tallas."""
+    filas, problemas = filas_de_productos(
+        [_sin_precio("H31503-1T28"),
+         _producto(code="H31503-1T30", name="H31503-1T30 JEAN",
+                   prices=[{"price_list": [{"value": 159900}]}])], "Arrayanes")
+    assert problemas == []
+    assert {f["sku"]: (f["precio"], f["precio_origen"]) for f in filas} == {
+        "H31503-1T28": (159900, "otras_tallas"),
+        "H31503-1T30": (159900, "siigo")}
+
+
+def test_si_las_otras_tallas_no_coinciden_NO_se_elige_un_precio():
+    _, problemas = filas_de_productos(
+        [_sin_precio("70001-1T6"),
+         _producto(code="70001-1T8", prices=[{"price_list": [{"value": 149900}]}]),
+         _producto(code="70001-1T10", prices=[{"price_list": [{"value": 129900}]}])],
+        "Arrayanes")
+    assert len(problemas) == 1 and "70001-1T6" in problemas[0]
+
+
+def test_la_referencia_entera_en_cero_toma_el_precio_de_la_tienda_en_linea():
+    """Lo que pasó con `94609-1`: 26 unidades en cada tienda, todas las tallas
+    en $0 en Siigo, y la caja no la encontraba."""
+    from backend.modules.retail.catalogo_desde_siigo import sin_precio_en_siigo
+    productos = [_sin_precio("94609-1T6"), _sin_precio("94609-1T8")]
+    assert sin_precio_en_siigo(productos, {37}) == ["94609-1T6", "94609-1T8"]
+
+    filas, problemas = filas_de_productos(
+        productos, "Arrayanes",
+        {"94609-1T6": 149900, "94609-1t8": 149900})
+    assert problemas == []
+    assert [(f["sku"], f["precio"], f["precio_origen"]) for f in filas] == [
+        ("94609-1T6", 149900, "tienda_en_linea"),
+        ("94609-1T8", 149900, "tienda_en_linea")]
+
+
+def test_sin_ninguna_fuente_de_precio_se_reporta_y_no_se_inventa():
+    filas, problemas = filas_de_productos([_sin_precio("94609-1T6")], "Arrayanes")
+    assert filas == []
+    assert "ponérselo en Siigo" in problemas[0]
+
+
+def test_no_se_pregunta_afuera_por_lo_que_no_esta_en_la_tienda():
+    """Sólo los códigos con existencia en las bodegas pedidas."""
+    from backend.modules.retail.catalogo_desde_siigo import sin_precio_en_siigo
+    solo_melonn = _sin_precio("80001-1T6", warehouses=[
+        {"id": 32, "name": "MELONN", "quantity": 9.0}])
+    assert sin_precio_en_siigo([solo_melonn], {37, 48}) == []
+
+
+def test_si_siigo_SI_trae_precio_pero_mal_marcado_no_se_le_cambia_por_el_de_la_web():
+    """La caja regalo: $5.950 «sin IVA incluido» en Siigo y $5.000 en la
+    tienda en línea. Dos precios distintos: se reporta, no se elige."""
+    from backend.modules.retail.catalogo_desde_siigo import sin_precio_en_siigo
+    caja = _producto(code="010", name="010 CAJA REGALO", tax_included=False,
+                     prices=[{"price_list": [{"value": 5950}]}])
+    assert sin_precio_en_siigo([caja], {37}) == []
+    filas, problemas = filas_de_productos([caja], "Arrayanes", {"010": 5000})
+    assert filas == [] and "SIN IVA incluido" in problemas[0]

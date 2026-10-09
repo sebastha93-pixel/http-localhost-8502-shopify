@@ -39,7 +39,10 @@ from typing import Dict, List, Optional
 from sqlalchemy import create_engine, text
 
 from backend.modules.retail.cargar_catalogo import _id_de
-from backend.modules.retail.catalogo_desde_siigo import filas_de_productos
+from backend.modules.retail.catalogo_desde_siigo import (
+    filas_de_productos,
+    sin_precio_en_siigo,
+)
 from backend.modules.retail.infrastructure.persistencia.unidad_de_trabajo import (
     normalizar_url,
 )
@@ -55,11 +58,20 @@ class LecturaSospechosa(Exception):
 
 def sincronizar(url: str, *, productos: Optional[List[dict]] = None,
                 aplicar: bool = False,
-                usuario_id: str = "sincronizacion_siigo") -> dict:
-    """Devuelve un resumen por tienda. En ensayo calcula todo y no escribe."""
+                usuario_id: str = "sincronizacion_siigo",
+                precios_de_lista=None) -> dict:
+    """Devuelve un resumen por tienda. En ensayo calcula todo y no escribe.
+
+    `precios_de_lista(códigos) -> {código: pesos}`: a quién preguntarle el
+    precio de lo que Siigo tiene en $0. Por defecto, la tienda en línea.
+    """
     if productos is None:
         from backend.modules.retail.catalogo_desde_siigo import _traer_productos
         productos = _traer_productos()
+    if precios_de_lista is None:
+        from backend.modules.retail.infrastructure.precios_tienda_en_linea import (
+            precios_de_lista,
+        )
 
     resumen: dict = {"aplicado": aplicar, "productos_leidos": len(productos),
                      "tiendas": {}}
@@ -72,9 +84,15 @@ def sincronizar(url: str, *, productos: Optional[List[dict]] = None,
                  WHERE tipo = 'tienda' AND siigo_bodega_id IS NOT NULL
                  ORDER BY id
             """)).mappings().all()
+            # Lo que tiene existencia en alguna tienda y Siigo trae sin precio:
+            # se le pregunta UNA vez a la tienda en línea, por todos.
+            bodegas = {int(u["siigo_bodega_id"]) for u in ubicaciones}
+            faltan = sin_precio_en_siigo(productos, bodegas)
+            respaldo = precios_de_lista(faltan) if faltan else {}
+            resumen["sin_precio_en_siigo"] = len(faltan)
             for u in ubicaciones:
                 resumen["tiendas"][u["tienda_id"]] = _una_tienda(
-                    c, u, productos, usuario_id)
+                    c, u, productos, usuario_id, respaldo)
             if aplicar:
                 tx.commit()
             else:
@@ -84,8 +102,10 @@ def sincronizar(url: str, *, productos: Optional[List[dict]] = None,
     return resumen
 
 
-def _una_tienda(c, u, productos: List[dict], usuario_id: str) -> dict:
-    filas, problemas = filas_de_productos(productos, int(u["siigo_bodega_id"]))
+def _una_tienda(c, u, productos: List[dict], usuario_id: str,
+                respaldo: Optional[Dict[str, int]] = None) -> dict:
+    filas, problemas = filas_de_productos(
+        productos, int(u["siigo_bodega_id"]), respaldo)
     por_sku: Dict[str, dict] = {}
     for f in filas:
         # Un SKU repetido en Siigo: se queda el primero. Ya va en `problemas`.
@@ -125,7 +145,12 @@ def _una_tienda(c, u, productos: List[dict], usuario_id: str) -> dict:
     r = {"en_siigo": len(por_sku), "nuevos": 0, "datos_actualizados": 0,
          "saldos_cambiados": 0, "puestos_en_cero": 0,
          "unidades": 0, "sin_facturar_descontadas": 0,
-         "fuera": len(problemas), "problemas": problemas[:20]}
+         "fuera": len(problemas), "problemas": problemas[:20],
+         # Lo que entró con un precio que NO es el de Siigo: hay que
+         # corregirlo allá. Se lista para que no pase por normal.
+         "precio_prestado": sorted(
+             f"{f['sku']} ${f['precio']:,} ({f['precio_origen']})".replace(",", ".")
+             for f in por_sku_previo(filas) if f["precio_origen"] != "siigo")}
     tocados: List[str] = []
 
     for sku, f in por_sku.items():
@@ -207,6 +232,16 @@ def _una_tienda(c, u, productos: List[dict], usuario_id: str) -> dict:
                    categoria = EXCLUDED.categoria, color = EXCLUDED.color
         """), {"skus": tocados})
     return r
+
+
+def por_sku_previo(filas: List[dict]) -> List[dict]:
+    """Una fila por SKU (la primera), como las usa `_una_tienda`."""
+    vistos, salida = set(), []
+    for f in filas:
+        if f["sku"].upper() not in vistos:
+            vistos.add(f["sku"].upper())
+            salida.append(f)
+    return salida
 
 
 def _fijar(c, ubicacion_id: str, variante_id: str, antes: int, despues: int,

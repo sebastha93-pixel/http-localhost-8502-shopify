@@ -48,7 +48,7 @@ async def tienda(monkeypatch):
     sembrar(URL, aplicar=True)
     # Una con existencia, una que sólo tiene FLORIDA (Arrayanes no tiene ni
     # la fila de saldo) y una con una sola unidad.
-    sincronizar(URL, aplicar=True, productos=[
+    sincronizar(URL, aplicar=True, precios_de_lista=lambda c: {}, productos=[
         _p("10001-1T6", arrayanes=5), _p("20002-1T8", florida=3),
         _p("30003-1T10", arrayanes=1)])
     os.environ["RETAIL_DATABASE_URL"] = URL
