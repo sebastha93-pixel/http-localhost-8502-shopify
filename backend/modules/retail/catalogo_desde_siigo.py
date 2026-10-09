@@ -41,7 +41,8 @@ import time
 from typing import Dict, List, Tuple
 
 __all__ = ["filas_de_productos", "escribir_csv", "ref_talla", "IVA_PORCENTAJE",
-           "PRECIO_MINIMO"]
+           "PRECIO_MINIMO",
+           "precios_por_referencia", "sin_precio_en_siigo"]
 
 IVA_PORCENTAJE = 19.0
 #  Tallas numéricas (4, 10, 12) o de letra (S, M, XL). Lo que no calce no es
@@ -86,17 +87,81 @@ def _nombre_limpio(producto: dict, code: str) -> str:
 PRECIO_MINIMO = 1_000
 
 
-def filas_de_productos(productos: List[dict], bodega) -> Tuple[List[dict], List[str]]:
+def _precio_propio(pr: dict):
+    """El precio de etiqueta que Siigo tiene para ESE producto, o `None` si
+    no sirve: en $0, marcado sin IVA incluido, o por debajo del piso."""
+    precio, con_iva = _precio_con_iva(pr)
+    if not precio or not con_iva or precio < PRECIO_MINIMO:
+        return None
+    return int(round(precio))
+
+
+def precios_por_referencia(productos: List[dict]) -> Dict[str, int]:
+    """El precio de cada referencia según SUS OTRAS TALLAS.
+
+    Una referencia vale lo mismo en todas sus tallas. Si a la talla 28 le
+    falta el precio en Siigo y la 30 lo tiene, ése es. Sólo cuando todas las
+    que lo tienen coinciden: con dos precios distintos no se elige.
+    """
+    vistos: Dict[str, set] = {}
+    for pr in productos:
+        ref, talla = ref_talla((pr.get("code") or "").strip())
+        precio = _precio_propio(pr)
+        if ref and talla and precio:
+            vistos.setdefault(ref, set()).add(precio)
+    return {ref: next(iter(p)) for ref, p in vistos.items() if len(p) == 1}
+
+
+def sin_precio_en_siigo(productos: List[dict], bodegas) -> List[str]:
+    """Los códigos con existencia en esas bodegas a los que Siigo no les da
+    un precio útil ni por sus otras tallas. Son los que hay que ir a
+    preguntarle a otra fuente."""
+    por_ref = precios_por_referencia(productos)
+    faltan = []
+    for pr in productos:
+        if not pr.get("stock_control"):
+            continue
+        if not any(float(w.get("quantity") or 0) > 0
+                   and (w.get("id") in bodegas or w.get("name") in bodegas)
+                   for w in (pr.get("warehouses") or [])):
+            continue
+        code = (pr.get("code") or "").strip()
+        if not code or _precio_propio(pr) or _precio_con_iva(pr)[0]:
+            continue           # tiene precio (aunque esté mal marcado)
+        if ref_talla(code)[0] in por_ref:
+            continue
+        faltan.append(code)
+    return faltan
+
+
+def filas_de_productos(productos: List[dict], bodega,
+                       precios_de_respaldo: Dict[str, int] = None,
+                       ) -> Tuple[List[dict], List[str]]:
     """Las filas del catálogo y los problemas, SIN tocar la red.
 
     `bodega` es el NOMBRE de la bodega en Siigo («Arrayanes») o su id (37).
 
     Devuelve los dos: un cargador que sólo devuelve filas esconde lo que dejó
     fuera, y lo que queda fuera es justo lo que alguien tiene que mirar.
+
+    UNA PRENDA CON EXISTENCIA NO SE QUEDA FUERA POR UN PRECIO MAL PUESTO EN
+    SIIGO. Pasó con `94609-1`: 26 unidades en Arrayanes, 26 en Florida, y el
+    precio en $0. La tienda la tenía colgada y la caja no la encontraba. El
+    precio se busca en este orden, y la fila dice de dónde salió:
+
+      1. el de Siigo, si sirve;
+      2. el de las otras tallas de la misma referencia;
+      3. `precios_de_respaldo[código]` — el precio de lista de la tienda en
+         línea, que quien llama trae de Shopify.
+
+    Sólo si ninguno lo da se reporta y se deja fuera: una prenda no se vende
+    a un precio inventado.
     """
     filas: List[dict] = []
     problemas: List[str] = []
     vistos: Dict[str, int] = {}
+    por_ref = precios_por_referencia(productos)
+    respaldo = {k.upper(): v for k, v in (precios_de_respaldo or {}).items()}
 
     for pr in productos:
         if not pr.get("stock_control"):
@@ -113,22 +178,26 @@ def filas_de_productos(productos: List[dict], bodega) -> Tuple[List[dict], List[
         if not code:
             continue
 
-        precio, con_iva = _precio_con_iva(pr)
+        precio, origen = _precio_propio(pr), "siigo"
+        if not precio and ref in por_ref:
+            precio, origen = por_ref[ref], "otras_tallas"
+        # El respaldo es SÓLO para lo que Siigo tiene en $0. Si Siigo trae un
+        # precio y lo raro es cómo está marcado (la caja regalo: $5.950 «sin
+        # IVA incluido», y $5.000 en la tienda en línea), hay dos precios
+        # distintos sobre la mesa y no le toca a este código elegir.
+        if (not precio and not _precio_con_iva(pr)[0]
+                and respaldo.get(code.upper(), 0) >= PRECIO_MINIMO):
+            precio, origen = int(respaldo[code.upper()]), "tienda_en_linea"
         if not precio:
-            problemas.append(f"{code}: sin precio en Siigo")
-            continue
-        if not con_iva:
-            # El precio se convirtió ×1,19 y casi nunca da un número de
-            # etiqueta. Es señal de que ESE producto está marcado distinto.
-            problemas.append(
-                f"{code}: Siigo lo tiene SIN IVA incluido, a diferencia del "
-                f"resto. Convertido daría ${round(precio):,}".replace(",", ".")
-                + " — revísalo antes de cargarlo")
-            continue
-
-        if precio < PRECIO_MINIMO:
-            problemas.append(f"{code}: precio de ${round(precio)}, no es un "
-                             f"precio de venta")
+            crudo, con_iva = _precio_con_iva(pr)
+            if not crudo:
+                motivo = "precio en $0 en Siigo"
+            elif not con_iva:
+                motivo = "Siigo lo tiene SIN IVA incluido, a diferencia del resto"
+            else:
+                motivo = f"precio de ${round(crudo)}, no es un precio de venta"
+            problemas.append(f"{code}: {motivo}, y no hay de dónde más "
+                             f"tomarlo. Hay que ponérselo en Siigo.")
             continue
 
         if es_prenda:
@@ -147,6 +216,9 @@ def filas_de_productos(productos: List[dict], bodega) -> Tuple[List[dict], List[
                           or "Sin categoría").strip().title(),
             "talla": talla,
             "precio": int(round(precio)),
+            # De dónde salió el precio. Lo que no viene de Siigo es un dato
+            # que contabilidad tiene que corregir allá.
+            "precio_origen": origen,
             "cantidad": int(round(cantidad)),
             "codigo_barras": ((pr.get("additional_fields") or {})
                               .get("barcode") or "").strip(),
@@ -160,7 +232,7 @@ def filas_de_productos(productos: List[dict], bodega) -> Tuple[List[dict], List[
 
 def escribir_csv(filas: List[dict], ruta: str) -> None:
     with open(ruta, "w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=[
+        w = csv.DictWriter(fh, extrasaction="ignore", fieldnames=[
             "referencia", "nombre", "color", "categoria", "talla", "precio",
             "cantidad", "codigo_barras", "sku"])
         w.writeheader()

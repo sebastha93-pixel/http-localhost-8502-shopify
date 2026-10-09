@@ -67,7 +67,7 @@ def _catalogo(c, **params):
 
 def test_salen_TODAS_las_referencias_de_la_tienda_no_las_primeras_60(cliente):
     from backend.modules.retail.sincronizar_inventario import sincronizar
-    sincronizar(URL, aplicar=True, productos=[
+    sincronizar(URL, aplicar=True, precios_de_lista=lambda c: {}, productos=[
         _p(f"9{n:04d}-1T6", arrayanes=2) for n in range(150)])
     refs = _catalogo(cliente)
     assert len(refs) == 150
@@ -76,14 +76,14 @@ def test_salen_TODAS_las_referencias_de_la_tienda_no_las_primeras_60(cliente):
 
 def test_no_salen_las_referencias_que_solo_tiene_la_OTRA_tienda(cliente):
     from backend.modules.retail.sincronizar_inventario import sincronizar
-    sincronizar(URL, aplicar=True, productos=[
+    sincronizar(URL, aplicar=True, precios_de_lista=lambda c: {}, productos=[
         _p("10001-1T6", arrayanes=2), _p("20002-1T6", florida=5)])
     assert [r["referencia"] for r in _catalogo(cliente)] == ["10001-1"]
 
 
 def test_la_talla_agotada_de_una_referencia_que_si_hay_sale_en_cero(cliente):
     from backend.modules.retail.sincronizar_inventario import sincronizar
-    sincronizar(URL, aplicar=True, productos=[
+    sincronizar(URL, aplicar=True, precios_de_lista=lambda c: {}, productos=[
         _p("10001-1T6", arrayanes=2), _p("10001-1T8", florida=3)])
     [ref] = _catalogo(cliente)
     assert {t["talla"]: t["disponible"] for t in ref["tallas"]} == {"6": 2, "8": 0}
@@ -93,7 +93,7 @@ def test_buscando_una_referencia_agotada_SE_VE_y_se_ve_que_no_hay(cliente):
     """Quien busca por código tiene que encontrarla en cero, no concluir que
     no existe."""
     from backend.modules.retail.sincronizar_inventario import sincronizar
-    sincronizar(URL, aplicar=True, productos=[
+    sincronizar(URL, aplicar=True, precios_de_lista=lambda c: {}, productos=[
         _p("10001-1T6", arrayanes=2), _p("20002-1T6", florida=5)])
     [ref] = _catalogo(cliente, q="20002")
     assert ref["referencia"] == "20002-1"
