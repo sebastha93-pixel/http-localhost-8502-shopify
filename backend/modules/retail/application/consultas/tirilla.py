@@ -156,9 +156,27 @@ class ArmarTirilla:
                    t.nombre                   AS tienda_nombre,
                    t.resolucion_dian, t.mensaje_tirilla,
                    t.zona_horaria, t.regimen_iva, t.actividad_economica,
-                   t.autorizacion_numero, t.autorizacion_prefijo,
-                   t.autorizacion_desde, t.autorizacion_hasta,
-                   t.autorizacion_aprobada, t.autorizacion_meses,
+                   -- LA RESOLUCIÓN ES DE LA CAJA (migración 0027). Si la caja
+                   -- tiene prefijo, mandan SUS datos, completos o no: nunca
+                   -- se mezcla el prefijo de una con el número de otra. Sólo
+                   -- una caja sin resolución propia hereda la de la tienda.
+                   CASE WHEN c.autorizacion_prefijo IS NOT NULL
+                        THEN c.autorizacion_numero ELSE t.autorizacion_numero END
+                       AS autorizacion_numero,
+                   coalesce(c.autorizacion_prefijo, t.autorizacion_prefijo)
+                       AS autorizacion_prefijo,
+                   CASE WHEN c.autorizacion_prefijo IS NOT NULL
+                        THEN c.autorizacion_desde ELSE t.autorizacion_desde END
+                       AS autorizacion_desde,
+                   CASE WHEN c.autorizacion_prefijo IS NOT NULL
+                        THEN c.autorizacion_hasta ELSE t.autorizacion_hasta END
+                       AS autorizacion_hasta,
+                   CASE WHEN c.autorizacion_prefijo IS NOT NULL
+                        THEN c.autorizacion_aprobada ELSE t.autorizacion_aprobada END
+                       AS autorizacion_aprobada,
+                   CASE WHEN c.autorizacion_prefijo IS NOT NULL
+                        THEN c.autorizacion_meses ELSE t.autorizacion_meses END
+                       AS autorizacion_meses,
                    c.siigo_documento_id,
                    coalesce(c.nombre, v.caja_id)   AS caja_nombre,
                    coalesce(p.nombre, v.cajera_id) AS cajera_nombre

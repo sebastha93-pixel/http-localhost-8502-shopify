@@ -504,6 +504,10 @@ def test_la_tirilla_de_una_factura_validada_lleva_lo_que_pide_la_norma(entorno, 
         async with AsyncSession(entorno) as s:
             return await ArmarTirilla(s).ejecutar(VENTA)
 
+    # Esta prueba fija el texto con la resolución heredada de la TIENDA: la
+    # caja sin resolución propia.
+    _ejecutar(entorno, "UPDATE retail.cajas SET autorizacion_prefijo = NULL")
+
     # Antes de emitir: viene en camino, y todavía no es factura.
     antes = _correr(ir())
     assert antes.factura_en_camino is True and antes.es_documento_fiscal is False
@@ -521,6 +525,35 @@ def test_la_tirilla_de_una_factura_validada_lleva_lo_que_pide_la_norma(entorno, 
     assert t.resolucion_dian == (
         "Número Autorización 18764083761292 aprobado en 20241120 prefijo TARR "
         "desde el número 1 al 1000000 Vigencia: 24 meses")
+
+
+def test_la_resolucion_es_de_la_CAJA_y_sin_sus_datos_no_hay_factura(entorno, monkeypatch):
+    """Las resoluciones nuevas van por caja (Florida tiene dos). Con el prefijo
+    puesto y el resto sin cargar, la tirilla NO toma prestado el número de la
+    resolución vieja de la tienda: no se llama factura hasta tener los datos."""
+    from backend.modules.retail.application.consultas.tirilla import ArmarTirilla
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    _drenar(SiigoFalso())
+    _ejecutar(entorno, "UPDATE retail.documentos_fiscales SET numero = 'ARRT-1'")
+
+    async def ir():
+        async with AsyncSession(entorno) as s:
+            return await ArmarTirilla(s).ejecutar(VENTA)
+    t = _correr(ir())
+    assert t.resolucion_dian is None and t.es_documento_fiscal is False
+
+    _ejecutar(entorno, """
+        UPDATE retail.cajas SET autorizacion_numero = '18764099999999',
+               autorizacion_desde = 1, autorizacion_hasta = 50000,
+               autorizacion_aprobada = DATE '2026-10-09', autorizacion_meses = 24
+         WHERE id = 'arrayanes_caja1'""")
+    t = _correr(ir())
+    assert t.es_documento_fiscal is True
+    assert t.resolucion_dian == (
+        "Número Autorización 18764099999999 aprobado en 20261009 prefijo ARRT "
+        "desde el número 1 al 50000 Vigencia: 24 meses")
 
 
 def test_la_resolucion_NO_se_le_pega_a_un_numero_que_no_ampara(entorno, monkeypatch):
