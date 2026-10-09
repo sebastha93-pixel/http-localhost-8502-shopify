@@ -537,6 +537,9 @@ def test_la_resolucion_es_de_la_CAJA_y_sin_sus_datos_no_hay_factura(entorno, mon
     monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
     _drenar(SiigoFalso())
     _ejecutar(entorno, "UPDATE retail.documentos_fiscales SET numero = 'ARRT-1'")
+    # La caja con el prefijo y NADA más, como quedó el día que se crearon.
+    _ejecutar(entorno, "UPDATE retail.cajas SET autorizacion_numero = NULL, "
+                       "autorizacion_aprobada = NULL")
 
     async def ir():
         async with AsyncSession(entorno) as s:
