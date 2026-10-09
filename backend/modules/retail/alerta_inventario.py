@@ -188,7 +188,7 @@ def main(argv: List[str]) -> int:
     if not url:
         print("Falta RETAIL_DATABASE_URL.", file=sys.stderr)
         return 2
-    dia = date.fromisoformat(argv[0]) if argv else (
+    dia = datetime.strptime(argv[0], "%Y-%m-%d").date() if argv else (
         datetime.now(_BOGOTA).date() - timedelta(days=1))
     motor = create_engine(normalizar_url(url), future=True)
     try:
