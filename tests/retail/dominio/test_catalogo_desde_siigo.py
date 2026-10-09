@@ -60,14 +60,32 @@ def test_lo_que_no_tiene_existencia_en_esa_bodega_no_entra():
     assert filas == [] and problemas == []     # no es un problema: no está
 
 
-def test_los_insumos_no_son_prendas_y_se_reportan():
-    """`010` es el empaque; `5353`, un insumo. No tienen talla que extraer."""
+def test_la_bolsa_SE_VENDE_y_entra_con_su_codigo_tal_cual():
+    """`5353` no tiene talla que extraer, pero va cobrada en casi todas las
+    facturas de la tienda. Su SKU es el código de Siigo: «5353TU» sería un
+    producto que Siigo no conoce y la factura se rechazaría."""
+    bolsa = _producto(code="5353", name="BOLSA MALE PEQUEÑA",
+                      prices=[{"price_list": [{"value": 1000}]}],
+                      additional_fields={"barcode": "5353"})
+    [fila], problemas = filas_de_productos([bolsa], "Arrayanes")
+    assert problemas == []
+    assert (fila["sku"], fila["referencia"], fila["talla"]) == ("5353", "5353", "U")
+    assert fila["precio"] == 1000 and fila["cantidad"] == 2
+
+
+def test_lo_que_no_tiene_precio_de_venta_se_reporta():
+    """`010` (sin IVA incluido), `101` (sin precio) y un llavero a $1."""
     filas, problemas = filas_de_productos(
-        [_producto(code="010", name="EMPAQUE"),
-         _producto(code="5353", name="INSUMO")], "Arrayanes")
-    assert filas == []
-    assert len(problemas) == 2
-    assert all("referencia y talla" in p for p in problemas)
+        [_producto(code="010", name="CAJA", tax_included=False),
+         _producto(code="101", name="GENERICO", prices=[]),
+         _producto(code="002LLAVERO", name="LLAVERO",
+                   prices=[{"price_list": [{"value": 1}]}])], "Arrayanes")
+    assert filas == [] and len(problemas) == 3
+
+
+def test_la_bodega_se_puede_pedir_por_su_id():
+    assert filas_de_productos([_producto()], 48)[0][0]["cantidad"] == 3
+    assert filas_de_productos([_producto()], 37)[0][0]["sku"] == "26602-1T6"
 
 
 # ── EL PRECIO, que es donde duele ───────────────────────────────────────────

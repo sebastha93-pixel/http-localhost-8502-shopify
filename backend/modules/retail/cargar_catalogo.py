@@ -49,7 +49,10 @@ COLUMNAS = ["referencia", "nombre", "color", "categoria", "talla",
 #  Opcional: el código IMPRESO en la etiqueta, cuando no es el SKU. En Siigo
 #  hay prendas cuyo código perdió la «T» (`42606-110`) o apunta a otra
 #  referencia; sin esta columna, esas etiquetas se escanean y no pasa nada.
-OPCIONALES = ["codigo_barras"]
+#  `sku`: para lo que no es una prenda con talla (bolsas, pañoletas). Su código
+#  en Siigo es el SKU tal cual; sin esta columna saldría «5353TU», que Siigo no
+#  conoce, y la factura se rechazaría.
+OPCIONALES = ["codigo_barras", "sku"]
 
 #  Crockford base32 SIN I, L, O ni U — el mismo alfabeto del dominio
 #  `retail.ulid`. Las cuatro se excluyen para que nadie confunda un 1 con una
@@ -116,7 +119,7 @@ def leer_csv(ruta: str) -> Tuple[List[dict], List[str]]:
                 problemas.append(f"línea {n}: falta el nombre de {ref}")
                 continue
 
-            sku = f"{ref}T{talla}"
+            sku = (fila.get("sku") or "").strip().upper() or f"{ref}T{talla}"
             if sku in vistos:
                 problemas.append(
                     f"línea {n}: {sku} ya venía en la línea {vistos[sku]}. "
