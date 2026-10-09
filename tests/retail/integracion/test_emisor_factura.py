@@ -877,3 +877,39 @@ def test_con_todo_apagado_la_nota_credito_tambien_espera(entorno, monkeypatch):
     monkeypatch.setenv("RETAIL_FISCAL_MODO", "apagado")
     assert _drenar(siigo, dentro_de=timedelta(minutes=5)).sin_manejador == 1
     assert siigo.nc_enviadas == []
+
+
+def test_si_falta_la_libreria_del_qr_la_tirilla_SALE_IGUAL(entorno, monkeypatch):
+    """Pasó en producción el primer día: `segno` no estaba instalado y la
+    tirilla de toda venta ya facturada respondía 500. La factura existía y
+    el papel no salía."""
+    import builtins
+    from backend.modules.retail.application.consultas.tirilla import ArmarTirilla
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    # El Siigo falso numera con TARR: se usa la resolución de la tienda.
+    _ejecutar(entorno, "UPDATE retail.cajas SET autorizacion_prefijo = NULL")
+    _drenar(SiigoFalso())
+
+    real = builtins.__import__
+
+    def sin_segno(nombre, *a, **kw):
+        if nombre == "segno":
+            raise ImportError("No module named 'segno'")
+        return real(nombre, *a, **kw)
+    monkeypatch.setattr(builtins, "__import__", sin_segno)
+
+    async def ir():
+        async with AsyncSession(entorno) as s:
+            return await ArmarTirilla(s).ejecutar(VENTA)
+    t = _correr(ir())
+    assert t.es_documento_fiscal is True and t.cufe == "c" * 96
+    assert t.qr_ruta is None
+
+
+def test_la_libreria_del_qr_esta_en_lo_que_instala_PRODUCCION():
+    """El servidor instala `requirements.txt`, no el de las pruebas."""
+    import pathlib
+    raiz = pathlib.Path(__file__).resolve().parents[3]
+    assert "segno" in (raiz / "requirements.txt").read_text()
