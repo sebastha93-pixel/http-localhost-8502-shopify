@@ -31,12 +31,19 @@ _LIBERAR = text("""
 
 # Confirmar = la reserva se vuelve salida real. Se hace en una sentencia para
 # que no exista un instante en el que el stock ya bajó pero sigue reservado.
+#
+# ES UN UPSERT, y no por comodidad. Una tienda puede vender una prenda que el
+# sistema nunca le contó —llegó sin traslado, o Siigo la tiene en otra bodega—
+# y para esa prenda NO HAY FILA de saldo. Con un UPDATE la venta reventaba con
+# la clienta pagando. La prenda existe: está en la mano de la cajera. El saldo
+# nace en negativo, que es exactamente lo que hay que avisarle a contabilidad.
 _CONFIRMAR = text("""
-    UPDATE retail.stock_ubicacion
-       SET cantidad = cantidad - :n,
-           reservado = greatest(reservado - :n, 0),
+    INSERT INTO retail.stock_ubicacion (ubicacion_id, variante_id, cantidad)
+    VALUES (:ubicacion, :variante, -:n)
+    ON CONFLICT (ubicacion_id, variante_id) DO UPDATE
+       SET cantidad = retail.stock_ubicacion.cantidad - :n,
+           reservado = greatest(retail.stock_ubicacion.reservado - :n, 0),
            actualizado_en = now()
-     WHERE ubicacion_id = :ubicacion AND variante_id = :variante
     RETURNING cantidad
 """)
 

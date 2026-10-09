@@ -64,6 +64,17 @@ def correr_ahora() -> dict:
         _candado.release()
 
 
+def _alerta_diaria() -> None:
+    """El correo a contabilidad con lo vendido ayer sin existencia. Se intenta
+    en cada pasada; `enviar_la_de_ayer` sabe si toca y si ya salió."""
+    from backend.modules.retail import alerta_inventario
+    url = os.environ.get("RETAIL_DATABASE_URL", "").strip()
+    if not url:
+        return
+    r = alerta_inventario.enviar_la_de_ayer(url)
+    ultimo["alerta"] = r
+
+
 def _bucle() -> None:
     if _parar.wait(RETRASO_INICIAL):
         return
@@ -72,6 +83,10 @@ def _bucle() -> None:
             correr_ahora()
         except Exception as e:  # noqa: BLE001 — el hilo no muere por una pasada
             log.error("[retail-inventario] pasada fallida: %s", e)
+        try:
+            _alerta_diaria()
+        except Exception as e:  # noqa: BLE001
+            log.error("[retail-inventario] alerta diaria fallida: %s", e)
         _parar.wait(INTERVALO_SEGUNDOS)
 
 
