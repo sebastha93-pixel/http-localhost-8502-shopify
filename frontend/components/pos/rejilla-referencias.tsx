@@ -78,17 +78,27 @@ export function RejillaReferencias({
             {r.tallas.map((t) => {
               const agotada = t.disponible <= 0;
               return (
+                // LA TALLA EN CERO SE PUEDE VENDER. El inventario del sistema
+                // es el de Siigo, y Siigo no siempre va al día: la prenda que
+                // la cajera tiene en la mano existe aunque el sistema diga
+                // cero. Bloquearla era perder la venta por un dato atrasado.
+                // Se ve distinta —punteada y apagada— para que se note, el
+                // carrito lo avisa, y contabilidad recibe la lista cada día.
                 <button
                   key={t.sku}
-                  disabled={agotada}
                   onClick={() => onElegir(r, t)}
-                  title={agotada ? "Agotada" : `${t.disponible} en stock`}
-                  aria-label={`Talla ${t.talla}${agotada ? ", agotada" : `, ${t.disponible} en stock`}`}
+                  title={agotada
+                    ? "El sistema la tiene en cero. Se puede vender: queda avisado a contabilidad."
+                    : `${t.disponible} en stock`}
+                  aria-label={`Talla ${t.talla}${agotada ? ", en cero según el sistema" : `, ${t.disponible} en stock`}`}
+                  style={agotada
+                    ? { borderStyle: "dashed", color: "var(--pos-muted)" }
+                    : undefined}
                   // 44×44 de verdad, no una zona sensible que lo aparente. Es
                   // el control más pulsado del producto —uno por línea de cada
                   // venta, de pie y con una prenda en la otra mano— y ahí un
                   // fallo de puntería es una talla equivocada en la bolsa.
-                  className="h-11 w-full rounded-[var(--pos-r-sm)] border border-[var(--pos-divider)] text-[14px] transition-colors duration-[var(--pos-transicion)] enabled:hover:border-[var(--pos-accent)] enabled:hover:bg-[var(--pos-100)]"
+                  className="h-11 w-full rounded-[var(--pos-r-sm)] border border-[var(--pos-divider)] text-[14px] transition-colors duration-[var(--pos-transicion)] hover:border-[var(--pos-accent)] hover:bg-[var(--pos-100)]"
                 >
                   {t.talla}
                 </button>

@@ -110,7 +110,8 @@ export function CarritoPanel({
 
               {l.disponible <= 0 && (
                 <p className="mt-1.5 text-[12px]" style={{ color: "var(--pos-700)" }}>
-                  ⚠ El sistema no la tiene en esta tienda. Se vende igual y queda alertado.
+                  El sistema la tiene en cero en esta tienda. Se vende igual
+                  y contabilidad recibe el aviso.
                 </p>
               )}
             </div>
