@@ -92,11 +92,14 @@ TIENDAS = [
 #  muestra el número de Siigo como «Factura No.» y éste como referencia.
 CAJAS = [
     {"id": "florida_caja1", "tienda_id": "florida", "nombre": "Caja 1",
-     "prefijo_factura": "FLPOS"},
+     "prefijo_factura": "FLPOS",
+     "autorizacion_prefijo": "TFL"},
     {"id": "florida_caja2", "tienda_id": "florida", "nombre": "Caja 2",
-     "prefijo_factura": "FLPOS"},
+     "prefijo_factura": "FLPOS",
+     "autorizacion_prefijo": "TFP"},
     {"id": "arrayanes_caja1", "tienda_id": "arrayanes", "nombre": "Caja 1",
-     "prefijo_factura": "ARRPOS"},
+     "prefijo_factura": "ARRPOS",
+     "autorizacion_prefijo": "ARRT"},
 ]
 
 UBICACIONES = [
