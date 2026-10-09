@@ -101,9 +101,30 @@ function filtrar(
     if (categoria && categoria !== "Todo" && r.categoria !== categoria) return false;
     if (!tokens.length) return true;
     const texto = [r.referencia, r.nombre, r.color,
-                   ...r.tallas.map((t) => t.sku)].join(" ").toLowerCase();
+                   ...r.tallas.map((t) => t.sku),
+                   ...r.tallas.map((t) => t.codigo_barras || "")]
+      .join(" ").toLowerCase();
     return tokens.every((t) => texto.includes(t));
   });
+}
+
+/** Las tallas cuyo SKU —o el código impreso en la etiqueta, que no siempre es
+ *  el mismo— es EXACTAMENTE lo leído. Se devuelven TODAS: si un código casa
+ *  con dos prendas, agregar cualquiera sería adivinar con la clienta enfrente. */
+function coincidencias(
+  referencias: Referencia[],
+  texto: string,
+): { r: Referencia; t: Talla }[] {
+  const casan: { r: Referencia; t: Talla }[] = [];
+  for (const r of referencias) {
+    for (const t of r.tallas) {
+      if (t.sku.toUpperCase() === texto ||
+          (t.codigo_barras || "").toUpperCase() === texto) {
+        casan.push({ r, t });
+      }
+    }
+  }
+  return casan;
 }
 
 /**
@@ -170,6 +191,11 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
   // que se ve es una foto, y ofrecer lo que ya se vendió en la otra caja es la
   // peor conversación posible en el mostrador.
   const [catalogoDe, setCatalogoDe] = useState<number | null>(null);
+  // EL CATÁLOGO ENTERO, EN MEMORIA. Una lectura de la pistola se resuelve
+  // aquí, sin ir al servidor: el viaje de ida y vuelta por cada prenda era un
+  // segundo largo con la clienta enfrente (medido en Arrayanes el primer día).
+  // Se refresca cada vez que el servidor devuelve el catálogo sin filtros.
+  const catalogoCompleto = useRef<Referencia[] | null>(null);
   // Horas desde el último contacto con el servidor. No es «hay red»: la caja
   // puede cobrar sin conexión una hora sin problema; lo que no puede es
   // seguir haciéndolo tres días.
@@ -319,6 +345,27 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
     if (!configurado || !turno || !UBICACION) return;
     let vigente = true;
     const temporizador = setTimeout(async () => {
+      // PRIMERO LO QUE YA ESTÁ EN LA CAJA. Si lo leído es exactamente una
+      // prenda del catálogo en memoria, entra de una vez y no se le pregunta
+      // nada al servidor. La venta se valida allá al cobrar, así que un stock
+      // de hace unos minutos aquí no puede colar una venta que no se pueda
+      // hacer.
+      const enMemoria = catalogoCompleto.current;
+      const leido = consulta.trim().toUpperCase();
+      if (enMemoria && leido.length >= 6) {
+        const casan = coincidencias(enMemoria, leido);
+        if (casan.length === 1) {
+          agregar(casan[0].r, casan[0].t);
+          setConsulta("");
+          return;
+        }
+      }
+      // Y la búsqueda a mano se pinta ya con lo local; el servidor la
+      // refresca debajo cuando conteste.
+      if (enMemoria && consulta.trim()) {
+        setReferencias(filtrar(enMemoria, consulta, categoria));
+      }
+
       let d: { referencias: Referencia[]; categorias: string[] };
       try {
         d = await listarCatalogo(UBICACION, consulta.trim(), categoria);
@@ -330,6 +377,7 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
         // guardar lo filtrado dejaría a la cajera viendo tres referencias
         // porque justo antes de la caída había buscado «falda».
         if (!consulta.trim() && (!categoria || categoria === "Todo")) {
+          catalogoCompleto.current = d.referencias;
           void guardarCatalogo(d).catch(() => {});
         }
       } catch (e) {
@@ -342,6 +390,7 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
           return;
         }
         setCatalogoDe(local.guardado_en);
+        catalogoCompleto.current = local.referencias;
         const ultimo = await ultimoContacto();
         setHorasSinContacto(ultimo ? (Date.now() - ultimo) / 3_600_000 : 0);
         d = { referencias: filtrar(local.referencias, consulta, categoria),
@@ -363,15 +412,7 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
         // caso no se agrega nada y quedan las dos a la vista para tocar.
         const texto = consulta.trim().toUpperCase();
         if (texto.length >= 6) {
-          const casan: { r: Referencia; t: Talla }[] = [];
-          for (const r of d.referencias) {
-            for (const t of r.tallas) {
-              if (t.sku.toUpperCase() === texto ||
-                  (t.codigo_barras || "").toUpperCase() === texto) {
-                casan.push({ r, t });
-              }
-            }
-          }
+          const casan = coincidencias(d.referencias, texto);
           if (casan.length === 1) {
             agregar(casan[0].r, casan[0].t);
             setConsulta("");
