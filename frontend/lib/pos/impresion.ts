@@ -10,10 +10,16 @@
  * frente a la impresora con el papel en la mano. Por eso se ajusta ahí, con
  * una tirilla de prueba, y se guarda en el equipo.
  *
- * No viaja al servidor a propósito: si el equipo se cambia, la impresora
- * también, y heredar el ajuste de la anterior sería empezar mal.
+ * SE GUARDA EN LA CAJA, EN EL SERVIDOR (2026-10-10). Vivía sólo en el
+ * navegador, y eso falló de dos maneras: quien lo ajustaba desde su propio
+ * computador veía cambiar la vista previa mientras la caja de la tienda seguía
+ * imprimiendo igual —eran dos navegadores—, y un navegador que borra sus datos
+ * lo perdía. Ahora la caja lo lee del servidor cada vez que abre una pantalla
+ * que imprime; el navegador sólo guarda una copia para cuando no hay red.
  */
 import { useCallback, useEffect, useState } from "react";
+import { api } from "@/lib/api";
+import { cajaDeEsteEquipo } from "@/lib/pos/caja-del-equipo";
 
 export interface ConfigImpresion {
   /** Ancho de la hoja que se le declara a la impresora, en mm (el rollo). */
@@ -35,7 +41,9 @@ export const IMPRESION_POR_DEFECTO: ConfigImpresion = {
 export const LIMITES = {
   hojaMm: { min: 48, max: 90, paso: 1 },
   anchoMm: { min: 40, max: 80, paso: 1 },
-  letraPct: { min: 70, max: 160, paso: 5 },
+  // Hasta 250: hay controladores que encogen la hoja entera, y con 160 no
+  // alcanzaba a compensarse.
+  letraPct: { min: 70, max: 250, paso: 5 },
   margenMm: { min: 0, max: 12, paso: 0.5 },
 } as const;
 
@@ -81,6 +89,43 @@ export function guardarImpresion(c: Partial<ConfigImpresion>): ConfigImpresion {
   return limpio;
 }
 
+// ── El servidor ─────────────────────────────────────────────────────────────
+
+/** Una consulta por carga de página y por caja: varias pantallas montan la
+ *  tirilla y no hace falta preguntar lo mismo cada vez. */
+const pedidas = new Map<string, Promise<ConfigImpresion | null>>();
+
+export function impresionDeLaCaja(caja: string): Promise<ConfigImpresion | null> {
+  if (!caja) return Promise.resolve(null);
+  let p = pedidas.get(caja);
+  if (!p) {
+    p = api
+      .get<{ impresion: Partial<ConfigImpresion> | null }>(
+        `/api/retail/caja/impresion?${new URLSearchParams({ caja_id: caja })}`)
+      .then((r) => (r.impresion ? acotar(r.impresion) : null))
+      .catch(() => {
+        pedidas.delete(caja);      // sin red: que se vuelva a intentar luego
+        return null;
+      });
+    pedidas.set(caja, p);
+  }
+  return p;
+}
+
+/** Deja el ajuste puesto EN LA CAJA. Lanza si el servidor no lo recibió:
+ *  decir «guardado» sin haberlo guardado es justo lo que se está arreglando. */
+export async function guardarImpresionEnLaCaja(
+  caja: string, c: Partial<ConfigImpresion>,
+): Promise<ConfigImpresion> {
+  const limpio = acotar(c);
+  const r = await api.post<{ impresion: ConfigImpresion }>(
+    "/api/retail/caja/impresion", { caja_id: caja, ...limpio });
+  const guardado = acotar(r.impresion);
+  pedidas.set(caja, Promise.resolve(guardado));
+  guardarImpresion(guardado);
+  return guardado;
+}
+
 /** El ajuste vigente. Se entera si cambia en esta pestaña o en otra. */
 export function useConfigImpresion(): [
   ConfigImpresion,
@@ -90,9 +135,15 @@ export function useConfigImpresion(): [
   useEffect(() => {
     const releer = () => setCfg(leerImpresion());
     releer();
+    // LO QUE DIGA LA CAJA MANDA sobre la copia de este navegador.
+    let vivo = true;
+    impresionDeLaCaja(cajaDeEsteEquipo()).then((delServidor) => {
+      if (vivo && delServidor) guardarImpresion(delServidor);
+    });
     window.addEventListener(AVISO, releer);
     window.addEventListener("storage", releer);
     return () => {
+      vivo = false;
       window.removeEventListener(AVISO, releer);
       window.removeEventListener("storage", releer);
     };

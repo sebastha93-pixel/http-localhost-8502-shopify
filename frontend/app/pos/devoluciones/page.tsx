@@ -50,10 +50,12 @@ const MOTIVOS: { valor: MotivoDevolucion; etiqueta: string }[] = [
   { valor: "cambio_modelo", etiqueta: "Cambio de modelo" },
 ];
 
+// SÓLO SALDO A FAVOR (Sebastián, 2026-10-10). La tienda no devuelve plata ni
+// reversa datáfonos: la clienta sale con otra prenda o con un saldo, y en
+// Siigo queda el ANTICIPO para cruzarlo. «Efectivo» y «Método original» se
+// quitaron de la pantalla; el servidor los sigue entendiendo por si vuelven.
 const REEMBOLSOS: { valor: Reembolso; etiqueta: string }[] = [
-  { valor: "efectivo", etiqueta: "Efectivo" },
-  { valor: "metodo_original", etiqueta: "Método original" },
-  { valor: "credito_tienda", etiqueta: "Crédito tienda" },
+  { valor: "credito_tienda", etiqueta: "Saldo a favor" },
 ];
 
 // Se devuelve en la caja de ESTE equipo, que puede no ser la que vendió:
@@ -83,7 +85,7 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
   const [candidatas, setCandidatas] = useState<VentaEncontrada[]>([]);
   const [seleccion, setSeleccion] = useState<Record<string, number>>({});
   const [motivo, setMotivo] = useState<MotivoDevolucion | null>(null);
-  const [reembolso, setReembolso] = useState<Reembolso | null>(null);
+  const [reembolso, setReembolso] = useState<Reembolso | null>("credito_tienda");
   const [buscando, setBuscando] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -121,7 +123,7 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
     setTicket(null);
     setSeleccion({});
     setMotivo(null);
-    setReembolso(null);
+    setReembolso("credito_tienda");
     setCandidatas([]);
     try {
       // Primero se averigua CUÁL venta es —por cédula, por el número de la
@@ -203,7 +205,7 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
     setConsulta("");
     setSeleccion({});
     setMotivo(null);
-    setReembolso(null);
+    setReembolso("credito_tienda");
     setError(null);
     buscador.current?.focus();
   };

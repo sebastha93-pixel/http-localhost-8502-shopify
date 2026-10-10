@@ -12,12 +12,15 @@
  * El recuadro punteado es el ancho de la hoja; lo que quede por fuera, la
  * impresora lo corta.
  */
+import { useEffect, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { cajaDeEsteEquipo } from "@/lib/pos/caja-del-equipo";
 import { Rail } from "@/components/pos/rail";
 import { Tirilla, TirillaImpresa, estilosDelEquipo } from "@/components/pos/tirilla";
 import {
   IMPRESION_POR_DEFECTO,
   LIMITES,
+  guardarImpresionEnLaCaja,
   useConfigImpresion,
   type ConfigImpresion,
 } from "@/lib/pos/impresion";
@@ -27,8 +30,28 @@ export default function PaginaImpresion() {
   const { user } = useAuth();
   const [cfg, guardar] = useConfigImpresion();
 
-  const cambiar = (k: keyof ConfigImpresion, v: number) =>
+  // Se lee tras montar: en el servidor no hay equipo ni caja.
+  const [caja, setCaja] = useState({ caja: "" });
+  useEffect(() => setCaja({ caja: cajaDeEsteEquipo() }), []);
+  // "pendiente": se movió algo y todavía no está en la caja.
+  const [estado, setEstado] =
+    useState<"igual" | "pendiente" | "guardando" | "guardado" | "error">("igual");
+
+  const cambiar = (k: keyof ConfigImpresion, v: number) => {
     guardar({ ...cfg, [k]: v });
+    setEstado("pendiente");
+  };
+
+  async function guardarEnLaCaja(c: ConfigImpresion) {
+    if (!caja.caja) return;
+    setEstado("guardando");
+    try {
+      await guardarImpresionEnLaCaja(caja.caja, c);
+      setEstado("guardado");
+    } catch {
+      setEstado("error");
+    }
+  }
 
   return (
     <div className="pos-raiz flex h-screen overflow-hidden">
@@ -41,9 +64,10 @@ export default function PaginaImpresion() {
             Ajuste de la impresora
           </h1>
           <p className="mt-2 text-[13px] leading-relaxed text-[var(--pos-700)]">
-            Vale sólo para <b>este equipo</b>. Mueve los valores, imprime la
-            prueba y repite hasta que el papel salga completo y se lea bien.
-            Se guarda solo.
+            Es el ajuste de la caja <b>{caja.caja || "de este equipo"}</b>.
+            Mueve los valores, imprime la prueba y, cuando el papel salga
+            completo y se lea bien, toca <b>GUARDAR</b>: queda puesto para esa
+            caja, se ajuste desde el equipo que sea.
           </p>
 
           <div className="mt-6 flex flex-col gap-5">
@@ -72,17 +96,30 @@ export default function PaginaImpresion() {
           <div className="mt-7 flex flex-wrap gap-3">
             <button
               onClick={() => window.print()}
-              className="pos-btn pos-btn-primario px-8 py-3.5 text-[13.5px]"
+              className="pos-btn pos-btn-sec px-8 py-3.5 text-[13.5px]"
             >
               IMPRIMIR PRUEBA
             </button>
             <button
-              onClick={() => guardar(IMPRESION_POR_DEFECTO)}
+              onClick={() => guardarEnLaCaja(cfg)}
+              disabled={!caja.caja || estado === "guardando"}
+              className="pos-btn pos-btn-primario px-8 py-3.5 text-[13.5px]"
+            >
+              {estado === "guardando" ? "GUARDANDO…" : "GUARDAR"}
+            </button>
+            <button
+              onClick={() => { guardar(IMPRESION_POR_DEFECTO); setEstado("pendiente"); }}
               className="pos-btn pos-btn-sec px-5 py-3.5 text-[13.5px]"
             >
               VOLVER A LO DE FÁBRICA
             </button>
           </div>
+
+          <p className="mt-3 text-[13px] font-medium" role="status">
+            {estado === "guardado" && `✓ Guardado para la caja ${caja.caja}. La caja lo toma al abrir o recargar la pantalla.`}
+            {estado === "pendiente" && "Cambios sin guardar: todavía no están en la caja."}
+            {estado === "error" && "No se pudo guardar. Revisa la conexión y vuelve a tocar GUARDAR."}
+          </p>
 
           <p className="mt-5 text-[12px] leading-relaxed text-[var(--pos-600)]">
             Si después de ajustar el navegador sigue encogiendo la hoja, revisa

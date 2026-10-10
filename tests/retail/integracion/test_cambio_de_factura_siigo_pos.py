@@ -499,3 +499,38 @@ def test_anular_la_venta_le_DEVUELVE_el_saldo(tienda):
     assert r.status_code == 200, r.text
     assert _uno(tienda, "SELECT usado FROM retail.saldos_a_favor") == 0
     assert _uno(tienda, "SELECT count(*) FROM retail.saldo_usos") == 0
+
+
+def test_al_cobrar_salen_SOLOS_los_saldos_de_la_clienta_y_solo_con_plata(tienda):
+    """No se le vuelve a pedir la cédula: ya está puesta en la venta."""
+    _con_credito(tienda, {"95613-1T12": 2})               # $149.900
+    laura = _uno(tienda, "SELECT id FROM retail.clientes LIMIT 1")
+    ver = lambda c: [(x["codigo"], x["disponible_centavos"]) for x in tienda["c"].get(
+        "/api/retail/saldos", params={"cliente_id": c}).json()]
+    assert ver(laura) == [("SF-00001", 14_990_000)]
+    # A otra clienta no le sale el saldo de Laura.
+    assert ver("01JQ8X4T5NCL0F1R8S9V0W1X2Y") == []
+    # Gastado entero, deja de ofrecerse.
+    assert _comprar(tienda, [{"medio_pago_id": "saldo_a_favor",
+                              "monto_centavos": 14_990_000,
+                              "referencia": "SF-00001"}]).status_code == 200
+    assert ver(laura) == []
+    # Y sin decir quién ni qué, no sale nada.
+    assert tienda["c"].get("/api/retail/saldos").json() == []
+
+
+def test_el_ajuste_de_la_impresora_se_guarda_EN_LA_CAJA(tienda):
+    """Vivía en el navegador: quien lo movía desde su computador no cambiaba
+    lo que imprimía la caja de la tienda."""
+    c = tienda["c"]
+    leer = lambda caja: c.get("/api/retail/caja/impresion",
+                              params={"caja_id": caja}).json()["impresion"]
+    assert leer("florida_caja1") is None
+    cfg = {"hojaMm": 80, "anchoMm": 66, "letraPct": 115, "margenMm": 1.5}
+    r = c.post("/api/retail/caja/impresion",
+               json={"caja_id": "florida_caja1", **cfg})
+    assert r.status_code == 200, r.text
+    assert leer("florida_caja1") == cfg
+    assert leer("arrayanes_caja1") is None            # es de ESA caja
+    assert c.post("/api/retail/caja/impresion",
+                  json={"caja_id": "no_existe", **cfg}).status_code == 404
