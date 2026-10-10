@@ -162,3 +162,29 @@ def test_si_siigo_falla_la_busqueda_responde_vacio_y_no_un_error(cliente, monkey
     caída de un tercero le bloquee el buscador."""
     _siigo(monkeypatch, {"1037000111": RuntimeError("Siigo HTTP 503")})
     assert _buscar(cliente, "1037000111") == []
+
+
+# ── El panel de cada tienda ─────────────────────────────────────────────────
+
+def test_el_panel_de_una_tienda_lo_ve_quien_trabaja_en_ella(cliente):
+    """El panel deja cambiar de tienda a quien tiene varias. Una asesora de
+    Arrayanes no puede mirar las ventas de Florida cambiando la dirección."""
+    from sqlalchemy import create_engine, text
+    m = create_engine(URL, future=True)
+    with m.begin() as c:
+        c.execute(text("INSERT INTO retail.permisos_pos (usuario_id,nombre,tiendas) "
+                       "VALUES ('maria','María','{arrayanes}')"))
+    m.dispose()
+    ok = cliente.get("/api/retail/panel", params={"tienda_id": "arrayanes"})
+    assert ok.status_code == 200, ok.text
+    ajena = cliente.get("/api/retail/panel", params={"tienda_id": "florida"})
+    assert ajena.status_code == 403
+    assert ajena.json()["detail"]["error"] == "tienda_ajena"
+
+    # Con las dos asignadas —el dueño, el director comercial— ve las dos.
+    m = create_engine(URL, future=True)
+    with m.begin() as c:
+        c.execute(text("UPDATE retail.permisos_pos SET tiendas = '{arrayanes,florida}'"))
+    m.dispose()
+    assert cliente.get("/api/retail/panel",
+                       params={"tienda_id": "florida"}).status_code == 200
