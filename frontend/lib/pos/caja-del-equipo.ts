@@ -44,6 +44,11 @@ function actual(): string {
   return guardada();
 }
 
+/** La caja de este equipo, fuera de React. Vacío si aún no se eligió. */
+export function cajaDeEsteEquipo(): string {
+  return typeof window === "undefined" ? "" : guardada();
+}
+
 function delEnlace(): string {
   const v = new URLSearchParams(window.location.search).get("caja") || "";
   return FORMATO.test(v) ? v : "";

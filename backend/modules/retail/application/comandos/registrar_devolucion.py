@@ -250,6 +250,7 @@ class RegistrarDevolucion:
                          "tienda_venta": cabecera["tienda_id"],
                          "motivo": motivo_enum.value,
                          "reembolso": reembolso_enum.value,
+                         "saldo_codigo": saldo_codigo,
                          "total": devolucion.total.centavos,
                          "unidades": devolucion.unidades,
                          "lineas": [{"sku": l.sku, "cantidad": l.cantidad}

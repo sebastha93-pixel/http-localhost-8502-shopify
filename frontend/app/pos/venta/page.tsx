@@ -892,6 +892,7 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
                   medios={contexto?.medios_pago ?? []}
                   emiteFactura={Boolean(contexto?.tiene_resolucion)}
                   saldoInicial={saldoInicial}
+                  clienteId={cliente?.id ?? null}
                   onCancelar={() => setFase("vendiendo")}
                   onConfirmar={cobrar}
                 />

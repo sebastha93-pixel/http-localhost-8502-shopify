@@ -1983,15 +1983,33 @@ class SaldoAFavor(BaseModel):
 
 @router.get("/saldos", response_model=List[SaldoAFavor])
 async def buscar_saldos(
-    q: str = Query(min_length=3, max_length=40),
+    q: str = Query("", max_length=40),
+    cliente_id: Optional[str] = Query(None, max_length=40),
     s=Depends(sesion_lectura),
     _: CurrentUser = Depends(require_permission("retail", "ver")),
 ):
     """El saldo a favor de una clienta: por el código del comprobante
-    (`SF-00012`) o por su cédula, que es lo que trae la que perdió el papel."""
+    (`SF-00012`), por su cédula —la que perdió el papel— o, al cobrar, por la
+    clienta que ya está puesta en la venta (`cliente_id`): ahí salen solos,
+    sin volver a pedirle nada, y sólo los que todavía tienen plata."""
     from sqlalchemy import text as _t
     import re as _re
 
+    if cliente_id:
+        filas = (await s.execute(_t("""
+            SELECT s.codigo, s.monto, s.usado, s.creado_en, s.numero_origen,
+                   ti.nombre AS tienda, s.cliente_id, c.numero_documento,
+                   trim(concat_ws(' ', c.nombre, c.apellido)) AS cliente
+              FROM retail.saldos_a_favor s
+              JOIN retail.tiendas ti ON ti.id = s.tienda_id
+              JOIN retail.clientes c ON c.id = s.cliente_id
+             WHERE s.cliente_id = :c AND s.monto > s.usado
+             ORDER BY s.creado_en LIMIT 20
+        """), {"c": cliente_id})).mappings().all()
+        return [_saldo(f) for f in filas]
+
+    if len((q or "").strip()) < 3:
+        return []
     crudo = (q or "").strip().upper()
     digitos = _re.sub(r"\D", "", crudo)
     filas = (await s.execute(_t("""
@@ -2009,14 +2027,68 @@ async def buscar_saldos(
     """), {"c": crudo, "d": digitos or "x",
            "solo": bool(digitos) and digitos == crudo and len(digitos) <= 5,
            "ced": len(digitos) >= 6 and digitos == crudo})).mappings().all()
-    return [SaldoAFavor(
+    return [_saldo(f) for f in filas]
+
+
+def _saldo(f) -> "SaldoAFavor":
+    return SaldoAFavor(
         codigo=f["codigo"], monto_centavos=int(f["monto"]),
         usado_centavos=int(f["usado"]),
         disponible_centavos=int(f["monto"]) - int(f["usado"]),
         fecha=f["creado_en"].isoformat(), origen=f["numero_origen"],
         tienda=f["tienda"], cliente_id=f["cliente_id"],
-        cliente=f["cliente"] or None, documento=f["numero_documento"],
-    ) for f in filas]
+        cliente=f["cliente"] or None, documento=f["numero_documento"])
+
+
+# ── El ajuste de la impresora, por caja ─────────────────────────────────────
+
+class ImpresionDeCaja(BaseModel):
+    caja_id: str = Field(max_length=64)
+    hojaMm: float = Field(ge=40, le=120)
+    anchoMm: float = Field(ge=30, le=120)
+    letraPct: float = Field(ge=50, le=300)
+    margenMm: float = Field(ge=0, le=20)
+
+
+@router.get("/caja/impresion")
+async def leer_impresion(
+    caja_id: str = Query(max_length=64),
+    s=Depends(sesion_lectura),
+    _: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Cómo imprime ESA caja. `null` si nadie lo ha ajustado."""
+    from sqlalchemy import text as _t
+    cfg = (await s.execute(_t(
+        "SELECT impresion FROM retail.cajas WHERE id = :c"),
+        {"c": caja_id})).scalar()
+    return {"impresion": cfg or None}
+
+
+@router.post("/caja/impresion")
+async def guardar_impresion(
+    entrada: ImpresionDeCaja,
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Guarda el ajuste EN LA CAJA, no en el navegador: quien lo mueve desde
+    otro equipo lo deja puesto para la impresora de la tienda."""
+    import json as _json
+    from sqlalchemy import text as _t
+    cfg = {"hojaMm": entrada.hojaMm, "anchoMm": entrada.anchoMm,
+           "letraPct": entrada.letraPct, "margenMm": entrada.margenMm}
+    async with uow as t:
+        tienda = (await t.sesion.execute(_t(
+            "SELECT tienda_id FROM retail.cajas WHERE id = :c"),
+            {"c": entrada.caja_id})).scalar()
+        if tienda is None:
+            raise HTTPException(404, {"error": "no_existe",
+                                      "mensaje": "Esa caja no existe."})
+        await _exigir_tienda(t, usuario, tienda)
+        await t.sesion.execute(_t(
+            "UPDATE retail.cajas SET impresion = CAST(:j AS jsonb) "
+            "WHERE id = :c"), {"j": _json.dumps(cfg), "c": entrada.caja_id})
+        await t.commit()
+    return {"impresion": cfg}
 
 
 class VentaEncontrada(BaseModel):

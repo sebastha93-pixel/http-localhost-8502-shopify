@@ -95,6 +95,10 @@ def resumen_para_el_caso(payload: dict) -> str:
     if payload.get("total"):
         partes.append(f"{_pesos(payload['total'])} en {payload.get('reembolso', '')}"
                       .replace("_", " "))
+    if payload.get("saldo_codigo"):
+        # Con él Postventa sabe que la nota crédito va con ANTICIPO: la
+        # clienta ya salió con ese saldo y puede haberlo gastado.
+        partes.append(f"saldo a favor {payload['saldo_codigo']}")
     vendio, recibe = payload.get("tienda_venta_id"), payload.get("tienda_id")
     if vendio and recibe and vendio != recibe:
         partes.append(f"vendido en {vendio}")

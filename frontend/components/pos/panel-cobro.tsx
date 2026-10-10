@@ -2,7 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { desdePesosTecleados, formatear } from "@/lib/pos/dinero";
-import { buscarSaldos, type MedioPago, type SaldoAFavor } from "@/lib/pos/api";
+import {
+  buscarSaldos,
+  saldosDeCliente,
+  type MedioPago,
+  type SaldoAFavor,
+} from "@/lib/pos/api";
 
 /**
  * Cobro, con pago mixto.
@@ -40,6 +45,7 @@ export function PanelCobro({
   medios,
   emiteFactura = false,
   saldoInicial,
+  clienteId,
   onCancelar,
   onConfirmar,
 }: {
@@ -52,6 +58,9 @@ export function PanelCobro({
   /** El código de un saldo a favor con el que se llega a cobrar (viene de
    *  un cambio recién hecho): entra con ese medio ya elegido. */
   saldoInicial?: string;
+  /** La clienta de la venta. Si tiene saldos a favor salen SOLOS: ya se
+   *  identificó al ponerla en la venta, no se le vuelve a pedir la cédula. */
+  clienteId?: string | null;
   onCancelar: () => void;
   onConfirmar: (
     pagos: {
@@ -75,6 +84,30 @@ export function PanelCobro({
   const [saldo, setSaldo] = useState<SaldoAFavor | null>(null);
   const [saldoError, setSaldoError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
+
+  // LOS SALDOS DE ESTA CLIENTA. Los trae el servidor por la clienta de la
+  // venta —sólo los suyos y sólo los que tienen plata— y el primero entra ya
+  // elegido. Sin clienta en la venta no sale ninguno: un saldo no se ofrece
+  // a quien no se sabe quién es.
+  const [saldosCliente, setSaldosCliente] = useState<SaldoAFavor[]>([]);
+  useEffect(() => {
+    setSaldosCliente([]);
+    if (!clienteId || !medioSaldo) return;
+    let vigente = true;
+    saldosDeCliente(clienteId)
+      .then((l) => {
+        if (!vigente) return;
+        const conPlata = l.filter((x) => x.disponible_centavos > 0);
+        setSaldosCliente(conPlata);
+        if (conPlata.length && !saldoInicial) {
+          setMedioId(medioSaldo.id);
+          setReferencia(conPlata[0].codigo);
+        }
+      })
+      .catch(() => undefined);
+    return () => { vigente = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clienteId, medioSaldo?.id]);
 
   const medio = medios.find((m) => m.id === medioId) ?? medios[0];
   const yaPagado = pagos.reduce((s, p) => s + p.monto, 0);
@@ -235,6 +268,26 @@ export function PanelCobro({
         </div>
       )}
 
+      {saldosCliente.length > 0 && (
+        <div className="mb-3 border-l-2 border-[var(--pos-accent)] bg-[var(--pos-accent)]/10 py-2 pl-3 pr-2 text-[12px] leading-relaxed text-[var(--pos-900)]">
+          <b>Esta clienta tiene saldo a favor.</b>
+          {saldosCliente.map((s) => (
+            <button
+              key={s.codigo}
+              onClick={() => {
+                if (medioSaldo) setMedioId(medioSaldo.id);
+                setTexto("");
+                setReferencia(s.codigo);
+              }}
+              className="mt-1 flex w-full items-baseline justify-between gap-2 border border-[var(--pos-divider)] bg-[var(--pos-surface)] px-2 py-1.5 text-left tabular"
+            >
+              <span>{s.codigo} · cambio de {s.origen}</span>
+              <b>{formatear(s.disponible_centavos)}</b>
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="mb-4 grid grid-cols-2 gap-2">
         {medios.map((m) => (
           <button
@@ -242,6 +295,10 @@ export function PanelCobro({
             onClick={() => {
               setMedioId(m.id);
               limpiar();
+              // Al volver a «Saldo a favor», el de la clienta entra puesto.
+              if (m.tipo === "credito" && saldosCliente.length) {
+                setReferencia(saldosCliente[0].codigo);
+              }
             }}
             className={`border px-2 py-3 text-[13px] transition-colors duration-[var(--pos-transicion)] ${
               medio.id === m.id

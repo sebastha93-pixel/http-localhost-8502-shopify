@@ -913,3 +913,9 @@ export async function buscarSaldos(q: string): Promise<SaldoAFavor[]> {
   const p = new URLSearchParams({ q });
   return api.get<SaldoAFavor[]>(`/api/retail/saldos?${p}`);
 }
+
+/** Los saldos CON PLATA de la clienta que ya está puesta en la venta. */
+export async function saldosDeCliente(clienteId: string): Promise<SaldoAFavor[]> {
+  const p = new URLSearchParams({ cliente_id: clienteId });
+  return api.get<SaldoAFavor[]>(`/api/retail/saldos?${p}`);
+}
