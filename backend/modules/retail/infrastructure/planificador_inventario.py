@@ -20,7 +20,11 @@ log = logging.getLogger("retail.inventario")
 
 __all__ = ["start", "stop", "ultimo", "correr_ahora", "INTERVALO_SEGUNDOS"]
 
-INTERVALO_SEGUNDOS = int(os.environ.get("RETAIL_INVENTARIO_SEC", 3600))
+# CADA 10 MINUTOS (era cada hora). Lo que el POS mueve —ventas, cambios,
+# anulaciones— se ve al instante; esto es para lo que pasa FUERA de él:
+# mercancía que llega, traslados, precios. Leer el catálogo de Siigo son unas
+# decenas de peticiones; más seguido le quitaría cupo a la facturación.
+INTERVALO_SEGUNDOS = int(os.environ.get("RETAIL_INVENTARIO_SEC", 600))
 #  Tres minutos después de arrancar: el proceso primero atiende lo urgente.
 RETRASO_INICIAL = 180
 
@@ -43,6 +47,14 @@ def correr_ahora() -> dict:
     if not _candado.acquire(blocking=False):
         raise RuntimeError("Ya hay una sincronización en curso.")
     try:
+        try:
+            from backend.modules.retail.infrastructure.postventa import (
+                devoluciones_acreditadas,
+            )
+            devoluciones_acreditadas.marcar(url)
+        except Exception as e:  # noqa: BLE001 — no frena el inventario
+            log.warning("[retail-inventario] no se pudo revisar las notas "
+                        "crédito de las devoluciones: %s", e)
         r = sincronizar(url, aplicar=True)
         ultimo.update({
             "corrio_en": datetime.now(timezone.utc).isoformat(), "ok": True,

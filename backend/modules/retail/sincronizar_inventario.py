@@ -26,6 +26,11 @@ TRES COSAS QUE ESTO NO PUEDE HACER MAL:
    y es append-only: cada cambio de saldo deja el suyo, con el motivo. Es lo
    que después permite explicar una diferencia.
 
+4. **Esconder la prenda que una clienta acaba de devolver.** Siigo no sabe
+   de ella hasta que Postventa emite la nota crédito. Mientras tanto está en
+   el estante y se puede vender: a lo de Siigo se le SUMAN las devoluciones
+   cuya nota crédito no ha salido (`devoluciones.entro_a_siigo_en` vacío).
+
 Lo que ya no tiene existencia en Siigo queda en cero aquí. No se borra: la
 prenda sigue en el catálogo para las ventas y devoluciones que la nombran.
 """
@@ -104,8 +109,18 @@ def sincronizar(url: str, *, productos: Optional[List[dict]] = None,
 
 def _una_tienda(c, u, productos: List[dict], usuario_id: str,
                 respaldo: Optional[Dict[str, int]] = None) -> dict:
+    # Lo devuelto en esta tienda que Siigo todavía no tiene en su bodega.
+    devueltas = {r["sku"].upper(): int(r["n"]) for r in c.execute(text("""
+        SELECT l.sku, sum(l.cantidad) AS n
+          FROM retail.devolucion_lineas l
+          JOIN retail.devoluciones d ON d.id = l.devolucion_id
+         WHERE d.tienda_id = :t AND d.entro_a_siigo_en IS NULL
+         GROUP BY l.sku
+    """), {"t": u["tienda_id"]}).mappings()}
+
     filas, problemas = filas_de_productos(
-        productos, int(u["siigo_bodega_id"]), respaldo)
+        productos, int(u["siigo_bodega_id"]), respaldo,
+        incluir_sin_existencia=devueltas)
     por_sku: Dict[str, dict] = {}
     for f in filas:
         # Un SKU repetido en Siigo: se queda el primero. Ya va en `problemas`.
@@ -119,9 +134,10 @@ def _una_tienda(c, u, productos: List[dict], usuario_id: str,
                    WHERE s.ubicacion_id = :u
               """), {"u": u["id"]}).mappings()}
     habia = sum(1 for _, n in saldos.values() if n > 0)
-    if habia >= 20 and len(por_sku) < habia / 2:
+    con_existencia = sum(1 for f in por_sku.values() if int(f["cantidad"]) > 0)
+    if habia >= 20 and con_existencia < habia / 2:
         raise LecturaSospechosa(
-            f"{u['tienda_id']}: Siigo devolvió {len(por_sku)} referencias con "
+            f"{u['tienda_id']}: Siigo devolvió {con_existencia} referencias con "
             f"existencia y el POS tenía {habia}. No se pone en cero media "
             f"tienda por una lectura dudosa.")
 
@@ -146,6 +162,7 @@ def _una_tienda(c, u, productos: List[dict], usuario_id: str,
     r = {"en_siigo": len(por_sku), "nuevos": 0, "datos_actualizados": 0,
          "saldos_cambiados": 0, "puestos_en_cero": 0,
          "unidades": 0, "sin_facturar_descontadas": 0,
+         "devueltas_sumadas": 0,
          "fuera": len(problemas), "problemas": problemas[:20],
          # Lo que entró con un precio que NO es el de Siigo: hay que
          # corregirlo allá. Se lista para que no pase por normal.
@@ -202,8 +219,10 @@ def _una_tienda(c, u, productos: List[dict], usuario_id: str,
                 tocados.append(f["sku"])
 
         sin_facturar = min(pendientes.get(sku, 0), int(f["cantidad"]))
-        objetivo = int(f["cantidad"]) - sin_facturar
+        vuelven = devueltas.get(sku, 0)
+        objetivo = int(f["cantidad"]) - sin_facturar + vuelven
         r["sin_facturar_descontadas"] += sin_facturar
+        r["devueltas_sumadas"] += vuelven
         r["unidades"] += objetivo
         antes = saldos.get(sku, (None, 0))[1]
         if objetivo != antes or sku not in saldos:
@@ -216,8 +235,14 @@ def _una_tienda(c, u, productos: List[dict], usuario_id: str,
     for sku, (vid, antes) in saldos.items():
         if sku in por_sku or antes == 0:
             continue
-        _fijar(c, u["id"], vid, antes, 0, usuario_id, sku, existe=True)
-        r["puestos_en_cero"] += 1
+        # La devuelta que Siigo ni siquiera lista (un código que ya no
+        # existe allá): se queda con lo devuelto, no en cero.
+        queda = devueltas.get(sku, 0)
+        if queda == antes:
+            continue
+        _fijar(c, u["id"], vid, antes, queda, usuario_id, sku, existe=True)
+        if queda == 0:
+            r["puestos_en_cero"] += 1
 
     if tocados:
         # Sin esto el producto EXISTE pero el buscador no lo encuentra.

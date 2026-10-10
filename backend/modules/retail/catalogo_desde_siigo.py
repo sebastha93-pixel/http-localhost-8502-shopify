@@ -136,6 +136,7 @@ def sin_precio_en_siigo(productos: List[dict], bodegas) -> List[str]:
 
 def filas_de_productos(productos: List[dict], bodega,
                        precios_de_respaldo: Dict[str, int] = None,
+                       incluir_sin_existencia=None,
                        ) -> Tuple[List[dict], List[str]]:
     """Las filas del catálogo y los problemas, SIN tocar la red.
 
@@ -156,7 +157,12 @@ def filas_de_productos(productos: List[dict], bodega,
 
     Sólo si ninguno lo da se reporta y se deja fuera: una prenda no se vende
     a un precio inventado.
+
+    `incluir_sin_existencia`: códigos que entran AUNQUE Siigo los tenga en
+    cero en esa bodega —las prendas devueltas que su nota crédito todavía no
+    ha metido—. Salen con `cantidad` 0 y con su nombre y precio de Siigo.
     """
+    incluir = {str(x).upper() for x in (incluir_sin_existencia or ())}
     filas: List[dict] = []
     problemas: List[str] = []
     vistos: Dict[str, int] = {}
@@ -169,7 +175,8 @@ def filas_de_productos(productos: List[dict], bodega,
         cantidad = sum(float(w.get("quantity") or 0)
                        for w in (pr.get("warehouses") or [])
                        if bodega in (w.get("name"), w.get("id")))
-        if cantidad <= 0:
+        if cantidad <= 0 and (
+                (pr.get("code") or "").strip().upper() not in incluir):
             continue
 
         code = (pr.get("code") or "").strip()
