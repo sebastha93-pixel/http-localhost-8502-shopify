@@ -300,7 +300,8 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
                     <span className="titular text-[17px]">{ticket.numero}</span>
                     <span className="text-[13px] text-[var(--pos-muted)]">
                       {fechaLegible(ticket.fecha)}
-                      {ticket.cajera ? ` · ${ticket.cajera}` : ""}
+                      {ticket.cajera && ticket.cajera !== "siigo_pos"
+                        ? ` · ${ticket.cajera}` : ""}
                     </span>
                   </div>
 
@@ -409,7 +410,13 @@ function ArticuloDevolvible({
       }}
     >
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[14px] font-medium">{linea.nombre}</div>
+        {/* LA REFERENCIA, ADELANTE. Dos jeans de la misma talla sólo se
+            distinguen por ella, y es lo que trae la etiqueta de la prenda que
+            la clienta pone en el mostrador. */}
+        <div className="truncate text-[14px] font-medium">
+          <span className="tabular mr-2 font-semibold">{linea.sku}</span>
+          {linea.nombre}
+        </div>
         <div className="text-[12px] text-[var(--pos-muted)]">
           {linea.talla ? `Talla ${linea.talla} · ` : ""}
           {formatear(linea.precio_unitario_con_iva_centavos)}
