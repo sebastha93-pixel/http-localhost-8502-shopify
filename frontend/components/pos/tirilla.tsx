@@ -21,6 +21,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { formatear } from "@/lib/pos/dinero";
 import type { Tirilla as Datos } from "@/lib/pos/api";
+import { useConfigImpresion, type ConfigImpresion } from "@/lib/pos/impresion";
 // IMPORTADO, no servido desde `/public`: así Next lo deja bajo
 // `/_next/static/`, que es lo único que el service worker guarda. Desde
 // `/public` el logo desaparecería de la tirilla justo cuando no hay red.
@@ -412,6 +413,7 @@ const ESTILOS = `
  */
 export function TirillaImpresa({ datos }: { datos: Datos | null }) {
   const [destino, setDestino] = useState<HTMLElement | null>(null);
+  const [cfg] = useConfigImpresion();
   useEffect(() => {
     const nodo = document.createElement("div");
     nodo.className = "pos-impresion";
@@ -420,7 +422,38 @@ export function TirillaImpresa({ datos }: { datos: Datos | null }) {
     return () => { nodo.remove(); };
   }, []);
   if (!destino || !datos) return null;
-  return createPortal(<Tirilla datos={datos} />, destino);
+  return createPortal(
+    <>
+      <Tirilla datos={datos} />
+      {/* DESPUÉS de la tirilla: sus reglas pisan las de fábrica. */}
+      <style>{estilosDelEquipo(cfg)}</style>
+    </>,
+    destino,
+  );
+}
+
+/**
+ * El ajuste de ESTE equipo, hecho hoja de estilo. Ver `lib/pos/impresion.ts`.
+ *
+ * LA LETRA SE AGRANDA CON `zoom`, no cambiando cada tamaño. La tirilla tiene
+ * ocho tamaños de letra pensados entre sí; escalarlos de a uno los descuadra.
+ * `zoom` agranda el papel entero —letras, QR, logo, separadores— y por eso el
+ * ancho se divide por el mismo factor: lo que tiene que medir `anchoMm` es lo
+ * que SALE, no lo que se declara.
+ */
+export function estilosDelEquipo(c: ConfigImpresion): string {
+  const z = c.letraPct / 100;
+  return `
+.pos-impresion .tirilla {
+  width: ${(c.anchoMm / z).toFixed(3)}mm;
+  zoom: ${z};
+  margin: 0 0 0 ${(c.margenMm / z).toFixed(3)}mm;
+}
+@media print {
+  @page { size: ${c.hojaMm}mm auto; margin: 0; }
+  html, body { width: ${c.hojaMm}mm; }
+}
+`;
 }
 
 

@@ -128,16 +128,22 @@ UBICACIONES = [
 MEDIOS = [
     {"id": "efectivo_florida", "nombre": "Efectivo", "tipo": "efectivo",
      "tienda_id": "florida", "siigo_forma_pago_id": 12243,
-     "permite_vuelto": True, "orden": 0},
+     "permite_vuelto": True, "orden": 0, "exige_referencia": False},
     {"id": "datafono_florida", "nombre": "Datáfono", "tipo": "tarjeta",
      "tienda_id": "florida", "siigo_forma_pago_id": 12244,
-     "permite_vuelto": False, "orden": 1},
+     "permite_vuelto": False, "orden": 1,
+     # El número del voucher: es lo que cuadra el cierre contra el informe
+     # del datáfono. Obligatorio desde el 2026-10-10.
+     "exige_referencia": True},
     {"id": "efectivo_arrayanes", "nombre": "Efectivo", "tipo": "efectivo",
      "tienda_id": "arrayanes", "siigo_forma_pago_id": 8282,
-     "permite_vuelto": True, "orden": 0},
+     "permite_vuelto": True, "orden": 0, "exige_referencia": False},
     {"id": "datafono_arrayanes", "nombre": "Datáfono", "tipo": "tarjeta",
      "tienda_id": "arrayanes", "siigo_forma_pago_id": 8987,
-     "permite_vuelto": False, "orden": 1},
+     "permite_vuelto": False, "orden": 1,
+     # El número del voucher: es lo que cuadra el cierre contra el informe
+     # del datáfono. Obligatorio desde el 2026-10-10.
+     "exige_referencia": True},
 ]
 
 

@@ -661,6 +661,7 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
           pagos: pagos.map((p) => ({
             nombre: nombreDelMedio(p.medio_pago_id),
             monto_centavos: p.monto_centavos,
+            referencia: p.referencia ?? null,
           })),
           clienteNombre: cliente ? cliente.nombre : null,
           clienteDocumento: cliente
