@@ -1424,6 +1424,22 @@ class PanelSalida(BaseModel):
     mas_vendidos: List[MasVendidoSalida]
 
 
+async def _exigir_tienda(t, usuario, tienda_id: str) -> None:
+    """403 si esa tienda no es de quien pregunta. El administrador las ve
+    todas; quien tiene el permiso del OS sin fila en el POS mira como antes."""
+    if usuario.rol == "admin":
+        return
+    from sqlalchemy import text as _t
+    suyas = (await t.sesion.execute(_t("""
+        SELECT coalesce(tiendas, '{}') FROM retail.permisos_pos
+         WHERE usuario_id = :u AND activo
+    """), {"u": usuario.id})).scalar()
+    if suyas is not None and tienda_id not in list(suyas):
+        raise HTTPException(403, {
+            "error": "tienda_ajena",
+            "mensaje": "No estás asignada a esa tienda."})
+
+
 @router.get("/panel", response_model=PanelSalida)
 async def panel_del_dia(
     tienda_id: str = Query(),
@@ -1441,19 +1457,7 @@ async def panel_del_dia(
             # administrador). Desde que el panel deja cambiar de tienda, que
             # el parámetro viaje en la dirección ya no puede ser la única
             # barrera.
-            if usuario.rol != "admin":
-                from sqlalchemy import text as _t
-                suyas = (await t.sesion.execute(_t("""
-                    SELECT coalesce(tiendas, '{}') FROM retail.permisos_pos
-                     WHERE usuario_id = :u AND activo
-                """), {"u": usuario.id})).scalar()
-                # Sólo a quien ESTÁ inscrito en el POS con sus tiendas. Quien
-                # tiene el permiso del OS sin fila aquí no vende ni abre
-                # turno; se le deja mirar como hasta ahora.
-                if suyas is not None and tienda_id not in list(suyas):
-                    raise HTTPException(403, {
-                        "error": "tienda_ajena",
-                        "mensaje": "No estás asignada a esa tienda."})
+            await _exigir_tienda(t, usuario, tienda_id)
             p = await PanelVentas(t.sesion).ejecutar(tienda_id=tienda_id)
     except ReglaDeNegocio as e:
         raise HTTPException(400, {"error": "regla_de_negocio",
@@ -1796,6 +1800,73 @@ class VentaDelTurno(BaseModel):
     estado_fiscal: str
     cliente_nombre: Optional[str] = None
     motivo_anulacion: Optional[str] = None
+    #  Sólo en la lista del panel: el número de la factura, la caja y si su
+    #  turno sigue abierto (una venta de un turno cerrado no se anula).
+    factura: Optional[str] = None
+    caja: Optional[str] = None
+    anulable: Optional[bool] = None
+
+
+class VentasDelDia(BaseModel):
+    puede_anular: bool
+    ventas: List[VentaDelTurno]
+
+
+@router.get("/panel/ventas", response_model=VentasDelDia)
+async def ventas_del_dia(
+    tienda_id: str = Query(),
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Las ventas de HOY de una tienda, para quien la supervisa.
+
+    La lista para anular vivía sólo en el Cierre, que es de la caja del
+    equipo: quien administra las dos tiendas desde su computador no tenía
+    cómo llegar a una venta de la otra sin cambiar de caja (2026-10-10).
+    """
+    from sqlalchemy import text as _t
+
+    async with uow as t:
+        await _exigir_tienda(t, usuario, tienda_id)
+        puede = (await t.sesion.execute(_t("""
+            SELECT coalesce(puede_anular_venta, false)
+                   AND :t = ANY(coalesce(tiendas, '{}'))
+              FROM retail.permisos_pos WHERE usuario_id = :u AND activo
+        """), {"u": usuario.id, "t": tienda_id})).scalar()
+        filas = (await t.sesion.execute(_t("""
+            SELECT v.id, v.numero, v.total, v.estado, v.estado_fiscal,
+                   v.motivo_anulacion, ca.nombre AS caja,
+                   s.estado = 'abierta' AS anulable,
+                   to_char(v.cerrada_en AT TIME ZONE coalesce(ti.zona_horaria,
+                           'America/Bogota'), 'HH24:MI') AS hora,
+                   coalesce((SELECT sum(l.cantidad) FROM retail.venta_lineas l
+                              WHERE l.venta_id = v.id), 0) AS unidades,
+                   trim(concat_ws(' ', c.nombre, c.apellido)) AS cliente,
+                   (SELECT d.numero FROM retail.documentos_fiscales d
+                     WHERE d.venta_id = v.id AND d.tipo = 'factura_electronica'
+                       AND d.numero IS NOT NULL
+                     ORDER BY d.creado_en DESC LIMIT 1) AS factura
+              FROM retail.ventas v
+              JOIN retail.tiendas ti ON ti.id = v.tienda_id
+              JOIN retail.sesiones_caja s ON s.id = v.sesion_id
+              LEFT JOIN retail.cajas ca ON ca.id = v.caja_id
+              LEFT JOIN retail.clientes c ON c.id = v.cliente_id
+             WHERE v.tienda_id = :t AND v.cerrada_en IS NOT NULL
+               AND v.origen <> 'siigo_pos'
+               AND (v.cerrada_en AT TIME ZONE coalesce(ti.zona_horaria,
+                    'America/Bogota'))::date
+                 = (now() AT TIME ZONE coalesce(ti.zona_horaria,
+                    'America/Bogota'))::date
+             ORDER BY v.cerrada_en DESC
+        """), {"t": tienda_id})).mappings().all()
+
+    return VentasDelDia(puede_anular=bool(puede), ventas=[VentaDelTurno(
+        venta_id=f["id"], numero=f["numero"], hora=f["hora"] or "",
+        total_centavos=int(f["total"]), unidades=int(f["unidades"]),
+        estado=f["estado"], estado_fiscal=f["estado_fiscal"],
+        cliente_nombre=f["cliente"] or None,
+        motivo_anulacion=f["motivo_anulacion"], factura=f["factura"],
+        caja=f["caja"], anulable=bool(f["anulable"])) for f in filas])
 
 
 @router.get("/caja/ventas", response_model=List[VentaDelTurno])

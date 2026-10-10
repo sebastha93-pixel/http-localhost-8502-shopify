@@ -356,3 +356,47 @@ def test_una_tienda_que_no_existe_lo_dice(cliente):
     r = c.get("/api/retail/panel", params={"tienda_id": "no_existe"})
     assert r.status_code == 400
     assert "no_existe" in r.json()["detail"]["mensaje"]
+
+
+# ── Las ventas de hoy, para quien supervisa ────────────────────────────────
+
+def _ventas_de_hoy(c, tienda="florida"):
+    return c.get("/api/retail/panel/ventas", params={"tienda_id": tienda})
+
+
+def test_el_panel_lista_las_ventas_de_hoy_y_NO_las_de_ayer(cliente):
+    c, motor = cliente
+    import asyncio
+    ahora = _ahora_bogota()
+    corre = asyncio.get_event_loop().run_until_complete
+    corre(_vender(motor, 1, cuando=ahora - timedelta(minutes=1),
+                  variante=_var(1), cantidad=2, precio=10000000))
+    corre(_vender(motor, 2, cuando=ahora - timedelta(days=1),
+                  variante=_var(1), cantidad=1, precio=10000000))
+    r = _ventas_de_hoy(c)
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert [(v["venta_id"], v["unidades"]) for v in d["ventas"]] == [
+        (_venta_id(1), 2)]
+    # María no está inscrita con permiso de anular: ve, pero no anula.
+    assert d["puede_anular"] is False
+    assert d["ventas"][0]["factura"] is None
+
+
+def test_quien_tiene_el_permiso_en_ESA_tienda_puede_anular_desde_el_panel(cliente):
+    c, motor = cliente
+    import asyncio
+
+    async def inscribir(tiendas):
+        async with motor.begin() as x:
+            await x.execute(text("DELETE FROM retail.permisos_pos"))
+            await x.execute(text(
+                "INSERT INTO retail.permisos_pos (usuario_id,nombre,tiendas,"
+                "puede_anular_venta) VALUES ('maria','María',:t,true)"),
+                {"t": tiendas})
+    corre = asyncio.get_event_loop().run_until_complete
+    corre(inscribir(["florida"]))
+    assert _ventas_de_hoy(c).json()["puede_anular"] is True
+    # Con el permiso, pero en OTRA tienda: esta ni la ve.
+    corre(inscribir(["arrayanes"]))
+    assert _ventas_de_hoy(c).status_code == 403

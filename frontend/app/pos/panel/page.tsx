@@ -22,7 +22,17 @@ import { Auditoria } from "@/components/pos/auditoria";
 import { Rail } from "@/components/pos/rail";
 import { ConLaCaja } from "@/components/pos/elegir-caja";
 import { formatear } from "@/lib/pos/dinero";
-import { listarCajas, panelDelDia, type Panel as Datos } from "@/lib/pos/api";
+import { DialogoAnular, VentasDelTurno } from "@/components/pos/ventas-del-turno";
+import { TirillaImpresa } from "@/components/pos/tirilla";
+import {
+  anularVenta,
+  listarCajas,
+  panelDelDia,
+  pedirTirilla,
+  ventasDelDia,
+  type Panel as Datos,
+  type VentaDelTurno,
+} from "@/lib/pos/api";
 
 const REFRESCO_MS = 60_000;
 
@@ -56,7 +66,26 @@ function PantallaPanel({ TIENDA: tiendaDelEquipo }: { TIENDA: string }) {
       .catch(() => setTiendas([]));
   }, []);
 
+  // LAS VENTAS DE HOY, CON ANULAR. La lista para anular vivía sólo en el
+  // Cierre, que es de la caja del equipo: quien administra las dos tiendas
+  // no llegaba a una venta de la otra sin cambiar de caja.
+  const [ventas, setVentas] = useState<VentaDelTurno[]>([]);
+  const [puedeAnular, setPuedeAnular] = useState(false);
+  const [anulando, setAnulando] = useState<VentaDelTurno | null>(null);
+  const [errorAnular, setErrorAnular] = useState<string | null>(null);
+  const [enviandoAnulacion, setEnviandoAnulacion] = useState(false);
+  const [tirilla, setTirilla] =
+    useState<Awaited<ReturnType<typeof pedirTirilla>> | null>(null);
+
   const cargar = useCallback(async () => {
+    try {
+      const v = await ventasDelDia(TIENDA);
+      setVentas(v.ventas);
+      setPuedeAnular(v.puede_anular);
+    } catch {
+      setVentas([]);
+      setPuedeAnular(false);
+    }
     try {
       setDatos(await panelDelDia(TIENDA));
       setError(null);
@@ -85,6 +114,33 @@ function PantallaPanel({ TIENDA: tiendaDelEquipo }: { TIENDA: string }) {
     const t = setInterval(cargar, REFRESCO_MS);
     return () => clearInterval(t);
   }, [cargar]);
+
+  async function reimprimir(ventaId: string) {
+    try {
+      setTirilla(await pedirTirilla(ventaId));
+      // React tiene que pintar la tirilla antes de abrir el diálogo.
+      await new Promise((r) => setTimeout(r, 60));
+      window.print();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo traer la tirilla.");
+    }
+  }
+
+  async function confirmarAnulacion(motivo: string) {
+    if (!anulando) return;
+    setEnviandoAnulacion(true);
+    setErrorAnular(null);
+    try {
+      await anularVenta(anulando.venta_id, motivo);
+      setAnulando(null);
+      await cargar();
+    } catch (e) {
+      setErrorAnular(
+        e instanceof Error ? e.message : "No se pudo anular la venta.");
+    } finally {
+      setEnviandoAnulacion(false);
+    }
+  }
 
   const pico = Math.max(1, ...(datos?.horas ?? []).map((h) => h.ventas_centavos));
 
@@ -324,6 +380,17 @@ function PantallaPanel({ TIENDA: tiendaDelEquipo }: { TIENDA: string }) {
               </Marco>
             </div>
 
+            <div className="shrink-0">
+              <VentasDelTurno
+                ventas={ventas}
+                onReimprimir={reimprimir}
+                onAnular={setAnulando}
+                puedeAnular={puedeAnular}
+                titulo="Ventas de hoy"
+                vacio="Todavía no hay ventas hoy en esta tienda."
+              />
+            </div>
+
             {/* La auditoría vive AQUÍ y no en el rail: no es una pantalla de
                 cajera. Quien la abre ya está mirando cómo va el día, y la
                 consulta justo cuando algo de arriba no cuadra. */}
@@ -333,6 +400,19 @@ function PantallaPanel({ TIENDA: tiendaDelEquipo }: { TIENDA: string }) {
           </>
         )}
       </main>
+
+      {/* La copia para la impresora cuelga de <body>: ver TirillaImpresa. */}
+      <TirillaImpresa datos={tirilla} />
+
+      {anulando && (
+        <DialogoAnular
+          venta={anulando}
+          onCancelar={() => { setAnulando(null); setErrorAnular(null); }}
+          onConfirmar={confirmarAnulacion}
+          error={errorAnular}
+          anulando={enviandoAnulacion}
+        />
+      )}
     </div>
   );
 }
