@@ -13,9 +13,16 @@ Lo que la clienta trae impreso es el prefijo y el número (`TARR-11451`); el
 filtro de Siigo es por `name`, que es el código interno (`FV-6-11451`). Aquí
 se traduce de uno a otro.
 
-SÓLO ESTOS TRES. Las compras de la tienda en línea (`FE`) y de mayoristas
-tienen su propio trámite de cambio en Postventa, con otras reglas; traerlas a
-la caja sería devolver en efectivo algo que se pagó por otro canal.
+Y LA TIENDA EN LÍNEA (2026-10-10):
+
+    FV-1   prefijo FE    id 11810  maledenim.com
+
+La clienta que compró por la página también llega a la tienda a cambiar. Esa
+factura no es de ninguna caja: se trae a la caja QUE ATIENDE, y la prenda
+entra al inventario de esa tienda. Lo que NO se hace es devolverle efectivo
+del cajón —pagó por otro canal—: sale con otra prenda o con crédito.
+
+Mayoristas sigue fuera: su cambio se tramita por Postventa.
 """
 from __future__ import annotations
 
@@ -23,7 +30,10 @@ import re
 import time
 from typing import List, Optional
 
-__all__ = ["COMPROBANTES", "nombres_a_buscar", "buscar", "leer", "es_de_tienda"]
+__all__ = ["COMPROBANTES", "PREFIJO_EN_LINEA", "nombres_a_buscar", "buscar",
+           "leer", "es_de_tienda"]
+
+PREFIJO_EN_LINEA = "FE"
 
 #  código FV → (prefijo impreso, id del comprobante, tienda, caja)
 COMPROBANTES = {
@@ -33,13 +43,17 @@ COMPROBANTES = {
          "caja_id": "florida_caja1"},
     12: {"prefijo": "FP", "documento_id": 31434, "tienda_id": "florida",
          "caja_id": "florida_caja2"},
+    #  Sin tienda ni caja: son las de quien atiende el cambio.
+    1:  {"prefijo": PREFIJO_EN_LINEA, "documento_id": 11810, "tienda_id": None,
+         "caja_id": None},
 }
 _POR_PREFIJO = {v["prefijo"]: k for k, v in COMPROBANTES.items()}
 _POR_DOCUMENTO = {v["documento_id"]: v for v in COMPROBANTES.values()}
 
 
 def es_de_tienda(factura: dict) -> Optional[dict]:
-    """El comprobante de tienda de esa factura, o `None` si es de otro canal."""
+    """El comprobante de esa factura si la caja le puede hacer el cambio
+    (tiendas y tienda en línea), o `None` si es de otro canal."""
     return _POR_DOCUMENTO.get(int((factura.get("document") or {}).get("id") or 0))
 
 
@@ -48,16 +62,17 @@ def nombres_a_buscar(q: str, tienda_id: Optional[str] = None) -> List[str]:
 
         TARR-11451, tarr11451  → ['FV-6-11451']
         FV-6-11451             → ['FV-6-11451']
-        11451                  → ['FV-6-11451', 'FV-11-11451', 'FV-12-11451']
-        11451, en Arrayanes    → ['FV-6-11451']
+        FE-67700               → ['FV-1-67700']
+        11451, en Arrayanes    → ['FV-6-11451', 'FV-1-11451']
 
-    Vacío si no parece el número de una factura de tienda.
+    Vacío si no parece el número de una factura que la caja pueda cambiar.
 
     EL NÚMERO SUELTO SE BUSCA SÓLO EN LA TIENDA QUE PREGUNTA. Probar los tres
     comprobantes son tres peticiones a una cuenta que aguanta una por segundo
     y que comparte ese cupo con todo lo demás: medido en vivo, «2077» tardó
     un minuto. La clienta casi siempre vuelve a donde compró; si compró en la
     otra tienda, el papel trae el prefijo y con él se encuentra de una.
+    La tienda en línea se prueba siempre, de última: no es de ninguna tienda.
     """
     crudo = (q or "").strip().upper()
     m = re.fullmatch(r"FV[\s-]*(\d+)[\s-]*(\d+)", crudo)
@@ -70,7 +85,7 @@ def nombres_a_buscar(q: str, tienda_id: Optional[str] = None) -> List[str]:
         return [f"FV-{codigo}-{int(m.group(2))}"] if codigo else []
     if re.fullmatch(r"\d{1,7}", crudo):
         return [f"FV-{c}-{int(crudo)}" for c, v in COMPROBANTES.items()
-                if not tienda_id or v["tienda_id"] == tienda_id]
+                if not tienda_id or v["tienda_id"] in (tienda_id, None)]
     return []
 
 

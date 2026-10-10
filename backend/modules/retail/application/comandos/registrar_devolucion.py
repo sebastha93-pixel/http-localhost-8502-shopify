@@ -94,7 +94,7 @@ class RegistrarDevolucion:
         async with self._uow as t:
             cabecera = (await t.sesion.execute(text("""
                 SELECT v.id, v.numero, v.tienda_id, v.caja_id, v.moneda,
-                       v.estado,
+                       v.estado, v.prefijo, v.origen,
                        (SELECT m.ubicacion_id
                           FROM retail.movimientos_inventario m
                          WHERE m.referencia_id = v.id AND m.delta < 0
@@ -104,6 +104,16 @@ class RegistrarDevolucion:
             """), {"i": venta_id})).mappings().first()
             if cabecera is None:
                 raise ReglaDeNegocio(f"No existe la venta {venta_id}.")
+            # LA COMPRA DE LA TIENDA EN LÍNEA se pagó por otro canal: del
+            # cajón de la tienda no sale efectivo por ella. Se cambia por otra
+            # prenda o queda con crédito.
+            if (reembolso_enum is Reembolso.EFECTIVO
+                    and cabecera["origen"] == "siigo_pos"
+                    and (cabecera["prefijo"] or "").upper() == "FE"):
+                raise ReglaDeNegocio(
+                    "Es una compra de la tienda en línea: se cambia por otra "
+                    "prenda o queda con crédito, no se devuelve efectivo del "
+                    "cajón.")
             lugar = await self._lugar(t, caja_id, cabecera)
 
             vendidas, variantes = await self._lineas_vendidas(t, venta_id)

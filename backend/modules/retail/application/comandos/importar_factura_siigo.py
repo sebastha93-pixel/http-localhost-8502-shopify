@@ -62,8 +62,13 @@ class ImportarFacturaSiigo:
     async def ejecutar(self, factura: dict, *, comprobante: dict,
                        nuevo_id: Callable[[], str],
                        cliente_id: Optional[str] = None,
-                       ahora: Optional[datetime] = None) -> VentaImportada:
-        """`comprobante` es la fila de `facturas_tienda.COMPROBANTES`."""
+                       ahora: Optional[datetime] = None,
+                       caja_que_atiende: Optional[str] = None,
+                       tienda_que_atiende: Optional[str] = None) -> VentaImportada:
+        """`comprobante` es la fila de `facturas_tienda.COMPROBANTES`.
+
+        La factura de la tienda en línea no es de ninguna caja: queda en la
+        que atiende el cambio (`caja_que_atiende`)."""
         siigo_id = str(factura.get("id") or "")
         prefijo = (factura.get("prefix") or comprobante["prefijo"]).strip().upper()
         consecutivo = factura.get("number")
@@ -87,7 +92,12 @@ class ImportarFacturaSiigo:
                 f"La factura {numero} no tiene prendas que se puedan devolver.")
 
         ahora = ahora or datetime.now(timezone.utc)
-        caja_id, tienda_id = comprobante["caja_id"], comprobante["tienda_id"]
+        caja_id = comprobante["caja_id"] or caja_que_atiende
+        tienda_id = comprobante["tienda_id"] or tienda_que_atiende
+        if not caja_id or not tienda_id:
+            raise ReglaDeNegocio(
+                f"Para traer la factura {numero} hay que decir en qué caja se "
+                "atiende el cambio.")
         sesion_id = await self._turno_historico(caja_id, tienda_id)
         cuando = self._fecha(factura)
 

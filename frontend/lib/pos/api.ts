@@ -691,6 +691,8 @@ export interface TicketDevolucion {
   /** `false` sin turno abierto en esta caja: el efectivo se desactiva ANTES
    *  de elegirlo, en vez de dejar llegar hasta el final y fallar. */
   puede_efectivo: boolean;
+  /** El motivo, para el botón apagado. */
+  sin_efectivo_porque?: string | null;
   lineas: LineaDevolvible[];
 }
 
@@ -727,9 +729,14 @@ export interface VentaEncontrada {
 
 /** Trae al POS una factura de Siigo POS para poder hacerle el cambio. No es
  *  una venta nueva: no mueve inventario ni entra a ningún arqueo. */
-export async function traerFacturaDeSiigo(siigoId: string): Promise<VentaEncontrada> {
+export async function traerFacturaDeSiigo(
+  siigoId: string, cajaId?: string,
+): Promise<VentaEncontrada> {
+  // `caja_id`: la factura de la tienda en línea no es de ninguna caja y queda
+  // en la que atiende el cambio.
   return api.post<VentaEncontrada>(
-    "/api/retail/devoluciones/traer-de-siigo", { siigo_id: siigoId });
+    "/api/retail/devoluciones/traer-de-siigo",
+    { siigo_id: siigoId, caja_id: cajaId ?? null });
 }
 
 /** La venta que la clienta viene a cambiar, por lo que ELLA trae: la cédula,
