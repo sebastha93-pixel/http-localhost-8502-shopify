@@ -22,7 +22,7 @@ import { Auditoria } from "@/components/pos/auditoria";
 import { Rail } from "@/components/pos/rail";
 import { ConLaCaja } from "@/components/pos/elegir-caja";
 import { formatear } from "@/lib/pos/dinero";
-import { panelDelDia, type Panel as Datos } from "@/lib/pos/api";
+import { listarCajas, panelDelDia, type Panel as Datos } from "@/lib/pos/api";
 
 const REFRESCO_MS = 60_000;
 
@@ -31,11 +31,30 @@ export default function PaginaPanel() {
   return <ConLaCaja>{(c) => <PantallaPanel TIENDA={c.tienda_id} />}</ConLaCaja>;
 }
 
-function PantallaPanel({ TIENDA }: { TIENDA: string }) {
+function PantallaPanel({ TIENDA: tiendaDelEquipo }: { TIENDA: string }) {
   const { user } = useAuth();
   const [datos, setDatos] = useState<Datos | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [actualizado, setActualizado] = useState<Date | null>(null);
+
+  // QUIEN TIENE VARIAS TIENDAS LAS VE TODAS DESDE AQUÍ, sin cambiar la caja
+  // del equipo. Cambiar de caja borra lo guardado de la anterior y es para
+  // vender; mirar cómo va la otra tienda no puede costar eso. Las tiendas
+  // salen de las cajas que el servidor le deja ver a esta persona: una
+  // asesora tiene una y no ve el selector.
+  const [tiendas, setTiendas] = useState<{ id: string; nombre: string }[]>([]);
+  const [TIENDA, setTienda] = useState(tiendaDelEquipo);
+  const [porTienda, setPorTienda] = useState<Record<string, Datos>>({});
+
+  useEffect(() => {
+    listarCajas()
+      .then((cajas) => {
+        const vistas = new Map<string, string>();
+        for (const c of cajas) vistas.set(c.tienda_id, c.tienda_nombre);
+        setTiendas([...vistas].map(([id, nombre]) => ({ id, nombre })));
+      })
+      .catch(() => setTiendas([]));
+  }, []);
 
   const cargar = useCallback(async () => {
     try {
@@ -45,7 +64,21 @@ function PantallaPanel({ TIENDA }: { TIENDA: string }) {
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo cargar el panel.");
     }
-  }, [TIENDA]);
+    // El resumen de las demás, para los botones. Si una falla no tumba el
+    // panel de la que se está mirando.
+    if (tiendas.length > 1) {
+      const pares = await Promise.all(
+        tiendas.map(async (t) => {
+          try {
+            return [t.id, await panelDelDia(t.id)] as const;
+          } catch {
+            return null;
+          }
+        }),
+      );
+      setPorTienda(Object.fromEntries(pares.filter((x) => x !== null)));
+    }
+  }, [TIENDA, tiendas]);
 
   useEffect(() => {
     cargar();
@@ -87,6 +120,48 @@ function PantallaPanel({ TIENDA }: { TIENDA: string }) {
             </p>
           )}
         </header>
+
+        {tiendas.length > 1 && (
+          <div className="flex shrink-0 flex-wrap items-stretch gap-2" role="tablist"
+               aria-label="Tienda que se está mirando">
+            {tiendas.map((t) => {
+              const d = porTienda[t.id];
+              const activa = t.id === TIENDA;
+              return (
+                <button
+                  key={t.id}
+                  role="tab"
+                  aria-selected={activa}
+                  onClick={() => { setDatos(null); setTienda(t.id); }}
+                  className={`min-w-[150px] border px-4 py-2.5 text-left transition-colors duration-[var(--pos-transicion)] ${
+                    activa
+                      ? "border-[var(--pos-accent)] bg-[var(--pos-accent)]/10"
+                      : "border-[var(--pos-divider)] bg-[var(--pos-surface)] hover:bg-[var(--pos-100)]"
+                  }`}
+                >
+                  <span className="kicker block text-[var(--pos-700)]">{t.nombre}</span>
+                  <span className="tabular block text-[17px] font-semibold tabular-nums">
+                    {d ? formatear(d.ventas_centavos) : "—"}
+                  </span>
+                  <span className="tabular block text-[12px] text-[var(--pos-600)]">
+                    {d ? `${d.transacciones} venta${d.transacciones === 1 ? "" : "s"} · ${d.unidades} und` : " "}
+                  </span>
+                </button>
+              );
+            })}
+            {/* La suma, aparte y sin borde de botón: no es una tienda que se
+                pueda abrir, es el total del día. */}
+            <div className="ml-auto px-2 py-2.5 text-right">
+              <span className="kicker block text-[var(--pos-700)]">Las tiendas hoy</span>
+              <span className="tabular block text-[17px] font-semibold tabular-nums">
+                {formatear(Object.values(porTienda).reduce((s, d) => s + d.ventas_centavos, 0))}
+              </span>
+              <span className="tabular block text-[12px] text-[var(--pos-600)]">
+                {Object.values(porTienda).reduce((s, d) => s + d.transacciones, 0)} ventas
+              </span>
+            </div>
+          </div>
+        )}
 
         {error && (
           <p className="max-w-[560px] border-l-2 border-[var(--pos-800)] rounded-[var(--pos-r-sm)] bg-[var(--pos-800)]/10 py-3 pl-4 text-[13px] text-[var(--pos-900)]">

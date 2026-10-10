@@ -1443,6 +1443,23 @@ async def panel_del_dia(
 
     try:
         async with uow as t:
+            # El panel de una tienda lo ve quien trabaja en ella (o un
+            # administrador). Desde que el panel deja cambiar de tienda, que
+            # el parámetro viaje en la dirección ya no puede ser la única
+            # barrera.
+            if usuario.rol != "admin":
+                from sqlalchemy import text as _t
+                suyas = (await t.sesion.execute(_t("""
+                    SELECT coalesce(tiendas, '{}') FROM retail.permisos_pos
+                     WHERE usuario_id = :u AND activo
+                """), {"u": usuario.id})).scalar()
+                # Sólo a quien ESTÁ inscrito en el POS con sus tiendas. Quien
+                # tiene el permiso del OS sin fila aquí no vende ni abre
+                # turno; se le deja mirar como hasta ahora.
+                if suyas is not None and tienda_id not in list(suyas):
+                    raise HTTPException(403, {
+                        "error": "tienda_ajena",
+                        "mensaje": "No estás asignada a esa tienda."})
             p = await PanelVentas(t.sesion).ejecutar(tienda_id=tienda_id)
     except ReglaDeNegocio as e:
         raise HTTPException(400, {"error": "regla_de_negocio",
