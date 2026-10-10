@@ -99,12 +99,17 @@ function PantallaPanel({ TIENDA: tiendaDelEquipo }: { TIENDA: string }) {
           </h1>
           {/* Los permisos no van en el rail: no es pantalla de cajera. Pero
               tienen que ser alcanzables sin teclear la URL a mano. */}
-          <a
-            href="/pos/permisos"
-            className="ml-auto border border-[var(--pos-divider)] px-2.5 py-1 text-[12px] text-[var(--pos-700)] hover:bg-[var(--pos-100)]"
-          >
-            Permisos
-          </a>
+          {/* SÓLO PARA EL ADMINISTRADOR. Dar permisos es un acto sobre
+              personas y el servidor ya se lo niega a los demás; enseñarle a
+              una asesora un botón que la lleva a un «no puedes» es ruido. */}
+          {user?.rol === "admin" && (
+            <a
+              href="/pos/permisos"
+              className="ml-auto border border-[var(--pos-divider)] px-2.5 py-1 text-[12px] text-[var(--pos-700)] hover:bg-[var(--pos-100)]"
+            >
+              Permisos
+            </a>
+          )}
           {datos && (
             <p className="tabular text-[12px] text-[var(--pos-600)]">
               {datos.tienda_nombre} · {fechaLarga(datos.fecha)}

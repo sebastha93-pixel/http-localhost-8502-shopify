@@ -709,6 +709,26 @@ export interface Devolucion {
 
 /** `cajaId` es la caja DONDE se devuelve: de su turno depende si se puede
  *  reembolsar en efectivo, aunque la venta haya sido en otra tienda. */
+export interface VentaEncontrada {
+  venta_id: string;
+  /** El del POS (`ARRPOS-11891`): con él se abre el ticket. */
+  numero: string;
+  /** El de la factura (`ARRT-5`), el que va grande en el papel. */
+  factura: string | null;
+  fecha: string;
+  tienda: string;
+  total_centavos: number;
+  cliente: string | null;
+  anulada: boolean;
+}
+
+/** La venta que la clienta viene a cambiar, por lo que ELLA trae: la cédula,
+ *  el número de la factura (`ARRT-5`, `5`, `FV-13-5`) o el del ticket. */
+export async function buscarVentasParaCambio(q: string): Promise<VentaEncontrada[]> {
+  const p = new URLSearchParams({ q });
+  return api.get<VentaEncontrada[]>(`/api/retail/devoluciones/buscar?${p}`);
+}
+
 export async function buscarTicket(
   numero: string, cajaId: string,
 ): Promise<TicketDevolucion> {
