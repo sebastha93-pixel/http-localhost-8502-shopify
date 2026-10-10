@@ -45,6 +45,8 @@ import {
   turnoActual,
   type ContextoCaja,
   type Cliente,
+  buscarClientes,
+  buscarSaldos,
   type Referencia,
   type Turno,
   type Talla,
@@ -179,6 +181,26 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
   const [aviso, setAviso] = useState<string | null>(null);
   const [descontando, setDescontando] = useState<string | null>(null);
   const [cliente, setCliente] = useState<Cliente | null>(null);
+  // LLEGA DEL CAMBIO CON LA CLIENTA YA PUESTA. El saldo es de ella y la venta
+  // tiene que ir a su nombre: se busca por el saldo y entra sola, para que a
+  // la cajera sólo le quede añadir la prenda nueva.
+  useEffect(() => {
+    if (!saldoInicial) return;
+    let vigente = true;
+    (async () => {
+      try {
+        const saldo = (await buscarSaldos(saldoInicial))
+          .find((x) => x.codigo === saldoInicial);
+        if (!saldo?.cliente_id || !saldo.documento) return;
+        const duena = (await buscarClientes(saldo.documento))
+          .find((c) => c.id === saldo.cliente_id);
+        if (vigente && duena) setCliente((actual) => actual ?? duena);
+      } catch {
+        /* sin red: la cajera la pone a mano, como siempre */
+      }
+    })();
+    return () => { vigente = false; };
+  }, [saldoInicial]);
   // Guarda el DOCUMENTO ya tecleado, no un booleano: quien abre el alta
   // acaba de buscar y no encontrar, y volver a pedirle el número sería
   // hacerle teclear dos veces lo mismo delante de la clienta.
@@ -700,6 +722,12 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
     setConsulta("");
     setAviso(null);
     setCliente(null);
+    // El saldo con el que se llegó era para ESA venta: la siguiente empieza
+    // limpia, y la dirección también, o una recarga lo volvería a traer.
+    setSaldoInicial(undefined);
+    if (window.location.search.includes("saldo=")) {
+      window.history.replaceState(null, "", window.location.pathname);
+    }
     setTirillaLocal(null);
     ventaId.current = nuevoUlid();
     setFase("vendiendo");
