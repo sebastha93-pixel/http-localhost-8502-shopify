@@ -259,8 +259,15 @@ def test_una_denominacion_dada_de_baja_no_entra(entorno):
     """Una tableta con el catálogo viejo podría declarar 40 monedas de $50
     después de que la tienda las dio de baja, y el total cuadraría contra una
     moneda que ya nadie recibe."""
-    c, _ = entorno
-    r = abrir(c, {5000000: 4, 5000: 40})       # la de $50 nace apagada
+    c, motor = entorno
+
+    async def dar_de_baja():
+        async with motor.begin() as cn:
+            await cn.execute(text("UPDATE retail.denominaciones "
+                                  "SET activa = false WHERE valor_centavos = 5000"))
+    asyncio.get_event_loop().run_until_complete(dar_de_baja())
+
+    r = abrir(c, {5000000: 4, 5000: 40})
     assert r.status_code == 400
     assert "no tiene activas" in r.json()["detail"]["mensaje"]
 
@@ -339,5 +346,5 @@ def test_el_catalogo_viaja_con_el_contexto(entorno):
               params={"caja_id": "florida_caja1"}).json()
     valores = [x["valor_centavos"] for x in d["denominaciones"]]
     assert valores == sorted(valores, reverse=True)   # se cuenta de mayor a menor
-    assert 5000 not in valores                        # la de $50 no circula
+    assert valores[-1] == 5000        # la de $50 SÍ se cuenta (migración 0029)
     assert d["denominaciones"][0]["tipo"] == "billete"
