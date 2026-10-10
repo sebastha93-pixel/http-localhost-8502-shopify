@@ -6,9 +6,14 @@ entonces ya viene contada en lo que dice Siigo, y sumarla otra vez la
 duplicaría. Aquí se marca el paso de un estado al otro.
 
 Se pregunta a Postventa, que es quien emite: un caso con su `nota_credito` en
-`emitido`. Un caso RECHAZADO o CERRADO sin nota crédito también deja de
-sumarse: Siigo ya no va a recibir esa prenda por ese camino, y seguir
-contándola sería inventario fantasma para siempre.
+`emitido`. Un caso RECHAZADO también deja de sumarse: no hubo cambio y la
+prenda se la llevó la clienta.
+
+UN CASO «CERRADO» SIN NOTA CRÉDITO SIGUE SUMANDO. Pasó el mismo día que esto
+se escribió (PV-2026-0004): alguien llevó el caso de estado en estado hasta
+cerrarlo en veinte segundos y la nota crédito nunca se emitió. La prenda está
+en el estante de la tienda; lo que falta es el documento, y esconderla del
+POS no lo arregla — lo tapa.
 """
 from __future__ import annotations
 
@@ -37,7 +42,7 @@ def casos_con_nota_credito(numeros: List[str]) -> Dict[str, bool]:
                .in_("case_number", numeros).execute()).data or []
     por_id = {c["id"]: c["case_number"] for c in casos}
     terminados = {c["case_number"] for c in casos
-                  if c.get("status") in ("rechazado", "cerrado")}
+                  if c.get("status") == "rechazado"}
     if not por_id:
         return {}
     emitidas = (sb.table("postventa_fiscal").select("case_id")
