@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { desdePesosTecleados, formatear } from "@/lib/pos/dinero";
 import type { MedioPago } from "@/lib/pos/api";
 
@@ -83,8 +83,14 @@ export function PanelCobro({
   const vuelto = Math.min(excedente, efectivoTotal);
   const excedenteInvalido = excedente > efectivoTotal;
 
+  // EL COMPROBANTE se puede anotar en TODO lo que no es efectivo —el voucher
+  // del datáfono, la referencia del QR, la aprobación del crédito—. Es lo que
+  // permite cuadrar el cierre contra el informe del datáfono línea por línea.
+  // Obligatorio sólo donde la tienda lo exige (`exige_referencia`).
+  const admiteReferencia = Boolean(medio) && !medio!.es_efectivo;
   const faltaReferencia =
     Boolean(medio?.exige_referencia) && referencia.trim().length < 4;
+  const campoMonto = useRef<HTMLInputElement>(null);
   const montoInvalido = monto <= 0;
 
   function limpiar() {
@@ -217,20 +223,26 @@ export function PanelCobro({
         </p>
       )}
 
-      {medio.exige_referencia && (
+      {admiteReferencia && (
         <label className="mb-3 block">
           <span className="kicker">
-            NÚMERO DE APROBACIÓN
+            {medio.tipo === "tarjeta"
+              ? "NÚMERO DEL COMPROBANTE"
+              : "NÚMERO DE APROBACIÓN"}
+            {!medio.exige_referencia && " (OPCIONAL)"}
           </span>
           <input
             value={referencia}
             onChange={(e) => setReferencia(e.target.value)}
             autoComplete="off"
-            placeholder="el que salió en la pantalla o en la app"
+            placeholder={medio.tipo === "tarjeta"
+              ? "el del voucher del datáfono"
+              : "el que salió en la pantalla o en la app"}
+            aria-label={`Comprobante de ${medio.nombre}`}
             className="mt-1 w-full pos-input px-3 py-2.5 tabular text-[15px] text-[var(--pos-text)]"
           />
           <span className="mt-1 block text-[12px] leading-relaxed text-[var(--pos-600)]">
-            Es lo único que después permite cuadrar este cobro contra el informe
+            Es lo que después permite cuadrar este cobro contra el informe
             de {medio.nombre} — y lo que la clienta necesita para reclamar.
           </span>
         </label>
@@ -239,9 +251,20 @@ export function PanelCobro({
       <label className="kicker">
         {medio.permite_vuelto ? "MONTO RECIBIDO" : "MONTO COBRADO"}
       </label>
+      {/* AL TOCARLO SE LLENA CON LO QUE FALTA, y queda seleccionado. Así se ve
+          la cifra que se va a cobrar en vez de un campo vacío con un texto
+          gris, y cambiarla no pide borrar: lo primero que se teclee la
+          reemplaza. */}
       <input
+        ref={campoMonto}
         value={texto}
-        onChange={(e) => setTexto(e.target.value)}
+        onChange={(e) => setTexto(e.target.value.replace(/[^\d]/g, ""))}
+        onFocus={() => {
+          if (!texto && restante > 0) setTexto(String(Math.round(restante / 100)));
+          // Tras el repintado: en ese instante el campo todavía tiene el
+          // valor viejo y no habría nada que seleccionar.
+          setTimeout(() => campoMonto.current?.select(), 0);
+        }}
         inputMode="numeric"
         placeholder={formatear(restante)}
         aria-label={`Monto con ${medio.nombre}`}

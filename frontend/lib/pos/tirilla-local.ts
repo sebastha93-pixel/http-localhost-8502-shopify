@@ -26,7 +26,7 @@ export function armarTirillaLocal(opciones: {
   numero: string;
   cajera: string;
   lineas: LineaCarrito[];
-  pagos: { nombre: string; monto_centavos: number }[];
+  pagos: { nombre: string; monto_centavos: number; referencia?: string | null }[];
   clienteNombre?: string | null;
   clienteDocumento?: string | null;
   cuando?: Date;
@@ -96,7 +96,8 @@ export function armarTirillaLocal(opciones: {
     cliente_documento: opciones.clienteDocumento ?? null,
     lineas,
     pagos: opciones.pagos.map((p) => ({
-      nombre: p.nombre, monto_centavos: p.monto_centavos, referencia: null,
+      nombre: p.nombre, monto_centavos: p.monto_centavos,
+      referencia: p.referencia ?? null,
     })),
     subtotal_centavos: subtotal,
     descuento_centavos: descuento,

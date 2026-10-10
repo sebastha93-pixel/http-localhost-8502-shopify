@@ -93,7 +93,8 @@ def _vender(t, sku, cantidad=1, venta_id=None):
                     "precio_unitario_centavos": 14_990_000,
                     "descripcion": f"Jean · {sku}"}],
         "pagos": [{"medio_pago_id": "datafono_arrayanes",
-                   "monto_centavos": 14_990_000 * cantidad}]})
+                   "monto_centavos": 14_990_000 * cantidad,
+                   "referencia": "004512"}]})
     return vid, r
 
 
@@ -208,3 +209,20 @@ def test_sin_destinatarios_no_se_envia_ni_se_marca(tienda, monkeypatch):
     # El día que se configure, el de ayer todavía puede salir.
     monkeypatch.setenv("RETAIL_ALERTA_INVENTARIO_PARA", "a@male.test, b@male.test")
     assert _alerta(_manana_a_las(8), enviados)["destinatarios"] == 2
+
+
+def test_el_datafono_no_se_cobra_sin_el_numero_del_comprobante(tienda):
+    """Es lo que cuadra el cierre contra el informe del datáfono. Sin él, un
+    cobro de más o de menos no se puede rastrear a su venta."""
+    r = tienda["c"].post("/api/retail/ventas/cerrar", json={
+        "venta_id": "01JQ8X4T5N77V0F1R8S9V0W1X2", "numero":
+            f"{tienda['prefijo']}-{tienda['n'][0]}",
+        "tienda_id": "arrayanes", "caja_id": "arrayanes_caja1",
+        "sesion_id": SESION, "ubicacion_id": "tienda:arrayanes",
+        "lineas": [{"sku": "10001-1T6", "cantidad": 1,
+                    "precio_unitario_centavos": 14_990_000,
+                    "descripcion": "Jean"}],
+        "pagos": [{"medio_pago_id": "datafono_arrayanes",
+                   "monto_centavos": 14_990_000}]})
+    assert r.status_code == 400
+    assert "Datáfono" in r.json()["detail"]["mensaje"]

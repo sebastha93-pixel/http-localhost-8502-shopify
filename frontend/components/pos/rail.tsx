@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 /**
- * Rail de navegación — 92px, cinco secciones.
+ * Rail de navegación — 92px, seis secciones.
  *
  * Es lo que mi diseño no tenía: sin él, cada pantalla del POS era un callejón
  * sin salida. Viene del handoff.
@@ -21,6 +21,10 @@ const SECCIONES = [
   { href: "/pos/inventario", label: "Stock", icono: CajaIcono, listo: true },
   { href: "/pos/cierre", label: "Cierre", icono: CandadoIcono, listo: true },
   { href: "/pos/panel", label: "Panel", icono: BarrasIcono, listo: true },
+  // El ajuste de la impresora es de CADA equipo y lo hace quien está frente
+  // a él con el papel en la mano: por eso está aquí, a un toque, y no detrás
+  // de la pantalla de permisos.
+  { href: "/pos/impresion", label: "Papel", icono: ImpresoraIcono, listo: true },
 ];
 
 export function Rail({ cajera }: { cajera: string }) {
@@ -122,6 +126,14 @@ function CandadoIcono() {
     <svg {...props} aria-hidden>
       <rect width="18" height="11" x="3" y="11" rx="2" />
       <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  );
+}
+function ImpresoraIcono() {
+  return (
+    <svg {...props} aria-hidden>
+      <path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+      <rect width="12" height="8" x="6" y="14" />
     </svg>
   );
 }
