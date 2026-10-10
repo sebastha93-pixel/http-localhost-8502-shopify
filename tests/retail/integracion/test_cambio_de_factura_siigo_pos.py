@@ -300,6 +300,21 @@ def test_la_compra_en_linea_NO_devuelve_efectivo_del_cajon(tienda):
                         "WHERE tipo LIKE 'devolucion%'") == 0
 
 
+def test_la_prenda_que_esta_tienda_NUNCA_tuvo_tambien_entra(tienda):
+    """Florida, 2026-10-10 (FE-67444): comprada por la página, de una
+    referencia sin saldo en la tienda. El cambio reventaba con «no hay saldo
+    registrado»."""
+    venta_id = _traer(tienda, EN_LINEA["id"], caja="florida_caja1"
+                      ).json()["venta_id"]
+    r = tienda["c"].post("/api/retail/devoluciones", json={
+        "devolucion_id": "01JQ8X4T5NDV0F1R8S9V0W1X2Y", "venta_id": venta_id,
+        "seleccion": {"95613-1T12": 1, "101": 1}, "motivo": "talla",
+        "reembolso": "credito_tienda", "caja_id": "florida_caja1"})
+    assert r.status_code == 200, r.text
+    assert _stock(tienda, "95613-1T12", "tienda:florida") == 1   # no había fila
+    assert _stock(tienda, "101", "tienda:florida") == 1          # ni variante
+
+
 # ── Hacerle el cambio ───────────────────────────────────────────────────────
 
 def _devolver(t, seleccion, reembolso="efectivo", caja="arrayanes_caja1",

@@ -96,16 +96,20 @@ class RepositorioInventarioSQL:
         cualquier diferencia se puede hacer desaparecer, y entonces la
         conciliación mensual deja de significar algo.
         """
+        # INSERTA O SUMA, igual que la salida. La prenda que vuelve puede no
+        # tener fila de saldo en ESTA tienda: se compró por la página o en la
+        # otra tienda, y aquí nunca hubo una. Con un UPDATE el cambio reventaba
+        # con la clienta delante (Florida, 2026-10-10, FE-67444). La prenda
+        # está en la mano de la cajera: entra.
         fila = (await self._s.execute(text("""
-            UPDATE retail.stock_ubicacion
-               SET cantidad = cantidad + :n, actualizado_en = now()
-             WHERE ubicacion_id = :ubicacion AND variante_id = :variante
+            INSERT INTO retail.stock_ubicacion (ubicacion_id, variante_id, cantidad)
+            VALUES (:ubicacion, :variante, :n)
+            ON CONFLICT (ubicacion_id, variante_id) DO UPDATE
+               SET cantidad = retail.stock_ubicacion.cantidad + :n,
+                   actualizado_en = now()
          RETURNING cantidad
         """), {"n": cantidad, "ubicacion": ubicacion_id,
                "variante": variante_id})).first()
-        if fila is None:
-            raise LookupError(
-                f"no hay saldo registrado de {variante_id} en {ubicacion_id}")
         # `referencia_tipo` es parámetro desde que existen las devoluciones: el
         # asiento de una devolución apunta a LA DEVOLUCIÓN, no a la venta. Si
         # apuntara a la venta, dos devoluciones parciales de la misma venta
