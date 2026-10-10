@@ -1864,6 +1864,8 @@ class TicketDevolucion(BaseModel):
     #  desactivar «Efectivo» ANTES de que la cajera lo elija, en vez de
     #  dejarla llegar hasta el final y fallar.
     puede_efectivo: bool
+    #  Por qué no, para decírselo a la cajera en el botón apagado.
+    sin_efectivo_porque: Optional[str] = None
     lineas: List[LineaDevolvible]
 
 
@@ -2006,7 +2008,8 @@ async def buscar_ventas_para_cambio(
         encontradas.append(VentaEncontrada(
             venta_id="", numero=numero, factura=numero,
             fecha=str(f.get("date") or ""),
-            tienda=_TIENDA_DE.get(_facturas_tienda().es_de_tienda(f)["tienda_id"], ""),
+            tienda=_TIENDA_DE.get(_facturas_tienda().es_de_tienda(f)["tienda_id"],
+                                  "Tienda en línea"),
             total_centavos=int(round(float(f.get("total") or 0) * 100)),
             cliente=nombre.strip() or None, anulada=False,
             siigo_id=str(f.get("id"))))
@@ -2035,6 +2038,9 @@ async def _facturas_de_siigo_pos(q: str, tienda_id: Optional[str] = None) -> lis
 
 class ImportarFacturaEntrada(BaseModel):
     siigo_id: str = Field(min_length=8, max_length=64)
+    #  La caja que atiende. Una factura de la tienda en línea no es de
+    #  ninguna caja: queda en esta.
+    caja_id: Optional[str] = Field(default=None, max_length=64)
 
 
 @router.post("/devoluciones/traer-de-siigo", response_model=VentaEncontrada)
@@ -2072,8 +2078,8 @@ async def traer_factura_de_siigo(
     if comprobante is None:
         raise HTTPException(400, {
             "error": "no_es_de_tienda",
-            "mensaje": "Esa factura no es de una tienda: su cambio se tramita "
-                       "por Postventa."})
+            "mensaje": "Esa factura no es de una tienda ni de la tienda en "
+                       "línea: su cambio se tramita por Postventa."})
 
     # La clienta, para que el caso de Postventa lleve sus datos.
     documento = str((factura.get("customer") or {}).get("identification") or "")
@@ -2086,6 +2092,14 @@ async def traer_factura_de_siigo(
             clienta = None
 
     async with uow as t:
+        tienda_que_atiende = None
+        if entrada.caja_id:
+            tienda_que_atiende = (await t.sesion.execute(_t(
+                "SELECT tienda_id FROM retail.cajas WHERE id = :c"),
+                {"c": entrada.caja_id})).scalar()
+        tienda_id = comprobante["tienda_id"] or tienda_que_atiende
+        caja_id = comprobante["caja_id"] or (
+            entrada.caja_id if tienda_que_atiende else None)
         cliente_id = None
         if clienta:
             await ImportarClientes(t.sesion).ejecutar(
@@ -2097,7 +2111,8 @@ async def traer_factura_de_siigo(
         try:
             r = await ImportarFacturaSiigo(t.sesion).ejecutar(
                 factura, comprobante=comprobante, nuevo_id=_nuevo_ulid,
-                cliente_id=cliente_id)
+                cliente_id=cliente_id, caja_que_atiende=caja_id,
+                tienda_que_atiende=tienda_id)
         except ReglaDeNegocio as e:
             raise HTTPException(400, {"error": "regla_de_negocio",
                                       "mensaje": str(e)})
@@ -2105,7 +2120,7 @@ async def traer_factura_de_siigo(
             await t.auditoria.registrar(
                 evento="venta.traida_de_siigo",
                 ocurrido_en=datetime.now(timezone.utc),
-                tienda_id=comprobante["tienda_id"], caja_id=comprobante["caja_id"],
+                tienda_id=tienda_id, caja_id=caja_id,
                 usuario_id=usuario.id, agregado_tipo="venta",
                 agregado_id=r.venta_id,
                 payload={"factura": r.numero, "siigo_id": entrada.siigo_id,
@@ -2115,7 +2130,7 @@ async def traer_factura_de_siigo(
     return VentaEncontrada(
         venta_id=r.venta_id, numero=r.numero, factura=r.numero,
         fecha=str(factura.get("date") or ""),
-        tienda=_TIENDA_DE.get(comprobante["tienda_id"], ""),
+        tienda=_TIENDA_DE.get(comprobante["tienda_id"], "Tienda en línea"),
         total_centavos=int(round(float(factura.get("total") or 0) * 100)),
         cliente=None, anulada=False)
 
@@ -2142,7 +2157,7 @@ async def buscar_ticket(
 
     cab = (await s.execute(_t("""
         SELECT v.id, v.numero, v.total, v.estado, v.cajera_id, v.caja_id,
-               v.cerrada_en,
+               v.cerrada_en, v.prefijo, v.origen,
                -- El turno de la caja DONDE se devuelve: de ese cajón sale la
                -- plata, no del de la caja que vendió.
                EXISTS (SELECT 1 FROM retail.sesiones_caja sc
@@ -2192,7 +2207,12 @@ async def buscar_ticket(
         fecha=cab["cerrada_en"].isoformat() if cab["cerrada_en"] else "",
         cajera=cab["cajera_id"] or "", total_centavos=int(cab["total"]),
         anulada=cab["estado"] == "anulada",
-        puede_efectivo=bool(cab["hay_turno"]),
+        puede_efectivo=bool(cab["hay_turno"]) and not _es_en_linea(cab),
+        sin_efectivo_porque=(
+            "Compra de la tienda en línea: se cambia por otra prenda o queda "
+            "con crédito" if _es_en_linea(cab)
+            else None if cab["hay_turno"]
+            else "Necesita un turno abierto en esta caja"),
         lineas=[
             LineaDevolvible(
                 sku=f["sku"], nombre=f["descripcion"], talla=_talla(f["sku"]),
@@ -2204,6 +2224,13 @@ async def buscar_ticket(
             for f in filas
         ],
     )
+
+
+def _es_en_linea(venta) -> bool:
+    """La compra de maledenim.com traída a la caja para cambiarla. Se pagó
+    por otro canal: del cajón de la tienda no sale efectivo por ella."""
+    return (venta["origen"] == "siigo_pos" and (venta["prefijo"] or "").upper()
+            == _facturas_tienda().PREFIJO_EN_LINEA)
 
 
 @router.post("/devoluciones", response_model=DevolucionSalida)

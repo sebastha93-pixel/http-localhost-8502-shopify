@@ -146,9 +146,9 @@ def _buscar(t, q):
     return r.json()
 
 
-def _traer(t, siigo_id=FACTURA["id"]):
+def _traer(t, siigo_id=FACTURA["id"], caja=None):
     return t["c"].post("/api/retail/devoluciones/traer-de-siigo",
-                       json={"siigo_id": siigo_id})
+                       json={"siigo_id": siigo_id, "caja_id": caja})
 
 
 # ── Encontrarla ─────────────────────────────────────────────────────────────
@@ -160,15 +160,19 @@ def test_el_numero_impreso_se_traduce_al_codigo_que_siigo_entiende():
     assert n("TARR-11451") == n("tarr 11451") == n("TARR11451") == ["FV-6-11451"]
     assert n("FL-2077") == ["FV-11-2077"] and n("FP-685") == ["FV-12-685"]
     assert n("FV-6-11451") == n("fv 6 11451") == ["FV-6-11451"]
-    # Sólo el número: puede ser de cualquiera de los tres comprobantes…
-    assert n("11451") == ["FV-6-11451", "FV-11-11451", "FV-12-11451"]
+    # Sólo el número: puede ser de cualquiera de los comprobantes…
+    assert n("11451") == ["FV-6-11451", "FV-11-11451", "FV-12-11451",
+                          "FV-1-11451"]
     # …pero se busca sólo en la tienda que pregunta: tres peticiones a Siigo
     # tardaron un minuto en vivo.
-    assert n("11451", "arrayanes") == ["FV-6-11451"]
-    assert n("2077", "florida") == ["FV-11-2077", "FV-12-2077"]
+    # tardaron un minuto en vivo. La tienda en línea va siempre, de última.
+    assert n("11451", "arrayanes") == ["FV-6-11451", "FV-1-11451"]
+    assert n("2077", "florida") == ["FV-11-2077", "FV-12-2077", "FV-1-2077"]
     assert n("TARR-11451", "florida") == ["FV-6-11451"]   # con prefijo, donde sea
-    # Lo que no es de tienda no se busca aquí.
-    assert n("FE-67700") == [] and n("FV-1-67700") == [] and n("ARRT-5") == []
+    # La tienda en línea, por su prefijo.
+    assert n("FE-67700") == n("fe 67700") == n("FV-1-67700") == ["FV-1-67700"]
+    # Lo que no es de tienda ni de la página no se busca aquí.
+    assert n("ARRT-5") == [] and n("FV-3-10") == []
 
 
 def test_una_factura_de_antes_del_pos_APARECE_al_buscarla(tienda):
@@ -253,11 +257,47 @@ def test_buscarla_dos_veces_no_la_duplica(tienda):
     assert v["venta_id"] == a["venta_id"] and not v.get("siigo_id")
 
 
-def test_una_factura_de_la_tienda_en_linea_NO_se_trae_a_la_caja(tienda):
+def test_la_compra_de_la_tienda_en_linea_se_trae_a_la_caja_QUE_ATIENDE(tienda):
+    """No es de ninguna caja: queda en la tienda donde la clienta la cambia."""
+    r = _traer(tienda, EN_LINEA["id"], caja="florida_caja1")
+    assert r.status_code == 200, r.text
+    assert r.json()["numero"] == "FE-67700"
+    assert r.json()["tienda"] == "Tienda en línea"
+    assert _todas(tienda, "SELECT numero, tienda_id, caja_id, origen "
+                          "FROM retail.ventas") == [
+        ("FE-67700", "florida", "florida_caja1", "siigo_pos")]
+
+
+def test_sin_decir_la_caja_la_de_la_tienda_en_linea_NO_se_trae(tienda):
     r = _traer(tienda, EN_LINEA["id"])
     assert r.status_code == 400
-    assert r.json()["detail"]["error"] == "no_es_de_tienda"
     assert _uno(tienda, "SELECT count(*) FROM retail.ventas") == 0
+
+
+def test_la_compra_en_linea_NO_devuelve_efectivo_del_cajon(tienda):
+    venta_id = _traer(tienda, EN_LINEA["id"], caja="arrayanes_caja1"
+                      ).json()["venta_id"]
+    d = tienda["c"].get("/api/retail/devoluciones/ticket/FE-67700",
+                        params={"caja_id": "arrayanes_caja1"}).json()
+    assert d["puede_efectivo"] is False
+    assert "tienda en línea" in d["sin_efectivo_porque"]
+
+    def devolver(reembolso, did):
+        return tienda["c"].post("/api/retail/devoluciones", json={
+            "devolucion_id": did, "venta_id": venta_id,
+            "seleccion": {"26602-1T6": 1}, "motivo": "talla",
+            "reembolso": reembolso, "caja_id": "arrayanes_caja1"})
+
+    r = devolver("efectivo", "01JQ8X4T5NDV0F1R8S9V0W1X2Y")
+    assert r.status_code == 400 and "tienda en línea" in r.json()["detail"]["mensaje"]
+    assert _stock(tienda, "26602-1T6", "tienda:arrayanes") == 2
+
+    # Con crédito sí: y la prenda entra a la tienda que atiende.
+    r = devolver("credito_tienda", "01JQ8X4T5NDV0F1R8S9V0W1X2Z")
+    assert r.status_code == 200, r.text
+    assert _stock(tienda, "26602-1T6", "tienda:arrayanes") == 3
+    assert _uno(tienda, "SELECT count(*) FROM retail.movimientos_caja "
+                        "WHERE tipo LIKE 'devolucion%'") == 0
 
 
 # ── Hacerle el cambio ───────────────────────────────────────────────────────

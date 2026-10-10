@@ -105,7 +105,7 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
   // abre igual que cualquier venta del POS.
   const elegir = useCallback(async (v: VentaEncontrada) => {
     const numero = v.siigo_id
-      ? (await traerFacturaDeSiigo(v.siigo_id)).numero
+      ? (await traerFacturaDeSiigo(v.siigo_id, CAJA)).numero
       : v.numero;
     await abrir(numero);
   }, [abrir]);
@@ -340,7 +340,8 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
                         activo={reembolso === r.valor}
                         deshabilitado={apagado}
                         titulo={apagado
-                          ? "Necesita un turno abierto en esta caja"
+                          ? (ticket.sin_efectivo_porque
+                             ?? "Necesita un turno abierto en esta caja")
                           : undefined}
                         onClick={() => setReembolso(r.valor)}
                       >
