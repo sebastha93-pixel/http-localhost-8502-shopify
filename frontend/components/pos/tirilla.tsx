@@ -20,7 +20,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { formatear } from "@/lib/pos/dinero";
-import type { Tirilla as Datos } from "@/lib/pos/api";
+import type { SaldoAFavor, Tirilla as Datos } from "@/lib/pos/api";
 import { useConfigImpresion, type ConfigImpresion } from "@/lib/pos/impresion";
 // IMPORTADO, no servido desde `/public`: así Next lo deja bajo
 // `/_next/static/`, que es lo único que el service worker guarda. Desde
@@ -411,6 +411,76 @@ const ESTILOS = `
  * puesto en la pantalla. Esta copia cuelga directo de `<body>` y la hoja de
  * impresión esconde todo lo demás, así que ninguna maqueta la puede tapar.
  */
+/**
+ * EL COMPROBANTE DEL SALDO A FAVOR. Lo que la clienta se lleva cuando cambia
+ * una prenda y no gasta todo —o nada— ahí mismo. No es una factura ni una
+ * nota crédito y lo dice: es el papel con el CÓDIGO que la caja le pide la
+ * próxima vez.
+ */
+export function SaldoImpreso({ saldo }: { saldo: SaldoAFavor | null }) {
+  const [destino, setDestino] = useState<HTMLElement | null>(null);
+  const [cfg] = useConfigImpresion();
+  useEffect(() => {
+    const nodo = document.createElement("div");
+    nodo.className = "pos-impresion";
+    document.body.appendChild(nodo);
+    setDestino(nodo);
+    return () => { nodo.remove(); };
+  }, []);
+  if (!destino || !saldo) return null;
+  const fecha = new Date(saldo.fecha).toLocaleString("es-CO", {
+    day: "2-digit", month: "2-digit", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+  return createPortal(
+    <>
+      <div className="tirilla" aria-label="Comprobante de saldo a favor">
+        <style>{ESTILOS}</style>
+        <header className="t-centro">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img className="t-logo" src={logo.src} alt="MALE DENIM" />
+          <div>{saldo.tienda}</div>
+        </header>
+        <div className="t-sep" />
+        <div className="t-centro t-fuerte">COMPROBANTE DE SALDO A FAVOR</div>
+        <div className="t-centro t-fuerte t-grande">{saldo.codigo}</div>
+        <div className="t-centro t-chico">{fecha}</div>
+        <div className="t-sep" />
+        {saldo.cliente && (
+          <div className="t-fila"><span>Cliente</span><span>{saldo.cliente}</span></div>
+        )}
+        {saldo.documento && (
+          <div className="t-fila"><span>Documento</span><span>{saldo.documento}</span></div>
+        )}
+        <div className="t-fila"><span>Por cambio de</span><span>{saldo.origen}</span></div>
+        <div className="t-sep" />
+        {saldo.usado_centavos > 0 && (
+          <>
+            <div className="t-fila">
+              <span>Saldo inicial</span><span>{formatear(saldo.monto_centavos)}</span>
+            </div>
+            <div className="t-fila">
+              <span>Ya usado</span><span>−{formatear(saldo.usado_centavos)}</span>
+            </div>
+          </>
+        )}
+        <div className="t-fila t-fuerte t-grande">
+          <span>SALDO A FAVOR</span>
+          <span>{formatear(saldo.disponible_centavos)}</span>
+        </div>
+        <div className="t-sep" />
+        <div className="t-centro t-chico">
+          Preséntalo en cualquier tienda MALE DENIM para pagar tu próxima
+          compra. Se usa a nombre de la misma clienta. No es canjeable por
+          dinero. Este papel no es factura ni nota crédito.
+        </div>
+      </div>
+      <style>{estilosDelEquipo(cfg)}</style>
+    </>,
+    destino,
+  );
+}
+
 export function TirillaImpresa({ datos }: { datos: Datos | null }) {
   const [destino, setDestino] = useState<HTMLElement | null>(null);
   const [cfg] = useConfigImpresion();

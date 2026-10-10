@@ -164,6 +164,14 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
   const [referencias, setReferencias] = useState<Referencia[]>([]);
   const [lineas, setLineas] = useState<LineaCarrito[]>([]);
   const [fase, setFase] = useState<Fase>("vendiendo");
+  // Se llega desde un cambio recién hecho con `?saldo=SF-00012`: el cobro
+  // abre con «Saldo a favor» y ese código. Se lee de la dirección a mano —
+  // `useSearchParams` obligaría a envolver la página en un Suspense.
+  const [saldoInicial, setSaldoInicial] = useState<string | undefined>();
+  useEffect(() => {
+    const c = new URLSearchParams(window.location.search).get("saldo");
+    if (c) setSaldoInicial(c.trim().toUpperCase());
+  }, []);
   const [ticket, setTicket] = useState<Ticket | null>(null);
   // Sólo se llena cuando la venta se cerró SIN RED: es la tirilla armada aquí,
   // porque la del servidor no se puede pedir.
@@ -883,6 +891,7 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
                   total={totales.total}
                   medios={contexto?.medios_pago ?? []}
                   emiteFactura={Boolean(contexto?.tiene_resolucion)}
+                  saldoInicial={saldoInicial}
                   onCancelar={() => setFase("vendiendo")}
                   onConfirmar={cobrar}
                 />

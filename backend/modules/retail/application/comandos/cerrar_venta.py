@@ -94,6 +94,9 @@ class CerrarVenta:
 
             # 2
             await t.ventas.guardar(venta, variante_por_sku=variante_por_sku)
+            # Después de guardar: el uso del saldo apunta a la venta. Si no
+            # alcanza, revienta aquí y la transacción entera se deshace.
+            await self._consumir_saldos(t, venta)
 
             # El bloque de la caja avanza CON la venta, en la misma
             # transacción. Sin esto el contador del servidor se queda quieto y
@@ -209,6 +212,53 @@ class CerrarVenta:
         )
 
     @staticmethod
+    async def _consumir_saldos(t, venta) -> None:
+        """El pago con «Saldo a favor» gasta un saldo que EXISTE y alcanza.
+
+        La referencia de ese pago es el código impreso en el comprobante
+        (`SF-00012`). Se bloquea la fila: dos cajas no pueden gastar el mismo
+        saldo a la vez. Y la venta va a nombre de la dueña del saldo — en
+        Siigo el anticipo es de un tercero, y cruzarlo contra la factura de
+        otra persona lo deja colgado.
+        """
+        from sqlalchemy import text as _t
+
+        for pago, neto in venta.cobros_netos():
+            if pago.medio_pago_id != MEDIO_SALDO or neto.es_cero():
+                continue
+            codigo = (pago.referencia or "").strip().upper()
+            s = (await t.sesion.execute(_t("""
+                SELECT s.id, s.monto - s.usado AS disponible, s.cliente_id,
+                       trim(concat_ws(' ', c.nombre, c.apellido)) AS duena
+                  FROM retail.saldos_a_favor s
+                  LEFT JOIN retail.clientes c ON c.id = s.cliente_id
+                 WHERE s.codigo = :c FOR UPDATE OF s
+            """), {"c": codigo})).mappings().first()
+            if s is None:
+                raise ReglaDeNegocio(
+                    f"No existe el saldo a favor «{codigo}». El código está en "
+                    f"el comprobante que se le entregó a la clienta.")
+            if s["cliente_id"] and venta.cliente_id != s["cliente_id"]:
+                raise ReglaDeNegocio(
+                    f"El saldo {codigo} es de {s['duena'] or 'otra clienta'}: "
+                    f"pon la venta a su nombre para poder cruzarlo.")
+            if int(s["disponible"]) < neto.centavos:
+                raise ReglaDeNegocio(
+                    f"Al saldo {codigo} le quedan "
+                    f"${int(s['disponible']) // 100:,}".replace(",", ".")
+                    + ": cobra esa parte con él y el resto con otro medio.")
+            await t.sesion.execute(_t("""
+                UPDATE retail.saldos_a_favor SET usado = usado + :n
+                 WHERE id = :i
+            """), {"n": neto.centavos, "i": s["id"]})
+            await t.sesion.execute(_t("""
+                INSERT INTO retail.saldo_usos (saldo_id, venta_id, monto)
+                VALUES (:i, :v, :n)
+                ON CONFLICT (saldo_id, venta_id) DO UPDATE
+                   SET monto = retail.saldo_usos.monto + :n
+            """), {"i": s["id"], "v": venta.id, "n": neto.centavos})
+
+    @staticmethod
     async def _exigir_referencias(t, venta) -> None:
         """Que ningún pago que necesite referencia entre sin ella.
 
@@ -246,6 +296,10 @@ class CerrarVenta:
                 f"Está en la pantalla del datáfono o en la app, y es lo único "
                 f"que después permite cuadrar ese cobro."
             )
+
+
+#  El medio de pago que gasta un saldo a favor. Lo siembra la migración 0031.
+MEDIO_SALDO = "saldo_a_favor"
 
 
 class RelojDelSistema:

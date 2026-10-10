@@ -58,6 +58,9 @@ class ResultadoDevolucion:
     salio_del_cajon: bool
     #  El turno que la absorbió. `None` cuando no tocó ningún cajón.
     sesion_id: Optional[str]
+    #  Con crédito de tienda: el código del saldo a favor (`SF-00012`), que va
+    #  impreso en su comprobante y con el que se paga la siguiente compra.
+    saldo_codigo: Optional[str] = None
 
 
 class RegistrarDevolucion:
@@ -94,7 +97,7 @@ class RegistrarDevolucion:
         async with self._uow as t:
             cabecera = (await t.sesion.execute(text("""
                 SELECT v.id, v.numero, v.tienda_id, v.caja_id, v.moneda,
-                       v.estado, v.prefijo, v.origen,
+                       v.estado, v.prefijo, v.origen, v.cliente_id,
                        (SELECT m.ubicacion_id
                           FROM retail.movimientos_inventario m
                          WHERE m.referencia_id = v.id AND m.delta < 0
@@ -165,6 +168,27 @@ class RegistrarDevolucion:
                 "unidades": devolucion.unidades,
                 "moneda": devolucion.moneda, "ahora": ahora,
             })
+            # EL SALDO A FAVOR. Con crédito de tienda la clienta se va con un
+            # código que vale plata: lo usa ahí mismo en otra prenda o vuelve
+            # con el papel. Nace en la misma transacción que la devolución.
+            saldo_codigo = None
+            if reembolso_enum is Reembolso.CREDITO_TIENDA:
+                n = (await t.sesion.execute(text(
+                    "SELECT nextval('retail.saldo_a_favor_seq')"))).scalar()
+                saldo_codigo = f"SF-{int(n):05d}"
+                await t.sesion.execute(text("""
+                    INSERT INTO retail.saldos_a_favor
+                        (id, codigo, devolucion_id, numero_origen, cliente_id,
+                         tienda_id, monto, creado_por, creado_en)
+                    VALUES (:id, :codigo, :id, :numero, :cliente, :tienda,
+                            :monto, :usuario, :ahora)
+                """), {"id": devolucion_id, "codigo": saldo_codigo,
+                       "numero": cabecera["numero"],
+                       "cliente": cabecera["cliente_id"],
+                       "tienda": lugar["tienda_id"],
+                       "monto": devolucion.total.centavos,
+                       "usuario": usuario_id, "ahora": ahora})
+
             for linea in devolucion.lineas:
                 await t.sesion.execute(text("""
                     INSERT INTO retail.devolucion_lineas
@@ -262,6 +286,7 @@ class RegistrarDevolucion:
             reembolso=reembolso_enum.value,
             salio_del_cajon=devolucion.sale_del_cajon,
             sesion_id=sesion_para_guardar,
+            saldo_codigo=saldo_codigo,
         )
 
     # ── Lecturas ────────────────────────────────────────────────────────────

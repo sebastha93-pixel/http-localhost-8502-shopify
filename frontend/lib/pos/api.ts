@@ -720,6 +720,8 @@ export interface Devolucion {
   reembolso: Reembolso;
   salio_del_cajon: boolean;
   sesion_id: string | null;
+  /** Con crédito de tienda: el código del saldo a favor (`SF-00012`). */
+  saldo_codigo?: string | null;
 }
 
 /** `cajaId` es la caja DONDE se devuelve: de su turno depende si se puede
@@ -887,4 +889,27 @@ export async function guardarPermisos(
   } catch (e) {
     return traducir(e);
   }
+}
+
+// ── Saldo a favor ───────────────────────────────────────────────────────────
+
+/** Lo que deja un cambio con crédito de tienda. Se gasta con el medio de pago
+ *  «Saldo a favor», poniendo el código como referencia. */
+export interface SaldoAFavor {
+  codigo: string;
+  monto_centavos: number;
+  usado_centavos: number;
+  disponible_centavos: number;
+  fecha: string;
+  origen: string;
+  tienda: string;
+  cliente_id: string | null;
+  cliente: string | null;
+  documento: string | null;
+}
+
+/** Por el código del comprobante o por la cédula de la clienta. */
+export async function buscarSaldos(q: string): Promise<SaldoAFavor[]> {
+  const p = new URLSearchParams({ q });
+  return api.get<SaldoAFavor[]>(`/api/retail/saldos?${p}`);
 }
