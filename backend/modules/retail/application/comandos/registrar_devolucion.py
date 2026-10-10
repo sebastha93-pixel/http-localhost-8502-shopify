@@ -264,10 +264,16 @@ class RegistrarDevolucion:
         Con caja, el inventario es el de SU tienda; si esa tienda no tiene
         ubicación se usa el de la venta antes que dejar la prenda sin saldo.
         """
-        if not caja_id or caja_id == cabecera["caja_id"]:
+        if (not caja_id or caja_id == cabecera["caja_id"]) \
+                and cabecera["ubicacion_id"]:
             return {"caja_id": cabecera["caja_id"],
                     "tienda_id": cabecera["tienda_id"],
                     "ubicacion_id": cabecera["ubicacion_id"]}
+        # Sin asiento de inventario en la venta —una factura de Siigo POS
+        # traída para hacerle el cambio— la prenda entra igual: al inventario
+        # de la tienda de la caja. Antes, devuelta en la MISMA caja que la
+        # vendió, se quedaba sin entrar a ninguna parte.
+        caja_id = caja_id or cabecera["caja_id"]
         fila = (await t.sesion.execute(text("""
             SELECT c.id, c.tienda_id,
                    (SELECT u.id FROM retail.ubicaciones u

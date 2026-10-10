@@ -126,7 +126,8 @@ def _una_tienda(c, u, productos: List[dict], usuario_id: str,
             f"tienda por una lectura dudosa.")
 
     variantes = {r["sku"].upper(): dict(r) for r in c.execute(text("""
-        SELECT sku, id, nombre, categoria, precio_con_iva, codigo_barras
+        SELECT sku, id, nombre, categoria, precio_con_iva, codigo_barras,
+               activa
           FROM retail.variantes
     """)).mappings()}
     barras_de = {v["codigo_barras"].upper(): k for k, v in variantes.items()
@@ -174,7 +175,7 @@ def _una_tienda(c, u, productos: List[dict], usuario_id: str,
                    "nom": f["nombre"], "cat": f["categoria"], "p": precio,
                    "barras": barras}).scalar()
             variantes[sku] = {"id": vid, "nombre": f["nombre"],
-                              "categoria": f["categoria"],
+                              "categoria": f["categoria"], "activa": True,
                               "precio_con_iva": precio, "codigo_barras": barras}
             if barras:
                 barras_de[barras.upper()] = sku
@@ -184,15 +185,19 @@ def _una_tienda(c, u, productos: List[dict], usuario_id: str,
             vid = v["id"]
             if (v["nombre"], v["categoria"], int(v["precio_con_iva"])) != (
                     f["nombre"], f["categoria"], precio) or (
-                    barras and not v["codigo_barras"]):
+                    barras and not v["codigo_barras"]) or not v["activa"]:
+                # `activa = true`: una prenda que entró APAGADA —traída con
+                # una factura vieja de Siigo para recibirle un cambio— y que
+                # ahora tiene existencia, se vende.
                 c.execute(text("""
                     UPDATE retail.variantes
                        SET nombre = :nom, categoria = :cat, precio_con_iva = :p,
                            codigo_barras = coalesce(codigo_barras, :barras),
-                           actualizado_en = now()
+                           activa = true, actualizado_en = now()
                      WHERE id = :id
                 """), {"id": vid, "nom": f["nombre"], "cat": f["categoria"],
                        "p": precio, "barras": barras})
+                v["activa"] = True
                 r["datos_actualizados"] += 1
                 tocados.append(f["sku"])
 

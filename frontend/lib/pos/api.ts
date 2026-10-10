@@ -720,12 +720,25 @@ export interface VentaEncontrada {
   total_centavos: number;
   cliente: string | null;
   anulada: boolean;
+  /** Con valor, la venta TODAVÍA NO ESTÁ EN EL POS: es una factura del
+   *  sistema anterior encontrada en Siigo. Hay que traerla antes de abrirla. */
+  siigo_id?: string | null;
+}
+
+/** Trae al POS una factura de Siigo POS para poder hacerle el cambio. No es
+ *  una venta nueva: no mueve inventario ni entra a ningún arqueo. */
+export async function traerFacturaDeSiigo(siigoId: string): Promise<VentaEncontrada> {
+  return api.post<VentaEncontrada>(
+    "/api/retail/devoluciones/traer-de-siigo", { siigo_id: siigoId });
 }
 
 /** La venta que la clienta viene a cambiar, por lo que ELLA trae: la cédula,
  *  el número de la factura (`ARRT-5`, `5`, `FV-13-5`) o el del ticket. */
-export async function buscarVentasParaCambio(q: string): Promise<VentaEncontrada[]> {
-  const p = new URLSearchParams({ q });
+export async function buscarVentasParaCambio(
+  q: string, cajaId?: string,
+): Promise<VentaEncontrada[]> {
+  // La caja dice qué tienda pregunta: un número suelto se busca en la suya.
+  const p = new URLSearchParams(cajaId ? { q, caja_id: cajaId } : { q });
   return api.get<VentaEncontrada[]>(`/api/retail/devoluciones/buscar?${p}`);
 }
 

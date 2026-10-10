@@ -1910,11 +1910,15 @@ class VentaEncontrada(BaseModel):
     total_centavos: int
     cliente: Optional[str] = None
     anulada: bool
+    #  Con valor, la venta TODAVÍA NO ESTÁ EN EL POS: es una factura del
+    #  sistema anterior encontrada en Siigo. Hay que traerla antes de abrirla.
+    siigo_id: Optional[str] = None
 
 
 @router.get("/devoluciones/buscar", response_model=List[VentaEncontrada])
 async def buscar_ventas_para_cambio(
     q: str = Query(min_length=1),
+    caja_id: Optional[str] = Query(None),
     s=Depends(sesion_lectura),
     _: CurrentUser = Depends(require_permission("retail", "ver")),
 ):
@@ -1983,12 +1987,143 @@ async def buscar_ventas_para_cambio(
     """), {"k": compacto, "solo": solo_numero, "dig": digitos or "x"}
     )).mappings().all()
 
-    return [VentaEncontrada(
+    encontradas = [VentaEncontrada(
         venta_id=f["id"], numero=f["numero"], factura=f["factura"],
         fecha=f["cerrada_en"].isoformat() if f["cerrada_en"] else "",
         tienda=f["tienda"], total_centavos=int(f["total"]),
         cliente=f["cliente"], anulada=f["estado"] == "anulada",
     ) for f in filas]
+
+    # LAS DEL SISTEMA ANTERIOR. Las tiendas facturaron con Siigo POS hasta el
+    # 2026-10-08; esas ventas no están aquí y sus clientas van a volver a
+    # cambiar. Se buscan en Siigo y se ofrecen junto a las del POS.
+    tienda_que_pregunta = None
+    if caja_id:
+        tienda_que_pregunta = (await s.execute(_t(
+            "SELECT tienda_id FROM retail.cajas WHERE id = :c"),
+            {"c": caja_id})).scalar()
+    for f in await _facturas_de_siigo_pos(q, tienda_que_pregunta):
+        numero = f"{(f.get('prefix') or '').strip()}-{f.get('number')}"
+        if any(v.numero == numero or v.factura == numero for v in encontradas):
+            continue                       # ya se trajo antes
+        cli = f.get("customer") or {}
+        nombre = " ".join(cli.get("name") or []) if isinstance(
+            cli.get("name"), list) else (cli.get("name") or "")
+        encontradas.append(VentaEncontrada(
+            venta_id="", numero=numero, factura=numero,
+            fecha=str(f.get("date") or ""),
+            tienda=_TIENDA_DE.get(_facturas_tienda().es_de_tienda(f)["tienda_id"], ""),
+            total_centavos=int(round(float(f.get("total") or 0) * 100)),
+            cliente=nombre.strip() or None, anulada=False,
+            siigo_id=str(f.get("id"))))
+    return encontradas
+
+
+_TIENDA_DE = {"arrayanes": "Arrayanes", "florida": "Florida"}
+
+
+def _facturas_tienda():
+    from backend.modules.retail.infrastructure.siigo import facturas_tienda
+    return facturas_tienda
+
+
+async def _facturas_de_siigo_pos(q: str, tienda_id: Optional[str] = None) -> list:
+    """Nunca tumba la búsqueda: Siigo lento, caído o sin configurar equivale a
+    «no hay de las viejas», y las del POS salen igual."""
+    import asyncio
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_facturas_tienda().buscar, q, tienda_id=tienda_id),
+            timeout=12.0)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+class ImportarFacturaEntrada(BaseModel):
+    siigo_id: str = Field(min_length=8, max_length=64)
+
+
+@router.post("/devoluciones/traer-de-siigo", response_model=VentaEncontrada)
+async def traer_factura_de_siigo(
+    entrada: ImportarFacturaEntrada,
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Trae al POS una factura de Siigo POS para poder hacerle el cambio.
+
+    No es una venta nueva: no mueve inventario ni entra a ningún arqueo. Ver
+    `importar_factura_siigo.py`.
+    """
+    import asyncio
+    from datetime import datetime, timezone
+    from backend.modules.retail.application.comandos.importar_clientes import (
+        ImportarClientes,
+    )
+    from backend.modules.retail.application.comandos.importar_factura_siigo import (
+        ImportarFacturaSiigo,
+    )
+    from backend.modules.retail.infrastructure.siigo import clientes_siigo
+    from sqlalchemy import text as _t
+
+    ft = _facturas_tienda()
+    try:
+        factura = await asyncio.wait_for(
+            asyncio.to_thread(ft.leer, entrada.siigo_id), timeout=15.0)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, {
+            "error": "siigo_no_respondio",
+            "mensaje": "Siigo no respondió al traer la factura. Intenta de "
+                       f"nuevo en un momento. ({str(e)[:80]})"})
+    comprobante = ft.es_de_tienda(factura)
+    if comprobante is None:
+        raise HTTPException(400, {
+            "error": "no_es_de_tienda",
+            "mensaje": "Esa factura no es de una tienda: su cambio se tramita "
+                       "por Postventa."})
+
+    # La clienta, para que el caso de Postventa lleve sus datos.
+    documento = str((factura.get("customer") or {}).get("identification") or "")
+    clienta = None
+    if documento and documento != "222222222222":
+        try:
+            clienta = await asyncio.wait_for(asyncio.to_thread(
+                clientes_siigo.buscar_por_documento, documento), timeout=6.0)
+        except Exception:  # noqa: BLE001 — sin clienta la factura entra igual
+            clienta = None
+
+    async with uow as t:
+        cliente_id = None
+        if clienta:
+            await ImportarClientes(t.sesion).ejecutar(
+                [clienta], usuario_id="cambio_en_caja", dry_run=False,
+                nuevo_id=_nuevo_ulid)
+            cliente_id = (await t.sesion.execute(_t("""
+                SELECT id FROM retail.clientes WHERE numero_documento = :d
+                 ORDER BY creado_en LIMIT 1"""), {"d": documento})).scalar()
+        try:
+            r = await ImportarFacturaSiigo(t.sesion).ejecutar(
+                factura, comprobante=comprobante, nuevo_id=_nuevo_ulid,
+                cliente_id=cliente_id)
+        except ReglaDeNegocio as e:
+            raise HTTPException(400, {"error": "regla_de_negocio",
+                                      "mensaje": str(e)})
+        if not r.ya_estaba:
+            await t.auditoria.registrar(
+                evento="venta.traida_de_siigo",
+                ocurrido_en=datetime.now(timezone.utc),
+                tienda_id=comprobante["tienda_id"], caja_id=comprobante["caja_id"],
+                usuario_id=usuario.id, agregado_tipo="venta",
+                agregado_id=r.venta_id,
+                payload={"factura": r.numero, "siigo_id": entrada.siigo_id,
+                         "total": float(factura.get("total") or 0)})
+        await t.commit()
+
+    return VentaEncontrada(
+        venta_id=r.venta_id, numero=r.numero, factura=r.numero,
+        fecha=str(factura.get("date") or ""),
+        tienda=_TIENDA_DE.get(comprobante["tienda_id"], ""),
+        total_centavos=int(round(float(factura.get("total") or 0) * 100)),
+        cliente=None, anulada=False)
 
 
 @router.get("/devoluciones/ticket/{numero}", response_model=TicketDevolucion)

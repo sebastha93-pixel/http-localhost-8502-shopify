@@ -31,6 +31,7 @@ import { nuevoUlid } from "@/lib/pos/ulid";
 import {
   buscarTicket,
   buscarVentasParaCambio,
+  traerFacturaDeSiigo,
   type VentaEncontrada,
   registrarDevolucion,
   type Devolucion,
@@ -100,6 +101,15 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
     }
   }, [CAJA]);
 
+  // Una factura del sistema anterior primero se TRAE de Siigo; después se
+  // abre igual que cualquier venta del POS.
+  const elegir = useCallback(async (v: VentaEncontrada) => {
+    const numero = v.siigo_id
+      ? (await traerFacturaDeSiigo(v.siigo_id)).numero
+      : v.numero;
+    await abrir(numero);
+  }, [abrir]);
+
   const buscar = useCallback(async () => {
     const n = consulta.trim();
     if (!n) return;
@@ -113,26 +123,26 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
     try {
       // Primero se averigua CUÁL venta es —por cédula, por el número de la
       // factura o por el del ticket— y después se abre.
-      const ventas = await buscarVentasParaCambio(n);
+      const ventas = await buscarVentasParaCambio(n, CAJA);
       if (ventas.length === 0) {
         setError(
-          `No encontramos ninguna venta del POS con «${n}». Prueba con la ` +
-          `cédula de la clienta o con el número de la factura (por ejemplo ` +
-          `ARRT-5). Si la compra es anterior al 9 de octubre de 2026 se hizo ` +
-          `en el sistema anterior y el cambio se tramita por Postventa.`);
+          `No encontramos ninguna factura de tienda con «${n}». Prueba con ` +
+          `la cédula de la clienta o con el número de la factura como sale ` +
+          `en el papel (ARRT-5, TARR-11451, FL-2077). Las compras de la ` +
+          `tienda en línea se cambian por Postventa.`);
         return;
       }
       if (ventas.length > 1) {
         setCandidatas(ventas);
         return;
       }
-      await abrir(ventas[0].numero);
+      await elegir(ventas[0]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "No pudimos buscar esa venta.");
     } finally {
       setBuscando(false);
     }
-  }, [consulta, abrir]);
+  }, [consulta, elegir, CAJA]);
 
   const cambiar = (sku: string, cantidad: number, tope: number) => {
     const n = Math.max(0, Math.min(tope, cantidad));
@@ -244,7 +254,7 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
                       key={v.venta_id}
                       disabled={v.anulada}
                       onClick={() => {
-                        abrir(v.numero).catch((e) => setError(
+                        elegir(v).catch((e) => setError(
                           e instanceof Error ? e.message : "No pudimos abrir esa venta."));
                       }}
                       className="flex min-h-[52px] w-full items-center gap-4 border-b border-[var(--pos-divider)] px-3 py-2.5 text-left transition-colors duration-[var(--pos-transicion)] enabled:hover:bg-[var(--pos-100)] disabled:opacity-50"
@@ -257,7 +267,9 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
                         <span className="tabular block text-[12px] text-[var(--pos-600)]">
                           {fechaCorta(v.fecha)} · {v.tienda}
                           {v.cliente ? ` · ${v.cliente}` : ""}
-                          {v.factura ? ` · ${v.numero}` : ""}
+                          {v.siigo_id
+                            ? " · sistema anterior"
+                            : v.factura ? ` · ${v.numero}` : ""}
                         </span>
                       </span>
                       <span className="tabular text-[15px] font-semibold tabular-nums">
