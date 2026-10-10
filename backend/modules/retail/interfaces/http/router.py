@@ -1899,6 +1899,98 @@ class DevolucionSalida(BaseModel):
     sesion_id: Optional[str] = None
 
 
+class VentaEncontrada(BaseModel):
+    venta_id: str
+    #  El del POS (`ARRPOS-11891`): con él se abre el ticket.
+    numero: str
+    #  El de la factura (`ARRT-5`), que es el que va grande en el papel.
+    factura: Optional[str] = None
+    fecha: str
+    tienda: str
+    total_centavos: int
+    cliente: Optional[str] = None
+    anulada: bool
+
+
+@router.get("/devoluciones/buscar", response_model=List[VentaEncontrada])
+async def buscar_ventas_para_cambio(
+    q: str = Query(min_length=1),
+    s=Depends(sesion_lectura),
+    _: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """La venta que la clienta viene a cambiar, por lo que ELLA trae.
+
+    Trae el papel o trae la cédula; el número del POS no lo trae nadie. El
+    papel dice grande «No. ARRT-5», que es el de la factura, y la búsqueda de
+    antes sólo entendía el interno (`ARRPOS-11891`): la asesora tecleaba lo
+    que veía y «no existía».
+
+    Se acepta, en una sola caja de texto:
+      · la CÉDULA de la clienta → sus compras, la más reciente primero;
+      · el número de la FACTURA, como venga: `ARRT-5`, `arrt5`, sólo `5`, o
+        con el código que le pone Siigo por delante (`FV-13-5`);
+      · el número del ticket del POS.
+
+    Devuelve una LISTA: una cédula tiene varias compras, y un «5» suelto
+    puede ser la factura 5 de cada caja. Con una sola, la pantalla la abre.
+    """
+    import re as _re
+    from sqlalchemy import text as _t
+
+    crudo = (q or "").strip().upper()
+    # «FV-13-5» es como Siigo NOMBRA el documento por dentro; lo que quedó
+    # guardado y lo que va impreso es el prefijo de la resolución y el número.
+    sin_fv = _re.sub(r"^FV[\s-]*\d+[\s-]*", "", crudo)
+    compacto = _re.sub(r"[^A-Z0-9]", "", sin_fv)
+    digitos = _re.sub(r"\D", "", sin_fv)
+    if not compacto:
+        return []
+    solo_numero = compacto.isdigit()
+
+    filas = (await s.execute(_t("""
+        SELECT v.id, v.numero, v.cerrada_en, v.total, v.estado,
+               t.nombre AS tienda, d.numero AS factura,
+               nullif(trim(concat_ws(' ', c.nombre, c.apellido)), '') AS cliente,
+               -- Lo más probable arriba: la coincidencia exacta del número
+               -- antes que «todas las compras de esa cédula».
+               CASE WHEN regexp_replace(upper(coalesce(d.numero, '')),
+                                        '[^A-Z0-9]', '', 'g') = :k THEN 0
+                    WHEN regexp_replace(upper(v.numero),
+                                        '[^A-Z0-9]', '', 'g') = :k THEN 0
+                    ELSE 1 END AS orden
+          FROM retail.ventas v
+          JOIN retail.tiendas t ON t.id = v.tienda_id
+          LEFT JOIN retail.clientes c ON c.id = v.cliente_id
+          LEFT JOIN LATERAL (
+                SELECT numero FROM retail.documentos_fiscales
+                 WHERE venta_id = v.id AND tipo = 'factura_electronica'
+                   AND estado = 'emitido'
+                 ORDER BY emitido_en DESC LIMIT 1) d ON true
+         WHERE v.estado <> 'borrador'
+           AND (
+                regexp_replace(upper(coalesce(d.numero, '')), '[^A-Z0-9]', '', 'g') = :k
+             OR regexp_replace(upper(v.numero), '[^A-Z0-9]', '', 'g') = :k
+             -- Sólo el consecutivo: «5» encuentra ARRT-5, TFL-5 y TFP-5.
+             OR (CAST(:solo AS boolean) AND d.numero ~ ('-' || CAST(:dig AS text) || '$'))
+             OR (CAST(:solo AS boolean) AND v.numero ~ ('-' || CAST(:dig AS text) || '$'))
+             -- La cédula, completa: con menos de cinco dígitos sería medio
+             -- padrón.
+             OR (CAST(:solo AS boolean) AND length(CAST(:dig AS text)) >= 5
+                 AND regexp_replace(c.numero_documento, '[^0-9]', '', 'g') = CAST(:dig AS text))
+           )
+         ORDER BY orden, v.cerrada_en DESC NULLS LAST
+         LIMIT 25
+    """), {"k": compacto, "solo": solo_numero, "dig": digitos or "x"}
+    )).mappings().all()
+
+    return [VentaEncontrada(
+        venta_id=f["id"], numero=f["numero"], factura=f["factura"],
+        fecha=f["cerrada_en"].isoformat() if f["cerrada_en"] else "",
+        tienda=f["tienda"], total_centavos=int(f["total"]),
+        cliente=f["cliente"], anulada=f["estado"] == "anulada",
+    ) for f in filas]
+
+
 @router.get("/devoluciones/ticket/{numero}", response_model=TicketDevolucion)
 async def buscar_ticket(
     numero: str,

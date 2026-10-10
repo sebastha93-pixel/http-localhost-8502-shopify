@@ -30,6 +30,8 @@ import { formatear } from "@/lib/pos/dinero";
 import { nuevoUlid } from "@/lib/pos/ulid";
 import {
   buscarTicket,
+  buscarVentasParaCambio,
+  type VentaEncontrada,
   registrarDevolucion,
   type Devolucion,
   type MotivoDevolucion,
@@ -58,10 +60,23 @@ export default function PaginaDevoluciones() {
   return <PantallaDevoluciones key={caja.estado.caja} CAJA={caja.estado.caja} />;
 }
 
+/** «10/10/2026 12:16», en la hora del equipo. */
+function fechaCorta(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const dos = (n: number) => String(n).padStart(2, "0");
+  return `${dos(d.getDate())}/${dos(d.getMonth() + 1)}/${d.getFullYear()} `
+       + `${dos(d.getHours())}:${dos(d.getMinutes())}`;
+}
+
 function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
   const { user } = useAuth();
   const [consulta, setConsulta] = useState("");
   const [ticket, setTicket] = useState<TicketDevolucion | null>(null);
+  // Cuando lo buscado da varias ventas: las compras de una cédula, o un «5»
+  // que es la factura 5 de cada caja. La asesora elige; no se adivina.
+  const [candidatas, setCandidatas] = useState<VentaEncontrada[]>([]);
   const [seleccion, setSeleccion] = useState<Record<string, number>>({});
   const [motivo, setMotivo] = useState<MotivoDevolucion | null>(null);
   const [reembolso, setReembolso] = useState<Reembolso | null>(null);
@@ -73,6 +88,18 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
 
   useEffect(() => { buscador.current?.focus(); }, []);
 
+  const abrir = useCallback(async (numero: string) => {
+    setCandidatas([]);
+    setError(null);
+    const t = await buscarTicket(numero, CAJA);
+    setTicket(t);
+    if (t.anulada) {
+      setError(
+        `El ticket ${t.numero} está anulado: su plata ya volvió por el ` +
+        `arqueo. No se puede devolver otra vez.`);
+    }
+  }, [CAJA]);
+
   const buscar = useCallback(async () => {
     const n = consulta.trim();
     if (!n) return;
@@ -82,20 +109,30 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
     setSeleccion({});
     setMotivo(null);
     setReembolso(null);
+    setCandidatas([]);
     try {
-      const t = await buscarTicket(n, CAJA);
-      setTicket(t);
-      if (t.anulada) {
+      // Primero se averigua CUÁL venta es —por cédula, por el número de la
+      // factura o por el del ticket— y después se abre.
+      const ventas = await buscarVentasParaCambio(n);
+      if (ventas.length === 0) {
         setError(
-          `El ticket ${t.numero} está anulado: su plata ya volvió por el ` +
-          `arqueo. No se puede devolver otra vez.`);
+          `No encontramos ninguna venta del POS con «${n}». Prueba con la ` +
+          `cédula de la clienta o con el número de la factura (por ejemplo ` +
+          `ARRT-5). Si la compra es anterior al 9 de octubre de 2026 se hizo ` +
+          `en el sistema anterior y el cambio se tramita por Postventa.`);
+        return;
       }
+      if (ventas.length > 1) {
+        setCandidatas(ventas);
+        return;
+      }
+      await abrir(ventas[0].numero);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No pudimos buscar ese ticket.");
+      setError(e instanceof Error ? e.message : "No pudimos buscar esa venta.");
     } finally {
       setBuscando(false);
     }
-  }, [consulta]);
+  }, [consulta, abrir]);
 
   const cambiar = (sku: string, cantidad: number, tope: number) => {
     const n = Math.max(0, Math.min(tope, cantidad));
@@ -175,8 +212,8 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
                 value={consulta}
                 onChange={(e) => setConsulta(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") void buscar(); }}
-                placeholder="Número de ticket, ej. FL-1537"
-                aria-label="Número de ticket"
+                placeholder="Cédula o número de factura, ej. ARRT-5"
+                aria-label="Cédula de la clienta o número de la factura"
                 autoComplete="off"
                 spellCheck={false}
                 className="pos-input h-11 w-[320px] px-3 text-[14px]"
@@ -186,7 +223,7 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
                 disabled={!consulta.trim() || buscando}
                 className="pos-btn pos-btn-primario px-6 text-[14px]"
               >
-                {buscando ? "Buscando…" : "Buscar ticket"}
+                {buscando ? "Buscando…" : "Buscar"}
               </button>
             </div>
 
@@ -196,7 +233,43 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
               </p>
             )}
 
-            {!ticket && !error && (
+            {candidatas.length > 0 && !ticket && (
+              <div className="mb-4 max-w-[760px]">
+                <p className="kicker mb-2 text-[var(--pos-700)]">
+                  {candidatas.length} ventas · elige la que viene a cambiar
+                </p>
+                <div className="border-t border-[var(--pos-divider)]">
+                  {candidatas.map((v) => (
+                    <button
+                      key={v.venta_id}
+                      disabled={v.anulada}
+                      onClick={() => {
+                        abrir(v.numero).catch((e) => setError(
+                          e instanceof Error ? e.message : "No pudimos abrir esa venta."));
+                      }}
+                      className="flex min-h-[52px] w-full items-center gap-4 border-b border-[var(--pos-divider)] px-3 py-2.5 text-left transition-colors duration-[var(--pos-transicion)] enabled:hover:bg-[var(--pos-100)] disabled:opacity-50"
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="titular block text-[15px]">
+                          {v.factura || v.numero}
+                          {v.anulada && " · anulada"}
+                        </span>
+                        <span className="tabular block text-[12px] text-[var(--pos-600)]">
+                          {fechaCorta(v.fecha)} · {v.tienda}
+                          {v.cliente ? ` · ${v.cliente}` : ""}
+                          {v.factura ? ` · ${v.numero}` : ""}
+                        </span>
+                      </span>
+                      <span className="tabular text-[15px] font-semibold tabular-nums">
+                        {formatear(v.total_centavos)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!ticket && !error && candidatas.length === 0 && (
               <div className="blueprint px-6 py-12 text-center">
                 <p className="text-[15px] font-semibold">
                   Busca el ticket de la compra

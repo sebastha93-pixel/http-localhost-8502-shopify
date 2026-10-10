@@ -913,3 +913,55 @@ def test_la_libreria_del_qr_esta_en_lo_que_instala_PRODUCCION():
     import pathlib
     raiz = pathlib.Path(__file__).resolve().parents[3]
     assert "segno" in (raiz / "requirements.txt").read_text()
+
+
+# ── BUSCAR LA VENTA QUE VIENEN A CAMBIAR ────────────────────────────────────
+
+def _buscar_cambio(q):
+    r = _CLIENTE["c"].get("/api/retail/devoluciones/buscar", params={"q": q})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_el_cambio_se_busca_por_el_numero_que_va_GRANDE_en_el_papel(entorno, monkeypatch):
+    """La tirilla dice «No. TARR-11452». La búsqueda sólo entendía el número
+    interno del POS, que va en letra chica: la asesora tecleaba lo que veía y
+    «no existía»."""
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    _drenar(SiigoFalso())
+
+    for como in ("TARR-11452", "tarr11452", "TARR 11452", "11452",
+                 "FV-6-11452", "fv 6 11452"):
+        [v] = _buscar_cambio(como)
+        assert v["factura"] == "TARR-11452", como
+        assert v["numero"].startswith("ARRPOS-")
+        assert v["tienda"] == "Arrayanes" and v["total_centavos"] == 29_980_000
+
+    # El del POS sigue sirviendo.
+    numero_pos = _buscar_cambio("11452")[0]["numero"]
+    assert _buscar_cambio(numero_pos)[0]["factura"] == "TARR-11452"
+    assert _buscar_cambio("TARR-99999") == []
+
+
+def test_el_cambio_se_busca_por_la_cedula_de_la_clienta(entorno, monkeypatch):
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    _con_clienta(entorno)
+    siigo = SiigoFalso()
+    siigo.clientes.add("1037000111")
+    _drenar(siigo)
+
+    for como in ("1037000111", "1.037.000.111"):
+        [v] = _buscar_cambio(como)
+        assert v["cliente"] == "Laura Gómez Ríos" and v["factura"] == "TARR-11452"
+    # Media cédula no trae medio padrón.
+    assert _buscar_cambio("1037") == []
+
+
+def test_con_el_numero_encontrado_se_abre_el_ticket_para_devolver(entorno, monkeypatch):
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    _drenar(SiigoFalso())
+    [v] = _buscar_cambio("TARR-11452")
+    r = _CLIENTE["c"].get(f"/api/retail/devoluciones/ticket/{v['numero']}",
+                          params={"caja_id": "arrayanes_caja1"})
+    assert r.status_code == 200, r.text
+    assert r.json()["lineas"][0]["sku"] == "92611-1T10"
