@@ -534,3 +534,52 @@ def test_el_ajuste_de_la_impresora_se_guarda_EN_LA_CAJA(tienda):
     assert leer("arrayanes_caja1") is None            # es de ESA caja
     assert c.post("/api/retail/caja/impresion",
                   json={"caja_id": "no_existe", **cfg}).status_code == 404
+
+
+# ── La prenda devuelta y el inventario de Siigo ─────────────────────────────
+
+def _sincronizar(productos):
+    from backend.modules.retail.sincronizar_inventario import sincronizar
+    return sincronizar(URL, aplicar=True, precios_de_lista=lambda c: {},
+                       productos=productos)
+
+
+def test_la_sincronizacion_NO_esconde_la_prenda_recien_devuelta(tienda):
+    """Florida, 2026-10-10 (12612-1T12): Siigo no sabe de la prenda hasta la
+    nota crédito, y la sincronización la volvía a poner en cero."""
+    from backend.modules.retail.infrastructure.postventa import (
+        devoluciones_acreditadas,
+    )
+    # Comprada en línea, devuelta en Florida: de `95613-1T12` Florida no
+    # tenía ni fila de saldo.
+    venta_id = _traer(tienda, EN_LINEA["id"], caja="florida_caja1"
+                      ).json()["venta_id"]
+    r = tienda["c"].post("/api/retail/devoluciones", json={
+        "devolucion_id": "01JQ8X4T5NDV0F1R8S9V0W1X2Y", "venta_id": venta_id,
+        "seleccion": {"95613-1T12": 1, "26602-1T6": 1}, "motivo": "talla",
+        "reembolso": "credito_tienda", "caja_id": "florida_caja1"})
+    assert r.status_code == 200, r.text
+
+    siigo = [_p("26602-1T6", arrayanes=2, florida=4),
+             _p("95613-1T12", arrayanes=8)]              # Florida: 0 en Siigo
+    d = _sincronizar(siigo)["tiendas"]["florida"]
+    assert d["devueltas_sumadas"] == 2
+    assert _stock(tienda, "95613-1T12", "tienda:florida") == 1    # sigue ahí
+    assert _stock(tienda, "26602-1T6", "tienda:florida") == 5     # 4 + la devuelta
+    assert _stock(tienda, "95613-1T12", "tienda:arrayanes") == 8  # no se riega
+    # Y se ve en la rejilla de Florida para venderla.
+    refs = tienda["c"].get("/api/retail/catalogo/referencias", params={
+        "ubicacion_id": "tienda:florida"}).json()["referencias"]
+    assert any(t["sku"] == "95613-1T12" and t["disponible"] == 1
+               for ref in refs for t in ref["tallas"])
+
+    # Salió la nota crédito: Siigo ya la cuenta, y no se suma dos veces.
+    with tienda["motor"].begin() as c:
+        c.execute(text("UPDATE retail.devoluciones SET caso_postventa = 'PV-1'"))
+    assert devoluciones_acreditadas.marcar(
+        URL, consultar=lambda numeros: {n: True for n in numeros}) == 1
+    siigo = [_p("26602-1T6", arrayanes=2, florida=5),
+             _p("95613-1T12", arrayanes=8, florida=1)]
+    assert _sincronizar(siigo)["tiendas"]["florida"]["devueltas_sumadas"] == 0
+    assert _stock(tienda, "95613-1T12", "tienda:florida") == 1
+    assert _stock(tienda, "26602-1T6", "tienda:florida") == 5
