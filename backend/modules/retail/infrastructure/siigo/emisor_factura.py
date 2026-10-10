@@ -175,16 +175,31 @@ class SiigoIO:
                         None)
         return await asyncio.to_thread(ir)
 
-    async def existe_cliente(self, identificacion: str) -> bool:
+    async def sucursal_de_cliente(self, identificacion: str) -> Optional[int]:
+        """La sucursal con la que Siigo tiene a la clienta; `None` si no está.
+
+        NO BASTA CON SABER QUE EXISTE. Siigo identifica a un tercero por
+        identificación Y sucursal, y hay clientas creadas hace años con una
+        sucursal distinta de 0. Facturarle a la 0 a quien está en la 17
+        devuelve «The customer doesn't exist» aunque la consulta la acabe de
+        encontrar (Florida, 2026-10-10, FLPOS-2539).
+        """
         def ir():
             from backend.services.siigo import siigo_get
             r = siigo_get("/customers", {"identification": identificacion})
             filas = r.get("results", []) if isinstance(r, dict) else (r or [])
             # `identification` es de los filtros que Siigo a veces ignora y
             # devuelve la lista entera: se comprueba el dato, no que haya filas.
-            return any(str(c.get("identification")) == str(identificacion)
-                       for c in filas)
+            sucursales = sorted(
+                int(c.get("branch_office") or 0) for c in filas
+                if str(c.get("identification")) == str(identificacion)
+                and c.get("active", True) is not False)
+            # Si está en varias, la principal (0) o, a falta de ella, la menor.
+            return sucursales[0] if sucursales else None
         return await asyncio.to_thread(ir)
+
+    async def existe_cliente(self, identificacion: str) -> bool:
+        return await self.sucursal_de_cliente(identificacion) is not None
 
     async def buscar_por_marca(self, *, documento_id: int, fecha: str,
                                marca: str) -> Optional[dict]:
@@ -500,8 +515,14 @@ async def _armar(t, v, io: SiigoIO, *, documento_id: int, fecha: str,
 
     identificacion = (v["cliente_documento"] or "").strip() or None
     con_clienta = bool(identificacion and identificacion != CONSUMIDOR_FINAL)
-    if con_clienta and not await io.existe_cliente(identificacion):
-        await _crear_clienta(t, v, io, identificacion)
+    sucursal = 0
+    if con_clienta:
+        hallada = await io.sucursal_de_cliente(identificacion)
+        if hallada is None:
+            # Recién creada queda en la sucursal 0, que es la que se manda.
+            await _crear_clienta(t, v, io, identificacion)
+        else:
+            sucursal = hallada
 
     try:
         return construir_factura(
@@ -509,7 +530,7 @@ async def _armar(t, v, io: SiigoIO, *, documento_id: int, fecha: str,
             lineas=lineas, pagos=pagos, documento_id=documento_id,
             tipo_descuento=tipo.get("discount_type"),
             vendedor_id=int(v["siigo_vendedor_id"]), fecha=fecha,
-            identificacion=identificacion,
+            identificacion=identificacion, sucursal=sucursal,
             bodega_id=v["siigo_bodega_id"],
             centro_costo_id=v["siigo_centro_costo_id"], estampar=estampar,
             # La entrega de la factura: a quien dejó correo, Siigo se la manda.
