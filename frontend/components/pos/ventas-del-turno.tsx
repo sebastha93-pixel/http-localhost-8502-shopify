@@ -22,16 +22,20 @@ export function VentasDelTurno({
   onReimprimir,
   onAnular,
   puedeAnular,
+  titulo = "Ventas del turno",
+  vacio = "Todavía no hay ventas en este turno.",
 }: {
   ventas: VentaDelTurno[];
   onReimprimir: (ventaId: string) => void;
   onAnular: (venta: VentaDelTurno) => void;
   puedeAnular: boolean;
+  titulo?: string;
+  vacio?: string;
 }) {
   return (
     <Panel className="flex flex-col gap-2 p-6">
       <div className="flex items-baseline justify-between">
-        <h2 className="titular text-[17px] font-semibold">Ventas del turno</h2>
+        <h2 className="titular text-[17px] font-semibold">{titulo}</h2>
         <span className="tabular text-[12px] text-[var(--pos-600)]">
           {ventas.filter((v) => v.estado === "cerrada").length} vigentes
         </span>
@@ -39,7 +43,7 @@ export function VentasDelTurno({
 
       {ventas.length === 0 && (
         <p className="text-[13px] text-[var(--pos-600)]">
-          Todavía no hay ventas en este turno.
+          {vacio}
         </p>
       )}
 
@@ -62,6 +66,15 @@ export function VentasDelTurno({
                 <span className="tabular text-[12px] text-[var(--pos-600)]">
                   {v.hora} · {v.unidades} u
                 </span>
+                {/* En el panel: la factura, o que todavía no la tiene. */}
+                {v.factura !== undefined && !anulada && (
+                  <span className="tabular text-[12px] text-[var(--pos-600)]">
+                    {v.factura
+                      ?? (v.estado_fiscal === "rechazado"
+                        ? "sin factura · Siigo la rechazó"
+                        : "factura en camino")}
+                  </span>
+                )}
                 {v.cliente_nombre && (
                   <span className="truncate text-[12px] text-[var(--pos-600)]">
                     {v.cliente_nombre}
@@ -94,7 +107,7 @@ export function VentasDelTurno({
               >
                 Tirilla
               </button>
-              {!anulada && puedeAnular && (
+              {!anulada && puedeAnular && v.anulable !== false && (
                 <button
                   onClick={() => onAnular(v)}
                   className="border border-[var(--pos-accent)]/40 px-2 py-1 text-[12px] text-[var(--pos-accent)] hover:bg-[var(--pos-accent)]/10"

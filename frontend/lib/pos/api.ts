@@ -636,6 +636,19 @@ export interface VentaDelTurno {
   estado_fiscal: string;
   cliente_nombre: string | null;
   motivo_anulacion: string | null;
+  /** Sólo en la lista del panel. */
+  factura?: string | null;
+  caja?: string | null;
+  /** `false`: su turno ya cerró y no se anula desde aquí. */
+  anulable?: boolean | null;
+}
+
+/** Las ventas de HOY de una tienda, para quien la supervisa desde el panel. */
+export async function ventasDelDia(
+  tiendaId: string,
+): Promise<{ puede_anular: boolean; ventas: VentaDelTurno[] }> {
+  const p = new URLSearchParams({ tienda_id: tiendaId });
+  return api.get(`/api/retail/panel/ventas?${p}`);
 }
 
 /** Para reimprimir o anular. Hasta ahora la tirilla sólo se podía reimprimir
