@@ -50,6 +50,7 @@ class SiigoFalso:
         self.al_crear = "ok"        # ok | rechazo | sin_respuesta | crea_y_muere
         self.tipo = {"id": DOC_SIIGO, "active": True, "discount_type": "Value"}
         self.clientes = {"222222222222"}
+        self.sucursales = {}
         # Lo que contesta la DIAN cuando se le pregunta por una factura.
         self.dian = "accepted"      # accepted | draft | rejected
         self.lecturas = 0
@@ -133,6 +134,11 @@ class SiigoFalso:
 
     async def tipo_documento(self, documento_id):
         return self.tipo
+
+    async def sucursal_de_cliente(self, identificacion):
+        if identificacion not in self.clientes:
+            return None
+        return self.sucursales.get(identificacion, 0)
 
     async def existe_cliente(self, identificacion):
         return identificacion in self.clientes
@@ -637,6 +643,19 @@ def test_la_clienta_que_siigo_ya_tiene_NO_se_vuelve_a_crear(entorno):
     siigo.clientes.add("1037000111")
     assert _drenar(siigo).procesados == 1
     assert siigo.clientes_creados == []
+
+
+def test_se_factura_a_la_SUCURSAL_con_la_que_siigo_tiene_a_la_clienta(entorno):
+    """Florida, 2026-10-10 (FLPOS-2539): la clienta estaba en Siigo desde 2024
+    con la sucursal 17. Se le facturó a la 0 y Siigo respondió que no existía."""
+    _con_clienta(entorno)
+    siigo = SiigoFalso()
+    siigo.clientes.add("1037000111")
+    siigo.sucursales["1037000111"] = 17
+    assert _drenar(siigo).procesados == 1
+    assert siigo.clientes_creados == []
+    assert siigo.enviadas[0]["customer"] == {
+        "identification": "1037000111", "branch_office": 17}
 
 
 def test_una_clienta_con_un_solo_nombre_espera_y_NO_sale_a_nombre_de_otra(entorno):
