@@ -132,6 +132,16 @@ class AnularVenta:
                     usuario_id=usuario_id, medio_pago_id=pago.medio_pago_id,
                     autorizado_por=usuario_id, ahora=ahora)
 
+            # El saldo a favor que esta venta gastó vuelve a su dueña.
+            await t.sesion.execute(text("""
+                UPDATE retail.saldos_a_favor s SET usado = s.usado - u.monto
+                  FROM retail.saldo_usos u
+                 WHERE u.saldo_id = s.id AND u.venta_id = :v
+            """), {"v": venta_id})
+            await t.sesion.execute(text(
+                "DELETE FROM retail.saldo_usos WHERE venta_id = :v"),
+                {"v": venta_id})
+
             exige_nc = fila["estado_fiscal"] == "emitido"
 
             await t.auditoria.registrar(

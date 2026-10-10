@@ -135,7 +135,8 @@ def test_los_medios_viajan_con_el_contexto(entorno):
     d = c.get("/api/retail/caja/contexto",
               params={"caja_id": "florida_caja1"}).json()
     ids = [m["id"] for m in d["medios_pago"]]
-    assert ids == ["efectivo", "datafono", "wompi_qr", "addi", "sumas"]
+    assert ids == ["efectivo", "datafono", "wompi_qr", "addi", "sumas",
+                   "saldo_a_favor"]
     assert "viejo" not in ids                                    # `activo=false`
 
 
@@ -164,7 +165,9 @@ def test_dice_cuales_NO_pueden_facturar_todavia(entorno):
     # candidatos y no se adivinó). Transferencia se desactivó en la 0023:
     # las tiendas no la reciben.
     assert listas == {"efectivo": True, "datafono": True, "addi": True,
-                      "sumas": True, "wompi_qr": True}
+                      "sumas": True, "wompi_qr": True,
+                      # ANTICIPO CLIENTES (8316), desde la 0031.
+                      "saldo_a_favor": True}
 
 
 # ── LA REFERENCIA, que estaba muerta desde la migración 0001 ────────────────

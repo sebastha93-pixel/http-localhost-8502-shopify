@@ -1970,6 +1970,59 @@ class DevolucionSalida(BaseModel):
     reembolso: str
     salio_del_cajon: bool
     sesion_id: Optional[str] = None
+    saldo_codigo: Optional[str] = None
+
+
+class SaldoAFavor(BaseModel):
+    codigo: str
+    monto_centavos: int
+    usado_centavos: int
+    disponible_centavos: int
+    fecha: str
+    #  La factura o el ticket del que salió.
+    origen: str
+    tienda: str
+    cliente_id: Optional[str] = None
+    cliente: Optional[str] = None
+    documento: Optional[str] = None
+
+
+@router.get("/saldos", response_model=List[SaldoAFavor])
+async def buscar_saldos(
+    q: str = Query(min_length=3, max_length=40),
+    s=Depends(sesion_lectura),
+    _: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """El saldo a favor de una clienta: por el código del comprobante
+    (`SF-00012`) o por su cédula, que es lo que trae la que perdió el papel."""
+    from sqlalchemy import text as _t
+    import re as _re
+
+    crudo = (q or "").strip().upper()
+    digitos = _re.sub(r"\D", "", crudo)
+    filas = (await s.execute(_t("""
+        SELECT s.codigo, s.monto, s.usado, s.creado_en, s.numero_origen,
+               ti.nombre AS tienda, s.cliente_id, c.numero_documento,
+               trim(concat_ws(' ', c.nombre, c.apellido)) AS cliente
+          FROM retail.saldos_a_favor s
+          JOIN retail.tiendas ti ON ti.id = s.tienda_id
+          LEFT JOIN retail.clientes c ON c.id = s.cliente_id
+         WHERE s.codigo = :c
+            OR (CAST(:solo AS boolean) AND s.codigo = 'SF-' || lpad(:d, 5, '0'))
+            OR (CAST(:ced AS boolean)
+                AND regexp_replace(c.numero_documento, '[^0-9]', '', 'g') = :d)
+         ORDER BY s.creado_en DESC LIMIT 20
+    """), {"c": crudo, "d": digitos or "x",
+           "solo": bool(digitos) and digitos == crudo and len(digitos) <= 5,
+           "ced": len(digitos) >= 6 and digitos == crudo})).mappings().all()
+    return [SaldoAFavor(
+        codigo=f["codigo"], monto_centavos=int(f["monto"]),
+        usado_centavos=int(f["usado"]),
+        disponible_centavos=int(f["monto"]) - int(f["usado"]),
+        fecha=f["creado_en"].isoformat(), origen=f["numero_origen"],
+        tienda=f["tienda"], cliente_id=f["cliente_id"],
+        cliente=f["cliente"] or None, documento=f["numero_documento"],
+    ) for f in filas]
 
 
 class VentaEncontrada(BaseModel):
@@ -2350,7 +2403,7 @@ async def registrar_devolucion(
         devolucion_id=r.devolucion_id, numero_venta=r.numero_venta,
         total_centavos=r.total_centavos, unidades=r.unidades,
         reembolso=r.reembolso, salio_del_cajon=r.salio_del_cajon,
-        sesion_id=r.sesion_id,
+        sesion_id=r.sesion_id, saldo_codigo=r.saldo_codigo,
     )
 
 

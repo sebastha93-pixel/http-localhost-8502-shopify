@@ -28,9 +28,12 @@ import { ElegirCaja } from "@/components/pos/elegir-caja";
 import { useCajaDelEquipo } from "@/lib/pos/caja-del-equipo";
 import { formatear } from "@/lib/pos/dinero";
 import { nuevoUlid } from "@/lib/pos/ulid";
+import { SaldoImpreso } from "@/components/pos/tirilla";
 import {
+  buscarSaldos,
   buscarTicket,
   buscarVentasParaCambio,
+  type SaldoAFavor,
   traerFacturaDeSiigo,
   type VentaEncontrada,
   registrarDevolucion,
@@ -520,6 +523,26 @@ function Exito({
   devolucion: Devolucion;
   onNueva: () => void;
 }) {
+  // EL SALDO A FAVOR. Con crédito, la clienta sale con un código que vale
+  // plata: o lo gasta ya en otra prenda, o se lleva el papel.
+  const [saldo, setSaldo] = useState<SaldoAFavor | null>(null);
+  const [imprimiendo, setImprimiendo] = useState<SaldoAFavor | null>(null);
+  const codigo = devolucion.saldo_codigo ?? null;
+  useEffect(() => {
+    if (!codigo) return;
+    buscarSaldos(codigo)
+      .then((l) => setSaldo(l.find((x) => x.codigo === codigo) ?? null))
+      .catch(() => setSaldo(null));
+  }, [codigo]);
+
+  async function imprimir() {
+    if (!saldo) return;
+    setImprimiendo(saldo);
+    // React tiene que pintar el papel antes de abrir el diálogo.
+    await new Promise((r) => setTimeout(r, 60));
+    window.print();
+  }
+
   return (
     <div className="blueprint mx-auto w-full max-w-[520px] p-8 text-center">
       <div
@@ -545,10 +568,38 @@ function Exito({
         {devolucion.salio_del_cajon
           ? `Entrégale ${formatear(devolucion.total_centavos)} en efectivo. Ya salió del arqueo de este turno.`
           : devolucion.reembolso === "credito_tienda"
-            ? "Queda como crédito a favor de la clienta. No sale plata del cajón."
+            ? "Queda como saldo a favor de la clienta. No sale plata del cajón."
             : "Se reversa por el mismo medio con el que pagó. No sale plata del cajón."}
       </p>
-      <p className="mx-auto mt-2 max-w-[42ch] text-[12px] leading-relaxed text-[var(--pos-muted)]">
+
+      {codigo && (
+        <div className="mx-auto mt-4 max-w-[42ch] border border-[var(--pos-divider)] bg-[var(--pos-100)] p-4">
+          <p className="kicker">SALDO A FAVOR</p>
+          <p className="tabular mt-1 text-[22px] font-bold">{codigo}</p>
+          <p className="mt-1 text-[12px] leading-relaxed text-[var(--pos-muted)]">
+            Si se lleva otra prenda, cóbrala ya con «Saldo a favor» y este
+            código; lo que sobre le queda guardado. Si no lleva nada,
+            entrégale el comprobante impreso.
+          </p>
+          <div className="mt-3 flex gap-2">
+            <a
+              href={`/pos/venta?saldo=${encodeURIComponent(codigo)}`}
+              className="pos-btn pos-btn-primario flex h-11 flex-1 items-center justify-center text-[13px]"
+            >
+              Usar en una compra ahora
+            </a>
+            <button
+              onClick={imprimir}
+              disabled={!saldo}
+              className="pos-btn pos-btn-sec h-11 flex-1 text-[13px]"
+            >
+              Imprimir comprobante
+            </button>
+          </div>
+        </div>
+      )}
+
+      <p className="mx-auto mt-3 max-w-[42ch] text-[12px] leading-relaxed text-[var(--pos-muted)]">
         {/* NO «la emite Postventa»: eso sonaba a que sale sola. El caso nace
             esperando a que una persona lo apruebe, y es ella quien hace la
             nota crédito. Decirle a la cajera que ya está resuelto la deja
@@ -557,9 +608,12 @@ function Exito({
         crédito no sale sola: la hace quien apruebe ese caso.
       </p>
 
-      <button onClick={onNueva} className="pos-btn pos-btn-primario mt-6 h-12 w-full text-[14px]">
+      <button onClick={onNueva}
+              className={`pos-btn mt-6 h-12 w-full text-[14px] ${codigo ? "pos-btn-sec" : "pos-btn-primario"}`}>
         Nueva devolución
       </button>
+
+      <SaldoImpreso saldo={imprimiendo} />
     </div>
   );
 }

@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { desdePesosTecleados, formatear } from "@/lib/pos/dinero";
-import type { MedioPago } from "@/lib/pos/api";
+import { buscarSaldos, type MedioPago, type SaldoAFavor } from "@/lib/pos/api";
 
 /**
  * Cobro, con pago mixto.
@@ -39,6 +39,7 @@ export function PanelCobro({
   total,
   medios,
   emiteFactura = false,
+  saldoInicial,
   onCancelar,
   onConfirmar,
 }: {
@@ -48,6 +49,9 @@ export function PanelCobro({
    *  factura de este medio queda pendiente» da a entender que con los demás
    *  sí sale — y hoy no sale con ninguno. */
   emiteFactura?: boolean;
+  /** El código de un saldo a favor con el que se llega a cobrar (viene de
+   *  un cambio recién hecho): entra con ese medio ya elegido. */
+  saldoInicial?: string;
   onCancelar: () => void;
   onConfirmar: (
     pagos: {
@@ -59,18 +63,54 @@ export function PanelCobro({
   ) => void;
 }) {
   const [pagos, setPagos] = useState<PagoLocal[]>([]);
-  const [medioId, setMedioId] = useState(medios[0]?.id ?? "");
+  const medioSaldo = medios.find((m) => m.tipo === "credito");
+  const [medioId, setMedioId] = useState(
+    (saldoInicial && medioSaldo?.id) || (medios[0]?.id ?? ""));
   const [texto, setTexto] = useState("");
-  const [referencia, setReferencia] = useState("");
+  const [referencia, setReferencia] = useState(
+    saldoInicial && medioSaldo ? saldoInicial : "");
+  // EL SALDO A FAVOR SE COMPRUEBA ANTES DE COBRAR. El código va en la
+  // referencia; se consulta cuánto le queda y de quién es, para que la cajera
+  // lo vea aquí y no en un rechazo al confirmar.
+  const [saldo, setSaldo] = useState<SaldoAFavor | null>(null);
+  const [saldoError, setSaldoError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
 
   const medio = medios.find((m) => m.id === medioId) ?? medios[0];
   const yaPagado = pagos.reduce((s, p) => s + p.monto, 0);
   const restante = Math.max(total - yaPagado, 0);
 
+  const esSaldo = medio?.tipo === "credito";
+  const codigoSaldo = esSaldo ? referencia.trim().toUpperCase() : "";
+  useEffect(() => {
+    setSaldo(null);
+    setSaldoError(null);
+    if (codigoSaldo.length < 4) return;
+    let vigente = true;
+    const t = setTimeout(() => {
+      buscarSaldos(codigoSaldo)
+        .then((l) => {
+          if (!vigente) return;
+          const s = l.find((x) => x.codigo === codigoSaldo) ?? (l.length === 1 ? l[0] : null);
+          if (s) setSaldo(s);
+          else setSaldoError("No hay un saldo a favor con ese código.");
+        })
+        .catch(() => vigente && setSaldoError("No se pudo consultar el saldo."));
+    }, 350);
+    return () => { vigente = false; clearTimeout(t); };
+  }, [codigoSaldo]);
+  // Lo que ese saldo todavía puede pagar en ESTA venta: descontando lo que
+  // ya se agregó con el mismo código.
+  const saldoYaPuesto = pagos
+    .filter((p) => p.medio.tipo === "credito" && saldo && p.referencia === saldo.codigo)
+    .reduce((s, p) => s + p.monto, 0);
+  const saldoDisponible = saldo ? Math.max(saldo.disponible_centavos - saldoYaPuesto, 0) : 0;
+
   // El monto se rellena con LO QUE FALTA. Es lo que hace que una venta de un
   // solo pago no note que esta pantalla sabe hacer pagos mixtos.
-  const monto = texto ? desdePesosTecleados(texto) : restante;
+  const monto = texto
+    ? desdePesosTecleados(texto)
+    : esSaldo && saldo ? Math.min(restante, saldoDisponible) : restante;
   const cubre = monto >= restante;
   const faltaTrasEste = Math.max(restante - monto, 0);
 
@@ -92,6 +132,9 @@ export function PanelCobro({
     Boolean(medio?.exige_referencia) && referencia.trim().length < 4;
   const campoMonto = useRef<HTMLInputElement>(null);
   const montoInvalido = monto <= 0;
+  const saldoInvalido = esSaldo && (!saldo || monto > saldoDisponible);
+  // Con el saldo se manda el código tal como está guardado.
+  const referenciaFinal = esSaldo && saldo ? saldo.codigo : referencia.trim();
 
   function limpiar() {
     setTexto("");
@@ -102,7 +145,7 @@ export function PanelCobro({
     if (!medio) return;
     setPagos((p) => [
       ...p,
-      { medio, monto, ...(referencia.trim() ? { referencia: referencia.trim() } : {}) },
+      { medio, monto, ...(referenciaFinal ? { referencia: referenciaFinal } : {}) },
     ]);
     limpiar();
   }
@@ -112,7 +155,7 @@ export function PanelCobro({
     setEnviando(true);
     const todos: PagoLocal[] = [
       ...pagos,
-      { medio, monto, ...(referencia.trim() ? { referencia: referencia.trim() } : {}) },
+      { medio, monto, ...(referenciaFinal ? { referencia: referenciaFinal } : {}) },
     ];
     onConfirmar(
       todos.map((p) => ({
@@ -226,25 +269,45 @@ export function PanelCobro({
       {admiteReferencia && (
         <label className="mb-3 block">
           <span className="kicker">
-            {medio.tipo === "tarjeta"
-              ? "NÚMERO DEL COMPROBANTE"
-              : "NÚMERO DE APROBACIÓN"}
+            {esSaldo
+              ? "CÓDIGO DEL SALDO A FAVOR"
+              : medio.tipo === "tarjeta"
+                ? "NÚMERO DEL COMPROBANTE"
+                : "NÚMERO DE APROBACIÓN"}
             {!medio.exige_referencia && " (OPCIONAL)"}
           </span>
           <input
             value={referencia}
             onChange={(e) => setReferencia(e.target.value)}
             autoComplete="off"
-            placeholder={medio.tipo === "tarjeta"
-              ? "el del voucher del datáfono"
-              : "el que salió en la pantalla o en la app"}
+            placeholder={esSaldo
+              ? "SF-00012, o la cédula de la clienta"
+              : medio.tipo === "tarjeta"
+                ? "el del voucher del datáfono"
+                : "el que salió en la pantalla o en la app"}
             aria-label={`Comprobante de ${medio.nombre}`}
             className="mt-1 w-full pos-input px-3 py-2.5 tabular text-[15px] text-[var(--pos-text)]"
           />
-          <span className="mt-1 block text-[12px] leading-relaxed text-[var(--pos-600)]">
-            Es lo que después permite cuadrar este cobro contra el informe
-            de {medio.nombre} — y lo que la clienta necesita para reclamar.
-          </span>
+          {esSaldo ? (
+            <span className="mt-1 block text-[12px] leading-relaxed text-[var(--pos-600)]">
+              {saldo ? (
+                <>
+                  <b className="text-[var(--pos-text)]">
+                    {saldo.codigo} · le quedan {formatear(saldoDisponible)}
+                  </b>
+                  {saldo.cliente && <> · de {saldo.cliente}</>}. La venta
+                  tiene que ir a su nombre.
+                </>
+              ) : (
+                saldoError ?? "Está en el comprobante que se le entregó en el cambio."
+              )}
+            </span>
+          ) : (
+            <span className="mt-1 block text-[12px] leading-relaxed text-[var(--pos-600)]">
+              Es lo que después permite cuadrar este cobro contra el informe
+              de {medio.nombre} — y lo que la clienta necesita para reclamar.
+            </span>
+          )}
         </label>
       )}
 
@@ -260,7 +323,7 @@ export function PanelCobro({
         value={texto}
         onChange={(e) => setTexto(e.target.value.replace(/[^\d]/g, ""))}
         onFocus={() => {
-          if (!texto && restante > 0) setTexto(String(Math.round(restante / 100)));
+          if (!texto && monto > 0) setTexto(String(Math.round(monto / 100)));
           // Tras el repintado: en ese instante el campo todavía tiene el
           // valor viejo y no habría nada que seleccionar.
           setTimeout(() => campoMonto.current?.select(), 0);
@@ -274,7 +337,9 @@ export function PanelCobro({
       <div className="mt-2 flex flex-wrap gap-2">
         {/* «Lo que falta» primero: en un pago mixto es el que se pulsa para
             cerrar, y en uno normal es el exacto de siempre. */}
-        <Rapido etiqueta="Lo que falta" onClick={() => setTexto(String(Math.round(restante / 100)))} />
+        <Rapido etiqueta={esSaldo && saldo && saldoDisponible < restante ? "Todo el saldo" : "Lo que falta"}
+                onClick={() => setTexto(String(Math.round(
+                  (esSaldo && saldo ? Math.min(restante, saldoDisponible) : restante) / 100)))} />
         {medio.permite_vuelto &&
           [200000_00, 500000_00]
             .filter((v) => v > restante)
@@ -312,7 +377,7 @@ export function PanelCobro({
         )}
 
         <button
-          disabled={montoInvalido || excedenteInvalido || faltaReferencia || enviando}
+          disabled={montoInvalido || excedenteInvalido || faltaReferencia || saldoInvalido || enviando}
           onClick={cubre ? confirmar : agregar}
           className="w-full pos-btn pos-btn-primario py-3.5 text-[13.5px] disabled:cursor-not-allowed"
         >
@@ -328,7 +393,13 @@ export function PanelCobro({
             Quedarían {formatear(faltaTrasEste)} por cobrar con otro medio.
           </p>
         )}
-        {faltaReferencia && !montoInvalido && (
+        {esSaldo && saldo && monto > saldoDisponible && (
+          <p className="mt-2 text-center text-[12px] text-[var(--pos-600)]">
+            A ese saldo le quedan {formatear(saldoDisponible)}: cobra esa parte
+            con él y el resto con otro medio.
+          </p>
+        )}
+        {faltaReferencia && !montoInvalido && !esSaldo && (
           <p className="mt-2 text-center text-[12px] text-[var(--pos-600)]">
             Falta el número de aprobación de {medio.nombre}.
           </p>

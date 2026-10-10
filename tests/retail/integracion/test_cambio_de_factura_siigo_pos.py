@@ -124,7 +124,7 @@ async def tienda(monkeypatch):
             "sesion_id": SESION, "tienda_id": "arrayanes",
             "caja_id": "arrayanes_caja1"})
         assert r.status_code == 200, r.text
-        yield {"c": c, "motor": motor, "pedidas": pedidas}
+        yield {"c": c, "motor": motor, "pedidas": pedidas, "turno": r.json()}
     motor.dispose()
     dependencias.reiniciar()
     revertir(URL)
@@ -392,3 +392,110 @@ def test_el_caso_de_postventa_lleva_la_factura_de_siigo(tienda):
     assert tipo == "abrir_caso_postventa"
     assert payload["numero_venta"] == "TARR-11451"
     assert payload["tienda_id"] == "arrayanes"
+
+
+# ── El saldo a favor ────────────────────────────────────────────────────────
+
+def _con_credito(t, seleccion):
+    r = _devolver(t, seleccion, reembolso="credito_tienda")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _comprar(t, pagos, *, cliente=True, venta="01JQ8X4T5NVE0F1R8S9V0W1X2Y",
+             n=0):
+    """Una prenda de $149.900 en Arrayanes."""
+    consecutivo = t["turno"]["consecutivo_siguiente"] + n
+    prefijo = _uno(t, "SELECT prefijo_factura FROM retail.cajas "
+                      "WHERE id = 'arrayanes_caja1'")
+    return t["c"].post("/api/retail/ventas/cerrar", json={
+        "venta_id": venta, "numero": f"{prefijo}-{consecutivo}",
+        "tienda_id": "arrayanes", "caja_id": "arrayanes_caja1",
+        "sesion_id": SESION, "ubicacion_id": "tienda:arrayanes",
+        "cliente_id": _uno(t, "SELECT id FROM retail.clientes LIMIT 1")
+                      if cliente else None,
+        "lineas": [{"sku": "95613-1T12", "cantidad": 1,
+                    "precio_unitario_centavos": 14_990_000,
+                    "descripcion": "Jean · 12"}],
+        "pagos": pagos})
+
+
+def test_el_cambio_con_credito_deja_un_saldo_a_favor_con_su_codigo(tienda):
+    d = _con_credito(tienda, {"26602-1T6": 1})            # $134.910
+    assert d["saldo_codigo"] == "SF-00001"
+    [s] = tienda["c"].get("/api/retail/saldos", params={"q": "SF-00001"}).json()
+    assert (s["monto_centavos"], s["disponible_centavos"], s["origen"]) == (
+        13_491_000, 13_491_000, "TARR-11451")
+    assert s["cliente"] == "Laura Gómez Ríos"
+    # La que perdió el papel lo encuentra con la cédula.
+    assert [x["codigo"] for x in tienda["c"].get(
+        "/api/retail/saldos", params={"q": "1037000111"}).json()] == ["SF-00001"]
+    # En efectivo no queda saldo.
+    r = _devolver(tienda, {"95613-1T12": 1},
+                  devolucion="01JQ8X4T5NDV0F1R8S9V0W1X2Z")
+    assert r.json()["saldo_codigo"] is None
+
+
+def test_la_prenda_nueva_se_paga_con_el_saldo_y_el_resto_con_otro_medio(tienda):
+    _con_credito(tienda, {"26602-1T6": 1})                # $134.910 de saldo
+    r = _comprar(tienda, [
+        {"medio_pago_id": "saldo_a_favor", "monto_centavos": 13_491_000,
+         "referencia": "sf-00001"},
+        {"medio_pago_id": "efectivo_arrayanes", "monto_centavos": 1_499_000,
+         "es_efectivo": True}])
+    assert r.status_code == 200, r.text
+    assert _uno(tienda, "SELECT usado FROM retail.saldos_a_favor") == 13_491_000
+    [s] = tienda["c"].get("/api/retail/saldos", params={"q": "SF-00001"}).json()
+    assert s["disponible_centavos"] == 0
+    # Al cajón sólo entra el efectivo: el saldo no es plata.
+    assert _todas(tienda, """SELECT medio_pago_id, monto
+        FROM retail.movimientos_caja WHERE tipo = 'venta' ORDER BY 1""") == [
+        ("efectivo_arrayanes", 1_499_000), ("saldo_a_favor", 13_491_000)]
+
+
+def test_si_la_prenda_vale_MENOS_el_resto_del_saldo_le_queda(tienda):
+    _con_credito(tienda, {"95613-1T12": 2, "26602-1T6": 1})   # $284.810
+    r = _comprar(tienda, [{"medio_pago_id": "saldo_a_favor",
+                           "monto_centavos": 14_990_000,
+                           "referencia": "SF-00001"}])
+    assert r.status_code == 200, r.text
+    [s] = tienda["c"].get("/api/retail/saldos", params={"q": "00001"}).json()
+    assert s["disponible_centavos"] == 28_481_000 - 14_990_000
+
+
+def test_no_se_gasta_mas_saldo_del_que_hay_ni_un_codigo_inventado(tienda):
+    _con_credito(tienda, {"26602-1T6": 1})                # $134.910
+    r = _comprar(tienda, [{"medio_pago_id": "saldo_a_favor",
+                           "monto_centavos": 14_990_000,
+                           "referencia": "SF-00001"}])
+    assert r.status_code == 400 and "le quedan" in r.text
+    r = _comprar(tienda, [{"medio_pago_id": "saldo_a_favor",
+                           "monto_centavos": 14_990_000,
+                           "referencia": "SF-99999"}])
+    assert r.status_code == 400 and "No existe" in r.text
+    assert _uno(tienda, "SELECT usado FROM retail.saldos_a_favor") == 0
+    assert _uno(tienda, "SELECT count(*) FROM retail.ventas "
+                        "WHERE origen <> 'siigo_pos'") == 0
+
+
+def test_el_saldo_se_cruza_SOLO_en_una_venta_a_nombre_de_su_duena(tienda):
+    _con_credito(tienda, {"95613-1T12": 2})               # $149.900
+    r = _comprar(tienda, [{"medio_pago_id": "saldo_a_favor",
+                           "monto_centavos": 14_990_000,
+                           "referencia": "SF-00001"}], cliente=False)
+    assert r.status_code == 400 and "a su nombre" in r.text
+
+
+def test_anular_la_venta_le_DEVUELVE_el_saldo(tienda):
+    _con_credito(tienda, {"95613-1T12": 2})               # $149.900
+    venta = "01JQ8X4T5NVE0F1R8S9V0W1X2Y"
+    assert _comprar(tienda, [{"medio_pago_id": "saldo_a_favor",
+                              "monto_centavos": 14_990_000,
+                              "referencia": "SF-00001"}]).status_code == 200
+    with tienda["motor"].begin() as c:
+        c.execute(text("UPDATE retail.permisos_pos SET puede_anular_venta = true"))
+    r = tienda["c"].post(f"/api/retail/ventas/{venta}/anular",
+                         json={"motivo": "se cobró por error"})
+    assert r.status_code == 200, r.text
+    assert _uno(tienda, "SELECT usado FROM retail.saldos_a_favor") == 0
+    assert _uno(tienda, "SELECT count(*) FROM retail.saldo_usos") == 0
