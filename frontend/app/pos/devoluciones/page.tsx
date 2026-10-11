@@ -35,6 +35,7 @@ import {
   buscarVentasParaCambio,
   type SaldoAFavor,
   traerFacturaDeSiigo,
+  traerPedidoWeb,
   type VentaEncontrada,
   registrarDevolucion,
   type Devolucion,
@@ -109,11 +110,18 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
   // Una factura del sistema anterior primero se TRAE de Siigo; después se
   // abre igual que cualquier venta del POS.
   const elegir = useCallback(async (v: VentaEncontrada) => {
-    const numero = v.siigo_id
-      ? (await traerFacturaDeSiigo(v.siigo_id, CAJA)).numero
-      : v.numero;
-    await abrir(numero);
-  }, [abrir]);
+    setBuscando(true);
+    try {
+      const numero = v.pedido_web
+        ? (await traerPedidoWeb(v.pedido_web, v.fecha, CAJA)).numero
+        : v.siigo_id
+          ? (await traerFacturaDeSiigo(v.siigo_id, CAJA)).numero
+          : v.numero;
+      await abrir(numero);
+    } finally {
+      setBuscando(false);
+    }
+  }, [abrir, CAJA]);
 
   const buscar = useCallback(async () => {
     const n = consulta.trim();
@@ -131,10 +139,10 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
       const ventas = await buscarVentasParaCambio(n, CAJA);
       if (ventas.length === 0) {
         setError(
-          `No encontramos ninguna factura de tienda con «${n}». Prueba con ` +
-          `la cédula de la clienta o con el número de la factura como sale ` +
-          `en el papel (ARRT-5, TARR-11451, FL-2077). Las compras de la ` +
-          `tienda en línea se cambian por Postventa.`);
+          `No encontramos ninguna compra con «${n}». Prueba con la cédula, ` +
+          `con el número de la factura como sale en el papel (ARRT-5, ` +
+          `TARR-11451, FE-67600) o, si compró por la página, con el número ` +
+          `del pedido (#64429) o con su nombre.`);
         return;
       }
       if (ventas.length > 1) {
@@ -227,7 +235,7 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
                 value={consulta}
                 onChange={(e) => setConsulta(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") void buscar(); }}
-                placeholder="Cédula o número de factura, ej. ARRT-5"
+                placeholder="Cédula, factura (ARRT-5), pedido web (#64429) o nombre"
                 aria-label="Cédula de la clienta o número de la factura"
                 autoComplete="off"
                 spellCheck={false}
@@ -256,8 +264,8 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
                 <div className="border-t border-[var(--pos-divider)]">
                   {candidatas.map((v) => (
                     <button
-                      key={v.venta_id}
-                      disabled={v.anulada}
+                      key={v.venta_id || v.siigo_id || `pedido-${v.pedido_web}`}
+                      disabled={v.anulada || buscando}
                       onClick={() => {
                         elegir(v).catch((e) => setError(
                           e instanceof Error ? e.message : "No pudimos abrir esa venta."));
@@ -272,9 +280,11 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
                         <span className="tabular block text-[12px] text-[var(--pos-600)]">
                           {fechaCorta(v.fecha)} · {v.tienda}
                           {v.cliente ? ` · ${v.cliente}` : ""}
-                          {v.siigo_id
-                            ? " · sistema anterior"
-                            : v.factura ? ` · ${v.numero}` : ""}
+                          {v.pedido_web
+                            ? " · se busca su factura al elegirlo"
+                            : v.siigo_id
+                              ? " · sistema anterior"
+                              : v.factura ? ` · ${v.numero}` : ""}
                         </span>
                       </span>
                       <span className="tabular text-[15px] font-semibold tabular-nums">

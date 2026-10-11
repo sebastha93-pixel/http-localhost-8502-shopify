@@ -583,3 +583,60 @@ def test_la_sincronizacion_NO_esconde_la_prenda_recien_devuelta(tienda):
     assert _sincronizar(siigo)["tiendas"]["florida"]["devueltas_sumadas"] == 0
     assert _stock(tienda, "95613-1T12", "tienda:florida") == 1
     assert _stock(tienda, "26602-1T6", "tienda:florida") == 5
+
+
+# ── La compra en línea que no se facturó a la cédula ────────────────────────
+
+def test_que_se_le_pregunta_a_shopify_y_que_no():
+    from backend.modules.retail.infrastructure.pedidos_web import parece_pedido as p
+    assert p("#64429") == p("pedido 64429") == p("Pedido #64429") == "name:#64429"
+    assert p("Yenny Ruiz") == "Yenny Ruiz"
+    # Una cédula o una factura se buscan en Siigo, no en Shopify.
+    assert p("43180115") is None and p("FE-67600") is None
+    assert p("ARRT 5") is None and p("ana") is None
+
+
+def test_el_pedido_web_se_encuentra_por_su_numero_y_se_trae_SU_factura(
+        tienda, monkeypatch):
+    """Arrayanes, 2026-10-10: la clienta compró por la página y la factura
+    quedó a «Cliente Mostrador». Por cédula no aparecía."""
+    from backend.modules.retail.infrastructure import pedidos_web
+    monkeypatch.setattr(pedidos_web, "buscar", lambda q: [{
+        "pedido": "64429", "fecha": "2026-10-05", "total": 285820.0,
+        "cliente": "Yenny Ruiz", "prendas": ["26602-1T6"]}])
+    pedidas = []
+
+    def factura_de(pedido, fecha):
+        pedidas.append((pedido, fecha))
+        return EN_LINEA if pedido == "64429" else None
+    monkeypatch.setattr(pedidos_web, "factura_de", factura_de)
+
+    [v] = [x for x in _buscar(tienda, "#64429") if x.get("pedido_web")]
+    assert (v["numero"], v["tienda"], v["fecha"]) == (
+        "Pedido #64429", "Tienda en línea", "2026-10-05")
+    assert pedidas == []                     # al listar NO se recorre Siigo
+
+    r = tienda["c"].post("/api/retail/devoluciones/traer-de-siigo", json={
+        "pedido_web": "64429", "fecha": "2026-10-05",
+        "caja_id": "arrayanes_caja1"})
+    assert r.status_code == 200, r.text
+    assert r.json()["numero"] == "FE-67700" and pedidas == [("64429", "2026-10-05")]
+
+    # El que todavía no tiene factura lo dice, no revienta.
+    r = tienda["c"].post("/api/retail/devoluciones/traer-de-siigo", json={
+        "pedido_web": "99999", "fecha": "2026-10-05",
+        "caja_id": "arrayanes_caja1"})
+    assert r.status_code == 404
+
+
+def test_los_saldos_de_CLIENTE_MOSTRADOR_no_se_le_ofrecen_solos_a_nadie(tienda):
+    """Esa «clienta» son todas las que no dieron cédula: ofrecer sus saldos
+    al cobrar sería darle a una el saldo de otra. Sólo con el código."""
+    _con_credito(tienda, {"95613-1T12": 2})
+    with tienda["motor"].begin() as c:
+        c.execute(text("UPDATE retail.clientes SET numero_documento = '222222222'"))
+    mostrador = _uno(tienda, "SELECT id FROM retail.clientes LIMIT 1")
+    assert tienda["c"].get("/api/retail/saldos",
+                           params={"cliente_id": mostrador}).json() == []
+    assert len(tienda["c"].get("/api/retail/saldos",
+                               params={"q": "SF-00001"}).json()) == 1

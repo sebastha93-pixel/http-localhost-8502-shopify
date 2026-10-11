@@ -2010,6 +2010,10 @@ async def buscar_saldos(
               JOIN retail.tiendas ti ON ti.id = s.tienda_id
               JOIN retail.clientes c ON c.id = s.cliente_id
              WHERE s.cliente_id = :c AND s.monto > s.usado
+               -- «Cliente Mostrador» (222222222) es de TODAS las que no
+               -- dieron cédula: ofrecer sus saldos solos sería darle a una
+               -- el saldo de otra. Esos sólo se usan con el código del papel.
+               AND c.numero_documento !~ '^2+$'
              ORDER BY s.creado_en LIMIT 20
         """), {"c": cliente_id})).mappings().all()
         return [_saldo(f) for f in filas]
@@ -2111,6 +2115,9 @@ class VentaEncontrada(BaseModel):
     #  Con valor, la venta TODAVÍA NO ESTÁ EN EL POS: es una factura del
     #  sistema anterior encontrada en Siigo. Hay que traerla antes de abrirla.
     siigo_id: Optional[str] = None
+    #  Con valor, es un PEDIDO de la tienda en línea hallado en Shopify: su
+    #  factura de Siigo se busca al elegirlo.
+    pedido_web: Optional[str] = None
 
 
 @router.get("/devoluciones/buscar", response_model=List[VentaEncontrada])
@@ -2131,7 +2138,9 @@ async def buscar_ventas_para_cambio(
       · la CÉDULA de la clienta → sus compras, la más reciente primero;
       · el número de la FACTURA, como venga: `ARRT-5`, `arrt5`, sólo `5`, o
         con el código que le pone Siigo por delante (`FV-13-5`);
-      · el número del ticket del POS.
+      · el número del ticket del POS;
+      · el PEDIDO de la tienda en línea (`#64429`) o el NOMBRE de la clienta,
+        para las compras de la página que no se facturaron a su cédula.
 
     Devuelve una LISTA: una cédula tiene varias compras, y un «5» suelto
     puede ser la factura 5 de cada caja. Con una sola, la pantalla la abre.
@@ -2215,7 +2224,31 @@ async def buscar_ventas_para_cambio(
             total_centavos=int(round(float(f.get("total") or 0) * 100)),
             cliente=nombre.strip() or None, anulada=False,
             siigo_id=str(f.get("id"))))
+
+    # LOS PEDIDOS DE LA TIENDA EN LÍNEA, por su número o por el nombre: lo que
+    # la clienta sabe cuando la factura no quedó a su cédula.
+    for p in await _pedidos_web(q):
+        encontradas.append(VentaEncontrada(
+            venta_id="", numero=f"Pedido #{p['pedido']}", factura=None,
+            fecha=p["fecha"], tienda="Tienda en línea",
+            total_centavos=int(round(p["total"] * 100)),
+            cliente=" · ".join(x for x in (
+                p["cliente"], " + ".join(p["prendas"][:4])) if x) or None,
+            anulada=False, pedido_web=p["pedido"]))
     return encontradas
+
+
+async def _pedidos_web(q: str) -> list:
+    """Nunca tumba la búsqueda: Shopify lento o caído es «no hay pedidos»."""
+    import asyncio
+    from backend.modules.retail.infrastructure import pedidos_web
+    if not pedidos_web.parece_pedido(q):
+        return []
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(pedidos_web.buscar, q), timeout=8.0)
+    except Exception:  # noqa: BLE001
+        return []
 
 
 _TIENDA_DE = {"arrayanes": "Arrayanes", "florida": "Florida"}
@@ -2239,7 +2272,11 @@ async def _facturas_de_siigo_pos(q: str, tienda_id: Optional[str] = None) -> lis
 
 
 class ImportarFacturaEntrada(BaseModel):
-    siigo_id: str = Field(min_length=8, max_length=64)
+    siigo_id: Optional[str] = Field(default=None, max_length=64)
+    #  En vez del id: el pedido de la tienda en línea y su fecha. La factura
+    #  se busca en Siigo por «Orden Nº».
+    pedido_web: Optional[str] = Field(default=None, max_length=12)
+    fecha: Optional[str] = Field(default=None, max_length=10)
     #  La caja que atiende. Una factura de la tienda en línea no es de
     #  ninguna caja: queda en esta.
     caja_id: Optional[str] = Field(default=None, max_length=64)
@@ -2268,9 +2305,35 @@ async def traer_factura_de_siigo(
     from sqlalchemy import text as _t
 
     ft = _facturas_tienda()
+    siigo_id = (entrada.siigo_id or "").strip()
+    if not siigo_id and entrada.pedido_web:
+        import re as _re
+        from backend.modules.retail.infrastructure import pedidos_web
+        if not _re.fullmatch(r"\d{4}-\d{2}-\d{2}", entrada.fecha or ""):
+            raise HTTPException(400, {"error": "regla_de_negocio",
+                                      "mensaje": "Falta la fecha del pedido."})
+        try:
+            hallada = await asyncio.wait_for(asyncio.to_thread(
+                pedidos_web.factura_de, entrada.pedido_web, entrada.fecha),
+                timeout=30.0)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(502, {
+                "error": "siigo_no_respondio",
+                "mensaje": "Siigo no respondió al buscar la factura del "
+                           f"pedido. Intenta de nuevo. ({str(e)[:80]})"})
+        if hallada is None:
+            raise HTTPException(404, {
+                "error": "no_existe",
+                "mensaje": f"El pedido #{entrada.pedido_web} todavía no tiene "
+                           "factura en Siigo, o se facturó más de una semana "
+                           "después. Búscala por el número de la factura."})
+        siigo_id = str(hallada.get("id") or "")
+    if len(siigo_id) < 8:
+        raise HTTPException(400, {"error": "regla_de_negocio",
+                                  "mensaje": "Falta la factura que se va a traer."})
     try:
         factura = await asyncio.wait_for(
-            asyncio.to_thread(ft.leer, entrada.siigo_id), timeout=15.0)
+            asyncio.to_thread(ft.leer, siigo_id), timeout=15.0)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, {
             "error": "siigo_no_respondio",
@@ -2325,7 +2388,7 @@ async def traer_factura_de_siigo(
                 tienda_id=tienda_id, caja_id=caja_id,
                 usuario_id=usuario.id, agregado_tipo="venta",
                 agregado_id=r.venta_id,
-                payload={"factura": r.numero, "siigo_id": entrada.siigo_id,
+                payload={"factura": r.numero, "siigo_id": siigo_id,
                          "total": float(factura.get("total") or 0)})
         await t.commit()
 

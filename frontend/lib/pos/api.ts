@@ -740,10 +740,23 @@ export interface VentaEncontrada {
   /** Con valor, la venta TODAVÍA NO ESTÁ EN EL POS: es una factura del
    *  sistema anterior encontrada en Siigo. Hay que traerla antes de abrirla. */
   siigo_id?: string | null;
+  /** Con valor, es un PEDIDO de la tienda en línea hallado en Shopify: su
+   *  factura se busca en Siigo al elegirlo. */
+  pedido_web?: string | null;
 }
 
 /** Trae al POS una factura de Siigo POS para poder hacerle el cambio. No es
  *  una venta nueva: no mueve inventario ni entra a ningún arqueo. */
+/** Trae la factura de un pedido de la tienda en línea. Tarda unos segundos:
+ *  Siigo no deja buscar por pedido y hay que recorrer las de esos días. */
+export async function traerPedidoWeb(
+  pedido: string, fecha: string, cajaId?: string,
+): Promise<VentaEncontrada> {
+  return api.post<VentaEncontrada>(
+    "/api/retail/devoluciones/traer-de-siigo",
+    { pedido_web: pedido, fecha, caja_id: cajaId ?? null });
+}
+
 export async function traerFacturaDeSiigo(
   siigoId: string, cajaId?: string,
 ): Promise<VentaEncontrada> {
