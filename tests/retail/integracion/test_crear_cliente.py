@@ -141,3 +141,19 @@ def test_recien_creada_se_ENCUENTRA_al_buscarla(entorno):
     assert r.status_code == 200
     assert [x["numero_documento"] for x in r.json()] == ["1037368561"]
     assert r.json()[0]["compras"] == 0
+
+
+def test_un_NIT_escrito_con_su_digito_se_guarda_como_empresa(entorno):
+    """Arrayanes, 2026-10-11: `901495189-5` entró como cédula, con el guion,
+    y Siigo rechazó la identificación. La venta quedó un día sin factura."""
+    c, motor = entorno[0], entorno[1]
+    r = c.post("/api/retail/clientes", json={
+        **CUERPO, "tipo_documento": "CC", "numero_documento": "901.495.189-5",
+        "nombre": "PORTAFOLIO AMBIENTAL SOSTENIBLE"})
+    assert r.status_code == 200, r.text
+    assert r.json()["tipo_documento"] == "NIT"
+    assert r.json()["numero_documento"] == "901495189"
+    # Una cédula con letras o signos no pasa: Siigo la rechazaría después.
+    r = c.post("/api/retail/clientes", json={
+        **CUERPO, "numero_documento": "43180115A"})
+    assert r.status_code == 400

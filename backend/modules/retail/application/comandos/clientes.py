@@ -83,7 +83,19 @@ class CrearCliente:
         if tipo not in TIPOS_DOCUMENTO:
             raise ReglaDeNegocio(f"Tipo de documento no válido: {tipo_documento!r}")
 
-        documento = re.sub(r"\s", "", numero_documento or "")
+        documento = re.sub(r"[\s.]", "", numero_documento or "")
+        # UN NIT ESCRITO CON SU DÍGITO DE VERIFICACIÓN (`901495189-5`). Se
+        # guardaba tal cual y como cédula, y Siigo rechazaba la identificación:
+        # la venta quedó un día sin factura (Arrayanes, 2026-10-11). El guion
+        # sólo lo lleva un NIT: se separa el dígito y se guarda como empresa.
+        dv = None
+        m = re.fullmatch(r"(\d{6,12})-(\d)", documento)
+        if m:
+            documento, dv, tipo = m.group(1), m.group(2), "NIT"
+        if tipo in ("CC", "NIT", "TI") and not documento.isdigit():
+            raise ReglaDeNegocio(
+                "El número de identificación sólo lleva números, sin puntos, "
+                "guiones ni letras.")
         if len(re.sub(r"\D", "", documento)) < 5:
             raise ReglaDeNegocio("El número de identificación es demasiado corto.")
 
@@ -111,12 +123,12 @@ class CrearCliente:
         try:
             await self._s.execute(text("""
                 INSERT INTO retail.clientes
-                    (id, tipo_documento, numero_documento, nombre, apellido,
+                    (id, tipo_documento, numero_documento, dv, nombre, apellido,
                      telefono, correo, direccion, ciudad,
                      creado_por, creado_en, actualizado_en)
-                VALUES (:id, :tipo, :doc, :nom, :ape, :tel, :mail, :dir, :ciu,
-                        :por, :ts, :ts)
-            """), {"id": cliente_id, "tipo": tipo, "doc": documento,
+                VALUES (:id, :tipo, :doc, :dv, :nom, :ape, :tel, :mail, :dir,
+                        :ciu, :por, :ts, :ts)
+            """), {"id": cliente_id, "tipo": tipo, "doc": documento, "dv": dv,
                    "nom": partes[0], "ape": partes[1] if len(partes) > 1 else "",
                    "tel": tel, "mail": limpio,
                    "dir": (direccion or "").strip() or None,
