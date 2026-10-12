@@ -932,3 +932,23 @@ export async function saldosDeCliente(clienteId: string): Promise<SaldoAFavor[]>
   const p = new URLSearchParams({ cliente_id: clienteId });
   return api.get<SaldoAFavor[]>(`/api/retail/saldos?${p}`);
 }
+
+// ── Tarjeta regalo ──────────────────────────────────────────────────────────
+
+export interface TarjetaRegalo {
+  codigo: string;
+  /** `false`: no se pudo preguntar a Shopify (`motivo` dice por qué). */
+  verificada: boolean;
+  motivo: string | null;
+  tarjetas: {
+    ultimos: string; activa: boolean; vence: string | null;
+    saldo: number; inicial: number; creada: string;
+  }[];
+  usos: { venta: string; fecha: string; tienda: string; monto_centavos: number }[];
+  usado_en_cajas_centavos: number;
+}
+
+export async function verificarTarjetaRegalo(codigo: string): Promise<TarjetaRegalo> {
+  const p = new URLSearchParams({ codigo });
+  return api.get<TarjetaRegalo>(`/api/retail/tarjetas-regalo?${p}`);
+}
