@@ -654,3 +654,41 @@ def test_DOS_pagos_por_el_mismo_medio_en_una_venta(tienda):
     assert _todas(tienda, """SELECT medio_pago_id, monto FROM retail.movimientos_caja
         WHERE tipo = 'venta' ORDER BY monto""") == [
         ("datafono_arrayanes", 4_990_000), ("datafono_arrayanes", 10_000_000)]
+
+
+# ── Tarjeta regalo ──────────────────────────────────────────────────────────
+
+def test_la_tarjeta_regalo_se_cobra_con_su_codigo_y_se_ve_lo_ya_usado(
+        tienda, monkeypatch):
+    from backend.modules.retail.infrastructure import tarjetas_regalo
+    monkeypatch.setattr(tarjetas_regalo, "consultar", lambda c: {
+        "verificada": True, "motivo": None, "tarjetas": [{
+            "ultimos": c[-4:], "activa": True, "vence": None, "saldo": 200000.0,
+            "inicial": 200000.0, "creada": "2026-09-30"}]})
+    ver = lambda cod: tienda["c"].get("/api/retail/tarjetas-regalo",
+                                      params={"codigo": cod}).json()
+    d = ver("kfm0 ifgy3")
+    assert d["codigo"] == "KFM0IFGY3" and d["verificada"] is True
+    assert d["tarjetas"][0]["saldo"] == 200000.0 and d["usos"] == []
+
+    # Sin código no se cobra con ella.
+    r = _comprar(tienda, [{"medio_pago_id": "tarjeta_regalo",
+                           "monto_centavos": 14_990_000}])
+    assert r.status_code == 400
+    r = _comprar(tienda, [{"medio_pago_id": "tarjeta_regalo",
+                           "monto_centavos": 14_990_000,
+                           "referencia": "KFM0-IFGY3"}])
+    assert r.status_code == 200, r.text
+    # No es plata del cajón, y queda dicho cuánto se le cobró a ese código.
+    d = ver("KFM0IFGY3")
+    assert d["usado_en_cajas_centavos"] == 14_990_000 and len(d["usos"]) == 1
+
+
+def test_si_shopify_no_deja_verificar_la_tarjeta_SE_DICE(tienda, monkeypatch):
+    from backend.modules.retail.infrastructure import tarjetas_regalo
+    monkeypatch.setattr(tarjetas_regalo, "consultar", lambda c: {
+        "verificada": False, "tarjetas": [],
+        "motivo": "La app de Shopify no tiene permiso para ver tarjetas regalo."})
+    d = tienda["c"].get("/api/retail/tarjetas-regalo",
+                        params={"codigo": "KFM0IFGY3"}).json()
+    assert d["verificada"] is False and "permiso" in d["motivo"]

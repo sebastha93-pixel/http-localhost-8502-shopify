@@ -2044,6 +2044,71 @@ def _saldo(f) -> "SaldoAFavor":
         cliente=f["cliente"] or None, documento=f["numero_documento"])
 
 
+# ── Tarjeta regalo ──────────────────────────────────────────────────────────
+
+class UsoDeTarjeta(BaseModel):
+    venta: str
+    fecha: str
+    tienda: str
+    monto_centavos: int
+
+
+class TarjetaRegalo(BaseModel):
+    codigo: str
+    #  ¿Se pudo preguntar a Shopify? Si no, `motivo` dice por qué y la caja
+    #  NO puede dar la tarjeta por buena sola.
+    verificada: bool
+    motivo: Optional[str] = None
+    #  Las tarjetas de Shopify que terminan igual (sólo deja ver 4 caracteres).
+    tarjetas: List[dict] = []
+    #  Lo que YA se cobró en las cajas con ese mismo código.
+    usos: List[UsoDeTarjeta] = []
+    usado_en_cajas_centavos: int = 0
+
+
+@router.get("/tarjetas-regalo", response_model=TarjetaRegalo)
+async def verificar_tarjeta_regalo(
+    codigo: str = Query(min_length=4, max_length=40),
+    s=Depends(sesion_lectura),
+    _: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """El saldo de la tarjeta en Shopify y lo ya cobrado con ella en las cajas.
+
+    Cobrar en la caja no le descuenta a Shopify, así que el saldo de allá no
+    basta: una tarjeta de $200.000 usada ayer en Florida sigue diciendo
+    $200.000. Por eso van las dos cosas.
+    """
+    import asyncio
+    from sqlalchemy import text as _t
+    from backend.modules.retail.infrastructure import tarjetas_regalo
+
+    limpio = tarjetas_regalo.limpiar(codigo)
+    try:
+        r = await asyncio.wait_for(
+            asyncio.to_thread(tarjetas_regalo.consultar, limpio), timeout=8.0)
+    except Exception:  # noqa: BLE001
+        r = {"verificada": False, "tarjetas": [],
+             "motivo": "Shopify no respondió."}
+    filas = (await s.execute(_t("""
+        SELECT v.numero, v.cerrada_en, ti.nombre AS tienda, p.monto
+          FROM retail.venta_pagos p
+          JOIN retail.ventas v ON v.id = p.venta_id
+          JOIN retail.tiendas ti ON ti.id = v.tienda_id
+         WHERE p.medio_pago_id = 'tarjeta_regalo' AND v.estado = 'cerrada'
+           AND regexp_replace(upper(coalesce(p.referencia, '')),
+                              '[^A-Z0-9]', '', 'g') = :c
+         ORDER BY v.cerrada_en DESC LIMIT 20
+    """), {"c": limpio})).mappings().all()
+    return TarjetaRegalo(
+        codigo=limpio, verificada=bool(r["verificada"]), motivo=r.get("motivo"),
+        tarjetas=r["tarjetas"],
+        usos=[UsoDeTarjeta(
+            venta=f["numero"],
+            fecha=f["cerrada_en"].isoformat() if f["cerrada_en"] else "",
+            tienda=f["tienda"], monto_centavos=int(f["monto"])) for f in filas],
+        usado_en_cajas_centavos=sum(int(f["monto"]) for f in filas))
+
+
 # ── El ajuste de la impresora, por caja ─────────────────────────────────────
 
 class ImpresionDeCaja(BaseModel):

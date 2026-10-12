@@ -5,8 +5,10 @@ import { desdePesosTecleados, formatear } from "@/lib/pos/dinero";
 import {
   buscarSaldos,
   saldosDeCliente,
+  verificarTarjetaRegalo,
   type MedioPago,
   type SaldoAFavor,
+  type TarjetaRegalo,
 } from "@/lib/pos/api";
 
 /**
@@ -112,6 +114,27 @@ export function PanelCobro({
   const medio = medios.find((m) => m.id === medioId) ?? medios[0];
   const yaPagado = pagos.reduce((s, p) => s + p.monto, 0);
   const restante = Math.max(total - yaPagado, 0);
+
+  // LA TARJETA REGALO SE VERIFICA AL ESCRIBIR SU CÓDIGO: el saldo que dice
+  // Shopify y lo que ya se cobró con ella en las cajas.
+  const esTarjetaRegalo = medio?.id === "tarjeta_regalo";
+  const [tarjeta, setTarjeta] = useState<TarjetaRegalo | null>(null);
+  const codigoTarjeta = esTarjetaRegalo
+    ? referencia.replace(/[^A-Za-z0-9]/g, "").toUpperCase() : "";
+  useEffect(() => {
+    setTarjeta(null);
+    if (codigoTarjeta.length < 6) return;
+    let vigente = true;
+    const t = setTimeout(() => {
+      verificarTarjetaRegalo(codigoTarjeta)
+        .then((r) => vigente && setTarjeta(r))
+        .catch(() => vigente && setTarjeta({
+          codigo: codigoTarjeta, verificada: false,
+          motivo: "No se pudo consultar.", tarjetas: [], usos: [],
+          usado_en_cajas_centavos: 0 }));
+    }, 400);
+    return () => { vigente = false; clearTimeout(t); };
+  }, [codigoTarjeta]);
 
   const esSaldo = medio?.tipo === "credito";
   const codigoSaldo = esSaldo ? referencia.trim().toUpperCase() : "";
@@ -328,6 +351,8 @@ export function PanelCobro({
           <span className="kicker">
             {esSaldo
               ? "CÓDIGO DEL SALDO A FAVOR"
+              : esTarjetaRegalo
+                ? "CÓDIGO DE LA TARJETA REGALO"
               : medio.tipo === "tarjeta"
                 ? "NÚMERO DEL COMPROBANTE"
                 : "NÚMERO DE APROBACIÓN"}
@@ -339,6 +364,8 @@ export function PanelCobro({
             autoComplete="off"
             placeholder={esSaldo
               ? "SF-00012, o la cédula de la clienta"
+              : esTarjetaRegalo
+                ? "el código completo, como viene en la tarjeta"
               : medio.tipo === "tarjeta"
                 ? "el del voucher del datáfono"
                 : "el que salió en la pantalla o en la app"}
@@ -357,6 +384,38 @@ export function PanelCobro({
                 </>
               ) : (
                 saldoError ?? "Está en el comprobante que se le entregó en el cambio."
+              )}
+            </span>
+          ) : esTarjetaRegalo ? (
+            <span className="mt-1 block text-[12px] leading-relaxed text-[var(--pos-600)]">
+              {!tarjeta && "Escribe el código completo para verificarla."}
+              {tarjeta && tarjeta.verificada && tarjeta.tarjetas.length === 0 && (
+                <b className="text-[var(--pos-accent)]">
+                  No hay ninguna tarjeta regalo que termine en {tarjeta.codigo.slice(-4)}.
+                  No la recibas sin confirmar.
+                </b>
+              )}
+              {tarjeta && tarjeta.tarjetas.map((t, i) => (
+                <b key={i} className="block text-[var(--pos-text)]">
+                  Termina en {t.ultimos} · saldo {formatear(Math.round(t.saldo * 100))}
+                  {" "}de {formatear(Math.round(t.inicial * 100))}
+                  {!t.activa && " · DESACTIVADA"}
+                  {t.vence && ` · vence ${t.vence}`}
+                </b>
+              ))}
+              {tarjeta && !tarjeta.verificada && (
+                <b className="text-[var(--pos-accent)]">
+                  No se pudo verificar en Shopify: {tarjeta.motivo} Confirma el
+                  saldo con administración antes de recibirla.
+                </b>
+              )}
+              {tarjeta && tarjeta.usos.length > 0 && (
+                <span className="mt-1 block">
+                  Ya se cobró con este código en caja{" "}
+                  <b>{formatear(tarjeta.usado_en_cajas_centavos)}</b>:{" "}
+                  {tarjeta.usos.map((u) => `${u.venta} (${u.tienda}, ${formatear(u.monto_centavos)})`).join(" · ")}.
+                  Shopify no lo sabe: réstalo del saldo.
+                </span>
               )}
             </span>
           ) : (
