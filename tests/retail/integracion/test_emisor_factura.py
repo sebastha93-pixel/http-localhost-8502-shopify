@@ -51,6 +51,7 @@ class SiigoFalso:
         self.tipo = {"id": DOC_SIIGO, "active": True, "discount_type": "Value"}
         self.clientes = {"222222222222"}
         self.sucursales = {}
+        self.buscadas = []
         # Lo que contesta la DIAN cuando se le pregunta por una factura.
         self.dian = "accepted"      # accepted | draft | rejected
         self.lecturas = 0
@@ -143,7 +144,8 @@ class SiigoFalso:
     async def existe_cliente(self, identificacion):
         return identificacion in self.clientes
 
-    async def buscar_por_marca(self, *, documento_id, fecha, marca):
+    async def buscar_por_marca(self, *, documento_id, fecha, marca, hasta=None):
+        self.buscadas.append((fecha, hasta))
         return next((f for f in self.en_siigo
                      if marca in f["observations"]), None)
 
@@ -984,3 +986,16 @@ def test_con_el_numero_encontrado_se_abre_el_ticket_para_devolver(entorno, monke
                           params={"caja_id": "arrayanes_caja1"})
     assert r.status_code == 200, r.text
     assert r.json()["lineas"][0]["sku"] == "92611-1T10"
+
+
+def test_la_factura_que_sale_TARDE_lleva_la_fecha_de_hoy_no_la_de_la_venta(entorno):
+    """ARRPOS-17910, 2026-10-12: la venta era de ayer —la clienta quedó mal
+    digitada— y al facturarla al otro día Siigo respondió «Invalid date»."""
+    from zoneinfo import ZoneInfo
+    _ejecutar(entorno, "UPDATE retail.ventas "
+                       "SET cerrada_en = cerrada_en - interval '2 days'")
+    siigo = SiigoFalso()
+    assert _drenar(siigo).procesados == 1
+    hoy = datetime.now(ZoneInfo("America/Bogota")).date().isoformat()
+    assert siigo.enviadas[0]["date"] == hoy
+    assert all(p["due_date"] == hoy for p in siigo.enviadas[0]["payments"])

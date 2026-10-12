@@ -202,13 +202,15 @@ class SiigoIO:
         return await self.sucursal_de_cliente(identificacion) is not None
 
     async def buscar_por_marca(self, *, documento_id: int, fecha: str,
-                               marca: str) -> Optional[dict]:
+                               marca: str,
+                               hasta: Optional[str] = None) -> Optional[dict]:
         def ir():
             from backend.services.siigo import siigo_get
             for pagina in range(1, 21):
                 r = siigo_get("/invoices", {
                     "document_id": documento_id, "date_start": fecha,
-                    "date_end": fecha, "page": pagina, "page_size": 100})
+                    "date_end": hasta or fecha, "page": pagina,
+                    "page_size": 100})
                 filas = r.get("results", []) if isinstance(r, dict) else []
                 for f in filas:
                     if marca in (f.get("observations") or ""):
@@ -292,16 +294,25 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
             t, v, io, en_modo=en_modo, siigo_id=doc["documento_externo_id"],
             numero=doc["numero"], desde=doc["creado_en"])
 
-    fecha = v["cerrada_en"].astimezone(
-        _zona(v["zona_horaria"])).date().isoformat()
+    zona = _zona(v["zona_horaria"])
+    dia_venta = v["cerrada_en"].astimezone(zona).date()
+    # LA FACTURA LLEVA LA FECHA DEL DÍA EN QUE SE EMITE. Casi siempre es el
+    # de la venta. Pero la que se quedó esperando —una clienta mal digitada,
+    # Siigo caído— y sale al día siguiente no puede ir con la fecha de ayer:
+    # Siigo la rechaza con «Invalid date» (ARRPOS-17910, 2026-10-12). La venta
+    # conserva su fecha en el POS; el documento fiscal lleva la de expedición.
+    hoy = datetime.now(timezone.utc).astimezone(zona).date()
+    fecha = max(dia_venta, hoy).isoformat()
     marca = marca_de(v["id"], v["numero"])
     documento_id = int(v["siigo_documento_id"])
 
     creada = None
     if doc and doc["estado"] == "enviando":
-        # Hubo un envío sin resultado. ANTES de reenviar se mira si llegó.
+        # Hubo un envío sin resultado. ANTES de reenviar se mira si llegó:
+        # pudo haber llegado cualquier día entre la venta y hoy.
         creada = await io.buscar_por_marca(documento_id=documento_id,
-                                           fecha=fecha, marca=marca)
+                                           fecha=dia_venta.isoformat(),
+                                           hasta=fecha, marca=marca)
         if creada:
             log.warning("[retail-fiscal] %s ya estaba en Siigo: se adopta, "
                         "no se reenvía", v["numero"])
