@@ -126,7 +126,8 @@ class CerrarVenta:
                     sesion_id=venta.sesion_id, venta_id=venta.id,
                     medio_pago_id=pago.medio_pago_id,
                     monto_centavos=neto.centavos,
-                    usuario_id=usuario_id, ahora=ahora)
+                    usuario_id=usuario_id, ahora=ahora,
+                    numero_pago=pago.numero)
 
             # 5. Los descuentos autorizados van aparte y como CRÍTICOS: son los
             #    eventos que alguien querría que desaparezcan.
