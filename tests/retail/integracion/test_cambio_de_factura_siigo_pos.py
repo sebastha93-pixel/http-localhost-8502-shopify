@@ -640,3 +640,17 @@ def test_los_saldos_de_CLIENTE_MOSTRADOR_no_se_le_ofrecen_solos_a_nadie(tienda):
                            params={"cliente_id": mostrador}).json() == []
     assert len(tienda["c"].get("/api/retail/saldos",
                                params={"q": "SF-00001"}).json()) == 1
+
+
+def test_DOS_pagos_por_el_mismo_medio_en_una_venta(tienda):
+    """Arrayanes, 2026-10-12: dos cobros por datáfono en la misma venta
+    reventaban con «duplicate key» en movimientos_caja."""
+    r = _comprar(tienda, [
+        {"medio_pago_id": "datafono_arrayanes", "monto_centavos": 10_000_000,
+         "referencia": "111111"},
+        {"medio_pago_id": "datafono_arrayanes", "monto_centavos": 4_990_000,
+         "referencia": "222222"}])
+    assert r.status_code == 200, r.text
+    assert _todas(tienda, """SELECT medio_pago_id, monto FROM retail.movimientos_caja
+        WHERE tipo = 'venta' ORDER BY monto""") == [
+        ("datafono_arrayanes", 4_990_000), ("datafono_arrayanes", 10_000_000)]

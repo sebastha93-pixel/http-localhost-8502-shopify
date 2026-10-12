@@ -25,7 +25,8 @@ class RepositorioCajaSQL:
 
     async def registrar_cobro(self, *, sesion_id: str, venta_id: str,
                               medio_pago_id: str, monto_centavos: int,
-                              usuario_id: str, ahora: datetime) -> None:
+                              usuario_id: str, ahora: datetime,
+                              numero_pago: int = 1) -> None:
         # El id se deriva de la venta y el medio para que reintentar el mismo
         # cierre no sume dos veces la misma plata al arqueo.
         #
@@ -34,7 +35,13 @@ class RepositorioCajaSQL:
         # cada worker y tras cada despliegue, así que el reintento que esto
         # dice impedir habría sumado dos veces. No pasó porque la venta ya se
         # protege por su propia llave — pero el código no hacía lo que afirma.
-        huella = int(hashlib.sha256(medio_pago_id.encode()).hexdigest(), 16)
+        #
+        # Y CON EL NÚMERO DEL PAGO. Sólo con el medio, dos pagos por el MISMO
+        # medio en una venta —dos tarjetas, dos datáfonos— daban el mismo id
+        # y el cobro reventaba con «duplicate key» con la clienta delante
+        # (Arrayanes, 2026-10-12).
+        huella = int(hashlib.sha256(
+            f"{medio_pago_id}#{numero_pago}".encode()).hexdigest(), 16)
         mov_id = f"{venta_id[:20]}{huella % 10**6:06d}"[:26].upper()
         await self._s.execute(T.movimientos_caja.insert().values(
             id=mov_id, sesion_id=sesion_id, tipo="venta",
