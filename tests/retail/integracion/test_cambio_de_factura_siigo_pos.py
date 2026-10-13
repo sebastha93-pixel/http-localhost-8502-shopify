@@ -692,3 +692,153 @@ def test_si_shopify_no_deja_verificar_la_tarjeta_SE_DICE(tienda, monkeypatch):
     d = tienda["c"].get("/api/retail/tarjetas-regalo",
                         params={"codigo": "KFM0IFGY3"}).json()
     assert d["verificada"] is False and "permiso" in d["motivo"]
+
+
+# ── La nota crédito del cambio la emite el POS ──────────────────────────────
+
+class _SiigoDeMentira:
+    consultas_inmediatas = 1
+    pausa = 0
+
+    def __init__(self, factura=FACTURA, dian="Accepted"):
+        self.factura, self.dian = factura, dian
+        self.enviadas, self.en_siigo = [], []
+        self.al_crear = "ok"
+
+    async def leer_factura(self, siigo_id):
+        assert siigo_id == self.factura["id"]
+        return self.factura
+
+    async def crear_nota_credito(self, cuerpo):
+        from backend.modules.retail.infrastructure.siigo.emisor_factura import (
+            RechazoDeSiigo,
+        )
+        self.enviadas.append(cuerpo)
+        if self.al_crear == "rechazo":
+            raise RechazoDeSiigo('HTTP 400: {"Code":"invalid_total_payments"}')
+        nc = {"id": f"nc-{len(self.enviadas)}", "name": f"NC-1-{7600 + len(self.enviadas)}",
+              "observations": cuerpo["observations"],
+              "stamp": {"status": self.dian, "cude": "d" * 96}}
+        self.en_siigo.append(nc)
+        if self.al_crear == "crea_y_muere":
+            raise RuntimeError("se cayó la conexión después de crear")
+        return nc
+
+    async def leer_nota_credito(self, siigo_id):
+        nc = dict(next(x for x in self.en_siigo if x["id"] == siigo_id))
+        nc["stamp"] = {"status": self.dian, "cude": "d" * 96}
+        return nc
+
+    async def buscar_nc_por_marca(self, *, desde, marca):
+        return next((n for n in self.en_siigo if marca in n["observations"]), None)
+
+
+def _drenar_nc(siigo, monkeypatch, *, dentro_de=1):
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+    from backend.modules.retail.application.comandos.drenar_outbox import DrenarOutbox
+    from backend.modules.retail.infrastructure.persistencia.unidad_de_trabajo import (
+        UnidadDeTrabajoSQL, crear_fabrica, crear_motor,
+    )
+    from backend.modules.retail.infrastructure.siigo.emisor_nota_credito_cambio import (
+        crear_manejador,
+    )
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+
+    async def ir():
+        m = crear_motor(URL)
+        try:
+            return await DrenarOutbox(
+                UnidadDeTrabajoSQL(crear_fabrica(m)),
+                {"emitir_nota_credito_cambio": crear_manejador(siigo)},
+            ).ejecutar(ahora=datetime.now(timezone.utc)
+                       + timedelta(minutes=dentro_de), limite=20)
+        finally:
+            await m.dispose()
+    return asyncio.new_event_loop().run_until_complete(ir())
+
+
+def test_el_cambio_emite_SU_nota_credito_con_anticipo_y_a_la_bodega_que_recibe(
+        tienda, monkeypatch):
+    """Tres días, nueve cambios y ninguna nota crédito: dependían de que
+    alguien aprobara un caso en Postventa (2026-10-13)."""
+    # Comprada en Arrayanes, devuelta en FLORIDA: una de dos del segundo jean
+    # y el primero, que tenía 10 % de descuento.
+    r = _devolver(tienda, {"26602-1T6": 1, "95613-1T12": 1},
+                  reembolso="credito_tienda", caja="florida_caja1")
+    assert r.status_code == 200, r.text
+    # Ya no abre caso en Postventa: la nota crédito sale de aquí.
+    assert _todas(tienda, "SELECT tipo FROM retail.outbox "
+                          "WHERE agregado_tipo = 'devolucion'") == [
+        ("emitir_nota_credito_cambio",)]
+
+    siigo = _SiigoDeMentira()
+    assert _drenar_nc(siigo, monkeypatch).procesados == 1
+    [nc] = siigo.enviadas
+    assert nc["invoice"] == FACTURA["id"] and nc["reason"] == 1
+    assert nc["customer"] == {"identification": "1037000111", "branch_office": 0}
+    assert [(i["code"], i["quantity"], i["price"], i.get("discount"),
+             i["warehouse"]) for i in nc["items"]] == [
+        ("26602-1T6", 1, 125966.39, 10, 48),          # 48 = bodega de Florida
+        ("95613-1T12", 1, 62983.19, None, 48)]
+    # El anticipo: $134.910 (el total de esa línea) + UNA de dos de $74.950.
+    [pago] = nc["payments"]
+    assert pago["id"] == 8316 and pago["value"] == 134910.0 + 74950.0
+    assert pago["value"] == r.json()["total_centavos"] / 100
+    assert nc["cost_center"] == 677 and nc["stamp"] == {"send": True}
+
+    assert _todas(tienda, "SELECT nota_credito_numero, entro_a_siigo_en IS NOT NULL "
+                          "FROM retail.devoluciones") == [("NC-1-7601", True)]
+    assert _todas(tienda, "SELECT estado, numero FROM retail.documentos_fiscales "
+                          "WHERE tipo = 'nota_credito'") == [("emitido", "NC-1-7601")]
+    # Volver a drenar no manda otra.
+    assert _drenar_nc(siigo, monkeypatch).procesados == 0
+    assert len(siigo.enviadas) == 1
+
+
+def test_si_el_envio_se_corta_la_nota_credito_NO_se_duplica(tienda, monkeypatch):
+    _con_credito(tienda, {"26602-1T6": 1})
+    siigo = _SiigoDeMentira()
+    siigo.al_crear = "crea_y_muere"
+    _drenar_nc(siigo, monkeypatch)
+    assert len(siigo.en_siigo) == 1
+    siigo.al_crear = "ok"
+    _drenar_nc(siigo, monkeypatch, dentro_de=600)
+    assert len(siigo.enviadas) == 1                   # se adoptó, no se reenvió
+    assert _uno(tienda, "SELECT nota_credito_numero FROM retail.devoluciones"
+                ) == "NC-1-7601"
+
+
+def test_si_siigo_la_rechaza_QUEDA_A_LA_VISTA_y_la_prenda_sigue_contando(
+        tienda, monkeypatch):
+    _con_credito(tienda, {"26602-1T6": 1})
+    siigo = _SiigoDeMentira()
+    siigo.al_crear = "rechazo"
+    _drenar_nc(siigo, monkeypatch)
+    assert _todas(tienda, "SELECT estado FROM retail.documentos_fiscales "
+                          "WHERE tipo = 'nota_credito'") == [("rechazado",)]
+    assert _todas(tienda, "SELECT nota_credito_numero, entro_a_siigo_en "
+                          "FROM retail.devoluciones") == [(None, None)]
+    assert _uno(tienda, "SELECT estado FROM retail.outbox "
+                        "WHERE tipo = 'emitir_nota_credito_cambio'") == "fallido"
+
+
+def test_no_se_acredita_lo_que_la_factura_no_trae():
+    from backend.modules.retail.infrastructure.siigo.factura_venta import (
+        FacturaInvalida,
+    )
+    from backend.modules.retail.infrastructure.siigo.nota_credito_cambio import (
+        construir_nota_credito_cambio as c,
+    )
+    args = dict(factura=FACTURA, documento_id=11817, fecha="2026-10-13",
+                marca="POS CAMBIO X · Y", bodega_id=37)
+    with pytest.raises(FacturaInvalida):
+        c(devueltas={"OTRA-1T6": 1}, **args)
+    with pytest.raises(FacturaInvalida):
+        c(devueltas={"95613-1T12": 3}, **args)        # compró dos
+    with pytest.raises(FacturaInvalida):              # la DIAN aún no la valida
+        c(devueltas={"26602-1T6": 1},
+          **{**args, "factura": {**FACTURA, "stamp": {"status": "Draft"}}})
+    # La factura completa da exactamente su total.
+    todo = c(devueltas={"26602-1T6": 1, "95613-1T12": 2, "101": 1}, **args)
+    assert todo["payments"][0]["value"] == FACTURA["total"]

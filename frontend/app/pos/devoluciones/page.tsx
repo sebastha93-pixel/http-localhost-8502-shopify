@@ -612,12 +612,12 @@ function Exito({
       )}
 
       <p className="mx-auto mt-3 max-w-[42ch] text-[12px] leading-relaxed text-[var(--pos-muted)]">
-        {/* NO «la emite Postventa»: eso sonaba a que sale sola. El caso nace
-            esperando a que una persona lo apruebe, y es ella quien hace la
-            nota crédito. Decirle a la cajera que ya está resuelto la deja
-            prometiéndole a la clienta un documento que nadie ha hecho. */}
-        Quedó un caso en Postventa con el ticket y las prendas. La nota
-        crédito no sale sola: la hace quien apruebe ese caso.
+        {/* La nota crédito la emite el POS solo, igual que la de una
+            anulación. Antes esperaba a que alguien aprobara un caso en
+            Postventa, y no pasaba. */}
+        La nota crédito sale sola hacia Siigo en unos minutos: deja el saldo
+        como anticipo a nombre de la clienta y entra la prenda al inventario
+        de esta tienda.
       </p>
 
       <button onClick={onNueva}

@@ -11,8 +11,9 @@ a enviar» antes de enviar, se envía una vez, y al reintentar primero se BUSCA
 por su marca. Y creada en Siigo no es nota crédito todavía: lo es cuando la
 DIAN la valida.
 
-SÓLO ANULACIONES COMPLETAS. La devolución de una prenda sigue yendo a
-Postventa, donde una persona aprueba el caso antes de que salga el documento.
+SÓLO ANULACIONES COMPLETAS. La nota crédito de un CAMBIO —parcial y con
+anticipo— la emite `emisor_nota_credito_cambio`. Sus documentos terminan en
+`NCD`; los de aquí en `NCR`, y cada manejador toca sólo los suyos.
 """
 from __future__ import annotations
 
@@ -126,6 +127,7 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
         SELECT id, estado, numero, documento_externo_id, creado_en
           FROM retail.documentos_fiscales
          WHERE venta_id = :v AND tipo = 'nota_credito'
+           AND right(id::text, 3) = 'NCR'
          ORDER BY creado_en DESC LIMIT 1
     """), {"v": venta_id})).mappings().first()
     if doc and doc["estado"] == "emitido":
@@ -193,6 +195,7 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
            SET estado = 'verificando', numero = :n, documento_externo_id = :ext,
                respuesta_cruda = CAST(:cruda AS jsonb), ultimo_error = NULL
          WHERE venta_id = :v AND tipo = 'nota_credito'
+           AND right(id::text, 3) = 'NCR'
     """), {"v": venta_id, "n": numero, "ext": siigo_id,
            "cruda": json.dumps(creada, default=str)})
     await t.commit()
@@ -250,6 +253,7 @@ async def _anotar_emitida(t, v, nc: dict, *, en_modo: str,
                respuesta_cruda = CAST(:cruda AS jsonb),
                emitido_en = :ts, ultimo_error = NULL
          WHERE venta_id = :v AND tipo = 'nota_credito'
+           AND right(id::text, 3) = 'NCR'
     """), {"v": v["id"], "n": numero, "cude": cude, "ext": siigo_id,
            "ts": ahora, "cruda": json.dumps(nc, default=str)})
     await t.auditoria.registrar(
@@ -270,4 +274,5 @@ async def _cerrar(t, venta_id: str, estado: str, *, error: str) -> None:
         UPDATE retail.documentos_fiscales
            SET estado = :e, ultimo_error = :err
          WHERE venta_id = :v AND tipo = 'nota_credito'
+           AND right(id::text, 3) = 'NCR'
     """), {"v": venta_id, "e": estado, "err": error[:500]})

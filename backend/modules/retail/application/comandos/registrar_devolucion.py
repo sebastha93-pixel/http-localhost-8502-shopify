@@ -256,26 +256,40 @@ class RegistrarDevolucion:
                          "lineas": [{"sku": l.sku, "cantidad": l.cantidad}
                                     for l in devolucion.lineas]})
 
-            await t.outbox.encolar(
-                tipo="abrir_caso_postventa", agregado_tipo="devolucion",
-                agregado_id=devolucion_id,
-                payload={"devolucion_id": devolucion_id,
-                         "venta_id": venta_id,
-                         "numero_venta": cabecera["numero"],
-                         # La tienda que ATIENDE el caso —y a cuya bodega
-                         # entra la prenda—; la de la venta va aparte, que
-                         # es la que emitió la factura que se anula.
-                         "tienda_id": lugar["tienda_id"],
-                         "tienda_venta_id": cabecera["tienda_id"],
-                         "motivo": motivo_enum.value,
-                         "reembolso": reembolso_enum.value,
-                         "total": devolucion.total.centavos,
-                         "base_gravable": devolucion.base_gravable.centavos,
-                         "iva": devolucion.iva.centavos,
-                         "lineas": [{"sku": l.sku, "cantidad": l.cantidad,
-                                     "precio_unitario_con_iva":
-                                         l.precio_unitario_con_iva_centavos}
-                                    for l in devolucion.lineas]})
+            if reembolso_enum is Reembolso.CREDITO_TIENDA:
+                # LA NOTA CRÉDITO LA EMITE EL POS, ya. Es lo que hace existir
+                # el saldo a favor en Siigo —como anticipo— antes de que la
+                # clienta lo gaste, y lo que mete la prenda a la bodega de la
+                # tienda. No se abre caso en Postventa: sería una segunda
+                # puerta hacia la misma nota crédito.
+                await t.outbox.encolar(
+                    tipo="emitir_nota_credito_cambio",
+                    agregado_tipo="devolucion", agregado_id=devolucion_id,
+                    payload={"devolucion_id": devolucion_id,
+                             "venta_id": venta_id,
+                             "numero_venta": cabecera["numero"],
+                             "saldo_codigo": saldo_codigo})
+            else:
+                await t.outbox.encolar(
+                    tipo="abrir_caso_postventa", agregado_tipo="devolucion",
+                    agregado_id=devolucion_id,
+                    payload={"devolucion_id": devolucion_id,
+                             "venta_id": venta_id,
+                             "numero_venta": cabecera["numero"],
+                             # La tienda que ATIENDE el caso —y a cuya bodega
+                             # entra la prenda—; la de la venta va aparte, que
+                             # es la que emitió la factura que se anula.
+                             "tienda_id": lugar["tienda_id"],
+                             "tienda_venta_id": cabecera["tienda_id"],
+                             "motivo": motivo_enum.value,
+                             "reembolso": reembolso_enum.value,
+                             "total": devolucion.total.centavos,
+                             "base_gravable": devolucion.base_gravable.centavos,
+                             "iva": devolucion.iva.centavos,
+                             "lineas": [{"sku": l.sku, "cantidad": l.cantidad,
+                                         "precio_unitario_con_iva":
+                                             l.precio_unitario_con_iva_centavos}
+                                        for l in devolucion.lineas]})
 
             await t.commit()
 
