@@ -105,6 +105,16 @@ function PantallaInventario({ TIENDA, UBICACION }: {
             </>
           )}
 
+          {datos && datos.filas.length > 0 && (
+            <button
+              onClick={() => descargar(datos, TIENDA)}
+              title="Descarga lo que está en pantalla, con los filtros puestos"
+              className="h-11 border border-[var(--pos-divider)] bg-[var(--pos-surface)] px-4 text-[14px] font-medium text-[var(--pos-700)] hover:bg-[var(--pos-100)]"
+            >
+              Descargar
+            </button>
+          )}
+
           <div className="ml-auto flex gap-1.5">
             {["Todo", ...(datos?.categorias ?? [])].map((c) => (
               // Mismo chip que en Venta: píldora, tinte + borde de acento
@@ -333,4 +343,42 @@ function Td({
       {children}
     </td>
   );
+}
+
+
+/**
+ * El inventario que está en pantalla, a un archivo que Excel abre de una.
+ *
+ * CSV con punto y coma y con BOM: el Excel en español separa por «;» y, sin
+ * la marca de UTF-8, convierte las tildes en jeroglíficos. Sale lo que se ve
+ * —con el filtro y la categoría puestos—, una fila por referencia y una
+ * columna por talla.
+ */
+function descargar(datos: Inventario, tienda: string): void {
+  const celda = (v: string | number) => {
+    const t = String(v ?? "");
+    return /[";\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  const tallas = datos.columnas_talla;
+  const lineas = [
+    ["Referencia", "Nombre", "Color", "Categoría", "Precio con IVA",
+     ...tallas.map((t) => `Talla ${t}`), "Total", "En otras tiendas", "Estado"],
+    ...datos.filas.map((f) => {
+      const por = new Map(f.tallas.map((c) => [c.talla, c.disponible]));
+      return [f.referencia, f.nombre, f.color, f.categoria,
+              Math.round(f.precio_con_iva_centavos / 100),
+              ...tallas.map((t) => por.get(t) ?? ""),
+              f.total, f.en_otras_ubicaciones, f.estado];
+    }),
+  ];
+  const csv = "\uFEFF" + lineas.map((l) => l.map(celda).join(";")).join("\r\n");
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  const hoy = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Bogota" });
+  a.href = url;
+  a.download = `inventario-${tienda}-${hoy}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }

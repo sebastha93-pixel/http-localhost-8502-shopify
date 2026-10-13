@@ -23,12 +23,17 @@ hubo ninguna, que es una afirmación distinta de «no se puede hacer».
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from datetime import date, datetime
+from typing import List, Optional
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-__all__ = ["PanelVentas", "Panel", "BarraHora", "MasVendido"]
+__all__ = ["PanelVentas", "Panel", "BarraHora", "MasVendido", "PorFit",
+           "PorDia"]
+
+#  Un año de tope: más que eso es un informe, no un panel.
+MAX_DIAS = 366
 
 # El horario habitual de las tiendas. Es el ANCLA del gráfico, no su límite:
 # si se vendió antes o después, esas horas se agregan.
@@ -54,10 +59,38 @@ class MasVendido:
     valor_centavos: int
 
 
+@dataclass(frozen=True)
+class PorFit:
+    """Lo vendido de un FIT (skinny, wide leg, flare…): la categoría de la
+    prenda, que viene del grupo de inventario de Siigo."""
+    categoria: str
+    unidades: int
+    valor_centavos: int
+    #  Qué parte de las unidades del periodo fue de este fit, de 0 a 100.
+    participacion: int
+
+
+@dataclass(frozen=True)
+class PorDia:
+    fecha: str
+    ventas_centavos: int
+    transacciones: int
+    unidades: int
+
+
 @dataclass
 class Panel:
     fecha: str
     tienda_nombre: str
+    #  El periodo que de verdad se consultó, y con qué filtros.
+    desde: str = ""
+    hasta: str = ""
+    hora_desde: int = 0
+    hora_hasta: int = 23
+    categoria: Optional[str] = None
+    categorias: List[str] = field(default_factory=list)
+    por_fit: List[PorFit] = field(default_factory=list)
+    por_dia: List[PorDia] = field(default_factory=list)
     ventas_centavos: int = 0
     transacciones: int = 0
     unidades: int = 0
@@ -80,77 +113,162 @@ class PanelVentas:
     def __init__(self, sesion: AsyncSession) -> None:
         self._s = sesion
 
-    async def ejecutar(self, *, tienda_id: str) -> Panel:
+    async def ejecutar(self, *, tienda_id: str,
+                       desde: Optional[str] = None, hasta: Optional[str] = None,
+                       hora_desde: Optional[int] = None,
+                       hora_hasta: Optional[int] = None,
+                       categoria: Optional[str] = None) -> Panel:
+        """Sin filtros es el panel de HOY, como siempre.
+
+        `desde`/`hasta` (`AAAA-MM-DD`) son días DE LA TIENDA; `hora_desde`/
+        `hora_hasta` (0–23) recortan la franja del día; `categoria` deja sólo
+        un fit. Con fit, las cifras son las de ESAS PRENDAS —no el tiquete
+        entero de quien llevó una—: es lo que responde «cuánto vendí de
+        skinny».
+        """
+        from backend.modules.retail.domain.venta.errores import ReglaDeNegocio
+
         tienda = (await self._s.execute(text("""
-            SELECT nombre, zona_horaria FROM retail.tiendas WHERE id = :t
+            SELECT nombre, zona_horaria,
+                   (now() AT TIME ZONE coalesce(zona_horaria, 'America/Bogota'))::date
+                       AS hoy
+              FROM retail.tiendas WHERE id = :t
         """), {"t": tienda_id})).mappings().first()
         if tienda is None:
-            from backend.modules.retail.domain.venta.errores import ReglaDeNegocio
             raise ReglaDeNegocio(f"La tienda {tienda_id!r} no existe.")
 
         tz = tienda["zona_horaria"] or "America/Bogota"
-        params = {"t": tienda_id, "tz": tz}
+        hoy: date = tienda["hoy"]
+        d1 = _dia(desde) or _dia(hasta) or hoy
+        d2 = _dia(hasta) or _dia(desde) or hoy
+        if d1 > d2:
+            d1, d2 = d2, d1
+        if (d2 - d1).days > MAX_DIAS:
+            raise ReglaDeNegocio("El periodo no puede pasar de un año.")
+        h1 = 0 if hora_desde is None else max(0, min(23, int(hora_desde)))
+        h2 = 23 if hora_hasta is None else max(0, min(23, int(hora_hasta)))
+        if h1 > h2:
+            h1, h2 = h2, h1
+        cat = (categoria or "").strip() or None
+        if cat and cat.lower() in ("todo", "todas", "todos"):
+            cat = None
+        params = {"t": tienda_id, "tz": tz, "d1": d1, "d2": d2, "h1": h1,
+                  "h2": h2, "cat": cat}
 
         # El día de la tienda, calculado por Postgres en SU zona horaria. Se
         # hace en la base y no en Python para que el corte del día sea el mismo
         # que usan el arqueo y los informes: dos definiciones de «hoy» que
         # difieren en cinco horas producen dos verdades.
-        dia = """
-            (v.cerrada_en AT TIME ZONE :tz)::date
-                = (now() AT TIME ZONE :tz)::date
+        #
+        # `siigo_pos` FUERA: son facturas viejas traídas para hacerles un
+        # cambio, con su fecha original. No son ventas de esta caja, y en un
+        # rango de fechas se colarían como si lo fueran.
+        periodo = """
+            v.tienda_id = :t AND v.cerrada_en IS NOT NULL
+            AND v.origen <> 'siigo_pos'
+            AND (v.cerrada_en AT TIME ZONE :tz)::date BETWEEN :d1 AND :d2
+            AND extract(hour FROM (v.cerrada_en AT TIME ZONE :tz))
+                BETWEEN :h1 AND :h2
         """
-
-        cab = (await self._s.execute(text(f"""
-            SELECT (now() AT TIME ZONE :tz)::date AS fecha,
-                   count(*) FILTER (WHERE v.estado = 'cerrada')     AS transacciones,
-                   coalesce(sum(v.total) FILTER (WHERE v.estado='cerrada'), 0)
-                       AS ventas,
-                   coalesce(sum(v.descuento_total) FILTER (WHERE v.estado='cerrada'), 0)
-                       AS descuentos,
-                   count(*) FILTER (WHERE v.estado = 'anulada')     AS anuladas,
-                   coalesce(sum(v.total) FILTER (WHERE v.estado='anulada'), 0)
-                       AS anulado
-              FROM retail.ventas v
-             WHERE v.tienda_id = :t AND v.cerrada_en IS NOT NULL AND {dia}
-        """), params)).mappings().one()
-
-        unidades = (await self._s.execute(text(f"""
-            SELECT coalesce(sum(l.cantidad), 0)
+        lineas = f"""
               FROM retail.venta_lineas l
               JOIN retail.ventas v ON v.id = l.venta_id
-             WHERE v.tienda_id = :t AND v.estado = 'cerrada'
-               AND v.cerrada_en IS NOT NULL AND {dia}
-        """), params)).scalar() or 0
+              JOIN retail.variantes x ON x.id = l.variante_id
+             WHERE {periodo}
+        """
 
-        por_hora = (await self._s.execute(text(f"""
-            SELECT extract(hour FROM (v.cerrada_en AT TIME ZONE :tz))::int AS hora,
-                   sum(v.total)::bigint AS ventas,
-                   count(*)::int        AS transacciones
-              FROM retail.ventas v
-             WHERE v.tienda_id = :t AND v.estado = 'cerrada'
-               AND v.cerrada_en IS NOT NULL AND {dia}
-             GROUP BY 1 ORDER BY 1
-        """), params)).mappings().all()
+        if cat is None:
+            cab = (await self._s.execute(text(f"""
+                SELECT count(*) FILTER (WHERE v.estado = 'cerrada') AS transacciones,
+                       coalesce(sum(v.total) FILTER (WHERE v.estado='cerrada'), 0)
+                           AS ventas,
+                       coalesce(sum(v.descuento_total)
+                                FILTER (WHERE v.estado='cerrada'), 0) AS descuentos,
+                       count(*) FILTER (WHERE v.estado = 'anulada') AS anuladas,
+                       coalesce(sum(v.total) FILTER (WHERE v.estado='anulada'), 0)
+                           AS anulado
+                  FROM retail.ventas v WHERE {periodo}
+            """), params)).mappings().one()
+            por_hora = (await self._s.execute(text(f"""
+                SELECT extract(hour FROM (v.cerrada_en AT TIME ZONE :tz))::int AS hora,
+                       sum(v.total)::bigint AS ventas,
+                       count(*)::int        AS transacciones
+                  FROM retail.ventas v
+                 WHERE {periodo} AND v.estado = 'cerrada'
+                 GROUP BY 1 ORDER BY 1
+            """), params)).mappings().all()
+        else:
+            cab = (await self._s.execute(text(f"""
+                SELECT count(DISTINCT v.id) FILTER (WHERE v.estado = 'cerrada')
+                           AS transacciones,
+                       coalesce(sum(l.total_linea)
+                                FILTER (WHERE v.estado='cerrada'), 0) AS ventas,
+                       coalesce(sum(l.descuento_monto)
+                                FILTER (WHERE v.estado='cerrada'), 0) AS descuentos,
+                       count(DISTINCT v.id) FILTER (WHERE v.estado = 'anulada')
+                           AS anuladas,
+                       coalesce(sum(l.total_linea)
+                                FILTER (WHERE v.estado='anulada'), 0) AS anulado
+                {lineas} AND x.categoria = :cat
+            """), params)).mappings().one()
+            por_hora = (await self._s.execute(text(f"""
+                SELECT extract(hour FROM (v.cerrada_en AT TIME ZONE :tz))::int AS hora,
+                       sum(l.total_linea)::bigint  AS ventas,
+                       count(DISTINCT v.id)::int   AS transacciones
+                {lineas} AND v.estado = 'cerrada' AND x.categoria = :cat
+                 GROUP BY 1 ORDER BY 1
+            """), params)).mappings().all()
+
+        filtro_fit = "AND x.categoria = :cat" if cat else ""
+        unidades = (await self._s.execute(text(f"""
+            SELECT coalesce(sum(l.cantidad), 0)
+            {lineas} AND v.estado = 'cerrada' {filtro_fit}
+        """), params)).scalar() or 0
 
         vendidos = (await self._s.execute(text(f"""
             SELECT x.referencia, max(x.nombre) AS nombre, max(x.color) AS color,
                    sum(l.cantidad)::int    AS unidades,
                    sum(l.total_linea)::bigint AS valor
-              FROM retail.venta_lineas l
-              JOIN retail.ventas v ON v.id = l.venta_id
-              JOIN retail.variantes x ON x.id = l.variante_id
-             WHERE v.tienda_id = :t AND v.estado = 'cerrada'
-               AND v.cerrada_en IS NOT NULL AND {dia}
+            {lineas} AND v.estado = 'cerrada' {filtro_fit}
              GROUP BY x.referencia
              -- Por UNIDADES, no por valor: el panel responde «qué se está
              -- llevando la gente», que es lo que hay que reponer. El de mayor
              -- facturación es otra pregunta y otra tarjeta.
              ORDER BY unidades DESC, valor DESC
-             LIMIT 5
+             LIMIT :tope
+        """), {**params, "tope": 5 if d1 == d2 else 15})).mappings().all()
+
+        # VENTAS POR FIT: todos los fits del periodo, sin el filtro de fit —
+        # es la tabla que permite compararlos.
+        fits = (await self._s.execute(text(f"""
+            SELECT x.categoria, sum(l.cantidad)::int AS unidades,
+                   sum(l.total_linea)::bigint AS valor
+            {lineas} AND v.estado = 'cerrada'
+             GROUP BY x.categoria ORDER BY unidades DESC, valor DESC
         """), params)).mappings().all()
 
+        dias = []
+        if d1 != d2:
+            dias = (await self._s.execute(text(f"""
+                SELECT (v.cerrada_en AT TIME ZONE :tz)::date AS fecha,
+                       sum(l.total_linea)::bigint  AS ventas,
+                       count(DISTINCT v.id)::int   AS transacciones,
+                       sum(l.cantidad)::int        AS unidades
+                {lineas} AND v.estado = 'cerrada' {filtro_fit}
+                 GROUP BY 1 ORDER BY 1
+            """), params)).mappings().all()
+
+        categorias = (await self._s.execute(text("""
+            SELECT DISTINCT categoria FROM retail.variantes
+             WHERE activa AND categoria IS NOT NULL AND categoria <> ''
+             ORDER BY 1
+        """))).scalars().all()
+
         panel = Panel(
-            fecha=cab["fecha"].isoformat(), tienda_nombre=tienda["nombre"],
+            fecha=hoy.isoformat(), tienda_nombre=tienda["nombre"],
+            desde=d1.isoformat(), hasta=d2.isoformat(),
+            hora_desde=h1, hora_hasta=h2, categoria=cat,
+            categorias=list(categorias),
             ventas_centavos=int(cab["ventas"]),
             transacciones=int(cab["transacciones"]),
             unidades=int(unidades),
@@ -161,6 +279,8 @@ class PanelVentas:
 
         movidas = {int(f["hora"]): f for f in por_hora}
         for hora in _ventana(movidas.keys()):
+            if not h1 <= hora <= h2:
+                continue
             f = movidas.get(hora)
             panel.horas.append(BarraHora(
                 hora=hora, etiqueta=f"{hora}h",
@@ -174,7 +294,27 @@ class PanelVentas:
                        valor_centavos=int(f["valor"]))
             for i, f in enumerate(vendidos, start=1)
         ]
+        total_u = sum(int(f["unidades"]) for f in fits) or 1
+        panel.por_fit = [
+            PorFit(categoria=f["categoria"] or "Sin categoría",
+                   unidades=int(f["unidades"]), valor_centavos=int(f["valor"]),
+                   participacion=round(int(f["unidades"]) * 100 / total_u))
+            for f in fits]
+        panel.por_dia = [
+            PorDia(fecha=f["fecha"].isoformat(), ventas_centavos=int(f["ventas"]),
+                   transacciones=int(f["transacciones"]),
+                   unidades=int(f["unidades"])) for f in dias]
         return panel
+
+
+def _dia(texto: Optional[str]) -> Optional[date]:
+    """`AAAA-MM-DD` → fecha. `None` si viene vacío o no es una fecha."""
+    if not texto:
+        return None
+    try:
+        return datetime.strptime(str(texto)[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
 
 
 def _ventana(horas_con_venta) -> List[int]:

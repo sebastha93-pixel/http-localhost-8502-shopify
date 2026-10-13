@@ -400,3 +400,104 @@ def test_quien_tiene_el_permiso_en_ESA_tienda_puede_anular_desde_el_panel(client
     # Con el permiso, pero en OTRA tienda: esta ni la ve.
     corre(inscribir(["arrayanes"]))
     assert _ventas_de_hoy(c).status_code == 403
+
+
+# ── Filtros: fechas, horas y fit ────────────────────────────────────────────
+
+def _con_fits(motor):
+    import asyncio
+
+    async def ir():
+        async with motor.begin() as c:
+            await c.execute(text("UPDATE retail.variantes SET categoria = 'SKINNY' "
+                                 "WHERE id = :v"), {"v": _var(1)})
+            await c.execute(text("UPDATE retail.variantes SET categoria = 'WIDE LEG' "
+                                 "WHERE id = :v"), {"v": _var(2)})
+    asyncio.get_event_loop().run_until_complete(ir())
+
+
+def _panel_con(c, **filtros):
+    r = c.get("/api/retail/panel", params={"tienda_id": "florida", **filtros})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_el_panel_se_puede_pedir_por_un_RANGO_de_fechas(cliente):
+    c, motor = cliente
+    import asyncio
+    corre = asyncio.get_event_loop().run_until_complete
+    hoy = _ahora_bogota().replace(hour=11, minute=0, second=0, microsecond=0)
+    corre(_vender(motor, 1, cuando=hoy, variante=_var(1), cantidad=1,
+                  precio=10000000))
+    corre(_vender(motor, 2, cuando=hoy - timedelta(days=1), variante=_var(1),
+                  cantidad=2, precio=10000000))
+    corre(_vender(motor, 3, cuando=hoy - timedelta(days=9), variante=_var(1),
+                  cantidad=4, precio=10000000))
+    ayer = (hoy - timedelta(days=1)).date().isoformat()
+
+    assert _panel_con(c)["transacciones"] == 1                 # sin filtros: hoy
+    d = _panel_con(c, desde=ayer, hasta=hoy.date().isoformat())
+    assert (d["transacciones"], d["unidades"], d["ventas_centavos"]) == (
+        2, 3, 30000000)
+    assert (d["desde"], d["hasta"]) == (ayer, hoy.date().isoformat())
+    # En un rango viene el día a día.
+    assert [(x["fecha"], x["unidades"]) for x in d["por_dia"]] == [
+        (ayer, 2), (hoy.date().isoformat(), 1)]
+    # Un solo día del pasado.
+    assert _panel_con(c, desde=ayer, hasta=ayer)["unidades"] == 2
+
+
+def test_el_panel_se_puede_recortar_por_HORAS(cliente):
+    c, motor = cliente
+    import asyncio
+    corre = asyncio.get_event_loop().run_until_complete
+    ayer = (_ahora_bogota() - timedelta(days=1)).replace(
+        minute=30, second=0, microsecond=0)
+    corre(_vender(motor, 1, cuando=ayer.replace(hour=10), variante=_var(1),
+                  cantidad=1, precio=10000000))
+    corre(_vender(motor, 2, cuando=ayer.replace(hour=17), variante=_var(1),
+                  cantidad=3, precio=10000000))
+    dia = ayer.date().isoformat()
+    d = _panel_con(c, desde=dia, hasta=dia, hora_desde=15, hora_hasta=19)
+    assert (d["transacciones"], d["unidades"]) == (1, 3)
+    assert [h["hora"] for h in d["horas"]] == [15, 16, 17, 18, 19]
+    assert _panel_con(c, desde=dia, hasta=dia)["unidades"] == 4
+
+
+def test_las_ventas_por_FIT_y_el_filtro_de_un_fit(cliente):
+    c, motor = cliente
+    import asyncio
+    corre = asyncio.get_event_loop().run_until_complete
+    _con_fits(motor)
+    ahora = _ahora_bogota() - timedelta(minutes=2)
+    corre(_vender(motor, 1, cuando=ahora, variante=_var(1), cantidad=3,
+                  precio=10000000))                           # SKINNY
+    corre(_vender(motor, 2, cuando=ahora, variante=_var(2), cantidad=1,
+                  precio=20000000))                           # WIDE LEG
+    d = _panel_con(c)
+    assert [(f["categoria"], f["unidades"], f["valor_centavos"],
+             f["participacion"]) for f in d["por_fit"]] == [
+        ("SKINNY", 3, 30000000, 75), ("WIDE LEG", 1, 20000000, 25)]
+    assert d["categorias"] == ["SKINNY", "WIDE LEG"]
+    # Con un fit elegido, las cifras son las de ESAS prendas.
+    s = _panel_con(c, categoria="WIDE LEG")
+    assert (s["ventas_centavos"], s["unidades"], s["transacciones"]) == (
+        20000000, 1, 1)
+    assert [m["referencia"] for m in s["mas_vendidos"]] == ["93100-2"]
+    # La tabla de fits sigue completa: es la que deja compararlos.
+    assert len(s["por_fit"]) == 2
+
+
+def test_una_factura_vieja_traida_para_un_cambio_NO_es_venta_del_panel(cliente):
+    c, motor = cliente
+    import asyncio
+    corre = asyncio.get_event_loop().run_until_complete
+    ahora = _ahora_bogota() - timedelta(minutes=2)
+    corre(_vender(motor, 1, cuando=ahora, variante=_var(1), cantidad=1,
+                  precio=10000000))
+
+    async def marcar():
+        async with motor.begin() as x:
+            await x.execute(text("UPDATE retail.ventas SET origen = 'siigo_pos'"))
+    corre(marcar())
+    assert _panel_con(c)["transacciones"] == 0

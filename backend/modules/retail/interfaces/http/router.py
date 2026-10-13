@@ -1428,6 +1428,16 @@ class PanelSalida(BaseModel):
     descuentos_centavos: int
     horas: List[BarraHoraSalida]
     mas_vendidos: List[MasVendidoSalida]
+    #  El periodo consultado y sus filtros.
+    desde: str = ""
+    hasta: str = ""
+    hora_desde: int = 0
+    hora_hasta: int = 23
+    categoria: Optional[str] = None
+    categorias: List[str] = []
+    #  Ventas por FIT (la categoría de la prenda) y, en un rango, por día.
+    por_fit: List[dict] = []
+    por_dia: List[dict] = []
 
 
 async def _exigir_tienda(t, usuario, tienda_id: str) -> None:
@@ -1449,6 +1459,11 @@ async def _exigir_tienda(t, usuario, tienda_id: str) -> None:
 @router.get("/panel", response_model=PanelSalida)
 async def panel_del_dia(
     tienda_id: str = Query(),
+    desde: Optional[str] = Query(None, max_length=10),
+    hasta: Optional[str] = Query(None, max_length=10),
+    hora_desde: Optional[int] = Query(None, ge=0, le=23),
+    hora_hasta: Optional[int] = Query(None, ge=0, le=23),
+    categoria: Optional[str] = Query(None, max_length=80),
     uow=Depends(unidad_de_trabajo),
     usuario: CurrentUser = Depends(require_permission("retail", "ver")),
 ):
@@ -1464,7 +1479,10 @@ async def panel_del_dia(
             # el parámetro viaje en la dirección ya no puede ser la única
             # barrera.
             await _exigir_tienda(t, usuario, tienda_id)
-            p = await PanelVentas(t.sesion).ejecutar(tienda_id=tienda_id)
+            p = await PanelVentas(t.sesion).ejecutar(
+                tienda_id=tienda_id, desde=desde, hasta=hasta,
+                hora_desde=hora_desde, hora_hasta=hora_hasta,
+                categoria=categoria)
     except ReglaDeNegocio as e:
         raise HTTPException(400, {"error": "regla_de_negocio",
                                   "mensaje": str(e)})
@@ -1483,6 +1501,11 @@ async def panel_del_dia(
             posicion=m.posicion, referencia=m.referencia, nombre=m.nombre,
             color=m.color, unidades=m.unidades,
             valor_centavos=m.valor_centavos) for m in p.mas_vendidos],
+        desde=p.desde, hasta=p.hasta, hora_desde=p.hora_desde,
+        hora_hasta=p.hora_hasta, categoria=p.categoria,
+        categorias=p.categorias,
+        por_fit=[f.__dict__ for f in p.por_fit],
+        por_dia=[d.__dict__ for d in p.por_dia],
     )
 
 

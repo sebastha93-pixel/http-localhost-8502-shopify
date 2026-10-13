@@ -44,6 +44,22 @@ function actual(): string {
   return guardada();
 }
 
+/**
+ * Deja este equipo trabajando como OTRA caja, fuera de React. Lo usa el Panel
+ * cuando quien administra varias tiendas elige una: Venta, Cambios, Stock y
+ * Cierre pasan a ser de esa tienda. Olvida lo guardado de la caja anterior
+ * (contexto, catálogo, carrito); la cola de ventas pendientes NO se toca.
+ */
+export async function cambiarCajaDelEquipo(id: string): Promise<void> {
+  if (!FORMATO.test(id)) return;
+  try {
+    localStorage.setItem(CLAVE, id);
+  } catch {
+    // Sin almacenamiento no se recuerda; no es motivo para fallar.
+  }
+  await olvidarDatosDeCaja().catch(() => {});
+}
+
 /** La caja de este equipo, fuera de React. Vacío si aún no se eligió. */
 export function cajaDeEsteEquipo(): string {
   return typeof window === "undefined" ? "" : guardada();
