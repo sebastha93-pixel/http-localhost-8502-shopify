@@ -33,8 +33,16 @@ from backend.modules.retail.infrastructure.siigo.emisor_nota_credito import (  #
     emitir_nota_credito,
 )
 
+from backend.modules.retail.infrastructure.siigo.emisor_nota_credito_cambio import (  # noqa: E402
+    TIPO as TIPO_NOTA_CREDITO_CAMBIO,
+    emitir_nota_credito_cambio,
+)
+
 MANEJADORES = {
     TIPO_CASO_DEVOLUCION: abrir_caso_postventa,
     TIPO_FACTURA: emitir_factura,
     TIPO_NOTA_CREDITO: emitir_nota_credito,
+    #  La de un CAMBIO: parcial, con anticipo. La emite el POS desde el
+    #  2026-10-13; antes esperaba a que alguien aprobara el caso de Postventa.
+    TIPO_NOTA_CREDITO_CAMBIO: emitir_nota_credito_cambio,
 }
