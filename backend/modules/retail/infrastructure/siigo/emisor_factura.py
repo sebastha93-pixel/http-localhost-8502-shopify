@@ -141,6 +141,30 @@ class SiigoIO:
         mano: tampoco se reintenta."""
         return await self._post_una_vez("/customers", cuerpo)
 
+    # ── Asientos (cruce de anticipos) ───────────────────────────────────────
+
+    async def crear_asiento(self, cuerpo: dict) -> dict:
+        """Un asiento repetido cruza dos veces: tampoco se reintenta."""
+        return await self._post_una_vez("/journals", cuerpo)
+
+    async def buscar_asiento_por_marca(self, *, marca: str,
+                                       dias: int = 10) -> Optional[dict]:
+        def ir():
+            from datetime import date
+            from backend.services.siigo import siigo_get
+            desde = (date.today() - timedelta(days=dias)).isoformat()
+            for pagina in range(1, 21):
+                r = siigo_get("/journals", {
+                    "created_start": desde, "page": pagina, "page_size": 100})
+                filas = r.get("results", []) if isinstance(r, dict) else []
+                for f in filas:
+                    if marca in (f.get("observations") or ""):
+                        return f
+                if len(filas) < 100:
+                    return None
+            return None
+        return await asyncio.to_thread(ir)
+
     # ── Notas crédito ───────────────────────────────────────────────────────
 
     async def crear_nota_credito(self, cuerpo: dict) -> dict:
@@ -481,6 +505,14 @@ async def _anotar_emitida(t, v, factura: dict, *, en_modo: str) -> str:
                  "validada_dian": bool(cufe),
                  "diferencia_centavos": diferencia})
     log.info("[retail-fiscal] %s → %s (%s)", v["numero"], numero, en_modo)
+
+    if v["estado"] != "anulada":
+        # Si se pagó con un saldo a favor, su anticipo se cruza con ESTA
+        # factura. Import local: ese módulo importa de éste.
+        from backend.modules.retail.infrastructure.siigo.cruce_anticipo import (
+            encolar_cruces,
+        )
+        await encolar_cruces(t, venta_id=v["id"])
 
     if v["estado"] == "anulada":
         # La venta se anuló mientras su factura estaba en camino. `AnularVenta`

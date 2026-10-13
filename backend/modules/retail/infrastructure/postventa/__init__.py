@@ -38,6 +38,11 @@ from backend.modules.retail.infrastructure.siigo.emisor_nota_credito_cambio impo
     emitir_nota_credito_cambio,
 )
 
+from backend.modules.retail.infrastructure.siigo.cruce_anticipo import (  # noqa: E402
+    TIPO as TIPO_CRUCE_ANTICIPO,
+    cruzar_anticipo,
+)
+
 MANEJADORES = {
     TIPO_CASO_DEVOLUCION: abrir_caso_postventa,
     TIPO_FACTURA: emitir_factura,
@@ -45,4 +50,7 @@ MANEJADORES = {
     #  La de un CAMBIO: parcial, con anticipo. La emite el POS desde el
     #  2026-10-13; antes esperaba a que alguien aprobara el caso de Postventa.
     TIPO_NOTA_CREDITO_CAMBIO: emitir_nota_credito_cambio,
+    #  El asiento que cruza el anticipo de esa nota crédito con la factura
+    #  que lo gastó. Siigo no lo hace solo.
+    TIPO_CRUCE_ANTICIPO: cruzar_anticipo,
 }
