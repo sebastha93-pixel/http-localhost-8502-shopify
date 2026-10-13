@@ -21,6 +21,7 @@ import { Panel as Marco } from "@/components/pos/marco";
 import { Auditoria } from "@/components/pos/auditoria";
 import { Rail } from "@/components/pos/rail";
 import { ConLaCaja } from "@/components/pos/elegir-caja";
+import { cajaDeEsteEquipo, cambiarCajaDelEquipo } from "@/lib/pos/caja-del-equipo";
 import { formatear } from "@/lib/pos/dinero";
 import { DialogoAnular, VentasDelTurno } from "@/components/pos/ventas-del-turno";
 import { TirillaImpresa } from "@/components/pos/tirilla";
@@ -30,6 +31,8 @@ import {
   panelDelDia,
   pedirTirilla,
   ventasDelDia,
+  type CajaDelPos,
+  type FiltrosPanel,
   type Panel as Datos,
   type VentaDelTurno,
 } from "@/lib/pos/api";
@@ -55,10 +58,38 @@ function PantallaPanel({ TIENDA: tiendaDelEquipo }: { TIENDA: string }) {
   const [tiendas, setTiendas] = useState<{ id: string; nombre: string }[]>([]);
   const [TIENDA, setTienda] = useState(tiendaDelEquipo);
   const [porTienda, setPorTienda] = useState<Record<string, Datos>>({});
+  const [cajas, setCajas] = useState<CajaDelPos[]>([]);
+  // La caja con la que quedó trabajando este equipo, para decirlo.
+  const [cajaEquipo, setCajaEquipo] = useState("");
+  useEffect(() => setCajaEquipo(cajaDeEsteEquipo()), []);
+
+  // LA TIENDA ELEGIDA AQUÍ ES LA DE TODO EL POS. Antes sólo cambiaba este
+  // panel, y Venta, Cambios, Stock y Cierre seguían en la otra: quien
+  // administra las dos elegía Florida y el Stock le mostraba Arrayanes. Ahora
+  // el equipo pasa a trabajar como una caja de la tienda elegida.
+  const elegirTienda = useCallback(async (tiendaId: string) => {
+    setDatos(null);
+    setTienda(tiendaId);
+    const actual = cajas.find((c) => c.caja_id === cajaDeEsteEquipo());
+    if (actual?.tienda_id === tiendaId) return;
+    const destino = cajas
+      .filter((c) => c.tienda_id === tiendaId)
+      .sort((a, b) => a.caja_id.localeCompare(b.caja_id))[0];
+    if (!destino) return;
+    await cambiarCajaDelEquipo(destino.caja_id);
+    setCajaEquipo(destino.caja_id);
+  }, [cajas]);
+
+  // ── Filtros: fechas, horas y fit ──
+  const [filtros, setFiltros] = useState<FiltrosPanel>({});
+  const conFiltros = Boolean(
+    filtros.desde || filtros.hasta || filtros.categoria
+    || filtros.horaDesde !== undefined || filtros.horaHasta !== undefined);
 
   useEffect(() => {
     listarCajas()
       .then((cajas) => {
+        setCajas(cajas);
         const vistas = new Map<string, string>();
         for (const c of cajas) vistas.set(c.tienda_id, c.tienda_nombre);
         setTiendas([...vistas].map(([id, nombre]) => ({ id, nombre })));
@@ -87,7 +118,7 @@ function PantallaPanel({ TIENDA: tiendaDelEquipo }: { TIENDA: string }) {
       setPuedeAnular(false);
     }
     try {
-      setDatos(await panelDelDia(TIENDA));
+      setDatos(await panelDelDia(TIENDA, filtros));
       setError(null);
       setActualizado(new Date());
     } catch (e) {
@@ -107,7 +138,7 @@ function PantallaPanel({ TIENDA: tiendaDelEquipo }: { TIENDA: string }) {
       );
       setPorTienda(Object.fromEntries(pares.filter((x) => x !== null)));
     }
-  }, [TIENDA, tiendas]);
+  }, [TIENDA, tiendas, filtros]);
 
   useEffect(() => {
     cargar();
@@ -193,7 +224,7 @@ function PantallaPanel({ TIENDA: tiendaDelEquipo }: { TIENDA: string }) {
                   key={t.id}
                   role="tab"
                   aria-selected={activa}
-                  onClick={() => { setDatos(null); setTienda(t.id); }}
+                  onClick={() => { void elegirTienda(t.id); }}
                   className={`min-w-[150px] border px-4 py-2.5 text-left transition-colors duration-[var(--pos-transicion)] ${
                     activa
                       ? "border-[var(--pos-accent)] bg-[var(--pos-accent)]/10"
@@ -224,6 +255,23 @@ function PantallaPanel({ TIENDA: tiendaDelEquipo }: { TIENDA: string }) {
           </div>
         )}
 
+        {tiendas.length > 1 && cajaEquipo && (
+          <p className="tabular -mt-2 text-[12px] text-[var(--pos-600)]">
+            Este equipo trabaja como <b className="text-[var(--pos-text)]">{
+              cajas.find((c) => c.caja_id === cajaEquipo)
+                ? `${cajas.find((c) => c.caja_id === cajaEquipo)!.tienda_nombre} · ${cajas.find((c) => c.caja_id === cajaEquipo)!.caja_nombre}`
+                : cajaEquipo}</b>:
+            Venta, Cambios, Stock y Cierre son de esa tienda.
+          </p>
+        )}
+
+        <FiltrosDelPanel
+          hoy={datos?.fecha ?? ""}
+          filtros={filtros}
+          categorias={datos?.categorias ?? []}
+          onCambiar={(f) => { setDatos(null); setFiltros(f); }}
+        />
+
         {error && (
           <p className="max-w-[560px] border-l-2 border-[var(--pos-800)] rounded-[var(--pos-r-sm)] bg-[var(--pos-800)]/10 py-3 pl-4 text-[13px] text-[var(--pos-900)]">
             {error}
@@ -238,7 +286,7 @@ function PantallaPanel({ TIENDA: tiendaDelEquipo }: { TIENDA: string }) {
           <>
             <div className="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4">
               <Tarjeta
-                titulo="Ventas hoy"
+                titulo={conFiltros ? "Ventas del periodo" : "Ventas hoy"}
                 valor={formatear(datos.ventas_centavos)}
                 pie={
                   datos.descuentos_centavos
@@ -333,7 +381,7 @@ function PantallaPanel({ TIENDA: tiendaDelEquipo }: { TIENDA: string }) {
 
               <Marco className="flex flex-col gap-2 p-6">
                 <h2 className="titular text-[17px] font-semibold">
-                  Más vendidos hoy
+                  {conFiltros ? "Más vendidos del periodo" : "Más vendidos hoy"}
                 </h2>
                 {datos.mas_vendidos.length === 0 && (
                   <p className="text-[13px] text-[var(--pos-600)]">
@@ -380,6 +428,75 @@ function PantallaPanel({ TIENDA: tiendaDelEquipo }: { TIENDA: string }) {
               </Marco>
             </div>
 
+            {/* VENTAS POR FIT. La categoría de la prenda —skinny, wide leg,
+                flare— es lo que dice qué silueta se está moviendo y cuál hay
+                que pedir. */}
+            <Marco className="flex shrink-0 flex-col gap-2 p-6">
+              <h2 className="titular text-[17px] font-semibold">Ventas por fit</h2>
+              {datos.por_fit.length === 0 && (
+                <p className="text-[13px] text-[var(--pos-600)]">
+                  Sin ventas en este periodo.
+                </p>
+              )}
+              {datos.por_fit.map((f) => (
+                <button
+                  key={f.categoria}
+                  onClick={() => {
+                    setDatos(null);
+                    setFiltros((x) => ({
+                      ...x,
+                      categoria: x.categoria === f.categoria ? undefined : f.categoria,
+                    }));
+                  }}
+                  title="Ver sólo este fit"
+                  className={`flex items-center gap-3 border-b border-[var(--pos-divider)]/60 py-2 text-left last:border-0 hover:bg-[var(--pos-100)] ${
+                    filtros.categoria === f.categoria ? "bg-[var(--pos-accent)]/10" : ""
+                  }`}
+                >
+                  <span className="w-[150px] shrink-0 truncate text-[13px] font-medium">
+                    {f.categoria}
+                  </span>
+                  <span className="relative h-2 min-w-0 flex-1 bg-[var(--pos-100)]">
+                    <span
+                      className="absolute inset-y-0 left-0 bg-[var(--pos-accent)]"
+                      style={{ width: `${Math.max(f.participacion, 1)}%` }}
+                    />
+                  </span>
+                  <span className="tabular w-[44px] shrink-0 text-right text-[12px] text-[var(--pos-600)]">
+                    {f.participacion}%
+                  </span>
+                  <span className="tabular w-[56px] shrink-0 text-right text-[13px] font-semibold">
+                    {f.unidades} u
+                  </span>
+                  <span className="tabular w-[110px] shrink-0 text-right text-[13px]">
+                    {formatear(f.valor_centavos)}
+                  </span>
+                </button>
+              ))}
+              {datos.por_fit.length > 0 && (
+                <p className="tabular mt-1 text-[12px] text-[var(--pos-600)]">
+                  El porcentaje es sobre las unidades del periodo. Toca un fit
+                  para ver sólo sus cifras.
+                </p>
+              )}
+            </Marco>
+
+            {datos.por_dia.length > 0 && (
+              <Marco className="flex shrink-0 flex-col gap-1 p-6">
+                <h2 className="titular mb-1 text-[17px] font-semibold">Día a día</h2>
+                {datos.por_dia.map((d) => (
+                  <div key={d.fecha}
+                       className="tabular flex items-baseline gap-3 border-b border-[var(--pos-divider)]/60 py-1.5 text-[13px] last:border-0">
+                    <span className="w-[130px] shrink-0">{fechaLarga(d.fecha)}</span>
+                    <span className="flex-1 text-[12px] text-[var(--pos-600)]">
+                      {d.transacciones} venta{d.transacciones === 1 ? "" : "s"} · {d.unidades} und
+                    </span>
+                    <span className="font-semibold">{formatear(d.ventas_centavos)}</span>
+                  </div>
+                ))}
+              </Marco>
+            )}
+
             <div className="shrink-0">
               <VentasDelTurno
                 ventas={ventas}
@@ -412,6 +529,101 @@ function PantallaPanel({ TIENDA: tiendaDelEquipo }: { TIENDA: string }) {
           error={errorAnular}
           anulando={enviandoAnulacion}
         />
+      )}
+    </div>
+  );
+}
+
+/** Fechas, horas y fit. Sin tocar nada, el panel es el de hoy. */
+function FiltrosDelPanel({
+  hoy, filtros, categorias, onCambiar,
+}: {
+  hoy: string;
+  filtros: FiltrosPanel;
+  categorias: string[];
+  onCambiar: (f: FiltrosPanel) => void;
+}) {
+  // Las fechas se calculan a partir del «hoy» DE LA TIENDA que manda el
+  // servidor, no del reloj del navegador.
+  const mover = (dias: number) => {
+    if (!hoy) return "";
+    const [a, m, d] = hoy.split("-").map(Number);
+    const f = new Date(a, m - 1, d + dias);
+    return `${f.getFullYear()}-${String(f.getMonth() + 1).padStart(2, "0")}-${String(f.getDate()).padStart(2, "0")}`;
+  };
+  const rangos: { etiqueta: string; desde: string; hasta: string }[] = hoy ? [
+    { etiqueta: "Hoy", desde: "", hasta: "" },
+    { etiqueta: "Ayer", desde: mover(-1), hasta: mover(-1) },
+    { etiqueta: "7 días", desde: mover(-6), hasta: hoy },
+    { etiqueta: "Este mes", desde: `${hoy.slice(0, 8)}01`, hasta: hoy },
+  ] : [];
+  const activo = (r: { desde: string; hasta: string }) =>
+    (filtros.desde ?? "") === r.desde && (filtros.hasta ?? "") === r.hasta;
+  const campo = "h-9 border border-[var(--pos-divider)] bg-[var(--pos-surface)] px-2 text-[13px] text-[var(--pos-text)]";
+  const horas = Array.from({ length: 24 }, (_, h) => h);
+  const hayFiltros = Boolean(filtros.desde || filtros.hasta || filtros.categoria
+    || filtros.horaDesde !== undefined || filtros.horaHasta !== undefined);
+
+  return (
+    <div className="flex shrink-0 flex-wrap items-end gap-x-4 gap-y-2">
+      <div className="flex gap-1.5">
+        {rangos.map((r) => (
+          <button
+            key={r.etiqueta}
+            onClick={() => onCambiar({ ...filtros, desde: r.desde || undefined, hasta: r.hasta || undefined })}
+            aria-pressed={activo(r)}
+            className={`h-9 border px-3 text-[13px] ${
+              activo(r)
+                ? "border-[var(--pos-accent)] bg-[var(--pos-accent)]/10 text-[var(--pos-text)]"
+                : "border-[var(--pos-divider)] bg-[var(--pos-surface)] text-[var(--pos-700)]"
+            }`}
+          >
+            {r.etiqueta}
+          </button>
+        ))}
+      </div>
+      <label className="flex flex-col gap-0.5">
+        <span className="kicker text-[var(--pos-600)]">Desde</span>
+        <input type="date" value={filtros.desde ?? ""} max={hoy || undefined}
+               onChange={(e) => onCambiar({ ...filtros, desde: e.target.value || undefined,
+                                            hasta: filtros.hasta ?? (e.target.value ? hoy : undefined) })}
+               className={campo} />
+      </label>
+      <label className="flex flex-col gap-0.5">
+        <span className="kicker text-[var(--pos-600)]">Hasta</span>
+        <input type="date" value={filtros.hasta ?? ""} max={hoy || undefined}
+               onChange={(e) => onCambiar({ ...filtros, hasta: e.target.value || undefined })}
+               className={campo} />
+      </label>
+      <label className="flex flex-col gap-0.5">
+        <span className="kicker text-[var(--pos-600)]">Hora desde</span>
+        <select value={filtros.horaDesde ?? ""} className={campo}
+                onChange={(e) => onCambiar({ ...filtros, horaDesde: e.target.value === "" ? undefined : Number(e.target.value) })}>
+          <option value="">Todo el día</option>
+          {horas.map((h) => <option key={h} value={h}>{h}:00</option>)}
+        </select>
+      </label>
+      <label className="flex flex-col gap-0.5">
+        <span className="kicker text-[var(--pos-600)]">Hora hasta</span>
+        <select value={filtros.horaHasta ?? ""} className={campo}
+                onChange={(e) => onCambiar({ ...filtros, horaHasta: e.target.value === "" ? undefined : Number(e.target.value) })}>
+          <option value="">Todo el día</option>
+          {horas.map((h) => <option key={h} value={h}>{h}:59</option>)}
+        </select>
+      </label>
+      <label className="flex flex-col gap-0.5">
+        <span className="kicker text-[var(--pos-600)]">Fit</span>
+        <select value={filtros.categoria ?? ""} className={campo}
+                onChange={(e) => onCambiar({ ...filtros, categoria: e.target.value || undefined })}>
+          <option value="">Todos</option>
+          {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </label>
+      {hayFiltros && (
+        <button onClick={() => onCambiar({})}
+                className="h-9 px-2 text-[13px] text-[var(--pos-700)] underline">
+          Quitar filtros
+        </button>
       )}
     </div>
   );

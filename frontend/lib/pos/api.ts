@@ -513,10 +513,40 @@ export interface Panel {
   descuentos_centavos: number;
   horas: BarraHora[];
   mas_vendidos: MasVendido[];
+  /** El periodo que se consultó y sus filtros. */
+  desde: string;
+  hasta: string;
+  hora_desde: number;
+  hora_hasta: number;
+  categoria: string | null;
+  /** Los fits que existen, para el selector. */
+  categorias: string[];
+  /** Ventas por FIT: la categoría de la prenda (skinny, wide leg…). */
+  por_fit: { categoria: string; unidades: number; valor_centavos: number;
+             participacion: number }[];
+  /** Sólo en un rango de varios días. */
+  por_dia: { fecha: string; ventas_centavos: number; transacciones: number;
+             unidades: number }[];
 }
 
-export async function panelDelDia(tiendaId: string): Promise<Panel> {
+export interface FiltrosPanel {
+  desde?: string;
+  hasta?: string;
+  horaDesde?: number;
+  horaHasta?: number;
+  categoria?: string;
+}
+
+/** Sin filtros es el panel de HOY. */
+export async function panelDelDia(
+  tiendaId: string, f: FiltrosPanel = {},
+): Promise<Panel> {
   const p = new URLSearchParams({ tienda_id: tiendaId });
+  if (f.desde) p.set("desde", f.desde);
+  if (f.hasta) p.set("hasta", f.hasta);
+  if (f.horaDesde !== undefined) p.set("hora_desde", String(f.horaDesde));
+  if (f.horaHasta !== undefined) p.set("hora_hasta", String(f.horaHasta));
+  if (f.categoria) p.set("categoria", f.categoria);
   return api.get<Panel>(`/api/retail/panel?${p}`);
 }
 
