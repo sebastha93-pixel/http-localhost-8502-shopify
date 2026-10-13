@@ -704,8 +704,20 @@ class _SiigoDeMentira:
         self.factura, self.dian = factura, dian
         self.enviadas, self.en_siigo = [], []
         self.al_crear = "ok"
+        self.asientos, self.asientos_enviados, self.al_cruzar = [], [], "ok"
+        # La factura de la prenda NUEVA, pagada con el saldo.
+        self.nueva = {
+            "id": "fac-nueva", "name": "FV-13-50", "date": "2026-10-13",
+            "total": 149900.0, "balance": 134910.0,
+            "customer": {"identification": "1037000111", "branch_office": 0},
+            "payments": [
+                {"id": 8316, "name": "ANTICIPO CLIENTES", "value": 134910.0,
+                 "due_date": "2026-10-13"},
+                {"id": 8282, "name": "Caja general Arrayanes", "value": 14990.0}]}
 
     async def leer_factura(self, siigo_id):
+        if siigo_id == "fac-nueva":
+            return self.nueva
         assert siigo_id == self.factura["id"]
         return self.factura
 
@@ -717,7 +729,10 @@ class _SiigoDeMentira:
         if self.al_crear == "rechazo":
             raise RechazoDeSiigo('HTTP 400: {"Code":"invalid_total_payments"}')
         nc = {"id": f"nc-{len(self.enviadas)}", "name": f"NC-1-{7600 + len(self.enviadas)}",
-              "observations": cuerpo["observations"],
+              "observations": cuerpo["observations"], "date": cuerpo["date"],
+              "customer": cuerpo["customer"],
+              "payments": [{**p, "name": "ANTICIPO CLIENTES"}
+                           for p in cuerpo["payments"]],
               "stamp": {"status": self.dian, "cude": "d" * 96}}
         self.en_siigo.append(nc)
         if self.al_crear == "crea_y_muere":
@@ -732,6 +747,26 @@ class _SiigoDeMentira:
     async def buscar_nc_por_marca(self, *, desde, marca):
         return next((n for n in self.en_siigo if marca in n["observations"]), None)
 
+    # ── el cruce ──
+    asientos: list
+    nueva: dict
+
+    async def leer_factura_nueva(self):
+        return self.nueva
+
+    async def crear_asiento(self, cuerpo):
+        self.asientos_enviados.append(cuerpo)
+        a = {"id": f"cc-{len(self.asientos_enviados)}",
+             "name": f"CC-1-{5700 + len(self.asientos_enviados)}",
+             "observations": cuerpo["observations"]}
+        self.asientos.append(a)
+        if self.al_cruzar == "crea_y_muere":
+            raise RuntimeError("se cayó la conexión después de crear")
+        return a
+
+    async def buscar_asiento_por_marca(self, *, marca, dias=10):
+        return next((a for a in self.asientos if marca in a["observations"]), None)
+
 
 def _drenar_nc(siigo, monkeypatch, *, dentro_de=1):
     import asyncio
@@ -743,6 +778,9 @@ def _drenar_nc(siigo, monkeypatch, *, dentro_de=1):
     from backend.modules.retail.infrastructure.siigo.emisor_nota_credito_cambio import (
         crear_manejador,
     )
+    from backend.modules.retail.infrastructure.siigo.cruce_anticipo import (
+        crear_manejador as manejador_cruce,
+    )
     monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
 
     async def ir():
@@ -750,7 +788,8 @@ def _drenar_nc(siigo, monkeypatch, *, dentro_de=1):
         try:
             return await DrenarOutbox(
                 UnidadDeTrabajoSQL(crear_fabrica(m)),
-                {"emitir_nota_credito_cambio": crear_manejador(siigo)},
+                {"emitir_nota_credito_cambio": crear_manejador(siigo),
+                 "cruzar_anticipo": manejador_cruce(siigo)},
             ).ejecutar(ahora=datetime.now(timezone.utc)
                        + timedelta(minutes=dentro_de), limite=20)
         finally:
@@ -842,3 +881,112 @@ def test_no_se_acredita_lo_que_la_factura_no_trae():
     # La factura completa da exactamente su total.
     todo = c(devueltas={"26602-1T6": 1, "95613-1T12": 2, "101": 1}, **args)
     assert todo["payments"][0]["value"] == FACTURA["total"]
+
+
+# ── El cruce del anticipo con la factura que lo gastó ───────────────────────
+
+def _compra_facturada(t, monto=13_491_000):
+    """La prenda nueva pagada con el saldo ($134.910) y el resto en efectivo,
+    con su factura ya emitida en Siigo."""
+    venta = "01JQ8X4T5NVE0F1R8S9V0W1X2Y"
+    r = _comprar(t, [
+        {"medio_pago_id": "saldo_a_favor", "monto_centavos": monto,
+         "referencia": "SF-00001"},
+        {"medio_pago_id": "efectivo_arrayanes",
+         "monto_centavos": 14_990_000 - monto, "es_efectivo": True}])
+    assert r.status_code == 200, r.text
+    with t["motor"].begin() as c:
+        c.execute(text("""
+            INSERT INTO retail.documentos_fiscales
+                (id, venta_id, tipo, estado, numero, documento_externo_id,
+                 payload_snapshot)
+            VALUES (:i, :v, 'factura_electronica', 'emitido', 'ARRT-50',
+                    'fac-nueva', '{}')
+            ON CONFLICT (id) DO UPDATE
+               SET estado = 'emitido', numero = 'ARRT-50',
+                   documento_externo_id = 'fac-nueva'
+        """), {"i": venta[:23] + "FAC", "v": venta})
+    return venta
+
+
+def test_el_anticipo_se_CRUZA_con_la_factura_que_lo_gasto(tienda, monkeypatch):
+    """Siigo no lo hace solo: TFL-15 seguía con $149.900 pendientes después de
+    emitida su nota crédito (2026-10-13). El asiento es el de CC-1-5600."""
+    _con_credito(tienda, {"26602-1T6": 1})                 # saldo $134.910
+    _compra_facturada(tienda)                              # y lo gasta ya
+    siigo = _SiigoDeMentira()
+    # La nota crédito sale DESPUÉS de la compra: al salir, encola el cruce.
+    _drenar_nc(siigo, monkeypatch)
+    _drenar_nc(siigo, monkeypatch, dentro_de=5)
+    [a] = siigo.asientos_enviados
+    assert a["document"] == {"id": 11831}
+    assert a["observations"] == "POS CRUCE SF-00001 · NC-1-7601 con ARRT-50"
+    tercero = {"identification": "1037000111", "branch_office": 0}
+    assert [(i["account"], i["customer"], i["due"]["prefix"],
+             i["due"]["consecutive"], i["value"]) for i in a["items"]] == [
+        ({"code": "28050501", "movement": "Debit"}, tercero, "NC-1", 7601, 134910.0),
+        ({"code": "28050501", "movement": "Credit"}, tercero, "FV-13", 50, 134910.0)]
+    assert _todas(tienda, "SELECT cruce_estado, cruce_numero FROM retail.saldo_usos"
+                  ) == [("cruzado", "CC-1-5701")]
+    # Una sola vez, por más que se drene.
+    _drenar_nc(siigo, monkeypatch, dentro_de=60)
+    assert len(siigo.asientos_enviados) == 1
+
+
+def test_sin_nota_credito_todavia_NO_se_cruza_nada(tienda, monkeypatch):
+    _con_credito(tienda, {"26602-1T6": 1})
+    venta = _compra_facturada(tienda)
+    with tienda["motor"].begin() as c:
+        # Sólo el cruce en la cola: la nota crédito aún no ha salido.
+        c.execute(text("DELETE FROM retail.outbox"))
+        c.execute(text("""INSERT INTO retail.outbox
+            (tipo, agregado_tipo, agregado_id, payload)
+            VALUES ('cruzar_anticipo', 'saldo_uso', 'x', CAST(:p AS jsonb))"""),
+            {"p": '{"saldo_id": "01JQ8X4T5NDV0F1R8S9V0W1X2Y", "venta_id": "%s"}' % venta})
+    siigo = _SiigoDeMentira()
+    assert _drenar_nc(siigo, monkeypatch).procesados == 1
+    assert siigo.asientos_enviados == []
+    assert _todas(tienda, "SELECT cruce_estado, cruce_numero FROM retail.saldo_usos"
+                  ) == [(None, None)]
+
+
+def test_si_el_envio_del_cruce_se_corta_NO_se_cruza_dos_veces(tienda, monkeypatch):
+    _con_credito(tienda, {"26602-1T6": 1})
+    _compra_facturada(tienda)
+    siigo = _SiigoDeMentira()
+    siigo.al_cruzar = "crea_y_muere"
+    _drenar_nc(siigo, monkeypatch)
+    _drenar_nc(siigo, monkeypatch, dentro_de=5)
+    assert len(siigo.asientos) == 1
+    siigo.al_cruzar = "ok"
+    _drenar_nc(siigo, monkeypatch, dentro_de=600)
+    assert len(siigo.asientos_enviados) == 1               # se adoptó
+    assert _uno(tienda, "SELECT cruce_numero FROM retail.saldo_usos") == "CC-1-5701"
+
+
+def test_una_factura_que_ya_cruzaron_a_mano_NO_se_vuelve_a_cruzar(tienda, monkeypatch):
+    _con_credito(tienda, {"26602-1T6": 1})
+    _compra_facturada(tienda)
+    siigo = _SiigoDeMentira()
+    siigo.nueva = {**siigo.nueva, "balance": 0.0}
+    _drenar_nc(siigo, monkeypatch)
+    _drenar_nc(siigo, monkeypatch, dentro_de=5)
+    assert siigo.asientos_enviados == []
+    assert _uno(tienda, "SELECT cruce_estado FROM retail.saldo_usos") == "ya_cruzada"
+
+
+def test_el_anticipo_de_una_persona_no_se_cruza_con_la_factura_de_otra():
+    from backend.modules.retail.infrastructure.siigo.cruce_anticipo import (
+        construir_asiento,
+    )
+    pago = [{"id": 8316, "value": 100000.0, "due_date": "2026-10-13"}]
+    f = {"name": "FV-14-15", "customer": {"identification": "1"}, "payments": pago}
+    n = {"name": "NC-1-7517", "customer": {"identification": "2"}, "payments": pago}
+    with pytest.raises(ValueError):
+        construir_asiento(factura=f, nota_credito=n, valor_centavos=10_000_000,
+                          fecha="2026-10-13", marca="x")
+    # Ni por más de lo que la nota crédito dejó.
+    n["customer"] = {"identification": "1"}
+    with pytest.raises(ValueError):
+        construir_asiento(factura=f, nota_credito=n, valor_centavos=10_000_100,
+                          fecha="2026-10-13", marca="x")

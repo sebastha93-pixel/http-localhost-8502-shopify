@@ -260,6 +260,12 @@ async def _anotar_emitida(t, d, nc: dict, *, doc_id: str, en_modo: str,
            SET nota_credito_numero = :n, entro_a_siigo_en = :ts
          WHERE id = :d
     """), {"d": d["id"], "n": numero, "ts": ahora})
+    # Si la clienta YA gastó ese saldo, el anticipo que acaba de nacer se
+    # cruza con la factura donde lo gastó.
+    from backend.modules.retail.infrastructure.siigo.cruce_anticipo import (
+        encolar_cruces,
+    )
+    await encolar_cruces(t, saldo_id=d["id"])
     await t.auditoria.registrar(
         evento="nota_credito.emitida", ocurrido_en=ahora, severidad="aviso",
         tienda_id=d["tienda_id"], caja_id=d["caja_id"],
