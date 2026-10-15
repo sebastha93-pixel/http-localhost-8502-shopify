@@ -148,6 +148,14 @@ interface OrdenCorte {
     precio_corte?: number | null;
     cantidad_programada?: number | null;
     referencia?: { codigo_referencia?: string; nombre?: string; tela?: string; color?: string };
+    /** Forro de bolsillo + telas complementarias del precosteo, con color y metros.
+     *  Informativo para el cortador; la complementaria solo viene si el precosteo la tiene. */
+    telas_adicionales?: {
+      item: string;
+      color?: string | null;
+      metros_por_prenda?: number | null;
+      metros_estimados?: number | null;
+    }[];
   }[];
   rollos: RolloLink[];
 }
@@ -185,9 +193,6 @@ export default function DetalleOrdenCortePage() {
   const [unidadesReal, setUnidadesReal] = useState<Record<string, string>>({});
   // Multi-referencia: unidades cortadas por referencia → { refId: { talla: "n" } }
   const [unidadesRealRef, setUnidadesRealRef] = useState<Record<string, Record<string, string>>>({});
-  // Rollos LIQUIDADOS: usados completos para no dejar restantes → al cerrar
-  // se les descuenta todo el saldo (quedan agotados de verdad).
-  const [rollosLiquidados, setRollosLiquidados] = useState<Set<string>>(new Set());
   // Flujo nuevo: al cerrar el informe se AUTO-GENERA la remisión de confección
   // (sin imprimir) para el confeccionista elegido aquí, y se le avisa que tiene
   // un lote por recoger. La impresión se libera al separar los insumos.
@@ -540,7 +545,6 @@ export default function DetalleOrdenCortePage() {
         promedio_real: promedioFinal ? Number(promedioFinal.toFixed(4)) : null,
         unidades_cortadas: unidadesFinal,
         unidades_por_referencia: unidadesPorRef,
-        rollos_liquidados: rollosLiquidados.size > 0 ? Array.from(rollosLiquidados) : null,
         retazos_metros: retazosM || null,
         fecha_entrega: fechaEntrega || null,
         precio_corte: precioCorte ? parseFloat(precioCorte) : null,
@@ -622,7 +626,6 @@ export default function DetalleOrdenCortePage() {
     onSuccess: () => {
       setMsg("Orden reabierta: la tela volvió al inventario. Corrige el informe y ciérrala de nuevo.");
       setErr("");
-      setRollosLiquidados(new Set());
       qc.invalidateQueries({ queryKey: ["produccion", "corte", id] });
     },
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
@@ -800,15 +803,27 @@ export default function DetalleOrdenCortePage() {
       title={oc.consecutivo}
       subtitle={`${oc.referencia?.codigo_referencia || ""} · ${oc.referencia?.nombre || ""}`}
     >
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <Link href="/produccion/corte" className="inline-flex items-center gap-1 text-xs text-graphite hover:text-ink-900">
           <ArrowLeft className="h-3.5 w-3.5" /> Volver a órdenes
         </Link>
-        <Badge tone={cerrada ? "normal" : "pendiente"}>
-          {cerrada
-            ? <><Lock className="inline h-2.5 w-2.5 mr-1" />Cortada</>
-            : ({ borrador: "Borrador", autorizada: "Autorizada", en_proceso: "En proceso" }[oc.estado] || oc.estado)}
-        </Badge>
+        <div className="flex items-center gap-2">
+          {/* Editar TODA la orden en una (referencia, tallas, cantidades, largo,
+              capas, cortador…). Disponible mientras no esté cortada — con rollos
+              asignados también, porque la reserva es un plan que se reconcilia al
+              cerrar. Reemplaza tener que corregir ítem por ítem. */}
+          {puedeEditarNotas && !cerrada && (
+            <Link href={`/produccion/corte/nueva?editar=${id}`}
+              className="inline-flex items-center gap-1.5 rounded-sm border border-navy-600/40 bg-card px-3 py-1.5 text-xs font-semibold text-navy-600 hover:bg-navy-600/[0.06]">
+              <Pencil className="h-3.5 w-3.5" /> Editar orden
+            </Link>
+          )}
+          <Badge tone={cerrada ? "normal" : "pendiente"}>
+            {cerrada
+              ? <><Lock className="inline h-2.5 w-2.5 mr-1" />Cortada</>
+              : ({ borrador: "Borrador", autorizada: "Autorizada", en_proceso: "En proceso" }[oc.estado] || oc.estado)}
+          </Badge>
+        </div>
       </div>
 
       {msg && (
@@ -885,6 +900,56 @@ export default function DetalleOrdenCortePage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Telas adicionales: forro de bolsillo + complementarias del precosteo,
+          con su color y metros. Además de la tela principal; la complementaria
+          solo aparece si el precosteo la contiene. */}
+      {(() => {
+        const multi = (oc.referencias?.length || 0) > 1;
+        const adic: { ref?: string; item: string; color?: string | null; mpp?: number | null; tot?: number | null }[] = [];
+        for (const rf of oc.referencias || []) {
+          for (const t of rf.telas_adicionales || []) {
+            adic.push({
+              ref: multi ? (rf.referencia?.codigo_referencia || "") : undefined,
+              item: t.item, color: t.color,
+              mpp: t.metros_por_prenda, tot: t.metros_estimados,
+            });
+          }
+        }
+        if (!adic.length) return null;
+        return (
+          <Card>
+            <CardContent className="p-5 space-y-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="section-label">Telas adicionales</p>
+                <span className="text-xs text-graphite">Forro de bolsillo y telas complementarias del precosteo — además de la tela principal.</span>
+              </div>
+              <div className="space-y-2">
+                {adic.map((a, i) => (
+                  <div key={i} className="flex items-center justify-between gap-2 flex-wrap rounded-sm border border-border bg-cloud/30 px-3 py-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {a.ref && (
+                        <span className="rounded-sm bg-navy-600/10 px-2 py-0.5 text-[0.62rem] font-bold uppercase tracking-widest text-navy-600">{a.ref}</span>
+                      )}
+                      <span className="font-semibold text-ink-900 text-sm">{a.item}</span>
+                      {a.color && (
+                        <span className="rounded-sm border border-border bg-white px-2 py-0.5 text-[0.7rem] text-graphite">
+                          Color: <span className="font-semibold text-ink-900">{a.color}</span>
+                        </span>
+                      )}
+                    </div>
+                    {(a.mpp || a.tot) && (
+                      <span className="text-xs text-graphite tabular">
+                        {a.mpp ? `${a.mpp} m/prenda` : ""}{a.mpp && a.tot ? " · " : ""}{a.tot ? `≈${a.tot} m` : ""}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       <Card>
         <CardContent className="p-5">
@@ -1397,8 +1462,8 @@ export default function DetalleOrdenCortePage() {
             <p className="section-label">Sobrantes de esta tela — para liquidar</p>
             <p className="text-xs text-graphite">
               Restantes de rollos ya cortados, de la misma tela. Agrégalos al corte
-              para liquidarlos y no dejar retazos acumulados; al cerrar, márcalos
-              como liquidados.
+              para liquidarlos y no dejar retazos acumulados; al cerrar se consumen
+              solos con los metros que reportes.
             </p>
             <div className="space-y-2">
               {rollosMatch
@@ -1597,7 +1662,6 @@ export default function DetalleOrdenCortePage() {
           consumoReal={consumoReal} setConsumoReal={setConsumoReal}
           mermaTipo={mermaTipo} setMermaTipo={setMermaTipo}
           mermaValor={mermaValor} setMermaValor={setMermaValor}
-          rollosLiquidados={rollosLiquidados} setRollosLiquidados={setRollosLiquidados}
           confs={confeccionistasQ.data?.confeccionistas || []}
           confId={cierreConfId} setConfId={setCierreConfId}
           onCerrar={() => cerrar.mutate()}
@@ -1712,7 +1776,7 @@ export default function DetalleOrdenCortePage() {
       {/* Tras confirmar el informe, el cortador (o el encargado de remisiones)
           genera la remisión de confección, la imprime y la marca recogida. */}
       {cerrada && <GenerarRemisionCard ordenCorteId={oc.id} esCortador={esCortador} />}
-      {cerrada && !esCortador && <HojaRutaCard ordenCorteId={oc.id} consecutivo={oc.consecutivo} />}
+      {cerrada && !esCortador && <HojaRutaLotes ordenCorteId={oc.id} consecutivo={oc.consecutivo} />}
     </PageShell>
   );
 }
@@ -1873,7 +1937,6 @@ function InformeCorteCard({
   unidadesReal, setUnidadesReal, unidadesRealRef, setUnidadesRealRef,
   consumoReal, setConsumoReal,
   mermaTipo, setMermaTipo, mermaValor, setMermaValor,
-  rollosLiquidados, setRollosLiquidados,
   confs, confId, setConfId,
   onCerrar, isPending,
 }: {
@@ -1890,7 +1953,6 @@ function InformeCorteCard({
   consumoReal: string; setConsumoReal: (v: string) => void;
   mermaTipo: string; setMermaTipo: (v: string) => void;
   mermaValor: string; setMermaValor: (v: string) => void;
-  rollosLiquidados: Set<string>; setRollosLiquidados: (v: Set<string>) => void;
   confs: { id: string; nombre: string }[];
   confId: string; setConfId: (v: string) => void;
   onCerrar: () => void;
@@ -2010,32 +2072,17 @@ function InformeCorteCard({
           <FieldText label="Merma valor (opc.)" value={mermaValor}  onChange={setMermaValor} inputMode="decimal" placeholder="0" />
         </div>
 
-        {/* Rollos liquidados: usados COMPLETOS para no dejar restantes */}
+        {/* La liquidación de rollos es AUTOMÁTICA: con los metros consumidos, el
+            backend descuenta rollo a rollo en orden (agota uno antes de abrir el
+            siguiente) y el restante queda en un solo rollo. Los sobrantes chicos
+            (< 2 m) se van a retazo y el rollo se agota solo. El cortador ya no
+            marca rollos uno por uno. */}
         {(oc.rollos || []).length > 0 && (
-          <div className="rounded-sm border border-dashed border-border bg-cloud/20 p-3">
-            <p className="section-label mb-2">¿Liquidaste algún rollo? (usado completo, sin dejar restante)</p>
-            <div className="flex flex-wrap gap-x-5 gap-y-2">
-              {(oc.rollos || []).map((l) => (
-                <label key={l.rollo_id} className="inline-flex items-center gap-2 text-xs text-ink-900 cursor-pointer">
-                  <input type="checkbox"
-                    checked={rollosLiquidados.has(l.rollo_id)}
-                    onChange={(e) => {
-                      const n = new Set(rollosLiquidados);
-                      if (e.target.checked) n.add(l.rollo_id); else n.delete(l.rollo_id);
-                      setRollosLiquidados(n);
-                    }}
-                    className="h-3.5 w-3.5 accent-teal" />
-                  <span className="tabular">{l.rollo?.codigo_interno || l.rollo_id.slice(0, 8)}</span>
-                  <span className="text-graphite">({Number(l.rollo?.metros_disponible ?? 0).toFixed(1)} m en sistema)</span>
-                </label>
-              ))}
-            </div>
-            <p className="mt-2 text-[0.7rem] text-graphite">
-              A los rollos marcados se les descuenta <span className="font-semibold text-ink-900">todo el saldo</span> (quedan
-              agotados). El resto del consumo se descuenta <span className="font-semibold text-ink-900">rollo a rollo en orden</span> —
-              el restante queda en un solo rollo, no repartido en pedacitos.
-            </p>
-          </div>
+          <p className="rounded-sm border border-dashed border-border bg-cloud/20 p-3 text-[0.7rem] text-graphite">
+            La tela se descuenta sola con los metros que reportes: <span className="font-semibold text-ink-900">rollo a
+            rollo en orden</span>, agotando cada uno antes de abrir el siguiente. El restante queda en un solo rollo, y
+            los sobrantes menores a 2 m se van a retazo (el rollo se agota). No tienes que marcar nada.
+          </p>
         )}
 
         {/* Unidades cortadas por talla */}
@@ -2290,6 +2337,9 @@ interface RutaCorte {
   token_publico: string;
   token_publico_terminacion?: string;
   remision_id?: string;   // para poder reasignar el confeccionista del lote
+  // Referencia PROPIA del lote (en un corte combinado cada lote es una ref).
+  referencia_id?: string;
+  ref_lote?: { codigo_referencia?: string; nombre?: string; tela?: string; color?: string };
   etapa: string;
   precio_confeccion?: number;
   precio_terminacion?: number;
@@ -2325,15 +2375,42 @@ const ADMINS_WA = [
   { nombre: "Alejandro", tel: "573008740405" },
 ];
 
-function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; consecutivo: string }) {
+/** Muestra TODAS las hojas de ruta de un corte: un corte combinado tiene una
+ *  por referencia. Si aún no hay ninguna (sin remisión), no muestra nada — el
+ *  atajo para crearla lo pone GenerarRemisionCard. */
+function HojaRutaLotes({ ordenCorteId, consecutivo }: { ordenCorteId: string; consecutivo: string }) {
+  const q = useQuery<{ rutas: RutaCorte[] }>({
+    queryKey: ["rutas-corte-todas", ordenCorteId],
+    queryFn: () => api.get(`/api/produccion/rutas/por-corte/${ordenCorteId}/todas`),
+    enabled: !!ordenCorteId,
+  });
+  const rutas = q.data?.rutas || [];
+  if (rutas.length === 0) return null;
+  return (
+    <>
+      {rutas.map((rt) => (
+        <HojaRutaCard key={rt.id} ordenCorteId={ordenCorteId} consecutivo={consecutivo}
+          referenciaId={rt.referencia_id} referenciaCodigo={rt.ref_lote?.codigo_referencia} />
+      ))}
+    </>
+  );
+}
+
+function HojaRutaCard({ ordenCorteId, consecutivo, referenciaId, referenciaCodigo }: {
+  ordenCorteId: string; consecutivo: string; referenciaId?: string; referenciaCodigo?: string;
+}) {
   const qc = useQueryClient();
   const [urlLav, setUrlLav] = useState("");
   const [errRuta, setErrRuta] = useState("");
   const [lavanderiaId, setLavanderiaId] = useState("");
 
+  // Un corte combinado tiene una hoja de ruta por referencia: la clave y la URL
+  // incluyen la referencia para no mezclar los lotes.
+  const rutaKey = ["ruta-corte", ordenCorteId, referenciaId ?? ""];
   const q = useQuery<RutaCorte>({
-    queryKey: ["ruta-corte", ordenCorteId],
-    queryFn: () => api.get(`/api/produccion/rutas/por-corte/${ordenCorteId}`),
+    queryKey: rutaKey,
+    queryFn: () => api.get(`/api/produccion/rutas/por-corte/${ordenCorteId}`
+      + (referenciaId ? `?referencia_id=${referenciaId}` : "")),
     enabled: !!ordenCorteId,
     retry: false,
   });
@@ -2370,7 +2447,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
         const d = await r.json().catch(() => ({}));
         throw new Error(d.detail || `HTTP ${r.status}`);
       }
-      qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] });
+      qc.invalidateQueries({ queryKey: rutaKey });
     } catch (e) {
       setErrRuta(`No se pudo subir la remisión de lavandería: ${e instanceof Error ? e.message : "error"}`);
     } finally {
@@ -2380,7 +2457,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
 
   const cambiarEtapa = useMutation({
     mutationFn: (etapa: string) => api.post(`/api/produccion/rutas/${q.data?.id}/etapa`, { etapa }),
-    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }); },
+    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: rutaKey }); },
     onError: (e: Error) => setErrRuta(`No se pudo cambiar la etapa: ${e.message}`),
   });
   // DEVOLVER UNA ETAPA. Avanzar era un clic y devolverse no existía: un lote
@@ -2389,14 +2466,14 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
   const devolverEtapa = useMutation({
     mutationFn: ({ etapa, motivo }: { etapa: string; motivo: string }) =>
       api.post(`/api/produccion/rutas/${q.data?.id}/devolver-etapa`, { etapa, motivo }),
-    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }); },
+    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: rutaKey }); },
     onError: (e: Error) => setErrRuta(`No se pudo devolver la etapa: ${e.message}`),
   });
   const guardarUrl = useMutation({
     mutationFn: () => api.patch(`/api/produccion/rutas/${q.data?.id}`, {
       remision_lavanderia_url: urlLav || null,
     }),
-    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: ["ruta-corte", ordenCorteId] }); },
+    onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: rutaKey }); },
     onError: (e: Error) => setErrRuta(`No se pudo guardar la remisión de lavandería: ${e.message}`),
   });
 
@@ -2530,7 +2607,14 @@ function HojaRutaCard({ ordenCorteId, consecutivo }: { ordenCorteId: string; con
     <Card>
       <CardContent className="p-5 space-y-4">
         <div className="flex items-center justify-between">
-          <p className="section-label">Hoja de ruta del lote</p>
+          <p className="section-label">
+            Hoja de ruta del lote
+            {(referenciaCodigo || r.ref_lote?.codigo_referencia) && (
+              <span className="ml-2 rounded-sm bg-navy-600/10 px-1.5 py-0.5 text-[0.62rem] font-bold uppercase tracking-wider text-navy-600 align-middle">
+                REF {referenciaCodigo || r.ref_lote?.codigo_referencia}
+              </span>
+            )}
+          </p>
           <a href={linkPublico} target="_blank" rel="noopener noreferrer"
             className="text-[0.65rem] text-navy-600 hover:underline">Ver ficha pública</a>
         </div>

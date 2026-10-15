@@ -57,18 +57,44 @@ def _get_token() -> str:
     return _token_cache["token"]
 
 
+def _forzar_reauth() -> str:
+    """Invalida el token cacheado y vuelve a pedir uno nuevo.
+
+    Existe por un 401 que llega ANTES del expires_in: el token quedó muerto pero
+    el caché todavía lo cree vivo, así que _get_token lo reusa y todo sigue en
+    401 hasta el próximo reinicio. Pasa sobre todo cuando varias apps comparten
+    el mismo usuario de Siigo (cada /auth puede invalidar el token anterior).
+    Mismo patrón que se arregló en Addi. Un 401 real de credencial vuelve a
+    fallar en el /auth de acá y se propaga."""
+    _token_cache["token"] = None
+    _token_cache["expira"] = 0.0
+    return _get_token()
+
+
 def siigo_get(path: str, params: Optional[dict] = None) -> dict:
-    """GET con retry/backoff para el rate limit de Siigo (~1 req/s)."""
-    token = _get_token()
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Partner-Id": os.getenv("SIIGO_PARTNER_ID", ""),
-    }
+    """GET con retry/backoff para el rate limit de Siigo (~1 req/s) y
+    re-login automático ante un 401 (token invalidado antes de tiempo)."""
+    def _headers(tok: str) -> dict:
+        return {"Authorization": f"Bearer {tok}",
+                "Partner-Id": os.getenv("SIIGO_PARTNER_ID", "")}
+
+    headers = _headers(_get_token())
+    reintento_auth = False
     last = ""
     for intento in range(5):
         r = httpx.get(SIIGO_BASE + path, params=params or {}, headers=headers, timeout=60)
         if r.status_code == 200:
             return r.json()
+        # Token invalidado antes del expires_in → reautenticar UNA vez y
+        # reintentar con token fresco. Si el fresco también da 401, cae al raise.
+        if r.status_code == 401 and not reintento_auth:
+            reintento_auth = True
+            try:
+                headers = _headers(_forzar_reauth())
+            except Exception as e:
+                raise RuntimeError(
+                    f"siigo_get {path} HTTP 401 y el re-login también falló: {str(e)[:160]}")
+            continue
         if r.status_code in (429, 502, 503, 504):
             espera = min(2 ** intento, 8)
             retry_after = r.headers.get("Retry-After")
@@ -87,17 +113,28 @@ def siigo_post(path: str, body: dict) -> dict:
     OJO: crea documentos. Solo lo usa el motor fiscal de postventa, y solo
     tras confirmación humana. Un 4xx NO se reintenta (es error de payload).
     """
-    token = _get_token()
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Partner-Id": os.getenv("SIIGO_PARTNER_ID", ""),
-        "Content-Type": "application/json",
-    }
+    def _headers(tok: str) -> dict:
+        return {"Authorization": f"Bearer {tok}",
+                "Partner-Id": os.getenv("SIIGO_PARTNER_ID", ""),
+                "Content-Type": "application/json"}
+
+    headers = _headers(_get_token())
+    reintento_auth = False
     last = ""
     for intento in range(3):
         r = httpx.post(SIIGO_BASE + path, json=body, headers=headers, timeout=60)
         if r.status_code in (200, 201):
             return r.json()
+        # Token invalidado (401): un 401 significa que NO se creó el documento,
+        # así que reautenticar y reintentar una vez es seguro (no duplica).
+        if r.status_code == 401 and not reintento_auth:
+            reintento_auth = True
+            try:
+                headers = _headers(_forzar_reauth())
+            except Exception as e:
+                raise RuntimeError(
+                    f"siigo_post {path} HTTP 401 y el re-login también falló: {str(e)[:160]}")
+            continue
         # 4xx = payload inválido: no tiene sentido reintentar.
         if 400 <= r.status_code < 500 and r.status_code != 429:
             raise RuntimeError(f"siigo_post {path} HTTP {r.status_code}: {r.text[:300]}")
@@ -633,8 +670,12 @@ def ventas_tiendas(desde: str, hasta: str) -> list[dict]:
                 float(i.get("price") or 0) * float(i.get("quantity") or 0)
                 for i in items)
             agg[cc]["descuentos"] += sum(_desc_item(i) for i in items)
-        total = ((data.get("pagination") or {}).get("total_results") or 0)
-        if page * 100 >= total or not results:
+        # Paginar por el TAMAÑO de la página, no por total_results: Siigo a veces
+        # OMITE pagination.total_results, y `or 0` cortaba tras la página 1 en
+        # silencio — así las ventas de tienda se truncaban a 100 facturas y el
+        # total salía corto sin avisar. El resto del código ya usa este patrón
+        # seguro (len<100 = última página); _fetch_ds documenta el mismo riesgo.
+        if len(results) < 100:
             break
         page += 1
         if page > 40:  # tope de seguridad (~4.000 facturas)

@@ -14,7 +14,7 @@ import { useAuth } from "@/components/auth-provider";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Lock, Camera, CheckCircle, Loader2, AlertCircle, Pencil, Plus, Trash2, X, Copy } from "lucide-react";
+import { ArrowLeft, Lock, Camera, CheckCircle, Loader2, AlertCircle, Pencil, Plus, Trash2, X, Copy, ZoomIn } from "lucide-react";
 
 // Mismas categorías del backend (CATEGORIAS_PRECOSTEO)
 const CATEGORIAS = ["MATERIA PRIMA", "PROCESO EN MATERIA PRIMA", "INSUMO CONFECCION", "INSUMO TERMINACION"];
@@ -23,6 +23,7 @@ const CATEGORIAS = ["MATERIA PRIMA", "PROCESO EN MATERIA PRIMA", "INSUMO CONFECC
 interface LineaEdit {
   categoria: string;
   item: string;
+  color: string;   // solo MATERIA PRIMA (tela): color de esa tela
   valor_unitario: string;
   cantidad: string;
   iva: string;
@@ -32,6 +33,7 @@ interface Item {
   id: string;
   categoria: string;
   item: string;
+  color?: string;
   valor_unitario: number;
   cantidad: number;
   iva: number;
@@ -45,6 +47,7 @@ interface Precosteo {
   nombre: string;
   tela?: string;
   color?: string;
+  descripcion?: string;
   foto_url?: string;
   iva_pct: number;
   margen: number;
@@ -125,7 +128,9 @@ export default function PrecosteoDetallePage() {
   // Precio de venta final (PVP con IVA) para calcular el margen y decidir autorización.
   const [pvp, setPvp] = useState("");
   const pvpInitRef = useRef(false);
-  const [form, setForm] = useState({ nombre: "", codigo_referencia: "", tela: "", instrucciones_lavado: "" });
+  const [form, setForm] = useState({ nombre: "", codigo_referencia: "", tela: "", instrucciones_lavado: "", descripcion: "" });
+  // Vista previa a pantalla de la foto adjunta (para verla mejor).
+  const [zoomFoto, setZoomFoto] = useState(false);
   // Líneas del costeo editables (al duplicar una referencia los valores
   // cambian aunque la tela sea la misma — por eso el duplicado se edita).
   const [editLineas, setEditLineas] = useState<LineaEdit[]>([]);
@@ -134,6 +139,7 @@ export default function PrecosteoDetallePage() {
     return items.map((it) => ({
       categoria: it.categoria,
       item: it.item,
+      color: it.color ?? "",
       valor_unitario: String(it.valor_unitario ?? ""),
       cantidad: String(it.cantidad ?? ""),
       iva: String(it.iva ?? "0"),
@@ -151,6 +157,23 @@ export default function PrecosteoDetallePage() {
     onSuccess: () => {
       setMsg("Firmado y bloqueado.");
       setErr("");
+      qc.invalidateQueries({ queryKey: ["produccion", "precosteo"] });
+    },
+    onError: (e: Error) => { setErr(e.message); setMsg(""); },
+  });
+
+  // Aprobación guiada de una MUESTRA de diseño: en un paso captura la referencia
+  // definitiva, autoriza y bloquea (deja lista para corte, misma id = misma
+  // trazabilidad). `aprobando` abre el panel; `refDefinitiva` es el código.
+  const [aprobando, setAprobando] = useState(false);
+  const [refDefinitiva, setRefDefinitiva] = useState("");
+  const aprobarMuestraMut = useMutation({
+    mutationFn: (codigo_referencia: string) =>
+      api.post(`/api/produccion/precosteo/${id}/aprobar-muestra`, { codigo_referencia }),
+    onSuccess: () => {
+      setMsg("Muestra aprobada y referencia asignada. Lista para corte.");
+      setErr("");
+      setAprobando(false);
       qc.invalidateQueries({ queryKey: ["produccion", "precosteo"] });
     },
     onError: (e: Error) => { setErr(e.message); setMsg(""); },
@@ -187,22 +210,28 @@ export default function PrecosteoDetallePage() {
 
   const guardarMut = useMutation({
     mutationFn: () => {
-      // Los totales por línea y globales los recalcula el backend.
+      // Los totales por línea y globales los recalcula el backend. Ordenamos por
+      // categoría para que lo guardado quede agrupado (plantilla: MATERIA PRIMA,
+      // PROCESO, INSUMO CONFECCION, INSUMO TERMINACION).
+      const rank = (c: string) => { const i = CATEGORIAS.indexOf(c); return i < 0 ? CATEGORIAS.length : i; };
       const items = editLineas
         .filter((l) => l.item.trim() && (parseFloat(l.valor_unitario || "0") > 0 || parseFloat(l.cantidad || "0") > 0))
         .map((l) => ({
           categoria: l.categoria,
           item: l.item.trim(),
+          color: l.categoria === "MATERIA PRIMA" ? (l.color.trim() || null) : null,
           valor_unitario: parseFloat(l.valor_unitario || "0") || 0,
           cantidad: parseFloat(l.cantidad || "0") || 1,
           iva: parseFloat(l.iva || "0") || 0,
-        }));
+        }))
+        .sort((a, b) => rank(a.categoria) - rank(b.categoria));
       if (items.length === 0) throw new Error("El costeo necesita al menos una línea con valor.");
       return api.patch(`/api/produccion/precosteo/${id}`, {
         nombre: form.nombre.trim(),
         codigo_referencia: form.codigo_referencia.trim(),
         tela: form.tela.trim(),
         instrucciones_lavado: form.instrucciones_lavado.trim(),
+        descripcion: form.descripcion.trim(),
         items,
       });
     },
@@ -250,6 +279,7 @@ export default function PrecosteoDetallePage() {
         codigo_referencia: q.data.codigo_referencia || "",
         tela: q.data.tela || "",
         instrucciones_lavado: q.data.instrucciones_lavado || "",
+        descripcion: q.data.descripcion || "",
       });
       setEditLineas(lineasDesde(q.data.items || []));
       setEditando(true);
@@ -299,7 +329,9 @@ export default function PrecosteoDetallePage() {
   //   margen = (precio_sin_iva − costo_sin_iva) / precio_sin_iva
   // Se usa tanto en el KPI de arriba como en la tarjeta, para que sean el mismo número.
   const _ivaTop = Number(p.iva_pct || 19);
-  const _pvpTop = parseFloat((pvp || "").replace(/[^\d.]/g, "")) || 0;
+  // COP no tiene decimales: el punto es separador de miles. "189.900" → 189900,
+  // no 189,9 (que guardaba un PVP mil veces menor y un margen absurdo).
+  const _pvpTop = parseInt((pvp || "").replace(/\D/g, ""), 10) || 0;
   const _precioSinIvaTop = _pvpTop > 0 ? _pvpTop / (1 + _ivaTop / 100) : 0;
   const margenReal = _precioSinIvaTop > 0
     ? ((_precioSinIvaTop - Number(p.costo_total_sin_iva || 0)) / _precioSinIvaTop) * 100
@@ -323,6 +355,7 @@ export default function PrecosteoDetallePage() {
       codigo_referencia: p.codigo_referencia || "",
       tela: p.tela || "",
       instrucciones_lavado: p.instrucciones_lavado || "",
+      descripcion: p.descripcion || "",
     });
     setEditLineas(lineasDesde(p.items || []));
     setErr(""); setMsg("");
@@ -405,6 +438,16 @@ export default function PrecosteoDetallePage() {
                 placeholder="Ej: 100%ALGODON  ·  o  98% ALGODON 2% ELASTANO. Los cuidados (lavadora, agua tibia…) son fijos en la etiqueta."
                 className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm text-ink-900 placeholder:text-graphite/50" />
             </div>
+            <div>
+              <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                Descripción
+              </label>
+              <textarea value={form.descripcion}
+                onChange={(e) => setForm({ ...form, descripcion: e.target.value })}
+                rows={3}
+                placeholder="Detalle de la referencia: características, terminación, notas del diseño…"
+                className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm text-ink-900 placeholder:text-graphite/50" />
+            </div>
             <div className="flex justify-end gap-2">
               <button onClick={() => { setEditando(false); setErr(""); }}
                 className="inline-flex items-center gap-1 rounded-sm border border-border bg-card px-4 py-2 text-xs font-semibold uppercase tracking-widest text-graphite hover:bg-cloud">
@@ -429,8 +472,16 @@ export default function PrecosteoDetallePage() {
         <Card>
           <CardContent className="p-3">
             {p.foto_url ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={p.foto_url} alt={p.codigo_referencia} className="w-full rounded-sm border border-border" />
+              <button type="button" onClick={() => setZoomFoto(true)}
+                title="Ampliar foto"
+                className="group relative block w-full">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={p.foto_url} alt={p.codigo_referencia}
+                  className="w-full cursor-zoom-in rounded-sm border border-border transition-opacity group-hover:opacity-90" />
+                <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-sm bg-ink-900/70 px-2 py-1 text-[0.62rem] font-semibold uppercase tracking-widest text-white opacity-0 transition-opacity group-hover:opacity-100">
+                  <ZoomIn className="h-3 w-3" /> Ampliar
+                </span>
+              </button>
             ) : (
               <div className="aspect-square w-full flex items-center justify-center bg-cloud rounded-sm border border-border text-graphite">
                 <Camera className="h-8 w-8" />
@@ -460,6 +511,16 @@ export default function PrecosteoDetallePage() {
         </Card>
       </div>
 
+      {/* Descripción libre de la referencia (si tiene) */}
+      {!editando && p.descripcion && (
+        <Card>
+          <CardContent className="p-4">
+            <p className="section-label mb-1.5">Descripción</p>
+            <p className="whitespace-pre-wrap text-sm text-ink-900 dark:text-foreground">{p.descripcion}</p>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Precio de venta final → margen (para autorizar) */}
       <MargenCard
         p={p}
@@ -476,7 +537,7 @@ export default function PrecosteoDetallePage() {
             <p className="section-label">Líneas ({editando ? editLineas.length : p.items.length})</p>
             {editando && (
               <button
-                onClick={() => setEditLineas((ls) => [...ls, { categoria: CATEGORIAS[0], item: "", valor_unitario: "", cantidad: "1", iva: "0" }])}
+                onClick={() => setEditLineas((ls) => [...ls, { categoria: CATEGORIAS[0], item: "", color: "", valor_unitario: "", cantidad: "1", iva: "0" }])}
                 className="inline-flex items-center gap-1 rounded-sm border border-border bg-card px-3 py-1.5 text-[0.68rem] font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud">
                 <Plus className="h-3.5 w-3.5" /> Agregar línea
               </button>
@@ -511,6 +572,13 @@ export default function PrecosteoDetallePage() {
                           <input value={l.item} onChange={(e) => setLinea(i, "item", e.target.value)}
                             placeholder="Nombre del insumo/proceso"
                             className="w-full rounded-sm border border-border bg-white px-2 py-1 text-xs" />
+                          {/* Color de la tela — solo MATERIA PRIMA. Viaja a la orden
+                              de corte (forro / tela complementaria por color). */}
+                          {l.categoria === "MATERIA PRIMA" && (
+                            <input value={l.color} onChange={(e) => setLinea(i, "color", e.target.value)}
+                              placeholder="Color de la tela (opcional)"
+                              className="mt-1 w-full rounded-sm border border-border bg-white px-2 py-1 text-[0.7rem] text-graphite placeholder:text-graphite/50" />
+                          )}
                         </td>
                         <td className="px-2 py-1">
                           <input value={l.valor_unitario} onChange={(e) => setLinea(i, "valor_unitario", e.target.value)}
@@ -569,7 +637,12 @@ export default function PrecosteoDetallePage() {
               {p.items.map((it) => (
                 <tr key={it.id} className="border-b border-border/40 hover:bg-cloud/50">
                   <td className="px-3 py-1.5 text-graphite">{it.categoria}</td>
-                  <td className="px-3 py-1.5 text-ink-900">{it.item}</td>
+                  <td className="px-3 py-1.5 text-ink-900">
+                    {it.item}
+                    {it.categoria === "MATERIA PRIMA" && it.color
+                      ? <span className="text-graphite"> · {it.color}</span>
+                      : null}
+                  </td>
                   <td className="px-3 py-1.5 text-right tabular">${it.valor_unitario.toLocaleString("es-CO", { maximumFractionDigits: 0 })}</td>
                   <td className="px-3 py-1.5 text-right tabular">{it.cantidad}</td>
                   <td className="px-3 py-1.5 text-right tabular">${it.iva.toLocaleString("es-CO", { maximumFractionDigits: 0 })}</td>
@@ -582,6 +655,55 @@ export default function PrecosteoDetallePage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Panel guiado: aprobar la muestra asignando su referencia definitiva.
+          Un solo paso — autoriza, bloquea y deja la referencia lista para
+          corte, conservando la id (y por tanto la trazabilidad). */}
+      {aprobando && !p.bloqueada && p.es_muestra_diseno && (
+        <Card>
+          <CardContent className="space-y-3 py-4">
+            <div>
+              <p className="text-sm font-semibold text-ink-900 dark:text-foreground">
+                Aprobar muestra y asignar referencia definitiva
+              </p>
+              <p className="mt-0.5 text-xs leading-snug text-graphite">
+                Al aprobar, la muestra queda autorizada y bloqueada con esta
+                referencia — lista para enviar a corte. Se conserva la
+                trazabilidad (misma id de la muestra). Este paso no se puede
+                deshacer sin permiso de administrador.
+              </p>
+            </div>
+            <div>
+              <label className="mb-1 block text-[0.68rem] uppercase tracking-widest text-graphite">
+                Referencia definitiva
+              </label>
+              <input
+                value={refDefinitiva}
+                onChange={(e) => setRefDefinitiva(e.target.value)}
+                placeholder="Código de referencia definitivo"
+                autoFocus
+                onKeyDown={(e) => { if (e.key === "Enter" && refDefinitiva.trim()) aprobarMuestraMut.mutate(refDefinitiva.trim()); }}
+                className="w-full rounded-sm border border-border/60 bg-transparent px-3 py-2 text-sm text-ink-900 outline-none focus:border-teal dark:text-foreground"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => aprobarMuestraMut.mutate(refDefinitiva.trim())}
+                disabled={aprobarMuestraMut.isPending || !refDefinitiva.trim()}
+                className="inline-flex items-center gap-2 rounded-sm bg-teal px-5 py-2 text-sm font-semibold text-white hover:bg-ink-900 disabled:opacity-40">
+                {aprobarMuestraMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                Aprobar y bloquear
+              </button>
+              <button
+                onClick={() => { setAprobando(false); setErr(""); }}
+                disabled={aprobarMuestraMut.isPending}
+                className="inline-flex items-center gap-1.5 rounded-sm border border-border/60 px-3 py-2 text-xs font-medium text-graphite hover:bg-cloud/40 disabled:opacity-50">
+                Cancelar
+              </button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {(esAdmin(user) || !p.bloqueada) && (
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -596,12 +718,31 @@ export default function PrecosteoDetallePage() {
           ) : <span />}
 
           {!p.bloqueada && (
-            <button onClick={() => firmarMut.mutate()} disabled={firmarMut.isPending}
-              className="inline-flex items-center gap-2 rounded-sm bg-teal px-6 py-2.5 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-ink-900 disabled:opacity-40">
-              {firmarMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
-              Firmar y bloquear
-            </button>
+            p.es_muestra_diseno ? (
+              <button onClick={() => { setRefDefinitiva(p.codigo_referencia); setAprobando(true); setErr(""); }}
+                className="inline-flex items-center gap-2 rounded-sm bg-teal px-6 py-2.5 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-ink-900 disabled:opacity-40">
+                <CheckCircle className="h-4 w-4" /> Aprobar y asignar referencia
+              </button>
+            ) : (
+              <button onClick={() => firmarMut.mutate()} disabled={firmarMut.isPending}
+                className="inline-flex items-center gap-2 rounded-sm bg-teal px-6 py-2.5 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-ink-900 disabled:opacity-40">
+                {firmarMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
+                Firmar y bloquear
+              </button>
+            )
           )}
+        </div>
+      )}
+
+      {/* Vista previa a pantalla completa de la foto adjunta */}
+      {zoomFoto && p.foto_url && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-900/80 p-4" onClick={() => setZoomFoto(false)}>
+          <button className="absolute right-4 top-4 text-white/80 hover:text-white" onClick={() => setZoomFoto(false)} title="Cerrar">
+            <X className="h-6 w-6" />
+          </button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={p.foto_url} alt={p.codigo_referencia}
+            className="max-h-[88vh] max-w-full rounded-sm" onClick={(e) => e.stopPropagation()} />
         </div>
       )}
     </PageShell>
@@ -619,7 +760,7 @@ function MargenCard({ p, pvp, setPvp, puedeEditar, onGuardar, guardando }: {
   const iva = Number(p.iva_pct || 19);
   const costoSinIva = Number(p.costo_total_sin_iva || 0);
   // El precio que se digita es PVP CON IVA → se le quita el IVA para el margen.
-  const pvpNum = parseFloat(pvp.replace(/[^\d.]/g, "")) || 0;
+  const pvpNum = parseInt(pvp.replace(/\D/g, ""), 10) || 0;
   const precioSinIva = pvpNum > 0 ? pvpNum / (1 + iva / 100) : 0;
   const utilidad = precioSinIva - costoSinIva;
   const margen = precioSinIva > 0 ? (utilidad / precioSinIva) * 100 : 0;

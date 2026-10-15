@@ -21,6 +21,9 @@ import { ArrowLeft, Truck, Loader2, MessageCircle, Copy } from "lucide-react";
 interface Item {
   id: string;
   orden_corte_id: string;
+  // Referencia PROPIA del lote (un corte combinado tiene un item por referencia).
+  referencia_id?: string;
+  ref_item?: { codigo_referencia?: string; nombre?: string; tela?: string };
   orden_corte?: {
     consecutivo: string;
     referencia_lote?: string;
@@ -175,9 +178,9 @@ export default function RemisionDetallePage() {
                         </Link>
                       </td>
                       <td className="px-4 py-2 text-ink-900">
-                        {it.orden_corte?.referencia?.codigo_referencia || "—"}
+                        {it.ref_item?.codigo_referencia || it.orden_corte?.referencia?.codigo_referencia || "—"}
                         <div className="text-[0.7rem] text-graphite">
-                          {it.orden_corte?.referencia?.nombre}
+                          {it.ref_item?.nombre || it.orden_corte?.referencia?.nombre}
                         </div>
                       </td>
                       <td className="px-4 py-2 text-graphite">{it.orden_corte?.referencia_lote || "—"}</td>
@@ -246,8 +249,9 @@ export default function RemisionDetallePage() {
           <div className="space-y-3">
             {(rem.items || []).map((it) => (
               <RutaCard key={it.id} ordenCorteId={it.orden_corte_id}
+                referenciaId={it.referencia_id}
                 consecutivo={it.orden_corte?.consecutivo || ""}
-                referencia={it.orden_corte?.referencia?.codigo_referencia || ""}
+                referencia={it.ref_item?.codigo_referencia || it.orden_corte?.referencia?.codigo_referencia || ""}
                 tipo={rem.tipo === "terminacion" ? "terminacion" : "confeccion"}
                 telefono={rem.confeccionista?.telefono}
                 confeccionistaNombre={rem.confeccionista?.nombre}
@@ -280,8 +284,9 @@ interface Ruta {
   aceptado_at?: string;
 }
 
-function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confeccionistaNombre, remisionId }: {
+function RutaCard({ ordenCorteId, referenciaId, consecutivo, referencia, tipo, telefono, confeccionistaNombre, remisionId }: {
   ordenCorteId: string;
+  referenciaId?: string;
   consecutivo: string;
   referencia?: string;
   tipo: "confeccion" | "terminacion";
@@ -301,7 +306,8 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
   // wa.me con el mensaje listo como respaldo — nunca se queda sin salida.
   const enviarWA = useMutation({
     mutationFn: () => api.post<{ ok: boolean; envios: { enviado: boolean; wa_url?: string }[] }>(
-      `/api/produccion/remisiones/${remisionId}/whatsapp`, { orden_corte_id: ordenCorteId }),
+      `/api/produccion/remisiones/${remisionId}/whatsapp`,
+      { orden_corte_id: ordenCorteId, referencia_id: referenciaId ?? null }),
     onSuccess: (data) => {
       const e = (data.envios || [])[0];
       if (e?.enviado) {
@@ -316,8 +322,9 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
   });
 
   const q = useQuery<Ruta>({
-    queryKey: ["ruta", ordenCorteId],
-    queryFn: () => api.get(`/api/produccion/rutas/por-corte/${ordenCorteId}`),
+    queryKey: ["ruta", ordenCorteId, referenciaId ?? ""],
+    queryFn: () => api.get(`/api/produccion/rutas/por-corte/${ordenCorteId}`
+      + (referenciaId ? `?referencia_id=${referenciaId}` : "")),
     enabled: !!ordenCorteId,
     retry: false,
   });
@@ -337,7 +344,7 @@ function RutaCard({ ordenCorteId, consecutivo, referencia, tipo, telefono, confe
         fecha_entrega_confeccion: fecha || null,
       });
     },
-    onSuccess: () => { setErrCard(""); qc.invalidateQueries({ queryKey: ["ruta", ordenCorteId] }); },
+    onSuccess: () => { setErrCard(""); qc.invalidateQueries({ queryKey: ["ruta", ordenCorteId, referenciaId ?? ""] }); },
     onError: (e: Error) => setErrCard(`No se pudo guardar la fecha: ${e.message}`),
   });
 

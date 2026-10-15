@@ -139,11 +139,18 @@ def listar_casos(status: Optional[str] = None) -> list[dict]:
     sb = _sb()
     if sb is None:
         return []
-    q = sb.table("postventa_cases").select("*").eq("brand_id", _brand_id())
-    if status:
-        q = q.eq("status", status)
-    r = q.order("created_at", desc=True).execute()
-    return r.data or []
+    out, inicio = [], 0
+    while inicio < 50000:                # paginar: PostgREST corta en 1000 filas
+        q = sb.table("postventa_cases").select("*").eq("brand_id", _brand_id())
+        if status:
+            q = q.eq("status", status)
+        r = (q.order("created_at", desc=True)
+               .range(inicio, inicio + 999).execute()).data or []
+        out += r
+        if len(r) < 1000:
+            break
+        inicio += 1000
+    return out
 
 
 def registrar_evento(case_id: str, event_type: str, description: str = "",
@@ -467,13 +474,19 @@ def impacto_ventas(desde: str = "", hasta: str = "") -> dict:
     if sb is None:
         return {"devuelto": 0.0, "refacturado": 0.0, "neto": 0.0, "casos": 0}
 
-    q = (sb.table("postventa_fiscal").select("doc_kind,amount,case_id")
-           .eq("brand_id", _brand_id()).eq("status", "emitido"))
-    if desde:
-        q = q.gte("created_at", desde)
-    if hasta:
-        q = q.lte("created_at", hasta)
-    filas = q.execute().data or []
+    filas, inicio = [], 0
+    while inicio < 50000:                # paginar: PostgREST corta en 1000 filas
+        q = (sb.table("postventa_fiscal").select("doc_kind,amount,case_id")
+               .eq("brand_id", _brand_id()).eq("status", "emitido"))
+        if desde:
+            q = q.gte("created_at", desde)
+        if hasta:
+            q = q.lte("created_at", hasta)
+        r = q.range(inicio, inicio + 999).execute().data or []
+        filas += r
+        if len(r) < 1000:
+            break
+        inicio += 1000
 
     devuelto = sum(float(f.get("amount") or 0)
                    for f in filas if f.get("doc_kind") == "nota_credito")

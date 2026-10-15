@@ -694,6 +694,11 @@ async def kommo_webhook(request: Request, background_tasks: BackgroundTasks) -> 
     2. Encolamos TODO el parseo y persistencia en background.
     3. Respondemos 200 inmediatamente.
     """
+    # Kommo DESACTIVADO (2026-09-21, a pedido): no se procesa ningún evento. Se
+    # responde 200 para que Kommo no reintente. Ver KOMMO_HABILITADO en
+    # src/kommo_client. Para revivirlo, quitar este return.
+    return {"ok": True, "ignorado": "kommo desactivado"}
+
     import os as _os, hmac as _hmac, hashlib as _hashlib
     from datetime import datetime as _dt, timezone as _tz
     now_iso = _dt.now(tz=_tz.utc).isoformat()

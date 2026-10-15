@@ -50,6 +50,7 @@ export const NAV_GROUPS: NavGroup[] = [
     title: "Finanzas",
     items: [
       { label: "Finanzas",     href: "/finanzas",     permiso: "finanzas", desc: "Panorama financiero" },
+      { label: "Caja menor",   href: "/finanzas/caja-menor", permiso: "finanzas", desc: "Base y gastos con foto del recibo" },
       { label: "Conciliación", href: "/conciliacion", permiso: "finanzas", desc: "Cruce de pagos" },
       { label: "Facturación",  href: "/facturacion",  permiso: "finanzas", desc: "Facturas emitidas" },
       { label: "MercadoPago",  href: "/mercadopago",  permiso: "finanzas", desc: "Pagos MercadoPago" },
@@ -101,7 +102,10 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Usuarios",            href: "/usuarios",            desc: "Cuentas y permisos" },
       { label: "Auditoría",           href: "/auditoria",           desc: "Registro de acciones" },
-      { label: "Diagnóstico Revenue", href: "/diagnostico-revenue", desc: "Calidad de datos" },
+      // Kommo desactivado (2026-09-21): esta pantalla es 100% Kommo/Revenue
+      // (compara "Kommo dice" vs auditoría, re-sincroniza leads), así que queda
+      // fuera del menú. La página sigue en el repo; descomentar para revivirla.
+      // { label: "Diagnóstico Revenue", href: "/diagnostico-revenue", desc: "Calidad de datos" },
     ],
   },
 ];

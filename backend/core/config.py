@@ -120,8 +120,12 @@ class Settings(BaseSettings):
 
         # WARNING — webhook secrets (no aborta, los endpoints tienen su propio gate)
         import os as _os
-        if not (_os.environ.get("META_APP_SECRET") or "").strip():
-            warnings.append("META_APP_SECRET no configurado — webhook Meta rechazará todos los requests en prod")
+        # El webhook valida con META_APP_SECRET O WHATSAPP_APP_SECRET (cualquiera).
+        # Solo si faltan LOS DOS acepta sin firma (fail-open) — antes este aviso
+        # decía "rechazará todos los requests", lo contrario de lo que hace.
+        if not ((_os.environ.get("META_APP_SECRET") or "").strip()
+                or (_os.environ.get("WHATSAPP_APP_SECRET") or "").strip()):
+            warnings.append("Sin META_APP_SECRET ni WHATSAPP_APP_SECRET — webhook Meta ACEPTA sin validar firma (fail-open)")
         if not (_os.environ.get("KOMMO_WEBHOOK_SECRET") or "").strip():
             warnings.append("KOMMO_WEBHOOK_SECRET no configurado — webhook Kommo acepta sin firma (modo legacy)")
 

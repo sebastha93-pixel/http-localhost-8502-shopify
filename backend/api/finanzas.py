@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, field_validator
 
 from backend.core.security import CurrentUser, get_current_user, require_role, require_permission
@@ -146,7 +146,9 @@ def resumen(_: CurrentUser = Depends(get_current_user)) -> ResumenFinanzas:
     try:
         import mp_client as mp
         desde = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-        pagos = mp.obtener_pagos(fecha_desde=desde, limit_total=1000)
+        # limit_total 1000 truncaba la cifra de plata si había más pagos en 30
+        # días (obtener_pagos ya pagina solo; el tope solo cortaba el total).
+        pagos = mp.obtener_pagos(fecha_desde=desde, limit_total=5000)
         n_mp = len(pagos)
         mp_total = sum(p.get("valor_bruto", 0) for p in pagos)
         mp_neto  = sum(p.get("valor_neto", 0)  for p in pagos)
@@ -221,6 +223,42 @@ def cartera_cod_detalle(
         raise HTTPException(status_code=502, detail=f"Melonn error: {exc}")
     pedidos = [metricas_svc.clasificar(p) for p in data["pedidos"]]
     return cartera_svc.cruzar(pedidos)
+
+
+@router.get("/cartera-cod/ordenes")
+def cartera_cod_ordenes(
+    _: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """Cruce PERSISTIDO por orden (tabla cruce_cod_siigo): cada contraentrega
+    ENTREGADA con su estado verídico contra Siigo — COMPLETO, sin capar a 300.
+    Lo llena el scheduler; acá solo se lee (0 llamadas a Siigo/Melonn)."""
+    from backend.services import cartera_cod as cartera_svc
+    sb = cartera_svc._sb()
+    if sb is None:
+        raise HTTPException(status_code=503, detail="Supabase no configurado")
+    filas = (sb.table("cruce_cod_siigo")
+               .select("orden,estado,clasificacion,fuente_pago,facturas,fecha_factura,"
+                       "facturado,saldo,a_credito,medio,valor_melonn,entrega,ciudad,dias")
+               .order("saldo", desc=True).limit(3000).execute()).data or []
+    # Resumen por la VERDAD operativa (clasificacion), no por el saldo contable.
+    resumen: dict = {}
+    for f in filas:
+        c = f.get("clasificacion") or "sin_clasificar"
+        b = resumen.setdefault(c, {"n": 0, "facturado": 0.0, "saldo": 0.0})
+        b["n"] += 1
+        b["facturado"] += float(f.get("facturado") or 0)
+        b["saldo"] += float(f.get("saldo") or 0)
+    return {
+        "ordenes": filas,
+        "resumen": resumen,
+        "total": len(filas),
+        "nota": ("El OS lleva su propio estado de recaudo. 'pagado' = conciliado "
+                 "por el archivo de Melonn o con recibo ya posteado en Siigo. "
+                 "'pendiente' = entregado y sin conciliar (pendiente de pago). "
+                 "El 'saldo' de Siigo NO es deuda: se cancela con 1-3 meses de "
+                 "atraso, por eso el OS se apoya en el archivo de conciliación, "
+                 "no en Siigo."),
+    }
 
 
 @router.get("/mercadopago", response_model=PagosMPResponse)
@@ -381,3 +419,136 @@ def conciliacion_excepciones(
     """Lo que el motor no pudo cuadrar — la lista de trabajo real."""
     from backend.services import recon_client
     return recon_client.excepciones(limite=limite)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CAJA MENOR · fondo fijo con soporte fotográfico por gasto
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Fondo fijo: la caja tiene una BASE, cada gasto exige descripción + foto del
+# recibo, y `saldo = base − gastos abiertos`. Al reponer se cierra el periodo y
+# el saldo vuelve a la base. Ver services/caja_menor.py.
+
+class BaseBody(BaseModel):
+    base: float
+
+
+class MotivoBody(BaseModel):
+    motivo: str = ""
+
+
+@router.get("/caja-menor")
+def caja_menor_resumen(
+    _: CurrentUser = Depends(require_permission("finanzas", "ver")),
+) -> dict:
+    """Estado de la caja: base, saldo disponible y lo gastado en el periodo."""
+    from backend.services import caja_menor as svc
+    try:
+        return svc.resumen()
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+
+
+@router.get("/caja-menor/movimientos")
+def caja_menor_movimientos(
+    incluir_cerrados: bool = Query(default=False),
+    limit: int = Query(default=200, ge=1, le=2000),
+    _: CurrentUser = Depends(require_permission("finanzas", "ver")),
+) -> dict:
+    """Gastos del periodo abierto (default) o el histórico completo."""
+    from backend.services import caja_menor as svc
+    try:
+        return svc.listar_movimientos(incluir_cerrados=incluir_cerrados, limit=limit)
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+
+
+@router.post("/caja-menor/base")
+def caja_menor_set_base(
+    body: BaseBody,
+    user: CurrentUser = Depends(require_permission("finanzas", "modificar")),
+) -> dict:
+    """Fija/ajusta la base (fondo fijo) de la caja."""
+    from backend.services import caja_menor as svc
+    try:
+        return svc.set_base(body.base, usuario_id=user.id, usuario_nombre=user.nombre)
+    except ValueError:
+        raise HTTPException(400, "La base debe ser un número mayor o igual a cero.")
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+
+
+@router.post("/caja-menor/gasto")
+async def caja_menor_gasto(
+    monto: float = Form(...),
+    descripcion: str = Form(...),
+    categoria: str = Form(default=""),
+    fecha: str = Form(default=""),
+    file: UploadFile = File(...),
+    user: CurrentUser = Depends(require_permission("finanzas", "modificar")),
+) -> dict:
+    """Registra un gasto con su soporte fotográfico (obligatorio)."""
+    from backend.services import caja_menor as svc
+    content = await file.read()
+    if len(content) > 15 * 1024 * 1024:
+        raise HTTPException(400, "La foto no puede pesar más de 15 MB.")
+    try:
+        return svc.registrar_gasto(
+            monto=monto,
+            descripcion=descripcion,
+            categoria=categoria,
+            fecha=fecha or None,
+            file_bytes=content,
+            filename=file.filename or "recibo.jpg",
+            content_type=file.content_type or "image/jpeg",
+            usuario_id=user.id,
+            usuario_nombre=user.nombre,
+        )
+    except ValueError as e:
+        mensajes = {
+            "monto_invalido": "El monto debe ser un número mayor a cero.",
+            "descripcion_requerida": "La descripción es obligatoria.",
+            "foto_requerida": "La foto del recibo es obligatoria.",
+            "formato_imagen_no_soportado": "Formato de imagen no soportado (usa JPG o PNG).",
+        }
+        raise HTTPException(400, mensajes.get(str(e), str(e)))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+
+
+@router.post("/caja-menor/movimiento/{mov_id}/anular")
+def caja_menor_anular(
+    mov_id: str,
+    body: MotivoBody,
+    user: CurrentUser = Depends(require_permission("finanzas", "modificar")),
+) -> dict:
+    """Anula un gasto abierto (corregir una mala carga)."""
+    from backend.services import caja_menor as svc
+    try:
+        return svc.anular_gasto(mov_id, motivo=body.motivo,
+                                usuario_id=user.id, usuario_nombre=user.nombre)
+    except ValueError as e:
+        mensajes = {
+            "no_encontrado": "No se encontró el gasto.",
+            "solo_gastos": "Solo se pueden anular gastos.",
+            "periodo_cerrado": "Ese gasto ya fue repuesto; no se puede anular.",
+        }
+        raise HTTPException(400, mensajes.get(str(e), str(e)))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+
+
+@router.post("/caja-menor/reponer")
+def caja_menor_reponer(
+    user: CurrentUser = Depends(require_permission("finanzas", "modificar")),
+) -> dict:
+    """Repone el fondo: cierra el periodo y devuelve el saldo a la base."""
+    from backend.services import caja_menor as svc
+    try:
+        return svc.reponer_caja(usuario_id=user.id, usuario_nombre=user.nombre)
+    except ValueError as e:
+        if str(e) == "nada_por_reponer":
+            raise HTTPException(400, "No hay gastos por reponer.")
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))

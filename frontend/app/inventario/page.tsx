@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { PageShell, LoadingState, ErrorState, TableSkeleton } from "@/components/page-shell";
@@ -185,9 +185,8 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                 {filtrados.length === 0 ? (
                   <tr><td colSpan={12} className="px-3 py-8 text-center text-sm text-graphite">Sin productos con estos filtros.</td></tr>
                 ) : filtrados.map((p) => (
-                  <>
+                  <Fragment key={p.id}>
                     <tr
-                      key={p.id}
                       className="hover:bg-cloud/50 cursor-pointer transition-colors"
                       onClick={() => setExpandido(expandido === p.id ? null : p.id)}
                     >
@@ -349,7 +348,7 @@ function TablaProductos({ productos, mostrarStock = true }: { productos: Product
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 ))}
               </tbody>
             </table>

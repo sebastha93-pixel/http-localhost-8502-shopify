@@ -575,6 +575,10 @@ class PrecosteoItemIn(BaseModel):
     valor_unitario: float = Field(ge=0)
     cantidad:       float = Field(gt=0)
     iva:            float = Field(ge=0, default=0)
+    # Color de la tela (solo aplica a MATERIA PRIMA: tela principal, forro de
+    # bolsillo, tela complementaria). Viaja a la orden de corte como dato
+    # informativo para el cortador. Opcional.
+    color:          Optional[str] = None
 
 
 class PrecosteoIn(BaseModel):
@@ -582,6 +586,7 @@ class PrecosteoIn(BaseModel):
     nombre:            str = Field(min_length=1)
     tela:              Optional[str] = None
     color:             Optional[str] = None
+    descripcion:       Optional[str] = None
     iva_pct:           float = 19
     margen:            float = 0
     items:             list[PrecosteoItemIn] = []
@@ -593,6 +598,7 @@ class PrecosteoUpdate(BaseModel):
     codigo_referencia: Optional[str] = None
     tela:    Optional[str] = None
     color:   Optional[str] = None
+    descripcion: Optional[str] = None  # detalle libre de la referencia
     iva_pct: Optional[float] = None
     margen:  Optional[float] = None
     items:   Optional[list[PrecosteoItemIn]] = None
@@ -617,6 +623,7 @@ def crear_precosteo(
             nombre=body.nombre,
             tela=body.tela or "",
             color=body.color or "",
+            descripcion=body.descripcion,
             iva_pct=body.iva_pct,
             margen=body.margen,
             items=[i.model_dump() for i in body.items],
@@ -668,6 +675,7 @@ def actualizar_precosteo(
             codigo_referencia=body.codigo_referencia,
             tela=body.tela,
             color=body.color,
+            descripcion=body.descripcion,
             iva_pct=body.iva_pct,
             margen=body.margen,
             items=[i.model_dump() for i in body.items] if body.items is not None else None,
@@ -725,6 +733,46 @@ def firmar_precosteo(
             raise HTTPException(403, "No tienes permiso para autorizar precosteo. Pide a un admin activar el flag.")
         if msg == "no_encontrado":
             raise HTTPException(404, "Precosteo no encontrado")
+        raise HTTPException(400, msg)
+
+
+class AprobarMuestraBody(BaseModel):
+    codigo_referencia: str
+
+
+@router.post("/precosteo/{precosteo_id}/aprobar-muestra")
+def aprobar_muestra_endpoint(
+    precosteo_id: str,
+    body: AprobarMuestraBody,
+    user: CurrentUser = Depends(require_permission_estricto("produccion_costos", "modificar")),
+) -> dict:
+    """Aprueba una muestra de diseño asignándole su referencia definitiva en un
+    solo paso (autoriza + bloquea, lista para corte). Requiere flag
+    `puede_autorizar_precosteo`."""
+    try:
+        p = svc.aprobar_muestra(precosteo_id, codigo_referencia=body.codigo_referencia,
+                                usuario_id=user.id)
+        # El aviso va DESPUÉS y no puede tumbar la aprobación (igual que firmar).
+        try:
+            from backend.services import avisos_produccion as avisos
+            avisos.avisar_precosteo_autorizado(p, autorizado_por=user.email)
+        except Exception:
+            pass
+        return p
+    except ValueError as e:
+        msg = str(e)
+        if msg == "sin_permiso_autorizar_precosteo":
+            raise HTTPException(403, "No tienes permiso para autorizar precosteo. Pide a un admin activar el flag.")
+        if msg == "no_encontrado":
+            raise HTTPException(404, "Precosteo no encontrado")
+        if msg == "no_es_muestra":
+            raise HTTPException(400, "Esta referencia no es una muestra de diseño.")
+        if msg == "ya_bloqueado":
+            raise HTTPException(400, "Esta muestra ya fue aprobada.")
+        if msg == "codigo_referencia_requerido":
+            raise HTTPException(400, "Escribe la referencia definitiva antes de aprobar.")
+        if msg == "codigo_referencia_duplicado":
+            raise HTTPException(409, "Ya existe otra referencia con ese código. Usa uno distinto.")
         raise HTTPException(400, msg)
 
 
@@ -927,6 +975,53 @@ def crear_corte(
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(500, f"crear_corte: {str(e)[:200]}")
+
+
+@router.patch("/corte/{oc_id}")
+def editar_corte(
+    oc_id: str,
+    body: CrearCorteBody,
+    user: CurrentUser = Depends(require_permission("produccion_corte", "modificar")),
+) -> dict:
+    """Corrige los datos de una orden de corte (por si el diseñador metió mal
+    algo). Solo antes de que el cortador asigne rollos y de que se corte."""
+    try:
+        oc = svc.editar_orden_corte(
+            oc_id,
+            referencia_id=body.referencia_id,
+            largo_trazo=body.largo_trazo,
+            curva_trazo=body.curva_trazo,
+            cantidad_programada=body.cantidad_programada,
+            promedio_tecnico=body.promedio_tecnico,
+            num_capas=body.num_capas,
+            referencias=[r.model_dump() for r in body.referencias] if body.referencias else None,
+            responsable=body.responsable,
+            responsable_email=body.responsable_email,
+            fecha_envio=body.fecha_envio,
+            indicaciones=body.indicaciones,
+            destinatarios_correo=body.destinatarios_correo,
+            trazos_url=body.trazos_url,
+        )
+        return {"ok": True, "orden_corte": oc}
+    except ValueError as e:
+        msg = str(e)
+        if msg.startswith("precosteo_ya_tiene_corte:"):
+            ref = msg.split(":", 1)[1]
+            raise HTTPException(409, f"La referencia {ref} ya está en otra orden de corte.")
+        amigable = {
+            "tiene_rollos_asignados": "No se puede editar: el cortador ya asignó tela (rollos). "
+                                      "Libera los rollos primero.",
+            "orden_ya_cortada": "No se puede editar: la orden ya está cortada.",
+            "precosteo_no_firmado": "Una de las referencias tiene el precosteo sin autorizar.",
+            "precosteo_no_encontrado": "No se encontró el precosteo de una referencia.",
+            "sin_referencias": "Falta al menos una referencia.",
+        }
+        if msg == "orden_no_encontrada":
+            raise HTTPException(404, "Orden de corte no encontrada.")
+        raise HTTPException(400, amigable.get(msg, msg))
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"editar_corte: {str(e)[:200]}")
 
 
 @router.post("/corte/{oc_id}/autorizar")
@@ -1424,7 +1519,8 @@ def cerrar_corte(
                     from datetime import datetime as _dt
                     from zoneinfo import ZoneInfo as _ZI
                     fecha_rec = _dt.now(_ZI("America/Bogota")).date().isoformat()
-                rem = svc.crear_remision(
+                # Un corte combinado genera una remisión POR REFERENCIA.
+                rems = svc.crear_remision(
                     confeccionista_id=body.confeccionista_id,
                     fecha_recogida=fecha_rec,
                     orden_corte_ids=[oc_id],
@@ -1432,12 +1528,16 @@ def cerrar_corte(
                     tipo="confeccion",
                     liberar_impresion=False,   # NO imprime hasta separar insumos
                 )
-                resp["remision"] = rem
-                try:
-                    resp["aviso_recoger"] = svc._notificar_lote_por_recoger(rem)
-                except Exception as e:
-                    import traceback; traceback.print_exc()
-                    resp["aviso_recoger_error"] = str(e)[:200]
+                resp["remision"] = rems[0] if rems else None
+                resp["remisiones"] = rems
+                avisos: list = []
+                for _rem in rems:
+                    try:
+                        avisos += svc._notificar_lote_por_recoger(_rem)
+                    except Exception as e:
+                        import traceback; traceback.print_exc()
+                        resp["aviso_recoger_error"] = str(e)[:200]
+                resp["aviso_recoger"] = avisos
             except ValueError as e:
                 # La remisión no debe tumbar el cierre: el informe ya quedó
                 # guardado. Se reporta para que el cortador la cree a mano.
@@ -1486,10 +1586,19 @@ class ConfeccionistaUpdate(BaseModel):
     tipo:      Optional[str] = None
 
 
+class LoteRefIn(BaseModel):
+    orden_corte_id: str
+    referencia_id:  Optional[str] = None
+
+
 class RemisionIn(BaseModel):
     confeccionista_id: str
     fecha_recogida:    str
-    orden_corte_ids:   list[str] = Field(min_length=1)
+    # Un corte combinado se remite POR REFERENCIA: `lotes` = [{orden_corte_id,
+    # referencia_id}]. `orden_corte_ids` (compat) remite el corte entero (todas
+    # sus referencias). Debe venir al menos uno de los dos.
+    orden_corte_ids:   list[str] = Field(default_factory=list)
+    lotes:             Optional[list[LoteRefIn]] = None
     tipo:              str = "confeccion"  # 'confeccion' | 'terminacion'
 
 
@@ -1648,10 +1757,15 @@ def crear_remision(
     # El cortador puro solo genera la remisión CONFECCIONISTA de SUS cortes
     # (después de guardar y confirmar el informe). No puede tocar terminación
     # ni cortes de otros.
+    # Órdenes involucradas (por lotes explícitos o por corte completo).
+    oc_ids_body = ([l.orden_corte_id for l in body.lotes] if body.lotes
+                   else list(body.orden_corte_ids))
+    if not oc_ids_body:
+        raise HTTPException(400, "Manda al menos un lote u orden de corte.")
     if _es_solo_cortador(user):
         if body.tipo != "confeccion":
             raise HTTPException(403, "El cortador solo genera remisiones de confección.")
-        for oc_id in body.orden_corte_ids:
+        for oc_id in dict.fromkeys(oc_ids_body):
             oc_check = svc.obtener_orden_corte(oc_id)
             if not oc_check or not _corte_es_del_cortador(oc_check, user):
                 raise HTTPException(403, "Solo puedes generar remisiones de los cortes asignados a ti.")
@@ -1665,24 +1779,29 @@ def crear_remision(
         #     + ficha "Aceptar lote". Las etiquetas térmicas salen al SEPARAR,
         #     no al crear la remisión.
         es_confeccion = (body.tipo != "terminacion")
-        rem = svc.crear_remision(
+        # Una remisión POR LOTE (cada referencia es independiente).
+        rems = svc.crear_remision(
             confeccionista_id=body.confeccionista_id,
             fecha_recogida=body.fecha_recogida,
-            orden_corte_ids=body.orden_corte_ids,
+            orden_corte_ids=(body.orden_corte_ids or None),
+            lotes=([l.model_dump() for l in body.lotes] if body.lotes else None),
             created_by=user.email,
             tipo=body.tipo,
             liberar_impresion=False,   # retenida hasta separar insumos (ambos tipos)
         )
         extra: dict = {"impresion": "retenida"}
         if es_confeccion:
-            # Aviso al confeccionista de que tiene un lote por recoger.
-            try:
-                extra["aviso_recoger"] = svc._notificar_lote_por_recoger(rem)
-            except Exception as e:
-                import logging as _lg
-                _lg.getLogger(__name__).warning(f"[wa] aviso lote por recoger fallo: {e}")
-                extra["aviso_recoger"] = []
-        return {"ok": True, "remision": rem, **extra}
+            # Aviso al confeccionista por cada lote por recoger.
+            avisos: list = []
+            for _rem in rems:
+                try:
+                    avisos += svc._notificar_lote_por_recoger(_rem)
+                except Exception as e:
+                    import logging as _lg
+                    _lg.getLogger(__name__).warning(f"[wa] aviso lote por recoger fallo: {e}")
+            extra["aviso_recoger"] = avisos
+        return {"ok": True, "remision": (rems[0] if rems else None),
+                "remisiones": rems, **extra}
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
@@ -1703,6 +1822,7 @@ def detalle_remision(
 
 class WhatsAppRemisionBody(BaseModel):
     orden_corte_id: Optional[str] = None   # enviar solo este lote (botón por lote)
+    referencia_id:  Optional[str] = None   # en un combinado, la referencia del lote
 
 
 @router.post("/remisiones/{rem_id}/whatsapp")
@@ -1717,7 +1837,8 @@ def remision_whatsapp(
     if not rem:
         raise HTTPException(404, "no_encontrada")
     try:
-        envios = svc._notificar_remision_whatsapp(rem, solo_oc_id=body.orden_corte_id)
+        envios = svc._notificar_remision_whatsapp(rem, solo_oc_id=body.orden_corte_id,
+                                                  solo_ref_id=body.referencia_id)
     except Exception as e:
         raise HTTPException(500, f"whatsapp: {str(e)[:200]}")
     return {"ok": True, "envios": envios}
@@ -1834,12 +1955,25 @@ def crear_ruta(
 @router.get("/rutas/por-corte/{oc_id}")
 def ruta_por_corte(
     oc_id: str,
+    referencia_id: Optional[str] = None,
     _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ) -> dict:
-    r = svc.obtener_ruta_por_corte(oc_id)
+    # Un corte combinado tiene una ruta por referencia: con `referencia_id` se
+    # pide la de ESA referencia (sin él, la primera — compat).
+    r = svc.obtener_ruta_por_corte(oc_id, referencia_id=referencia_id)
     if not r:
         raise HTTPException(404, "no_encontrada")
     return r
+
+
+@router.get("/rutas/por-corte/{oc_id}/todas")
+def rutas_por_corte(
+    oc_id: str,
+    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+) -> dict:
+    """Todas las hojas de ruta (lotes) de un corte — un combinado tiene una por
+    referencia. Lista vacía si aún no se ha remitido ninguna."""
+    return {"rutas": svc.obtener_rutas_por_corte(oc_id)}
 
 
 @router.patch("/rutas/{ruta_id}")

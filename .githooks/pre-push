@@ -1,0 +1,14 @@
+#!/bin/sh
+# Guardián — frena en el push las clases de bug que ya nos mordieron
+# (limit>1000 de Supabase, fromisoformat directo en Py 3.10). Revisa SOLO el
+# diff contra main, así que no molesta con el código viejo.
+#
+# Activar (una vez por clon):   git config core.hooksPath .githooks
+root="$(git rev-parse --show-toplevel)"
+if ! python3 "$root/scripts/guardian.py"; then
+  echo ""
+  echo "⛔ Push bloqueado por el guardián. Arréglalo, o justifica la línea con '# guardian: ok'."
+  echo "   (Emergencia: 'git push --no-verify' lo salta — pero deja rastro.)"
+  exit 1
+fi
+exit 0

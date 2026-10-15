@@ -400,17 +400,36 @@ _YA_DESPACHADO = ("en_transito", "novedad", "entregado", "resuelto", "devuelto")
 
 
 def _marcar_despacho_observado(p: dict, prev: dict) -> bool:
-    """Anota la fecha de despacho si ACABAMOS DE VER la transición.
+    """Anota la fecha de despacho de un pedido despachado.
 
-    Devuelve True si se anotó. No pisa una fecha propia ya existente: el
-    despacho pasa una sola vez, y si el pedido vuelve a "en tránsito" tras una
-    novedad eso no es un despacho nuevo.
+    Dos caminos:
+      · TRANSICIÓN — acabamos de ver el paso no-despachado → despachado. Es la
+        fecha buena observada, marca confiable.
+      · PISO — el pedido aparece YA despachado la primera vez (sin transición
+        observable) y NADIE le puso fecha: ni el ship_timestamp del detalle (aún
+        sin enriquecer) ni una observación previa. Sin esto quedaba
+        `despachado_sin_fecha` e IMPOSIBLE de trabajar hasta que el
+        enriquecimiento —rate-limited— lo alcanzara. Se estampa HOY como piso
+        para que sea trabajable YA; NO marca confiable, así el ship_timestamp
+        real lo pisa después (el detalle sobrescribe siempre).
+
+    No pisa una fecha propia ya existente: el despacho pasa una sola vez, y si el
+    pedido vuelve a "en tránsito" tras una novedad eso no es un despacho nuevo.
     """
-    if p.get("fecha_despacho_observada"):
+    # Ya tiene fecha observada propia o heredable de prev: no re-estampar.
+    if p.get("fecha_despacho_observada") or prev.get("fecha_despacho_observada"):
         return False
     antes = prev.get("sub_estado_logistico") or ""
     ahora = p.get("sub_estado_logistico") or ""
-    if antes not in _NO_DESPACHADO or ahora not in _YA_DESPACHADO:
+    transicion = antes in _NO_DESPACHADO and ahora in _YA_DESPACHADO
+    # CRÍTICO: este observador corre sobre el pedido CRUDO (el listado no trae
+    # fecha) ANTES de heredar los campos enriquecidos de prev (ver _fusionar_tramo
+    # y _heredar_enriquecidos). Por eso el piso mira TAMBIÉN prev: sin eso pisaría
+    # con "hoy" el ship_timestamp real que ya tenía el caché, en cada sweep.
+    ya_tiene_fecha = (p.get("fecha_despacho") or prev.get("fecha_despacho")
+                      or p.get("fecha_despacho_confiable") or prev.get("fecha_despacho_confiable"))
+    piso = ahora in _YA_DESPACHADO and not ya_tiene_fecha
+    if not (transicion or piso):
         return False
     from datetime import datetime as _dt
     try:
@@ -419,11 +438,12 @@ def _marcar_despacho_observado(p: dict, prev: dict) -> bool:
     except Exception:
         hoy = _dt.now().date().isoformat()
     p["fecha_despacho_observada"] = hoy
-    # Si no había fecha fiable, esta manda: la vimos nosotros.
+    # Si no había fecha fiable, esta manda. La TRANSICIÓN es confiable (la vimos);
+    # el PISO no (es un estimado que el ship_timestamp real reemplazará).
     if not p.get("fecha_despacho_confiable"):
         p["fecha_despacho"] = hoy
-        p["fecha_despacho_confiable"] = True
-        p["fecha_despacho_origen"] = "transicion_observada"
+        p["fecha_despacho_confiable"] = bool(transicion)
+        p["fecha_despacho_origen"] = "transicion_observada" if transicion else "visto_despachado"
     return True
 
 
@@ -576,7 +596,7 @@ CODIGOS_PROCESO_INTERNO = {3, 4, 10, 12, 22, 25, 27}
 
 # ── Whitelist por código ───────────────────────────────────────────────────────
 #   Pendiente seller → 26, 29      "Alistamiento en espera · Seller"
-#   En preparación   → 1,2,5,24,28 "En bodega de Melonn, todavía NO salió"
+#   En preparación   → 1,2,5,23,24,28,39 "En bodega de Melonn, todavía NO salió"
 #   En tránsito      → 7           "Con la transportadora, en la calle"
 #   Entregado        → 6, 8        "Picked-up by buyer" / "Delivered to buyer"
 #   Novedades ext.   → 20 + NOMBRE (código no confirmado en API docs)
@@ -597,7 +617,10 @@ CODIGOS_PENDIENTE_DESPACHO = {26, 29}
 # los conjuntos, así que caía en "otro" y el pedido DESAPARECÍA del tablero sin
 # dejar rastro. Encontrado 2026-08-01 con el pedido #61358, contraentrega,
 # invisible desde el 30 de julio.
-CODIGOS_EN_PREPARACION     = {1, 2, 5, 23, 24, 28}
+# 39 = "Packed at warehouse": empacada en bodega, lista para despachar (aún NO
+# salió). Mismo hueco que el 23 — la app no lo sabía clasificar y el aviso de
+# confiabilidad lo cazó (2026-09-18). Es preparación, va con 5/24.
+CODIGOS_EN_PREPARACION     = {1, 2, 5, 23, 24, 28, 39}
 CODIGOS_EN_TRANSITO        = {7}
 CODIGOS_ENTREGADO          = {6, 8}
 CODIGOS_NOVEDAD            = {20}
@@ -674,6 +697,7 @@ ESTADOS_EN_PREPARACION = {
     "Packed - on hold", "Empacada - retenida",                           # 23
     "Prepared for dispatch", "Preparada para despacho",                  # 24
     "Ready For Packing", "Lista para empaque",                           # 28
+    "Packed at warehouse", "Empacada en bodega",                         # 39
 }
 
 # Proceso interno puro — nunca se muestra (alistado, picking, packing interno)
@@ -847,12 +871,12 @@ def _sb_cache_guardar(pedidos: list, fuente: str = "api_live"):
             "config_hash": _config_hash(),
             "pedidos":     pedidos,
         }, default=str)
-        sb.table(_SB_TABLA).upsert({
+        _exec_upsert_idempotente(sb.table(_SB_TABLA).upsert({
             "id":          1,
             "fetched_at":  datetime.utcnow().isoformat(),
             "pedidos_json": envelope,
             "total":       len(pedidos),
-        }).execute()
+        }))
         log.info(f"Supabase cache guardado: {len(pedidos)} pedidos, fuente={fuente}")
     except Exception as e:
         log.warning(f"Supabase cache guardar error: {e}")
@@ -883,12 +907,12 @@ def _marcar_fetch_api() -> None:
     try:
         sb = _sb()
         if sb:
-            sb.table(_SB_TABLA).upsert({
+            _exec_upsert_idempotente(sb.table(_SB_TABLA).upsert({
                 "id":           _SB_FILA_API,
                 "fetched_at":   ahora,
                 "pedidos_json": "{}",
                 "total":        0,
-            }).execute()
+            }))
     except Exception as e:
         log.warning(f"No pude sellar la hora del fetch: {e}")
     try:
@@ -1071,6 +1095,40 @@ def _barrido_leer_sq() -> Optional[dict]:
     return e if isinstance(e, dict) else None
 
 
+def _es_corte_conexion(e: Exception) -> bool:
+    """El corte transitorio del pool de Supabase (GOAWAY HTTP/2 → ConnectionTerminated
+    / RemoteProtocolError / Server disconnected)."""
+    blob = (type(e).__name__ + " " + str(e)).lower()
+    return any(t in blob for t in ("remoteprotocol", "connectionterminated",
+                                   "server disconnected", "disconnected",
+                                   "connection reset", "connectionclosed"))
+
+
+def _exec_upsert_idempotente(query, intentos: int = 3):
+    """Ejecuta un UPSERT de una fila de id FIJO reintentando ante el corte del
+    pool de Supabase. Seguro reintentar: re-upsertar la misma fila no duplica
+    nada (a diferencia de un insert que acumula). Úsalo SOLO para upserts de fila
+    singleton — la marca del fetch, el cursor del barrido, etc.
+
+    Por qué existe (2026-09-11): el corte transitorio de Supabase tumbaba el
+    guardado del cursor del barrido (`no pude guardar el cursor`), el barrido se
+    estancaba y la marca del fetch quedaba vieja → el panel de confiabilidad
+    disparaba la falsa alerta roja "no hay registro de un fetch". El reintento
+    sistémico de postgrest solo cubre GET; estos son POST."""
+    ultimo = None
+    for i in range(intentos):
+        try:
+            return query.execute()
+        except Exception as e:
+            ultimo = e
+            if _es_corte_conexion(e) and i < intentos - 1:
+                time.sleep(0.4 * (2 ** i))
+                continue
+            raise
+    if ultimo is not None:
+        raise ultimo
+
+
 def _barrido_guardar(estado: dict) -> None:
     """Escribe el cursor en Supabase Y en SQLite. Si Supabase falla, SQLite
     conserva el avance dentro del contenedor: peor que nada es volver a barrer
@@ -1079,12 +1137,12 @@ def _barrido_guardar(estado: dict) -> None:
     try:
         sb = _sb()
         if sb:
-            sb.table(_SB_TABLA).upsert({
+            _exec_upsert_idempotente(sb.table(_SB_TABLA).upsert({
                 "id":           _SB_FILA_BARRIDO,
                 "fetched_at":   datetime.utcnow().isoformat(),
                 "pedidos_json": blob,
                 "total":        len(estado.get("vistas") or []),
-            }).execute()
+            }))
     except Exception as e:
         log.warning(f"[barrido] no pude guardar el cursor en Supabase: {e}")
     try:
@@ -1684,8 +1742,14 @@ def _get(path: str, params: dict = None) -> Optional[dict]:
             return data
 
         except requests.HTTPError as e:
-            log.warning(f"HTTP {e.response.status_code} en {url}")
-            _fallo(f"http_{e.response.status_code}", path)
+            code = e.response.status_code
+            # Un 404 en un GET de detalle casi siempre es "el pedido no está en
+            # Melonn con ese id" (backlog histórico de entregados, pedidos POS/
+            # manuales que nunca pasaron por Melonn). Es ruido ESPERADO, no una
+            # falla: se registra en INFO para no disparar alarma en Railway. Los
+            # 5xx (Melonn caído/errando) sí se avisan como warning.
+            (log.info if code == 404 else log.warning)(f"HTTP {code} en {url}")
+            _fallo(f"http_{code}", path)
             return None
         except Exception as e:
             log.warning(f"Request error en {url}: {e}")
@@ -2052,7 +2116,7 @@ def _sub_estado_logistico(estado: str, codigo: int = 0, es_cod: bool = False) ->
     Clasifica el estado Melonn en las categorías operativas del dashboard.
     Códigos confirmados en producción (corregido 2026-07-31):
       pendiente_despacho → 26, 29   esperando que el seller libere
-      en_preparacion     → 1,2,5,24,28  en la bodega de Melonn, NO salió
+      en_preparacion     → 1,2,5,23,24,28,39  en la bodega de Melonn, NO salió
       en_transito        → 7        con la transportadora, en la calle
       novedad            → 20 + novedades externas por nombre
       entregado          → 6, 8
@@ -2165,7 +2229,7 @@ def _normalizar(raw: dict) -> dict:
         # ── Flags de estado ───────────────────────────────────────────────────
         "dias_en_transito":       0,   # calculado dinámicamente en shared._dias_reales()
         "esta_en_transito":       estado in ESTADOS_EN_TRANSITO,
-        "entregado":              estado in ESTADOS_EXCLUIR,
+        "entregado":              estado in ESTADOS_ENTREGADO,
         "incidencia":             "NINGUNO",
         "promesa_vencida":        False,
     }
@@ -2460,6 +2524,32 @@ def _tam_tramo(estado: dict) -> int:
     return max(_TRAMO_MIN, min(_TRAMO_MAX, -(-previo // 2)))   # ceil(previo/2)
 
 
+def _traer_pagina_partida(pagina: int) -> Optional[list]:
+    """Reintenta una página que Melonn NO DIGIERE (500 tras agotar los reintentos
+    de _get) partiéndola en sub-páginas de la mitad de tamaño. Un `per_page`
+    menor suele pasar donde el grande revienta —por eso 'un tramo se cortó en la
+    página N: http_500' se repetía cada tick—. Devuelve los items combinados
+    (mismo rango de offset que la página entera), o None si aun partida falla
+    (ahí el barrido difiere al próximo tick, como siempre)."""
+    sub = _PAGE_SIZE // 2
+    if sub < 1 or _PAGE_SIZE % sub != 0:
+        return None                        # tamaño no divisible limpio → no arriesgar
+    factor = _PAGE_SIZE // sub              # 2
+    base = pagina * factor                 # primera sub-página que cubre esta página
+    combinado: list = []
+    for j in range(factor):
+        r = _get("sell-orders", params={"per_page": sub, "page": base + j})
+        if r is None:
+            return None                    # también revienta partida → difiere
+        chunk = r.get("data") or []
+        combinado.extend(chunk)
+        if len(chunk) < sub:
+            break                          # última página real: no hay más
+    log.warning(f"[barrido] página {pagina} no digerida entera; RECUPERADA partida "
+                f"en sub-páginas de {sub} ({len(combinado)} pedidos)")
+    return combinado
+
+
 def _barrido_tick(worker: str = "") -> dict:
     """Avanza UN TRAMO del barrido. Es lo que llama el scheduler en cada tick.
 
@@ -2530,9 +2620,15 @@ def _barrido_tick(worker: str = "") -> dict:
     while p < min(inicio + tam + solo_fusion, _MAX_PAGES):
         resp = _get("sell-orders", params={"per_page": _PAGE_SIZE, "page": p})
         if resp is None:
-            causa = (ultimo_fallo_get().get("motivo") or "sin_causa_registrada")
-            motivo = f"fallo_get_pagina_{p}:{causa}"
-            break
+            # La página revienta (500 tras reintentos): intentar recuperarla
+            # PARTIDA en sub-páginas más pequeñas antes de cortar el tramo. Solo
+            # si aun así falla se difiere al próximo tick.
+            partida = _traer_pagina_partida(p)
+            if partida is None:
+                causa = (ultimo_fallo_get().get("motivo") or "sin_causa_registrada")
+                motivo = f"fallo_get_pagina_{p}:{causa}"
+                break
+            resp = {"data": partida}
         items = resp.get("data") or []
         if not items:
             # Una página vacía significa "se acabó el listado" — pero SOLO si es
@@ -3000,30 +3096,32 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
     resultado = list(pedidos)
     completados = 0
 
+    from urllib.parse import quote
     for idx in indices:
         p = pedidos[idx]
-        # Probar primero external_order_number; si falla, probar internal
-        # (orden_melonn sin "M") — útil para órdenes manuales con códigos
-        # cortos como "0031" que el external no resuelve.
-        ext = p.get("orden_tienda")
+        # EL ID CORRECTO DEL GET (verificado contra Melonn 2026-09-16): el
+        # external_order_number se guarda CON "#" (ej. "#62531") y hay que
+        # pedirlo URL-encoded (%23). Antes se mandaba sin "#" y también el M-id,
+        # y AMBOS daban 404 "Order not found" — de ahí la tanda de 404/500 en los
+        # logs y que nunca se enriquecieran estos pedidos. Fallback sin "#" por
+        # si algún pedido manual no lo lleva.
+        ext = str(p.get("orden_tienda") or "").strip()
         internal = str(p.get("orden_melonn") or "").lstrip("Mm").strip()
 
         detail = None
-        for candidato in [ext, internal]:
-            if not candidato:
-                continue
+        base_ext = ext.lstrip("#")
+        candidatos = [quote(f"#{base_ext}", safe=""), base_ext] if base_ext else []
+        for ident in candidatos:
             try:
-                # ?fields=sell_order_promises trae el bloque sell_order_attempt
-                # con las fechas REALES (ship_timestamp, delivery_timestamp) y
-                # las ventanas prometidas. SIN este parámetro esos campos NO
-                # vienen — y eso era la causa del bucle infinito: buscábamos
-                # `dispatch_date`, que no existe en ninguna respuesta.
-                detail = _get(f"sell-orders/{candidato}",
+                # ?fields=sell_order_promises añade sell_order_promise_info (Melonn
+                # ya no devuelve el viejo sell_order_attempt). El detalle base ya
+                # trae buyer/shipping_info/line_items para enriquecer el cliente.
+                detail = _get(f"sell-orders/{ident}",
                               params={"fields": "sell_order_promises"})
                 if detail:
                     break
             except Exception as e:
-                log.debug(f"detail {candidato}: {e}")
+                log.debug(f"detail {ident}: {e}")
                 continue
 
         # Registrar el intento ANTES de mirar el resultado. Si el detalle no
@@ -3036,7 +3134,9 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
         resultado[idx] = p
 
         if not detail:
-            log.warning(f"Sin detalle Melonn para {ext} / {internal}")
+            # Esperado para el backlog histórico (pedidos que Melonn no resuelve
+            # por ningún id): se marcó el intento arriba y no se vuelve a preguntar.
+            log.info(f"Sin detalle Melonn para {ext} / {internal}")
             continue
 
         # Schema real Melonn API:
@@ -3102,22 +3202,22 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
         if direccion and not p.get("direccion"):
             p["direccion"] = direccion
 
-        # ── Fechas reales, desde sell_order_attempt ──────────────────────────
-        # ANTES leía `dispatch_date`, `delivery_date` y `promise_date`. NINGUNO
-        # DE LOS TRES EXISTE en las respuestas de Melonn — verificado volcando
-        # todas las claves de pedidos reales en varios estados. Por eso
-        # `fecha_despacho_confiable` nunca se marcaba y los pedidos en tránsito
-        # se re-consultaban en cada ciclo, para siempre (el bucle de las 130).
-        #
-        # Los campos de verdad viven en sell_order_attempt[], que SOLO llega si
-        # se pide ?fields=sell_order_promises (arriba). Cada attempt es un
-        # intento de entrega; `current: true` marca el vigente.
-        attempts = detail.get("sell_order_attempt") or []
-        if isinstance(attempts, list) and attempts:
-            act = next((a for a in attempts
-                        if isinstance(a, dict) and a.get("current")), None)
-            if act is None:
-                act = attempts[-1] if isinstance(attempts[-1], dict) else {}
+        # ── Fechas reales (ship_timestamp / delivery_timestamp) ──────────────
+        # Melonn REESTRUCTURÓ su API (verificado 2026-09-16): los intentos ya no
+        # están en `sell_order_attempt` (desapareció) sino en
+        # `sell_order_package[].sell_order_package_attempt[]`, con los MISMOS
+        # campos (ship_timestamp, delivery_timestamp, current). Se aplanan los
+        # intentos de todos los paquetes; `current: true` marca el vigente.
+        attempts: list = []
+        for _pkg in (detail.get("sell_order_package") or []):
+            if isinstance(_pkg, dict):
+                attempts.extend(a for a in (_pkg.get("sell_order_package_attempt") or [])
+                                if isinstance(a, dict))
+        # Compat: si el bloque viejo volviera a aparecer.
+        attempts.extend(a for a in (detail.get("sell_order_attempt") or [])
+                        if isinstance(a, dict))
+        if attempts:
+            act = next((a for a in attempts if a.get("current")), None) or attempts[-1]
 
             def _dia(v) -> str:
                 return str(v).split("T")[0] if v else ""

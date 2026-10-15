@@ -38,8 +38,17 @@ def cargar_map() -> dict[str, dict]:
     if sb is None:
         return {}
     try:
-        res = sb.table("liquidaciones_cod").select("*").execute()
-        return {r["orden"]: r for r in (res.data or [])}
+        out: dict[str, dict] = {}
+        inicio = 0
+        while inicio < 50000:            # paginar: PostgREST corta en 1000 filas
+            r = (sb.table("liquidaciones_cod").select("*")
+                   .range(inicio, inicio + 999).execute()).data or []
+            for row in r:
+                out[row["orden"]] = row
+            if len(r) < 1000:
+                break
+            inicio += 1000
+        return out
     except Exception as e:
         print(f"[conciliacion] Error cargar_map: {e}")
         return {}

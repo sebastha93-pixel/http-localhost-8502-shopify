@@ -23,6 +23,7 @@ interface TelaStock {
 interface LineaForm {
   categoria: string;
   item: string;
+  color?: string;        // solo MATERIA PRIMA (tela): color de esa tela → viaja a la orden de corte
   valor_unitario: string;
   cantidad: string;
   aplica_iva: boolean;   // si true, IVA se calcula automático con iva_pct global
@@ -71,9 +72,17 @@ function lineasIniciales(): LineaForm[] {
   return out;
 }
 
+// COP no tiene decimales: el separador de miles es el punto. "189.900" debe leerse
+// 189900, no 189,9. Para valores en PESOS se quitan TODOS los no-dígitos y se
+// parsea como entero. (La cantidad SÍ puede ser fraccionaria —metros de tela— y
+// se sigue leyendo con parseFloat.)
+function pesos(s?: string): number {
+  return parseInt((s || "").replace(/\D/g, ""), 10) || 0;
+}
+
 function ivaDeLinea(l: LineaForm, ivaPct: number): number {
   if (!l.aplica_iva) return 0;
-  const v = parseFloat(l.valor_unitario || "0") || 0;
+  const v = pesos(l.valor_unitario);
   const q = parseFloat(l.cantidad || "0") || 0;
   return Math.round(v * q * (ivaPct / 100));
 }
@@ -86,6 +95,7 @@ export default function NuevoPrecosteoPage() {
   const [nombre, setNombre] = useState("");
   const [tela, setTela] = useState("");
   const [color, setColor] = useState("");
+  const [descripcion, setDescripcion] = useState("");
   const [iva, setIva] = useState("19");
   const [precioVenta, setPrecioVenta] = useState("");
   const [esMuestra, setEsMuestra] = useState(false);
@@ -141,22 +151,31 @@ export default function NuevoPrecosteoPage() {
     }
   }, [telaOpen]);
 
-  const ivaPct = parseFloat(iva) || 0;
-  const precioVentaNum = parseFloat(precioVenta || "0") || 0;
+  // Vacío = usar el default 19%. Un 0 explícito (producto exento) se respeta.
+  const ivaPct = iva.trim() === "" ? 19 : (parseFloat(iva) || 0);
+  const precioVentaNum = pesos(precioVenta);
 
   const mut = useMutation({
     mutationFn: () => {
-      // Solo mandamos líneas con valor > 0 o cantidad > 0 (evita renglones vacíos de plantilla)
+      // Solo mandamos líneas con valor > 0 o cantidad > 0 (evita renglones vacíos de plantilla).
+      // Ordenamos por categoría (orden de la plantilla) para que lo guardado quede
+      // agrupado —y que un "+ Otro" caiga en su bloque, no suelto al final—.
+      const rank = (c: string) => { const i = CATEGORIAS.indexOf(c); return i < 0 ? CATEGORIAS.length : i; };
       const items = lineas
-        .filter((l) => l.item.trim() && (parseFloat(l.valor_unitario || "0") > 0 || parseFloat(l.cantidad || "0") > 0))
+        .filter((l) => l.item.trim() && (pesos(l.valor_unitario) > 0 || parseFloat(l.cantidad || "0") > 0))
         .map((l) => ({
           categoria: l.categoria,
           item: l.item.trim(),
-          valor_unitario: parseFloat(l.valor_unitario || "0") || 0,
-          cantidad: parseFloat(l.cantidad || "0") || 0,
+          color: l.categoria === "MATERIA PRIMA" ? (l.color?.trim() || null) : null,
+          valor_unitario: pesos(l.valor_unitario),
+          cantidad: parseFloat(l.cantidad || "0") || 1,
           iva: ivaDeLinea(l, ivaPct),
-        }));
-      if (items.length === 0) throw new Error("Llena al menos un renglón con valor unitario.");
+        }))
+        .sort((a, b) => rank(a.categoria) - rank(b.categoria));
+      // Al menos un renglón con VALOR real. Antes se pedía items.length>0, pero
+      // las líneas de plantilla nacen con cantidad "1" y siempre pasaban el
+      // filtro → un precosteo entero en $0 se colaba sin avisar.
+      if (!items.some((it) => it.valor_unitario > 0)) throw new Error("Llena al menos un renglón con valor unitario.");
       if (!telaFinal) throw new Error("Selecciona una tela del inventario.");
       // El precio de venta que el usuario teclea YA INCLUYE IVA.
       // Para calcular la utilidad real: sacar el IVA de la venta y compararlo
@@ -171,7 +190,8 @@ export default function NuevoPrecosteoPage() {
         nombre: nombre.trim(),
         tela: telaFinal || null,
         color: color.trim() || null,
-        iva_pct: ivaPct || 19,
+        descripcion: descripcion.trim() || null,
+        iva_pct: ivaPct,
         margen,
         items,
         es_muestra_diseno: esMuestra,
@@ -195,7 +215,7 @@ export default function NuevoPrecosteoPage() {
     setLineas((prev) => prev.filter((_, i) => i !== idx));
   }
 
-  const totalSin = lineas.reduce((s, l) => s + (parseFloat(l.valor_unitario || "0") || 0) * (parseFloat(l.cantidad || "0") || 0), 0);
+  const totalSin = lineas.reduce((s, l) => s + pesos(l.valor_unitario) * (parseFloat(l.cantidad || "0") || 0), 0);
   const totalIva = lineas.reduce((s, l) => s + ivaDeLinea(l, ivaPct), 0);
   const totalCon = totalSin + totalIva;
   // Precio de venta que teclea el usuario YA INCLUYE IVA.
@@ -204,13 +224,22 @@ export default function NuevoPrecosteoPage() {
   const utilidad = precioNetoVenta > 0 && totalSin > 0 ? precioNetoVenta - totalSin : 0;
   const utilidadPct = precioNetoVenta > 0 && totalSin > 0 ? (utilidad / totalSin) * 100 : 0;
 
-  // Agrupamos por categoría para dibujar sub-encabezados en la tabla
+  // Agrupamos por categoría: UNA sola sección por categoría, en el orden de la
+  // plantilla. Así un renglón "+ Otro" cae DENTRO del bloque de la categoría que
+  // elijas en su select (y salta de bloque si la cambias), en vez de quedar
+  // suelto al final. Las categorías fuera de la plantilla van al final.
+  const catOrden = [
+    ...CATEGORIAS,
+    ...Array.from(new Set(lineas.map((l) => l.categoria))).filter((c) => !CATEGORIAS.includes(c)),
+  ];
   const gruposUI: { categoria: string; indices: number[] }[] = [];
-  lineas.forEach((l, i) => {
-    const last = gruposUI[gruposUI.length - 1];
-    if (last && last.categoria === l.categoria) last.indices.push(i);
-    else gruposUI.push({ categoria: l.categoria, indices: [i] });
-  });
+  for (const cat of catOrden) {
+    const indices = lineas.reduce<number[]>((acc, l, i) => {
+      if (l.categoria === cat) acc.push(i);
+      return acc;
+    }, []);
+    if (indices.length) gruposUI.push({ categoria: cat, indices });
+  }
 
   return (
     <PageShell title="Nuevo precosteo" subtitle="Plantilla estándar · llena valor y cantidad">
@@ -279,6 +308,16 @@ export default function NuevoPrecosteoPage() {
               <Input label="Precio de venta (con IVA)" value={precioVenta} onChange={setPrecioVenta} inputMode="decimal" placeholder="120000" />
             </div>
 
+            <div>
+              <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
+                Descripción <span className="text-graphite/60 normal-case tracking-normal">(opcional)</span>
+              </label>
+              <textarea value={descripcion} onChange={(e) => setDescripcion(e.target.value)}
+                rows={3}
+                placeholder="Detalle de la referencia: características, terminación, notas del diseño…"
+                className="w-full rounded-sm border border-border bg-white px-3 py-2 text-sm text-ink-900 placeholder:text-graphite/50" />
+            </div>
+
             <label className={`flex items-start gap-3 rounded-sm border p-3 cursor-pointer ${esMuestra ? "border-navy-600 bg-navy-600/[0.04]" : "border-border bg-cloud/30"}`}>
               <input type="checkbox" checked={esMuestra} onChange={(e) => setEsMuestra(e.target.checked)}
                 className="mt-0.5 h-4 w-4" />
@@ -319,6 +358,8 @@ export default function NuevoPrecosteoPage() {
                 </thead>
                 <tbody>
                   {gruposUI.map((g) => (
+                    // Una sección por categoría (ver gruposUI): la categoría es
+                    // única, así que sirve de key directamente.
                     <Fragment key={g.categoria}>
                       <tr className="bg-cloud/60 border-b border-border">
                         <td colSpan={7} className="px-2 py-1.5 text-[0.7rem] font-bold uppercase tracking-[0.16em] text-ink-900">
@@ -327,7 +368,7 @@ export default function NuevoPrecosteoPage() {
                       </tr>
                       {g.indices.map((idx) => {
                         const l = lineas[idx];
-                        const ts = (parseFloat(l.valor_unitario || "0") || 0) * (parseFloat(l.cantidad || "0") || 0);
+                        const ts = pesos(l.valor_unitario) * (parseFloat(l.cantidad || "0") || 0);
                         const ivaMonto = ivaDeLinea(l, ivaPct);
                         const tc = ts + ivaMonto;
                         return (
@@ -349,6 +390,13 @@ export default function NuevoPrecosteoPage() {
                                     placeholder="Item"
                                     className="flex-1 rounded-sm border border-border bg-white px-2 py-1 text-xs" />
                                 </div>
+                              )}
+                              {/* Color de la tela — solo MATERIA PRIMA. Viaja a la orden de
+                                  corte (forro de bolsillo / tela complementaria por color). */}
+                              {l.categoria === "MATERIA PRIMA" && (
+                                <input value={l.color || ""} onChange={(e) => actualizar(idx, "color", e.target.value)}
+                                  placeholder="Color de la tela (opcional)"
+                                  className="mt-1 w-full rounded-sm border border-border bg-white px-2 py-1 text-[0.7rem] text-graphite placeholder:text-graphite/50" />
                               )}
                             </td>
                             <td className="px-2 py-1.5">

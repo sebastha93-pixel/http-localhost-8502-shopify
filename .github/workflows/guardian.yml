@@ -1,0 +1,27 @@
+name: Guardián
+
+# Corre en CADA push a main y en cada PR. Revisa SOLO lo que trae el cambio
+# (diff), así que no se traba con el código viejo: frena lo NUEVO.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  guardian:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # historia completa para poder hacer el diff
+
+      - name: Definir base del diff
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "GUARDIAN_BASE=origin/${{ github.base_ref }}" >> "$GITHUB_ENV"
+          else
+            echo "GUARDIAN_BASE=${{ github.event.before }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Guardián
+        run: python3 scripts/guardian.py

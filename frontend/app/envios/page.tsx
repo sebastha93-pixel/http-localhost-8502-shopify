@@ -17,8 +17,10 @@ export default function EnviosPage() {
     const code = (p: Pedido) => p.estado_melonn_code;
     return {
       todos:      pres,
-      // En proceso: alistamiento → preparado, ANTES de la transportadora
-      proceso:    pres.filter((p) => [1, 2, 5, 24, 26, 28, 29].includes(code(p)) && !p.es_novedad_visible),
+      // En proceso: alistamiento → preparado, ANTES de la transportadora.
+      // 23 (Packed - on hold) y 39 (Packed at warehouse) son bodega: sin ellos
+      // esos pedidos caían fuera de TODAS las pestañas (aviso de confiabilidad).
+      proceso:    pres.filter((p) => [1, 2, 5, 23, 24, 26, 28, 29, 39].includes(code(p)) && !p.es_novedad_visible),
       // En tránsito: ya con la transportadora (en ruta al cliente)
       transito:   pres.filter((p) => code(p) === 7 && !p.es_novedad_visible),
       novedades:  pres.filter((p) => p.es_novedad_visible),

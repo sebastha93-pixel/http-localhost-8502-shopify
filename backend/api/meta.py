@@ -107,13 +107,15 @@ async def webhook_receive(request: Request, background_tasks: BackgroundTasks) -
         _stats["primero_en"] = now_iso
     _stats["ultimo_en"] = now_iso
 
-    # Validar firma con META_APP_SECRET cuando esté configurado.
-    # Si el secret falta, log warning pero NO rechazamos (validate_security
-    # ya alertó al admin en boot). Cuando el admin lo configure, los requests
-    # con firma inválida se rechazan inmediato.
-    secret_ok = bool(_app_secret())
+    # Validar firma cuando HAYA con qué. _verify_signature acepta la firma de
+    # CUALQUIERA de las dos apps (META_APP_SECRET o WHATSAPP_APP_SECRET), así que
+    # la compuerta tiene que mirar las DOS: antes solo miraba META_APP_SECRET, y
+    # con la WABA nueva (que trae solo WHATSAPP_APP_SECRET) el webhook aceptaba
+    # TODO sin validar firma aunque sí había secret para hacerlo — hueco abierto
+    # a eventos falsos. Ahora: si hay algún secret, se valida; si no, se avisa.
+    secret_ok = bool(_app_secret() or os.environ.get("WHATSAPP_APP_SECRET", "").strip())
     if not secret_ok:
-        log.warning("Meta webhook sin META_APP_SECRET — aceptando sin validar firma")
+        log.warning("Meta webhook sin secret (META_APP_SECRET/WHATSAPP_APP_SECRET) — aceptando sin validar firma")
     elif not _verify_signature(body, sig):
         _stats["errores"] += 1
         _stats["ultimo_error"] = "firma_invalida"

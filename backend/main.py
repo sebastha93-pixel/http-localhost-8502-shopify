@@ -34,6 +34,20 @@ async def lifespan(app: FastAPI):
     # Startup
     print(f"🚀 MALE'DENIM OS API · env={settings.env}")
     print(f"   CORS allowed: {settings.cors_origins_list}")
+
+    # Blindaje de Supabase. VA ANTES de la primera query (el bootstrap de abajo
+    # ya consulta la BD) y antes de crear cualquier cliente (todos son perezosos
+    # dentro de _sb()). Ver backend/core/supabase_resiliente.py.
+    #   1) RAÍZ: forzar HTTP/1.1 en PostgREST — el ConnectionTerminated es un
+    #      GOAWAY de HTTP/2 sobre conexión reusada; en HTTP/1.1 no existe.
+    #   2) Red: reintentar las LECTURAS por si igual se cae una conexión.
+    try:
+        from backend.core.supabase_resiliente import (
+            forzar_http1_postgrest, instalar_retry_lecturas_supabase)
+        forzar_http1_postgrest()
+        instalar_retry_lecturas_supabase()
+    except Exception as e:
+        print(f"   ⚠️  Blindaje Supabase no instalado: {e}")
     # Validar configuración de seguridad — aborta boot en producción si hay
     # secrets débiles (JWT default, META_APP_SECRET vacío, etc.)
     settings.validate_security()
@@ -67,17 +81,62 @@ async def lifespan(app: FastAPI):
     # Solo UNO debe correr los crons (auditorías, sync_tasks, transcripción).
     # Mecanismo: file lock atómico — el primer worker que cree el archivo gana.
     LEADER_LOCK = "/tmp/maledenim-leader.lock"
+
+    def _pid_vivo(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False           # el dueño murió
+        except PermissionError:
+            return True            # existe (otro dueño) → vivo, no reclamar
+        except Exception:
+            return False
+
+    def _crear_lock() -> bool:
+        # O_EXCL atomic: falla si el archivo ya existe (otro worker ganó).
+        try:
+            fd = os.open(LEADER_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, f"pid={os.getpid()}".encode())
+            os.close(fd)
+            return True
+        except FileExistsError:
+            return False
+
     es_lider = False
     try:
-        # O_EXCL atomic: falla si el archivo ya existe (otro worker ganó).
-        fd = os.open(LEADER_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, f"pid={os.getpid()}".encode())
-        os.close(fd)
-        es_lider = True
-        print(f"   👑 Worker {os.getpid()} es LÍDER (corre schedulers)")
-    except FileExistsError:
-        es_lider = False
-        print(f"   🤝 Worker {os.getpid()} es seguidor (solo sirve HTTP)")
+        if _crear_lock():
+            es_lider = True
+        else:
+            # El lock ya existe. Si el dueño MURIÓ sin limpiar (OOM/crash sin
+            # shutdown limpio), el archivo queda HUÉRFANO y ningún worker vuelve
+            # a ser líder → los crons (Melonn, cartera, salud, lavandería, bot,
+            # digest) se callan hasta un redeploy: la clase "motor mudo". Se
+            # reclama el lock SOLO cuando su PID dueño ya no vive.
+            try:
+                raw = open(LEADER_LOCK).read().strip()        # "pid=12345"
+                pid = int(raw.split("=", 1)[1]) if "=" in raw else 0
+            except Exception:
+                pid = 0
+            if pid > 0 and not _pid_vivo(pid):
+                # Dueño MUERTO y confirmado → reclamar (borrar huérfano y
+                # reintentar de forma atómica; si otro lo reclama primero, gana).
+                try:
+                    os.unlink(LEADER_LOCK)
+                except FileNotFoundError:
+                    pass
+                es_lider = _crear_lock()
+            else:
+                # Dueño VIVO, o PID aún ILEGIBLE: un sibling pudo crear el lock
+                # microsegundos antes y todavía no escribió su pid (archivo vacío
+                # en esa ventana). Reclamar a ciegas ahí haría que DOS workers se
+                # creyeran líderes en el arranque → schedulers duplicados. Ante la
+                # duda, SEGUIDOR: solo se reclama con un PID legible y muerto.
+                es_lider = False
+        if es_lider:
+            print(f"   👑 Worker {os.getpid()} es LÍDER (corre schedulers)")
+        else:
+            print(f"   🤝 Worker {os.getpid()} es seguidor (solo sirve HTTP)")
     except Exception as e:
         # Fallback conservador: si falla el lock por permisos u otro motivo,
         # asume líder si WEB_CONCURRENCY=1, no-líder si >1.

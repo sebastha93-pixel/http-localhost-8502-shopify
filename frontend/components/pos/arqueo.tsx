@@ -35,7 +35,7 @@
  */
 import { useState } from "react";
 import { Panel } from "@/components/pos/marco";
-import { ContadorDenominaciones } from "@/components/pos/contador-denominaciones";
+import { ContadorDenominaciones, totalDe } from "@/components/pos/contador-denominaciones";
 import { formatear, desdePesosTecleados } from "@/lib/pos/dinero";
 import type { MedioResumen, ResumenCierre } from "@/lib/pos/api";
 
@@ -176,7 +176,7 @@ export function Arqueo({
 
       <Fila
         label="Diferencia"
-        valor={esperado ? diferenciaViva(esperado, contados, aDeclarar) : "—"}
+        valor={esperado ? diferenciaViva(esperado, contados, piezas, aDeclarar) : "—"}
         fuerte
         separador
         atenuado={!esperado}
@@ -209,12 +209,18 @@ export function Arqueo({
 function diferenciaViva(
   esperado: Record<string, number>,
   contados: Record<string, string>,
+  piezas: Record<number, number>,
   medios: MedioResumen[],
 ): string {
+  // El efectivo se cuenta por denominación (`piezas`), NO en `contados`; su
+  // total sale de `totalDe(piezas)`. Sin esto, el término del efectivo era
+  // 0 − esperado y la diferencia mostraba todo el efectivo como faltante.
   const total = medios.reduce(
     (acc, m) =>
       acc +
-      (desdePesosTecleados(contados[m.medio_pago_id] ?? "") -
+      ((m.es_efectivo
+        ? totalDe(piezas)
+        : desdePesosTecleados(contados[m.medio_pago_id] ?? "")) -
         (esperado[m.medio_pago_id] ?? 0)),
     0,
   );

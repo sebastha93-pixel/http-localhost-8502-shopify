@@ -152,10 +152,16 @@ def sincronizar() -> dict:
     ahora = datetime.now(timezone.utc).isoformat()
     for f in filas:
         f["actualizado_en"] = ahora
-    sb.table(TABLA).upsert(filas, on_conflict="brand_id,code,bodega").execute()
+    # Reintento seguro ante el corte transitorio del pool: el upsert va por clave
+    # natural (brand_id,code,bodega) y el delete tiene un WHERE determinista
+    # (< ahora, fijo) — reintentar re-escribe/borra el mismo conjunto, no duplica.
+    # Además, primero el upsert COMPLETO y luego el delete: si el upsert se
+    # cortaba a medias, el delete borraba como agotadas filas que sí llegaron.
+    from backend.core.supabase_resiliente import exec_idempotente
+    exec_idempotente(sb.table(TABLA).upsert(filas, on_conflict="brand_id,code,bodega"))
     # Lo que ya no vino de Siigo se agotó: se borra por fecha, no por lista,
     # para no armar un DELETE gigante.
-    sb.table(TABLA).delete().eq("brand_id", _brand()).lt("actualizado_en", ahora).execute()
+    exec_idempotente(sb.table(TABLA).delete().eq("brand_id", _brand()).lt("actualizado_en", ahora))
     return {"filas": len(filas), "actualizado_en": ahora}
 
 
@@ -163,8 +169,22 @@ def _edad(fila: dict) -> Optional[float]:
     val = fila.get("actualizado_en")
     if not val:
         return None
+    s = str(val).replace("Z", "+00:00").strip()
+    # Py 3.10: fromisoformat SOLO acepta fracciones de segundo de 3 o 6 dígitos,
+    # pero Postgres recorta los ceros finales (1/2/4/5 dígitos) → ValueError, y
+    # toda la fila salía "sin actualizar" ~10% de los sync (falso "stale" que
+    # confundía a la asesora). Se quita la fracción (no hace falta para la edad
+    # en segundos) conservando el offset de zona horaria.
+    if "." in s:
+        cabeza, resto = s.split(".", 1)
+        tz = ""
+        for i, ch in enumerate(resto):
+            if ch in "+-":
+                tz = resto[i:]
+                break
+        s = cabeza + tz
     try:
-        t = datetime.fromisoformat(str(val).replace("Z", "+00:00")[:32])
+        t = datetime.fromisoformat(s)
     except ValueError:
         return None
     if t.tzinfo is None:
