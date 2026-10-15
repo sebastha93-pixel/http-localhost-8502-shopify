@@ -3,6 +3,7 @@
 import { BuscadorCliente } from "@/components/pos/buscador-cliente";
 import { formatear } from "@/lib/pos/dinero";
 import type { LineaCarrito } from "@/lib/pos/carrito";
+import { descuentoDeLinea } from "@/lib/pos/promo";
 import type { Cliente } from "@/lib/pos/api";
 
 /**
@@ -106,6 +107,15 @@ export function CarritoPanel({
                   −{l.descuentoPct}% · {l.descuentoMotivo}
                   {l.autorizadoPor && ` · firmó ${l.autorizadoPor}`}
                 </p>
+              ) : l.descuentoValor ? (
+                <p className="mt-1.5 text-[12px] font-medium" style={{ color: "var(--pos-accent)" }}>
+                  {l.descuentoMotivo} · −{formatear(l.descuentoValor)}
+                </p>
+              ) : l.promocionId ? (
+                <p className="mt-1.5 text-[12px]" style={{ color: "var(--pos-700)" }}>
+                  En la promoción: agrega otra prenda del listado y la más
+                  barata queda en $1.000.
+                </p>
               ) : null}
 
               {l.disponible <= 0 && (
@@ -173,9 +183,7 @@ export function CarritoPanel({
 const conIvaUnidad = (l: LineaCarrito) => l.precioConIva;
 
 function totalLinea(l: LineaCarrito) {
-  const sub = l.precioConIva * l.cantidad;
-  const desc = l.descuentoPct ? Math.round((sub * l.descuentoPct) / 100) : 0;
-  return sub - desc;
+  return l.precioConIva * l.cantidad - descuentoDeLinea(l);
 }
 
 function Fila({ etiqueta, valor, tenue }: { etiqueta: string; valor: number; tenue?: boolean }) {

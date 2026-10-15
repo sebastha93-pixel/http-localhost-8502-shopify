@@ -65,6 +65,8 @@ export interface LineaEnvio {
   tasa_iva: string;
   descripcion: string;
   descuento_porcentaje?: string;
+  /** Marca la línea como parte de la promoción; el servidor calcula cuánto. */
+  promocion_id?: string;
   descuento_motivo?: string;
   autorizado_por?: string;
 }
@@ -296,6 +298,8 @@ export interface ContextoCaja {
    *  cobro, y uno apuntaba a un id inexistente: con tarjeta no se podía
    *  cobrar. Viajan con el contexto para que también funcionen sin red. */
   medios_pago: MedioPago[];
+  /** La promoción vigente en esta tienda, o `null`. */
+  promocion?: import("./promo").Promocion | null;
 }
 
 export interface MedioPago {

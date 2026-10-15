@@ -25,4 +25,8 @@ export interface LineaCarrito {
   descuentoPct?: number;
   descuentoMotivo?: string;
   autorizadoPor?: string | null;
+  /** Descuento en pesos de la PROMOCIÓN (la segunda a $1.000). No se guarda:
+   *  lo calcula `conPromocion` cada vez, y el servidor lo vuelve a calcular. */
+  descuentoValor?: number;
+  promocionId?: string;
 }
