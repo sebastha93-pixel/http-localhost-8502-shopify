@@ -111,7 +111,7 @@ export function CarritoPanel({
                 <p className="mt-1.5 text-[12px] font-medium" style={{ color: "var(--pos-accent)" }}>
                   {l.descuentoMotivo} · −{formatear(l.descuentoValor)}
                 </p>
-              ) : l.promocionId ? (
+              ) : l.promocionId && l.promocionId.startsWith("segunda") ? (
                 <p className="mt-1.5 text-[12px]" style={{ color: "var(--pos-700)" }}>
                   En la promoción: agrega otra prenda del listado y la más
                   barata queda en $1.000.

@@ -14,9 +14,13 @@ import type { LineaCarrito } from "./carrito";
 export interface Promocion {
   id: string;
   nombre: string;
+  /** `segunda_a_precio` (la segunda a $1.000) o `porcentaje` (10 % en todo). */
   tipo: string;
   precio_centavos: number;
+  porcentaje?: number | null;
   referencias: string[];
+  /** Las que NO llevan el porcentaje: las rebajadas. */
+  excluidas?: string[];
   hasta: string;
 }
 
@@ -27,20 +31,31 @@ export function referenciaDe(sku: string): string {
   return i > 0 ? s.slice(0, i) : s;
 }
 
-/** Las líneas con su descuento de promoción ya puesto (`descuentoValor`). */
+/** Las líneas con su descuento de promoción ya puesto (`descuentoValor`).
+ *
+ * DOS A LA VEZ (2026-10-15): la segunda a $1.000 para las del listado y un
+ * porcentaje para todo lo demás, en la misma compra. Una prenda está en UNA
+ * sola. Lo que ya tiene un descuento a mano no entra a ninguna. */
 export function conPromocion(
-  lineas: LineaCarrito[], promo: Promocion | null | undefined,
+  lineas: LineaCarrito[],
+  promos: Promocion[] | Promocion | null | undefined,
 ): LineaCarrito[] {
-  if (!promo || new Date(promo.hasta).getTime() <= Date.now()) {
-    return lineas.map((l) => ({ ...l, descuentoValor: undefined, promocionId: undefined }));
-  }
-  const refs = new Set(promo.referencias.map((r) => r.toUpperCase()));
-  const entra = (l: LineaCarrito) =>
-    !l.descuentoPct && refs.has(referenciaDe(l.sku));
+  const ahora = Date.now();
+  const vigentes = (Array.isArray(promos) ? promos : promos ? [promos] : [])
+    .filter((p) => new Date(p.hasta).getTime() > ahora);
+  const segunda = vigentes.find((p) => p.tipo === "segunda_a_precio");
+  const pct = vigentes.find((p) => p.tipo === "porcentaje" && p.porcentaje);
+  const limpias = lineas.map((l) => ({ ...l, descuentoValor: undefined, promocionId: undefined }));
+  if (!segunda && !pct) return limpias;
+
+  const refs = new Set((segunda?.referencias ?? []).map((r) => r.toUpperCase()));
+  const excluidas = new Set((pct?.excluidas ?? []).map((r) => r.toUpperCase()));
+  const enSegunda = (l: LineaCarrito) =>
+    Boolean(segunda) && !l.descuentoPct && refs.has(referenciaDe(l.sku));
 
   const unidades: { precio: number; orden: number; sku: string }[] = [];
-  lineas.forEach((l, orden) => {
-    if (!entra(l)) return;
+  limpias.forEach((l, orden) => {
+    if (!enSegunda(l)) return;
     for (let k = 0; k < l.cantidad; k++) {
       unidades.push({ precio: l.precioConIva, orden, sku: l.sku });
     }
@@ -49,13 +64,24 @@ export function conPromocion(
   const desc = new Map<string, number>();
   for (let i = 1; i < unidades.length; i += 2) {
     const u = unidades[i];
-    const rebaja = Math.max(u.precio - promo.precio_centavos, 0);
+    const rebaja = Math.max(u.precio - (segunda?.precio_centavos ?? 0), 0);
     if (rebaja) desc.set(u.sku, (desc.get(u.sku) ?? 0) + rebaja);
   }
-  return lineas.map((l) => entra(l)
-    ? { ...l, promocionId: promo.id, descuentoValor: desc.get(l.sku) || undefined,
-        descuentoMotivo: desc.get(l.sku) ? promo.nombre : l.descuentoMotivo }
-    : { ...l, descuentoValor: undefined, promocionId: undefined });
+
+  return limpias.map((l) => {
+    if (enSegunda(l)) {
+      const d = desc.get(l.sku);
+      return { ...l, promocionId: segunda!.id, descuentoValor: d || undefined,
+               descuentoMotivo: d ? segunda!.nombre : l.descuentoMotivo };
+    }
+    const ref = referenciaDe(l.sku);
+    if (pct && !l.descuentoPct && !refs.has(ref) && !excluidas.has(ref)) {
+      const d = Math.round((l.precioConIva * l.cantidad * (pct.porcentaje ?? 0)) / 100);
+      return { ...l, promocionId: pct.id, descuentoValor: d || undefined,
+               descuentoMotivo: pct.nombre };
+    }
+    return l;
+  });
 }
 
 /** El descuento total de una línea, sea a mano (%) o de la promoción. */

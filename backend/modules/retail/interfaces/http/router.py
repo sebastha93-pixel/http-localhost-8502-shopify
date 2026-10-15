@@ -284,7 +284,7 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
             SELECT coalesce(tope_descuento_pct, 0) FROM retail.permisos_pos
              WHERE usuario_id = :u AND activo
         """), {"u": usuario_id})).scalar() or 0))
-        promo = await _promocion_vigente(t.sesion, entrada.tienda_id)
+        promos = await _promociones_vigentes(t.sesion, entrada.tienda_id)
     # Se indexa por el SKU NORMALIZADO (Sku.parsear → strip+upper), el mismo que
     # usa CerrarVenta para el lookup (linea.sku.codigo). Antes se indexaba por el
     # SKU crudo de la BD y el guardián comparaba crudo: si un SKU guardado tenía
@@ -292,30 +292,51 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
     # con KeyError (500). Ahora guardián y lookup usan la misma llave.
     variante_por_sku = {Sku.parsear(f["sku"]).codigo: f["id"] for f in filas}
 
-    # LA PROMOCIÓN LA CALCULA EL SERVIDOR. De la caja sólo se toma qué líneas
-    # entran —las que marcó—; cuánto se descuenta sale de la regla, sin pasar
-    # por el tope de quien cobra: es una promoción de la tienda, no un
+    # LAS PROMOCIONES LAS CALCULA EL SERVIDOR. De la caja sólo se toma qué
+    # líneas entran —las que marcó—; cuánto se descuenta sale de la regla, sin
+    # pasar por el tope de quien cobra: es una promoción de la tienda, no un
     # descuento de la asesora.
-    promo_desc: dict = {}
+    #
+    # Dos a la vez y en la misma compra (2026-10-15): la segunda a $1.000 para
+    # las del listado y un porcentaje para todo lo demás. Una prenda está en
+    # UNA sola: la del listado nunca lleva además el porcentaje.
+    from backend.modules.retail.domain.venta.promocion import (
+        descuentos_segunda_a_precio, referencia_de,
+    )
+    por_id = {p["id"]: p for p in promos}
+    segunda = next((p for p in promos if p["tipo"] == "segunda_a_precio"), None)
+    refs_segunda = {r.upper() for r in (segunda or {}).get("referencias") or []}
     marcadas = [l for l in entrada.lineas if l.promocion_id]
-    if marcadas:
-        if promo is None or any(l.promocion_id != promo["id"] for l in marcadas):
-            raise ReglaDeNegocio(
-                "La promoción ya no está vigente. Actualiza la pantalla y "
-                "vuelve a cobrar.")
-        from backend.modules.retail.domain.venta.promocion import (
-            descuentos_segunda_a_precio, referencia_de,
-        )
-        refs = {r.upper() for r in promo["referencias"]}
-        fuera = [l.sku for l in marcadas if referencia_de(l.sku) not in refs]
+    if any(l.promocion_id not in por_id for l in marcadas):
+        raise ReglaDeNegocio(
+            "La promoción ya no está vigente. Actualiza la pantalla y "
+            "vuelve a cobrar.")
+    a_mano = lambda l: bool(l.obsequio or l.descuento_porcentaje  # noqa: E731
+                            or l.descuento_valor_centavos)
+    promo_desc: dict = {}
+    if segunda:
+        suyas = [l for l in marcadas if l.promocion_id == segunda["id"]]
+        fuera = [l.sku for l in suyas if referencia_de(l.sku) not in refs_segunda]
         if fuera:
             raise ReglaDeNegocio(
                 f"No están en la promoción: {', '.join(fuera)}.")
         promo_desc = descuentos_segunda_a_precio(
-            [(l.sku, l.cantidad, l.precio_unitario_centavos) for l in marcadas
-             if not (l.obsequio or l.descuento_porcentaje
-                     or l.descuento_valor_centavos)],
-            int(promo["precio_centavos"]))
+            [(l.sku, l.cantidad, l.precio_unitario_centavos) for l in suyas
+             if not a_mano(l)],
+            int(segunda["precio_centavos"]))
+    promo_pct: dict = {}
+    for l in marcadas:
+        p = por_id[l.promocion_id]
+        if p["tipo"] != "porcentaje" or a_mano(l):
+            continue
+        ref = referencia_de(l.sku)
+        excluidas = {r.upper() for r in p.get("excluidas") or []}
+        if ref in refs_segunda or ref in excluidas:
+            raise ReglaDeNegocio(
+                f"{l.sku} no lleva {p['nombre']}: "
+                + ("está en la segunda prenda." if ref in refs_segunda
+                   else "es una prenda rebajada."))
+        promo_pct[l.sku] = p
 
     faltan = [el.sku for el in entrada.lineas
               if Sku.parsear(el.sku).codigo not in variante_por_sku]
@@ -339,9 +360,17 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
                 linea.numero,
                 Descuento.valor(Dinero(promo_desc.pop(entrada_linea.sku),
                                        entrada.moneda),
-                                motivo=promo["nombre"]),
+                                motivo=segunda["nombre"]),
                 tope_de_quien_aplica=Decimal(100),
-                aplicado_por=f"promocion:{promo['id']}")
+                aplicado_por=f"promocion:{segunda['id']}")
+        elif entrada_linea.promocion_id and entrada_linea.sku in promo_pct:
+            p = promo_pct.pop(entrada_linea.sku)
+            venta.aplicar_descuento_linea(
+                linea.numero,
+                Descuento.porcentaje(Decimal(str(p["porcentaje"])),
+                                     motivo=p["nombre"]),
+                tope_de_quien_aplica=Decimal(100),
+                aplicado_por=f"promocion:{p['id']}")
         elif entrada_linea.descuento_porcentaje or entrada_linea.descuento_valor_centavos:
             venta.aplicar_descuento_linea(
                 linea.numero, _descuento(entrada_linea, entrada.moneda),
@@ -355,17 +384,19 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
     return venta, variante_por_sku
 
 
-async def _promocion_vigente(sesion, tienda_id: str) -> Optional[dict]:
-    """La promoción activa en esta tienda AHORA, o `None`."""
+async def _promociones_vigentes(sesion, tienda_id: str) -> list:
+    """Las promociones activas en esta tienda AHORA: a lo sumo una de cada
+    tipo, la más reciente."""
     from sqlalchemy import text as _t
-    f = (await sesion.execute(_t("""
-        SELECT id, nombre, tipo, precio_centavos, referencias, hasta
+    filas = (await sesion.execute(_t("""
+        SELECT DISTINCT ON (tipo) id, nombre, tipo, precio_centavos, porcentaje,
+               referencias, excluidas, hasta
           FROM retail.promociones
          WHERE activa AND now() >= desde AND now() < hasta
            AND (cardinality(tiendas) = 0 OR :t = ANY(tiendas))
-         ORDER BY desde DESC LIMIT 1
-    """), {"t": tienda_id})).mappings().first()
-    return dict(f) if f else None
+         ORDER BY tipo, desde DESC
+    """), {"t": tienda_id})).mappings().all()
+    return [dict(f) for f in filas]
 
 
 def _descuento(l: LineaEntrada, moneda: str) -> Descuento:
@@ -883,9 +914,11 @@ class ContextoCaja(BaseModel):
     # equipo guarda— porque una venta con Addi o con QR hay que poder cobrarla
     # también cuando se cayó el internet de la tienda.
     medios_pago: List[MedioPago] = []
-    #  La promoción vigente en esta tienda —«la segunda a $1.000»—, para que
-    #  la caja la aplique sola, también sin red.
+    #  Las promociones vigentes en esta tienda —«la segunda a $1.000», «10 %
+    #  en todo»—, para que la caja las aplique solas, también sin red.
+    #  `promocion` es la segunda prenda, para cajas con la pantalla anterior.
     promocion: Optional[dict] = None
+    promociones: List[dict] = []
 
 
 @router.get("/caja/contexto", response_model=ContextoCaja)
@@ -925,6 +958,7 @@ async def contexto_caja(
         raise HTTPException(404, {"error": "caja_desconocida",
                                   "mensaje": f"No existe la caja {caja_id}."})
 
+    vigentes = await _promociones_vigentes(sesion, fila["tienda_id"])
     return ContextoCaja(
         tienda_id=fila["tienda_id"], tienda_nombre=fila["tienda_nombre"],
         caja_id=fila["caja_id"], caja_nombre=fila["caja_nombre"],
@@ -937,8 +971,9 @@ async def contexto_caja(
         denominaciones=[Denominacion(**d) for d in (await _denominaciones(sesion))],
         medios_pago=[MedioPago(**m) for m in
                      (await _medios_pago(sesion, fila["tienda_id"]))],
-        promocion=_promo_para_caja(
-            await _promocion_vigente(sesion, fila["tienda_id"])),
+        promocion=next((_promo_para_caja(p) for p in vigentes
+                        if p["tipo"] == "segunda_a_precio"), None),
+        promociones=[_promo_para_caja(p) for p in vigentes],
     )
 
 
@@ -946,8 +981,10 @@ def _promo_para_caja(p: Optional[dict]) -> Optional[dict]:
     if not p:
         return None
     return {"id": p["id"], "nombre": p["nombre"], "tipo": p["tipo"],
-            "precio_centavos": int(p["precio_centavos"]),
-            "referencias": list(p["referencias"]),
+            "precio_centavos": int(p["precio_centavos"] or 0),
+            "porcentaje": float(p["porcentaje"]) if p.get("porcentaje") else None,
+            "referencias": list(p["referencias"] or []),
+            "excluidas": list(p.get("excluidas") or []),
             "hasta": p["hasta"].isoformat()}
 
 
