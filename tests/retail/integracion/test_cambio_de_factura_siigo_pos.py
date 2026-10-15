@@ -1078,3 +1078,61 @@ def test_la_promo_viaja_en_el_contexto_de_la_caja(tienda):
     assert d["promocion"]["id"] == "segunda_1000"
     assert d["promocion"]["precio_centavos"] == 100_000
     assert sorted(d["promocion"]["referencias"]) == ["26602-1", "95613-1"]
+
+
+
+# ── 10 % en todo, junto a la segunda prenda ─────────────────────────────────
+
+def _diez(t, excluidas=()):
+    with t["motor"].begin() as c:
+        c.execute(text("""
+            INSERT INTO retail.promociones
+                (id, nombre, tipo, porcentaje, desde, hasta, excluidas)
+            VALUES ('diez_todo', '10% en todo', 'porcentaje', 10,
+                    now() - interval '1 day', now() + interval '1 day', :e)
+        """), {"e": list(excluidas)})
+
+
+def test_par_del_listado_mas_una_de_afuera_es_1000_mas_10(tienda):
+    """Como en la página: el par del listado deja la más barata en $1.000 y la
+    de afuera lleva 10 %. Una prenda está en UNA sola promoción."""
+    _promo(tienda, refs=("95613-1",))
+    _diez(tienda)
+    r = _vender_lineas(tienda, [
+        {"sku": "95613-1T12", "cantidad": 2, "precio_unitario_centavos": 14_990_000,
+         "promocion_id": "segunda_1000"},
+        {"sku": "26602-1T6", "cantidad": 1, "precio_unitario_centavos": 12_990_000,
+         "promocion_id": "diez_todo"}],
+        pagos=[{"medio_pago_id": "efectivo_arrayanes",
+                "monto_centavos": 14_990_000 + 100_000 + 11_691_000,
+                "es_efectivo": True}])
+    assert r.status_code == 200, r.text
+    assert r.json()["total_centavos"] == 14_990_000 + 100_000 + 11_691_000
+    assert _todas(tienda, """SELECT sku, descuento_monto, descuento_motivo, autorizado_por
+        FROM retail.venta_lineas ORDER BY orden""") == [
+        ("95613-1T12", 14_890_000, "2da prenda x $1.000", "promocion:segunda_1000"),
+        ("26602-1T6", 1_299_000, "10% en todo", "promocion:diez_todo")]
+
+
+def test_el_10_no_va_a_las_del_listado_ni_a_las_rebajadas(tienda):
+    _promo(tienda, refs=("95613-1",))
+    _diez(tienda, excluidas=("26602-1",))
+    r = _vender_lineas(tienda, [
+        {"sku": "95613-1T12", "cantidad": 1, "precio_unitario_centavos": 14_990_000,
+         "promocion_id": "diez_todo"}])
+    assert r.status_code == 400 and "segunda prenda" in r.text
+    r = _vender_lineas(tienda, [
+        {"sku": "26602-1T6", "cantidad": 1, "precio_unitario_centavos": 12_990_000,
+         "promocion_id": "diez_todo"}])
+    assert r.status_code == 400 and "rebajada" in r.text
+
+
+def test_las_dos_promociones_viajan_en_el_contexto(tienda):
+    _promo(tienda)
+    _diez(tienda, excluidas=("12345-1",))
+    d = tienda["c"].get("/api/retail/caja/contexto",
+                        params={"caja_id": "arrayanes_caja1"}).json()
+    assert sorted(p["id"] for p in d["promociones"]) == ["diez_todo", "segunda_1000"]
+    assert d["promocion"]["id"] == "segunda_1000"
+    diez = next(p for p in d["promociones"] if p["id"] == "diez_todo")
+    assert (diez["porcentaje"], diez["excluidas"]) == (10.0, ["12345-1"])

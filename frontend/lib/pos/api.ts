@@ -298,8 +298,9 @@ export interface ContextoCaja {
    *  cobro, y uno apuntaba a un id inexistente: con tarjeta no se podía
    *  cobrar. Viajan con el contexto para que también funcionen sin red. */
   medios_pago: MedioPago[];
-  /** La promoción vigente en esta tienda, o `null`. */
+  /** La segunda prenda (para pantallas anteriores) y TODAS las vigentes. */
   promocion?: import("./promo").Promocion | null;
+  promociones?: import("./promo").Promocion[];
 }
 
 export interface MedioPago {

@@ -523,8 +523,9 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
   // `lineas` sigue siendo lo que la cajera puso; `conPromo` es lo que se
   // cobra, se muestra y se manda.
   const conPromo = useMemo(
-    () => conPromocion(lineas, contexto?.promocion),
-    [lineas, contexto?.promocion]);
+    () => conPromocion(lineas, contexto?.promociones?.length
+      ? contexto.promociones : contexto?.promocion),
+    [lineas, contexto?.promociones, contexto?.promocion]);
 
   // ── Totales ────────────────────────────────────────────────────────────
   const totales = useMemo(() => {
