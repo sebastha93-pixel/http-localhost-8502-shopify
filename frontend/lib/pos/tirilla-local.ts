@@ -46,7 +46,8 @@ export function armarTirillaLocal(opciones: {
 
   const lineas = opciones.lineas.map((l) => {
     const bruto = l.precioConIva * l.cantidad;
-    const desc = l.descuentoPct ? Math.round((bruto * l.descuentoPct) / 100) : 0;
+    const desc = l.descuentoPct ? Math.round((bruto * l.descuentoPct) / 100)
+      : Math.min(l.descuentoValor ?? 0, bruto);
     const total = bruto - desc;
     subtotal += bruto;
     descuento += desc;

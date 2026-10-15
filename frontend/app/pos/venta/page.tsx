@@ -54,6 +54,7 @@ import {
   type Tirilla as TirillaDatos,
 } from "@/lib/pos/api";
 import { nuevoUlid } from "@/lib/pos/ulid";
+import { conPromocion, descuentoDeLinea } from "@/lib/pos/promo";
 import {
   confirmada,
   encolar,
@@ -517,14 +518,22 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
     );
   }
 
+  // ── La promoción ───────────────────────────────────────────────────────
+  // «La segunda a $1.000» se aplica SOLA sobre lo que hay en el carrito.
+  // `lineas` sigue siendo lo que la cajera puso; `conPromo` es lo que se
+  // cobra, se muestra y se manda.
+  const conPromo = useMemo(
+    () => conPromocion(lineas, contexto?.promocion),
+    [lineas, contexto?.promocion]);
+
   // ── Totales ────────────────────────────────────────────────────────────
   const totales = useMemo(() => {
     let total = 0;
     let iva = 0;
     let descuento = 0;
-    for (const l of lineas) {
+    for (const l of conPromo) {
       const sub = l.precioConIva * l.cantidad;
-      const desc = l.descuentoPct ? Math.round((sub * l.descuentoPct) / 100) : 0;
+      const desc = descuentoDeLinea(l);
       const totalLinea = sub - desc;
       total += totalLinea;
       descuento += desc;
@@ -534,7 +543,7 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
       iva += ivaDe(totalLinea, l.tasaIva);
     }
     return { base: total - iva, iva, descuento, total };
-  }, [lineas]);
+  }, [conPromo]);
 
   /** `datafono` es un identificador; en el papel va «Tarjeta». Sin red no se
    *  puede consultar la tabla de medios, así que se traduce con lo que la
@@ -623,7 +632,7 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
         sesion_id: SESION,
         ubicacion_id: UBICACION,
         cliente_id: cliente?.id ?? null,
-        lineas: lineas.map((l) => ({
+        lineas: conPromo.map((l) => ({
           sku: l.sku,
           cantidad: l.cantidad,
           precio_unitario_centavos: l.precioConIva,
@@ -635,6 +644,8 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
                 descuento_motivo: l.descuentoMotivo,
               }
             : {}),
+          // Sólo la marca: cuánto se descuenta lo calcula el servidor.
+          ...(l.promocionId ? { promocion_id: l.promocionId } : {}),
         })),
       pagos,
     };
@@ -687,7 +698,7 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
       // el tiempo del timeout y acaba igual, con la clienta esperando.
       if (contexto) {
         setTirillaLocal(armarTirillaLocal({
-          contexto, numero, cajera: CAJERA, lineas,
+          contexto, numero, cajera: CAJERA, lineas: conPromo,
           pagos: pagos.map((p) => ({
             nombre: nombreDelMedio(p.medio_pago_id),
             monto_centavos: p.monto_centavos,
@@ -926,7 +937,7 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
                 />
               ) : (
                 <CarritoPanel
-                  lineas={lineas}
+                  lineas={conPromo}
                   totales={totales}
                   aviso={aviso}
                   onCantidad={cambiarCantidad}

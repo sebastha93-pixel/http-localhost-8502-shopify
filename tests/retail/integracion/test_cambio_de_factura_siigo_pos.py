@@ -990,3 +990,91 @@ def test_el_anticipo_de_una_persona_no_se_cruza_con_la_factura_de_otra():
     with pytest.raises(ValueError):
         construir_asiento(factura=f, nota_credito=n, valor_centavos=10_000_100,
                           fecha="2026-10-13", marca="x")
+
+
+# ── La segunda prenda a $1.000 ──────────────────────────────────────────────
+
+def _promo(t, *, refs=("95613-1", "26602-1"), vigente=True):
+    with t["motor"].begin() as c:
+        c.execute(text("""
+            INSERT INTO retail.promociones
+                (id, nombre, precio_centavos, desde, hasta, referencias)
+            VALUES ('segunda_1000', '2da prenda x $1.000', 100000,
+                    now() - interval '1 day',
+                    now() + (CASE WHEN :v THEN interval '1 day'
+                                  ELSE interval '-1 hour' END),
+                    :r)
+        """), {"v": vigente, "r": list(refs)})
+
+
+def _vender_lineas(t, lineas, pagos=None, venta="01JQ8X4T5NVE0F1R8S9V0W1X3A"):
+    prefijo = _uno(t, "SELECT prefijo_factura FROM retail.cajas "
+                      "WHERE id = 'arrayanes_caja1'")
+    total = sum(l["cantidad"] * l["precio_unitario_centavos"] for l in lineas)
+    return t["c"].post("/api/retail/ventas/cerrar", json={
+        "venta_id": venta,
+        "numero": f"{prefijo}-{t['turno']['consecutivo_siguiente']}",
+        "tienda_id": "arrayanes", "caja_id": "arrayanes_caja1",
+        "sesion_id": SESION, "ubicacion_id": "tienda:arrayanes",
+        "lineas": lineas,
+        "pagos": pagos or [{"medio_pago_id": "efectivo_arrayanes",
+                            "monto_centavos": total, "es_efectivo": True}]})
+
+
+def test_la_regla_de_la_segunda_prenda():
+    from backend.modules.retail.domain.venta.promocion import (
+        descuentos_segunda_a_precio as d, referencia_de,
+    )
+    assert referencia_de("93634-1T12") == "93634-1" and referencia_de("5353") == "5353"
+    # Dos: la más barata a $1.000.
+    assert d([("A", 1, 18990000), ("B", 1, 14990000)], 100000) == {"B": 14890000}
+    # Dos del mismo jean son un par.
+    assert d([("A", 2, 14990000)], 100000) == {"A": 14890000}
+    # Tres: una sola; cuatro (189, 159, 149, 149): la 2.ª y la 4.ª.
+    assert d([("A", 1, 18990000), ("B", 1, 15990000), ("C", 1, 14990000)],
+             100000) == {"B": 15890000}
+    assert d([("A", 1, 18990000), ("B", 1, 15990000), ("C", 2, 14990000)],
+             100000) == {"B": 15890000, "C": 14890000}
+    assert d([("A", 1, 18990000)], 100000) == {}
+
+
+def test_la_caja_cobra_la_segunda_a_1000_aunque_la_asesora_tenga_tope(tienda):
+    _promo(tienda)
+    r = _vender_lineas(tienda, [
+        {"sku": "95613-1T12", "cantidad": 1, "precio_unitario_centavos": 14_990_000,
+         "promocion_id": "segunda_1000"},
+        {"sku": "26602-1T6", "cantidad": 1, "precio_unitario_centavos": 12_990_000,
+         "promocion_id": "segunda_1000"}],
+        pagos=[{"medio_pago_id": "efectivo_arrayanes",
+                "monto_centavos": 14_990_000 + 100_000, "es_efectivo": True}])
+    assert r.status_code == 200, r.text
+    assert r.json()["total_centavos"] == 15_090_000
+    assert _todas(tienda, """SELECT sku, descuento_monto, total_linea, descuento_motivo
+        FROM retail.venta_lineas ORDER BY orden""") == [
+        ("95613-1T12", 0, 14_990_000, None),
+        ("26602-1T6", 12_890_000, 100_000, "2da prenda x $1.000")]
+
+
+def test_lo_que_no_esta_en_el_listado_o_una_promo_vencida_NO_pasa(tienda):
+    _promo(tienda, refs=("95613-1",))
+    lineas = [
+        {"sku": "95613-1T12", "cantidad": 1, "precio_unitario_centavos": 14_990_000,
+         "promocion_id": "segunda_1000"},
+        {"sku": "26602-1T6", "cantidad": 1, "precio_unitario_centavos": 12_990_000,
+         "promocion_id": "segunda_1000"}]
+    r = _vender_lineas(tienda, lineas)
+    assert r.status_code == 400 and "No están en la promoción" in r.text
+    with tienda["motor"].begin() as c:
+        c.execute(text("UPDATE retail.promociones SET hasta = now() - interval '1 minute', "
+                       "desde = now() - interval '2 days'"))
+    r = _vender_lineas(tienda, lineas)
+    assert r.status_code == 400 and "ya no está vigente" in r.text
+
+
+def test_la_promo_viaja_en_el_contexto_de_la_caja(tienda):
+    _promo(tienda)
+    d = tienda["c"].get("/api/retail/caja/contexto",
+                        params={"caja_id": "arrayanes_caja1"}).json()
+    assert d["promocion"]["id"] == "segunda_1000"
+    assert d["promocion"]["precio_centavos"] == 100_000
+    assert sorted(d["promocion"]["referencias"]) == ["26602-1", "95613-1"]
