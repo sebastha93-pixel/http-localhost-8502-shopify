@@ -21,6 +21,7 @@ después se importa. Es el mismo orden que ya siguió el motor fiscal con
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Iterator, Optional
 
 __all__ = ["muestra", "paginar", "a_cliente", "TIPOS_DOCUMENTO",
@@ -199,7 +200,27 @@ def a_cliente(c: dict) -> dict:
         "direccion": direccion.strip(),
         "ciudad": ciudad.strip(),
         "activo_en_siigo": bool(c.get("active", True)),
+        "actualizado_en_siigo": _fecha_utc(
+            (c.get("metadata") or {}).get("last_updated")),
     }
+
+
+def _fecha_utc(valor) -> Optional[datetime]:
+    """`metadata.last_updated` llega SIN zona (`2026-10-16T20:19:25.053`) y es
+    UTC: medido el 16-oct con una clienta creada en el POS a las 19:53 UTC y
+    corregida en Siigo 26 minutos después. Leída como hora de Bogotá habría
+    quedado cinco horas en el futuro."""
+    if not valor:
+        return None
+    try:
+        # Python 3.10 (producción) no lee fracciones de 1 o 2 dígitos ni la «Z».
+        base, _, frac = str(valor).replace("Z", "").partition(".")
+        f = datetime.strptime(base, "%Y-%m-%dT%H:%M:%S")
+        if frac:
+            f = f.replace(microsecond=int((frac[:6]).ljust(6, "0")))
+        return f.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def buscar_por_documento(documento: str) -> Optional[dict]:
