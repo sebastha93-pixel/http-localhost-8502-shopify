@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { buscarClientes, crearCliente, type Cliente } from "@/lib/pos/api";
+import { documentoParaBuscar, documentoParaCrear, pareceNitConDigito } from "@/lib/pos/documento";
 import { nuevoUlid } from "@/lib/pos/ulid";
 
 /**
@@ -23,9 +24,15 @@ import { nuevoUlid } from "@/lib/pos/ulid";
  */
 const TIPOS = [
   { valor: "CC", etiqueta: "Cédula de ciudadanía" },
+  // FACTURA A EMPRESA. El servidor y Siigo ya sabían crearla —persona
+  // jurídica, código 31, razón social en un solo nombre—, pero la opción no
+  // estaba en la lista y la caja no podía facturarle a una empresa.
+  { valor: "NIT", etiqueta: "NIT (empresa)" },
   { valor: "PP", etiqueta: "Pasaporte" },
   { valor: "CE", etiqueta: "Cédula de extranjería" },
 ];
+
+
 
 export function DialogoCliente({
   onCerrar,
@@ -63,8 +70,15 @@ export function DialogoCliente({
   }, [modo]);
 
   useEffect(() => {
+    // Con guion sólo se escribe un NIT: se pasa solo a «NIT» para que la
+    // cajera no tenga que adivinar el tipo.
+    if (pareceNitConDigito(documento)) setTipo("NIT");
+  }, [documento]);
+  const empresa = tipo === "NIT";
+
+  useEffect(() => {
     if (modo !== "buscar") return;
-    const digitos = documento.replace(/\D/g, "");
+    const digitos = documentoParaBuscar(documento);
     if (digitos.length < 3) {
       setResultados([]);
       setBuscado(false);
@@ -94,7 +108,7 @@ export function DialogoCliente({
       const c = await crearCliente({
         cliente_id: nuevoUlid(),
         tipo_documento: tipo,
-        numero_documento: documento,
+        numero_documento: documentoParaCrear(documento),
         nombre,
         telefono,
         correo,
@@ -216,7 +230,18 @@ export function DialogoCliente({
               </div>
             </div>
 
-            <Campo etiqueta="Nombre completo" valor={nombre} onCambio={setNombre} />
+            {empresa && (
+              <p className="mt-2 text-[12px]" style={{ color: "var(--pos-600)" }}>
+                El NIT va sin puntos. El dígito de verificación puede ir después
+                de un guion (900123456-7) o no ir: Siigo lo calcula.
+              </p>
+            )}
+            <Campo
+              etiqueta={empresa ? "Razón social" : "Nombre completo"}
+              valor={nombre}
+              onCambio={setNombre}
+              ayuda={empresa ? "Tal como aparece en el RUT: así sale en la factura." : undefined}
+            />
             <Campo etiqueta="Teléfono" valor={telefono} onCambio={setTelefono} tipo="tel" />
             <Campo
               etiqueta="Correo electrónico"

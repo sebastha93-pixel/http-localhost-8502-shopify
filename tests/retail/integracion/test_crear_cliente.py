@@ -157,3 +157,27 @@ def test_un_NIT_escrito_con_su_digito_se_guarda_como_empresa(entorno):
     r = c.post("/api/retail/clientes", json={
         **CUERPO, "numero_documento": "43180115A"})
     assert r.status_code == 400
+
+
+def test_una_empresa_se_crea_con_NIT_y_razon_social(entorno):
+    """La opción que faltaba en la caja: facturarle a una empresa."""
+    c, _ = entorno
+    r = c.post("/api/retail/clientes", json={
+        **CUERPO, "tipo_documento": "NIT", "numero_documento": "900123456",
+        "nombre": "Comercializadora Andina S.A.S."})
+    assert r.status_code == 200, r.text
+    assert r.json()["tipo_documento"] == "NIT"
+    assert r.json()["nombre"] == "Comercializadora Andina S.A.S."
+
+
+def test_una_empresa_se_ENCUENTRA_buscandola_con_su_digito(entorno):
+    """`901495189-5` como se lo dictan: quitarle sólo lo que no es dígito daba
+    `9014951895`, otro número, y la empresa no aparecía."""
+    c, _ = entorno
+    c.post("/api/retail/clientes", json={
+        **CUERPO, "numero_documento": "901495189-5",
+        "nombre": "PORTAFOLIO AMBIENTAL SOSTENIBLE"})
+    r = c.get("/api/retail/clientes/buscar",
+              params={"documento": "901.495.189-5"})
+    assert r.status_code == 200
+    assert [x["numero_documento"] for x in r.json()] == ["901495189"]

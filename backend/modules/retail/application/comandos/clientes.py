@@ -49,8 +49,11 @@ class BuscarClientes:
 
     async def ejecutar(self, documento: str, *, limite: int = 8) -> List[ClienteEncontrado]:
         # Sólo dígitos: la cajera teclea el documento como se lo dictan, con
-        # puntos o sin ellos, y ninguna de las dos formas puede fallar.
-        digitos = re.sub(r"\D", "", documento or "")
+        # puntos o sin ellos, y ninguna de las dos formas puede fallar. Un NIT
+        # llega además con su dígito tras un guion (`901495189-5`), que la base
+        # no guarda: pegarlo daba otro número y la empresa no aparecía.
+        sin_dv = re.sub(r"-\s*\d\s*$", "", documento or "")
+        digitos = re.sub(r"\D", "", sin_dv)
         if len(digitos) < 3:
             return []
 
