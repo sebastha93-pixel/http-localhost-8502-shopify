@@ -212,6 +212,10 @@ export interface Turno {
   consecutivo_desde: number;
   consecutivo_hasta: number;
   consecutivo_siguiente: number;
+  /** Otros equipos que vendieron como ESTA caja en este turno. Mayor que cero
+   *  casi siempre es un computador guardado con la caja equivocada. Opcional:
+   *  un turno guardado antes de que existiera no lo trae. */
+  otros_equipos?: number;
 }
 
 export interface Bloque {

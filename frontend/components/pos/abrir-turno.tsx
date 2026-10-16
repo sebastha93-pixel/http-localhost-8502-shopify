@@ -37,6 +37,7 @@ export function AbrirTurno({
   abriendo,
   error,
   onAbrir,
+  onCambiarCaja,
 }: {
   tienda: string;
   caja: string;
@@ -47,6 +48,9 @@ export function AbrirTurno({
   abriendo: boolean;
   error: string | null;
   onAbrir: (conteo: Record<number, number>, justificacion: string) => void;
+  /** Este computador no es esta caja. Abrir el turno aquí, en la equivocada,
+   *  mete todo el día del otro mostrador en el arqueo de esta. */
+  onCambiarCaja?: () => void;
 }) {
   const [piezas, setPiezas] = useState<Record<number, number>>({});
   const [justificacion, setJustificacion] = useState("");
@@ -73,6 +77,16 @@ export function AbrirTurno({
         <p className="kicker mt-1" style={{ color: "var(--pos-600)" }}>
           Punto de venta · {tienda} · {caja}
         </p>
+        {onCambiarCaja && (
+          <button
+            type="button"
+            onClick={onCambiarCaja}
+            className="mt-2 text-[13px] underline"
+            style={{ color: "var(--pos-700)" }}
+          >
+            ¿Este computador no es la {caja}? Cambiar de caja
+          </button>
+        )}
 
         <div className="my-5" style={{ borderTop: "1px solid var(--pos-divider)" }} />
 

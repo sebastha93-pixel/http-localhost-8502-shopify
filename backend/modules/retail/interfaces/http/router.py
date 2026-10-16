@@ -637,6 +637,10 @@ class TurnoSalida(BaseModel):
     consecutivo_desde: int = 0
     consecutivo_hasta: int = 0
     consecutivo_siguiente: int = 0
+    # Otros equipos que vendieron como ESTA caja en este turno. Mayor que cero
+    # casi siempre es un computador guardado con la caja equivocada: la
+    # pantalla lo avisa y ofrece cambiarla.
+    otros_equipos: int = 0
 
 
 class AbrirTurnoEntrada(BaseModel):
@@ -694,6 +698,9 @@ async def turno_actual(
                 usuario_id=usuario.id)
         bloque = await t.consecutivos.vigente_o_arrendar(
             caja_id=caja_id, prefijo=prefijo, dispositivo_id=dispositivo_id)
+        otros = await t.consecutivos.otros_equipos(
+            caja_id=caja_id, desde=abierta["abierta_en"],
+            dispositivo_id=dispositivo_id)
         await t.commit()
 
     return TurnoSalida(
@@ -706,6 +713,7 @@ async def turno_actual(
         prefijo=bloque["prefijo"], consecutivo_desde=bloque["desde"],
         consecutivo_hasta=bloque["hasta"],
         consecutivo_siguiente=bloque["siguiente"],
+        otros_equipos=otros,
     )
 
 
@@ -750,8 +758,12 @@ async def abrir_turno(
             bloque = await t.consecutivos.vigente_o_arrendar(
                 caja_id=entrada.caja_id, prefijo=prefijo,
                 dispositivo_id=entrada.dispositivo_id)
+            otros = await t.consecutivos.otros_equipos(
+                caja_id=entrada.caja_id, desde=ya["abierta_en"],
+                dispositivo_id=entrada.dispositivo_id)
             await t.commit()
             return TurnoSalida(
+                otros_equipos=otros,
                 sesion_id=ya["id"], numero_turno=ya["numero_turno"],
                 tienda_id=ya["tienda_id"], caja_id=entrada.caja_id,
                 cajera_id=ya["abierta_por"], cajera_nombre=ya["cajera_nombre"],

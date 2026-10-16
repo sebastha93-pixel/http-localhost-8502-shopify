@@ -21,7 +21,12 @@ import { Panel as Marco } from "@/components/pos/marco";
 import { Auditoria } from "@/components/pos/auditoria";
 import { Rail } from "@/components/pos/rail";
 import { ConLaCaja } from "@/components/pos/elegir-caja";
-import { cajaDeEsteEquipo, cambiarCajaDelEquipo } from "@/lib/pos/caja-del-equipo";
+import {
+  cajaDeEsteEquipo,
+  cajaRecordadaDeTienda,
+  cambiarCajaDelEquipo,
+  recordarCajaDeTienda,
+} from "@/lib/pos/caja-del-equipo";
 import { formatear } from "@/lib/pos/dinero";
 import { DialogoAnular, VentasDelTurno } from "@/components/pos/ventas-del-turno";
 import { TirillaImpresa } from "@/components/pos/tirilla";
@@ -72,9 +77,15 @@ function PantallaPanel({ TIENDA: tiendaDelEquipo }: { TIENDA: string }) {
     setTienda(tiendaId);
     const actual = cajas.find((c) => c.caja_id === cajaDeEsteEquipo());
     if (actual?.tienda_id === tiendaId) return;
-    const destino = cajas
+    // VOLVER DEJA LA CAJA QUE ERA. Caía siempre en la primera de la lista: el
+    // computador de la Caja 2 que iba a mirar Arrayanes volvía a Florida como
+    // Caja 1, y desde ahí cada venta entraba al arqueo de la otra.
+    if (actual) recordarCajaDeTienda(actual.tienda_id, actual.caja_id);
+    const deLaTienda = cajas
       .filter((c) => c.tienda_id === tiendaId)
-      .sort((a, b) => a.caja_id.localeCompare(b.caja_id))[0];
+      .sort((a, b) => a.caja_id.localeCompare(b.caja_id));
+    const recordada = cajaRecordadaDeTienda(tiendaId);
+    const destino = deLaTienda.find((c) => c.caja_id === recordada) ?? deLaTienda[0];
     if (!destino) return;
     await cambiarCajaDelEquipo(destino.caja_id);
     setCajaEquipo(destino.caja_id);
