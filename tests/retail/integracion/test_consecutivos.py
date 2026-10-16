@@ -456,6 +456,73 @@ def test_la_misma_tableta_reanudando_por_esa_via_conserva_el_suyo(entorno):
         assert b["consecutivo_desde"] == a["consecutivo_desde"]
 
 
+# ── DOS COMPUTADORES COMO LA MISMA CAJA ─────────────────────────────────────
+#
+# Florida, 16-oct: los dos computadores de la tienda estaban guardados como
+# «Caja 1» desde el primer día. Todo lo que se cobraba en el mostrador de la
+# Caja 2 caía en el turno y en los movimientos de la Caja 1, y nada en la
+# pantalla lo decía. El turno lo sabe —cada equipo se lleva su bloque— y
+# ahora lo cuenta.
+
+def _reanudar(c, caja: str, equipo: str) -> dict:
+    r = c.get("/api/retail/caja/turno-actual", params={
+        "caja_id": caja, "dispositivo_id": equipo,
+        "dispositivo_nombre": "Equipo"})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_un_solo_equipo_en_la_caja_no_avisa(entorno):
+    c, _ = entorno
+    EQ = "01JQ8X4T5N6PAAAR8S9V0W1X2Y"
+    assert _abrir_con_equipo(c, "florida_caja1", "001", EQ)["otros_equipos"] == 0
+    assert _reanudar(c, "florida_caja1", EQ)["otros_equipos"] == 0
+
+
+def test_dos_equipos_en_la_MISMA_caja_se_avisan_los_dos(entorno):
+    c, _ = entorno
+    EQ_A = "01JQ8X4T5N6PAAAR8S9V0W1X2Y"
+    EQ_B = "01JQ8X4T5N6PBBBR8S9V0W1X2Y"
+    _abrir_con_equipo(c, "florida_caja1", "001", EQ_A)
+
+    assert _reanudar(c, "florida_caja1", EQ_B)["otros_equipos"] == 1
+    # El primero también: es el que la cajera tiene enfrente al recargar.
+    assert _reanudar(c, "florida_caja1", EQ_A)["otros_equipos"] == 1
+
+
+def test_el_equipo_de_la_OTRA_caja_no_cuenta(entorno):
+    """Caja 1 y Caja 2, cada una en su computador, es lo correcto."""
+    c, _ = entorno
+    EQ_A = "01JQ8X4T5N6PAAAR8S9V0W1X2Y"
+    EQ_B = "01JQ8X4T5N6PBBBR8S9V0W1X2Y"
+    _abrir_con_equipo(c, "florida_caja1", "001", EQ_A)
+    _abrir_con_equipo(c, "florida_caja2", "002", EQ_B)
+
+    assert _reanudar(c, "florida_caja1", EQ_A)["otros_equipos"] == 0
+    assert _reanudar(c, "florida_caja2", EQ_B)["otros_equipos"] == 0
+
+
+def test_lo_de_un_turno_ANTERIOR_no_cuenta(entorno):
+    """Ayer el otro computador fue Caja 1 y hoy ya es Caja 2: el aviso es del
+    turno de hoy, o saldría todos los días hasta el fin de los tiempos."""
+    c, motor = entorno
+    EQ_A = "01JQ8X4T5N6PAAAR8S9V0W1X2Y"
+    EQ_B = "01JQ8X4T5N6PBBBR8S9V0W1X2Y"
+    _abrir_con_equipo(c, "florida_caja1", "001", EQ_A)
+    _reanudar(c, "florida_caja1", EQ_B)
+
+    async def bloques_de_ayer():
+        async with motor.begin() as cn:
+            await cn.execute(text("""
+                UPDATE retail.bloques_consecutivo
+                   SET arrendado_en = arrendado_en - interval '1 day'
+                 WHERE arrendado_a = :b
+            """), {"b": EQ_B})
+
+    asyncio.get_event_loop().run_until_complete(bloques_de_ayer())
+    assert _reanudar(c, "florida_caja1", EQ_A)["otros_equipos"] == 0
+
+
 # ── EL PISO Y EL TECHO DE LA RESOLUCIÓN ─────────────────────────────────────
 #
 # El POS arrancaba en 1 y la resolución FL de MALE ya va por 1536. La primera

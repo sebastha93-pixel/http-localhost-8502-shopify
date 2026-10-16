@@ -64,6 +64,24 @@ class RepositorioConsecutivosSQL:
             ON CONFLICT (id) DO UPDATE SET ultimo_visto_en = now()
         """), {"d": dispositivo_id, "c": caja_id, "n": nombre, "u": usuario_id})
 
+    async def otros_equipos(self, *, caja_id: str, desde,
+                            dispositivo_id: Optional[str]) -> int:
+        """Cuántos equipos DISTINTOS a este numeraron en la caja desde `desde`.
+
+        Cada equipo se lleva su propio bloque, así que los bloques del turno
+        dicen quién ha estado vendiendo como esta caja. Dos computadores
+        guardados como «Caja 1» meten las ventas de los dos mostradores en el
+        mismo turno sin que ninguna pantalla lo note: esto es lo que lo nota.
+        """
+        if not dispositivo_id:
+            return 0
+        return int((await self._s.execute(text("""
+            SELECT count(DISTINCT arrendado_a)
+              FROM retail.bloques_consecutivo
+             WHERE caja_id = :c AND arrendado_en >= :desde
+               AND arrendado_a IS NOT NULL AND arrendado_a <> :d
+        """), {"c": caja_id, "desde": desde, "d": dispositivo_id})).scalar() or 0)
+
     async def vigente(self, caja_id: str) -> Optional[dict]:
         fila = (await self._s.execute(text("""
             SELECT id, caja_id, prefijo, desde, hasta, siguiente, arrendado_en,

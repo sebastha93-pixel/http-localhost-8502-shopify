@@ -806,6 +806,7 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
         abriendo={abriendo}
         error={errorTurno}
         onAbrir={abrir}
+        onCambiarCaja={onOtraCaja}
       />
     );
   }
@@ -860,10 +861,51 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
             )}
             <EstadoConexion />
             <p className="text-[12px]" style={{ color: "var(--pos-600)" }}>
-              {contexto?.tienda_nombre ?? TIENDA} · {contexto?.caja_nombre ?? CAJA} · {CAJERA} · {hoy}
+              {contexto?.tienda_nombre ?? TIENDA} · {CAJERA} · {hoy}
             </p>
+            {/* LA CAJA, A LA VISTA Y CAMBIABLE. Era texto gris de 12px entre
+                la tienda y la fecha: en Florida los dos computadores fueron
+                «Caja 1» una semana entera y nadie lo vio. Con prendas en el
+                carrito no se cambia —se perderían—. */}
+            <button
+              type="button"
+              onClick={onOtraCaja}
+              disabled={lineas.length > 0}
+              title={lineas.length > 0
+                ? "Termina o vacía la venta antes de cambiar de caja"
+                : "Cambiar la caja de este computador"}
+              className="pos-tag pos-tag-neutro text-[13px] font-semibold disabled:opacity-60"
+            >
+              {contexto?.caja_nombre ?? CAJA} · Cambiar
+            </button>
           </div>
         </header>
+
+        {(turno.otros_equipos ?? 0) > 0 && (
+          <div
+            role="alert"
+            className="flex items-center justify-between gap-4 border-b px-6 py-3 text-[14px]"
+            style={{
+              borderColor: "var(--pos-divider)",
+              background: "var(--pos-100)",
+              color: "var(--pos-900)",
+            }}
+          >
+            <span>
+              <b>Otro computador también está vendiendo como {contexto?.caja_nombre ?? CAJA}</b>{" "}
+              en este turno: sus ventas y las de este caen en el mismo arqueo.
+              Si este computador es otra caja, cámbiala.
+            </span>
+            <button
+              type="button"
+              onClick={onOtraCaja}
+              disabled={lineas.length > 0}
+              className="pos-btn pos-btn-sec h-10 shrink-0 px-4 text-[14px] disabled:opacity-60"
+            >
+              Cambiar de caja
+            </button>
+          </div>
+        )}
 
         {/* Las columnas viven en pos.css: llevan media query, y una pista
             `minmax(0, …)` — no `1fr` a secas, que no baja de su contenido

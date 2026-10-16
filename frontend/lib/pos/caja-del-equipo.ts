@@ -60,6 +60,29 @@ export async function cambiarCajaDelEquipo(id: string): Promise<void> {
   await olvidarDatosDeCaja().catch(() => {});
 }
 
+// Qué caja era este equipo en cada tienda, para que el Panel lo devuelva a la
+// suya y no a la primera de la lista. Es una preferencia: si se pierde, se cae
+// en la primera, como antes.
+const DE_TIENDA = "pos.caja.de.";
+
+export function recordarCajaDeTienda(tienda: string, caja: string): void {
+  if (!FORMATO.test(caja)) return;
+  try {
+    localStorage.setItem(DE_TIENDA + tienda, caja);
+  } catch {
+    // Sin almacenamiento no se recuerda; no es motivo para fallar.
+  }
+}
+
+export function cajaRecordadaDeTienda(tienda: string): string {
+  try {
+    const c = localStorage.getItem(DE_TIENDA + tienda) || "";
+    return FORMATO.test(c) ? c : "";
+  } catch {
+    return "";
+  }
+}
+
 /** La caja de este equipo, fuera de React. Vacío si aún no se eligió. */
 export function cajaDeEsteEquipo(): string {
   return typeof window === "undefined" ? "" : guardada();
