@@ -55,6 +55,16 @@ def correr_ahora() -> dict:
         except Exception as e:  # noqa: BLE001 — no frena el inventario
             log.warning("[retail-inventario] no se pudo revisar las notas "
                         "crédito de las devoluciones: %s", e)
+        try:
+            # Lo que contabilidad corrige en Siigo —un correo, un nombre— no
+            # tenía cómo llegar al POS: la caja no edita clientas.
+            from backend.modules.retail.infrastructure.siigo import (
+                clientes_corregidos,
+            )
+            ultimo["clientes_corregidos"] = clientes_corregidos.traer(url)
+        except Exception as e:  # noqa: BLE001 — no frena el inventario
+            log.warning("[retail-inventario] no se pudo traer las clientas "
+                        "corregidas en Siigo: %s", e)
         r = sincronizar(url, aplicar=True)
         ultimo.update({
             "corrio_en": datetime.now(timezone.utc).isoformat(), "ok": True,
