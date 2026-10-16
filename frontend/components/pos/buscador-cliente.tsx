@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { buscarClientes, type Cliente } from "@/lib/pos/api";
+import { documentoParaBuscar, documentoParaCrear } from "@/lib/pos/documento";
 
 /**
  * La clienta, buscada DENTRO del carrito.
@@ -39,7 +40,7 @@ export function BuscadorCliente({
   const [buscado, setBuscado] = useState(false);
 
   useEffect(() => {
-    const digitos = documento.replace(/\D/g, "");
+    const digitos = documentoParaBuscar(documento);
     if (digitos.length < 3) {
       setResultados([]);
       setBuscado(false);
@@ -130,7 +131,7 @@ export function BuscadorCliente({
           acaba de buscar y no encontrar: volver a pedirle el número sería
           hacerle teclear dos veces lo mismo delante de la clienta. */}
       <button
-        onClick={() => onCrear(documento.replace(/\D/g, ""))}
+        onClick={() => onCrear(documentoParaCrear(documento))}
         className="mt-1.5 h-11 w-full rounded-[var(--pos-r-md)] border border-dashed text-[13px] transition-colors duration-[var(--pos-transicion)] hover:bg-[var(--pos-100)]"
         style={{ borderColor: "var(--pos-400)", color: "var(--pos-700)" }}
         title="Necesaria para la factura electrónica"
