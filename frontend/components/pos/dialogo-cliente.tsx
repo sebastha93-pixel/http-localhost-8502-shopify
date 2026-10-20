@@ -126,6 +126,8 @@ export function DialogoCliente({
   const completo =
     documento.replace(/\D/g, "").length >= 5 &&
     nombre.trim().length >= 3 &&
+    // Una persona necesita nombre Y apellido; una empresa, su razón social.
+    (empresa || nombre.trim().split(/\s+/).length >= 2) &&
     telefono.replace(/\D/g, "").length >= 7 &&
     correo.includes("@");
 

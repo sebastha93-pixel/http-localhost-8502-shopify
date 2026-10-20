@@ -181,3 +181,27 @@ def test_una_empresa_se_ENCUENTRA_buscandola_con_su_digito(entorno):
               params={"documento": "901.495.189-5"})
     assert r.status_code == 200
     assert [x["numero_documento"] for x in r.json()] == ["901495189"]
+
+
+def test_una_persona_con_UN_SOLO_nombre_no_se_guarda(entorno):
+    """Florida, 16 al 18-oct: CONSUELO, KELLY, YESENIA y YESIKA quedaron sin
+    apellido y sus facturas no salieron: Siigo exige nombre y apellido."""
+    c, _ = entorno
+    r = c.post("/api/retail/clientes", json={**CUERPO, "nombre": "CONSUELO"})
+    assert r.status_code == 400
+    assert "apellido" in r.json()["detail"]["mensaje"]
+    # Una empresa sí lleva un solo nombre: su razón social.
+    r = c.post("/api/retail/clientes", json={
+        **CUERPO, "tipo_documento": "NIT", "numero_documento": "900123456",
+        "nombre": "Comercializadora"})
+    assert r.status_code == 200, r.text
+
+
+def test_un_correo_con_ENE_o_tildes_no_se_guarda(entorno):
+    """«Invalid email: yesicamuñoz01@hotmail.com»: Siigo no crea a la clienta
+    y la factura se queda esperando. Se frena aquí, con ella enfrente."""
+    c, _ = entorno
+    for malo in ("yesicamuñoz01@hotmail.com", "yudy.casatñeda1551@gmail.com",
+                 "maría@correo.com", "susanita 2001@hotmail.com"):
+        r = c.post("/api/retail/clientes", json={**CUERPO, "correo": malo})
+        assert r.status_code == 400, malo
