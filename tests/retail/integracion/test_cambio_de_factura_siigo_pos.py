@@ -57,6 +57,12 @@ FACTURA = {
 EN_LINEA = {**FACTURA, "id": "bbbb1111-2222-3333-4444-555566667777",
             "document": {"id": 11810}, "name": "FV-1-67700", "prefix": "FE",
             "number": 67700}
+# Portal Mayoristas, 2026-10-19: Irma Elena (43083295) fue a cambiar a la
+# tienda y la cédula no traía nada. Su factura es FV-3 (prefijo CEFE), con el
+# 25 % mayorista en cada línea.
+MAYORISTA = {**FACTURA, "id": "cccc1111-2222-3333-4444-555566667777",
+             "document": {"id": 27152}, "name": "FV-3-2502", "prefix": "CEFE",
+             "number": 2502}
 
 
 def _p(code, arrayanes=0, florida=0):
@@ -99,7 +105,8 @@ async def tienda(monkeypatch):
         return [FACTURA] if "FV-6-11451" in facturas_tienda.nombres_a_buscar(q) else []
     monkeypatch.setattr(facturas_tienda, "buscar", buscar)
     monkeypatch.setattr(facturas_tienda, "leer", lambda sid: {
-        FACTURA["id"]: FACTURA, EN_LINEA["id"]: EN_LINEA}[sid])
+        FACTURA["id"]: FACTURA, EN_LINEA["id"]: EN_LINEA,
+        MAYORISTA["id"]: MAYORISTA}[sid])
     monkeypatch.setattr(clientes_siigo, "buscar_por_documento", lambda d: {
         "siigo_customer_id": "c-1", "tipo_documento": "CC",
         "numero_documento": d, "dv": None, "nombre": "Laura",
@@ -171,8 +178,13 @@ def test_el_numero_impreso_se_traduce_al_codigo_que_siigo_entiende():
     assert n("TARR-11451", "florida") == ["FV-6-11451"]   # con prefijo, donde sea
     # La tienda en línea, por su prefijo.
     assert n("FE-67700") == n("fe 67700") == n("FV-1-67700") == ["FV-1-67700"]
-    # Lo que no es de tienda ni de la página no se busca aquí.
-    assert n("ARRT-5") == [] and n("FV-3-10") == []
+    # Mayoristas, por su prefijo o su código…
+    assert n("CEFE-2502") == n("cefe 2502") == n("FV-3-2502") == ["FV-3-2502"]
+    # …pero NO con el número suelto: sería otra petición a Siigo en cada
+    # búsqueda de tienda, y la mayorista llega con su cédula.
+    assert "FV-3-11451" not in n("11451") + n("11451", "arrayanes")
+    # Lo que no es de tienda, de la página ni de mayoristas no se busca aquí.
+    assert n("ARRT-5") == [] and n("FV-2-10") == []
 
 
 def test_una_factura_de_antes_del_pos_APARECE_al_buscarla(tienda):
@@ -1136,3 +1148,42 @@ def test_las_dos_promociones_viajan_en_el_contexto(tienda):
     assert d["promocion"]["id"] == "segunda_1000"
     diez = next(p for p in d["promociones"] if p["id"] == "diez_todo")
     assert (diez["porcentaje"], diez["excluidas"]) == (10.0, ["12345-1"])
+
+
+# ── La compra del Portal Mayoristas ─────────────────────────────────────────
+
+def test_la_compra_de_MAYORISTAS_se_cambia_en_la_caja_que_atiende(tienda):
+    """Como la de la página: no es de ninguna caja, se pagó por otro canal y
+    sólo se devuelve como saldo a favor —por lo que pagó, a precio mayorista—."""
+    from backend.modules.retail.infrastructure.siigo import facturas_tienda
+    assert facturas_tienda.es_de_tienda(MAYORISTA) is not None
+
+    r = _traer(tienda, MAYORISTA["id"], caja="arrayanes_caja1")
+    assert r.status_code == 200, r.text
+    assert r.json()["numero"] == "CEFE-2502"
+    assert r.json()["tienda"] == "Portal mayoristas"
+    venta_id = r.json()["venta_id"]
+
+    d = tienda["c"].get("/api/retail/devoluciones/ticket/CEFE-2502",
+                        params={"caja_id": "arrayanes_caja1"}).json()
+    assert d["puede_efectivo"] is False
+    assert "mayoristas" in d["sin_efectivo_porque"]
+
+    def devolver(reembolso, did):
+        return tienda["c"].post("/api/retail/devoluciones", json={
+            "devolucion_id": did, "venta_id": venta_id,
+            "seleccion": {"26602-1T6": 1}, "motivo": "talla",
+            "reembolso": reembolso, "caja_id": "arrayanes_caja1"})
+
+    r = devolver("efectivo", "01JQ8X4T5NDV0F1R8S9V0W1X3A")
+    assert r.status_code == 400 and "mayoristas" in r.json()["detail"]["mensaje"]
+
+    r = devolver("credito_tienda", "01JQ8X4T5NDV0F1R8S9V0W1X3B")
+    assert r.status_code == 200, r.text
+    assert _stock(tienda, "26602-1T6", "tienda:arrayanes") == 3
+    [s] = tienda["c"].get("/api/retail/saldos",
+                          params={"q": r.json()["saldo_codigo"]}).json()
+    # Lo que pagó, no el precio de vitrina.
+    assert (s["monto_centavos"], s["origen"]) == (13_491_000, "CEFE-2502")
+    assert _uno(tienda, "SELECT count(*) FROM retail.movimientos_caja "
+                        "WHERE tipo LIKE 'devolucion%'") == 0

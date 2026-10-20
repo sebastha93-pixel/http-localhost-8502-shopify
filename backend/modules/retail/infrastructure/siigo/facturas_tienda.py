@@ -22,7 +22,14 @@ factura no es de ninguna caja: se trae a la caja QUE ATIENDE, y la prenda
 entra al inventario de esa tienda. Lo que NO se hace es devolverle efectivo
 del cajón —pagó por otro canal—: sale con otra prenda o con crédito.
 
-Mayoristas sigue fuera: su cambio se tramita por Postventa.
+Y EL PORTAL MAYORISTAS (2026-10-20):
+
+    FV-3   prefijo CEFE  id 27152  mayoristas.maledenim.com
+
+Iba por Postventa, hasta que una mayorista llegó a la tienda a cambiar y su
+cédula no traía nada. Mismas reglas que la página: se trae a la caja que
+atiende, sale con otra prenda o con saldo —nunca efectivo— y el saldo vale lo
+que pagó, el precio mayorista, no el de vitrina.
 """
 from __future__ import annotations
 
@@ -31,9 +38,10 @@ import time
 from typing import List, Optional
 
 __all__ = ["COMPROBANTES", "PREFIJO_EN_LINEA", "nombres_a_buscar", "buscar",
-           "leer", "es_de_tienda"]
+           "leer", "es_de_tienda", "canal_sin_efectivo"]
 
 PREFIJO_EN_LINEA = "FE"
+PREFIJO_MAYORISTAS = "CEFE"
 
 #  código FV → (prefijo impreso, id del comprobante, tienda, caja)
 COMPROBANTES = {
@@ -45,10 +53,26 @@ COMPROBANTES = {
          "caja_id": "florida_caja2"},
     #  Sin tienda ni caja: son las de quien atiende el cambio.
     1:  {"prefijo": PREFIJO_EN_LINEA, "documento_id": 11810, "tienda_id": None,
-         "caja_id": None},
+         "caja_id": None, "canal": "Tienda en línea"},
+    #  `numero_suelto: False`: con sólo el número no se prueba. Sería otra
+    #  petición a Siigo en CADA búsqueda de tienda, y la mayorista llega con
+    #  su cédula o con el papel, que trae el prefijo.
+    3:  {"prefijo": PREFIJO_MAYORISTAS, "documento_id": 27152, "tienda_id": None,
+         "caja_id": None, "canal": "Portal mayoristas", "numero_suelto": False},
 }
 _POR_PREFIJO = {v["prefijo"]: k for k, v in COMPROBANTES.items()}
 _POR_DOCUMENTO = {v["documento_id"]: v for v in COMPROBANTES.values()}
+
+
+def canal_sin_efectivo(prefijo: Optional[str]) -> Optional[str]:
+    """El canal de una compra pagada FUERA de las cajas (la página, el portal
+    de mayoristas), o `None` si es de una caja. Del cajón no sale efectivo
+    por ella: se cambia por otra prenda o queda con saldo a favor."""
+    p = (prefijo or "").strip().upper()
+    for v in COMPROBANTES.values():
+        if v["tienda_id"] is None and v["prefijo"] == p:
+            return v["canal"]
+    return None
 
 
 def es_de_tienda(factura: dict) -> Optional[dict]:
@@ -85,7 +109,8 @@ def nombres_a_buscar(q: str, tienda_id: Optional[str] = None) -> List[str]:
         return [f"FV-{codigo}-{int(m.group(2))}"] if codigo else []
     if re.fullmatch(r"\d{1,7}", crudo):
         return [f"FV-{c}-{int(crudo)}" for c, v in COMPROBANTES.items()
-                if not tienda_id or v["tienda_id"] in (tienda_id, None)]
+                if v.get("numero_suelto", True)
+                and (not tienda_id or v["tienda_id"] in (tienda_id, None))]
     return []
 
 
