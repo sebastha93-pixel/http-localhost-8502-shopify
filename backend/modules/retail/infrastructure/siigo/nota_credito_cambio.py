@@ -48,6 +48,27 @@ def marca_cambio_de(devolucion_id: str, numero_venta: str) -> str:
     return f"POS CAMBIO {numero_venta} · {devolucion_id}"
 
 
+def _precio_y_descuento(it: dict):
+    """El precio base y el porcentaje que se mandan para ese ítem.
+
+    Siigo GUARDA el porcentaje redondeado pero el valor exacto: la segunda
+    prenda a $1.000 de la página quedó como «99 %» con un descuento que en
+    realidad es 99,33 %. Copiar el 99 daba una línea de $1.499 contra un
+    anticipo de $1.000, y Siigo rechazaba la nota crédito (FE-67957, 18-oct).
+    Cuando el porcentaje no explica el valor, va el precio YA REBAJADO y sin
+    descuento, que es lo que la factura de venta hace en ese mismo caso.
+    """
+    precio = Decimal(str(it.get("price") or 0))
+    d = it.get("discount")
+    pct = _descuento_plano(d)
+    if isinstance(d, dict) and d.get("value") not in (None, "") and pct:
+        cant = Decimal(str(it.get("quantity") or 1)) or Decimal("1")
+        valor = Decimal(str(d["value"]))
+        if abs(_c(precio * cant * Decimal(str(pct)) / 100) - _c(valor)) > _CENT:
+            return _c(precio - valor / cant), None
+    return precio, pct
+
+
 def _total_de(it: dict, cantidad: int) -> Decimal:
     """Lo que Siigo calcula para `cantidad` unidades de ese ítem.
 
@@ -57,11 +78,9 @@ def _total_de(it: dict, cantidad: int) -> Decimal:
     """
     if cantidad == int(float(it.get("quantity") or 0)) and it.get("total") is not None:
         return _c(it["total"])
-    bruto = Decimal(str(it.get("price") or 0)) * cantidad
-    pct = Decimal(str((it.get("discount") or {}).get("percentage") or 0)) \
-        if isinstance(it.get("discount"), dict) \
-        else Decimal(str(it.get("discount") or 0))
-    descuento = _c(bruto * pct / 100)
+    precio, pct = _precio_y_descuento(it)
+    bruto = precio * cantidad
+    descuento = _c(bruto * Decimal(str(pct or 0)) / 100)
     subtotal = bruto - descuento
     tasa = sum((Decimal(str(t.get("percentage") or 0))
                 for t in (it.get("taxes") or [])), Decimal("0")) \
@@ -99,21 +118,25 @@ def construir_nota_credito_cambio(*, factura: dict, devueltas: Dict[str, int],
         faltan[codigo] -= cantidad
         if not faltan[codigo]:
             del faltan[codigo]
+        precio, pct = _precio_y_descuento(it)
         linea = {
             "code": it.get("code"),
             "description": it.get("description") or "",
             "quantity": cantidad,
-            "price": it.get("price"),
+            "price": float(precio),
             "taxes": ([{"id": t.get("id")} for t in (it.get("taxes") or [])
                        if t.get("id")] or [{"id": IVA_19_ID}]),
         }
-        bodega = _numero_plano(bodega_id if bodega_id is not None
-                               else it.get("warehouse"))
-        if bodega is not None:
-            linea["warehouse"] = bodega
-        descuento = _descuento_plano(it.get("discount"))
-        if descuento is not None:
-            linea["discount"] = descuento
+        # Sólo lo que la factura sacó de una bodega vuelve a una. El flete
+        # («13», un SERVICIO) no tiene bodega, y mandársela es «The warehouse
+        # cannot be used» (FE-65713, 14-oct).
+        if it.get("warehouse"):
+            bodega = _numero_plano(bodega_id if bodega_id is not None
+                                   else it.get("warehouse"))
+            if bodega is not None:
+                linea["warehouse"] = bodega
+        if pct is not None:
+            linea["discount"] = pct
         lineas.append(linea)
         total += _total_de(it, cantidad)
     if faltan:

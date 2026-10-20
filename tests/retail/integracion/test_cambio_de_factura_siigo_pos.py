@@ -895,6 +895,58 @@ def test_no_se_acredita_lo_que_la_factura_no_trae():
     assert todo["payments"][0]["value"] == FACTURA["total"]
 
 
+# Dos rechazos reales de Siigo (FE-65713, FE-67957, FE-67975; 14 y 18-oct).
+PAGINA = {
+    "id": "dddd1111-2222-3333-4444-555566667777", "name": "FV-1-67957",
+    "stamp": {"status": "Accepted"}, "customer": {"identification": "1"},
+    "items": [
+        # El flete es un SERVICIO: la factura no le pone bodega.
+        {"code": "13", "description": "ENVÍO PRODUCTO A LUGAR DESTINO",
+         "quantity": 1.0, "price": 12605.04, "discount": None,
+         "taxes": [{"id": 6352, "percentage": 19.0}], "total": 15000.0},
+        # La segunda prenda a $1.000 de la página: Siigo guardó el porcentaje
+        # REDONDEADO (99) y el valor exacto (99,33 %).
+        {"code": "21603-1T8", "description": "Jean flare", "quantity": 1.0,
+         "price": 125966.39, "discount": {"percentage": 99.0, "value": 125126.05},
+         "warehouse": {"id": 32, "name": "MELONN"},
+         "taxes": [{"id": 6352, "percentage": 19.0}], "total": 1000.0},
+    ],
+}
+
+
+def test_el_FLETE_no_lleva_bodega_en_la_nota_credito():
+    """«The warehouse cannot be used»: un servicio no entra a ninguna bodega."""
+    from backend.modules.retail.infrastructure.siigo.nota_credito_cambio import (
+        construir_nota_credito_cambio as c,
+    )
+    nc = c(factura=PAGINA, devueltas={"13": 1}, documento_id=11817,
+           fecha="2026-10-20", marca="M", bodega_id=48)
+    assert "warehouse" not in nc["items"][0]
+    assert nc["payments"][0]["value"] == 15000.0
+    # La prenda sí entra a la tienda que la recibe.
+    nc = c(factura=PAGINA, devueltas={"21603-1T8": 1}, documento_id=11817,
+           fecha="2026-10-20", marca="M", bodega_id=48)
+    assert nc["items"][0]["warehouse"] == 48
+
+
+def test_un_descuento_que_NO_es_porcentaje_entero_va_como_precio_rebajado():
+    """«The total credit note calculated is 1499»: con el 99 % redondeado la
+    línea valía $1.499 y el anticipo $1.000. Se manda el precio ya rebajado,
+    sin descuento, y Siigo calcula exactamente lo que se cobró."""
+    from decimal import Decimal
+    from backend.modules.retail.infrastructure.siigo.nota_credito_cambio import (
+        construir_nota_credito_cambio as c,
+    )
+    nc = c(factura=PAGINA, devueltas={"21603-1T8": 1}, documento_id=11817,
+           fecha="2026-10-20", marca="M", bodega_id=48)
+    [l] = nc["items"]
+    assert "discount" not in l
+    assert l["price"] == 840.34
+    # Lo que Siigo va a calcular: base × 1,19 redondeado al centavo.
+    assert (Decimal("840.34") * Decimal("1.19")).quantize(Decimal("0.01")) \
+        == Decimal("1000.00") == Decimal(str(nc["payments"][0]["value"]))
+
+
 # ── El cruce del anticipo con la factura que lo gastó ───────────────────────
 
 def _compra_facturada(t, monto=13_491_000):

@@ -29,7 +29,9 @@ from backend.modules.retail.domain.venta.errores import ReglaDeNegocio
 __all__ = ["BuscarClientes", "CrearCliente", "ClienteEncontrado"]
 
 TIPOS_DOCUMENTO = {"CC", "CE", "PP", "NIT", "TI"}
-_CORREO = re.compile(r"^[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}$")
+#  Sólo ASCII: Siigo rechaza la ñ y las tildes (`invalid_email`) y con eso
+#  la clienta no se crea y su factura se queda esperando (Florida, 16-oct).
+_CORREO = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,12 @@ class CrearCliente:
         completo = " ".join((nombre or "").split())
         if len(completo) < 3:
             raise ReglaDeNegocio("Escribe el nombre completo de la clienta.")
+        if tipo != "NIT" and len(completo.split(" ")) < 2:
+            # Siigo exige nombre Y apellido a una persona; con uno solo la
+            # factura no sale (CONSUELO, KELLY, YESENIA, YESIKA: 16 al 18-oct).
+            raise ReglaDeNegocio(
+                "Escribe nombre y apellido: la factura electrónica no sale "
+                "con un solo nombre.")
 
         tel = re.sub(r"[^\d+]", "", telefono or "")
         if len(re.sub(r"\D", "", tel)) < 7:
@@ -116,7 +124,8 @@ class CrearCliente:
         limpio = (correo or "").strip().lower()
         if not _CORREO.match(limpio):
             raise ReglaDeNegocio(
-                f"«{correo}» no parece un correo válido. Ahí le llega la factura."
+                f"«{correo}» no es un correo válido (sin ñ, tildes ni espacios). "
+                "Ahí le llega la factura."
             )
 
         # El nombre se parte en nombre/apellido porque así lo pide Siigo. Si
