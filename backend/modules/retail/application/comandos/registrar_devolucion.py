@@ -107,14 +107,17 @@ class RegistrarDevolucion:
             """), {"i": venta_id})).mappings().first()
             if cabecera is None:
                 raise ReglaDeNegocio(f"No existe la venta {venta_id}.")
-            # LA COMPRA DE LA TIENDA EN LÍNEA se pagó por otro canal: del
-            # cajón de la tienda no sale efectivo por ella. Se cambia por otra
-            # prenda o queda con crédito.
-            if (reembolso_enum is Reembolso.EFECTIVO
-                    and cabecera["origen"] == "siigo_pos"
-                    and (cabecera["prefijo"] or "").upper() == "FE"):
+            # LA COMPRA DE LA TIENDA EN LÍNEA O DEL PORTAL DE MAYORISTAS se
+            # pagó por otro canal: del cajón de la tienda no sale efectivo por
+            # ella. Se cambia por otra prenda o queda con crédito.
+            from backend.modules.retail.infrastructure.siigo.facturas_tienda import (
+                canal_sin_efectivo,
+            )
+            canal = (canal_sin_efectivo(cabecera["prefijo"])
+                     if cabecera["origen"] == "siigo_pos" else None)
+            if reembolso_enum is Reembolso.EFECTIVO and canal:
                 raise ReglaDeNegocio(
-                    "Es una compra de la tienda en línea: se cambia por otra "
+                    f"Es una compra de {canal.lower()}: se cambia por otra "
                     "prenda o queda con crédito, no se devuelve efectivo del "
                     "cajón.")
             lugar = await self._lugar(t, caja_id, cabecera)

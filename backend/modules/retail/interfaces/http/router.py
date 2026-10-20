@@ -2420,8 +2420,7 @@ async def buscar_ventas_para_cambio(
         encontradas.append(VentaEncontrada(
             venta_id="", numero=numero, factura=numero,
             fecha=str(f.get("date") or ""),
-            tienda=_TIENDA_DE.get(_facturas_tienda().es_de_tienda(f)["tienda_id"],
-                                  "Tienda en línea"),
+            tienda=_donde_se_compro(_facturas_tienda().es_de_tienda(f)),
             total_centavos=int(round(float(f.get("total") or 0) * 100)),
             cliente=nombre.strip() or None, anulada=False,
             siigo_id=str(f.get("id"))))
@@ -2453,6 +2452,12 @@ async def _pedidos_web(q: str) -> list:
 
 
 _TIENDA_DE = {"arrayanes": "Arrayanes", "florida": "Florida"}
+
+
+def _donde_se_compro(comprobante: dict) -> str:
+    """La tienda de la caja, o el canal si no es de ninguna (la página, el
+    portal de mayoristas)."""
+    return _TIENDA_DE.get(comprobante["tienda_id"]) or comprobante.get("canal", "")
 
 
 def _facturas_tienda():
@@ -2596,7 +2601,7 @@ async def traer_factura_de_siigo(
     return VentaEncontrada(
         venta_id=r.venta_id, numero=r.numero, factura=r.numero,
         fecha=str(factura.get("date") or ""),
-        tienda=_TIENDA_DE.get(comprobante["tienda_id"], "Tienda en línea"),
+        tienda=_donde_se_compro(comprobante),
         total_centavos=int(round(float(factura.get("total") or 0) * 100)),
         cliente=None, anulada=False)
 
@@ -2673,10 +2678,10 @@ async def buscar_ticket(
         fecha=cab["cerrada_en"].isoformat() if cab["cerrada_en"] else "",
         cajera=cab["cajera_id"] or "", total_centavos=int(cab["total"]),
         anulada=cab["estado"] == "anulada",
-        puede_efectivo=bool(cab["hay_turno"]) and not _es_en_linea(cab),
+        puede_efectivo=bool(cab["hay_turno"]) and not _canal_sin_efectivo(cab),
         sin_efectivo_porque=(
-            "Compra de la tienda en línea: se cambia por otra prenda o queda "
-            "con crédito" if _es_en_linea(cab)
+            f"Compra de {_canal_sin_efectivo(cab).lower()}: se cambia por otra "
+            "prenda o queda con crédito" if _canal_sin_efectivo(cab)
             else None if cab["hay_turno"]
             else "Necesita un turno abierto en esta caja"),
         lineas=[
@@ -2692,11 +2697,13 @@ async def buscar_ticket(
     )
 
 
-def _es_en_linea(venta) -> bool:
-    """La compra de maledenim.com traída a la caja para cambiarla. Se pagó
-    por otro canal: del cajón de la tienda no sale efectivo por ella."""
-    return (venta["origen"] == "siigo_pos" and (venta["prefijo"] or "").upper()
-            == _facturas_tienda().PREFIJO_EN_LINEA)
+def _canal_sin_efectivo(venta) -> Optional[str]:
+    """La compra de maledenim.com o del portal de mayoristas traída a la caja
+    para cambiarla. Se pagó por otro canal: del cajón de la tienda no sale
+    efectivo por ella."""
+    if venta["origen"] != "siigo_pos":
+        return None
+    return _facturas_tienda().canal_sin_efectivo(venta["prefijo"])
 
 
 @router.post("/devoluciones", response_model=DevolucionSalida)
