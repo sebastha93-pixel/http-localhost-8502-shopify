@@ -220,6 +220,16 @@ def test_escanear_un_codigo_de_barras_devuelve_una_sola_prenda(cliente):
     assert datos[0]["es_escaneo"] is True
 
 
+def test_el_guion_que_la_pistola_escribe_como_APOSTROFO_se_entiende(cliente):
+    """Arrayanes, 2026-10-21: pistola en inglés sobre Windows en español. El
+    código `92611-1T10` llegaba como `92611'1T10` y no encontraba nada."""
+    for q in ("92611'1T10", "92611´1T10", "92611’1T10"):
+        r = cliente.get("/api/retail/catalogo/buscar",
+                        params={"q": q, "ubicacion_id": UBICACION})
+        assert r.status_code == 200, r.text
+        assert [x["sku"] for x in r.json()] == ["92611-1T10"], q
+
+
 def test_buscar_por_varias_palabras_las_exige_todas(cliente):
     """`92611 azul 10` son tres condiciones, no un texto literal."""
     r = cliente.get("/api/retail/catalogo/buscar",
