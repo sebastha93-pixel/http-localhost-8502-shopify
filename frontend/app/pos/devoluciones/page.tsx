@@ -26,6 +26,7 @@ import { useAuth } from "@/components/auth-provider";
 import { Rail } from "@/components/pos/rail";
 import { ElegirCaja } from "@/components/pos/elegir-caja";
 import { useCajaDelEquipo } from "@/lib/pos/caja-del-equipo";
+import { corregirEscaneo } from "@/lib/pos/escaneo";
 import { formatear } from "@/lib/pos/dinero";
 import { nuevoUlid } from "@/lib/pos/ulid";
 import { SaldoImpreso } from "@/components/pos/tirilla";
@@ -233,7 +234,7 @@ function PantallaDevoluciones({ CAJA }: { CAJA: string }) {
               <input
                 ref={buscador}
                 value={consulta}
-                onChange={(e) => setConsulta(e.target.value)}
+                onChange={(e) => setConsulta(corregirEscaneo(e.target.value))}
                 onKeyDown={(e) => { if (e.key === "Enter") void buscar(); }}
                 placeholder="Cédula, factura (ARRT-5), pedido web (#64429) o nombre"
                 aria-label="Cédula de la clienta o número de la factura"

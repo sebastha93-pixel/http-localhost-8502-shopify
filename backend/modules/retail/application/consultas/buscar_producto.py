@@ -22,6 +22,8 @@ completa la quiere primera, no sepultada entre las que se le parecen.
 """
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -55,6 +57,9 @@ class BuscarProducto:
     async def ejecutar(self, texto: str, *, ubicacion_id: str,
                        limite: int = 24) -> List[Resultado]:
         consulta = (texto or "").strip()
+        # La pistola configurada en inglés sobre un Windows en español escribe
+        # el guion como apóstrofo (`26621'1T4`). Entre dos números se corrige.
+        consulta = re.sub(r"(\d)['´’](?=\d)", r"\1-", consulta)
         if not consulta:
             return []
 

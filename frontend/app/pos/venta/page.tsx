@@ -35,6 +35,7 @@ import { EstadoConexion } from "@/components/pos/estado-conexion";
 import { ElegirCaja } from "@/components/pos/elegir-caja";
 import { ApiError } from "@/lib/api";
 import { useCajaDelEquipo } from "@/lib/pos/caja-del-equipo";
+import { corregirEscaneo } from "@/lib/pos/escaneo";
 import {
   cerrarVenta,
   listarCatalogo,
@@ -917,7 +918,7 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
               <input
                 ref={buscadorRef}
                 value={consulta}
-                onChange={(e) => setConsulta(e.target.value)}
+                onChange={(e) => setConsulta(corregirEscaneo(e.target.value))}
                 placeholder="Buscar por nombre o referencia"
                 aria-label="Buscar producto"
                 autoComplete="off"

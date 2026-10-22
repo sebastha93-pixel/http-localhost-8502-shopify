@@ -22,6 +22,7 @@ import { useAuth } from "@/components/auth-provider";
 import { Rail } from "@/components/pos/rail";
 import { ConLaCaja } from "@/components/pos/elegir-caja";
 import { formatear } from "@/lib/pos/dinero";
+import { corregirEscaneo } from "@/lib/pos/escaneo";
 import { consultarInventario, type FilaInventario, type Inventario } from "@/lib/pos/api";
 
 // La tienda y la ubicación salen de la caja del equipo, no de variables.
@@ -82,7 +83,7 @@ function PantallaInventario({ TIENDA, UBICACION }: {
           <input
             ref={buscador}
             value={consulta}
-            onChange={(e) => setConsulta(e.target.value)}
+            onChange={(e) => setConsulta(corregirEscaneo(e.target.value))}
             placeholder="Filtrar por nombre o referencia"
             className="h-11 w-[320px] pos-input px-3 text-[14px] text-[var(--pos-text)]"
           />
