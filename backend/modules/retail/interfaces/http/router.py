@@ -338,6 +338,18 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
                    else "es una prenda rebajada."))
         promo_pct[l.sku] = p
 
+    # El regalo por monto (la pañoleta desde $149.900, 2026-10-22): UNA unidad
+    # de lo que se regala queda en $0 si lo que se paga por lo demás llega al
+    # mínimo. Se mide DESPUÉS de armar las otras líneas, con sus descuentos.
+    regalo = next((p for p in promos if p["tipo"] == "regalo_por_monto"), None)
+    refs_regalo = {r.upper() for r in (regalo or {}).get("referencias") or []}
+    if regalo:
+        fuera = [l.sku for l in marcadas if l.promocion_id == regalo["id"]
+                 and referencia_de(l.sku) not in refs_regalo]
+        if fuera:
+            raise ReglaDeNegocio(f"No es el regalo de la promoción: {', '.join(fuera)}.")
+    lineas_regalo: list = []
+
     faltan = [el.sku for el in entrada.lineas
               if Sku.parsear(el.sku).codigo not in variante_por_sku]
     if faltan:
@@ -355,6 +367,9 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
         )
         if entrada_linea.obsequio:
             venta.marcar_obsequio(linea.numero, autorizado_por=usuario_id)
+        elif (regalo and entrada_linea.promocion_id == regalo["id"]
+              and not a_mano(entrada_linea)):
+            lineas_regalo.append(linea)
         elif entrada_linea.promocion_id and promo_desc.get(entrada_linea.sku):
             venta.aplicar_descuento_linea(
                 linea.numero,
@@ -376,6 +391,26 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
                 linea.numero, _descuento(entrada_linea, entrada.moneda),
                 tope_de_quien_aplica=tope, aplicado_por=usuario_id)
 
+    if lineas_regalo:
+        # Lo que se regala no cuenta para llegar al mínimo, ni las otras
+        # unidades del regalo que sí se cobran.
+        base = sum(l.total().centavos for l in venta.lineas
+                   if referencia_de(l.sku.codigo) not in refs_regalo)
+        minimo = int(regalo["minimo_centavos"])
+        if base < minimo:
+            raise ReglaDeNegocio(
+                f"{regalo['nombre']}: las prendas suman "
+                f"{Dinero(base, entrada.moneda).formateado()} y el mínimo es "
+                f"{Dinero(minimo, entrada.moneda).formateado()}. Actualiza la "
+                f"pantalla y vuelve a cobrar.")
+        # Una por compra, aunque marquen más.
+        linea = lineas_regalo[0]
+        venta.aplicar_descuento_linea(
+            linea.numero,
+            Descuento.valor(linea.precio_unitario, motivo=regalo["nombre"]),
+            tope_de_quien_aplica=Decimal(100),
+            aplicado_por=f"promocion:{regalo['id']}")
+
     for p in entrada.pagos:
         venta.registrar_pago(p.medio_pago_id,
                              Dinero(p.monto_centavos, entrada.moneda),
@@ -390,7 +425,7 @@ async def _promociones_vigentes(sesion, tienda_id: str) -> list:
     from sqlalchemy import text as _t
     filas = (await sesion.execute(_t("""
         SELECT DISTINCT ON (tipo) id, nombre, tipo, precio_centavos, porcentaje,
-               referencias, excluidas, hasta
+               minimo_centavos, referencias, excluidas, hasta
           FROM retail.promociones
          WHERE activa AND now() >= desde AND now() < hasta
            AND (cardinality(tiendas) = 0 OR :t = ANY(tiendas))
@@ -995,6 +1030,7 @@ def _promo_para_caja(p: Optional[dict]) -> Optional[dict]:
     return {"id": p["id"], "nombre": p["nombre"], "tipo": p["tipo"],
             "precio_centavos": int(p["precio_centavos"] or 0),
             "porcentaje": float(p["porcentaje"]) if p.get("porcentaje") else None,
+            "minimo_centavos": int(p["minimo_centavos"]) if p.get("minimo_centavos") else None,
             "referencias": list(p["referencias"] or []),
             "excluidas": list(p.get("excluidas") or []),
             "hasta": p["hasta"].isoformat()}

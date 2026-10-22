@@ -55,7 +55,7 @@ import {
   type Tirilla as TirillaDatos,
 } from "@/lib/pos/api";
 import { nuevoUlid } from "@/lib/pos/ulid";
-import { conPromocion, descuentoDeLinea } from "@/lib/pos/promo";
+import { conPromocion, descuentoDeLinea, regaloPendiente } from "@/lib/pos/promo";
 import {
   confirmada,
   encolar,
@@ -527,6 +527,9 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
     () => conPromocion(lineas, contexto?.promociones?.length
       ? contexto.promociones : contexto?.promocion),
     [lineas, contexto?.promociones, contexto?.promocion]);
+  const regalo = useMemo(
+    () => regaloPendiente(conPromo, contexto?.promociones),
+    [conPromo, contexto?.promociones]);
 
   // ── Totales ────────────────────────────────────────────────────────────
   const totales = useMemo(() => {
@@ -858,6 +861,13 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
                 title="Sin conexión: el stock puede haber cambiado"
               >
                 Stock de hace {antiguedad(catalogoDe)}
+              </span>
+            )}
+            {regalo && (
+              // La pañoleta es una prenda de la percha: si no se escanea, no
+              // sale del inventario y la clienta se va sin ella.
+              <span role="status" className="pos-tag pos-tag-acento">
+                {regalo.nombre} · escanea la {regalo.referencias[0]}
               </span>
             )}
             <EstadoConexion />

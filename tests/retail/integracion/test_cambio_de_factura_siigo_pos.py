@@ -1202,6 +1202,71 @@ def test_las_dos_promociones_viajan_en_el_contexto(tienda):
     assert (diez["porcentaje"], diez["excluidas"]) == (10.0, ["12345-1"])
 
 
+# ── El regalo por monto: la pañoleta desde $149.900 ─────────────────────────
+# En el fixture no hay P004: hace de pañoleta la 26602-1 ($129.900).
+
+def _regalo(t, minimo=14_990_000):
+    with t["motor"].begin() as c:
+        c.execute(text("""
+            INSERT INTO retail.promociones
+                (id, nombre, tipo, minimo_centavos, desde, hasta, referencias)
+            VALUES ('panoleta', 'Pañoleta de regalo', 'regalo_por_monto', :m,
+                    now() - interval '1 day', now() + interval '1 day',
+                    ARRAY['26602-1'])
+        """), {"m": minimo})
+
+
+def test_desde_el_minimo_UNA_panoleta_sale_en_cero(tienda):
+    """Como en la página: una por compra. Si lleva dos, la otra se cobra."""
+    _regalo(tienda)
+    r = _vender_lineas(tienda, [
+        {"sku": "95613-1T12", "cantidad": 1, "precio_unitario_centavos": 14_990_000},
+        {"sku": "26602-1T6", "cantidad": 2, "precio_unitario_centavos": 12_990_000,
+         "promocion_id": "panoleta"}],
+        pagos=[{"medio_pago_id": "efectivo_arrayanes",
+                "monto_centavos": 14_990_000 + 12_990_000, "es_efectivo": True}])
+    assert r.status_code == 200, r.text
+    assert r.json()["total_centavos"] == 14_990_000 + 12_990_000
+    assert _todas(tienda, """SELECT sku, descuento_monto, descuento_motivo, autorizado_por
+        FROM retail.venta_lineas ORDER BY orden""") == [
+        ("95613-1T12", 0, None, None),
+        ("26602-1T6", 12_990_000, "Pañoleta de regalo", "promocion:panoleta")]
+
+
+def test_por_debajo_del_minimo_la_panoleta_NO_sale_gratis(tienda):
+    """La pañoleta no cuenta para llegar, y lo que se mide es lo que se paga:
+    una prenda de $149.900 con descuento a mano ya no llega."""
+    _regalo(tienda)
+    panoleta = {"sku": "26602-1T6", "cantidad": 1,
+                "precio_unitario_centavos": 12_990_000, "promocion_id": "panoleta"}
+    r = _vender_lineas(tienda, [panoleta])
+    assert r.status_code == 400 and "el mínimo es" in r.text
+    with tienda["motor"].begin() as c:
+        c.execute(text("UPDATE retail.permisos_pos SET tope_descuento_pct = 60"))
+    r = _vender_lineas(tienda, [
+        {"sku": "95613-1T12", "cantidad": 1, "precio_unitario_centavos": 14_990_000,
+         "descuento_porcentaje": "10", "descuento_motivo": "cliente frecuente"},
+        panoleta])
+    assert r.status_code == 400 and "el mínimo es" in r.text
+
+
+def test_solo_lo_del_listado_es_regalo(tienda):
+    _regalo(tienda)
+    r = _vender_lineas(tienda, [
+        {"sku": "95613-1T12", "cantidad": 2, "precio_unitario_centavos": 14_990_000,
+         "promocion_id": "panoleta"}])
+    assert r.status_code == 400 and "No es el regalo" in r.text
+
+
+def test_el_regalo_viaja_en_el_contexto(tienda):
+    _regalo(tienda)
+    d = tienda["c"].get("/api/retail/caja/contexto",
+                        params={"caja_id": "arrayanes_caja1"}).json()
+    [p] = d["promociones"]
+    assert (p["tipo"], p["minimo_centavos"], p["referencias"]) == (
+        "regalo_por_monto", 14_990_000, ["26602-1"])
+
+
 # ── La compra del Portal Mayoristas ─────────────────────────────────────────
 
 def test_la_compra_de_MAYORISTAS_se_cambia_en_la_caja_que_atiende(tienda):
