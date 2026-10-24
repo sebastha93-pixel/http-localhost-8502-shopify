@@ -951,6 +951,8 @@ export default function DetalleOrdenCortePage() {
         );
       })()}
 
+      <CuadreConfeccion ocId={id} puedeEditar={puedeEditarNotas} puedeJustificar={esAdmin} />
+
       <Card>
         <CardContent className="p-5">
           <div className="mb-2 flex items-center gap-2">
@@ -2839,6 +2841,214 @@ function GenerarRemisionCard({ ordenCorteId, esCortador }: { ordenCorteId: strin
           <div role="alert" className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta">
             {errRem}
           </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Cuadre de confección ────────────────────────────────────────────────────
+// Cuántas prendas entregó confección por talla vs lo cortado. El conteo entra
+// "por confirmar" (sin alerta); al confirmarlo se cruza en firme y, si falta,
+// salta la campanita. Un faltante confirmado lo puede justificar un admin.
+interface CuadreResp {
+  estado: "sin_base" | "sin_dato" | "cuadra" | "faltan" | "sobran" | "mixto";
+  base: Record<string, number>;
+  recibido: Record<string, number>;
+  faltan: Record<string, number>;
+  sobran: Record<string, number>;
+  total_base: number;
+  total_recibido: number;
+  total_faltan: number;
+  total_sobran: number;
+  cuadre_estado: "por_confirmar" | "confirmado" | "justificado" | null;
+  justificado_motivo?: string | null;
+}
+
+function statusBadgeCuadre(c: CuadreResp) {
+  if (c.estado === "sin_base") return <Badge tone="neutral">Sin corte cerrado</Badge>;
+  if (c.cuadre_estado === "justificado") return <Badge tone="neutral">Justificado</Badge>;
+  if (c.cuadre_estado === null) return <Badge tone="pendiente">Sin conteo</Badge>;
+  if (c.cuadre_estado === "por_confirmar") return <Badge tone="pendiente">Por confirmar</Badge>;
+  if (c.estado === "cuadra") return <Badge tone="normal">Cuadra</Badge>;
+  if (c.estado === "faltan" || c.estado === "mixto") return <Badge tone="critico">Faltan {c.total_faltan}</Badge>;
+  if (c.estado === "sobran") return <Badge tone="riesgo">Sobran {c.total_sobran}</Badge>;
+  return <Badge tone="neutral">—</Badge>;
+}
+
+function CuadreConfeccion({ ocId, puedeEditar, puedeJustificar }: {
+  ocId: string; puedeEditar: boolean; puedeJustificar: boolean;
+}) {
+  const qc = useQueryClient();
+  const [conteo, setConteo] = useState<Record<string, string>>({});
+  const [editando, setEditando] = useState(false);
+  const [justificando, setJustificando] = useState(false);
+  const [motivo, setMotivo] = useState("");
+  const [err, setErr] = useState("");
+
+  const q = useQuery<CuadreResp>({
+    queryKey: ["cuadre", ocId, "confeccion"],
+    queryFn: () => api.get(`/api/produccion/cuadre/${ocId}/confeccion`),
+    enabled: !!ocId,
+  });
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["cuadre", ocId, "confeccion"] });
+
+  const guardarMut = useMutation({
+    mutationFn: () => {
+      const unidades: Record<string, number> = {};
+      for (const [t, v] of Object.entries(conteo)) {
+        const n = parseInt((v || "").replace(/\D/g, ""), 10);
+        if (n > 0) unidades[t] = n;
+      }
+      return api.post(`/api/produccion/cuadre/${ocId}/confeccion`, { unidades, fuente: "manual" });
+    },
+    onSuccess: () => { setEditando(false); setErr(""); invalidate(); },
+    onError: (e: Error) => setErr(e.message),
+  });
+  const confirmarMut = useMutation({
+    mutationFn: () => api.post(`/api/produccion/cuadre/${ocId}/confeccion/confirmar`, {}),
+    onSuccess: () => { setErr(""); invalidate(); },
+    onError: (e: Error) => setErr(e.message),
+  });
+  const justificarMut = useMutation({
+    mutationFn: () => api.post(`/api/produccion/cuadre/${ocId}/confeccion/justificar`, { motivo: motivo.trim() }),
+    onSuccess: () => { setJustificando(false); setMotivo(""); setErr(""); invalidate(); },
+    onError: (e: Error) => setErr(e.message),
+  });
+
+  if (q.isLoading || q.isError || !q.data) return null;
+  const c = q.data;
+  const tallas = ordenarTallas(Array.from(new Set([...Object.keys(c.base), ...Object.keys(c.recibido)])));
+  const puedeIngresar = puedeEditar && (c.cuadre_estado === null || c.cuadre_estado === "por_confirmar");
+
+  function abrirEdicion() {
+    const seed: Record<string, string> = {};
+    for (const t of tallas) seed[t] = String(c.recibido[t] ?? "");
+    setConteo(seed); setEditando(true); setErr("");
+  }
+
+  return (
+    <Card>
+      <CardContent className="p-5 space-y-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className="section-label">Cuadre de confección</p>
+          {statusBadgeCuadre(c)}
+          <span className="text-xs text-graphite">Lo que entregó confección, por talla, contra lo cortado.</span>
+        </div>
+
+        {c.estado === "sin_base" ? (
+          <p className="text-xs text-graphite">Este corte aún no tiene unidades cortadas. Ciérralo para poder cuadrar lo que entrega confección.</p>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-[0.7rem] uppercase tracking-widest text-graphite border-b border-border">
+                    <th className="px-2 py-1.5">Talla</th>
+                    <th className="px-2 py-1.5 text-right">Cortado</th>
+                    <th className="px-2 py-1.5 text-right">Recibido</th>
+                    <th className="px-2 py-1.5 text-right">Faltan</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tallas.map((t) => {
+                    const cort = c.base[t] ?? 0;
+                    const rec = c.recibido[t] ?? 0;
+                    const falta = c.faltan[t] ?? 0;
+                    return (
+                      <tr key={t} className="border-b border-border/40">
+                        <td className="px-2 py-1 font-semibold text-ink-900">T{t}</td>
+                        <td className="px-2 py-1 text-right tabular">{cort || "—"}</td>
+                        <td className="px-2 py-1 text-right tabular">
+                          {editando ? (
+                            <input value={conteo[t] ?? ""} onChange={(e) => setConteo((p) => ({ ...p, [t]: e.target.value }))}
+                              inputMode="numeric"
+                              className="w-16 rounded-sm border border-border bg-white px-2 py-1 text-right text-xs tabular" />
+                          ) : (c.cuadre_estado === null ? "—" : rec)}
+                        </td>
+                        <td className={`px-2 py-1 text-right tabular ${falta > 0 ? "text-terracotta font-semibold" : "text-graphite"}`}>
+                          {falta > 0 ? `−${falta}` : (c.cuadre_estado === null ? "" : "0")}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t border-border">
+                    <td className="px-2 py-1.5 text-[0.65rem] uppercase tracking-widest text-graphite">Total</td>
+                    <td className="px-2 py-1.5 text-right tabular font-semibold">{c.total_base}</td>
+                    <td className="px-2 py-1.5 text-right tabular font-semibold">{c.cuadre_estado === null ? "—" : c.total_recibido}</td>
+                    <td className={`px-2 py-1.5 text-right tabular font-bold ${c.total_faltan > 0 ? "text-terracotta" : "text-graphite"}`}>
+                      {c.total_faltan > 0 ? `−${c.total_faltan}` : (c.cuadre_estado === null ? "" : "0")}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+
+            {c.cuadre_estado === "justificado" && c.justificado_motivo && (
+              <p className="text-xs text-graphite">Faltante justificado: <span className="text-ink-900 font-medium">{c.justificado_motivo}</span></p>
+            )}
+
+            {err && (
+              <div role="alert" className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta flex items-center gap-2">
+                <AlertCircle className="h-3.5 w-3.5" /> {err}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2">
+              {puedeIngresar && !editando && (
+                <button onClick={abrirEdicion}
+                  className="inline-flex items-center gap-1 rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud">
+                  <Pencil className="h-3.5 w-3.5" /> {c.cuadre_estado === null ? "Ingresar conteo" : "Editar conteo"}
+                </button>
+              )}
+              {editando && (
+                <>
+                  <button onClick={() => guardarMut.mutate()} disabled={guardarMut.isPending}
+                    className="inline-flex items-center gap-1 rounded-sm bg-navy-600 px-4 py-1.5 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
+                    {guardarMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />} Guardar conteo
+                  </button>
+                  <button onClick={() => { setEditando(false); setErr(""); }}
+                    className="inline-flex items-center gap-1 rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-semibold uppercase tracking-widest text-graphite hover:bg-cloud">
+                    <X className="h-3.5 w-3.5" /> Cancelar
+                  </button>
+                </>
+              )}
+              {puedeEditar && !editando && c.cuadre_estado === "por_confirmar" && (
+                <button onClick={() => confirmarMut.mutate()} disabled={confirmarMut.isPending}
+                  className="inline-flex items-center gap-1 rounded-sm bg-teal px-4 py-1.5 text-xs font-semibold uppercase tracking-widest text-white hover:bg-ink-900 disabled:opacity-40">
+                  {confirmarMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />} Confirmar conteo
+                </button>
+              )}
+              {puedeJustificar && !editando && !justificando && c.cuadre_estado === "confirmado" && (c.estado === "faltan" || c.estado === "mixto") && (
+                <button onClick={() => { setJustificando(true); setErr(""); }}
+                  className="inline-flex items-center gap-1 rounded-sm border border-terracotta/40 bg-card px-3 py-1.5 text-xs font-semibold uppercase tracking-widest text-terracotta hover:bg-terracotta/[0.06]">
+                  Justificar faltante
+                </button>
+              )}
+            </div>
+
+            {justificando && (
+              <div className="flex flex-wrap items-center gap-2">
+                <input value={motivo} onChange={(e) => setMotivo(e.target.value)}
+                  placeholder="Motivo (dañadas, 2das, re-conteo…)"
+                  className="flex-1 min-w-[180px] rounded-sm border border-border bg-white px-3 py-1.5 text-xs" />
+                <button onClick={() => justificarMut.mutate()} disabled={justificarMut.isPending || !motivo.trim()}
+                  className="inline-flex items-center gap-1 rounded-sm bg-teal px-4 py-1.5 text-xs font-semibold uppercase tracking-widest text-white hover:bg-ink-900 disabled:opacity-40">
+                  {justificarMut.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />} Justificar
+                </button>
+                <button onClick={() => { setJustificando(false); setMotivo(""); }}
+                  className="inline-flex items-center gap-1 rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-semibold uppercase tracking-widest text-graphite hover:bg-cloud">
+                  Cancelar
+                </button>
+              </div>
+            )}
+
+            {c.cuadre_estado === "por_confirmar" && (
+              <p className="text-[0.68rem] text-graphite">El conteo está <span className="font-semibold">por confirmar</span>: al confirmarlo se cruza en firme y, si falta algo, salta la alerta a la campanita.</p>
+            )}
+          </>
         )}
       </CardContent>
     </Card>
