@@ -167,7 +167,13 @@ def construir_factura(*, venta: dict, lineas: List[dict], pagos: List[dict],
                 f"{l['sku']}: precio en cero. Un obsequio no se factura así.")
         descuento = int(l.get("descuento_monto") or 0)
         neto = cantidad * precio - descuento
-        if neto <= 0:
+        # El regalo de una PROMOCIÓN (la pañoleta desde $149.900, 2026-10-23)
+        # va al 100 %: precio de lista y `discount: 100`, como lo factura la
+        # tienda en línea y la DIAN lo acepta. Un obsequio hecho a mano sigue
+        # sin pasar: ese no lo respalda ninguna regla de la tienda.
+        regalo = (neto == 0 and porcentaje and str(
+            l.get("autorizado_por") or "").startswith("promocion:"))
+        if neto <= 0 and not regalo:
             raise FacturaInvalida(
                 f"{l['sku']}: el descuento se lleva todo el precio. Un "
                 f"obsequio no se factura así.")
@@ -186,6 +192,12 @@ def construir_factura(*, venta: dict, lineas: List[dict], pagos: List[dict],
         if descuento == 0:
             items.append(item(cantidad, taxed_price=precio / 100))
             total_cent += total_linea(cantidad, base6_de(precio))
+            continue
+
+        if regalo:
+            base = base6_de(precio)
+            items.append(item(cantidad, price=base / 1_000_000, discount=100))
+            total_cent += total_linea(cantidad, base, 100)
             continue
 
         # ¿Es un porcentaje entero? Sólo así Siigo acepta el campo `discount`.
