@@ -536,7 +536,7 @@ async def _armar(t, v, io: SiigoIO, *, documento_id: int, fecha: str,
 
     lineas = [dict(f) for f in (await t.sesion.execute(text("""
         SELECT sku, descripcion, cantidad, precio_unitario, descuento_monto,
-               tasa_iva
+               tasa_iva, autorizado_por
           FROM retail.venta_lineas WHERE venta_id = :v ORDER BY orden
     """), {"v": v["id"]})).mappings().all()]
 

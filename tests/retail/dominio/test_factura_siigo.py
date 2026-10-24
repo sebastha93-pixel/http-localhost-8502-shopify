@@ -193,6 +193,26 @@ def test_un_descuento_que_se_lleva_todo_no_se_factura():
     with pytest.raises(FacturaInvalida, match="obsequio"):
         _factura(venta={**VENTA, "total": 0}, lineas=[_linea(descuento=14990000)],
                  pagos=[_pago(1)])
+    # Tampoco con porcentaje si lo puso una persona: no es el regalo de la tienda.
+    with pytest.raises(FacturaInvalida, match="obsequio"):
+        _factura(venta={**VENTA, "total": 0}, tipo_descuento="Percentage",
+                 lineas=[{**_linea(descuento=14990000), "autorizado_por": "u1"}],
+                 pagos=[_pago(1)])
+
+
+def test_la_panoleta_de_REGALO_viaja_al_100_como_en_la_tienda_en_linea():
+    """Siete facturas del 23-oct se rechazaron aquí: la regla de arriba no
+    distinguía el regalo de una promoción. Las FV-1 de la página llevan la
+    P004 con price base y discount 100 % y la DIAN las acepta."""
+    panoleta = {**_linea(precio=5990000, sku="P004", descuento=5990000),
+                "autorizado_por": "promocion:panoleta_regalo_oct2026"}
+    f = _factura(tipo_descuento="Percentage", lineas=[_linea(), panoleta])
+    assert f["items"][1]["discount"] == 100
+    assert f["items"][1]["price"] == pytest.approx(50336.134454)
+    assert f["_resumen"]["total_siigo"] == 149900.0
+    # Con un comprobante que no maneja porcentaje no hay cómo decirlo.
+    with pytest.raises(FacturaInvalida, match="obsequio"):
+        _factura(lineas=[_linea(), panoleta])
 
 
 # ── Lo que no se factura ────────────────────────────────────────────────────
