@@ -328,3 +328,82 @@ def leer_remision_lavanderia(archivo_bytes: bytes, mime_type: str) -> dict:
             "lavanderia": data.get("lavanderia") or None,
             "cantidad": data.get("cantidad"),
             "confianza": (data.get("confianza") or "media").lower()}
+
+
+# Prompt propio para el CUADRE DE BODEGA: del mismo papel que entrega el taller
+# saca el conteo POR TALLA (no solo el total). Aislado de SYSTEM_LAVANDERIA para
+# no tocar el OCR vivo de lavandería.
+SYSTEM_PROCESO = """\
+Eres experto en leer remisiones de taller de confección/terminación colombianas. \
+Recibes la foto de una remisión y debes extraer SOLO el conteo de prendas POR TALLA.
+
+Devuelve EXACTAMENTE este JSON (sin texto extra, solo JSON):
+{
+  "por_talla": { "12": 10, "14": 8, "16": 6 },
+  "total": 24,
+  "confianza": "alta | media | baja"
+}
+
+Reglas:
+- Las tallas de jean suelen ser 4, 6, 8, 10, 12, 14, 16; las de superior S, M, L, XL.
+  Usa el rótulo tal cual aparece en el papel, SIN la 'T' (escribe "12", no "T12").
+- Si la remisión trae solo un total sin desglose por talla, deja "por_talla": {} y
+  pon el número en "total".
+- No inventes tallas ni cantidades. Solo lo que ves en el documento.
+- "confianza" alta si la tabla de tallas se lee clara; baja si está borrosa o dudosa.
+"""
+
+
+def leer_remision_proceso(archivo_bytes: bytes, mime_type: str) -> dict:
+    """Conteo de prendas POR TALLA de la remisión de un taller (confección/
+    terminación), para el cuadre de bodega.
+
+    Returns {"ok": True, "por_talla": {talla:int}, "total": int|None,
+             "confianza": str} o {"ok": False, "error": ...}.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        return {"ok": False, "error": "ANTHROPIC_API_KEY no configurada"}
+
+    if mime_type == "application/pdf":
+        try:
+            paginas = _pdf_a_imagenes(archivo_bytes, max_paginas=2)
+        except Exception as e:
+            return {"ok": False, "error": f"No se pudo abrir el PDF: {e}"}
+        if not paginas:
+            return {"ok": False, "error": "PDF vacío"}
+        archivos = [(b, "image/jpeg") for b in paginas]
+    elif mime_type in ("image/jpeg", "image/jpg", "image/png", "image/webp"):
+        try:
+            archivos = [(_imagen_a_jpeg_optimizada(archivo_bytes), "image/jpeg")]
+        except Exception as e:
+            return {"ok": False, "error": f"No se pudo procesar la imagen: {e}"}
+    else:
+        return {"ok": False, "error": f"Tipo no soportado: {mime_type}"}
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        contenido = _preparar_contenido_imagenes(archivos)
+        contenido.append({"type": "text",
+                          "text": "Extrae el conteo por talla. Solo JSON."})
+        resp = client.messages.create(
+            model=MODELO, max_tokens=500, system=SYSTEM_PROCESO,
+            messages=[{"role": "user", "content": contenido}])
+        data = json.loads(_limpiar_json(resp.content[0].text))
+    except Exception as e:
+        return {"ok": False, "error": f"Error IA: {str(e)[:200]}"}
+
+    por_talla: dict = {}
+    for t, v in (data.get("por_talla") or {}).items():
+        try:
+            n = int(float(v or 0))
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            por_talla[str(t).strip().upper()] = n
+    try:
+        total = int(data.get("total")) if data.get("total") is not None else None
+    except (TypeError, ValueError):
+        total = None
+    return {"ok": True, "por_talla": por_talla, "total": total,
+            "confianza": (data.get("confianza") or "media").lower()}

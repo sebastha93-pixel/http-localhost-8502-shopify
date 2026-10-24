@@ -1399,6 +1399,29 @@ def remision_por_whatsapp(*, telefono: str, media_id: str, mime: str = "",
         # es el momento más barato de sacarle la cantidad.
         capturar_cantidad_remision(elegido["hoja_ruta_id"], contenido, mime_real,
                                    ya_leido=lectura)
+        # CUADRE DE BODEGA: del MISMO papel (la salida de confección) saca el
+        # conteo POR TALLA y guárdalo como conteo de confección "por confirmar"
+        # —no dispara alerta hasta que alguien lo confirme en el cuadre—.
+        # Aislado y best-effort: si falla, no toca el flujo de lavandería.
+        try:
+            sb2 = _sb()
+            hr = ((sb2.table("hoja_ruta_lote").select("orden_corte_id")
+                     .eq("id", elegido["hoja_ruta_id"]).limit(1).execute()).data
+                  if sb2 else None)
+            oc_id = hr[0]["orden_corte_id"] if hr else None
+            if oc_id:
+                from backend.services.remision_ocr import leer_remision_proceso
+                lx = leer_remision_proceso(contenido, mime_real)
+                if lx.get("ok") and (lx.get("por_talla") or {}):
+                    prod.guardar_conteo_proceso(
+                        oc_id, "confeccion", lx["por_talla"],
+                        fuente="ocr", creado_por="whatsapp")
+                    _nota(elegido["hoja_ruta_id"],
+                          f"Conteo por talla de confección leído de la remisión "
+                          f"({lx.get('confianza')}): {lx['por_talla']}. "
+                          f"Queda POR CONFIRMAR en el cuadre.")
+        except Exception as e:
+            log.warning(f"[cuadre] conteo confección por foto falló: {str(e)[:160]}")
         _nota(elegido["hoja_ruta_id"],
               f"Remisión de lavandería recibida por WhatsApp de {prov['nombre']} "
               f"(confección). Lote identificado por: {via}.")
