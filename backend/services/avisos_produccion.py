@@ -132,6 +132,39 @@ def avisar_corte_cerrado(oc: dict, *, cerrado_por: str) -> None:
         log.warning(f"[avisos] corte_cerrado falló: {str(e)[:160]}")
 
 
+def avisar_faltante_confeccion(oc: dict, cruce: dict) -> None:
+    """Se CONFIRMÓ el conteo de confección y FALTAN prendas → alerta de campanita.
+
+    Es el eslabón que faltaba: cazar la pérdida EN confección (no al final, en el
+    cierre de terminación). Va a los cortadores (por rol) y al diseñador que creó
+    el lote (persona), con las TALLAS que faltan. Solo se llama tras confirmar el
+    conteo (gate anti-alertas-falsas) y solo si hay faltante real.
+    """
+    try:
+        faltan = (cruce or {}).get("faltan") or {}
+        total = sum(int(v or 0) for v in faltan.values())
+        if total <= 0:
+            return
+        cons = _consecutivo(oc)
+        detalle = ", ".join(f"{t} −{n}" for t, n in sorted(faltan.items()))
+        titulo = f"Faltan {total} en confección · lote {cons}"
+        mensaje = (f"Confección del lote {cons} entregó {total} prenda(s) de menos: "
+                   f"{detalle}. Revisa el cuadre antes de que el lote siga.")
+        enlace = f"/produccion/corte/{oc.get('id') or ''}"
+        meta = {"orden_corte_id": oc.get("id"), "consecutivo": cons,
+                "paso": "confeccion", "faltan": faltan, "total_faltan": total}
+        notif.crear_para_modulo(
+            modulo=MODULO_CORTADOR, tipo="faltante_confeccion",
+            titulo=titulo, mensaje=mensaje, enlace=enlace, meta=meta)
+        dest = _creador_de_orden(oc)
+        if dest:
+            notif.crear(
+                destinatario_email=dest, tipo="faltante_confeccion",
+                titulo=titulo, mensaje=mensaje, enlace=enlace, meta=meta)
+    except Exception as e:
+        log.warning(f"[avisos] faltante_confeccion falló: {str(e)[:160]}")
+
+
 def avisar_lote_avanzo(ruta: dict, *, etapa_nueva: str, oc: Optional[dict],
                        movido_por: str = "") -> None:
     """Lote cambió de etapa → avisar al diseñador que creó la orden de corte."""

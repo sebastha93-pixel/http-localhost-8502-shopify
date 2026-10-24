@@ -1273,6 +1273,85 @@ def detalle_corte(
     return oc
 
 
+# ── Cuadre de bodega por proceso (Fase 1: confección) ──────────────────────
+# Captura por talla de lo que entregó un paso → cruce vs lo cortado → alerta de
+# faltante. Gate anti-alertas-falsas: el conteo entra "por confirmar" y solo al
+# confirmarlo se cruza en firme y, si falta, salta la campanita.
+class ConteoProcesoIn(BaseModel):
+    unidades:      dict = Field(default_factory=dict)   # {talla: cantidad}
+    fuente:        str = "manual"
+    foto_url:      Optional[str] = None
+    referencia_id: Optional[str] = None
+
+
+class JustificarProcesoIn(BaseModel):
+    motivo:        str = Field(min_length=1)
+    referencia_id: Optional[str] = None
+
+
+@router.get("/cuadre/{oc_id}/{paso}")
+def obtener_cuadre_proceso(
+    oc_id: str, paso: str,
+    _: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "ver")),
+) -> dict:
+    return svc.cruzar_proceso(oc_id, paso)
+
+
+@router.post("/cuadre/{oc_id}/{paso}")
+def guardar_cuadre_proceso(
+    oc_id: str, paso: str, body: ConteoProcesoIn,
+    user: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "modificar")),
+) -> dict:
+    try:
+        return svc.guardar_conteo_proceso(
+            oc_id, paso, body.unidades, fuente=body.fuente,
+            foto_url=body.foto_url, referencia_id=body.referencia_id,
+            creado_por=user.email)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"guardar_cuadre: {str(e)[:200]}")
+
+
+@router.post("/cuadre/{oc_id}/{paso}/confirmar")
+def confirmar_cuadre_proceso(
+    oc_id: str, paso: str,
+    user: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "modificar")),
+) -> dict:
+    try:
+        cruce = svc.confirmar_conteo_proceso(oc_id, paso, usuario=user.email)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"confirmar_cuadre: {str(e)[:200]}")
+    # El aviso va DESPUÉS de confirmar y no puede tumbar la confirmación (mismo
+    # criterio que corte_cerrado). Solo para confección y solo si falta de verdad.
+    if paso == "confeccion" and cruce.get("estado") in ("faltan", "mixto") \
+            and cruce.get("total_faltan", 0) > 0:
+        try:
+            from backend.services import avisos_produccion as avisos
+            oc = svc.obtener_orden_corte(oc_id) or {}
+            avisos.avisar_faltante_confeccion(oc, cruce)
+        except Exception:
+            pass
+    return cruce
+
+
+@router.post("/cuadre/{oc_id}/{paso}/justificar")
+def justificar_cuadre_proceso(
+    oc_id: str, paso: str, body: JustificarProcesoIn,
+    user: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    try:
+        return svc.justificar_proceso(
+            oc_id, paso, motivo=body.motivo,
+            referencia_id=body.referencia_id, usuario=user.email)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"justificar_cuadre: {str(e)[:200]}")
+
+
 @router.post("/corte/{oc_id}/reabrir")
 def reabrir_corte(
     oc_id: str,

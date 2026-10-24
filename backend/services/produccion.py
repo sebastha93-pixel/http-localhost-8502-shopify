@@ -2554,6 +2554,167 @@ def actualizar_unidades_cortadas(oc_id: str, unidades: dict) -> dict:
     return obtener_orden_corte(oc_id) or {}
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# CUADRE DE BODEGA POR PROCESO — conteo por talla en cada entrega + cruce
+# Fase 1: eslabón de confección (se caza la pérdida donde ocurre, no al final).
+# Ver docs/superpowers/specs/2026-10-23-cierre-bodega-trazabilidad-design.md
+# ═══════════════════════════════════════════════════════════════════════
+
+PASOS_CUADRE = ("confeccion", "lavanderia", "terminacion", "bodega")
+
+
+def _unidades_por_talla(d: Optional[dict]) -> dict:
+    """Normaliza un conteo por talla a {TALLA: int>0}, en MAYÚSCULA y sin ceros
+    —mismo criterio que unidades_cortadas (ver actualizar_unidades_cortadas)."""
+    out: dict = {}
+    for t, v in (d or {}).items():
+        try:
+            n = int(float(v or 0))
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            out[str(t).strip().upper()] = n
+    return out
+
+
+def _cuadre_fila(oc_id: str, paso: str, referencia_id: Optional[str] = None) -> Optional[dict]:
+    """La fila de cuadre_lote_proceso de (lote, paso, referencia). referencia
+    NULL = cuadre a nivel de orden de corte."""
+    sb = _sb()
+    if sb is None:
+        return None
+    q = (sb.table("cuadre_lote_proceso").select("*")
+           .eq("orden_corte_id", oc_id).eq("paso", paso))
+    q = q.is_("referencia_id", "null") if referencia_id is None else q.eq("referencia_id", referencia_id)
+    r = _safe_exec(q.limit(1)).data
+    return r[0] if r else None
+
+
+def cruzar_proceso(oc_id: str, paso: str, *, referencia_id: Optional[str] = None) -> dict:
+    """Cruza, POR TALLA, lo que entró a un paso contra su base (el paso anterior).
+
+    Fase 1: paso='confeccion' → la base es lo CORTADO (unidades_cortadas). Una
+    talla presente en la base y ausente del recibido cuenta como faltante completo
+    de esa talla. `estado`:
+      · sin_base  → la orden no tiene unidades_cortadas (corte sin informe) → no se juzga
+      · sin_dato  → aún no hay conteo de ese paso
+      · cuadra | faltan | sobran | mixto
+    Nunca revienta: devuelve el cruce con lo que haya."""
+    sb = _sb()
+    base: dict = {}
+    if sb is not None:
+        oc = _safe_exec(sb.table("ordenes_corte")
+                          .select("unidades_cortadas").eq("id", oc_id).limit(1)).data
+        if oc:
+            base = _unidades_por_talla(oc[0].get("unidades_cortadas"))
+    fila = _cuadre_fila(oc_id, paso, referencia_id)
+    recibido = _unidades_por_talla(fila.get("unidades")) if fila else {}
+
+    tallas = set(base) | set(recibido)
+    faltan = {t: base.get(t, 0) - recibido.get(t, 0) for t in tallas
+              if base.get(t, 0) - recibido.get(t, 0) > 0}
+    sobran = {t: recibido.get(t, 0) - base.get(t, 0) for t in tallas
+              if recibido.get(t, 0) - base.get(t, 0) > 0}
+
+    if not base:
+        estado = "sin_base"
+    elif fila is None:
+        estado = "sin_dato"
+    elif faltan and sobran:
+        estado = "mixto"
+    elif faltan:
+        estado = "faltan"
+    elif sobran:
+        estado = "sobran"
+    else:
+        estado = "cuadra"
+
+    return {
+        "oc_id": oc_id, "paso": paso,
+        "base": base, "recibido": recibido,
+        "faltan": faltan, "sobran": sobran,
+        "estado": estado,
+        "total_base": sum(base.values()),
+        "total_recibido": sum(recibido.values()),
+        "total_faltan": sum(faltan.values()),
+        "total_sobran": sum(sobran.values()),
+        # Estado del conteo en sí (gate anti-alertas-falsas):
+        "cuadre_estado": (fila or {}).get("estado"),  # por_confirmar/confirmado/justificado
+        "fuente": (fila or {}).get("fuente"),
+        "justificado_motivo": (fila or {}).get("justificado_motivo"),
+    }
+
+
+def guardar_conteo_proceso(oc_id: str, paso: str, unidades: dict, *,
+                           fuente: str = "manual",
+                           foto_url: Optional[str] = None,
+                           referencia_id: Optional[str] = None,
+                           creado_por: str = "") -> dict:
+    """Guarda (o reemplaza) el conteo por talla de un paso. Entra SIEMPRE como
+    'por_confirmar' —venga de OCR o tecleado a mano— hasta que alguien lo
+    confirme. Devuelve el cruce resultante."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    if paso not in PASOS_CUADRE:
+        raise ValueError("paso_invalido")
+    limpio = _unidades_por_talla(unidades)
+    datos: dict = {
+        "unidades": limpio,
+        "estado": "por_confirmar",
+        "fuente": fuente if fuente in ("ocr", "manual") else "manual",
+        "actualizado_at": _now_iso(),
+    }
+    if foto_url:
+        datos["remision_foto_url"] = foto_url
+    fila = _cuadre_fila(oc_id, paso, referencia_id)
+    if fila:
+        sb.table("cuadre_lote_proceso").update(datos).eq("id", fila["id"]).execute()
+    else:
+        datos.update({"orden_corte_id": oc_id, "paso": paso,
+                      "referencia_id": referencia_id, "creado_por": creado_por})
+        sb.table("cuadre_lote_proceso").insert(datos).execute()
+    return cruzar_proceso(oc_id, paso, referencia_id=referencia_id)
+
+
+def confirmar_conteo_proceso(oc_id: str, paso: str, *,
+                             referencia_id: Optional[str] = None,
+                             usuario: str = "") -> dict:
+    """Confirma el conteo de un paso → queda en firme (recién ahí se puede
+    alertar). Devuelve el cruce; el aviso de faltante lo dispara la capa de API,
+    igual que los demás avisos de producción."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    fila = _cuadre_fila(oc_id, paso, referencia_id)
+    if not fila:
+        raise ValueError("sin_conteo")
+    sb.table("cuadre_lote_proceso").update({
+        "estado": "confirmado", "confirmado_por": usuario,
+        "confirmado_at": _now_iso(), "actualizado_at": _now_iso(),
+    }).eq("id", fila["id"]).execute()
+    return cruzar_proceso(oc_id, paso, referencia_id=referencia_id)
+
+
+def justificar_proceso(oc_id: str, paso: str, *, motivo: str,
+                       referencia_id: Optional[str] = None,
+                       usuario: str = "") -> dict:
+    """Marca el faltante de un paso como justificado (dañadas/2das/re-conteo) para
+    cerrar el eslabón SIN tapar el rastro (queda quién y por qué)."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    fila = _cuadre_fila(oc_id, paso, referencia_id)
+    if not fila:
+        raise ValueError("sin_conteo")
+    sb.table("cuadre_lote_proceso").update({
+        "estado": "justificado", "justificado_por": usuario,
+        "justificado_motivo": (motivo or "").strip() or None,
+        "justificado_at": _now_iso(), "actualizado_at": _now_iso(),
+    }).eq("id", fila["id"]).execute()
+    return cruzar_proceso(oc_id, paso, referencia_id=referencia_id)
+
+
 def actualizar_curva_corte(oc_id: str, *, curva: dict,
                            referencia_id: Optional[str] = None,
                            num_capas: Optional[int] = None,
