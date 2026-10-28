@@ -209,6 +209,21 @@ def test_si_siigo_SI_trae_precio_pero_mal_marcado_no_se_le_cambia_por_el_de_la_w
     from backend.modules.retail.catalogo_desde_siigo import sin_precio_en_siigo
     caja = _producto(code="010", name="010 CAJA REGALO", tax_included=False,
                      prices=[{"price_list": [{"value": 5950}]}])
-    assert sin_precio_en_siigo([caja], {37}) == []
+    # Se pregunta afuera, pero para CONFIRMAR el número de Siigo.
+    assert sin_precio_en_siigo([caja], {37}) == ["010"]
     filas, problemas = filas_de_productos([caja], "Arrayanes", {"010": 5000})
     assert filas == [] and "SIN IVA incluido" in problemas[0]
+
+
+def test_la_caja_regalo_entra_si_la_web_confirma_el_MISMO_precio():
+    """28-oct: Siigo la tiene en $5.000 «sin IVA incluido» y la tienda en
+    línea la cobra a $5.000 con IVA —así la factura la página y la DIAN la
+    acepta—. Los dos números coinciden: es el precio de etiqueta."""
+    caja = _producto(code="010", name="010 CAJA REGALO", tax_included=False,
+                     taxes=[], prices=[{"price_list": [{"value": 5000}]}])
+    [fila], problemas = filas_de_productos([caja], "Arrayanes", {"010": 5000})
+    assert problemas == []
+    assert (fila["sku"], fila["precio"], fila["precio_origen"], fila["cantidad"]) == (
+        "010", 5000, "siigo_confirmado_en_linea", 2)
+    # Sin la confirmación de la web, sigue fuera.
+    assert filas_de_productos([caja], "Arrayanes")[0] == []
