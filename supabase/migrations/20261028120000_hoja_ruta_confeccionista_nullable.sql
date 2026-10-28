@@ -1,0 +1,23 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- HOJA DE RUTA SIN CONFECCIONISTA — lotes que entran al OS directo en terminación
+-- ═══════════════════════════════════════════════════════════════════════════
+--
+-- POR QUÉ (2026-10-28). Los lotes 2609-0001 y 2609-0008 llegaron a terminación
+-- SIN haber pasado por una remisión de confección en el OS. La hoja de ruta solo
+-- nacía con esa remisión; la de terminación se "colgaba" de una existente y, si
+-- no había, crear_remision se saltaba en silencio. Resultado: la ficha de
+-- terminación daba 404 ("No se pudo cargar la ficha de este lote") y no se
+-- podían separar insumos ni imprimir códigos e instrucciones.
+--
+-- Ahora crear_remision crea la hoja de ruta también para terminación. El
+-- confeccionista de esos lotes NO lo conoce el OS: inventarlo (p. ej. poner al
+-- taller de terminación) haría que costeo real (cruce_costeo_siigo) esperara
+-- un Documento Soporte de CONFECCIÓN de quien no cosió → alerta falsa. Por eso
+-- confeccionista_id pasa a admitir NULL = "la confección no pasó por el OS".
+--
+-- Relajar un NOT NULL no toca ninguna fila existente. El código ya trata el
+-- confeccionista como opcional (`.get(...) or {}` en back, `?.` en front).
+-- Idempotente. Se aplica en Supabase por MCP.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+ALTER TABLE hoja_ruta_lote ALTER COLUMN confeccionista_id DROP NOT NULL;

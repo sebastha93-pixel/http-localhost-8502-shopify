@@ -4745,15 +4745,27 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
                                 confeccionista_id=confeccionista_id,
                                 remision_id=rem["id"], created_by=created_by)
             else:  # terminacion
-                existente = obtener_ruta_por_corte(oc_id, referencia_id=ref_id) \
-                    or obtener_ruta_por_corte(oc_id)   # legacy: lote único del corte
+                existente = obtener_ruta_por_corte(oc_id, referencia_id=ref_id)
+                if not existente:
+                    # Legacy: la ruta VIEJA (sin referencia) es "el lote único del
+                    # corte". La de OTRA referencia de un corte combinado NO es este
+                    # lote: colgarle la terminación dejaba a esta sin ficha.
+                    legacy = obtener_ruta_por_corte(oc_id)
+                    if legacy and not legacy.get("referencia_id"):
+                        existente = legacy
                 if existente:
                     precio_term = existente.get("precio_terminacion") or \
                         _precio_proceso_precosteo(ref_id, "terminacion")
                     actualizar_ruta_lote(existente["id"], terminacion_id=confeccionista_id,
                                          precio_terminacion=precio_term)
                 else:
-                    log.warning(f"[remision-terminacion] lote {oc_id}/{ref_id} sin ruta previa, se salta")
+                    # El lote llega a terminación SIN remisión de confección en el
+                    # OS (2609-0001 / 2609-0008, oct-2026). Antes se saltaba en
+                    # silencio → la ficha de terminación daba 404 y no se podían
+                    # separar insumos ni imprimir códigos e instrucciones.
+                    crear_ruta_lote_en_terminacion(
+                        orden_corte_id=oc_id, referencia_id=ref_id,
+                        terminacion_id=confeccionista_id, created_by=created_by)
         except Exception as e:
             log.warning(f"[remision] no se pudo actualizar ruta {oc_id}/{ref_id}: {e}")
 
@@ -6621,6 +6633,58 @@ def crear_ruta_lote(*, orden_corte_id: str, confeccionista_id: str,
             sb.table("hoja_ruta_lote").insert(row).execute()
         else:
             raise
+    return obtener_ruta_por_corte(orden_corte_id, referencia_id=ref_id)
+
+
+def crear_ruta_lote_en_terminacion(*, orden_corte_id: str, terminacion_id: str,
+                                   referencia_id: Optional[str] = None,
+                                   created_by: str) -> Optional[dict]:
+    """Crea el LOTE (hoja de ruta) de un corte+referencia que entra al OS directo
+    en TERMINACIÓN, sin haber pasado por una remisión de confección.
+
+    Sin esto la ficha de terminación no tiene link (404) y no se pueden separar
+    insumos ni imprimir códigos e instrucciones (2609-0001 / 2609-0008, oct-2026).
+
+    - confeccionista_id: el del corte si lo tiene; si no, NULL = "la confección
+      no pasó por el OS". NO se pone al taller de terminación: costeo real
+      (cruce_costeo_siigo) esperaría de él un Documento Soporte de CONFECCIÓN
+      que nunca existirá → alerta falsa.
+    - precio_confeccion: solo si hay confeccionista; si no, NULL (no se liquida
+      confección por el OS de un lote que no se remitió a confección).
+    - etapa: justo antes de 'terminacion_recibida' —donde está cualquier lote
+      normal cuando se le crea la remisión de terminación—: 'lavanderia' si la
+      referencia la lleva, 'en_confeccion' si la omite. El portal de terminación
+      la avanza al recibir. Se inserta directo (sin cambiar_etapa_ruta) para no
+      disparar el aviso de "el lote avanzó".
+    Idempotente: si ya existe el lote de esa referencia, lo devuelve."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    oc = obtener_orden_corte(orden_corte_id)
+    if not oc:
+        raise ValueError("orden_no_encontrada")
+    if oc.get("estado") != "cortada":
+        raise ValueError("orden_no_cortada")
+    ref_id = referencia_id or oc.get("referencia_id")
+    existente = obtener_ruta_por_corte(orden_corte_id, referencia_id=ref_id)
+    if existente:
+        return existente
+    conf_id = oc.get("confeccionista_id") or None
+    omitidas = etapas_omitidas_por_precosteo(ref_id)
+    row = {
+        "orden_corte_id":     orden_corte_id,
+        "referencia_id":      ref_id,
+        "confeccionista_id":  conf_id,
+        "precio_confeccion":  _precio_proceso_precosteo(ref_id, "confeccion") if conf_id else None,
+        "terminacion_id":     terminacion_id,
+        "precio_terminacion": _precio_proceso_precosteo(ref_id, "terminacion"),
+        "etapa":              "en_confeccion" if "lavanderia" in omitidas else "lavanderia",
+        "etapas_omitidas":    omitidas,
+        "created_by":         created_by,
+    }
+    sb.table("hoja_ruta_lote").insert(row).execute()
+    log.info(f"[remision-terminacion] lote {orden_corte_id}/{ref_id} sin ruta previa → "
+             f"creada en terminación (etapa {row['etapa']})")
     return obtener_ruta_por_corte(orden_corte_id, referencia_id=ref_id)
 
 
