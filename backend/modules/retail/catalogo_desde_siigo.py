@@ -74,6 +74,15 @@ def _precio_con_iva(producto: dict):
     return None, None
 
 
+def _valor_en_siigo(producto: dict) -> float:
+    """El número tal como Siigo lo guarda, sin suponer nada del IVA."""
+    for lista in (producto.get("prices") or []):
+        for item in (lista.get("price_list") or []):
+            if item.get("value"):
+                return float(item["value"])
+    return 0.0
+
+
 def _nombre_limpio(producto: dict, code: str) -> str:
     """Siigo repite el código dentro del nombre: «26602-1T6 JEAN FLARE…»."""
     nombre = (producto.get("name") or "").strip()
@@ -126,8 +135,13 @@ def sin_precio_en_siigo(productos: List[dict], bodegas) -> List[str]:
                    for w in (pr.get("warehouses") or [])):
             continue
         code = (pr.get("code") or "").strip()
-        if not code or _precio_propio(pr) or _precio_con_iva(pr)[0]:
-            continue           # tiene precio (aunque esté mal marcado)
+        if not code or _precio_propio(pr):
+            continue
+        crudo, con_iva = _precio_con_iva(pr)
+        if crudo and con_iva:
+            continue           # tiene precio, sólo que por debajo del piso
+        # Marcado SIN IVA incluido (la caja regalo `010`): se le pregunta a la
+        # tienda en línea para CONFIRMAR el número de Siigo, no para cambiarlo.
         if ref_talla(code)[0] in por_ref:
             continue
         faltan.append(code)
@@ -195,6 +209,14 @@ def filas_de_productos(productos: List[dict], bodega,
         if (not precio and not _precio_con_iva(pr)[0]
                 and respaldo.get(code.upper(), 0) >= PRECIO_MINIMO):
             precio, origen = int(respaldo[code.upper()]), "tienda_en_linea"
+        # Marcado «sin IVA incluido» pero con EL MISMO número que la tienda en
+        # línea cobra con IVA (la caja regalo `010`: $5.000 en los dos, y así
+        # la factura la página y la DIAN la acepta): es el precio de etiqueta
+        # y lo raro es sólo la marca. Si los números difieren, sigue fuera.
+        valor = _valor_en_siigo(pr)
+        if (not precio and not _precio_con_iva(pr)[1] and valor >= PRECIO_MINIMO
+                and respaldo.get(code.upper()) == int(round(valor))):
+            precio, origen = int(round(valor)), "siigo_confirmado_en_linea"
         if not precio:
             crudo, con_iva = _precio_con_iva(pr)
             if not crudo:
