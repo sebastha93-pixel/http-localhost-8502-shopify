@@ -490,6 +490,78 @@ export async function consultarInventario(opciones: {
   return api.get<Inventario>(`/api/retail/inventario?${p}`);
 }
 
+// ── Conteo de inventario cargado en el POS (cuando Siigo no deja) ───────────
+
+export interface LineaConteo { codigo: string; cantidad: number }
+
+export interface CambioConteo { sku: string; nombre: string; antes: number; contado: number }
+
+export interface EnsayoConteo {
+  referencias_contadas: number;
+  unidades_contadas: number;
+  unidades_antes: number;
+  unidades_despues: number;
+  desconocidos: string[];
+  cambios: CambioConteo[];
+  a_cero: CambioConteo[];
+  /** Bolsas, caja regalo: lo que un conteo de prendas olvida. */
+  no_prendas_a_cero: CambioConteo[];
+}
+
+export interface ConteoGuardado {
+  id: string;
+  estado: "pendiente_siigo" | "en_siigo" | "reemplazado";
+  completo: boolean;
+  referencias: number;
+  unidades: number;
+  creado_en: string;
+  en_siigo_en: string | null;
+}
+
+export async function ensayarConteo(cuerpo: {
+  tienda_id: string; lineas: LineaConteo[]; completo: boolean;
+}): Promise<EnsayoConteo> {
+  try {
+    return await api.post<EnsayoConteo>("/api/retail/inventario/conteo/ensayo", cuerpo);
+  } catch (e) {
+    return traducir(e);
+  }
+}
+
+export async function cargarConteo(cuerpo: {
+  conteo_id: string; tienda_id: string; lineas: LineaConteo[]; completo: boolean;
+}): Promise<EnsayoConteo & { conteo_id: string; ya_estaba: boolean }> {
+  try {
+    return await api.post("/api/retail/inventario/conteo", cuerpo);
+  } catch (e) {
+    return traducir(e);
+  }
+}
+
+export async function listarConteos(tiendaId: string): Promise<ConteoGuardado[]> {
+  const p = new URLSearchParams({ tienda_id: tiendaId });
+  return api.get(`/api/retail/inventario/conteos?${p}`);
+}
+
+export async function conteoParaSiigo(conteoId: string): Promise<{
+  tienda_id: string; bodega_siigo: number | null; unidades: number;
+  filas: { sku: string; nombre: string; cantidad: number }[];
+}> {
+  try {
+    return await api.get(`/api/retail/inventario/conteos/${conteoId}/para-siigo`);
+  } catch (e) {
+    return traducir(e);
+  }
+}
+
+export async function marcarConteoEnSiigo(conteoId: string): Promise<void> {
+  try {
+    await api.post(`/api/retail/inventario/conteos/${conteoId}/en-siigo`, {});
+  } catch (e) {
+    traducir(e);
+  }
+}
+
 // ── Panel de ventas ─────────────────────────────────────────────────────────
 
 export interface BarraHora {

@@ -23,7 +23,11 @@ import { Rail } from "@/components/pos/rail";
 import { ConLaCaja } from "@/components/pos/elegir-caja";
 import { formatear } from "@/lib/pos/dinero";
 import { corregirEscaneo } from "@/lib/pos/escaneo";
-import { consultarInventario, type FilaInventario, type Inventario } from "@/lib/pos/api";
+import {
+  conteoParaSiigo, consultarInventario, listarConteos, marcarConteoEnSiigo,
+  type ConteoGuardado, type FilaInventario, type Inventario,
+} from "@/lib/pos/api";
+import { DialogoConteo } from "@/components/pos/dialogo-conteo";
 
 // La tienda y la ubicación salen de la caja del equipo, no de variables.
 export default function PaginaInventario() {
@@ -48,6 +52,17 @@ function PantallaInventario({ TIENDA, UBICACION }: {
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const buscador = useRef<HTMLInputElement>(null);
+  // Conteo cargado aquí mientras Siigo no deja cargarlo (29-oct-2026).
+  const [conteoAbierto, setConteoAbierto] = useState(false);
+  const [pendiente, setPendiente] = useState<ConteoGuardado | null>(null);
+  const [recarga, setRecarga] = useState(0);
+  const [avisoConteo, setAvisoConteo] = useState<string | null>(null);
+
+  useEffect(() => {
+    listarConteos(TIENDA)
+      .then((l) => setPendiente(l.find((c) => c.estado === "pendiente_siigo") ?? null))
+      .catch(() => setPendiente(null));
+  }, [TIENDA, recarga]);
 
   // El filtro se aplica con retraso: teclear «pantalón» son ocho consultas si
   // cada letra dispara una, y la última en volver puede no ser la última
@@ -68,7 +83,7 @@ function PantallaInventario({ TIENDA, UBICACION }: {
       }
     }, consulta ? 250 : 0);
     return () => { vivo = false; clearTimeout(t); };
-  }, [consulta, categoria, soloBajos, TIENDA, UBICACION]);
+  }, [consulta, categoria, soloBajos, TIENDA, UBICACION, recarga]);
 
   useEffect(() => { buscador.current?.focus(); }, []);
 
@@ -106,6 +121,14 @@ function PantallaInventario({ TIENDA, UBICACION }: {
             </>
           )}
 
+          <button
+            onClick={() => setConteoAbierto(true)}
+            title="Cuando Siigo no deja cargar el conteo de la tienda"
+            className="h-11 border border-[var(--pos-divider)] bg-[var(--pos-surface)] px-4 text-[14px] font-medium text-[var(--pos-700)] hover:bg-[var(--pos-100)]"
+          >
+            Cargar conteo
+          </button>
+
           {datos && datos.filas.length > 0 && (
             <button
               onClick={() => descargar(datos, TIENDA)}
@@ -139,6 +162,44 @@ function PantallaInventario({ TIENDA, UBICACION }: {
             ))}
           </div>
         </header>
+
+        {pendiente && (
+          <div role="status" className="mb-4 flex flex-wrap items-center gap-3 border-l-4 border-[var(--pos-accent)] bg-[var(--pos-100)] px-4 py-3 text-[14px]">
+            <span>
+              <strong>Conteo pendiente de cargar en Siigo</strong> (
+              {new Date(pendiente.creado_en).toLocaleString("es-CO", { timeZone: "America/Bogota", dateStyle: "short", timeStyle: "short" })}
+              ). Mientras tanto Siigo no le cambia el inventario a esta tienda.
+            </span>
+            <button
+              className="pos-btn pos-btn-sec h-9 px-3 text-[13px]"
+              onClick={async () => {
+                try { await descargarParaSiigo(pendiente.id, TIENDA); }
+                catch (e) { setAvisoConteo(e instanceof Error ? e.message : "No se pudo descargar."); }
+              }}
+            >
+              Descargar para Siigo
+            </button>
+            <button
+              className="pos-btn pos-btn-primario h-9 px-3 text-[13px]"
+              onClick={async () => {
+                if (!confirm("¿Ya quedó cargado en Siigo el archivo descargado? Desde ahora Siigo vuelve a mandar en el inventario de esta tienda.")) return;
+                try { await marcarConteoEnSiigo(pendiente.id); setRecarga((n) => n + 1); }
+                catch (e) { setAvisoConteo(e instanceof Error ? e.message : "No se pudo marcar."); }
+              }}
+            >
+              Ya está en Siigo
+            </button>
+            {avisoConteo && <span role="alert">{avisoConteo}</span>}
+          </div>
+        )}
+
+        {conteoAbierto && (
+          <DialogoConteo
+            tienda={TIENDA}
+            onCerrar={() => setConteoAbierto(false)}
+            onCargado={() => { setConteoAbierto(false); setRecarga((n) => n + 1); }}
+          />
+        )}
 
         {error && (
           <p className="border-l-2 border-[var(--pos-800)] rounded-[var(--pos-r-sm)] bg-[var(--pos-800)]/10 py-3 pl-4 text-[13px] text-[var(--pos-900)]">
@@ -355,6 +416,28 @@ function Td({
  * —con el filtro y la categoría puestos—, una fila por referencia y una
  * columna por talla.
  */
+/** Lo que hay que dejar en la bodega de Siigo: el inventario de AHORA, no el
+ *  conteo (lo vendido después ya bajó Siigo con su factura). */
+async function descargarParaSiigo(conteoId: string, tienda: string): Promise<void> {
+  const d = await conteoParaSiigo(conteoId);
+  const lineas = [["Código", "Nombre", "Cantidad", "Bodega Siigo"],
+                  ...d.filas.map((f) => [f.sku, f.nombre, f.cantidad, d.bodega_siigo ?? ""])];
+  const celda = (v: string | number) => {
+    const t = String(v ?? "");
+    return /[";\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  const csv = "\uFEFF" + lineas.map((l) => l.map(celda).join(";")).join("\r\n");
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  const hoy = new Date().toLocaleDateString("sv-SE", { timeZone: "America/Bogota" });
+  a.href = url;
+  a.download = `para-siigo-${tienda}-${hoy}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 function descargar(datos: Inventario, tienda: string): void {
   const celda = (v: string | number) => {
     const t = String(v ?? "");
