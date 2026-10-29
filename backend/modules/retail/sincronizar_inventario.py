@@ -95,7 +95,18 @@ def sincronizar(url: str, *, productos: Optional[List[dict]] = None,
             faltan = sin_precio_en_siigo(productos, bodegas)
             respaldo = precios_de_lista(faltan) if faltan else {}
             resumen["sin_precio_en_siigo"] = len(faltan)
+            # Una tienda con un conteo cargado en el POS que Siigo todavía no
+            # tiene: copiar Siigo le devolvería los números de antes del
+            # conteo. Se salta hasta que alguien lo marque cargado en Siigo.
+            from backend.modules.retail.conteo_tienda import (
+                resumen_pausado, ubicaciones_en_pausa,
+            )
+            en_pausa = ubicaciones_en_pausa(c)
             for u in ubicaciones:
+                if u["id"] in en_pausa:
+                    resumen["tiendas"][u["tienda_id"]] = resumen_pausado(
+                        en_pausa[u["id"]])
+                    continue
                 resumen["tiendas"][u["tienda_id"]] = _una_tienda(
                     c, u, productos, usuario_id, respaldo)
             if aplicar:

@@ -1544,6 +1544,165 @@ async def consultar_inventario(
     )
 
 
+# ── Conteo de inventario cargado en el POS (29-oct-2026) ────────────────────
+#  Cuando la página de Siigo no deja cargar el conteo de una tienda. Ver
+#  `conteo_tienda.py`: la foto se carga aquí, la sincronización no toca la
+#  tienda mientras esté pendiente, y el POS entrega lo que hay que poner en
+#  Siigo cuando funcione.
+
+class LineaConteo(BaseModel):
+    codigo: str = Field(max_length=60)
+    cantidad: int
+
+
+class ConteoEntrada(BaseModel):
+    tienda_id: str
+    lineas: List[LineaConteo] = Field(min_length=1, max_length=5000)
+    #  Lo que no aparece en el conteo queda en cero. Un conteo de verdad es
+    #  completo; parcial sirve para corregir unas pocas referencias.
+    completo: bool = True
+    conteo_id: Optional[str] = Field(None, description="ULID del equipo; "
+                                     "obligatorio para aplicar")
+
+
+async def _exigir_permiso_inventario(t, usuario: CurrentUser) -> None:
+    """El mismo permiso que sacar plata de la caja: el de la administradora.
+    Poner una tienda en cero no lo puede hacer cualquier cajera."""
+    from sqlalchemy import text as _t
+    puede = bool((await t.sesion.execute(_t("""
+        SELECT coalesce(puede_mover_caja, false) FROM retail.permisos_pos
+         WHERE usuario_id = :u AND activo
+    """), {"u": usuario.id})).scalar())
+    if not puede:
+        raise HTTPException(403, {
+            "error": "sin_permiso_inventario",
+            "mensaje": "Cargar un conteo es de la administradora. Pide que "
+                       "entre alguien con ese permiso."})
+
+
+def _conteo_http(e: Exception):
+    from backend.modules.retail.conteo_tienda import ConteoInvalido
+    if isinstance(e, ConteoInvalido):
+        raise HTTPException(400, {"error": "conteo_invalido", "mensaje": str(e)})
+    raise e
+
+
+@router.post("/inventario/conteo/ensayo")
+async def ensayar_conteo(
+    entrada: ConteoEntrada,
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Lo que cambiaría el conteo, sin escribir nada."""
+    from backend.modules.retail import conteo_tienda
+    async with uow as t:
+        await _exigir_permiso_inventario(t, usuario)
+        try:
+            p = await conteo_tienda.preparar(
+                t.sesion, tienda_id=entrada.tienda_id,
+                lineas=[l.model_dump() for l in entrada.lineas],
+                completo=entrada.completo)
+        except Exception as e:  # noqa: BLE001
+            _conteo_http(e)
+    return {k: v for k, v in p.items() if not k.startswith("_")}
+
+
+@router.post("/inventario/conteo")
+async def cargar_conteo(
+    entrada: ConteoEntrada,
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Deja la tienda exactamente como se contó. CRÍTICO en la auditoría:
+    un conteo puede poner media tienda en cero."""
+    from datetime import datetime, timezone
+    from backend.modules.retail import conteo_tienda
+    if not entrada.conteo_id:
+        raise HTTPException(400, {"error": "conteo_invalido",
+                                  "mensaje": "Falta el identificador del conteo."})
+    async with uow as t:
+        await _exigir_permiso_inventario(t, usuario)
+        try:
+            r = await conteo_tienda.aplicar(
+                t.sesion, conteo_id=entrada.conteo_id,
+                tienda_id=entrada.tienda_id,
+                lineas=[l.model_dump() for l in entrada.lineas],
+                completo=entrada.completo, usuario_id=usuario.id)
+        except Exception as e:  # noqa: BLE001
+            _conteo_http(e)
+        if not r["ya_estaba"]:
+            await t.auditoria.registrar(
+                evento="inventario.conteo", ocurrido_en=datetime.now(timezone.utc),
+                severidad="critico", tienda_id=entrada.tienda_id,
+                usuario_id=usuario.id, agregado_tipo="conteo_inventario",
+                agregado_id=entrada.conteo_id,
+                payload={"completo": entrada.completo,
+                         "referencias": r["referencias_contadas"],
+                         "unidades_antes": r["unidades_antes"],
+                         "unidades_despues": r["unidades_despues"],
+                         "cambios": len(r["cambios"]),
+                         "a_cero": len(r["a_cero"]),
+                         "desconocidos": r["desconocidos"][:50]})
+        await t.commit()
+    return r
+
+
+@router.get("/inventario/conteos")
+async def listar_conteos(
+    tienda_id: str = Query(),
+    sesion=Depends(sesion_lectura),
+    _: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    from sqlalchemy import text as _t
+    filas = (await sesion.execute(_t("""
+        SELECT id, estado, completo, referencias, unidades, creado_por,
+               creado_en, en_siigo_en
+          FROM retail.conteos_inventario
+         WHERE tienda_id = :t ORDER BY creado_en DESC LIMIT 20
+    """), {"t": tienda_id})).mappings().all()
+    return [{**dict(f), "creado_en": f["creado_en"].isoformat(),
+             "en_siigo_en": f["en_siigo_en"].isoformat() if f["en_siigo_en"] else None}
+            for f in filas]
+
+
+@router.get("/inventario/conteos/{conteo_id}/para-siigo")
+async def conteo_para_siigo(
+    conteo_id: str,
+    sesion=Depends(sesion_lectura),
+    _: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    from backend.modules.retail import conteo_tienda
+    try:
+        return await conteo_tienda.para_siigo(sesion, conteo_id=conteo_id)
+    except Exception as e:  # noqa: BLE001
+        _conteo_http(e)
+
+
+@router.post("/inventario/conteos/{conteo_id}/en-siigo")
+async def conteo_en_siigo(
+    conteo_id: str,
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Ya se cargó en Siigo: la sincronización vuelve a manejar la tienda."""
+    from datetime import datetime, timezone
+    from backend.modules.retail import conteo_tienda
+    async with uow as t:
+        await _exigir_permiso_inventario(t, usuario)
+        try:
+            await conteo_tienda.marcar_en_siigo(
+                t.sesion, conteo_id=conteo_id, usuario_id=usuario.id)
+        except Exception as e:  # noqa: BLE001
+            _conteo_http(e)
+        await t.auditoria.registrar(
+            evento="inventario.conteo_en_siigo",
+            ocurrido_en=datetime.now(timezone.utc), severidad="aviso",
+            usuario_id=usuario.id, agregado_tipo="conteo_inventario",
+            agregado_id=conteo_id, payload={"conteo_id": conteo_id})
+        await t.commit()
+    return {"conteo_id": conteo_id, "estado": "en_siigo"}
+
+
 # ── Panel de ventas del día (vista 8 del handoff) ───────────────────────────
 
 class BarraHoraSalida(BaseModel):
