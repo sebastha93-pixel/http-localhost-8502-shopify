@@ -1405,7 +1405,7 @@ def remision_por_whatsapp(*, telefono: str, media_id: str, mime: str = "",
         # Aislado y best-effort: si falla, no toca el flujo de lavandería.
         try:
             sb2 = _sb()
-            hr = ((sb2.table("hoja_ruta_lote").select("orden_corte_id")
+            hr = ((sb2.table("hoja_ruta_lote").select("orden_corte_id,referencia_id")
                      .eq("id", elegido["hoja_ruta_id"]).limit(1).execute()).data
                   if sb2 else None)
             oc_id = hr[0]["orden_corte_id"] if hr else None
@@ -1413,9 +1413,12 @@ def remision_por_whatsapp(*, telefono: str, media_id: str, mime: str = "",
                 from backend.services.remision_ocr import leer_remision_proceso
                 lx = leer_remision_proceso(contenido, mime_real)
                 if lx.get("ok") and (lx.get("por_talla") or {}):
+                    # Con la referencia del LOTE (Fase 2): en un corte combinado
+                    # cada referencia tiene su propio cuadre.
                     prod.guardar_conteo_proceso(
                         oc_id, "confeccion", lx["por_talla"],
-                        fuente="ocr", creado_por="whatsapp")
+                        fuente="ocr", creado_por="whatsapp",
+                        referencia_id=hr[0].get("referencia_id"))
                     _nota(elegido["hoja_ruta_id"],
                           f"Conteo por talla de confección leído de la remisión "
                           f"({lx.get('confianza')}): {lx['por_talla']}. "

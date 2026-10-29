@@ -1289,18 +1289,46 @@ class JustificarProcesoIn(BaseModel):
     referencia_id: Optional[str] = None
 
 
+# Quien cuenta: el cortador/diseño (confección) y quien recibe en bodega, que
+# maneja remisiones (insumos). Fase 2 (2026-10-29) suma produccion_remisiones.
+_PERM_CUADRE = ("produccion_corte", "produccion_cortador", "produccion_remisiones")
+
+
+@router.get("/cierre-bodega")
+def listar_cierre_bodega(
+    estado: Optional[str] = Query(None, pattern="^(abiertos|cerrados)$"),
+    _: CurrentUser = Depends(require_permission_any(_PERM_CUADRE, "ver")),
+) -> dict:
+    """Lotes con su cadena (corte → … → bodega) y su estado de cierre."""
+    return {"lotes": svc.listar_cierre_bodega(estado)}
+
+
+@router.get("/cierre-bodega/lote/{oc_id}")
+def detalle_cierre_bodega(
+    oc_id: str, referencia_id: Optional[str] = None,
+    _: CurrentUser = Depends(require_permission_any(_PERM_CUADRE, "ver")),
+) -> dict:
+    try:
+        return svc.cadena_lote(oc_id, referencia_id)
+    except ValueError as e:
+        raise HTTPException(400 if str(e) == "referencia_requerida" else 404, str(e))
+
+
 @router.get("/cuadre/{oc_id}/{paso}")
 def obtener_cuadre_proceso(
-    oc_id: str, paso: str,
-    _: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "ver")),
+    oc_id: str, paso: str, referencia_id: Optional[str] = None,
+    _: CurrentUser = Depends(require_permission_any(_PERM_CUADRE, "ver")),
 ) -> dict:
-    return svc.cruzar_proceso(oc_id, paso)
+    try:
+        return svc.cruzar_proceso(oc_id, paso, referencia_id=referencia_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.post("/cuadre/{oc_id}/{paso}")
 def guardar_cuadre_proceso(
     oc_id: str, paso: str, body: ConteoProcesoIn,
-    user: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "modificar")),
+    user: CurrentUser = Depends(require_permission_any(_PERM_CUADRE, "modificar")),
 ) -> dict:
     try:
         return svc.guardar_conteo_proceso(
@@ -1315,23 +1343,31 @@ def guardar_cuadre_proceso(
 
 @router.post("/cuadre/{oc_id}/{paso}/confirmar")
 def confirmar_cuadre_proceso(
-    oc_id: str, paso: str,
-    user: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_cortador"), "modificar")),
+    oc_id: str, paso: str, referencia_id: Optional[str] = None,
+    user: CurrentUser = Depends(require_permission_any(_PERM_CUADRE, "modificar")),
 ) -> dict:
     try:
-        cruce = svc.confirmar_conteo_proceso(oc_id, paso, usuario=user.email)
+        cruce = svc.confirmar_conteo_proceso(oc_id, paso, referencia_id=referencia_id,
+                                             usuario=user.email)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, f"confirmar_cuadre: {str(e)[:200]}")
     # El aviso va DESPUÉS de confirmar y no puede tumbar la confirmación (mismo
-    # criterio que corte_cerrado). Solo para confección y solo si falta de verdad.
-    if paso == "confeccion" and cruce.get("estado") in ("faltan", "mixto") \
-            and cruce.get("total_faltan", 0) > 0:
+    # criterio que corte_cerrado). Solo si falta de verdad.
+    if cruce.get("estado") in ("faltan", "mixto") and cruce.get("total_faltan", 0) > 0 \
+            and paso in ("confeccion", "bodega"):
         try:
             from backend.services import avisos_produccion as avisos
             oc = svc.obtener_orden_corte(oc_id) or {}
-            avisos.avisar_faltante_confeccion(oc, cruce)
+            if paso == "confeccion":
+                avisos.avisar_faltante_confeccion(oc, cruce)
+            else:
+                ref = next((r for r in (oc.get("referencias") or [])
+                            if r.get("referencia_id") == cruce.get("referencia_id")), {})
+                codigo = ((ref.get("referencia") or {}).get("codigo_referencia")
+                          or (oc.get("referencia") or {}).get("codigo_referencia") or "")
+                avisos.avisar_faltante_bodega(oc, cruce, referencia=codigo)
         except Exception:
             pass
     return cruce
@@ -2104,6 +2140,16 @@ def cambiar_etapa(
     body: CambiarEtapaBody,
     _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
 ) -> dict:
+    # Ingreso a bodega SOLO con conteo final por talla confirmado o justificado
+    # (cierre de bodega, 2026-10-29). Antes era un clic sin contar nada: así se
+    # descubrían los faltantes al final y sin saber dónde. Fallar cerrado.
+    if body.etapa == "despachado":
+        ruta = svc.ruta_por_id(ruta_id)
+        if not ruta:
+            raise HTTPException(404, "Lote no encontrado")
+        if not svc.bodega_cerrada(ruta["orden_corte_id"], ruta.get("referencia_id")):
+            raise HTTPException(400, "Para dar ingreso a bodega primero cuenta por talla lo "
+                                     "que llegó, en Producción → Cierre de bodega.")
     try:
         return {"ok": True, "ruta": svc.cambiar_etapa_ruta(ruta_id, body.etapa)}
     except ValueError as e:

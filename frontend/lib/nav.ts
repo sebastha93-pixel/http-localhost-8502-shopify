@@ -93,6 +93,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: "Remisiones",    href: "/produccion/remisiones",      permiso: "produccion_remisiones", desc: "6 · Entregas e insumos por lote" },
       { label: "Lotes",         href: "/produccion/lotes",           permiso: "produccion|produccion_remisiones", desc: "7 · Seguimiento del lote en proceso" },
       { label: "Lavandería",    href: "/produccion/lavanderia",      permiso: "produccion|produccion_remisiones", desc: "Remisiones que el OS está esperando + lo que se dijo en el grupo" },
+      { label: "Cierre de bodega", href: "/produccion/cierre-bodega", permiso: "produccion_remisiones|produccion_corte", desc: "Conteo final por talla al llegar a bodega y dónde se perdió lo que falta" },
       { label: "Costeo real",   href: "/produccion/costeo",                                         desc: "8 · Cierre con Siigo" },
       { label: "Proveedores",   href: "/produccion/confeccionistas", permiso: "produccion_proveedores", desc: "Directorio: confección, lavandería, terminación" },
     ],

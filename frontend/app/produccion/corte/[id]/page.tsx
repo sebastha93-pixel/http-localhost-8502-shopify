@@ -951,7 +951,12 @@ export default function DetalleOrdenCortePage() {
         );
       })()}
 
-      <CuadreConfeccion ocId={id} puedeEditar={puedeEditarNotas} puedeJustificar={esAdmin} />
+      {(oc.referencias?.length ? oc.referencias : [{ referencia_id: undefined, referencia: undefined }]).map((rf, i, arr) => (
+        <CuadreConfeccion key={rf.referencia_id || i} ocId={id}
+          referenciaId={rf.referencia_id}
+          etiqueta={arr.length > 1 ? (rf.referencia?.codigo_referencia || undefined) : undefined}
+          puedeEditar={puedeEditarNotas} puedeJustificar={esAdmin} />
+      ))}
 
       <Card>
         <CardContent className="p-5">
@@ -2595,11 +2600,18 @@ function HojaRutaCard({ ordenCorteId, consecutivo, referenciaId, referenciaCodig
       );
     }
     if (r.etapa === "terminacion_terminada") {
+      // Ingreso a bodega = contar por talla lo que llegó (Cierre de bodega). Ya no
+      // es un clic sin contar: el backend tampoco lo deja pasar sin conteo.
       return (
-        <button onClick={() => cambiarEtapa.mutate("despachado")} disabled={cambiarEtapa.isPending}
-          className="rounded-sm bg-teal px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-ink-900 disabled:opacity-40">
-          Marcar ingreso a bodega
-        </button>
+        <div>
+          <Link href={`/produccion/cierre-bodega?lote=${ordenCorteId}${referenciaId ? `&ref=${referenciaId}` : ""}`}
+            className="inline-block rounded-sm bg-teal px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-ink-900">
+            Contar y dar ingreso a bodega
+          </Link>
+          <p className="mt-1 text-[0.7rem] text-graphite">
+            Cuenta por talla lo que llegó de terminación. Si falta algo, salta la alerta.
+          </p>
+        </div>
       );
     }
     return null;
@@ -2876,8 +2888,9 @@ function statusBadgeCuadre(c: CuadreResp) {
   return <Badge tone="neutral">—</Badge>;
 }
 
-function CuadreConfeccion({ ocId, puedeEditar, puedeJustificar }: {
-  ocId: string; puedeEditar: boolean; puedeJustificar: boolean;
+function CuadreConfeccion({ ocId, referenciaId, etiqueta, puedeEditar, puedeJustificar }: {
+  ocId: string; referenciaId?: string; etiqueta?: string;
+  puedeEditar: boolean; puedeJustificar: boolean;
 }) {
   const qc = useQueryClient();
   const [conteo, setConteo] = useState<Record<string, string>>({});
@@ -2886,12 +2899,15 @@ function CuadreConfeccion({ ocId, puedeEditar, puedeJustificar }: {
   const [motivo, setMotivo] = useState("");
   const [err, setErr] = useState("");
 
+  // Un cuadre por LOTE (corte + referencia): en un corte combinado cada
+  // referencia compara contra lo que se cortó de ELLA (Fase 2).
+  const qs = referenciaId ? `?referencia_id=${referenciaId}` : "";
   const q = useQuery<CuadreResp>({
-    queryKey: ["cuadre", ocId, "confeccion"],
-    queryFn: () => api.get(`/api/produccion/cuadre/${ocId}/confeccion`),
+    queryKey: ["cuadre", ocId, "confeccion", referenciaId ?? ""],
+    queryFn: () => api.get(`/api/produccion/cuadre/${ocId}/confeccion${qs}`),
     enabled: !!ocId,
   });
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["cuadre", ocId, "confeccion"] });
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["cuadre", ocId, "confeccion", referenciaId ?? ""] });
 
   const guardarMut = useMutation({
     mutationFn: () => {
@@ -2900,18 +2916,20 @@ function CuadreConfeccion({ ocId, puedeEditar, puedeJustificar }: {
         const n = parseInt((v || "").replace(/\D/g, ""), 10);
         if (n > 0) unidades[t] = n;
       }
-      return api.post(`/api/produccion/cuadre/${ocId}/confeccion`, { unidades, fuente: "manual" });
+      return api.post(`/api/produccion/cuadre/${ocId}/confeccion`,
+        { unidades, fuente: "manual", referencia_id: referenciaId ?? null });
     },
     onSuccess: () => { setEditando(false); setErr(""); invalidate(); },
     onError: (e: Error) => setErr(e.message),
   });
   const confirmarMut = useMutation({
-    mutationFn: () => api.post(`/api/produccion/cuadre/${ocId}/confeccion/confirmar`, {}),
+    mutationFn: () => api.post(`/api/produccion/cuadre/${ocId}/confeccion/confirmar${qs}`, {}),
     onSuccess: () => { setErr(""); invalidate(); },
     onError: (e: Error) => setErr(e.message),
   });
   const justificarMut = useMutation({
-    mutationFn: () => api.post(`/api/produccion/cuadre/${ocId}/confeccion/justificar`, { motivo: motivo.trim() }),
+    mutationFn: () => api.post(`/api/produccion/cuadre/${ocId}/confeccion/justificar`,
+      { motivo: motivo.trim(), referencia_id: referenciaId ?? null }),
     onSuccess: () => { setJustificando(false); setMotivo(""); setErr(""); invalidate(); },
     onError: (e: Error) => setErr(e.message),
   });
@@ -2931,7 +2949,7 @@ function CuadreConfeccion({ ocId, puedeEditar, puedeJustificar }: {
     <Card>
       <CardContent className="p-5 space-y-3">
         <div className="flex items-center gap-2 flex-wrap">
-          <p className="section-label">Cuadre de confección</p>
+          <p className="section-label">Cuadre de confección{etiqueta ? ` · ${etiqueta}` : ""}</p>
           {statusBadgeCuadre(c)}
           <span className="text-xs text-graphite">Lo que entregó confección, por talla, contra lo cortado.</span>
         </div>

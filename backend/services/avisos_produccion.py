@@ -165,6 +165,37 @@ def avisar_faltante_confeccion(oc: dict, cruce: dict) -> None:
         log.warning(f"[avisos] faltante_confeccion falló: {str(e)[:160]}")
 
 
+def avisar_faltante_bodega(oc: dict, cruce: dict, *, referencia: str = "") -> None:
+    """Se CONFIRMÓ el conteo final (lo que llegó a bodega) y FALTAN prendas contra
+    lo cortado → alerta a quienes manejan remisiones/bodega (los admin siempre
+    reciben) y al diseñador que creó el lote. Con las TALLAS que faltan."""
+    try:
+        faltan = (cruce or {}).get("faltan") or {}
+        total = sum(int(v or 0) for v in faltan.values())
+        if total <= 0:
+            return
+        cons = _consecutivo(oc)
+        ref = f" · ref {referencia}" if referencia else ""
+        detalle = ", ".join(f"T{t} −{n}" for t, n in sorted(faltan.items()))
+        titulo = f"Faltan {total} al llegar a bodega · lote {cons}"
+        mensaje = (f"El lote {cons}{ref} llegó a bodega con {total} prenda(s) menos de "
+                   f"las que se cortaron: {detalle}. Revisa en Cierre de bodega dónde se "
+                   f"perdieron y justifica o reclama.")
+        enlace = (f"/produccion/cierre-bodega?lote={oc.get('id') or ''}"
+                  f"&ref={(cruce or {}).get('referencia_id') or ''}")
+        meta = {"orden_corte_id": oc.get("id"), "consecutivo": cons, "paso": "bodega",
+                "referencia_id": (cruce or {}).get("referencia_id"),
+                "faltan": faltan, "total_faltan": total}
+        notif.crear_para_modulo(modulo="produccion_remisiones", tipo="faltante_bodega",
+                                titulo=titulo, mensaje=mensaje, enlace=enlace, meta=meta)
+        dest = _creador_de_orden(oc)
+        if dest:
+            notif.crear(destinatario_email=dest, tipo="faltante_bodega",
+                        titulo=titulo, mensaje=mensaje, enlace=enlace, meta=meta)
+    except Exception as e:
+        log.warning(f"[avisos] faltante_bodega falló: {str(e)[:160]}")
+
+
 def avisar_remision_sin_ruta(rem: dict, *, tipo: str, oc_id: str,
                              referencia_id: Optional[str], error: str,
                              consecutivo_corte: str = "") -> None:

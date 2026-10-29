@@ -219,3 +219,25 @@ ni corrompe el cierre — a lo sumo deja un conteo "por confirmar".
   de salida de confección → cruzar vs lo cortado por talla → alertar), que resuelve
   el dolor declarado; luego la **vista de cierre de bodega** con toda la cadena; el
   resto (terminación por talla, afinar bodega) encima de esa base.
+
+## Fase 2 (2026-10-29) — cadena completa y conteo final
+
+Decisión de Sebastián: el conteo final se hace en una **pantalla del OS**
+("Cierre de bodega", Producción). Lo digita quien recibe en bodega (insumos)
+desde la remisión de terminación. Hallazgo que la motivó: ningún lote había
+pasado de lavandería en el OS (12 asignado, 11 en confección, 7 lavandería);
+el conteo final se hacía por fuera.
+
+- Cuadre **por lote** (corte + referencia), nunca la suma del corte. Base =
+  lo cortado de esa referencia → en corte de una sola referencia, lo cortado
+  del padre → último recurso la curva, marcada "programado" (nunca "cerrado
+  limpio" sobre lo programado).
+- Paso `bodega` por talla con el mismo gate (por confirmar → confirmar →
+  justificar). Confirmar = ingreso a bodega (`despachado`), aunque falte; el
+  faltante queda abierto hasta justificarse y avisa a remisiones + creador.
+- "Marcar ingreso a bodega" sin conteo queda **bloqueado** en el backend.
+- Lavandería y terminación siguen en totales (sin trabajo extra para los
+  talleres); la cadena compara cada paso contra el anterior con dato y marca
+  dónde se perdió la prenda.
+- Las etiquetas de terminación de un corte de una sola referencia ahora salen
+  con lo cortado, no con la curva programada (mismo criterio de base).

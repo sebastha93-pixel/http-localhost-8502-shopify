@@ -2578,8 +2578,8 @@ def _unidades_por_talla(d: Optional[dict]) -> dict:
 
 
 def _cuadre_fila(oc_id: str, paso: str, referencia_id: Optional[str] = None) -> Optional[dict]:
-    """La fila de cuadre_lote_proceso de (lote, paso, referencia). referencia
-    NULL = cuadre a nivel de orden de corte."""
+    """La fila de cuadre_lote_proceso de (lote, paso, referencia). Desde la Fase 2
+    las filas SIEMPRE llevan la referencia del lote (ver _ref_del_lote)."""
     sb = _sb()
     if sb is None:
         return None
@@ -2590,24 +2590,92 @@ def _cuadre_fila(oc_id: str, paso: str, referencia_id: Optional[str] = None) -> 
     return r[0] if r else None
 
 
-def cruzar_proceso(oc_id: str, paso: str, *, referencia_id: Optional[str] = None) -> dict:
-    """Cruza, POR TALLA, lo que entró a un paso contra su base (el paso anterior).
+def _oc_e_hijos(oc_id: str) -> tuple:
+    """La orden (cortado y curva del padre) y sus referencias hijas. Lectura
+    liviana a propósito: obtener_orden_corte trae rollos, correos y telas."""
+    sb = _sb()
+    if sb is None:
+        return {}, []
+    oc = _safe_exec(sb.table("ordenes_corte")
+                      .select("id,consecutivo,referencia_id,unidades_cortadas,curva_trazo,created_by")
+                      .eq("id", oc_id).limit(1)).data
+    try:
+        hijos = _safe_exec(sb.table("orden_corte_referencias")
+                             .select("orden_corte_id,referencia_id,unidades_cortadas,curva_trazo")
+                             .eq("orden_corte_id", oc_id)).data or []
+    except Exception:
+        hijos = []   # tabla hija aún sin migrar → corte de una sola referencia
+    return (oc[0] if oc else {}), hijos
 
-    Fase 1: paso='confeccion' → la base es lo CORTADO (unidades_cortadas). Una
-    talla presente en la base y ausente del recibido cuenta como faltante completo
-    de esa talla. `estado`:
-      · sin_base  → la orden no tiene unidades_cortadas (corte sin informe) → no se juzga
+
+def _resolver_ref(oc_row: dict, hijos: list, referencia_id: Optional[str]) -> Optional[str]:
+    """La referencia del LOTE. Si no viene y el corte tiene UNA sola referencia,
+    es esa. En un corte combinado hay que decir cuál lote (pura)."""
+    if referencia_id:
+        return referencia_id
+    if len(hijos or []) > 1:
+        raise ValueError("referencia_requerida")
+    if hijos:
+        return hijos[0].get("referencia_id") or (oc_row or {}).get("referencia_id")
+    return (oc_row or {}).get("referencia_id")
+
+
+def _ref_del_lote(oc_id: str, referencia_id: Optional[str]) -> Optional[str]:
+    if referencia_id:
+        return referencia_id
+    oc_row, hijos = _oc_e_hijos(oc_id)
+    return _resolver_ref(oc_row, hijos, None)
+
+
+def _base_desde(oc_row: dict, hijos: list, referencia_id: Optional[str]) -> tuple:
+    """Lo CORTADO de un lote (corte + referencia), por talla → (base, fuente).
+
+      1. la fila hija de ESA referencia (unidades_cortadas)          → 'cortado'
+      2. corte de UNA sola referencia: lo cortado del padre          → 'cortado'
+         (en esos cortes la fila hija queda NULL: el cierre del corte
+          solo la llena cuando hay varias referencias)
+      3. último recurso, la curva programada                          → 'programado'
+    Sin referencia → todo el corte. Sin nada → ({}, ''). Pura."""
+    oc_row = oc_row or {}
+    hijos = hijos or []
+    una_sola = len(hijos) <= 1
+    if referencia_id:
+        hijo = next((h for h in hijos if h.get("referencia_id") == referencia_id), None)
+        b = _unidades_por_talla((hijo or {}).get("unidades_cortadas"))
+        if b:
+            return b, "cortado"
+    else:
+        hijo = None
+    if una_sola or not referencia_id:
+        b = _unidades_por_talla(oc_row.get("unidades_cortadas"))
+        if b:
+            return b, "cortado"
+    curva = (hijo or {}).get("curva_trazo") or (oc_row.get("curva_trazo") if (una_sola or not referencia_id) else None)
+    b = _unidades_por_talla(curva)
+    return (b, "programado") if b else ({}, "")
+
+
+def cruzar_proceso(oc_id: str, paso: str, *, referencia_id: Optional[str] = None) -> dict:
+    """Cruza, POR TALLA, lo que contó un paso contra lo CORTADO de ese lote.
+
+    Confección (Fase 1) y bodega (Fase 2) comparan contra lo cortado: la pregunta
+    es siempre «¿llegó todo lo que se cortó?». Una talla cortada que no aparece en
+    el conteo cuenta como faltante completo de esa talla. `estado`:
+      · sin_base  → el lote no tiene nada cortado ni programado → no se juzga
       · sin_dato  → aún no hay conteo de ese paso
       · cuadra | faltan | sobran | mixto
-    Nunca revienta: devuelve el cruce con lo que haya."""
-    sb = _sb()
-    base: dict = {}
-    if sb is not None:
-        oc = _safe_exec(sb.table("ordenes_corte")
-                          .select("unidades_cortadas").eq("id", oc_id).limit(1)).data
-        if oc:
-            base = _unidades_por_talla(oc[0].get("unidades_cortadas"))
-    fila = _cuadre_fila(oc_id, paso, referencia_id)
+    `base_fuente` = 'programado' avisa que la base es la curva, no lo cortado.
+    Nunca revienta salvo corte combinado sin referencia (referencia_requerida)."""
+    oc_row, hijos = _oc_e_hijos(oc_id)
+    ref = _resolver_ref(oc_row, hijos, referencia_id)
+    base, fuente = _base_desde(oc_row, hijos, ref)
+    fila = _cuadre_fila(oc_id, paso, ref)
+    return _cruce_desde(base, fuente, fila, oc_id=oc_id, paso=paso, referencia_id=ref)
+
+
+def _cruce_desde(base: dict, fuente: str, fila: Optional[dict], *,
+                 oc_id: str, paso: str, referencia_id: Optional[str]) -> dict:
+    """El cruce por talla de un conteo contra su base (pura)."""
     recibido = _unidades_por_talla(fila.get("unidades")) if fila else {}
 
     tallas = set(base) | set(recibido)
@@ -2630,8 +2698,8 @@ def cruzar_proceso(oc_id: str, paso: str, *, referencia_id: Optional[str] = None
         estado = "cuadra"
 
     return {
-        "oc_id": oc_id, "paso": paso,
-        "base": base, "recibido": recibido,
+        "oc_id": oc_id, "paso": paso, "referencia_id": referencia_id,
+        "base": base, "base_fuente": fuente, "recibido": recibido,
         "faltan": faltan, "sobran": sobran,
         "estado": estado,
         "total_base": sum(base.values()),
@@ -2658,6 +2726,7 @@ def guardar_conteo_proceso(oc_id: str, paso: str, unidades: dict, *,
         raise RuntimeError("Supabase no configurado")
     if paso not in PASOS_CUADRE:
         raise ValueError("paso_invalido")
+    referencia_id = _ref_del_lote(oc_id, referencia_id)
     limpio = _unidades_por_talla(unidades)
     datos: dict = {
         "unidades": limpio,
@@ -2686,6 +2755,7 @@ def confirmar_conteo_proceso(oc_id: str, paso: str, *,
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
+    referencia_id = _ref_del_lote(oc_id, referencia_id)
     fila = _cuadre_fila(oc_id, paso, referencia_id)
     if not fila:
         raise ValueError("sin_conteo")
@@ -2693,6 +2763,17 @@ def confirmar_conteo_proceso(oc_id: str, paso: str, *,
         "estado": "confirmado", "confirmado_por": usuario,
         "confirmado_at": _now_iso(), "actualizado_at": _now_iso(),
     }).eq("id", fila["id"]).execute()
+    if paso == "bodega":
+        # Contar y confirmar la llegada ES el ingreso a bodega: el lote pasa a
+        # 'despachado' aunque falte algo (la mercancía llegó; el faltante queda
+        # abierto en Cierre de bodega hasta que se justifique).
+        try:
+            ruta = obtener_ruta_por_corte(oc_id, referencia_id=referencia_id)
+            if ruta and ruta.get("etapa") != "despachado":
+                cambiar_etapa_ruta(ruta["id"], "despachado")
+        except Exception as e:
+            log.error(f"[cuadre] bodega confirmada pero no pude pasar el lote "
+                      f"{oc_id}/{referencia_id} a 'despachado': {e}")
     return cruzar_proceso(oc_id, paso, referencia_id=referencia_id)
 
 
@@ -2704,6 +2785,7 @@ def justificar_proceso(oc_id: str, paso: str, *, motivo: str,
     sb = _sb()
     if sb is None:
         raise RuntimeError("Supabase no configurado")
+    referencia_id = _ref_del_lote(oc_id, referencia_id)
     fila = _cuadre_fila(oc_id, paso, referencia_id)
     if not fila:
         raise ValueError("sin_conteo")
@@ -2713,6 +2795,229 @@ def justificar_proceso(oc_id: str, paso: str, *, motivo: str,
         "justificado_at": _now_iso(), "actualizado_at": _now_iso(),
     }).eq("id", fila["id"]).execute()
     return cruzar_proceso(oc_id, paso, referencia_id=referencia_id)
+
+
+# ── Fase 2: la cadena completa del lote y el cierre de bodega ───────────────
+# Bodega = el cierre de terminación (lo que llega a bodega). El lote queda
+# "cerrado limpio" cuando lo que llegó a bodega, por talla, es lo que se cortó.
+
+_NOMBRE_PASO = {"corte": "Corte", "confeccion": "Confección", "lavanderia": "Lavandería",
+                "terminacion": "Terminación", "bodega": "Bodega"}
+CIERRES_ABIERTOS = ("sin_conteo_final", "por_confirmar", "faltante", "revisar")
+CIERRES_CERRADOS = ("cerrado_limpio", "justificado")
+
+
+def _cadena_desde(ruta: dict, oc_row: dict, hijos: list, filas: list) -> dict:
+    """La cadena corte → confección → lavandería → terminación → bodega de UN lote,
+    con lo que el OS ya sabe de cada paso (pura, se puede probar sin base):
+
+      · corte y bodega: por talla (lo cortado / el conteo final)
+      · confección: por talla (Fase 1, por foto o a mano)
+      · lavandería y terminación: TOTALES de sus portales (sin trabajo extra
+        para los talleres)
+
+    Cada paso con dato se compara contra el anterior que tenga dato:
+    `faltan_vs_anterior` y `se_perdio_aqui` dicen DÓNDE se fue la prenda. El
+    cierre compara la bodega contra lo CORTADO, por talla."""
+    ruta = ruta or {}
+    ref = ruta.get("referencia_id") or _resolver_ref(oc_row, hijos, None)
+    base, fuente = _base_desde(oc_row, hijos, ref)
+    por_paso = {f.get("paso"): f for f in (filas or [])
+                if f.get("referencia_id") in (ref, None)}
+    omitidas = set(ruta.get("etapas_omitidas") or [])
+
+    def _cuadre(paso: str) -> dict:
+        f = por_paso.get(paso)
+        u = _unidades_por_talla(f.get("unidades")) if f else {}
+        return {"paso": paso, "nombre": _NOMBRE_PASO[paso],
+                "total": sum(u.values()) if f else None,
+                "por_talla": u or None,
+                "estado": f.get("estado") if f else "sin_dato"}
+
+    pasos = [{"paso": "corte", "nombre": "Corte",
+              "total": sum(base.values()) if base else None,
+              "por_talla": base or None,
+              "estado": ("programado" if fuente == "programado"
+                         else "confirmado" if base else "sin_dato")},
+             _cuadre("confeccion")]
+    if "lavanderia" in omitidas:
+        pasos.append({"paso": "lavanderia", "nombre": "Lavandería", "total": None,
+                      "por_talla": None, "estado": "omitido"})
+    else:
+        rec, ent = ruta.get("lav_cantidad_recibida"), ruta.get("lav_cantidad_entregada")
+        tot = ent if ent is not None else rec
+        pasos.append({"paso": "lavanderia", "nombre": "Lavandería", "total": tot,
+                      "por_talla": None,
+                      "estado": "dato" if tot is not None else "sin_dato",
+                      "detalle": {"recibio": rec, "entrego": ent}})
+    tr = ruta.get("term_cantidad_recibida")
+    pasos.append({"paso": "terminacion", "nombre": "Terminación", "total": tr,
+                  "por_talla": None, "estado": "dato" if tr is not None else "sin_dato"})
+    pasos.append(_cuadre("bodega"))
+
+    anterior = None
+    for p in pasos:
+        p["faltan_vs_anterior"] = None
+        p["se_perdio_aqui"] = False
+        if p.get("total") is None:
+            continue
+        if anterior is not None:
+            d = int(anterior["total"]) - int(p["total"])
+            p["faltan_vs_anterior"] = max(d, 0)
+            p["se_perdio_aqui"] = d > 0
+        anterior = p
+
+    fb = por_paso.get("bodega")
+    cruce_b = _cruce_desde(base, fuente, fb, oc_id=(oc_row or {}).get("id"),
+                           paso="bodega", referencia_id=ref)
+    if not fb:
+        cierre = "sin_conteo_final"
+    elif fb.get("estado") == "por_confirmar":
+        cierre = "por_confirmar"
+    elif fb.get("estado") == "justificado":
+        cierre = "justificado"
+    elif fuente != "cortado":
+        cierre = "revisar"        # la base es lo programado, no lo cortado
+    elif cruce_b["estado"] == "cuadra":
+        cierre = "cerrado_limpio"
+    elif cruce_b["estado"] in ("faltan", "mixto"):
+        cierre = "faltante"
+    else:
+        cierre = "revisar"        # llegó más de lo cortado
+
+    ref_lote = ruta.get("ref_lote") or {}
+    return {
+        "orden_corte_id": (oc_row or {}).get("id") or ruta.get("orden_corte_id"),
+        "consecutivo": (oc_row or {}).get("consecutivo"),
+        "referencia_id": ref,
+        "referencia": ref_lote.get("codigo_referencia"),
+        "referencia_nombre": ref_lote.get("nombre"),
+        "ruta_id": ruta.get("id"),
+        "etapa": ruta.get("etapa"),
+        "terminacion": (ruta.get("terminacion") or {}).get("nombre"),
+        "base_fuente": fuente,
+        "pasos": pasos,
+        "cruce_bodega": cruce_b,
+        "cierre": cierre,
+        "total_cortado": sum(base.values()),
+        "total_faltan_bodega": cruce_b["total_faltan"] if fb else None,
+        "donde_se_perdio": [p["nombre"] for p in pasos if p["se_perdio_aqui"]],
+        "justificado_motivo": (fb or {}).get("justificado_motivo"),
+    }
+
+
+_CADENA_RUTA_SELECT = ("id,orden_corte_id,referencia_id,etapa,etapas_omitidas,"
+                       "lav_cantidad_recibida,lav_cantidad_entregada,term_cantidad_recibida,"
+                       "created_at,ref_lote:referencia_id(codigo_referencia,nombre),"
+                       "terminacion:terminacion_id(nombre)")
+
+
+def cadena_lote(oc_id: str, referencia_id: Optional[str] = None) -> dict:
+    """La cadena de UN lote, para su detalle en Cierre de bodega."""
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    oc_row, hijos = _oc_e_hijos(oc_id)
+    if not oc_row:
+        raise ValueError("orden_no_encontrada")
+    ref = _resolver_ref(oc_row, hijos, referencia_id)
+    rutas = _safe_exec(sb.table("hoja_ruta_lote").select(_CADENA_RUTA_SELECT)
+                         .eq("orden_corte_id", oc_id)).data or []
+    ruta = next((r for r in rutas if r.get("referencia_id") == ref), None) \
+        or {"orden_corte_id": oc_id, "referencia_id": ref}
+    ruta = _con_etapas_omitidas(ruta) or ruta
+    filas = _safe_exec(sb.table("cuadre_lote_proceso").select("*")
+                         .eq("orden_corte_id", oc_id)).data or []
+    return _cadena_desde(ruta, oc_row, hijos, filas)
+
+
+def _leer_en_paginas(q_factory) -> list:
+    """Lee TODAS las filas de una consulta en páginas de 1.000 (PostgREST corta
+    ahí en silencio)."""
+    filas: list = []
+    inicio = 0
+    while True:
+        chunk = _safe_exec(q_factory().range(inicio, inicio + 999)).data or []
+        filas.extend(chunk)
+        if len(chunk) < 1000:
+            return filas
+        inicio += 1000
+
+
+def listar_cierre_bodega(estado: Optional[str] = None) -> list[dict]:
+    """Todos los lotes con su cadena y su estado de cierre, en pocas consultas
+    (rutas, órdenes, referencias hijas y cuadres) y el resto en memoria.
+
+    estado: 'abiertos' (sin conteo final / por confirmar / faltante / revisar),
+            'cerrados' (cerrado limpio / justificado) o None (todos).
+    Orden: lo que necesita acción primero (faltantes), luego lo más reciente."""
+    sb = _sb()
+    if sb is None:
+        return []
+    rutas = _leer_en_paginas(lambda: sb.table("hoja_ruta_lote").select(_CADENA_RUTA_SELECT)
+                                       .order("created_at", desc=True))
+    oc_ids = sorted({r["orden_corte_id"] for r in rutas if r.get("orden_corte_id")})
+    ocs: dict = {}
+    hijos: dict = {}
+    filas: dict = {}
+    for i in range(0, len(oc_ids), 150):
+        lote_ids = oc_ids[i:i + 150]
+        for o in (_safe_exec(sb.table("ordenes_corte")
+                               .select("id,consecutivo,referencia_id,unidades_cortadas,curva_trazo,created_by")
+                               .in_("id", lote_ids)).data or []):
+            ocs[o["id"]] = o
+        try:
+            for h in (_safe_exec(sb.table("orden_corte_referencias")
+                                   .select("orden_corte_id,referencia_id,unidades_cortadas,curva_trazo")
+                                   .in_("orden_corte_id", lote_ids)).data or []):
+                hijos.setdefault(h["orden_corte_id"], []).append(h)
+        except Exception:
+            pass
+        for f in (_safe_exec(sb.table("cuadre_lote_proceso").select("*")
+                               .in_("orden_corte_id", lote_ids)).data or []):
+            filas.setdefault(f["orden_corte_id"], []).append(f)
+
+    out = []
+    for r in rutas:
+        oc_id = r.get("orden_corte_id")
+        try:
+            c = _cadena_desde(r, ocs.get(oc_id) or {"id": oc_id}, hijos.get(oc_id, []),
+                              filas.get(oc_id, []))
+        except Exception as e:
+            log.warning(f"[cierre-bodega] lote {oc_id} omitido: {str(e)[:120]}")
+            continue
+        if estado == "abiertos" and c["cierre"] not in CIERRES_ABIERTOS:
+            continue
+        if estado == "cerrados" and c["cierre"] not in CIERRES_CERRADOS:
+            continue
+        out.append(c)
+    prioridad = {"faltante": 0, "revisar": 1, "por_confirmar": 2, "sin_conteo_final": 3,
+                 "justificado": 4, "cerrado_limpio": 5}
+    # Lo más reciente primero (consecutivo AAMM-NNNN desc) y, como el orden es
+    # estable, agrupado por lo que necesita acción.
+    out.sort(key=lambda c: str(c.get("consecutivo") or ""), reverse=True)
+    out.sort(key=lambda c: prioridad.get(c["cierre"], 9))
+    return out
+
+
+def ruta_por_id(ruta_id: str) -> Optional[dict]:
+    sb = _sb()
+    if sb is None:
+        return None
+    r = _safe_exec(sb.table("hoja_ruta_lote").select("id,orden_corte_id,referencia_id,etapa")
+                     .eq("id", ruta_id).limit(1)).data
+    return r[0] if r else None
+
+
+def bodega_cerrada(oc_id: str, referencia_id: Optional[str]) -> bool:
+    """¿Ya se contó y confirmó (o justificó) lo que llegó a bodega de este lote?
+    Sin eso el lote NO pasa a 'despachado' (fallar cerrado)."""
+    try:
+        ref = _ref_del_lote(oc_id, referencia_id)
+    except ValueError:
+        return False
+    fila = _cuadre_fila(oc_id, "bodega", ref)
+    return bool(fila) and fila.get("estado") in ("confirmado", "justificado")
 
 
 def actualizar_curva_corte(oc_id: str, *, curva: dict,
@@ -5221,11 +5526,19 @@ def _orden_talla(t: str) -> int:
         return 999
 
 
-def _unidades_de_referencia(rr: dict) -> dict:
+def _unidades_de_referencia(rr: dict, oc: Optional[dict] = None) -> dict:
     """Unidades por talla de una referencia del tendido: cortadas si existen,
-    si no la curva programada."""
+    si no la curva programada.
+
+    En un corte de UNA sola referencia la fila hija queda sin unidades_cortadas
+    (el cierre solo la llena cuando hay varias), así que se usa lo cortado del
+    padre antes que la curva: las etiquetas salían con lo PROGRAMADO, no con lo
+    que se cortó (2026-10-29). Mismo criterio que `_base_desde`."""
     unid = rr.get("unidades_cortadas") or {}
     limpio = {str(t): int(v) for t, v in unid.items() if int(v or 0) > 0} if unid else {}
+    if not limpio and oc is not None and len(oc.get("referencias") or []) <= 1:
+        padre = oc.get("unidades_cortadas") or {}
+        limpio = {str(t): int(v) for t, v in padre.items() if int(v or 0) > 0}
     if not limpio:
         limpio = {str(t): int(v) for t, v in (rr.get("curva_trazo") or {}).items()
                   if int(v or 0) > 0}
@@ -5255,7 +5568,7 @@ def _encolar_trabajos_terminacion(rem: dict) -> int:
                 continue
             ref = rr.get("referencia") or {}
             codigo = ref.get("codigo_referencia") or ""
-            unidades = _unidades_de_referencia(rr)
+            unidades = _unidades_de_referencia(rr, oc)
             total = sum(unidades.values())
             if not codigo or total <= 0:
                 continue
