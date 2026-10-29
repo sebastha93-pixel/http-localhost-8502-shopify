@@ -165,6 +165,36 @@ def avisar_faltante_confeccion(oc: dict, cruce: dict) -> None:
         log.warning(f"[avisos] faltante_confeccion falló: {str(e)[:160]}")
 
 
+def avisar_remision_sin_ruta(rem: dict, *, tipo: str, oc_id: str,
+                             referencia_id: Optional[str], error: str,
+                             consecutivo_corte: str = "") -> None:
+    """La remisión se creó pero su lote quedó SIN hoja de ruta → la ficha (link
+    público, separar insumos, imprimir códigos e instrucciones) va a dar error.
+
+    POR QUÉ (2026-10-29): REM-2026-0046 y 0047 quedaron sin ruta y lo único que
+    quedó fue un warning en los logs; lo descubrió la coordinadora de insumos al
+    no poder imprimir. Ahora se avisa en el acto a quienes manejan remisiones
+    (los admin siempre reciben).
+    """
+    try:
+        cons_rem = str(rem.get("consecutivo") or rem.get("id") or "?")
+        lote = consecutivo_corte or oc_id
+        cual = "terminación" if tipo == "terminacion" else "confección"
+        notif.crear_para_modulo(
+            modulo="produccion_remisiones", tipo="remision_sin_ruta",
+            titulo=f"Remisión {cons_rem}: la ficha no va a cargar",
+            mensaje=(f"La remisión {cons_rem} (lote {lote}) se creó, pero su hoja de "
+                     f"ruta no quedó lista. La ficha de {cual} va a dar error y no se "
+                     f"podrán separar insumos ni imprimir códigos e instrucciones. "
+                     f"Avísale a Sebastián para repararla. Detalle: {error}"),
+            enlace=f"/produccion/remisiones/{rem.get('id') or ''}",
+            meta={"remision_id": rem.get("id"), "orden_corte_id": oc_id,
+                  "referencia_id": referencia_id, "tipo": tipo, "error": error},
+        )
+    except Exception as e:
+        log.warning(f"[avisos] remision_sin_ruta falló: {str(e)[:160]}")
+
+
 def avisar_lote_avanzo(ruta: dict, *, etapa_nueva: str, oc: Optional[dict],
                        movido_por: str = "") -> None:
     """Lote cambió de etapa → avisar al diseñador que creó la orden de corte."""

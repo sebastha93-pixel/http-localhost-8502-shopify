@@ -4767,7 +4767,23 @@ def crear_remision(*, confeccionista_id: str, fecha_recogida: str,
                         orden_corte_id=oc_id, referencia_id=ref_id,
                         terminacion_id=confeccionista_id, created_by=created_by)
         except Exception as e:
-            log.warning(f"[remision] no se pudo actualizar ruta {oc_id}/{ref_id}: {e}")
+            ruta_error = str(e)[:200]
+            log.error(f"[remision] no se pudo crear/actualizar la ruta {oc_id}/{ref_id}: {e}")
+        else:
+            ruta_error = ""
+        # Se verifica el RESULTADO, no solo la excepción: con la misma búsqueda que
+        # usa la ficha de la remisión (GET /rutas/por-corte). Sin hoja de ruta la
+        # ficha da error y no se pueden separar insumos ni imprimir. Antes eso
+        # quedaba en un warning que nadie leía (REM-2026-0046/0047, oct-2026).
+        try:
+            if not obtener_ruta_por_corte(oc_id, referencia_id=ref_id):
+                from backend.services import avisos_produccion as _avisos
+                _avisos.avisar_remision_sin_ruta(
+                    rem, tipo=tipo, oc_id=oc_id, referencia_id=ref_id,
+                    error=ruta_error or "la hoja de ruta no quedó creada",
+                    consecutivo_corte=(obtener_orden_corte(oc_id) or {}).get("consecutivo") or "")
+        except Exception as e:
+            log.warning(f"[remision] no pude verificar la ruta {oc_id}/{ref_id}: {e}")
 
         rem_full = obtener_remision(rem["id"])
         if tipo == "terminacion" and liberar_impresion:
