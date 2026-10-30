@@ -40,7 +40,19 @@ interface Respuesta {
   ok: boolean;
   no_leidas: number;
   notificaciones: Notificacion[];
+  por_area?: Record<string, number>;
 }
+
+// Pestañas del panel. Con cientos de avisos de cartera y logística sin leer,
+// los de producción se perdían (revisión de procesos, 2026-10-30). Las áreas
+// las define el backend (notificaciones.AREAS); "" = todas.
+const AREAS: { key: string; label: string }[] = [
+  { key: "", label: "Todo" },
+  { key: "produccion", label: "Producción" },
+  { key: "cartera", label: "Cartera" },
+  { key: "logistica", label: "Logística" },
+  { key: "otros", label: "Otros" },
+];
 
 const ICONO: Record<string, typeof Bell> = {
   corte_creado: Scissors,
@@ -247,6 +259,7 @@ export function NotificacionesBell() {
   const qc = useQueryClient();
   const router = useRouter();
   const [abierto, setAbierto] = useState(false);
+  const [area, setArea] = useState("");
   const audioCtx = useAudioCompartido();
   // null = primera carga. Sin esto suena al entrar por los avisos viejos.
   const previas = useRef<number | null>(null);
@@ -289,6 +302,16 @@ export function NotificacionesBell() {
 
   const noLeidas = q.data?.no_leidas ?? 0;
 
+  // Lista del panel: solo mientras está abierto, filtrada por área y con el
+  // conteo por pestaña. El poll de arriba sigue siendo el del número y el timbre.
+  const panel = useQuery<Respuesta>({
+    queryKey: ["notificaciones", "panel", area],
+    queryFn: () => api.get(`/api/notificaciones?con_areas=true${area ? `&area=${area}` : ""}`),
+    enabled: !!user && abierto,
+    refetchInterval: abierto ? 20_000 : false,
+  });
+  const porArea = panel.data?.por_area;
+
   // Prueba manual del timbre. El click en sí ya despierta el AudioContext
   // (useAudioCompartido escucha `click`), así que si antes no sonaba, después
   // de tocar este botón una vez empieza a sonar en esta pestaña.
@@ -304,12 +327,12 @@ export function NotificacionesBell() {
 
   const marcarTodas = useCallback(async () => {
     try {
-      await api.post("/api/notificaciones/leer-todas");
+      await api.post(`/api/notificaciones/leer-todas${area ? `?area=${area}` : ""}`);
       qc.invalidateQueries({ queryKey: ["notificaciones"] });
     } catch {
       /* si falla, el poll lo corrige */
     }
-  }, [qc]);
+  }, [qc, area]);
 
   const marcarUna = useCallback(
     async (id: string) => {
@@ -364,7 +387,8 @@ export function NotificacionesBell() {
 
 
   if (!user) return null;
-  const items = q.data?.notificaciones ?? [];
+  const items = panel.data?.notificaciones ?? (area ? [] : q.data?.notificaciones ?? []);
+  const sinLeerArea = area ? porArea?.[area] ?? 0 : noLeidas;
 
   return (
     <div className="fixed top-6 right-6 z-40">
@@ -410,7 +434,7 @@ export function NotificacionesBell() {
                 >
                   <Volume2 className="h-3 w-3" /> Probar
                 </button>
-                {noLeidas > 0 && (
+                {sinLeerArea > 0 && (
                   <button
                     onClick={marcarTodas}
                     className="inline-flex items-center gap-1 text-[0.68rem] font-semibold text-teal hover:underline"
@@ -421,9 +445,31 @@ export function NotificacionesBell() {
               </div>
             </div>
 
+            {porArea && (
+              <div className="flex flex-wrap gap-1 border-b border-border px-3 py-2">
+                {AREAS.filter((a) => !a.key || a.key === area || (porArea[a.key] ?? 0) > 0).map((a) => {
+                  const n = a.key ? porArea[a.key] ?? 0 : noLeidas;
+                  return (
+                    <button
+                      key={a.key || "todo"}
+                      onClick={() => setArea(a.key)}
+                      className={cn(
+                        "rounded-sm px-2 py-1 text-[0.65rem] font-semibold uppercase tracking-wider",
+                        area === a.key
+                          ? "bg-navy-600 text-white"
+                          : "text-graphite hover:bg-cloud dark:hover:bg-ink-800",
+                      )}
+                    >
+                      {a.label}{n > 0 ? ` ${n > 99 ? "99+" : n}` : ""}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             {items.length === 0 ? (
               <p className="px-3 py-6 text-center text-xs text-graphite">
-                Nada nuevo por acá.
+                {panel.isLoading ? "Cargando…" : "Nada nuevo por acá."}
               </p>
             ) : (
               <ul className="divide-y divide-border">

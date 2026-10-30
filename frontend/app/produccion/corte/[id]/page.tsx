@@ -2465,7 +2465,9 @@ function HojaRutaCard({ ordenCorteId, consecutivo, referenciaId, referenciaCodig
   }
 
   const cambiarEtapa = useMutation({
-    mutationFn: (etapa: string) => api.post(`/api/produccion/rutas/${q.data?.id}/etapa`, { etapa }),
+    mutationFn: (arg: string | { etapa: string; cantidad: number | null }) =>
+      api.post(`/api/produccion/rutas/${q.data?.id}/etapa`,
+        typeof arg === "string" ? { etapa: arg } : arg),
     onSuccess: () => { setErrRuta(""); qc.invalidateQueries({ queryKey: rutaKey }); },
     onError: (e: Error) => setErrRuta(`No se pudo cambiar la etapa: ${e.message}`),
   });
@@ -2528,6 +2530,20 @@ function HojaRutaCard({ ordenCorteId, consecutivo, referenciaId, referenciaCodig
     ? `${window.location.origin}/lote/${r.token_publico}`
     : "";
 
+  // "Recibido en terminación" desde el OS: se pide cuántas llegaron. Antes el
+  // botón avanzaba sin cantidad y el enlace de terminación ya no la aceptaba,
+  // así que la cifra que cierra la cadena se perdía. Vacío = la anota
+  // terminación en su enlace (sigue pudiendo).
+  function recibirEnTerminacion() {
+    const txt = window.prompt(
+      "¿Cuántas prendas llegaron a terminación?\n\n" +
+      "Déjalo vacío si terminación las va a contar en su enlace.");
+    if (txt === null) return;
+    const limpio = txt.replace(/\D/g, "");
+    cambiarEtapa.mutate({ etapa: "terminacion_recibida",
+      cantidad: limpio === "" ? null : parseInt(limpio, 10) });
+  }
+
   // Botón siguiente etapa según la actual
   function botonSiguiente() {
     if (r.etapa === "asignado") return null; // solo confeccionista puede aceptar
@@ -2537,7 +2553,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo, referenciaId, referenciaCodig
     if (sinLavanderia && (r.etapa === "aceptado" || r.etapa === "en_confeccion")) {
       return (
         <div>
-          <button onClick={() => cambiarEtapa.mutate("terminacion_recibida")} disabled={cambiarEtapa.isPending}
+          <button onClick={recibirEnTerminacion} disabled={cambiarEtapa.isPending}
             className="rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
             Marcar como recibido en terminación
           </button>
@@ -2587,7 +2603,7 @@ function HojaRutaCard({ ordenCorteId, consecutivo, referenciaId, referenciaCodig
     }
     if (r.etapa === "lavanderia") {
       return (
-        <button onClick={() => cambiarEtapa.mutate("terminacion_recibida")} disabled={cambiarEtapa.isPending}
+        <button onClick={recibirEnTerminacion} disabled={cambiarEtapa.isPending}
           className="rounded-sm bg-navy-600 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
           Marcar como recibido en terminación
         </button>

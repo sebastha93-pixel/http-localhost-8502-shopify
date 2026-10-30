@@ -268,7 +268,7 @@ def resolver_lote(codigo: str) -> dict:
     candidatos = []
     for oc in ordenes:
         r = prod.obtener_ruta_por_corte(oc["id"])
-        if r and not r.get("remision_lavanderia_url"):
+        if r and not r.get("remision_lavanderia_url") and not r.get("archivado_at"):
             candidatos.append(r)
 
     if len(candidatos) == 1:
@@ -290,6 +290,9 @@ def abrir_pendiente(*, ruta: dict, reloj: str, origen: str = "grupo",
         return {"abierto": False, "motivo": "sin_supabase"}
     if reloj not in ("recogida", "remision"):
         raise ValueError("reloj_invalido")
+    if ruta.get("archivado_at"):
+        # Lote archivado (viejo, ya vendido): no se le persigue a nadie.
+        return {"abierto": False, "motivo": "lote_archivado"}
 
     espera = GRACIA_MIN() if gracia_min is None else int(gracia_min)
     oc = ruta.get("orden_corte") or {}
@@ -396,6 +399,24 @@ def cerrar_pendientes(hoja_ruta_id: str, *, reloj: str, motivo: str) -> int:
         return n
     except Exception as e:
         log.warning(f"[lavanderia-chase] cerrar {reloj} falló: {str(e)[:200]}")
+        return 0
+
+
+def anular_por_ruta(hoja_ruta_id: str, *, motivo: str, por: str = "") -> int:
+    """Anula TODO lo abierto de un lote (al archivarlo). Devuelve cuántos."""
+    sb = _sb()
+    if sb is None:
+        return 0
+    try:
+        r = (sb.table(TABLA)
+               .update({"estado": "anulado", "cerrado_at": _iso(_ahora()),
+                        "motivo_cierre": f"{motivo} ({por})"[:300],
+                        "actualizado_en": _iso(_ahora())})
+               .eq("hoja_ruta_id", hoja_ruta_id)
+               .in_("estado", ["abierto", "escalado"]).execute())
+        return len(r.data or [])
+    except Exception as e:
+        log.warning(f"[lavanderia-chase] anular por ruta falló: {str(e)[:200]}")
         return 0
 
 
@@ -1095,7 +1116,9 @@ def _avisar_os(*, titulo: str, mensaje: str, enlace: str = "",
                             titulo=titulo, mensaje=mensaje, enlace=enlace,
                             meta=meta, creado_por="sistema")
         else:
-            notif.crear_para_modulo(modulo="produccion_cortador",
+            # Remisiones es quien persigue y enlaza las remisiones; antes le
+            # llegaba al cortador, que no puede hacer nada con esto.
+            notif.crear_para_modulo(modulo="produccion_remisiones",
                                     tipo="lavanderia_pendiente", titulo=titulo,
                                     mensaje=mensaje, enlace=enlace,
                                     meta=meta, creado_por="sistema")
@@ -1277,6 +1300,7 @@ def _pendientes_de(confeccionista_id: str) -> list[dict]:
         rutas = (sb.table("hoja_ruta_lote").select("id")
                    .eq("confeccionista_id", confeccionista_id)
                    .is_("remision_lavanderia_url", "null")
+                   .is_("archivado_at", "null")
                    .limit(200).execute()).data or []
         ids = [r["id"] for r in rutas]
         if not ids:
@@ -1347,6 +1371,12 @@ def remision_por_whatsapp(*, telefono: str, media_id: str, mime: str = "",
         if not prov:
             out["motivo"] = "no_es_un_proveedor_conocido"
             return out
+        # Meta reintenta el webhook. Sin esto, el reintento llegaba cuando el
+        # lote ya no estaba pendiente y la MISMA foto se le pegaba al otro lote
+        # que el proveedor tuviera esperando.
+        if _remision_ya_adjuntada(wa_message_id):
+            out["motivo"] = "foto_ya_procesada"
+            return out
         pendientes = _pendientes_de(prov["id"])
         if not pendientes:
             out["motivo"] = "el_proveedor_no_tiene_lotes_esperando_remision"
@@ -1357,9 +1387,12 @@ def remision_por_whatsapp(*, telefono: str, media_id: str, mime: str = "",
             pendientes, [f"{a}-{b}" for a, b in _RE_CODIGO.findall(texto or "")])
         via = "lo_que_escribio"
 
-        # 2) Un solo lote pendiente: no hay ambigüedad que resolver.
+        # 2) Un solo lote pendiente: candidato, pero se verifica con el papel
+        #    (más abajo) antes de adjuntar —una selfie o la remisión de otro
+        #    lote no pueden quedar como soporte de pago de este—.
+        unico = None
         if not elegido and len(pendientes) == 1:
-            elegido, via = pendientes[0], "unico_lote_pendiente"
+            unico = pendientes[0]
 
         # Se baja el archivo acá: hace falta para adjuntarlo, y también para
         # leerlo si toca desempatar.
@@ -1381,8 +1414,16 @@ def remision_por_whatsapp(*, telefono: str, media_id: str, mime: str = "",
             from backend.services.remision_ocr import leer_remision_lavanderia
             lectura = leer_remision_lavanderia(contenido, mime_real)
             if lectura.get("ok"):
-                elegido = _elegir_pendiente(pendientes, lectura.get("referencias") or [])
+                refs = lectura.get("referencias") or []
+                elegido = _elegir_pendiente(pendientes, refs)
                 via = f"leyendo_la_remision ({lectura.get('confianza')})"
+                # Lote único: se adjunta si el papel lo nombra, o si es una
+                # remisión legible que no nombra ninguno. Si nombra OTRO lote o
+                # no se distingue nada (confianza baja = foto que no es una
+                # remisión, o ilegible), se pregunta: fallar cerrado.
+                if (not elegido and unico and not refs
+                        and lectura.get("confianza") in ("alta", "media")):
+                    elegido, via = unico, "unico_lote_pendiente"
             else:
                 log.info(f"[lavanderia-chase] no pude leer la remisión: {lectura.get('error')}")
 
@@ -1410,6 +1451,7 @@ def remision_por_whatsapp(*, telefono: str, media_id: str, mime: str = "",
             elegido["hoja_ruta_id"], file_bytes=contenido,
             filename=f"remision_wa.{ext}", content_type=mime_real)
         cons = elegido.get("consecutivo") or "?"
+        _marcar_remision_adjuntada(elegido["hoja_ruta_id"], wa_message_id)
         # El archivo ya está en memoria y a veces ya fue leído para desempatar:
         # es el momento más barato de sacarle la cantidad.
         capturar_cantidad_remision(elegido["hoja_ruta_id"], contenido, mime_real,
@@ -1459,6 +1501,34 @@ def remision_por_whatsapp(*, telefono: str, media_id: str, mime: str = "",
         log.exception(f"[lavanderia-chase] remision_por_whatsapp falló: {e}")
         out["motivo"] = f"error:{str(e)[:120]}"
         return out
+
+
+def _remision_ya_adjuntada(wa_message_id: str) -> bool:
+    if not wa_message_id:
+        return False
+    sb = _sb()
+    if sb is None:
+        return False
+    try:
+        return bool((sb.table("hoja_ruta_lote").select("id")
+                       .eq("remision_wa_message_id", wa_message_id)
+                       .limit(1).execute()).data)
+    except Exception as e:
+        log.warning(f"[lavanderia-chase] dedup de remisión: {str(e)[:160]}")
+        return False
+
+
+def _marcar_remision_adjuntada(hoja_ruta_id: str, wa_message_id: str) -> None:
+    if not wa_message_id:
+        return
+    sb = _sb()
+    if sb is None:
+        return
+    try:
+        sb.table("hoja_ruta_lote").update(
+            {"remision_wa_message_id": wa_message_id[:200]}).eq("id", hoja_ruta_id).execute()
+    except Exception as e:
+        log.warning(f"[lavanderia-chase] no pude marcar la remisión: {str(e)[:160]}")
 
 
 def _responder(telefono: str, texto: str) -> None:

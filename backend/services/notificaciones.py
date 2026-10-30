@@ -43,6 +43,29 @@ _client: Optional[Client] = None
 # arrastrar el histórico entero en cada poll (se consulta cada ~20s).
 LIMITE_DEFAULT = 30
 
+# Áreas de la campanita, para filtrarla (revisión de procesos, 2026-10-30): con
+# ~750 avisos sin leer —casi todos de cartera COD y logística— los de
+# producción se perdían. Lo que no esté acá cae en "otros"; un tipo nuevo se
+# ve igual, solo que en "otros" hasta que se le asigne área.
+AREAS: dict[str, tuple[str, ...]] = {
+    "produccion": ("corte_creado", "corte_cerrado", "corte_a_medias", "lote_etapa",
+                   "lavanderia_pendiente", "precosteo_autorizado", "falta_composicion",
+                   "faltante_confeccion", "faltante_bodega", "remision_sin_ruta"),
+    "cartera":    ("cod_sin_facturar", "cartera_cod_vencida"),
+    "logistica":  ("salud_logistica",),
+}
+_TIPOS_CON_AREA = [t for tipos in AREAS.values() for t in tipos]
+
+
+def _por_area(q, area: Optional[str]):
+    if not area:
+        return q
+    if area == "otros":
+        return q.not_.in_("tipo", _TIPOS_CON_AREA)
+    if area not in AREAS:
+        raise ValueError("area_invalida")
+    return q.in_("tipo", list(AREAS[area]))
+
 
 def _sb() -> Optional[Client]:
     global _client
@@ -162,22 +185,43 @@ def crear_para_modulo(*, modulo: str, tipo: str, titulo: str,
 # ── Lectura ────────────────────────────────────────────────────────────────
 
 def listar(email: str, *, limite: int = LIMITE_DEFAULT,
-           solo_no_leidas: bool = False) -> list[dict]:
+           solo_no_leidas: bool = False, area: Optional[str] = None) -> list[dict]:
     dest = (email or "").strip().lower()
     sb = _sb()
     if sb is None or not dest:
         return []
     try:
-        q = (sb.table(_TABLA).select("*")
-               .eq("destinatario_email", dest)
-               .order("creado_en", desc=True)
-               .limit(max(1, min(limite, 100))))
+        q = _por_area(sb.table(_TABLA).select("*")
+                        .eq("destinatario_email", dest), area)
+        q = q.order("creado_en", desc=True).limit(max(1, min(limite, 100)))
         if solo_no_leidas:
             q = q.eq("leida", False)
         return q.execute().data or []
+    except ValueError:
+        raise
     except Exception as e:
         log.warning(f"[notificaciones] listar falló: {str(e)[:160]}")
         return []
+
+
+def no_leidas_por_area(email: str, total: int) -> dict[str, int]:
+    """Sin leer por área (para las pestañas). 'otros' = total − las demás."""
+    dest = (email or "").strip().lower()
+    sb = _sb()
+    out: dict[str, int] = {}
+    if sb is None or not dest:
+        return out
+    for area in AREAS:
+        try:
+            r = _por_area(sb.table(_TABLA).select("id", count="exact")
+                            .eq("destinatario_email", dest).eq("leida", False),
+                          area).limit(1).execute()
+            out[area] = r.count or 0
+        except Exception as e:
+            log.warning(f"[notificaciones] contar {area} falló: {str(e)[:160]}")
+            out[area] = 0
+    out["otros"] = max(total - sum(out.values()), 0)
+    return out
 
 
 def contar_no_leidas(email: str) -> int:
@@ -210,16 +254,18 @@ def marcar_leida(notif_id: str, email: str) -> bool:
         return False
 
 
-def marcar_todas_leidas(email: str) -> int:
+def marcar_todas_leidas(email: str, area: Optional[str] = None) -> int:
     dest = (email or "").strip().lower()
     sb = _sb()
     if sb is None or not dest:
         return 0
     try:
-        r = (sb.table(_TABLA).update({"leida": True})
-               .eq("destinatario_email", dest).eq("leida", False)
-               .execute())
+        r = _por_area(sb.table(_TABLA).update({"leida": True})
+                        .eq("destinatario_email", dest).eq("leida", False),
+                      area).execute()
         return len(r.data or [])
+    except ValueError:
+        raise
     except Exception as e:
         log.warning(f"[notificaciones] marcar_todas falló: {str(e)[:160]}")
         return 0

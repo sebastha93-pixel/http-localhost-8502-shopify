@@ -90,11 +90,14 @@ def avisar_precosteo_autorizado(p: dict, *, autorizado_por: str) -> None:
 
 
 def avisar_corte_creado(oc: dict, *, creado_por: str) -> None:
-    """Diseñador creó una orden de corte → avisar a los cortadores."""
+    """Diseñador creó una orden de corte → avisar al cortador ASIGNADO.
+
+    Antes le llegaba a todos los cortadores (y a todos los admins) aunque la
+    orden fuera de uno solo: ruido que enseña a no mirar la campanita
+    (revisión de procesos, 2026-10-30). Sin cortador elegido, a todo el módulo."""
     try:
         cons = _consecutivo(oc)
-        notif.crear_para_modulo(
-            modulo=MODULO_CORTADOR,
+        aviso = dict(
             tipo="corte_creado",
             titulo=f"Nueva orden de corte {cons}",
             mensaje=(f"{creado_por or 'Diseño'} generó la orden {cons}. "
@@ -103,6 +106,11 @@ def avisar_corte_creado(oc: dict, *, creado_por: str) -> None:
             meta={"orden_corte_id": oc.get("id"), "consecutivo": cons},
             creado_por=creado_por,
         )
+        responsable = (oc.get("responsable_email") or "").strip()
+        if responsable:
+            notif.crear(destinatario_email=responsable, **aviso)
+        else:
+            notif.crear_para_modulo(modulo=MODULO_CORTADOR, **aviso)
     except Exception as e:
         log.warning(f"[avisos] corte_creado falló: {str(e)[:160]}")
 

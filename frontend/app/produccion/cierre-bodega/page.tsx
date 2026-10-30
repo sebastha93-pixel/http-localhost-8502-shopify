@@ -14,6 +14,10 @@
  * pasa a "en bodega" y, si falta algo, salta la campanita. Un faltante queda
  * abierto hasta que un admin lo justifique. Sin este conteo el lote no puede
  * pasar a bodega (el backend lo bloquea).
+ *
+ * Archivar (admin, 2026-10-30): un lote viejo que nadie va a contar (la ropa ya
+ * se vendió) sale de "Por cerrar" y del tablero sin borrar nada; queda en
+ * Cerrados con su motivo. Si el lote se vuelve a mover, se desarchiva solo.
  */
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -24,7 +28,7 @@ import { ordenarTallas } from "@/lib/espigas";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { AlertCircle, CheckCircle, Loader2, Search, ArrowRight } from "lucide-react";
+import { AlertCircle, Archive, ArchiveRestore, CheckCircle, Loader2, Search, ArrowRight } from "lucide-react";
 
 type Tono = "critico" | "riesgo" | "normal" | "pendiente" | "info" | "neutral";
 
@@ -69,6 +73,10 @@ interface Lote {
   justificado_motivo: string | null;
   /** Corte cortado que nunca tuvo hoja de ruta (se fue a confección sin remisión). */
   sin_hoja_ruta?: boolean;
+  ruta_id: string | null;
+  archivado_at?: string | null;
+  archivado_por?: string | null;
+  archivado_motivo?: string | null;
 }
 
 const CIERRE: Record<string, { txt: string; tono: Tono }> = {
@@ -78,6 +86,7 @@ const CIERRE: Record<string, { txt: string; tono: Tono }> = {
   revisar:          { txt: "Revisar",          tono: "riesgo" },
   cerrado_limpio:   { txt: "Cerrado limpio",   tono: "normal" },
   justificado:      { txt: "Justificado",      tono: "neutral" },
+  archivado:        { txt: "Archivado",        tono: "neutral" },
 };
 
 const ETAPA: Record<string, string> = {
@@ -186,7 +195,8 @@ export default function CierreBodegaPage() {
         <div>
           {sel ? (
             <DetalleLote key={`${sel.oc}-${sel.ref}`} oc={sel.oc} refId={sel.ref}
-              puedeContar={puedeContar} puedeJustificar={esAdmin(user ?? undefined)} />
+              puedeContar={puedeContar} puedeJustificar={esAdmin(user ?? undefined)}
+              onArchivado={() => setTab("cerrados")} />
           ) : (
             <Card><CardContent className="p-6 text-sm text-graphite">
               Elige un lote para ver su cadena y hacer el conteo final.
@@ -198,8 +208,9 @@ export default function CierreBodegaPage() {
   );
 }
 
-function DetalleLote({ oc, refId, puedeContar, puedeJustificar }: {
+function DetalleLote({ oc, refId, puedeContar, puedeJustificar, onArchivado }: {
   oc: string; refId: string; puedeContar: boolean; puedeJustificar: boolean;
+  onArchivado: () => void;
 }) {
   const qc = useQueryClient();
   const qs = refId ? `?referencia_id=${refId}` : "";
@@ -244,6 +255,10 @@ function DetalleLote({ oc, refId, puedeContar, puedeJustificar }: {
         </CardContent>
       </Card>
 
+      {puedeJustificar && (
+        <ArchivoLote l={l} oc={oc} refId={refId}
+          onCambio={(archivado) => { refrescar(); if (archivado) onArchivado(); }} />
+      )}
       <Cadena pasos={l.pasos} />
       <ConteoBodega l={l} oc={oc} refId={refId} qs={qs}
         puedeContar={puedeContar} puedeJustificar={puedeJustificar} onCambio={refrescar} />
@@ -490,5 +505,72 @@ function ConteoBodega({ l, oc, refId, qs, puedeContar, puedeJustificar, onCambio
         )}
       </CardContent>
     </Card>
+  );
+}
+
+
+function ArchivoLote({ l, oc, refId, onCambio }: {
+  l: Lote; oc: string; refId: string; onCambio: (archivado: boolean) => void;
+}) {
+  const [abierto, setAbierto] = useState(false);
+  const [motivo, setMotivo] = useState("");
+  const [err, setErr] = useState("");
+  const archivar = useMutation({
+    mutationFn: () => api.post(`/api/produccion/cierre-bodega/lote/${oc}/archivar`,
+      { motivo: motivo.trim(), referencia_id: refId || null }),
+    onSuccess: () => { setAbierto(false); setMotivo(""); setErr(""); onCambio(true); },
+    onError: (e: Error) => setErr(e.message),
+  });
+  const desarchivar = useMutation({
+    mutationFn: () => api.post(`/api/produccion/rutas/${l.ruta_id}/desarchivar`, {}),
+    onSuccess: () => { setErr(""); onCambio(false); },
+    onError: (e: Error) => setErr(e.message),
+  });
+
+  if (l.archivado_at) {
+    const fecha = new Date(l.archivado_at).toLocaleDateString("es-CO", { day: "numeric", month: "short", year: "numeric" });
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-sm border border-border bg-cloud/60 px-4 py-3 text-xs text-ink-900">
+        <p className="flex items-start gap-2">
+          <Archive className="mt-0.5 h-3.5 w-3.5 flex-none text-graphite" />
+          <span>Archivado el {fecha}{l.archivado_por ? ` por ${l.archivado_por}` : ""}: <span className="font-medium">{l.archivado_motivo || "—"}</span></span>
+        </p>
+        {l.ruta_id && (
+          <button onClick={() => desarchivar.mutate()} disabled={desarchivar.isPending}
+            className="inline-flex items-center gap-1 rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud disabled:opacity-40">
+            {desarchivar.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArchiveRestore className="h-3.5 w-3.5" />} Desarchivar
+          </button>
+        )}
+        {err && <p role="alert" className="w-full text-terracotta">{err}</p>}
+      </div>
+    );
+  }
+  // Solo lo que sigue abierto se archiva: un lote ya contado tiene su cierre real.
+  if (!["sin_conteo_final", "por_confirmar", "revisar"].includes(l.cierre)) return null;
+  return abierto ? (
+    <div className="space-y-2 rounded-sm border border-border bg-card px-4 py-3">
+      <p className="text-xs text-graphite">
+        Archivar saca el lote de &quot;Por cerrar&quot;, del tablero y de los estancados. No borra nada y se puede desarchivar.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <input id="motivo-archivar" value={motivo} onChange={(e) => setMotivo(e.target.value)}
+          placeholder="Motivo (ej. ya se vendió, nunca se contó)"
+          className="min-w-[200px] flex-1 rounded-sm border border-border bg-white px-3 py-2 text-xs" />
+        <button onClick={() => archivar.mutate()} disabled={motivo.trim().length < 3 || archivar.isPending}
+          className="inline-flex items-center gap-1 rounded-sm bg-ink-900 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-white hover:bg-navy-700 disabled:opacity-40">
+          {archivar.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Archive className="h-3.5 w-3.5" />} Archivar
+        </button>
+        <button onClick={() => { setAbierto(false); setMotivo(""); setErr(""); }}
+          className="rounded-sm border border-border bg-card px-3 py-2 text-xs font-semibold uppercase tracking-widest text-graphite hover:bg-cloud">
+          Cancelar
+        </button>
+      </div>
+      {err && <p role="alert" className="text-xs text-terracotta">{err}</p>}
+    </div>
+  ) : (
+    <button onClick={() => setAbierto(true)}
+      className="inline-flex items-center gap-1 rounded-sm border border-border bg-card px-3 py-1.5 text-xs font-semibold uppercase tracking-widest text-graphite hover:bg-cloud">
+      <Archive className="h-3.5 w-3.5" /> Archivar lote viejo
+    </button>
   );
 }

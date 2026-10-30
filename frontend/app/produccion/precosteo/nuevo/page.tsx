@@ -189,6 +189,7 @@ export default function NuevoPrecosteoPage() {
         margen,
         items,
         es_muestra_diseno: esMuestra,
+        precio_venta_final: precioVentaNum > 0 ? precioVentaNum : null,
       });
     },
     onSuccess: (data) => router.push(`/produccion/precosteo/${data.id}`),

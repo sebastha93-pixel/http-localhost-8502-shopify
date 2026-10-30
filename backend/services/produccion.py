@@ -1191,7 +1191,8 @@ def _insertar_items_precosteo(sb, rows_items: list[dict]) -> None:
 def crear_precosteo(*, codigo_referencia: str, nombre: str, tela: str, color: str,
                     iva_pct: float, margen: float, items: list[dict],
                     created_by: str, es_muestra_diseno: bool = False,
-                    descripcion: Optional[str] = None) -> dict:
+                    descripcion: Optional[str] = None,
+                    precio_venta_final: Optional[float] = None) -> dict:
     """Crea un precosteo en estado 'borrador' con sus líneas.
 
     Si es_muestra_diseno=True, el precosteo puede usarse para generar
@@ -1261,6 +1262,15 @@ def crear_precosteo(*, codigo_referencia: str, nombre: str, tela: str, color: st
             })
         _insertar_items_precosteo(sb, rows_items)
 
+    # El PVP (con IVA) que se digitó al crear: antes se usaba para calcular el
+    # margen en pantalla y se botaba, y había que volver a escribirlo al editar.
+    if precio_venta_final and float(precio_venta_final) > 0:
+        try:
+            _guardar_columna_precosteo(sb, ref_id, "precio_venta_final",
+                                       float(precio_venta_final))
+        except Exception as e:
+            log.warning(f"[precosteo {ref_id}] no se guardó el PVP: {str(e)[:160]}")
+
     _cache_invalidate_prefix("precosteos")
     creado = obtener_precosteo(ref_id)
     _sync_precosteo_drive(creado)
@@ -1296,8 +1306,21 @@ def duplicar_precosteo(precosteo_id: str, *, created_by: str) -> dict:
         "total_sin_iva":  it.get("total_sin_iva") or 0,
         "total_con_iva":  it.get("total_con_iva") or 0,
     } for it in (src.get("items") or [])]
+    # Código provisional LIBRE: duplicar dos veces la misma referencia chocaba
+    # con el "-COPIA" de la primera (el código es único). -COPIA, -COPIA2, …
+    base = f"{(src.get('codigo_referencia') or 'REF').strip()}-COPIA"
+    codigo = base
+    sb = _sb()
+    if sb is not None:
+        usados = {str(r.get("codigo_referencia") or "").upper() for r in
+                  (sb.table("referencias_precosteo").select("codigo_referencia")
+                     .ilike("codigo_referencia", f"{base}%").limit(200).execute()).data or []}
+        n = 1
+        while codigo.upper() in usados:
+            n += 1
+            codigo = f"{base}{n}"
     return crear_precosteo(
-        codigo_referencia=f"{(src.get('codigo_referencia') or 'REF').strip()}-COPIA",
+        codigo_referencia=codigo,
         nombre=f"{(src.get('nombre') or '').strip()} (copia)".strip(),
         tela=src.get("tela") or "",
         color=src.get("color") or "",
@@ -1406,8 +1429,12 @@ def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
             sb, precosteo_id, "precio_venta_final", pvf if pvf > 0 else None)
 
     if items is not None:
-        # Reemplazar líneas: borrar y volver a insertar
-        sb.table("precosteo_items").delete().eq("referencia_id", precosteo_id).execute()
+        # Reemplazar líneas: PRIMERO insertar las nuevas y DESPUÉS borrar las
+        # viejas por id. Al revés (como era), una caída entre el borrado y el
+        # insert dejaba el precosteo SIN líneas —y sin costo—. Así, en el peor
+        # caso quedan duplicadas y el próximo guardado las limpia.
+        viejas = [r["id"] for r in (sb.table("precosteo_items").select("id")
+                                      .eq("referencia_id", precosteo_id).execute()).data or []]
         totales = _calcular_totales_precosteo(items, iva_pct if iva_pct is not None else float(actual.get("iva_pct") or 19), margen if margen is not None else float(actual.get("margen") or 0))
         update.update(totales)
         rows_items = []
@@ -1425,6 +1452,14 @@ def actualizar_precosteo(precosteo_id: str, *, nombre: Optional[str] = None,
                 "orden": i,
             })
         _insertar_items_precosteo(sb, rows_items)
+        for i in range(0, len(viejas), 150):
+            try:
+                sb.table("precosteo_items").delete().in_("id", viejas[i:i + 150]).execute()
+            except Exception as e:
+                log.error(f"[precosteo {precosteo_id}] líneas nuevas guardadas pero no pude "
+                          f"borrar las viejas (quedan duplicadas hasta el próximo guardado): "
+                          f"{str(e)[:160]}")
+                break
 
     if update:
         update["updated_at"] = _now_iso()
@@ -2806,7 +2841,9 @@ def justificar_proceso(oc_id: str, paso: str, *, motivo: str,
 _NOMBRE_PASO = {"corte": "Corte", "confeccion": "Confección", "lavanderia": "Lavandería",
                 "terminacion": "Terminación", "bodega": "Bodega"}
 CIERRES_ABIERTOS = ("sin_conteo_final", "por_confirmar", "faltante", "revisar")
-CIERRES_CERRADOS = ("cerrado_limpio", "justificado")
+# "archivado": el lote viejo que nadie va a contar (la ropa ya se vendió).
+# Sale de la lista de trabajo pero queda visible en Cerrados con su motivo.
+CIERRES_CERRADOS = ("cerrado_limpio", "justificado", "archivado")
 
 
 def _cadena_desde(ruta: dict, oc_row: dict, hijos: list, filas: list) -> dict:
@@ -2886,6 +2923,10 @@ def _cadena_desde(ruta: dict, oc_row: dict, hijos: list, filas: list) -> dict:
         cierre = "faltante"
     else:
         cierre = "revisar"        # llegó más de lo cortado
+    # Archivado solo tapa lo que seguía abierto: un lote contado y cerrado
+    # conserva su estado real aunque además lo hayan archivado.
+    if ruta.get("archivado_at") and cierre in CIERRES_ABIERTOS:
+        cierre = "archivado"
 
     ref_lote = ruta.get("ref_lote") or {}
     return {
@@ -2905,11 +2946,15 @@ def _cadena_desde(ruta: dict, oc_row: dict, hijos: list, filas: list) -> dict:
         "total_faltan_bodega": cruce_b["total_faltan"] if fb else None,
         "donde_se_perdio": [p["nombre"] for p in pasos if p["se_perdio_aqui"]],
         "justificado_motivo": (fb or {}).get("justificado_motivo"),
+        "archivado_at": ruta.get("archivado_at"),
+        "archivado_por": ruta.get("archivado_por"),
+        "archivado_motivo": ruta.get("archivado_motivo"),
     }
 
 
 _CADENA_RUTA_SELECT = ("id,orden_corte_id,referencia_id,etapa,etapas_omitidas,"
                        "lav_cantidad_recibida,lav_cantidad_entregada,term_cantidad_recibida,"
+                       "archivado_at,archivado_por,archivado_motivo,"
                        "created_at,ref_lote:referencia_id(codigo_referencia,nombre),"
                        "terminacion:terminacion_id(nombre)")
 
@@ -3032,7 +3077,7 @@ def listar_cierre_bodega(estado: Optional[str] = None) -> list[dict]:
             continue
         out.append(c)
     prioridad = {"faltante": 0, "revisar": 1, "por_confirmar": 2, "sin_conteo_final": 3,
-                 "justificado": 4, "cerrado_limpio": 5}
+                 "justificado": 4, "cerrado_limpio": 5, "archivado": 6}
     # Lo más reciente primero (consecutivo AAMM-NNNN desc) y, como el orden es
     # estable, agrupado por lo que necesita acción.
     out.sort(key=lambda c: str(c.get("consecutivo") or ""), reverse=True)
@@ -3058,6 +3103,83 @@ def bodega_cerrada(oc_id: str, referencia_id: Optional[str]) -> bool:
         return False
     fila = _cuadre_fila(oc_id, "bodega", ref)
     return bool(fila) and fila.get("estado") in ("confirmado", "justificado")
+
+
+# ── Archivar lotes viejos ────────────────────────────────────────────────
+# Sebastián, 2026-10-30: 30 lotes llevaban 30-80 días "en proceso" sin que
+# nadie los moviera en el OS (la ropa ya se vendió; el lote solo no se cerró).
+# Tapaban los estancados de verdad. Archivar NO borra ni cambia la etapa: el
+# lote sale del tablero, del resumen, de los estancados y de los abiertos del
+# cierre de bodega, y queda en Cerrados con quién, cuándo y por qué.
+
+_SIN_ARCHIVAR = {"archivado_at": None, "archivado_por": None, "archivado_motivo": None}
+
+
+def archivar_lote(oc_id: str, referencia_id: Optional[str] = None, *,
+                  motivo: str, por: str) -> dict:
+    motivo = (motivo or "").strip()
+    if len(motivo) < 3:
+        raise ValueError("motivo_requerido")
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    oc_row, hijos = _oc_e_hijos(oc_id)
+    if not oc_row:
+        raise ValueError("orden_no_encontrada")
+    ref = _resolver_ref(oc_row, hijos, referencia_id)
+    # Un faltante confirmado se JUSTIFICA, no se archiva (es plata perdida que
+    # alguien tiene que explicar); un lote ya cerrado no tiene nada que archivar.
+    if cadena_lote(oc_id, ref)["cierre"] not in ("sin_conteo_final", "por_confirmar", "revisar"):
+        raise ValueError("solo_se_archivan_lotes_sin_cerrar")
+    campos = {"archivado_at": _now_iso(), "archivado_por": (por or "")[:200] or None,
+              "archivado_motivo": motivo[:500]}
+    ruta = obtener_ruta_por_corte(oc_id, referencia_id=ref)
+    if ruta:
+        sb.table("hoja_ruta_lote").update(campos).eq("id", ruta["id"]).execute()
+        ruta_id = ruta["id"]
+    else:
+        # Corte que nunca tuvo hoja de ruta: se le crea una YA archivada para
+        # que el archivo tenga dónde vivir. Si un día le hacen la remisión,
+        # crear_ruta_lote la reutiliza (idempotente) y al moverse se desarchiva.
+        oc = obtener_orden_corte(oc_id) or {}
+        if oc.get("estado") != "cortada":
+            raise ValueError("orden_no_cortada")
+        row = {"orden_corte_id": oc_id, "referencia_id": ref,
+               "confeccionista_id": oc.get("confeccionista_id") or None,
+               "etapa": "asignado",
+               "etapas_omitidas": etapas_omitidas_por_precosteo(ref),
+               "created_by": (por or "")[:200] or None, **campos}
+        r = sb.table("hoja_ruta_lote").insert(row).execute()
+        ruta_id = (r.data or [{}])[0].get("id")
+    if ruta_id:
+        try:
+            from backend.services import lavanderia_chase
+            lavanderia_chase.anular_por_ruta(ruta_id, motivo="lote archivado", por=por)
+        except Exception as e:
+            log.warning(f"[archivar] no pude apagar la persecución: {str(e)[:160]}")
+        try:
+            crear_nota_ruta(ruta_id=ruta_id, actor="admin", autor=por,
+                            mensaje=f"Lote archivado: {motivo}")
+        except Exception:
+            pass
+    _cache_invalidate_prefix("tablero_produccion")
+    return {"ok": True, "ruta_id": ruta_id, "orden_corte_id": oc_id, "referencia_id": ref}
+
+
+def desarchivar_lote(ruta_id: str, *, por: str) -> dict:
+    sb = _sb()
+    if sb is None:
+        raise RuntimeError("Supabase no configurado")
+    r = sb.table("hoja_ruta_lote").update(_SIN_ARCHIVAR).eq("id", ruta_id).execute()
+    if not r.data:
+        raise ValueError("ruta_no_encontrada")
+    try:
+        crear_nota_ruta(ruta_id=ruta_id, actor="admin", autor=por,
+                        mensaje="Lote desarchivado: vuelve a la lista de trabajo.")
+    except Exception:
+        pass
+    _cache_invalidate_prefix("tablero_produccion")
+    return {"ok": True, "ruta_id": ruta_id}
 
 
 def actualizar_curva_corte(oc_id: str, *, curva: dict,
@@ -3727,6 +3849,28 @@ def asignar_rollo_a_corte(*, oc_id: str, barcode: str,
     return obtener_orden_corte(oc_id)
 
 
+def _reservado_por_otras_ordenes(sb, rollo_ids: list, oc_id: str) -> dict:
+    """Metros que OTRAS órdenes ABIERTAS tienen reservados en cada rollo.
+
+    Un rollo se puede compartir entre dos cortes abiertos (bodys 2607-0004/0005).
+    Sin descontar lo de la otra orden, el cierre de una agotaba el rollo entero
+    y la auto-asignación volvía a reservar metros ya comprometidos."""
+    ids = [r for r in dict.fromkeys(rollo_ids) if r]
+    out: dict = {}
+    for i in range(0, len(ids), 150):
+        filas = (sb.table("orden_corte_rollos")
+                   .select("rollo_id,metros_usados,orden_corte_id,orden_corte:orden_corte_id(estado)")
+                   .in_("rollo_id", ids[i:i + 150]).execute()).data or []
+        for l in filas:
+            if l.get("orden_corte_id") == oc_id:
+                continue
+            if (l.get("orden_corte") or {}).get("estado") == "cortada":
+                continue
+            out[l["rollo_id"]] = round(out.get(l["rollo_id"], 0.0)
+                                       + float(l.get("metros_usados") or 0), 2)
+    return out
+
+
 # Colchón de la asignación AUTOMÁTICA: se reserva 5% más de metros que el
 # teórico para evitar quedarse corto. El sobrante no consumido vuelve al
 # inventario al cerrar el informe (se descuenta el consumo real).
@@ -3812,6 +3956,7 @@ def auto_asignar_rollos_por_tono(*, oc_id: str,
     if tono_target:
         q = q.eq("tono", tono_target)
     rollos = q.execute().data or []
+    ajenas = _reservado_por_otras_ordenes(sb, [r["id"] for r in rollos], oc_id)
 
     asignados: list[dict] = []
     for r in rollos:
@@ -3819,7 +3964,9 @@ def auto_asignar_rollos_por_tono(*, oc_id: str,
             continue
         if m_pendientes <= 0:
             break
-        disp = float(r.get("metros_disponible") or 0)
+        # Lo LIBRE, no el saldo: si otra orden abierta tiene metros reservados
+        # en este rollo, esos no se vuelven a prometer.
+        disp = round(float(r.get("metros_disponible") or 0) - ajenas.get(r["id"], 0.0), 2)
         if disp <= 0:
             continue
         m_usar = round(min(m_pendientes, disp), 2)
@@ -4052,15 +4199,34 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
         else:
             pendientes.append((rollo_id, m_reservado, disp))
     real_resto = max(0.0, real_total - consumo_liquidado)
+    ajenas = _reservado_por_otras_ordenes(sb, [p[0] for p in pendientes], oc_id)
+    resto_sin_tela = 0.0
     if real_total > 0:
         # SECUENCIAL (como se corta en piso): se consume rollo a rollo en el
         # orden de asignación — cada rollo se agota antes de abrir el
         # siguiente, y el RESTANTE queda en UN SOLO rollo (el último tocado),
         # no repartido en pedacitos entre todos.
+        # ROLLOS COMPARTIDOS: primero solo lo LIBRE de cada rollo (saldo menos
+        # lo que otra orden abierta tiene reservado). Solo si eso no alcanza, se
+        # toca lo reservado por la otra orden —se cortó de verdad— y se avisa.
         resto = real_resto
+        tomado: dict = {}
         for rollo_id, m_reservado, disp in pendientes:
-            m = round(min(resto, disp), 2)
+            libre = max(0.0, round(disp - ajenas.get(rollo_id, 0.0), 2))
+            m = round(min(resto, libre), 2)
+            tomado[rollo_id] = m
             resto = round(resto - m, 2)
+        if resto > 0:
+            for rollo_id, m_reservado, disp in pendientes:
+                extra = round(min(resto, disp - tomado[rollo_id]), 2)
+                if extra > 0:
+                    tomado[rollo_id] = round(tomado[rollo_id] + extra, 2)
+                    resto = round(resto - extra, 2)
+                    log.warning(f"[cerrar_corte] {oc.get('consecutivo')}: tomó {extra} m del "
+                                f"rollo {rollo_id} que estaban reservados por otra orden abierta")
+        resto_sin_tela = max(resto, 0.0)
+        for rollo_id, m_reservado, disp in pendientes:
+            m = tomado[rollo_id]
             descuentos.append((rollo_id, m, round(disp - m, 2)))
     else:
         # Sin consumo real en el informe → se descuenta lo reservado (legacy).
@@ -4108,7 +4274,10 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
     aplicados: list = []   # (rollo_id, prev_disp, prev_estado, [mov_ids])
     try:
         for rollo_id, m, nuevo, retazo in descuentos_fin:
-            estado_nuevo = "agotado" if nuevo <= 0 else "disponible"
+            # Si otra orden abierta lo sigue reservando, el rollo sigue en corte:
+            # marcarlo "disponible" lo dejaba a la vista de la auto-asignación.
+            estado_nuevo = ("agotado" if nuevo <= 0
+                            else "en_corte" if ajenas.get(rollo_id, 0) > 0 else "disponible")
             prev = obtener_rollo(rollo_id) or {}
             prev_disp = float(prev.get("metros_disponible") or 0)
             prev_estado = prev.get("estado") or "disponible"
@@ -4214,6 +4383,26 @@ def cerrar_orden_corte(*, oc_id: str, consumo_real_cortador: float,
         for rid, _m, nuevo in descuentos if nuevo > 0.01
     ]
     resultado["retazos_auto_metros"] = retazos_auto
+    # Consumo real mayor que toda la tela de los rollos asignados: esos metros
+    # no se descontaron de ningún lado. Antes se descartaban en silencio.
+    resultado["metros_sin_rollo"] = resto_sin_tela
+    if resto_sin_tela > 0.5:
+        log.warning(f"[cerrar_corte] {doc_ref}: {resto_sin_tela} m del consumo real "
+                    f"no cupieron en los rollos asignados — inventario por revisar")
+        try:
+            from backend.services import notificaciones as notif
+            notif.crear_para_modulo(
+                modulo="produccion_ingreso", tipo="corte_a_medias",
+                titulo=f"Corte {doc_ref}: {resto_sin_tela} m de tela sin rollo",
+                mensaje=(f"El cortador reportó más consumo que la tela de los rollos "
+                         f"asignados; {resto_sin_tela} m no se descontaron de ningún "
+                         f"rollo. Revisa qué rollo se usó de más y ajústalo en Inventario."),
+                enlace=f"/produccion/corte/{oc_id}",
+                meta={"orden_corte_id": oc_id, "metros": resto_sin_tela},
+                creado_por=usuario or "",
+            )
+        except Exception:
+            pass
     return resultado
 
 
@@ -5186,7 +5375,9 @@ def obtener_remision(rem_id: str) -> Optional[dict]:
     items = _safe_exec(sb.table("remision_items")
                .select("*,ref_item:referencia_id(codigo_referencia,nombre,tela,color),"
                        "orden_corte:orden_corte_id("
-                       "consecutivo,referencia_lote,cantidad_programada,"
+                       # curva_trazo: el PDF cae a la curva programada si el
+                       # cierre quedó sin grilla, y no la estaba recibiendo.
+                       "consecutivo,referencia_lote,cantidad_programada,curva_trazo,"
                        "unidades_cortadas,fecha_entrega,promedio_real,"
                        "consumo_real_cortador,retazos_metros,retazos_cantidad,"
                        "referencia:referencia_id(codigo_referencia,nombre,tela,color))")
@@ -5379,11 +5570,15 @@ def reasignar_confeccionista_remision(*, remision_id: str,
             if not ruta:
                 continue
             notas = (ruta.get("notas") or "").strip()
+            import uuid as _uuid
             sb.table("hoja_ruta_lote").update({
                 "confeccionista_id": nuevo_confeccionista_id,
                 # La aceptación era del anterior: ya no vale.
                 "aceptado_at": None,
                 "etapa": "asignado",
+                # Enlace NUEVO: con el viejo, el confeccionista anterior podía
+                # seguir aceptando y avanzando un lote que ya no es suyo.
+                "token_publico": str(_uuid.uuid4()),
                 "notas": (notas + "\n" + marca).strip(),
                 "updated_at": _now_iso(),
             }).eq("id", ruta["id"]).execute()
@@ -5681,8 +5876,9 @@ def _avisar_falta_composicion(consecutivo, faltan: list) -> None:
         # Si es una sola referencia, el enlace va directo a su precosteo.
         ref_id = norm[0][2] if len(norm) == 1 else None
         enlace = f"/produccion/precosteo/{ref_id}" if ref_id else "/produccion/precosteo"
+        # A quien edita el precosteo (ahí se carga la composición), no al cortador.
         notif.crear_para_modulo(
-            modulo="produccion_cortador", tipo="falta_composicion",
+            modulo="produccion_costos", tipo="falta_composicion",
             titulo=f"Falta composición de tela — etiqueta de lavado no impresa ({consecutivo})",
             mensaje=(f"No se imprimió la etiqueta de lavado de: {refs}. La tela no "
                      f"tiene composición registrada. Cárgala en el PRECOSTEO de la "
@@ -6980,6 +7176,10 @@ def crear_ruta_lote(*, orden_corte_id: str, confeccionista_id: str,
     # Si ya existe el lote de ESTA referencia, devolverlo (dedup por corte+ref)
     existente = obtener_ruta_por_corte(orden_corte_id, referencia_id=ref_id)
     if existente:
+        if existente.get("archivado_at"):
+            # Le están haciendo una remisión: el lote está vivo.
+            sb.table("hoja_ruta_lote").update(_SIN_ARCHIVAR).eq("id", existente["id"]).execute()
+            existente.update(_SIN_ARCHIVAR)
         return existente
     # Precio de confección y etapas: del precosteo firmado de ESTA referencia
     if precio_confeccion is None:
@@ -7043,6 +7243,10 @@ def crear_ruta_lote_en_terminacion(*, orden_corte_id: str, terminacion_id: str,
     ref_id = referencia_id or oc.get("referencia_id")
     existente = obtener_ruta_por_corte(orden_corte_id, referencia_id=ref_id)
     if existente:
+        if existente.get("archivado_at"):
+            # Le están haciendo una remisión: el lote está vivo.
+            sb.table("hoja_ruta_lote").update(_SIN_ARCHIVAR).eq("id", existente["id"]).execute()
+            existente.update(_SIN_ARCHIVAR)
         return existente
     conf_id = oc.get("confeccionista_id") or None
     omitidas = etapas_omitidas_por_precosteo(ref_id)
@@ -7165,7 +7369,8 @@ def cambiar_etapa_ruta(ruta_id: str, etapa_nueva: str) -> dict:
         "despachado":            "despachado_at",
     }
     now = _now_iso()
-    update = {"etapa": etapa_nueva, "updated_at": now}
+    # Un lote que se mueve está vivo: si estaba archivado, vuelve solo.
+    update = {"etapa": etapa_nueva, "updated_at": now, **_SIN_ARCHIVAR}
     ts_col = ts_col_por_etapa.get(etapa_nueva)
     if ts_col:
         update[ts_col] = now
@@ -7301,7 +7506,7 @@ def _cerrar_persecucion_lavanderia(ruta_id: str) -> None:
 
 def listar_rutas(*, etapa: Optional[str] = None,
                   confeccionista_id: Optional[str] = None,
-                  limit: int = 200) -> list[dict]:
+                  limit: int = 200, incluir_archivados: bool = False) -> list[dict]:
     sb = _sb()
     if sb is None:
         return []
@@ -7318,6 +7523,8 @@ def listar_rutas(*, etapa: Optional[str] = None,
         q = q.eq("etapa", etapa)
     if confeccionista_id:
         q = q.eq("confeccionista_id", confeccionista_id)
+    if not incluir_archivados:
+        q = q.is_("archivado_at", "null")
     # Enriquecer TODAS: el panel de rutas es justo donde se necesita ver el chip
     # "sin lavandería", y devolvía la columna en NULL.
     return [_con_etapas_omitidas(x) for x in (q.execute().data or [])]
@@ -7454,18 +7661,25 @@ def tablero_produccion() -> dict:
     )
 
     # ── Ruta (lotes en proceso) ───────────────────────────────────
+    # Sin los archivados (lotes viejos que nadie va a contar) y con los días
+    # contados desde que el lote entró a su etapa ACTUAL: antes se contaba desde
+    # la asignación, y un lote que avanzó ayer salía "estancado 80 días".
     rutas = (sb.table("hoja_ruta_lote")
-               .select("etapa,asignado_at,despachado_at,"
+               .select("etapa,created_at,asignado_at,despachado_at,"
+                       + ",".join(TS_POR_ETAPA.values()) + ","
                        "orden_corte:orden_corte_id(consecutivo)")
+               .is_("archivado_at", "null")
                .limit(500).execute()).data or []
     por_etapa: dict[str, int] = {}
     estancados = []
     for r in rutas:
         etapa = r.get("etapa") or "asignado"
         por_etapa[etapa] = por_etapa.get(etapa, 0) + 1
-        if etapa != "despachado" and r.get("asignado_at"):
+        desde_txt = (r.get(TS_POR_ETAPA.get(etapa, "")) or r.get("asignado_at")
+                     or r.get("created_at"))
+        if etapa != "despachado" and desde_txt:
             try:
-                asignado = parse_iso_utc(r["asignado_at"])
+                asignado = parse_iso_utc(desde_txt)
                 if asignado is None:
                     raise ValueError("fecha_ilegible")
                 dias = (hoy - asignado).days
@@ -8525,8 +8739,12 @@ def devolver_etapa_ruta(ruta_id: str, etapa_destino: str, *, motivo: str,
     actual = (r[0].get("etapa") or "asignado")
     if orden[etapa_destino] >= orden.get(actual, 0):
         raise ValueError(f"no_es_un_retroceso:{actual}→{etapa_destino}")
+    # Un lote que no lava no puede "volver a lavandería": quedaría parado en una
+    # etapa que no tiene botón para salir.
+    if etapa_destino in _etapas_omitidas(r[0]):
+        raise ValueError(f"etapa_omitida_en_este_lote:{etapa_destino}")
 
-    update: dict = {"etapa": etapa_destino, "updated_at": _now_iso()}
+    update: dict = {"etapa": etapa_destino, "updated_at": _now_iso(), **_SIN_ARCHIVAR}
     borradas = []
     for etapa, col in TS_POR_ETAPA.items():
         if orden[etapa] > orden[etapa_destino] and r[0].get(col):
@@ -8596,7 +8814,7 @@ def registrar_cantidad_terminacion(ruta_id: str, cantidad: int) -> dict:
             from backend.services import notificaciones as notif
             cons = cruce.get("consecutivo") or "?"
             notif.crear_para_modulo(
-                modulo="produccion_cortador", tipo="lavanderia_pendiente",
+                modulo="produccion_remisiones", tipo="lavanderia_pendiente",
                 titulo=(f"Lote {cons}: {'faltan' if faltan > 0 else 'sobran'} "
                         f"{abs(faltan)} prendas al llegar a terminación"),
                 mensaje=(f"Se enviaron {esperadas} a lavandería y terminación "

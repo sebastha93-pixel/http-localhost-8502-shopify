@@ -301,32 +301,33 @@ def listar_rollos(
     tono: Optional[str] = None,
     asignables: bool = False,
     limit: int = Query(500, ge=1, le=2000),
-    _: CurrentUser = Depends(require_permission_any(("produccion_ingreso", "produccion_cortador"), "ver")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_ingreso", "produccion_cortador"), "ver")),
 ) -> dict:
-    return {"rollos": svc.listar_rollos(tela=tela, estado=estado, tono=tono,
-                                        limit=limit, asignables=asignables)}
+    rollos = svc.listar_rollos(tela=tela, estado=estado, tono=tono,
+                               limit=limit, asignables=asignables)
+    return {"rollos": rollos if tiene_permiso_costos(user) else _quitar_costo_metro(rollos)}
 
 
 @router.get("/rollos/{rollo_id}")
 def detalle_rollo(
     rollo_id: str,
-    _: CurrentUser = Depends(require_permission_any(("produccion_ingreso", "produccion_cortador"), "ver")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_ingreso", "produccion_cortador"), "ver")),
 ) -> dict:
     r = svc.obtener_rollo(rollo_id)
     if not r:
         raise HTTPException(404, "Rollo no encontrado")
-    return r
+    return r if tiene_permiso_costos(user) else _quitar_costo_metro(r)
 
 
 @router.get("/rollos/barcode/{barcode}")
 def rollo_por_barcode(
     barcode: str,
-    _: CurrentUser = Depends(require_permission_any(("produccion_ingreso", "produccion_cortador"), "ver")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_ingreso", "produccion_cortador"), "ver")),
 ) -> dict:
     r = svc.obtener_rollo_por_barcode(barcode)
     if not r:
         raise HTTPException(404, "Rollo no encontrado")
-    return r
+    return r if tiene_permiso_costos(user) else _quitar_costo_metro(r)
 
 
 @router.get("/inventario/auditoria")
@@ -591,6 +592,7 @@ class PrecosteoIn(BaseModel):
     margen:            float = 0
     items:             list[PrecosteoItemIn] = []
     es_muestra_diseno: bool = False
+    precio_venta_final: Optional[float] = Field(None, ge=0)
 
 
 class PrecosteoUpdate(BaseModel):
@@ -629,6 +631,7 @@ def crear_precosteo(
             items=[i.model_dump() for i in body.items],
             created_by=user.email,
             es_muestra_diseno=body.es_muestra_diseno,
+            precio_venta_final=body.precio_venta_final,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -1127,6 +1130,33 @@ def _es_solo_cortador(user: CurrentUser) -> bool:
             and user.rol != "admin")
 
 
+# Precio pactado con el taller (confección/terminación): es contra el que se
+# cruzan las facturas de Siigo. Solo admin o quien autoriza precosteos lo cambia
+# —si lo cambia cualquiera, se puede "igualar" a una factura inflada y apagar la
+# alerta— y el cortador no lo ve (decisión de Sebastián, 2026-10-30).
+_PRECIOS_TALLER = ("precio_confeccion", "precio_terminacion")
+
+
+def _puede_editar_precios_taller(user: CurrentUser) -> bool:
+    return user.rol == "admin" or svc._puede_editar_precosteo_bloqueado(user.id)
+
+
+def _ocultar_precios_taller(ruta, user: CurrentUser):
+    if isinstance(ruta, dict) and _es_solo_cortador(user):
+        return {k: v for k, v in ruta.items() if k not in _PRECIOS_TALLER}
+    return ruta
+
+
+def _quitar_costo_metro(x):
+    """Quita el costo por metro de la tela (en cualquier nivel) para quien no
+    tiene permiso de costos — mismo criterio que /inventario/resumen."""
+    if isinstance(x, list):
+        return [_quitar_costo_metro(i) for i in x]
+    if isinstance(x, dict):
+        return {k: _quitar_costo_metro(v) for k, v in x.items() if k != "costo_metro"}
+    return x
+
+
 def _norm_txt(s: Optional[str]) -> str:
     """Mayúsculas, sin espacios de sobra ni dobles. ' BARRETO ' → 'BARRETO'."""
     return " ".join((s or "").strip().upper().split())
@@ -1270,6 +1300,8 @@ def detalle_corte(
     # obtener_orden_corte, que se llama en 33 sitios (uno dentro de un bucle):
     # ahí haría que cerrar un corte o avanzar un lote consultaran a Resend.
     oc["correos"] = svc.listar_correos_corte(oc_id)
+    if not tiene_permiso_costos(user):
+        oc = _quitar_costo_metro(oc)
     return oc
 
 
@@ -1386,6 +1418,40 @@ def justificar_cuadre_proceso(
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, f"justificar_cuadre: {str(e)[:200]}")
+
+
+class ArchivarLoteIn(BaseModel):
+    motivo:        str = Field(min_length=3, max_length=500)
+    referencia_id: Optional[str] = None
+
+
+@router.post("/cierre-bodega/lote/{oc_id}/archivar")
+def archivar_lote(
+    oc_id: str, body: ArchivarLoteIn,
+    user: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """SOLO ADMIN: saca un lote viejo de las listas de trabajo (tablero,
+    estancados, resumen, abiertos del cierre de bodega) sin borrar nada."""
+    try:
+        return svc.archivar_lote(oc_id, body.referencia_id,
+                                 motivo=body.motivo, por=user.email)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"archivar_lote: {str(e)[:200]}")
+
+
+@router.post("/rutas/{ruta_id}/desarchivar")
+def desarchivar_lote(
+    ruta_id: str,
+    user: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    try:
+        return svc.desarchivar_lote(ruta_id, por=user.email)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"desarchivar_lote: {str(e)[:200]}")
 
 
 @router.post("/corte/{oc_id}/reabrir")
@@ -2032,6 +2098,9 @@ class ActualizarRutaBody(BaseModel):
 
 class CambiarEtapaBody(BaseModel):
     etapa: str
+    # Al marcar "recibido en terminación" desde el OS: cuántas llegaron. Antes
+    # el botón interno avanzaba sin cantidad y el portal ya no la aceptaba.
+    cantidad: Optional[int] = Field(None, ge=0, le=100000)
 
 
 @router.get("/rutas")
@@ -2039,10 +2108,12 @@ def listar_rutas(
     etapa: Optional[str] = None,
     confeccionista_id: Optional[str] = None,
     limit: int = Query(200, ge=1, le=500),
+    incluir_archivados: bool = False,
     _: CurrentUser = Depends(require_permission("produccion_remisiones", "ver")),
 ) -> dict:
     return {"rutas": svc.listar_rutas(
-        etapa=etapa, confeccionista_id=confeccionista_id, limit=limit
+        etapa=etapa, confeccionista_id=confeccionista_id, limit=limit,
+        incluir_archivados=incluir_archivados,
     )}
 
 
@@ -2051,6 +2122,8 @@ def crear_ruta(
     body: CrearRutaBody,
     user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
 ) -> dict:
+    if body.precio_confeccion is not None and not _puede_editar_precios_taller(user):
+        raise HTTPException(403, "Solo admin o quien autoriza precosteos puede fijar el precio del taller.")
     try:
         return {"ok": True, "ruta": svc.crear_ruta_lote(
             orden_corte_id=body.orden_corte_id,
@@ -2071,34 +2144,36 @@ def crear_ruta(
 def ruta_por_corte(
     oc_id: str,
     referencia_id: Optional[str] = None,
-    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ) -> dict:
     # Un corte combinado tiene una ruta por referencia: con `referencia_id` se
     # pide la de ESA referencia (sin él, la primera — compat).
     r = svc.obtener_ruta_por_corte(oc_id, referencia_id=referencia_id)
     if not r:
         raise HTTPException(404, "no_encontrada")
-    return r
+    return _ocultar_precios_taller(r, user)
 
 
 @router.get("/rutas/por-corte/{oc_id}/todas")
 def rutas_por_corte(
     oc_id: str,
-    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ) -> dict:
     """Todas las hojas de ruta (lotes) de un corte — un combinado tiene una por
     referencia. Lista vacía si aún no se ha remitido ninguna."""
-    return {"rutas": svc.obtener_rutas_por_corte(oc_id)}
+    return {"rutas": [_ocultar_precios_taller(r, user) for r in svc.obtener_rutas_por_corte(oc_id)]}
 
 
 @router.patch("/rutas/{ruta_id}")
 def actualizar_ruta(
     ruta_id: str,
     body: ActualizarRutaBody,
-    _: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
+    user: CurrentUser = Depends(require_permission("produccion_remisiones", "modificar")),
 ) -> dict:
+    campos = body.model_dump(exclude_unset=True)
+    if any(campos.get(k) is not None for k in _PRECIOS_TALLER) and not _puede_editar_precios_taller(user):
+        raise HTTPException(403, "Solo admin o quien autoriza precosteos puede cambiar el precio del taller.")
     try:
-        campos = body.model_dump(exclude_unset=True)
         return {"ok": True, "ruta": svc.actualizar_ruta_lote(ruta_id, **campos)}
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -2151,7 +2226,10 @@ def cambiar_etapa(
             raise HTTPException(400, "Para dar ingreso a bodega primero cuenta por talla lo "
                                      "que llegó, en Producción → Cierre de bodega.")
     try:
-        return {"ok": True, "ruta": svc.cambiar_etapa_ruta(ruta_id, body.etapa)}
+        ruta = svc.cambiar_etapa_ruta(ruta_id, body.etapa)
+        if body.etapa == "terminacion_recibida" and body.cantidad is not None:
+            svc.registrar_cantidad_terminacion(ruta_id, body.cantidad)
+        return {"ok": True, "ruta": ruta}
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -2246,6 +2324,9 @@ def lote_publico(token: str) -> dict:
         "confeccionista_nombre":     conf.get("nombre"),
         "etapa":                     r.get("etapa"),
         "aceptado_at":               r.get("aceptado_at"),
+        # La página del confeccionista ya lo lee para no pedirle lavandería a
+        # un lote que no lava; el endpoint no lo mandaba.
+        "etapas_omitidas":           r.get("etapas_omitidas") or [],
         "insumos":                   insumos_publicos,
     }
 
@@ -2318,6 +2399,7 @@ def terminacion_publica(token: str) -> dict:
         "terminacion_nombre": term.get("nombre"),
         "etapa":             r.get("etapa"),
         "recibido_at":       r.get("terminacion_recibida_at"),
+        "cantidad_recibida": r.get("term_cantidad_recibida"),
         "insumos":           insumos_pub,
     }
 
@@ -2342,11 +2424,20 @@ def recibir_terminacion_publica(token: str,
     r = svc.obtener_ruta_por_token_terminacion(token)
     if not r:
         raise HTTPException(404, "lote_no_encontrado")
-    if r.get("etapa") in ("terminacion_recibida", "terminacion_terminada", "despachado"):
-        raise HTTPException(400, f"ya_recibido:{r.get('etapa')}")
     cant = (body.cantidad if body else None)
     if cant is not None and (cant < 0 or cant > 100000):
         raise HTTPException(400, "cantidad_fuera_de_rango")
+    if r.get("etapa") in ("terminacion_recibida", "terminacion_terminada", "despachado"):
+        # Ya lo marcaron recibido (a veces desde el OS, sin contar). Si nadie
+        # anotó la cantidad, terminación todavía la puede dar: es la cifra que
+        # cierra la cadena. Si ya hay una, no se pisa desde el enlace público.
+        if cant is not None and r.get("term_cantidad_recibida") is None:
+            try:
+                return {"ok": True, "ruta": r,
+                        "cruce": svc.registrar_cantidad_terminacion(r["id"], cant)}
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+        raise HTTPException(400, f"ya_recibido:{r.get('etapa')}")
     try:
         ruta = svc.cambiar_etapa_ruta(r["id"], "terminacion_recibida")
         cruce = None

@@ -239,6 +239,7 @@ def _check_lotes_estancados() -> dict:
     rows = (sb.table("hoja_ruta_lote")
               .select("id,etapa,updated_at,orden_corte:orden_corte_id(consecutivo)")
               .neq("etapa", "despachado")
+              .is_("archivado_at", "null")
               .lt("updated_at", corte)
               .limit(20).execute()).data or []
     if not rows:

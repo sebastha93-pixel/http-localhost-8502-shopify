@@ -27,6 +27,7 @@ interface LoteTerm {
   terminacion_nombre?: string;
   etapa: string;
   recibido_at?: string;
+  cantidad_recibida?: number | null;
   insumos: Insumo[];
 }
 
@@ -75,7 +76,7 @@ export default function TerminacionPublicaPage() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        cantidad: cantRecibida.trim() === "" ? null : Number(cantRecibida),
+        cantidad: cantRecibida.trim() === "" ? null : parseInt(cantRecibida.replace(/\D/g, ""), 10) || 0,
       }),
     }),
     onSuccess: () => {
@@ -106,6 +107,8 @@ export default function TerminacionPublicaPage() {
 
   const l = q.data;
   const yaRecibido = ["terminacion_recibida", "terminacion_terminada", "despachado"].includes(l.etapa);
+  // Marcado recibido desde MALE'DENIM sin cantidad: terminación aún puede darla.
+  const faltaCantidad = yaRecibido && (l.cantidad_recibida === null || l.cantidad_recibida === undefined);
   const unidades = Object.keys(l.unidades_cortadas || {}).length
     ? l.unidades_cortadas!
     : (l.curva || {});
@@ -275,9 +278,31 @@ export default function TerminacionPublicaPage() {
             <p className="mt-2 text-sm text-ink-900 font-semibold">
               Lote recibido {l.recibido_at ? `el ${new Date(l.recibido_at).toLocaleDateString("es-CO")}` : ""}
             </p>
+            {l.cantidad_recibida != null && (
+              <p className="mt-1 text-xs text-ink-900 tabular">Recibiste {l.cantidad_recibida} prendas.</p>
+            )}
             <p className="mt-1 text-xs text-graphite">
               Cuando termines, escríbele a MALE&apos;DENIM por WhatsApp.
             </p>
+            {faltaCantidad && (
+              <div className="mt-3 space-y-2 text-left">
+                <label htmlFor="cant-recibida-tarde" className="block text-[0.7rem] uppercase tracking-widest text-graphite">
+                  ¿Cuántas prendas recibiste? (se esperaban {l.total_unidades})
+                </label>
+                <input id="cant-recibida-tarde"
+                  type="number" inputMode="numeric" min={0}
+                  value={cantRecibida}
+                  onChange={(e) => setCantRecibida(e.target.value)}
+                  placeholder="Cuenta y escribe el número"
+                  className="w-full rounded-sm border border-border bg-white px-3 py-3 text-base tabular"
+                />
+                <button onClick={() => recibir.mutate()} disabled={recibir.isPending || cantRecibida.trim() === ""}
+                  className="w-full inline-flex items-center justify-center gap-2 rounded-sm bg-teal px-6 py-3 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-ink-900 disabled:opacity-40">
+                  {recibir.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                  Guardar cantidad
+                </button>
+              </div>
+            )}
           </div>
         )}
 
