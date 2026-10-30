@@ -236,20 +236,24 @@ def _check_lotes_estancados() -> dict:
     if sb is None:
         return _chk("lotes", "Lotes en ruta", "alerta", "Sin conexión a la base")
     corte = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-    rows = (sb.table("hoja_ruta_lote")
-              .select("id,etapa,updated_at,orden_corte:orden_corte_id(consecutivo)")
-              .neq("etapa", "despachado")
-              .is_("archivado_at", "null")
-              .lt("updated_at", corte)
-              .limit(20).execute()).data or []
+    res = (sb.table("hoja_ruta_lote")
+             .select("id,etapa,updated_at,orden_corte:orden_corte_id(consecutivo)", count="exact")
+             .neq("etapa", "despachado")
+             .is_("archivado_at", "null")
+             .lt("updated_at", corte)
+             .order("updated_at")
+             .limit(20).execute())
+    rows = res.data or []
+    total = res.count if res.count is not None else len(rows)
     if not rows:
         return _chk("lotes", "Lotes en ruta", "ok", "Ningún lote lleva más de 7 días quieto")
     det = " · ".join(
         f"{(r.get('orden_corte') or {}).get('consecutivo') or '¿?'} ({r.get('etapa')})"
         for r in rows[:4])
-    extra = f" y {len(rows) - 4} más" if len(rows) > 4 else ""
+    # El total real (antes decía "20" aunque fueran más: el tope de la consulta).
+    extra = f" y {total - 4} más" if total > 4 else ""
     return _chk("lotes", "Lotes en ruta", "alerta",
-                f"{len(rows)} lote(s) sin moverse hace más de 7 días: {det}{extra}")
+                f"{total} lote(s) sin moverse hace más de 7 días: {det}{extra}")
 
 
 def _check_datos_corte() -> dict:

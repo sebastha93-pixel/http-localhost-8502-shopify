@@ -192,6 +192,14 @@ export default function NuevaRemisionPage() {
         router.push("/produccion/remisiones");
         return;
       }
+      // "retenida" = se imprime y se le avisa al taller cuando se separen los
+      // insumos, en el detalle de la remisión. Antes se abría el diálogo de
+      // impresión de una (papel antes de separar, y luego otra vez) y salía un
+      // "no se pudo armar el link" que no era cierto.
+      if (data.impresion === "retenida" && data.remision) {
+        router.push(`/produccion/remisiones/${data.remision.id}`);
+        return;
+      }
       if (tipo === "terminacion") {
         setCreada(data);
         // "auto"/"agente" = sale sola por la RICOH; sin valor = abrimos el diálogo.

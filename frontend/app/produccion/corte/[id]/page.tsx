@@ -146,6 +146,7 @@ interface OrdenCorte {
   referencias?: {
     referencia_id?: string;
     curva_trazo?: Record<string, number>;
+    unidades_cortadas?: Record<string, number> | null;
     precio_corte?: number | null;
     cantidad_programada?: number | null;
     referencia?: { codigo_referencia?: string; nombre?: string; tela?: string; color?: string };
@@ -222,7 +223,15 @@ export default function DetalleOrdenCortePage() {
   useEffect(() => {
     const d = q.data;
     if (!d) return;
-    setRefLote((prev) => prev || d.consecutivo || "");
+    // Orden cerrada: no se siembra nada (el formulario ni se muestra). Así, al
+    // REABRIRLA, este efecto corre de nuevo con la grilla vacía y la llena con
+    // lo que el cortador ya había reportado — no con la curva programada, que
+    // borraba las unidades reales al volver a cerrar sin mirar.
+    if (d.estado === "cortada") return;
+    setRefLote((prev) => prev || d.referencia_lote || d.consecutivo || "");
+    if (d.consumo_real_cortador) setConsumoReal((prev) => prev || String(d.consumo_real_cortador));
+    if (d.capas_real) setCapasReal((prev) => prev || String(d.capas_real));
+    if (d.precio_corte != null) setPrecioCorte((prev) => prev || String(d.precio_corte));
     const fplan = (d.fecha_envio || d.fecha_limite || "").slice(0, 10);
     if (fplan) setFechaEntrega((prev) => prev || fplan);
     if (d.precio_corte_sugerido != null) setPrecioCorte((prev) => prev || String(d.precio_corte_sugerido));
@@ -248,7 +257,9 @@ export default function DetalleOrdenCortePage() {
         for (const rf of refs) {
           const rid = rf.referencia_id;
           if (!rid) continue;
-          const g = seedGrid(rf.curva_trazo);
+          // Reabierta: lo que ya se había reportado de esa referencia.
+          const reportado = seedGrid(rf.unidades_cortadas || undefined);
+          const g = Object.keys(reportado).length ? reportado : seedGrid(rf.curva_trazo);
           if (Object.keys(g).length) seed[rid] = g;
         }
         return Object.keys(seed).length ? seed : prev;
@@ -256,7 +267,8 @@ export default function DetalleOrdenCortePage() {
     } else {
       setUnidadesReal((prev) => {
         if (Object.keys(prev).length > 0) return prev;
-        const g = seedGrid(d.curva_trazo);
+        const reportado = seedGrid(d.unidades_cortadas);
+        const g = Object.keys(reportado).length ? reportado : seedGrid(d.curva_trazo);
         return Object.keys(g).length ? g : prev;
       });
     }
@@ -603,17 +615,29 @@ export default function DetalleOrdenCortePage() {
   // SOLO ADMIN: corregir unidades de una orden CERRADA (solo el dato — no
   // toca inventario). Para cierres que quedaron con la grilla vacía.
   const [unidEdit, setUnidEdit] = useState<Record<string, string> | null>(null);
+  // Corte combinado: una grilla por referencia (el total es la suma). Corregir
+  // solo el total dejaba cada referencia con lo viejo.
+  const [unidEditRef, setUnidEditRef] = useState<Record<string, Record<string, string>> | null>(null);
   const corregirUnidades = useMutation({
     mutationFn: () => {
-      const unidades: Record<string, number> = {};
-      for (const [t, v] of Object.entries(unidEdit || {})) {
-        const n = parseInt(v || "0", 10);
-        if (n > 0) unidades[t] = n;
+      const limpiar = (m: Record<string, string>) => {
+        const out: Record<string, number> = {};
+        for (const [t, v] of Object.entries(m)) {
+          const n = parseInt((v || "").replace(/\D/g, ""), 10) || 0;
+          if (n > 0) out[t] = n;
+        }
+        return out;
+      };
+      if (unidEditRef) {
+        const porRef: Record<string, Record<string, number>> = {};
+        for (const [ref, m] of Object.entries(unidEditRef)) porRef[ref] = limpiar(m);
+        return api.patch(`/api/produccion/corte/${id}/unidades`, { unidades_por_referencia: porRef });
       }
-      return api.patch(`/api/produccion/corte/${id}/unidades`, { unidades });
+      return api.patch(`/api/produccion/corte/${id}/unidades`, { unidades: limpiar(unidEdit || {}) });
     },
     onSuccess: () => {
       setUnidEdit(null);
+      setUnidEditRef(null);
       setMsg("Unidades corregidas. Remisiones e insumos ya las toman en cuenta (el inventario no se tocó).");
       setErr("");
       qc.invalidateQueries({ queryKey: ["produccion", "corte"] });
@@ -1401,7 +1425,7 @@ export default function DetalleOrdenCortePage() {
               <div className="flex items-center gap-2">
                 <select value={tonoAuto} onChange={(e) => setTonoAuto(e.target.value)}
                   className="rounded-sm border border-border bg-card px-3 py-2 text-xs">
-                  <option value="">Cualquier tono disponible</option>
+                  <option value="">Un solo tono (el que alcance)</option>
                   {Array.from(new Set(rollosMatch.map((r) => r.tono).filter(Boolean) as string[]))
                     .map((t) => {
                       const stockTono = rollosMatch
@@ -1719,9 +1743,23 @@ export default function DetalleOrdenCortePage() {
               (eso arregla remisiones e insumos sin tocar la tela).
             </p>
             <div className="flex items-center gap-2">
-              {!unidEdit && (
+              {!unidEdit && !unidEditRef && (
                 <button
                   onClick={() => {
+                    const refs = oc.referencias || [];
+                    if (refs.length > 1) {
+                      const porRef: Record<string, Record<string, string>> = {};
+                      for (const rf of refs) {
+                        if (!rf.referencia_id) continue;
+                        const base = (rf.unidades_cortadas && Object.keys(rf.unidades_cortadas).length > 0)
+                          ? rf.unidades_cortadas : (rf.curva_trazo || {});
+                        const v: Record<string, string> = {};
+                        for (const [t, n] of Object.entries(base)) v[t] = String(n ?? "");
+                        porRef[rf.referencia_id] = v;
+                      }
+                      setUnidEditRef(porRef);
+                      return;
+                    }
                     const base = (oc.unidades_cortadas && Object.keys(oc.unidades_cortadas).length > 0)
                       ? oc.unidades_cortadas : (oc.curva_trazo || {});
                     const v: Record<string, string> = {};
@@ -1744,6 +1782,51 @@ export default function DetalleOrdenCortePage() {
               </button>
             </div>
           </div>
+          {unidEditRef && (
+            <div className="rounded-sm border border-navy-600/30 bg-navy-600/[0.04] p-3 space-y-3">
+              <p className="text-[0.65rem] font-bold uppercase tracking-widest text-navy-600">
+                Unidades cortadas reales por referencia y talla
+              </p>
+              {(oc.referencias || []).filter((rf) => rf.referencia_id && unidEditRef[rf.referencia_id]).map((rf) => {
+                const rid = rf.referencia_id as string;
+                const m = unidEditRef[rid];
+                return (
+                  <div key={rid} className="space-y-1">
+                    <p className="text-xs font-semibold text-ink-900">
+                      {rf.referencia?.codigo_referencia || "Referencia"}
+                      <span className="ml-2 font-normal text-graphite tabular">
+                        {Object.values(m).reduce((s, v) => s + (parseInt(v || "0", 10) || 0), 0)} prendas
+                      </span>
+                    </p>
+                    <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+                      {ordenarTallas(Object.keys(m)).map((t) => (
+                        <label key={t} className="block">
+                          <span className="mb-1 block text-center text-[0.65rem] font-semibold text-graphite">T{t}</span>
+                          <input
+                            inputMode="numeric"
+                            value={m[t] || ""}
+                            onChange={(e) => setUnidEditRef({ ...unidEditRef, [rid]: { ...m, [t]: e.target.value.replace(/[^0-9]/g, "") } })}
+                            placeholder="0"
+                            aria-label={`${rf.referencia?.codigo_referencia || "Referencia"} talla ${t}`}
+                            className="w-full rounded-sm border border-border bg-white px-1 py-1.5 text-center text-xs tabular text-ink-900 placeholder:text-graphite/40" />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="flex items-center justify-end gap-3">
+                <button onClick={() => setUnidEditRef(null)}
+                  className="rounded-sm border border-border bg-card px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-graphite hover:bg-cloud">
+                  Cancelar
+                </button>
+                <button onClick={() => corregirUnidades.mutate()} disabled={corregirUnidades.isPending}
+                  className="inline-flex items-center gap-1.5 rounded-sm bg-teal px-4 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-white hover:bg-ink-900 disabled:opacity-40">
+                  {corregirUnidades.isPending && <Loader2 className="h-3 w-3 animate-spin" />} Guardar unidades
+                </button>
+              </div>
+            </div>
+          )}
           {unidEdit && (
             <div className="rounded-sm border border-navy-600/30 bg-navy-600/[0.04] p-3 space-y-3">
               <p className="text-[0.65rem] font-bold uppercase tracking-widest text-navy-600">
@@ -2166,15 +2249,15 @@ function InformeCorteCard({
 
         {/* Confeccionista destino — al cerrar se AUTO-GENERA la remisión (sin
             imprimir) y se le avisa que tiene un lote por recoger. La impresión
-            sale a la RICOH cuando se separan los insumos. Opcional: si se deja
-            vacío, el informe se cierra y la remisión se crea a mano después. */}
+            sale a la RICOH cuando se separan los insumos. OBLIGATORIO desde el
+            30-oct-2026: sin él, 7 cortes se quedaron sin remisión. */}
         <div className="rounded-sm border border-navy-600/30 bg-navy-50/40 p-3 dark:bg-navy-950/20">
           <label className="mb-1.5 block text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-graphite">
-            Confeccionista que recoge el lote
+            Confeccionista que recoge el lote *
           </label>
           <select value={confId} onChange={(e) => setConfId(e.target.value)}
             className="w-full max-w-sm rounded-sm border border-border bg-white px-3 py-2 text-sm text-ink-900">
-            <option value="">— Elegir después (no genera remisión ahora) —</option>
+            <option value="">— Elige el confeccionista —</option>
             {confs.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
           </select>
           <p className="mt-1.5 text-[0.7rem] leading-relaxed text-graphite">
@@ -2183,13 +2266,14 @@ function InformeCorteCard({
                  WhatsApp al confeccionista que tiene un <strong>lote por recoger</strong>. La
                  remisión <strong>NO se imprime todavía</strong>: sale a la RICOH cuando se
                  separen los insumos.</>
-              : <>Sin confeccionista, el informe se cierra igual y la remisión se genera a mano
-                 en la tarjeta de abajo.</>}
+              : <>Obligatorio: sin confeccionista no se genera la remisión y el lote se
+                 pierde de vista. Si es una orden reabierta que ya tenía remisión, elige el
+                 mismo confeccionista.</>}
           </p>
         </div>
 
         <div className="flex justify-end">
-          <button onClick={onCerrar} disabled={isPending || !consumoReal}
+          <button onClick={onCerrar} disabled={isPending || !consumoReal || !confId}
             className="inline-flex items-center gap-2 rounded-sm bg-teal px-6 py-2.5 text-sm font-semibold uppercase tracking-[0.14em] text-white hover:bg-ink-900 disabled:opacity-40">
             {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
             Guardar informe y cerrar
@@ -2401,6 +2485,31 @@ function HojaRutaLotes({ ordenCorteId, consecutivo }: { ordenCorteId: string; co
         <HojaRutaCard key={rt.id} ordenCorteId={ordenCorteId} consecutivo={consecutivo}
           referenciaId={rt.referencia_id} referenciaCodigo={rt.ref_lote?.codigo_referencia} />
       ))}
+    </>
+  );
+}
+
+function BotonQuitarRemisionLav({ rutaId, onListo }: { rutaId: string; onListo: () => void }) {
+  const { user } = useAuth();
+  const [err, setErr] = useState("");
+  const quitar = useMutation({
+    mutationFn: (motivo: string) => api.post(`/api/produccion/rutas/${rutaId}/quitar-remision-lavanderia`, { motivo }),
+    onSuccess: () => { setErr(""); onListo(); },
+    onError: (e: Error) => setErr(e.message),
+  });
+  if (user?.rol !== "admin") return null;
+  return (
+    <>
+      <button
+        onClick={() => {
+          const m = window.prompt("¿Por qué se quita esta remisión de lavandería? (por ejemplo: era de otro lote)");
+          if (m && m.trim().length >= 3) quitar.mutate(m.trim());
+        }}
+        disabled={quitar.isPending}
+        className="text-[0.65rem] text-terracotta hover:underline disabled:opacity-40">
+        Quitar (admin)
+      </button>
+      {err && <span role="alert" className="text-[0.65rem] text-terracotta">{err}</span>}
     </>
   );
 }
@@ -2725,6 +2834,10 @@ function HojaRutaCard({ ordenCorteId, consecutivo, referenciaId, referenciaCodig
               {r.remision_lavanderia_url && (
                 <a href={r.remision_lavanderia_url} target="_blank" rel="noopener noreferrer"
                   className="text-[0.65rem] text-navy-600 hover:underline">Abrir</a>
+              )}
+              {r.remision_lavanderia_url && (
+                <BotonQuitarRemisionLav rutaId={r.id}
+                  onListo={() => qc.invalidateQueries({ queryKey: rutaKey })} />
               )}
             </div>
 

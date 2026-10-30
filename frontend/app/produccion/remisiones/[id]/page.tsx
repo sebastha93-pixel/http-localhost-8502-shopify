@@ -24,6 +24,8 @@ interface Item {
   // Referencia PROPIA del lote (un corte combinado tiene un item por referencia).
   referencia_id?: string;
   ref_item?: { codigo_referencia?: string; nombre?: string; tela?: string };
+  /** Corte combinado: unidades de ESTA referencia (no del tendido entero). */
+  unidades_lote?: Record<string, number>;
   orden_corte?: {
     consecutivo: string;
     referencia_lote?: string;
@@ -92,6 +94,12 @@ export default function RemisionDetallePage() {
     },
     onError: (e: Error) => setErrAccion(`No se pudo marcar la remisión: ${e.message}`),
   });
+  // SOLO ADMIN: deshacer una recogida marcada por error (devuelve los insumos).
+  const anularRecogida = useMutation({
+    mutationFn: (motivo: string) => api.post(`/api/produccion/remisiones/${id}/anular-recogida`, { motivo }),
+    onSuccess: () => { setErrAccion(""); qc.invalidateQueries({ queryKey: ["produccion", "remision", id] }); },
+    onError: (e: Error) => setErrAccion(`No se pudo anular: ${e.message}`),
+  });
 
   if (q.isLoading) return <LoadingState label="Cargando remisión…" />;
   if (q.isError || !q.data) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
@@ -105,7 +113,7 @@ export default function RemisionDetallePage() {
     : (esTerm ? "Por despachar" : "Por recoger");
 
   const totalUnidades = (rem.items || []).reduce((s, it) => {
-    const u = it.orden_corte?.unidades_cortadas || {};
+    const u = it.unidades_lote || it.orden_corte?.unidades_cortadas || {};
     return s + Object.values(u).reduce((x, y) => x + (Number(y) || 0), 0);
   }, 0);
 
@@ -168,7 +176,7 @@ export default function RemisionDetallePage() {
               </thead>
               <tbody>
                 {(rem.items || []).map((it) => {
-                  const totalOC = Object.values(it.orden_corte?.unidades_cortadas || {})
+                  const totalOC = Object.values(it.unidades_lote || it.orden_corte?.unidades_cortadas || {})
                     .reduce((x, y) => x + (Number(y) || 0), 0);
                   return (
                     <tr key={it.id} className="border-b border-border/40 hover:bg-cloud/40">
@@ -227,6 +235,23 @@ export default function RemisionDetallePage() {
         </div>
       )}
 
+      {yaRecogida && user?.rol === "admin" && (
+        <div className="flex justify-end">
+          <button
+            onClick={() => {
+              const m = window.prompt(
+                `¿Por qué se anula la ${esTerm ? "despachada" : "recogida"} de ${rem.consecutivo}?\n\n`
+                + "Vuelve a 'por " + (esTerm ? "despachar" : "recoger") + "' y los insumos descontados regresan al stock.");
+              if (m && m.trim().length >= 3) anularRecogida.mutate(m.trim());
+            }}
+            disabled={anularRecogida.isPending}
+            className="inline-flex items-center gap-2 rounded-sm border border-terracotta/40 bg-card px-4 py-2 text-xs font-semibold uppercase tracking-widest text-terracotta hover:bg-terracotta/[0.06] disabled:opacity-40">
+            {anularRecogida.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            Anular {esTerm ? "despacho" : "recogida"} (admin)
+          </button>
+        </div>
+      )}
+
       {esCortador && !yaRecogida && (
         <div role="status" className="rounded-sm border border-navy-600/30 bg-navy-600/[0.04] px-3 py-2 text-xs text-ink-900">
           Imprime la remisión (sale con las unidades cortadas por talla y la medida del retazo),
@@ -268,6 +293,7 @@ export default function RemisionDetallePage() {
 interface Ruta {
   id: string;
   token_publico: string;
+  referencia_id?: string | null;
   separacion_insumos?: Record<string, {
     items?: Record<string, boolean>;
     ok?: boolean;
@@ -440,7 +466,7 @@ function RutaCard({ ordenCorteId, referenciaId, consecutivo, referencia, tipo, t
 
       {/* Insumos que hay que SEPARAR físicamente antes de enviar */}
       <TablaInsumosSeparar ordenCorteId={ordenCorteId} tipo={tipo}
-        rutaId={r.id} remisionId={remisionId}
+        rutaId={r.id} remisionId={remisionId} referenciaId={r.referencia_id ?? referenciaId ?? null}
         separacionInicial={(r.separacion_insumos || {})[tipo] || null} />
 
       <div className="flex flex-wrap items-center gap-2">

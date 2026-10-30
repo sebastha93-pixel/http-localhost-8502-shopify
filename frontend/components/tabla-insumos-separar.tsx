@@ -54,8 +54,10 @@ function ordenarPorTalla(pt?: Record<string, number>): { t: string; n: number }[
     });
 }
 
-export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, separacionInicial, className = "" }: {
+export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, separacionInicial, referenciaId, className = "" }: {
   ordenCorteId: string;
+  /** Referencia del LOTE: en un corte combinado cada una lleva sus insumos. */
+  referenciaId?: string | null;
   tipo: "confeccion" | "terminacion";
   rutaId?: string;
   remisionId?: string;
@@ -96,8 +98,8 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
   }, [separacionInicial]);
 
   const q = useQuery<Respuesta>({
-    queryKey: ["insumos-separar", tipo, ordenCorteId],
-    queryFn: () => api.get(`/api/produccion/corte/${ordenCorteId}/insumos-requeridos?tipo=${tipo}`),
+    queryKey: ["insumos-separar", tipo, ordenCorteId, referenciaId ?? ""],
+    queryFn: () => api.get(`/api/produccion/corte/${ordenCorteId}/insumos-requeridos?tipo=${tipo}${referenciaId ? `&referencia_id=${referenciaId}` : ""}`),
     enabled: !!ordenCorteId,
   });
 

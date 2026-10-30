@@ -11,6 +11,7 @@ import { api, API_BASE } from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
 import { getToken } from "@/lib/auth";
 import { fmtDateTime } from "@/lib/utils";
+import { cantidadInsumo } from "@/lib/numeros";
 import { CasillaBusqueda, useBusqueda } from "@/components/buscador";
 import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
@@ -116,9 +117,9 @@ export default function InsumosPage() {
   const esAdmin = user?.rol === "admin";
 
   const [editId, setEditId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState<{ nombre: string; categoria: string; unidad: string; cantidad: string }>({ nombre: "", categoria: "", unidad: "", cantidad: "" });
+  const [editForm, setEditForm] = useState<{ nombre: string; categoria: string; unidad: string; cantidad: string; cantidadVista: number }>({ nombre: "", categoria: "", unidad: "", cantidad: "", cantidadVista: 0 });
   function abrirEdicion(i: Insumo) {
-    setEditForm({ nombre: i.nombre, categoria: i.categoria, unidad: i.unidad || "", cantidad: String(i.cantidad_disponible) });
+    setEditForm({ nombre: i.nombre, categoria: i.categoria, unidad: i.unidad || "", cantidad: String(i.cantidad_disponible), cantidadVista: Number(i.cantidad_disponible) || 0 });
     setEditId(i.id);
     setErr("");
   }
@@ -127,7 +128,12 @@ export default function InsumosPage() {
       nombre: editForm.nombre.trim(),
       categoria: editForm.categoria,
       unidad: editForm.unidad.trim() || "und",
-      cantidad_disponible: editForm.cantidad === "" ? undefined : parseFloat(editForm.cantidad),
+      // El stock solo se manda si la persona LO CAMBIÓ, junto con lo que vio:
+      // si una recogida descontó mientras editaba, el backend lo rechaza en vez
+      // de escribir el valor viejo encima.
+      ...(editForm.cantidad !== "" && cantidadInsumo(editForm.cantidad) !== editForm.cantidadVista
+        ? { cantidad_disponible: cantidadInsumo(editForm.cantidad), cantidad_anterior: editForm.cantidadVista }
+        : {}),
     }),
     onSuccess: () => { setEditId(null); setErr(""); qc.invalidateQueries({ queryKey: ["produccion", "insumos"] }); },
     onError: (e: Error) => setErr(`No se pudo editar: ${e.message}`),
@@ -151,7 +157,7 @@ export default function InsumosPage() {
   function corregirIngreso(id: string, actual: number, nombre: string) {
     const v = window.prompt(`Nueva cantidad para el ingreso de ${nombre}:`, String(actual));
     if (v === null) return;
-    const n = parseFloat(v.replace(",", "."));
+    const n = cantidadInsumo(v);
     if (!n || n <= 0) { setErr("Cantidad inválida."); return; }
     corregirMov.mutate({ id, cantidad: n });
   }
@@ -163,11 +169,11 @@ export default function InsumosPage() {
   const ingresar = useMutation({
     mutationFn: () => {
       const items = lineas
-        .filter((l) => l.nombre.trim() && parseFloat(l.cantidad || "0") > 0)
+        .filter((l) => l.nombre.trim() && cantidadInsumo(l.cantidad) > 0)
         .map((l) => ({
           nombre: l.nombre.trim(),
           categoria: l.categoria,
-          cantidad: parseFloat(l.cantidad),
+          cantidad: cantidadInsumo(l.cantidad),
           unidad: "und",
         }));
       if (items.length === 0) throw new Error("Llena al menos un insumo con cantidad.");

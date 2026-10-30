@@ -218,7 +218,13 @@ def _ruta_por_consecutivo(consecutivo: str) -> Optional[dict]:
             .eq("consecutivo", consecutivo).limit(1).execute()).data
     if not oc:
         return None
-    return prod.obtener_ruta_por_corte(oc[0]["id"])
+    rutas = prod.obtener_rutas_por_corte(oc[0]["id"])
+    # Corte combinado: el consecutivo no dice de cuál referencia se habla. Antes
+    # se tomaba siempre el primer lote; ahora es ambiguo y lo enlaza un humano.
+    if len(rutas) > 1:
+        return {"_ambiguo": [f"{consecutivo} / {(r.get('ref_lote') or {}).get('codigo_referencia') or '?'}"
+                             for r in rutas]}
+    return rutas[0] if rutas else None
 
 
 def resolver_lote(codigo: str) -> dict:
@@ -248,6 +254,8 @@ def resolver_lote(codigo: str) -> dict:
 
     # 1) ¿Es un consecutivo de orden de corte?
     ruta = _ruta_por_consecutivo(codigo)
+    if ruta and ruta.get("_ambiguo"):
+        return {"ruta": None, "via": "consecutivo", "ambiguo": ruta["_ambiguo"]}
     if ruta:
         return {"ruta": ruta, "via": "consecutivo", "ambiguo": []}
 
@@ -261,13 +269,17 @@ def resolver_lote(codigo: str) -> dict:
     if not ref:
         return vacio
 
-    ordenes = (sb.table("ordenes_corte").select("id,consecutivo,created_at")
-                 .eq("referencia_id", ref[0]["id"])
-                 .order("created_at", desc=True).limit(50).execute()).data or []
+    # Por la referencia DEL LOTE (hoja_ruta_lote.referencia_id), no por la
+    # principal del corte: en un corte combinado «Ref B sale a lavandería» se
+    # ignoraba en silencio porque B no es la principal de ninguna orden.
+    lotes = (sb.table("hoja_ruta_lote").select("orden_corte_id,referencia_id,created_at")
+               .eq("referencia_id", ref[0]["id"])
+               .is_("remision_lavanderia_url", "null").is_("archivado_at", "null")
+               .order("created_at", desc=True).limit(50).execute()).data or []
 
     candidatos = []
-    for oc in ordenes:
-        r = prod.obtener_ruta_por_corte(oc["id"])
+    for l in lotes:
+        r = prod.obtener_ruta_por_corte(l["orden_corte_id"], referencia_id=l["referencia_id"])
         if r and not r.get("remision_lavanderia_url") and not r.get("archivado_at"):
             candidatos.append(r)
 
@@ -1282,13 +1294,22 @@ def _confeccionista_por_telefono(telefono: str) -> Optional[dict]:
         return None
     try:
         filas = (sb.table("confeccionistas")
-                   .select("id,nombre,telefono,tipo").execute()).data or []
+                   .select("id,nombre,telefono,tipo,activo").execute()).data or []
     except Exception:
         return None
-    for f in filas:
-        if _solo_digitos(f.get("telefono") or "")[-10:] == cola:
-            return f
-    return None
+    iguales = [f for f in filas if _solo_digitos(f.get("telefono") or "")[-10:] == cola]
+    if not iguales:
+        return None
+    # La misma persona puede estar registrada en dos roles con el mismo número
+    # (Arley Arroyave: confección Y terminación). Antes se tomaba el primero que
+    # apareciera y, si era el de terminación, su foto de remisión de confección
+    # se ignoraba con "no tiene lotes esperando". Ahora se devuelven TODOS sus
+    # ids (activos primero) y se buscan los pendientes en cualquiera de ellos.
+    iguales.sort(key=lambda f: (not f.get("activo", True),
+                                (f.get("tipo") or "confeccion") != "confeccion"))
+    elegido = dict(iguales[0])
+    elegido["ids"] = [f["id"] for f in iguales]
+    return elegido
 
 
 def _pendientes_de(confeccionista_id: str) -> list[dict]:
@@ -1377,7 +1398,7 @@ def remision_por_whatsapp(*, telefono: str, media_id: str, mime: str = "",
         if _remision_ya_adjuntada(wa_message_id):
             out["motivo"] = "foto_ya_procesada"
             return out
-        pendientes = _pendientes_de(prov["id"])
+        pendientes = [p for pid in (prov.get("ids") or [prov["id"]]) for p in _pendientes_de(pid)]
         if not pendientes:
             out["motivo"] = "el_proveedor_no_tiene_lotes_esperando_remision"
             return out
@@ -1721,7 +1742,7 @@ def cruce_cantidades(ruta_id: str) -> dict:
         return {}
     try:
         hr = (sb.table("hoja_ruta_lote")
-                .select("id,orden_corte_id,lav_cantidad_remision,"
+                .select("id,orden_corte_id,referencia_id,lav_cantidad_remision,"
                         "lav_cantidad_remision_origen,lav_cantidad_recibida,"
                         "lav_cantidad_entregada,term_cantidad_recibida,"
                         "term_cantidad_terminada")
@@ -1737,6 +1758,16 @@ def cruce_cantidades(ruta_id: str) -> dict:
 
     o = oc[0] if oc else {}
     cortadas = sumar_cortadas(o.get("unidades_cortadas"))
+    # Corte combinado: lo cortado de ESTE lote (su referencia), no del tendido.
+    # Comparar el lote B (40) contra las 100 del corte daba "FALTAN 60" falsos.
+    try:
+        from backend.services import produccion as prod
+        oc_row, hijos = prod._oc_e_hijos(hr[0]["orden_corte_id"])
+        if len(hijos) > 1 and hr[0].get("referencia_id"):
+            base, fuente = prod._base_desde(oc_row, hijos, hr[0]["referencia_id"])
+            cortadas = sum(base.values()) if fuente == "cortado" else None
+    except Exception as e:
+        log.warning(f"[lavanderia-chase] cortadas del lote: {str(e)[:160]}")
     rem = hr[0].get("lav_cantidad_remision")
     recib = hr[0].get("lav_cantidad_recibida")
     entreg = hr[0].get("lav_cantidad_entregada")

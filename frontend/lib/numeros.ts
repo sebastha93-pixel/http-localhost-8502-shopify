@@ -19,6 +19,16 @@ export function pesos(s?: string | number | null): number {
   return parseInt(t.replace(/\D/g, ""), 10) || 0;
 }
 
+/** Cantidad de un insumo. "1.500" o "1,500" son MIL QUINIENTOS (botones,
+ *  cierres: así se escribe en Colombia), no 1,5. Con decimales de verdad
+ *  ("12,5" m de elástico, "1.500,5") se lee como decimal(). */
+export function cantidadInsumo(s?: string | number | null): number {
+  if (typeof s === "number") return Number.isFinite(s) ? s : 0;
+  const t = (s ?? "").trim().replace(/\s/g, "");
+  if (/^\d{1,3}([.,]\d{3})+$/.test(t)) return parseInt(t.replace(/\D/g, ""), 10) || 0;
+  return decimal(t);
+}
+
 /** Cantidades con decimales (metros, metros por prenda, %). "48,7" → 48.7 ·
  *  "1.245,6" → 1245.6 · "1,245.6" → 1245.6 · "0.8" → 0.8. Un punto solo se
  *  sigue leyendo como decimal (como antes). Vacío o ilegible → 0. */

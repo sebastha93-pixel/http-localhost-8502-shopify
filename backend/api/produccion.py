@@ -1474,7 +1474,9 @@ def reabrir_corte(
 
 
 class UnidadesCortadasBody(BaseModel):
-    unidades: dict
+    unidades: dict = {}
+    # Corte combinado: {referencia_id: {talla: n}}; el total sale de la suma.
+    unidades_por_referencia: Optional[dict] = None
 
 
 @router.patch("/corte/{oc_id}/unidades")
@@ -1486,7 +1488,8 @@ def corregir_unidades_cortadas(
     """SOLO ADMIN: corrige las unidades cortadas de una orden YA CERRADA.
     Solo repara el dato (remisiones/insumos) — NO toca inventario."""
     try:
-        return {"ok": True, "orden": svc.actualizar_unidades_cortadas(oc_id, body.unidades)}
+        return {"ok": True, "orden": svc.actualizar_unidades_cortadas(
+            oc_id, body.unidades, body.unidades_por_referencia)}
     except ValueError as e:
         m = str(e)
         if m == "no_encontrado":
@@ -1662,6 +1665,14 @@ def cerrar_corte(
         oc_check = svc.obtener_orden_corte(oc_id)
         if not oc_check or not _corte_es_del_cortador(oc_check, user):
             raise HTTPException(403, "Este corte no está asignado a ti")
+    # Confeccionista OBLIGATORIO (Sebastián, 2026-10-30): 7 cortes de sep-oct se
+    # cerraron sin él, nunca nació su remisión y se fueron a confección por fuera
+    # del OS. Solo se exime si el corte ya tiene remisión de confección (orden
+    # reabierta para corregir el informe).
+    rem_existente = svc.remision_de_orden_corte(oc_id, tipo="confeccion")
+    if not body.confeccionista_id and not rem_existente:
+        raise HTTPException(400, "Elige el confeccionista que recoge el lote: sin él no se "
+                                 "genera la remisión de confección.")
     try:
         oc = svc.cerrar_orden_corte(
             oc_id=oc_id,
@@ -1693,7 +1704,8 @@ def cerrar_corte(
         # AUTO-GENERA la remisión de confección SIN imprimirla (impresion_liberada
         # = False) y se avisa al confeccionista que tiene un lote por recoger.
         # La impresión se libera cuando se separan los insumos.
-        if body.confeccionista_id:
+        # Orden reabierta que ya tenía remisión: no se genera otra.
+        if body.confeccionista_id and not rem_existente:
             try:
                 fecha_rec = (body.fecha_recogida or body.fecha_entrega or "").strip()
                 if not fecha_rec:
@@ -1998,6 +2010,14 @@ def detalle_remision(
     rem = svc.obtener_remision(rem_id)
     if not rem:
         raise HTTPException(404, "no_encontrada")
+    # Corte combinado: las unidades del LOTE de cada ítem, no las del tendido.
+    for it in (rem.get("items") or []):
+        try:
+            lote = svc.lote_de_item_remision(it)
+            if lote:
+                it["unidades_lote"] = lote[1]
+        except Exception:
+            pass
     return rem
 
 
@@ -2030,8 +2050,54 @@ def marcar_recogida(
     rem_id: str,
     user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "modificar")),
 ) -> dict:
+    # El cortador puro marca la recogida de SUS lotes de confección; despachar a
+    # terminación (y descontar sus insumos) es de remisiones. Antes podía marcar
+    # cualquier remisión.
+    if _es_solo_cortador(user):
+        rem = svc.obtener_remision(rem_id)
+        if not rem:
+            raise HTTPException(404, "no_encontrada")
+        if (rem.get("tipo") or "confeccion") == "terminacion":
+            raise HTTPException(403, "Despachar a terminación lo hace remisiones.")
+        for it in (rem.get("items") or []):
+            oc = svc.obtener_orden_corte(it.get("orden_corte_id")) or {}
+            if not _corte_es_del_cortador(oc, user):
+                raise HTTPException(403, "Esta remisión no es de tus cortes.")
     try:
         return {"ok": True, "remision": svc.marcar_remision_recogida(rem_id, usuario=user.email)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class QuitarRemisionLavIn(BaseModel):
+    motivo: str = Field(min_length=3, max_length=300)
+
+
+@router.post("/rutas/{ruta_id}/quitar-remision-lavanderia")
+def quitar_remision_lavanderia(
+    ruta_id: str, body: QuitarRemisionLavIn,
+    user: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """SOLO ADMIN: quita una remisión de lavandería pegada al lote equivocado."""
+    try:
+        return svc.quitar_remision_lavanderia(ruta_id, motivo=body.motivo, usuario=user.email)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class AnularRecogidaIn(BaseModel):
+    motivo: str = Field(min_length=3, max_length=300)
+
+
+@router.post("/remisiones/{rem_id}/anular-recogida")
+def anular_recogida(
+    rem_id: str, body: AnularRecogidaIn,
+    user: CurrentUser = Depends(require_role("admin")),
+) -> dict:
+    """SOLO ADMIN: deshace una recogida/despacho marcado por error (devuelve
+    los insumos descontados)."""
+    try:
+        return svc.anular_recogida_remision(rem_id, motivo=body.motivo, usuario=user.email)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -2044,7 +2110,9 @@ def marcar_recogida(
 def insumos_requeridos_corte(
     oc_id: str,
     tipo: Optional[str] = None,  # 'confeccion' | 'terminacion' | None (ambos)
-    user: CurrentUser = Depends(require_permission("produccion_corte", "ver")),
+    referencia_id: Optional[str] = None,  # el LOTE en un corte combinado
+    # Remisiones también: es quien separa insumos desde el detalle de la remisión.
+    user: CurrentUser = Depends(require_permission_any(("produccion_corte", "produccion_remisiones"), "ver")),
 ) -> dict:
     """Calcula los insumos requeridos multiplicando item.cantidad × cantidad_a_cortar.
     Con `tipo=confeccion` filtra a categoría INSUMO CONFECCION;
@@ -2059,7 +2127,8 @@ def insumos_requeridos_corte(
     elif t == "terminacion":
         cats = ("INSUMO TERMINACION",)
     try:
-        res = svc.calcular_insumos_requeridos_corte(oc_id, categorias=cats)
+        res = svc.calcular_insumos_requeridos_corte(oc_id, categorias=cats,
+                                                    referencia_id=referencia_id or None)
         if not tiene_permiso_costos(user):
             res.pop("total_costo", None)
             for it in (res.get("items") or []):
@@ -2284,13 +2353,8 @@ def lote_publico(token: str) -> dict:
         raise HTTPException(404, "lote_no_encontrado")
 
     oc = r.get("orden_corte") or {}
-    ref = oc.get("referencia") or {}
+    lote = svc.datos_lote_publico(r)   # referencia y unidades DEL LOTE
     conf = r.get("confeccionista") or {}
-    total_unidades = 0
-    if oc.get("unidades_cortadas"):
-        total_unidades = sum(int(v or 0) for v in (oc.get("unidades_cortadas") or {}).values())
-    if total_unidades == 0:
-        total_unidades = int(oc.get("cantidad_programada") or 0)
 
     # Insumos: SOLO categoría INSUMO CONFECCION (los de terminación van en
     # una remisión aparte, más adelante en el flujo).
@@ -2299,6 +2363,7 @@ def lote_publico(token: str) -> dict:
         calc = svc.calcular_insumos_requeridos_corte(
             r["orden_corte_id"],
             categorias=("INSUMO CONFECCION",),
+            referencia_id=r.get("referencia_id"),
         )
         for it in (calc.get("items") or []):
             # Solo nombre + cantidad total — sin valor unitario ni costo.
@@ -2311,15 +2376,8 @@ def lote_publico(token: str) -> dict:
 
     return {
         "consecutivo":               oc.get("consecutivo"),
-        "referencia_codigo":         ref.get("codigo_referencia"),
-        "referencia_nombre":         ref.get("nombre"),
-        "tela":                      ref.get("tela"),
-        "color":                     ref.get("color"),
-        "foto_url":                  ref.get("foto_url"),
+        **lote,
         "referencia_lote":           oc.get("referencia_lote"),
-        "curva":                     oc.get("curva_trazo"),
-        "unidades_cortadas":         oc.get("unidades_cortadas"),
-        "total_unidades":            total_unidades,
         "fecha_entrega":             r.get("fecha_entrega_confeccion") or oc.get("fecha_entrega"),
         "confeccionista_nombre":     conf.get("nombre"),
         "etapa":                     r.get("etapa"),
@@ -2341,11 +2399,16 @@ def aceptar_lote_publico(token: str) -> dict:
     if not r:
         raise HTTPException(404, "lote_no_encontrado")
     if r.get("etapa") != "asignado":
+        if r.get("aceptado_at"):
+            # Doble toque en el celular: ya quedó aceptado, no es un error.
+            return {"ok": True, "etapa": r.get("etapa"), "ya_aceptado": True}
         raise HTTPException(400, f"ya_aceptado_o_en_progreso:{r.get('etapa')}")
     try:
         svc.cambiar_etapa_ruta(r["id"], "aceptado")          # estampa aceptado_at
         ruta = svc.cambiar_etapa_ruta(r["id"], "en_confeccion")  # estampa inicio
-        return {"ok": True, "ruta": ruta}
+        # NUNCA la fila: trae los precios del taller y los enlaces de los
+        # otros portales (con el de lavandería se sube el soporte de pago).
+        return {"ok": True, "etapa": (ruta or {}).get("etapa")}
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -2362,19 +2425,15 @@ def terminacion_publica(token: str) -> dict:
         raise HTTPException(404, "lote_no_encontrado")
 
     oc = r.get("orden_corte") or {}
-    ref = oc.get("referencia") or {}
+    lote = svc.datos_lote_publico(r)   # referencia y unidades DEL LOTE
     term = r.get("terminacion") or {}
-    total = 0
-    if oc.get("unidades_cortadas"):
-        total = sum(int(v or 0) for v in (oc.get("unidades_cortadas") or {}).values())
-    if total == 0:
-        total = int(oc.get("cantidad_programada") or 0)
 
     insumos_pub: list[dict] = []
     try:
         calc = svc.calcular_insumos_requeridos_corte(
             r["orden_corte_id"],
             categorias=("INSUMO TERMINACION",),
+            referencia_id=r.get("referencia_id"),
         )
         for it in (calc.get("items") or []):
             insumos_pub.append({
@@ -2386,15 +2445,8 @@ def terminacion_publica(token: str) -> dict:
 
     return {
         "consecutivo":       oc.get("consecutivo"),
-        "referencia_codigo": ref.get("codigo_referencia"),
-        "referencia_nombre": ref.get("nombre"),
-        "tela":              ref.get("tela"),
-        "color":             ref.get("color"),
-        "foto_url":          ref.get("foto_url"),
+        **lote,
         "referencia_lote":   oc.get("referencia_lote"),
-        "curva":             oc.get("curva_trazo"),
-        "unidades_cortadas": oc.get("unidades_cortadas"),
-        "total_unidades":    total,
         "fecha_entrega":     oc.get("fecha_entrega"),
         "terminacion_nombre": term.get("nombre"),
         "etapa":             r.get("etapa"),
@@ -2433,17 +2485,17 @@ def recibir_terminacion_publica(token: str,
         # cierra la cadena. Si ya hay una, no se pisa desde el enlace público.
         if cant is not None and r.get("term_cantidad_recibida") is None:
             try:
-                return {"ok": True, "ruta": r,
-                        "cruce": svc.registrar_cantidad_terminacion(r["id"], cant)}
+                svc.registrar_cantidad_terminacion(r["id"], cant)
+                return {"ok": True, "etapa": r.get("etapa")}
             except ValueError as e:
                 raise HTTPException(400, str(e))
         raise HTTPException(400, f"ya_recibido:{r.get('etapa')}")
     try:
         ruta = svc.cambiar_etapa_ruta(r["id"], "terminacion_recibida")
-        cruce = None
         if cant is not None:
-            cruce = svc.registrar_cantidad_terminacion(r["id"], cant)
-        return {"ok": True, "ruta": ruta, "cruce": cruce}
+            svc.registrar_cantidad_terminacion(r["id"], cant)
+        # Sin la fila: llevaría precios y los enlaces de los otros portales.
+        return {"ok": True, "etapa": (ruta or {}).get("etapa")}
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -2795,24 +2847,13 @@ def lavanderia_publica(token: str) -> dict:
         raise HTTPException(404, "lote_no_encontrado")
 
     oc = r.get("orden_corte") or {}
-    ref = oc.get("referencia") or {}
-    total = 0
-    if oc.get("unidades_cortadas"):
-        total = sum(int(v or 0) for v in (oc.get("unidades_cortadas") or {}).values())
-    if total == 0:
-        total = int(oc.get("cantidad_programada") or 0)
+    lote = svc.datos_lote_publico(r)   # referencia y unidades DEL LOTE
 
     return {
         "consecutivo":       oc.get("consecutivo"),
-        "referencia_codigo": ref.get("codigo_referencia"),
-        "referencia_nombre": ref.get("nombre"),
-        "tela":              ref.get("tela"),
-        "color":             ref.get("color"),
-        "foto_url":          ref.get("foto_url"),
+        **lote,
         "referencia_lote":   oc.get("referencia_lote"),
-        "curva":             oc.get("curva_trazo"),
-        "unidades_cortadas": oc.get("unidades_cortadas"),
-        "total_unidades":    total,
+        "etapas_omitidas":   r.get("etapas_omitidas") or [],
         "lavanderia_nombre": (r.get("lavanderia") or {}).get("nombre"),
         "etapa":             r.get("etapa"),
         "recibido_at":       r.get("lav_recibido_at"),
@@ -2871,14 +2912,16 @@ async def subir_remision_lavanderia_publica(
     r = svc.obtener_ruta_por_token_lavanderia(token)
     if not r:
         raise HTTPException(404, "lote_no_encontrado")
+    datos = await archivo.read()
+    if len(datos) > 15 * 1024 * 1024:
+        raise HTTPException(413, "archivo_muy_grande: máximo 15 MB")
     try:
-        datos = await archivo.read()
-        res = svc.subir_remision_lavanderia(
+        svc.subir_remision_lavanderia(
             r["id"], file_bytes=datos,
             filename=archivo.filename or "remision.jpg",
             content_type=archivo.content_type or "image/jpeg",
         )
-        return {"ok": True, "url": res.get("remision_lavanderia_url")}
+        return {"ok": True}
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
@@ -3524,9 +3567,13 @@ def _generar_remision_pdf(rem: dict) -> bytes:
     total_unidades = 0
     for it in (rem.get("items") or []):
         oc = it.get("orden_corte") or {}
-        ref = oc.get("referencia") or {}
-        unid_map, es_programado = _unidades_de(oc)
-        unid = sum(unid_map.values()) or int(oc.get("cantidad_programada") or 0)
+        lote = svc.lote_de_item_remision(it)   # corte combinado → SU referencia
+        if lote:
+            ref, unid_map, es_programado = lote
+        else:
+            ref = oc.get("referencia") or {}
+            unid_map, es_programado = _unidades_de(oc)
+        unid = sum(unid_map.values()) or (0 if lote else int(oc.get("cantidad_programada") or 0))
         total_unidades += unid
 
         # Referencia grande (como el 85609-2 del cuaderno)
@@ -3611,7 +3658,8 @@ def _generar_remision_pdf(rem: dict) -> bytes:
 
     for it in (rem.get("items") or []):
         try:
-            calc = svc.calcular_insumos_requeridos_corte(it["orden_corte_id"], categorias=cats)
+            calc = svc.calcular_insumos_requeridos_corte(it["orden_corte_id"], categorias=cats,
+                                                         referencia_id=it.get("referencia_id"))
             for ins in (calc.get("items") or []):
                 y -= 5.5 * mm
                 _salto()
@@ -3778,6 +3826,7 @@ def editar_insumo(
             categoria=body.get("categoria"),
             unidad=body.get("unidad"),
             cantidad_disponible=body.get("cantidad_disponible"),
+            cantidad_anterior=body.get("cantidad_anterior"),
             usuario=user.nombre or user.email,
         )
     except ValueError as e:
@@ -3902,12 +3951,18 @@ def _remision_de_ruta(ruta_id: str, tipo: str) -> Optional[dict]:
     sb = svc._sb()
     if sb is None:
         return None
-    ruta = (sb.table("hoja_ruta_lote").select("orden_corte_id")
+    ruta = (sb.table("hoja_ruta_lote").select("orden_corte_id,referencia_id")
               .eq("id", ruta_id).limit(1).execute()).data
     if not ruta:
         return None
-    items = (sb.table("remision_items").select("remision_id")
+    items = (sb.table("remision_items").select("remision_id,referencia_id")
                .eq("orden_corte_id", ruta[0]["orden_corte_id"]).execute()).data or []
+    # Corte combinado: la remisión de ESTA referencia (los ítems viejos sin
+    # referencia de respaldo), no la primera del corte.
+    ref_id = ruta[0].get("referencia_id")
+    if ref_id:
+        items = ([x for x in items if x.get("referencia_id") == ref_id]
+                 or [x for x in items if not x.get("referencia_id")])
     for it in items:
         rem = svc.obtener_remision(it["remision_id"])
         if rem and (rem.get("tipo") or "confeccion") == tipo:
