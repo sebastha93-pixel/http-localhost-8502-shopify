@@ -264,6 +264,30 @@ export function TablaInsumosSeparar({ ordenCorteId, tipo, rutaId, remisionId, se
         </table>
       )}
 
+      {/* Sin insumos de este tipo en el precosteo: igual hay que poder confirmar.
+          Antes "Marcar todo OK" solo salía con al menos un insumo y la remisión
+          quedaba RETENIDA para siempre: no se imprimía, no se encolaban las
+          etiquetas y no se avisaba al proveedor (2026-10-30). */}
+      {rutaId && q.data && !q.isLoading && !q.isError && total === 0 && !confirmado?.ok && (
+        <div className="px-3 py-2 border-t border-navy-600/20 flex flex-wrap items-center gap-2">
+          <select value={responsable} onChange={(e) => setResponsable(e.target.value)}
+            aria-label="Responsable"
+            className="rounded-sm border border-border bg-white px-2 py-1.5 text-xs">
+            <option value="">Responsable…</option>
+            {RESPONSABLES.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+          <button
+            onClick={() => guardar.mutate({ items: {}, no_aplica: [], ok: true, responsable })}
+            disabled={!responsable || guardar.isPending}
+            title={!responsable ? "Elige el responsable" : ""}
+            className="inline-flex items-center gap-1.5 rounded-sm bg-teal px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-widest text-white hover:bg-ink-900 disabled:opacity-40">
+            {guardar.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle className="h-3 w-3" />}
+            Confirmar sin insumos
+          </button>
+          <span className="text-[0.7rem] text-graphite">Libera la impresión de la remisión y el aviso al proveedor.</span>
+        </div>
+      )}
+
       {/* Confirmación final: responsable + Todo OK */}
       {rutaId && total > 0 && !confirmado?.ok && (
         <div className="px-3 py-2 border-t border-navy-600/20 flex flex-wrap items-center gap-2">

@@ -12,6 +12,7 @@ import { api } from "@/lib/api";
 import { PageShell } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Plus, Trash2, Save, Loader2, AlertCircle, CheckCircle, Search, ChevronDown } from "lucide-react";
+import { pesos, decimal } from "@/lib/numeros";
 
 interface TelaStock {
   descripcion_tela: string;
@@ -72,18 +73,11 @@ function lineasIniciales(): LineaForm[] {
   return out;
 }
 
-// COP no tiene decimales: el separador de miles es el punto. "189.900" debe leerse
-// 189900, no 189,9. Para valores en PESOS se quitan TODOS los no-dígitos y se
-// parsea como entero. (La cantidad SÍ puede ser fraccionaria —metros de tela— y
-// se sigue leyendo con parseFloat.)
-function pesos(s?: string): number {
-  return parseInt((s || "").replace(/\D/g, ""), 10) || 0;
-}
 
 function ivaDeLinea(l: LineaForm, ivaPct: number): number {
   if (!l.aplica_iva) return 0;
   const v = pesos(l.valor_unitario);
-  const q = parseFloat(l.cantidad || "0") || 0;
+  const q = decimal(l.cantidad);
   return Math.round(v * q * (ivaPct / 100));
 }
 
@@ -152,7 +146,7 @@ export default function NuevoPrecosteoPage() {
   }, [telaOpen]);
 
   // Vacío = usar el default 19%. Un 0 explícito (producto exento) se respeta.
-  const ivaPct = iva.trim() === "" ? 19 : (parseFloat(iva) || 0);
+  const ivaPct = iva.trim() === "" ? 19 : decimal(iva);
   const precioVentaNum = pesos(precioVenta);
 
   const mut = useMutation({
@@ -162,13 +156,13 @@ export default function NuevoPrecosteoPage() {
       // agrupado —y que un "+ Otro" caiga en su bloque, no suelto al final—.
       const rank = (c: string) => { const i = CATEGORIAS.indexOf(c); return i < 0 ? CATEGORIAS.length : i; };
       const items = lineas
-        .filter((l) => l.item.trim() && (pesos(l.valor_unitario) > 0 || parseFloat(l.cantidad || "0") > 0))
+        .filter((l) => l.item.trim() && (pesos(l.valor_unitario) > 0 || decimal(l.cantidad) > 0))
         .map((l) => ({
           categoria: l.categoria,
           item: l.item.trim(),
           color: l.categoria === "MATERIA PRIMA" ? (l.color?.trim() || null) : null,
           valor_unitario: pesos(l.valor_unitario),
-          cantidad: parseFloat(l.cantidad || "0") || 1,
+          cantidad: decimal(l.cantidad) || 1,
           iva: ivaDeLinea(l, ivaPct),
         }))
         .sort((a, b) => rank(a.categoria) - rank(b.categoria));
@@ -215,7 +209,7 @@ export default function NuevoPrecosteoPage() {
     setLineas((prev) => prev.filter((_, i) => i !== idx));
   }
 
-  const totalSin = lineas.reduce((s, l) => s + pesos(l.valor_unitario) * (parseFloat(l.cantidad || "0") || 0), 0);
+  const totalSin = lineas.reduce((s, l) => s + pesos(l.valor_unitario) * decimal(l.cantidad), 0);
   const totalIva = lineas.reduce((s, l) => s + ivaDeLinea(l, ivaPct), 0);
   const totalCon = totalSin + totalIva;
   // Precio de venta que teclea el usuario YA INCLUYE IVA.
@@ -368,7 +362,7 @@ export default function NuevoPrecosteoPage() {
                       </tr>
                       {g.indices.map((idx) => {
                         const l = lineas[idx];
-                        const ts = pesos(l.valor_unitario) * (parseFloat(l.cantidad || "0") || 0);
+                        const ts = pesos(l.valor_unitario) * decimal(l.cantidad);
                         const ivaMonto = ivaDeLinea(l, ivaPct);
                         const tc = ts + ivaMonto;
                         return (

@@ -24,6 +24,7 @@ import { Badge } from "@/components/ui/badge";
 import { Clock, MessageSquare, AlertTriangle } from "lucide-react";
 
 interface Pendiente {
+  orden_corte_id?: string;
   id: string;
   hoja_ruta_id: string;
   consecutivo?: string;
@@ -291,7 +292,7 @@ export default function LavanderiaPage() {
                 {pendientes.map((p) => (
                   <tr key={p.id} className="border-b border-border/40 hover:bg-cloud/30">
                     <td className="px-4 py-2 font-semibold text-navy-600">
-                      <Link href={`/produccion/corte/${p.hoja_ruta_id}`} className="hover:underline">
+                      <Link href={`/produccion/corte/${p.orden_corte_id || ""}`} className="hover:underline">
                         {p.codigo_referencia || p.consecutivo || "—"}
                       </Link>
                       <div className="text-[0.7rem] font-normal text-graphite">
@@ -320,7 +321,7 @@ export default function LavanderiaPage() {
                       {p.detectado_texto || <span className="italic">abierto a mano</span>}
                     </td>
                     <td className="px-4 py-2 text-right">
-                      {p.estado === "abierto" && (
+                      {(p.estado === "abierto" || p.estado === "escalado") && (
                         <button
                           onClick={() => { setErr(""); anular.mutate(p.id); }}
                           disabled={anular.isPending}

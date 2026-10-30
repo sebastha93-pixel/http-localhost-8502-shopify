@@ -67,6 +67,8 @@ interface Lote {
   total_faltan_bodega: number | null;
   donde_se_perdio: string[];
   justificado_motivo: string | null;
+  /** Corte cortado que nunca tuvo hoja de ruta (se fue a confección sin remisión). */
+  sin_hoja_ruta?: boolean;
 }
 
 const CIERRE: Record<string, { txt: string; tono: Tono }> = {
@@ -169,7 +171,7 @@ export default function CierreBodegaPage() {
                         {l.referencia || "—"}{l.referencia_nombre ? ` · ${l.referencia_nombre}` : ""}
                       </p>
                       <p className="mt-1 text-[0.7rem] text-graphite tabular">
-                        {l.total_cortado} cortadas · {ETAPA[l.etapa || ""] || l.etapa || "—"}
+                        {l.total_cortado} cortadas · {l.sin_hoja_ruta ? "sin hoja de ruta" : ETAPA[l.etapa || ""] || l.etapa || "—"}
                         {l.donde_se_perdio.length > 0 && (
                           <span className="text-terracotta font-semibold"> · se perdieron en {l.donde_se_perdio.join(", ")}</span>
                         )}
@@ -225,8 +227,13 @@ function DetalleLote({ oc, refId, puedeContar, puedeJustificar }: {
           <p className="text-sm text-graphite">
             {l.referencia || "—"}{l.referencia_nombre ? ` · ${l.referencia_nombre}` : ""}
             {l.terminacion ? ` · terminación: ${l.terminacion}` : ""}
-            {` · ${ETAPA[l.etapa || ""] || l.etapa || "—"}`}
+            {` · ${l.sin_hoja_ruta ? "sin hoja de ruta" : ETAPA[l.etapa || ""] || l.etapa || "—"}`}
           </p>
+          {l.sin_hoja_ruta && (
+            <p className="text-xs text-graphite">
+              Este corte se fue a confección sin remisión en el OS. Igual puedes contar lo que llegó a bodega.
+            </p>
+          )}
           {l.base_fuente === "programado" && (
             <p className="mt-2 flex items-start gap-2 rounded-sm border border-ochre/40 bg-ochre/10 px-3 py-2 text-xs text-ink-900">
               <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-none" />

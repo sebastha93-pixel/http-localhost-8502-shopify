@@ -53,8 +53,12 @@ def _datos(*, con_costos: bool) -> dict:
 
 
 def _stock_insumo(i: dict) -> float:
-    """El insumo trae varios nombres de stock según su antigüedad."""
-    for k in ("stock_disponible", "cantidad_disponible", "stock_inicial"):
+    """El insumo trae varios nombres de stock según su antigüedad.
+
+    `cantidad_disponible` va PRIMERO: es la que mueve el código. `stock_disponible`
+    es NOT NULL DEFAULT 0 y nadie la escribe, así que leída primero devolvía 0 en
+    todos los insumos y el informe impreso salía en cero (2026-10-30)."""
+    for k in ("cantidad_disponible", "stock_disponible", "stock_inicial"):
         v = i.get(k)
         if v is not None:
             try:

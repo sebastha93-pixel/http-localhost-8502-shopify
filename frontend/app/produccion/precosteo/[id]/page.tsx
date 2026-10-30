@@ -15,6 +15,7 @@ import { PageShell, LoadingState, ErrorState } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Lock, Camera, CheckCircle, Loader2, AlertCircle, Pencil, Plus, Trash2, X, Copy, ZoomIn } from "lucide-react";
+import { pesos, decimal } from "@/lib/numeros";
 
 // Mismas categorías del backend (CATEGORIAS_PRECOSTEO)
 const CATEGORIAS = ["MATERIA PRIMA", "PROCESO EN MATERIA PRIMA", "INSUMO CONFECCION", "INSUMO TERMINACION"];
@@ -215,14 +216,14 @@ export default function PrecosteoDetallePage() {
       // PROCESO, INSUMO CONFECCION, INSUMO TERMINACION).
       const rank = (c: string) => { const i = CATEGORIAS.indexOf(c); return i < 0 ? CATEGORIAS.length : i; };
       const items = editLineas
-        .filter((l) => l.item.trim() && (parseFloat(l.valor_unitario || "0") > 0 || parseFloat(l.cantidad || "0") > 0))
+        .filter((l) => l.item.trim() && (pesos(l.valor_unitario) > 0 || decimal(l.cantidad) > 0))
         .map((l) => ({
           categoria: l.categoria,
           item: l.item.trim(),
           color: l.categoria === "MATERIA PRIMA" ? (l.color.trim() || null) : null,
-          valor_unitario: parseFloat(l.valor_unitario || "0") || 0,
-          cantidad: parseFloat(l.cantidad || "0") || 1,
-          iva: parseFloat(l.iva || "0") || 0,
+          valor_unitario: pesos(l.valor_unitario),
+          cantidad: decimal(l.cantidad) || 1,
+          iva: pesos(l.iva),
         }))
         .sort((a, b) => rank(a.categoria) - rank(b.categoria));
       if (items.length === 0) throw new Error("El costeo necesita al menos una línea con valor.");
@@ -559,7 +560,7 @@ export default function PrecosteoDetallePage() {
                 </thead>
                 <tbody>
                   {editLineas.map((l, i) => {
-                    const tot = (parseFloat(l.valor_unitario || "0") || 0) * (parseFloat(l.cantidad || "0") || 0) + (parseFloat(l.iva || "0") || 0);
+                    const tot = pesos(l.valor_unitario) * decimal(l.cantidad) + pesos(l.iva);
                     return (
                       <tr key={i} className="border-b border-border/40">
                         <td className="px-2 py-1">
@@ -613,7 +614,7 @@ export default function PrecosteoDetallePage() {
                   <tr className="border-t-2 border-border">
                     <td colSpan={5} className="px-2 py-2 text-right text-[0.7rem] uppercase tracking-widest text-graphite">Costo total (se recalcula al guardar)</td>
                     <td className="px-2 py-2 text-right tabular font-semibold text-ink-900">
-                      ${editLineas.reduce((s, l) => s + (parseFloat(l.valor_unitario || "0") || 0) * (parseFloat(l.cantidad || "0") || 0) + (parseFloat(l.iva || "0") || 0), 0).toLocaleString("es-CO", { maximumFractionDigits: 0 })}
+                      ${editLineas.reduce((s, l) => s + pesos(l.valor_unitario) * decimal(l.cantidad) + pesos(l.iva), 0).toLocaleString("es-CO", { maximumFractionDigits: 0 })}
                     </td>
                     <td />
                   </tr>

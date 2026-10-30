@@ -332,7 +332,7 @@ def abrir_pendiente(*, ruta: dict, reloj: str, origen: str = "grupo",
             mensaje=("Se abrió el seguimiento de la remisión de lavandería, pero "
                      "el confeccionista de este lote no tiene teléfono en el "
                      "directorio, así que el recordatorio no puede salir."),
-            enlace="/produccion/proveedores",
+            enlace="/produccion/confeccionistas",
         )
     return {"abierto": True, "pendiente": p, "consecutivo": oc.get("consecutivo")}
 
@@ -389,7 +389,7 @@ def cerrar_pendientes(hoja_ruta_id: str, *, reloj: str, motivo: str) -> int:
                         "motivo_cierre": motivo,
                         "actualizado_en": _iso(_ahora())})
                .eq("hoja_ruta_id", hoja_ruta_id).eq("reloj", reloj)
-               .eq("estado", "abierto").execute())
+               .in_("estado", ["abierto", "escalado"]).execute())
         n = len(r.data or [])
         if n:
             log.info(f"[lavanderia-chase] cerrado {reloj} de {hoja_ruta_id} · {motivo}")
@@ -410,7 +410,7 @@ def anular_pendiente(pendiente_id: str, *, motivo: str, por: str = "") -> bool:
                .update({"estado": "anulado", "cerrado_at": _iso(_ahora()),
                         "motivo_cierre": f"{motivo} ({por})"[:300],
                         "actualizado_en": _iso(_ahora())})
-               .eq("id", pendiente_id).eq("estado", "abierto").execute())
+               .eq("id", pendiente_id).in_("estado", ["abierto", "escalado"]).execute())
         return bool(r.data)
     except Exception as e:
         log.warning(f"[lavanderia-chase] anular falló: {str(e)[:200]}")
@@ -816,8 +816,11 @@ def barrer() -> dict:
                "avisos": 0, "escalados": 0, "sin_destinatario": 0,
                "simulados": 0, "fallos": 0}
     try:
+        # También los ESCALADOS, pero solo para el paso 1 (cerrar si ya se
+        # cumplió). Antes el barrido leía solo 'abierto' y un escalado quedaba
+        # vivo para siempre aunque la remisión llegara: 4 desde el 20-ago-2026.
         abiertos = (sb.table(TABLA).select("*")
-                      .eq("estado", "abierto")
+                      .in_("estado", ["abierto", "escalado"])
                       .order("abierto_at").limit(500).execute()).data or []
     except Exception as e:
         log.warning(f"[lavanderia-chase] no pude leer pendientes: {str(e)[:200]}")
@@ -859,6 +862,11 @@ def barrer() -> dict:
                 resumen["cerrados"] += 1
                 continue
 
+            # Un escalado ya está en manos de una persona: no se vuelve a escalar
+            # ni a recordar, solo se cierra (arriba) cuando se cumple.
+            if p.get("estado") == "escalado":
+                continue
+
             # ── 2. ¿toca escalar?
             dias = (_horas_desde(p["abierto_at"]) or 0) / 24.0
             limite = (RECOGIDA_ESCALA_DIAS() if p["reloj"] == "recogida"
@@ -892,6 +900,13 @@ def barrer() -> dict:
                          f"lote {p.get('consecutivo')} → {conf.get('nombre')} (confección)")
                 continue
 
+            # Tomar el turno ANTES de enviar. Sin esto `ultimo_aviso_at` nunca se
+            # marcaba y el control de "uno cada 24 h" no frenaba nada: el mismo
+            # WhatsApp habría salido en cada barrido de 15 min (~280 por lote)
+            # en cuanto los envíos empezaran a salir (2026-10-30). Si el envío
+            # falla, _avisar_confeccionista devuelve el turno (_soltar_claim).
+            if not _claim(p):
+                continue
             if _avisar_confeccionista(p, ruta):
                 resumen["avisos"] += 1
             else:

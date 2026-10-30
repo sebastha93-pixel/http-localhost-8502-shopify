@@ -18,6 +18,7 @@ import { getToken } from "@/lib/auth";
 import { PageShell } from "@/components/page-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Plus, Trash2, Save, Loader2, AlertCircle, ScanLine, CheckCircle } from "lucide-react";
+import { pesos, decimal } from "@/lib/numeros";
 
 interface RolloForm {
   numero_rollo: string;
@@ -139,7 +140,7 @@ export default function NuevoIngresoPage() {
       const textileraFinal = textileraId === "otra" ? textileraOtra.trim() : textilera;
       if (!textileraFinal) throw new Error("Selecciona la textilera");
       const rollosValidos = rollos
-        .filter((r) => r.descripcion_tela.trim() && parseFloat(r.metros_inicial || "0") > 0)
+        .filter((r) => r.descripcion_tela.trim() && decimal(r.metros_inicial) > 0)
         .map((r) => ({
           numero_rollo: r.numero_rollo || null,
           lote_fabrica: r.lote_fabrica || null,
@@ -147,8 +148,8 @@ export default function NuevoIngresoPage() {
           referencia_tela: r.referencia_tela || null,
           descripcion_tela: r.descripcion_tela.trim().toUpperCase(),
           composicion: r.composicion.trim().toUpperCase() || null,
-          costo_metro: r.costo_metro ? parseFloat(r.costo_metro) : null,
-          metros_inicial: parseFloat(r.metros_inicial),
+          costo_metro: r.costo_metro ? pesos(r.costo_metro) : null,
+          metros_inicial: decimal(r.metros_inicial),
         }));
       if (rollosValidos.length === 0) throw new Error("Agrega al menos un rollo con descripción y metros");
       return api.post<{ ok: boolean; ingreso: { id: string; numero_ingreso: string } }>(
@@ -207,8 +208,8 @@ export default function NuevoIngresoPage() {
     setRollos((prev) => prev.filter((_, i) => i !== idx));
   }
 
-  const totalMetros = rollos.reduce((s, r) => s + (parseFloat(r.metros_inicial || "0") || 0), 0);
-  const totalRollosVal = rollos.filter((r) => r.descripcion_tela && parseFloat(r.metros_inicial || "0") > 0).length;
+  const totalMetros = rollos.reduce((s, r) => s + decimal(r.metros_inicial), 0);
+  const totalRollosVal = rollos.filter((r) => r.descripcion_tela && decimal(r.metros_inicial) > 0).length;
 
   return (
     <PageShell

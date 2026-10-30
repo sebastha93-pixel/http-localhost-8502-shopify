@@ -15,6 +15,8 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
+from backend.core.fechas import parse_iso_utc
+
 from supabase import Client, create_client
 
 log = logging.getLogger(__name__)
@@ -2923,12 +2925,21 @@ def cadena_lote(oc_id: str, referencia_id: Optional[str] = None) -> dict:
     ref = _resolver_ref(oc_row, hijos, referencia_id)
     rutas = _safe_exec(sb.table("hoja_ruta_lote").select(_CADENA_RUTA_SELECT)
                          .eq("orden_corte_id", oc_id)).data or []
-    ruta = next((r for r in rutas if r.get("referencia_id") == ref), None) \
-        or {"orden_corte_id": oc_id, "referencia_id": ref}
-    ruta = _con_etapas_omitidas(ruta) or ruta
+    ruta = next((r for r in rutas if r.get("referencia_id") == ref), None)
+    sin_hoja = ruta is None
+    if sin_hoja:
+        # Corte que nunca tuvo hoja de ruta: igual se puede contar en bodega.
+        rp = (_safe_exec(sb.table("referencias_precosteo").select("codigo_referencia,nombre")
+                           .eq("id", ref).limit(1)).data or [{}]) if ref else [{}]
+        ruta = {"orden_corte_id": oc_id, "referencia_id": ref, "etapas_omitidas": [],
+                "ref_lote": rp[0] if rp else {}}
+    else:
+        ruta = _con_etapas_omitidas(ruta) or ruta
     filas = _safe_exec(sb.table("cuadre_lote_proceso").select("*")
                          .eq("orden_corte_id", oc_id)).data or []
-    return _cadena_desde(ruta, oc_row, hijos, filas)
+    c = _cadena_desde(ruta, oc_row, hijos, filas)
+    c["sin_hoja_ruta"] = sin_hoja
+    return c
 
 
 def _leer_en_paginas(q_factory) -> list:
@@ -2956,7 +2967,14 @@ def listar_cierre_bodega(estado: Optional[str] = None) -> list[dict]:
         return []
     rutas = _leer_en_paginas(lambda: sb.table("hoja_ruta_lote").select(_CADENA_RUTA_SELECT)
                                        .order("created_at", desc=True))
-    oc_ids = sorted({r["orden_corte_id"] for r in rutas if r.get("orden_corte_id")})
+    # Cortes CORTADOS que nunca tuvieron hoja de ruta (se fueron a confección
+    # sin remisión en el OS): también se cuentan al llegar a bodega. Sin esto no
+    # aparecían en ningún lado (10 cortes del 11-ago al 21-oct-2026).
+    con_ruta = {r["orden_corte_id"] for r in rutas if r.get("orden_corte_id")}
+    cortadas = _leer_en_paginas(lambda: sb.table("ordenes_corte").select("id")
+                                          .eq("estado", "cortada").order("created_at", desc=True))
+    sin_ruta_ids = [c["id"] for c in cortadas if c["id"] not in con_ruta]
+    oc_ids = sorted(con_ruta | set(sin_ruta_ids))
     ocs: dict = {}
     hijos: dict = {}
     filas: dict = {}
@@ -2977,12 +2995,34 @@ def listar_cierre_bodega(estado: Optional[str] = None) -> list[dict]:
                                .in_("orden_corte_id", lote_ids)).data or []):
             filas.setdefault(f["orden_corte_id"], []).append(f)
 
+    # Lotes "virtuales" de los cortes sin hoja de ruta: uno por referencia.
+    virtuales = []
+    for oc_id in sin_ruta_ids:
+        oc_row = ocs.get(oc_id) or {}
+        refs = [h.get("referencia_id") for h in hijos.get(oc_id, []) if h.get("referencia_id")] \
+            or [oc_row.get("referencia_id")]
+        for ref in refs:
+            virtuales.append({"orden_corte_id": oc_id, "referencia_id": ref,
+                              "etapa": None, "etapas_omitidas": [], "_sin_hoja_ruta": True})
+    if virtuales:
+        ref_ids = sorted({v["referencia_id"] for v in virtuales if v.get("referencia_id")})
+        codigos = {}
+        for i in range(0, len(ref_ids), 150):
+            for rp in (_safe_exec(sb.table("referencias_precosteo")
+                                    .select("id,codigo_referencia,nombre")
+                                    .in_("id", ref_ids[i:i + 150])).data or []):
+                codigos[rp["id"]] = {"codigo_referencia": rp.get("codigo_referencia"),
+                                     "nombre": rp.get("nombre")}
+        for v in virtuales:
+            v["ref_lote"] = codigos.get(v.get("referencia_id")) or {}
+
     out = []
-    for r in rutas:
+    for r in rutas + virtuales:
         oc_id = r.get("orden_corte_id")
         try:
             c = _cadena_desde(r, ocs.get(oc_id) or {"id": oc_id}, hijos.get(oc_id, []),
                               filas.get(oc_id, []))
+            c["sin_hoja_ruta"] = bool(r.get("_sin_hoja_ruta"))
         except Exception as e:
             log.warning(f"[cierre-bodega] lote {oc_id} omitido: {str(e)[:120]}")
             continue
@@ -6159,7 +6199,7 @@ def calcular_insumos_requeridos_corte(
     if referencia_id:
         try:
             _hh = (_sb().table("orden_corte_referencias")
-                     .select("referencia_id,curva_trazo")
+                     .select("referencia_id,curva_trazo,unidades_cortadas")
                      .eq("orden_corte_id", oc_id)
                      .eq("referencia_id", referencia_id).limit(1).execute()).data or []
             hija = _hh[0] if _hh else None
@@ -6168,12 +6208,18 @@ def calcular_insumos_requeridos_corte(
 
     unid_talla_fuente = None
     if hija is not None:
-        # Por referencia: unidades y precosteo de ESA referencia.
+        # Por referencia: unidades y precosteo de ESA referencia. Las unidades son
+        # lo CORTADO —hija → (corte de una sola referencia) padre → curva—, mismo
+        # criterio que las etiquetas. Antes se usaba SOLO la curva programada y el
+        # stock de insumos bajaba según lo programado, no lo cortado (2026-10-30:
+        # 16 de 40 cortes con diferencia, 525 prendas en total).
         ref_id = hija.get("referencia_id")
-        curva_ref = {str(t): int(v or 0)
-                     for t, v in (hija.get("curva_trazo") or {}).items() if int(v or 0) > 0}
+        curva_ref = _unidades_de_referencia(hija, oc)
+        de_lo_cortado = bool(_unidades_por_talla(hija.get("unidades_cortadas"))) or (
+            len(oc.get("referencias") or []) <= 1
+            and bool(_unidades_por_talla(oc.get("unidades_cortadas"))))
         cantidad_base = sum(curva_ref.values())
-        origen = "referencia_curva"
+        origen = "referencia_cortadas" if de_lo_cortado else "referencia_curva"
         unid_talla_fuente = curva_ref
         _pref = obtener_precosteo(ref_id) if ref_id else None
         ref = {"codigo_referencia": (_pref or {}).get("codigo_referencia"),
@@ -7377,7 +7423,7 @@ def tablero_produccion() -> dict:
     ultimos = []
     for oc in cortes:
         try:
-            created = datetime.fromisoformat(str(oc.get("created_at", "")).replace("Z", "+00:00"))
+            created = parse_iso_utc(oc.get("created_at"))
         except Exception:
             created = None
         unidades = sum(_int0(v) for v in (oc.get("unidades_cortadas") or {}).values())
@@ -7419,7 +7465,9 @@ def tablero_produccion() -> dict:
         por_etapa[etapa] = por_etapa.get(etapa, 0) + 1
         if etapa != "despachado" and r.get("asignado_at"):
             try:
-                asignado = datetime.fromisoformat(str(r["asignado_at"]).replace("Z", "+00:00"))
+                asignado = parse_iso_utc(r["asignado_at"])
+                if asignado is None:
+                    raise ValueError("fecha_ilegible")
                 dias = (hoy - asignado).days
                 if dias > 7:
                     estancados.append({
@@ -7871,7 +7919,9 @@ def cruce_costeo_siigo(*, desde: Optional[str] = None) -> dict:
             if not entregado:
                 continue  # el confeccionista aún trabaja — no es exigible
             try:
-                ent_dt = datetime.fromisoformat(str(entregado).replace("Z", "+00:00"))
+                ent_dt = parse_iso_utc(entregado)
+                if ent_dt is None:
+                    continue
             except (TypeError, ValueError):
                 continue
             if (ahora - ent_dt).total_seconds() < 86400:

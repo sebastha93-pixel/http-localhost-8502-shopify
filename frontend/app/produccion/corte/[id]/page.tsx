@@ -23,6 +23,7 @@ import { type CorreoEnvio, presentacionCorreo } from "@/lib/correo-estado";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, ScanLine, Trash2, Lock, Loader2, AlertCircle, CheckCircle, Paperclip, Pencil, Send, X } from "lucide-react";
+import { pesos, decimal } from "@/lib/numeros";
 
 // Tallas base del editor de curva según tallaje (inferior = jeans, superior = bodys).
 const TALLAS_EDITOR: Record<"inferior" | "superior", string[]> = {
@@ -314,7 +315,7 @@ export default function DetalleOrdenCortePage() {
     mutationFn: () =>
       api.post(`/api/produccion/corte/${id}/pistolear`, {
         barcode: barcode.trim(),
-        metros_reservar: parseFloat(metros || "0"),
+        metros_reservar: decimal(metros),
       }),
     onSuccess: () => {
       setMsg(`✓ Rollo agregado (${metros} m)`);
@@ -393,7 +394,7 @@ export default function DetalleOrdenCortePage() {
         const n = parseInt(v || "0", 10);
         if (n > 0) curva[t] = n;
       }
-      const prom = parseFloat(curvaEdit?.promedio || "0") || 0;
+      const prom = decimal(curvaEdit?.promedio);
       return api.patch(`/api/produccion/corte/${id}/curva`, {
         curva, referencia_id: curvaEdit?.refId || null,
         promedio_tecnico: prom > 0 ? prom : null,
@@ -522,13 +523,13 @@ export default function DetalleOrdenCortePage() {
         throw new Error("Llena las UNIDADES CORTADAS por talla antes de cerrar. "
           + "El informe no se guarda sin ellas — abajo tienes la grilla.");
       }
-      const consumoFinal = parseFloat(consumoReal || "0") || 0;
+      const consumoFinal = decimal(consumoReal);
       if (consumoFinal <= 0) {
         throw new Error("Falta el CONSUMO REAL (metros) del corte. "
           + "El informe no se guarda sin ese dato.");
       }
-      const retazosM = parseFloat(retazos || "0") || 0;
-      const promedioManual = parseFloat(promedioReal || "0") || 0;
+      const retazosM = decimal(retazos);
+      const promedioManual = decimal(promedioReal);
       const promedioDerivado = totalUnid > 0 && consumoFinal > 0 ? consumoFinal / totalUnid : 0;
       const promedioFinal = promedioManual || promedioDerivado;
       return api.post<{
@@ -539,7 +540,7 @@ export default function DetalleOrdenCortePage() {
       }>(`/api/produccion/corte/${id}/cerrar`, {
         consumo_real_cortador: consumoFinal,
         merma_tipo: mermaTipo || null,
-        merma_valor: mermaValor ? parseFloat(mermaValor) : null,
+        merma_valor: mermaValor ? decimal(mermaValor) : null,
         referencia_lote: refLote || null,
         capas_real: capasReal ? parseInt(capasReal, 10) : null,
         promedio_real: promedioFinal ? Number(promedioFinal.toFixed(4)) : null,
@@ -547,7 +548,7 @@ export default function DetalleOrdenCortePage() {
         unidades_por_referencia: unidadesPorRef,
         retazos_metros: retazosM || null,
         fecha_entrega: fechaEntrega || null,
-        precio_corte: precioCorte ? parseFloat(precioCorte) : null,
+        precio_corte: precioCorte ? pesos(precioCorte) : null,
         // Flujo nuevo: si eligió confeccionista, se auto-genera la remisión
         // (retenida) y se le avisa el lote por recoger.
         confeccionista_id: cierreConfId || null,
@@ -1815,7 +1816,7 @@ function RollosTabla({ match, otros, telaRef, oc, onUsar, onAsignar, asignando }
   const asignarFila = (r: RolloInv) => {
     // Por defecto se asigna TODO lo libre; el campo es editable para una parte.
     const raw = metrosFila[r.id];
-    const m = (raw === undefined || raw === "") ? libresDe(r) : parseFloat(raw);
+    const m = (raw === undefined || raw === "") ? libresDe(r) : decimal(raw);
     if (!m || m <= 0) return;
     onAsignar(r, m);
     setMetrosFila((prev) => { const n = { ...prev }; delete n[r.id]; return n; });
@@ -1980,9 +1981,9 @@ function InformeCorteCard({
   // El cortador calcula el consumo, las capas y el promedio manualmente
   // (contando en piso) y los digita aquí para cruzarlos contra el teórico.
   // El promedio, si no lo escribe, se deriva de metros ÷ unidades.
-  const metrosRealN = parseFloat(consumoReal || "0") || 0;
+  const metrosRealN = decimal(consumoReal);
   const promedioDerivado = totalUnidades > 0 && metrosRealN > 0 ? metrosRealN / totalUnidades : 0;
-  const promedioRealN = parseFloat(promedioReal || "0") || promedioDerivado;
+  const promedioRealN = decimal(promedioReal) || promedioDerivado;
 
   // Deltas contra el teórico
   const promTeo = Number(oc.promedio_tecnico || 0);
@@ -2367,6 +2368,7 @@ interface RutaCorte {
   terminacion?: { nombre?: string; telefono?: string };
   lavanderia_id?: string;
   lavanderia?: { nombre?: string; telefono?: string };
+  token_publico_lavanderia?: string;
 }
 
 interface ProveedorTerminacion {
@@ -2637,6 +2639,16 @@ function HojaRutaCard({ ordenCorteId, consecutivo, referenciaId, referenciaCodig
           <div role="alert" className="rounded-sm border border-terracotta/40 bg-terracotta/[0.06] px-3 py-2 text-xs text-terracotta">
             {errRuta}
           </div>
+        )}
+
+        {/* Enlace del portal de LAVANDERÍA. Existía (token_publico_lavanderia) pero
+            nada lo mostraba ni lo enviaba: por eso 0 lavanderías registraron lo que
+            recibieron o entregaron (2026-10-30). Aparece cuando el lote va o está
+            en lavandería. */}
+        {!omitidas.includes("lavanderia") && r.token_publico_lavanderia
+          && (r.lavanderia_id || r.etapa === "lavanderia") && (
+          <EnlaceLavanderia token={r.token_publico_lavanderia} consecutivo={consecutivo}
+            nombre={r.lavanderia?.nombre} telefono={r.lavanderia?.telefono} />
         )}
 
         {/* Timeline visual */}
@@ -3070,5 +3082,39 @@ function CuadreConfeccion({ ocId, referenciaId, etiqueta, puedeEditar, puedeJust
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// ── Enlace para la lavandería ───────────────────────────────────────────────
+// Ahí registra lo que recibió y lo que entregó (con cantidades): es lo que
+// alimenta el paso de lavandería en Cierre de bodega.
+function EnlaceLavanderia({ token, consecutivo, nombre, telefono }: {
+  token: string; consecutivo: string; nombre?: string; telefono?: string;
+}) {
+  const [copiado, setCopiado] = useState(false);
+  const link = typeof window !== "undefined" ? `${window.location.origin}/lavanderia/${token}` : "";
+  const msg = `Hola${nombre ? " " + nombre : ""}, este es el enlace del lote *${consecutivo}* de MALE'DENIM. `
+    + `Ahí registras cuántas prendas recibiste y cuántas entregaste:\n\n${link}`;
+  const tel = (telefono || "").replace(/\D/g, "");
+  const telFinal = tel ? (tel.startsWith("57") ? tel : `57${tel}`) : "";
+  const wa = `https://wa.me/${telFinal}?text=${encodeURIComponent(msg)}`;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-sm border border-navy-600/30 bg-navy-600/[0.04] px-3 py-2">
+      <p className="text-xs text-ink-900">
+        <span className="font-semibold">Enlace para la lavandería</span>
+        {nombre ? ` (${nombre})` : ""}: ahí registra lo que recibió y lo que entregó.
+      </p>
+      <div className="flex items-center gap-2">
+        <button type="button"
+          onClick={() => { navigator.clipboard?.writeText(link).then(() => { setCopiado(true); setTimeout(() => setCopiado(false), 2500); }).catch(() => {}); }}
+          className="rounded-sm border border-border bg-card px-3 py-1.5 text-[0.68rem] font-semibold uppercase tracking-widest text-ink-900 hover:bg-cloud">
+          {copiado ? "Copiado" : "Copiar enlace"}
+        </button>
+        <a href={wa} target="_blank" rel="noopener noreferrer"
+          className="rounded-sm bg-teal px-3 py-1.5 text-[0.68rem] font-semibold uppercase tracking-widest text-white hover:bg-ink-900">
+          Enviar por WhatsApp
+        </a>
+      </div>
+    </div>
   );
 }
