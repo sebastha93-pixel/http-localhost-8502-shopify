@@ -141,8 +141,8 @@ def test_el_ensayo_corre_todo_y_no_deja_nada(base_vacia):
 
     r = sembrar(URL)
     assert r["aplicado"] is False
-    assert sorted(r["tiendas"]) == ["arrayanes", "florida"]
-    assert len(r["cajas"]) == 3 and len(r["ubicaciones"]) == 2
+    assert sorted(r["tiendas"]) == ["arrayanes", "feria", "florida"]
+    assert len(r["cajas"]) == 4 and len(r["ubicaciones"]) == 3
     assert _leer_sync(base_vacia, "SELECT count(*) FROM retail.tiendas")[0][0] == 0
 
 
@@ -176,6 +176,32 @@ def test_florida_queda_con_los_datos_de_su_tirilla(base_vacia):
     prefijos = _leer_sync(base_vacia, "SELECT DISTINCT prefijo_factura "
                                  "FROM retail.cajas WHERE tienda_id='florida'")
     assert prefijos == [("FLPOS",)]      # un prefijo por tienda, las dos cajas
+
+
+def test_la_feria_queda_APAGADA_hasta_que_exista_su_bodega_en_siigo(base_vacia):
+    """Sin bodega, la factura saldría sin ella y Siigo descontaría de
+    cualquiera. La caja se prende sola al enlazar la bodega «Feria»."""
+    from backend.modules.retail.sembrar_tiendas import enlazar_feria, sembrar
+
+    sembrar(URL, aplicar=True)
+    caja = "SELECT activa FROM retail.cajas WHERE id = 'feria_caja1'"
+    assert _leer_sync(base_vacia, caja)[0][0] is False
+    assert _leer_sync(base_vacia, "SELECT siigo_documento_id FROM retail.cajas "
+                                  "WHERE id = 'feria_caja1'")[0][0] == 80109
+
+    sin = enlazar_feria(URL, [{"id": 48, "name": "Florida"}], aplicar=True)
+    assert sin["enlazada"] is False
+    assert _leer_sync(base_vacia, caja)[0][0] is False
+
+    r = enlazar_feria(URL, [{"id": 48, "name": "Florida"},
+                            {"id": 5001, "name": "FERIA ", "active": True}],
+                      aplicar=True)
+    assert r == {"enlazada": True, "bodega": 5001}
+    assert _leer_sync(base_vacia, caja)[0][0] is True
+    assert _leer_sync(base_vacia, """
+        SELECT t.siigo_bodega_id, u.siigo_bodega_id FROM retail.tiendas t
+          JOIN retail.ubicaciones u ON u.tienda_id = t.id
+         WHERE t.id = 'feria'""")[0] == (5001, 5001)
 
 
 # ── Qué ve cada tienda ──────────────────────────────────────────────────────
