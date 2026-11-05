@@ -178,30 +178,20 @@ def test_florida_queda_con_los_datos_de_su_tirilla(base_vacia):
     assert prefijos == [("FLPOS",)]      # un prefijo por tienda, las dos cajas
 
 
-def test_la_feria_queda_APAGADA_hasta_que_exista_su_bodega_en_siigo(base_vacia):
-    """Sin bodega, la factura saldría sin ella y Siigo descontaría de
-    cualquiera. La caja se prende sola al enlazar la bodega «Feria»."""
-    from backend.modules.retail.sembrar_tiendas import enlazar_feria, sembrar
+def test_la_feria_factura_con_lo_que_monto_contabilidad_en_siigo(base_vacia):
+    """«Plaza de Wein» en Siigo: comprobante 4 (TPFE), bodega 4091 y centro
+    de costos 67648. Sin bodega, Siigo descontaría de cualquiera."""
+    from backend.modules.retail.sembrar_tiendas import sembrar
 
     sembrar(URL, aplicar=True)
-    caja = "SELECT activa FROM retail.cajas WHERE id = 'feria_caja1'"
-    assert _leer_sync(base_vacia, caja)[0][0] is False
-    assert _leer_sync(base_vacia, "SELECT siigo_documento_id FROM retail.cajas "
-                                  "WHERE id = 'feria_caja1'")[0][0] == 80109
-
-    sin = enlazar_feria(URL, [{"id": 48, "name": "Florida"}], aplicar=True)
-    assert sin["enlazada"] is False
-    assert _leer_sync(base_vacia, caja)[0][0] is False
-
-    r = enlazar_feria(URL, [{"id": 48, "name": "Florida"},
-                            {"id": 5001, "name": "FERIA ", "active": True}],
-                      aplicar=True)
-    assert r == {"enlazada": True, "bodega": 5001}
-    assert _leer_sync(base_vacia, caja)[0][0] is True
     assert _leer_sync(base_vacia, """
-        SELECT t.siigo_bodega_id, u.siigo_bodega_id FROM retail.tiendas t
+        SELECT c.activa, c.siigo_documento_id, c.autorizacion_prefijo,
+               t.siigo_bodega_id, u.siigo_bodega_id, t.siigo_centro_costo_id
+          FROM retail.cajas c
+          JOIN retail.tiendas t ON t.id = c.tienda_id
           JOIN retail.ubicaciones u ON u.tienda_id = t.id
-         WHERE t.id = 'feria'""")[0] == (5001, 5001)
+         WHERE c.id = 'feria_caja1'""")[0] == (
+        True, 27153, "TPFE", 4091, 4091, 67648)
 
 
 # ── Qué ve cada tienda ──────────────────────────────────────────────────────
@@ -408,7 +398,7 @@ def test_un_administrador_las_ve_todas_sin_estar_asignado(entorno, monkeypatch):
         id="jefe", email="jefe@male.com", nombre="Jefe", rol="admin",
         permisos={})
     ids = [x["caja_id"] for x in c.get("/api/retail/cajas").json()]
-    assert len(ids) == 3
+    assert len(ids) == 4                 # Florida ×2, Arrayanes y la Feria
 
 
 # ── El vuelto no es un faltante ─────────────────────────────────────────────
