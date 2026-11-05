@@ -36,7 +36,7 @@ from backend.modules.retail.infrastructure.persistencia.unidad_de_trabajo import
     normalizar_url,
 )
 
-__all__ = ["sembrar", "enlazar_feria", "TIENDAS", "CAJAS", "UBICACIONES",
+__all__ = ["sembrar", "TIENDAS", "CAJAS", "UBICACIONES",
            "MEDIOS"]
 
 _EMPRESA = {
@@ -80,13 +80,12 @@ TIENDAS = [
     },
     {
         # LA FERIA (Sebastián, 2026-11-03): un punto de venta propio, atendido
-        # desde un iPad. Su inventario es la bodega «Feria» de Siigo, que crea
-        # contabilidad: mientras no exista, `siigo_bodega_id` va vacío y la
-        # caja apagada (`enlazar_feria`). Centro de costo PRINCIPAL y el
-        # vendedor de Florida hasta que contabilidad diga otra cosa.
+        # desde un iPad. Contabilidad (2026-11-05) la montó en Siigo como
+        # «PLAZA DE WEIN»: bodega 4091 (código 7) y centro de costos 67648
+        # (código 18). El vendedor es el de Florida.
         **_EMPRESA,
         "id": "feria", "nombre": "Feria",
-        "siigo_bodega_id": None, "siigo_centro_costo_id": 237,
+        "siigo_bodega_id": 4091, "siigo_centro_costo_id": 67648,
         "siigo_vendedor_id": 937,
         "siigo_nc_documento_id": 11817,
         "direccion": "Feria", "telefono": "3122851520",
@@ -129,18 +128,12 @@ CAJAS = [
      "autorizacion_numero": "18764116899001", "autorizacion_desde": 1,
      "autorizacion_hasta": 1000000,
      "autorizacion_aprobada": date(2026, 10, 8), "autorizacion_meses": 24},
-    # Factura con el comprobante de la caja 2 de Florida (TFP, 80109): su
-    # resolución está vigente hasta 2028 y una nueva tarda días en la DIAN.
-    # Siigo numera; dos cajas en el mismo comprobante no se pisan.
-    # APAGADA hasta que exista la bodega: sin ella la factura saldría sin
-    # bodega y Siigo descontaría de cualquiera.
+    # Factura con el comprobante 4 de Siigo, «Factura de venta plaza de Wein»
+    # (prefijo TPFE, id 27153), el que indicó contabilidad el 2026-11-05.
+    # Sin el número de su resolución todavía: la tirilla sale sin él.
     {"id": "feria_caja1", "tienda_id": "feria", "nombre": "Caja Feria",
-     "prefijo_factura": "FERPOS", "siigo_documento_id": 80109,
-     "activa": False,
-     "autorizacion_prefijo": "TFP",
-     "autorizacion_numero": "18764116899665", "autorizacion_desde": 1,
-     "autorizacion_hasta": 1000000,
-     "autorizacion_aprobada": date(2026, 10, 8), "autorizacion_meses": 24},
+     "prefijo_factura": "FERPOS", "siigo_documento_id": 27153,
+     "autorizacion_prefijo": "TPFE"},
 ]
 
 UBICACIONES = [
@@ -149,7 +142,7 @@ UBICACIONES = [
     {"id": "tienda:arrayanes", "tipo": "tienda", "nombre": "Arrayanes",
      "tienda_id": "arrayanes", "siigo_bodega_id": 37},
     {"id": "tienda:feria", "tipo": "tienda", "nombre": "Feria",
-     "tienda_id": "feria", "siigo_bodega_id": None},
+     "tienda_id": "feria", "siigo_bodega_id": 4091},
 ]
 
 #  El efectivo y el datáfono son DE CADA TIENDA: en Siigo son cuentas
@@ -176,7 +169,7 @@ MEDIOS = [
      # del datáfono. Obligatorio desde el 2026-10-10.
      "exige_referencia": True},
     # La feria: el efectivo vuelve a la oficina; el datáfono es el de
-    # «Plaza de Wein» (12143), que contabilidad reactiva en Siigo.
+    # «Plaza de Wein» (12143).
     {"id": "efectivo_feria", "nombre": "Efectivo", "tipo": "efectivo",
      "tienda_id": "feria", "siigo_forma_pago_id": 44998,
      "permite_vuelto": True, "orden": 0, "exige_referencia": False},
@@ -225,38 +218,6 @@ def sembrar(url: str, *, aplicar: bool = False) -> dict:
         motor.dispose()
     r["aplicado"] = aplicar
     return r
-
-
-def enlazar_feria(url: str, bodegas: List[dict], *, aplicar: bool = False) -> dict:
-    """Cuando contabilidad crea la bodega «Feria» en Siigo: la enlaza a la
-    tienda y a su ubicación, y prende la caja. `bodegas` es `GET /warehouses`.
-
-    Sin bodega no hace nada: la caja sigue apagada.
-    """
-    feria = [b for b in bodegas
-             if (b.get("name") or "").strip().lower() == "feria"
-             and b.get("active", True)]
-    if len(feria) != 1:
-        return {"enlazada": False,
-                "motivo": f"{len(feria)} bodegas activas llamadas «Feria» en Siigo"}
-    bodega = int(feria[0]["id"])
-    motor = create_engine(normalizar_url(url), future=True)
-    try:
-        with motor.connect() as c:
-            tx = c.begin()
-            c.execute(text("UPDATE retail.tiendas SET siigo_bodega_id = :b "
-                           "WHERE id = 'feria'"), {"b": bodega})
-            c.execute(text("UPDATE retail.ubicaciones SET siigo_bodega_id = :b "
-                           "WHERE id = 'tienda:feria'"), {"b": bodega})
-            c.execute(text("UPDATE retail.cajas SET activa = true "
-                           "WHERE id = 'feria_caja1'"))
-            if aplicar:
-                tx.commit()
-            else:
-                tx.rollback()
-    finally:
-        motor.dispose()
-    return {"enlazada": aplicar, "bodega": bodega}
 
 
 def main(argv: List[str]) -> int:
