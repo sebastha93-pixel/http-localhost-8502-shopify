@@ -159,15 +159,27 @@ def test_dice_cuales_NO_pueden_facturar_todavia(entorno):
     d = c.get("/api/retail/caja/contexto",
               params={"caja_id": "florida_caja1"}).json()
     listas = {m["id"]: m["factura_lista"] for m in d["medios_pago"]}
-    # Addi (12245 «ADDI FLORIDA») y Sumas (12218 «SUMAS PAY TIENDA») YA tienen
-    # su id: se leyeron de la cuenta real en la migración 0019. Wompi lo
-    # recibió en la 0022 (8353 «WOMPI», confirmado por Sebastián: había dos
-    # candidatos y no se adivinó). Transferencia se desactivó en la 0023:
+    # Addi y Sumas YA tienen su id: se leyeron de la cuenta real en la
+    # migración 0019. Wompi lo recibió en la 0022. Los dos cambiaron a sus
+    # cuentas de crédito en la 0041. Transferencia se desactivó en la 0023:
     # las tiendas no la reciben.
     assert listas == {"efectivo": True, "datafono": True, "addi": True,
                       "sumas": True, "wompi_qr": True,
                       # ANTICIPO CLIENTES (8316), desde la 0031.
                       "saldo_a_favor": True, "tarjeta_regalo": True}
+
+
+def test_addi_y_wompi_van_a_sus_cuentas_de_credito(entorno):
+    """Sebastián, 2026-11-05 (0041): Addi → 8298 «ADDI CREDITO 30 DIAS» y
+    Wompi → 8844 «WOMPI CREDITO UN DIA», las mismas de la tienda online."""
+    from sqlalchemy import create_engine
+    motor = create_engine(URL, future=True)
+    with motor.connect() as c:
+        formas = dict(c.execute(text(
+            "SELECT id, siigo_forma_pago_id FROM retail.medios_pago "
+            "WHERE id IN ('addi', 'wompi_qr')")).all())
+    motor.dispose()
+    assert formas == {"addi": 8298, "wompi_qr": 8844}
 
 
 # ── LA REFERENCIA, que estaba muerta desde la migración 0001 ────────────────
