@@ -168,13 +168,13 @@ MEDIOS = [
      # El número del voucher: es lo que cuadra el cierre contra el informe
      # del datáfono. Obligatorio desde el 2026-10-10.
      "exige_referencia": True},
-    # La feria: el efectivo vuelve a la oficina; el datáfono es el de
-    # «Plaza de Wein» (12143).
+    # La feria: el efectivo vuelve a la oficina; el datáfono es de Wompi y va
+    # a «WOMPI CREDITO UN DIA» (8844), como todo lo de Wompi (0041).
     {"id": "efectivo_feria", "nombre": "Efectivo", "tipo": "efectivo",
      "tienda_id": "feria", "siigo_forma_pago_id": 44998,
      "permite_vuelto": True, "orden": 0, "exige_referencia": False},
     {"id": "datafono_feria", "nombre": "Datáfono", "tipo": "tarjeta",
-     "tienda_id": "feria", "siigo_forma_pago_id": 12143,
+     "tienda_id": "feria", "siigo_forma_pago_id": 8844,
      "permite_vuelto": False, "orden": 1, "exige_referencia": True},
 ]
 
