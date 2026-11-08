@@ -11,7 +11,7 @@ from typing import Optional, Any
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from backend.core.security import CurrentUser, require_role, require_permission
+from backend.core.security import CurrentUser, get_current_user, require_role, require_permission
 from backend.services import melonn as svc
 from backend.services import metricas as metricas_svc
 from backend.services import overrides as overrides_svc
@@ -427,7 +427,7 @@ def enriquecer_faltantes_endpoint(
 
 
 @router.get("/status", response_model=StatusResponse)
-def status() -> StatusResponse:
+def status(_: CurrentUser = Depends(get_current_user)) -> StatusResponse:
     """Estado de la integración Melonn — credenciales y caché."""
     return StatusResponse(
         credenciales_ok=svc.credenciales_ok(),
@@ -438,6 +438,7 @@ def status() -> StatusResponse:
 @router.get("/pedidos", response_model=PedidoListResponse)
 def pedidos(
     refresh: bool = Query(default=False, description="Forzar fetch a la API"),
+    _: CurrentUser = Depends(get_current_user),
 ) -> PedidoListResponse:
     """
     Lista de pedidos activos.
@@ -538,7 +539,7 @@ def salud(
 
 
 @router.get("/pedidos/{orden}")
-def pedido_detalle(orden: str) -> dict:
+def pedido_detalle(orden: str, _: CurrentUser = Depends(get_current_user)) -> dict:
     """Detalle de un pedido específico (por orden_tienda u orden_melonn)."""
     try:
         data = svc.obtener_pedidos(forzar_refresh=False)
