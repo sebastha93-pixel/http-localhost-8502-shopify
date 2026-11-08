@@ -3,9 +3,10 @@ backend.api.metricas — Endpoints de métricas globales (Centro de Control).
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from backend.core.security import CurrentUser, get_current_user
 from backend.services import melonn as melonn_svc
 from backend.services import metricas as metricas_svc
 
@@ -41,6 +42,7 @@ class MetricasResponse(BaseModel):
 @router.get("", response_model=MetricasResponse)
 def obtener_metricas(
     refresh: bool = Query(default=False, description="Forzar fetch a la API"),
+    _: CurrentUser = Depends(get_current_user),
 ) -> MetricasResponse:
     """Métricas globales pre-calculadas para el Centro de Control."""
     try:
