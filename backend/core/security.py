@@ -148,19 +148,30 @@ def get_current_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(_be
         fresh = cached["data"]
     else:
         from backend.services import usuarios as _svc
+        sin_base = _svc._sb() is None   # desarrollo local sin Supabase
         try:
             db_user = _svc.obtener_por_id(uid)
+            error_db = False
         except Exception:
-            db_user = None
-        if db_user is None:
-            # No pudimos leer la DB (RLS, timeout, etc.) — fallback al JWT
-            # para no romper el login. Solo INVALIDAMOS si la DB explícitamente
-            # nos dijo que el usuario está inactivo.
+            db_user, error_db = None, True
+        if db_user is None and sin_base:
+            # Sin Supabase configurada (solo pasa en local): se confía en el JWT.
             fresh = {
                 "rol": payload.get("rol", "lector"),
                 "permisos": payload.get("permisos", {}) or {},
                 "activo": True,
             }
+        elif db_user is None and error_db:
+            # La base falló (pool, timeout). Se acepta la última lectura buena
+            # de hasta 15 min; sin ella se FALLA CERRADO: un token con un `sub`
+            # inventado o de un usuario borrado nunca entra por esta puerta.
+            if cached and (now - cached["ts"]) < 900:
+                return _current_user(uid, payload, cached["data"])
+            raise HTTPException(status_code=503, detail="No se pudo verificar la sesión; intenta de nuevo")
+        elif db_user is None:
+            # La base respondió y el usuario NO existe (borrado o `sub` falso).
+            _USER_CACHE.pop(uid, None)
+            raise HTTPException(status_code=401, detail="Usuario no existe")
         elif not db_user.get("activo", True):
             _USER_CACHE.pop(uid, None)
             raise HTTPException(status_code=401, detail="Usuario inactivo")
@@ -172,6 +183,10 @@ def get_current_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(_be
             }
         _USER_CACHE[uid] = {"ts": now, "data": fresh}
 
+    return _current_user(uid, payload, fresh)
+
+
+def _current_user(uid: str, payload: dict, fresh: dict) -> CurrentUser:
     return CurrentUser(
         id=uid,
         email=payload["email"],
