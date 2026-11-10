@@ -382,7 +382,10 @@ async def errores_como_respuesta(request, call_next):
 async def renovar_sesion(request, call_next):
     response = await call_next(request)
     auth = request.headers.get("authorization") or ""
-    if auth.lower().startswith("bearer "):
+    # Solo se renueva si la petición pasó la verificación contra la base
+    # (get_current_user). Un 401/403/503 —usuario borrado, inactivo o sin
+    # verificar— nunca recibe un token fresco que lo mantenga vivo.
+    if auth.lower().startswith("bearer ") and response.status_code < 400:
         try:
             from backend.core.security import renovar_token_si_conviene
             nuevo = renovar_token_si_conviene(auth[7:].strip())
