@@ -533,6 +533,8 @@ def test_los_numeros_se_separan_POR_LINEA_no_sobre_el_total(cliente):
     from backend.modules.retail.domain.shared.impuestos import separar_iva
 
     c, _ = cliente
+    # Precio >= catálogo (169.900): desde nov-2026 un precio menor es una
+    # rebaja que pasa por el tope. 16.990.002 conserva la diferencia de redondeo.
     # Dos líneas cuyos totales, sumados, se separan distinto que por separado.
     r = c.post("/api/retail/ventas/cerrar", json={
         "venta_id": "01JQ8X4T5N6P010R8S9V0W1X2Y", "numero": "FV-20-1350",
@@ -540,18 +542,18 @@ def test_los_numeros_se_separan_POR_LINEA_no_sobre_el_total(cliente):
         "sesion_id": SESION, "ubicacion_id": UBICACION,
         "lineas": [
             {"sku": "92611-1T10", "cantidad": 1,
-             "precio_unitario_centavos": 999901, "descripcion": "A"},
+             "precio_unitario_centavos": 16990002, "descripcion": "A"},
             {"sku": "92611-1T10", "cantidad": 1,
-             "precio_unitario_centavos": 999901, "descripcion": "B"},
+             "precio_unitario_centavos": 16990002, "descripcion": "B"},
         ],
-        "pagos": [{"medio_pago_id": "efectivo", "monto_centavos": 1999802,
+        "pagos": [{"medio_pago_id": "efectivo", "monto_centavos": 33980004,
                    "es_efectivo": True}],
     })
     assert r.status_code == 200, r.text
     d = c.get("/api/retail/ventas/01JQ8X4T5N6P010R8S9V0W1X2Y/tirilla").json()
 
-    por_linea = sum(separar_iva(999901, 19)[1] for _ in range(2))
-    sobre_total = separar_iva(1999802, 19)[1]
+    por_linea = sum(separar_iva(16990002, 19)[1] for _ in range(2))
+    sobre_total = separar_iva(33980004, 19)[1]
 
     assert d["iva_centavos"] == por_linea, (
         "el servidor dejó de separar el IVA por línea"
@@ -562,4 +564,53 @@ def test_los_numeros_se_separan_POR_LINEA_no_sobre_el_total(cliente):
         )
     # Y el total sigue siendo el de la etiqueta, sin centavos fantasma.
     assert d["base_gravable_centavos"] + d["iva_centavos"] == d["total_centavos"]
-    assert d["total_centavos"] == 1999802
+    assert d["total_centavos"] == 33980004
+
+
+# ── El precio y el obsequio los respalda el servidor (auditoría nov-2026) ──
+# Antes el POS cobraba el precio que mandara el navegador y el obsequio se
+# «autorizaba» con el id de la misma cajera. María tiene tope del 10 %.
+
+def _cerrar(c, venta_id, numero, linea, monto):
+    return c.post("/api/retail/ventas/cerrar", json={
+        "venta_id": venta_id, "numero": numero, "tienda_id": "florida",
+        "caja_id": "florida_caja1", "sesion_id": SESION, "ubicacion_id": UBICACION,
+        "lineas": [{"sku": "92611-1T10", "cantidad": 1, "descripcion": "Jean", **linea}],
+        "pagos": [{"medio_pago_id": "efectivo", "monto_centavos": monto, "es_efectivo": True}],
+    })
+
+
+def test_precio_muy_por_debajo_del_catalogo_no_pasa(cliente):
+    c, _ = cliente
+    r = _cerrar(c, "01JQ8X4T5N6P010R8S9V0W1X3A", "FV-20-1360",
+                {"precio_unitario_centavos": 100000}, 100000)   # $1.000 por un jean de $169.900
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"]["error"] == "sobre_el_tope"
+
+
+def test_rebaja_dentro_del_tope_queda_como_descuento_firmado(cliente):
+    c, _ = cliente
+    precio = PRECIO - PRECIO * 5 // 100                          # 5 % menos, tope 10 %
+    r = _cerrar(c, "01JQ8X4T5N6P010R8S9V0W1X3B", "FV-20-1361",
+                {"precio_unitario_centavos": precio}, precio)
+    assert r.status_code == 200, r.text
+    assert r.json()["total_centavos"] == precio
+    d = _tirilla(c, "01JQ8X4T5N6P010R8S9V0W1X3B")
+    assert d["total_centavos"] == precio
+
+
+def test_obsequio_sin_tope_del_100_no_pasa(cliente):
+    c, _ = cliente
+    r = _cerrar(c, "01JQ8X4T5N6P010R8S9V0W1X3C", "FV-20-1362",
+                {"precio_unitario_centavos": PRECIO, "obsequio": True}, 1)
+    assert r.status_code == 403, r.text
+    assert "100" in r.json()["detail"]["mensaje"]
+
+
+def test_el_iva_lo_pone_el_catalogo_no_la_caja(cliente):
+    c, _ = cliente
+    r = _cerrar(c, "01JQ8X4T5N6P010R8S9V0W1X3D", "FV-20-1363",
+                {"precio_unitario_centavos": PRECIO, "tasa_iva": "0"}, PRECIO)
+    assert r.status_code == 200, r.text
+    d = _tirilla(c, "01JQ8X4T5N6P010R8S9V0W1X3D")
+    assert d["iva_centavos"] > 0, "la caja mandó IVA 0 y el servidor lo aceptó"
