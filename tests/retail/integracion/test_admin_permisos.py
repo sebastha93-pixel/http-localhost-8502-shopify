@@ -325,6 +325,11 @@ def test_sin_directorio_lo_dice_en_vez_de_mentir(entorno, monkeypatch):
     c, _, entrar_como = entorno
     entrar_como("jefe", "admin")
     monkeypatch.setitem(sys.modules, "backend.services.usuarios", None)
+    # Si otra prueba ya importó el módulo, queda como atributo del paquete y
+    # `from backend.services import usuarios` lo encuentra ahí sin pasar por
+    # sys.modules: hay que quitarlo también del paquete para simular la falta.
+    import backend.services as _paquete
+    monkeypatch.delattr(_paquete, "usuarios", raising=False)
 
     r = c.get("/api/retail/admin/usuarios-candidatos")
     assert r.status_code == 503

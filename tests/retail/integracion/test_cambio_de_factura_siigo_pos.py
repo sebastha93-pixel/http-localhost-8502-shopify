@@ -65,10 +65,10 @@ MAYORISTA = {**FACTURA, "id": "cccc1111-2222-3333-4444-555566667777",
              "number": 2502}
 
 
-def _p(code, arrayanes=0, florida=0):
+def _p(code, arrayanes=0, florida=0, precio=149900):
     return {"code": code, "name": f"{code} JEAN", "stock_control": True,
             "tax_included": True, "account_group": {"name": "SKINNY"},
-            "prices": [{"price_list": [{"value": 149900}]}],
+            "prices": [{"price_list": [{"value": precio}]}],
             "warehouses": [{"id": 37, "name": "Arrayanes", "quantity": arrayanes},
                            {"id": 48, "name": "Florida", "quantity": florida}],
             "additional_fields": {"barcode": code}}
@@ -90,7 +90,7 @@ async def tienda(monkeypatch):
     aplicar(URL)
     sembrar(URL, aplicar=True)
     sincronizar(URL, aplicar=True, precios_de_lista=lambda c: {}, productos=[
-        _p("26602-1T6", arrayanes=2, florida=4), _p("95613-1T12", arrayanes=8)])
+        _p("26602-1T6", arrayanes=2, florida=4, precio=129900), _p("95613-1T12", arrayanes=8)])
     os.environ["RETAIL_DATABASE_URL"] = URL
     dependencias.reiniciar()
     monkeypatch.setenv("RETAIL_FISCAL_MODO", "apagado")

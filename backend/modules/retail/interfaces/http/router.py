@@ -273,7 +273,8 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
     async with uow as t:
         from sqlalchemy import text as _t
         filas = (await t.sesion.execute(_t("""
-            SELECT id, sku FROM retail.variantes WHERE sku = ANY(:skus)
+            SELECT id, sku, precio_con_iva, tasa_iva
+              FROM retail.variantes WHERE sku = ANY(:skus)
         """), {"skus": skus})).mappings().all()
         # EL TOPE SE LEE AQUÍ, no llega en el cuerpo. Antes viajaba como
         # `tope_descuento` desde el navegador: un cliente modificado que
@@ -291,6 +292,38 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
     # minúsculas/espacios el guardián pasaba, pero el lookup normalizado reventaba
     # con KeyError (500). Ahora guardián y lookup usan la misma llave.
     variante_por_sku = {Sku.parsear(f["sku"]).codigo: f["id"] for f in filas}
+    catalogo = {Sku.parsear(f["sku"]).codigo: (int(f["precio_con_iva"]), str(f["tasa_iva"]))
+                for f in filas}
+
+    faltan = [el.sku for el in entrada.lineas
+              if Sku.parsear(el.sku).codigo not in variante_por_sku]
+    if faltan:
+        raise ReglaDeNegocio(
+            f"Estas referencias no están en el catálogo: {', '.join(faltan)}")
+
+    # EL PRECIO Y EL IVA LOS RESPALDA EL CATÁLOGO (auditoría nov-2026). Antes se
+    # cobraba el `precio_unitario_centavos` que mandaba el dispositivo sin
+    # compararlo con nada: un jean de $189.900 salía facturado a $1.000 y el
+    # tope de descuento no se enteraba, porque técnicamente no había descuento.
+    #
+    # Se sigue respetando el precio CONGELADO de la caja (ver la nota de
+    # `_armar`): si es igual o mayor al del catálogo, va tal cual. Si es MENOR,
+    # la diferencia es un descuento disfrazado y se trata como tal: se cobra el
+    # precio del catálogo y la rebaja entra como descuento de quien cobra,
+    # dentro de su tope y con su nombre en la auditoría. Una línea con rebaja
+    # no puede llevar además otro descuento, obsequio ni promoción.
+    rebajas: Dict[int, int] = {}
+    for i, el in enumerate(entrada.lineas):
+        precio_catalogo, tasa = catalogo[Sku.parsear(el.sku).codigo]
+        el.tasa_iva = tasa                       # el IVA no lo decide la caja
+        if precio_catalogo > 0 and el.precio_unitario_centavos < precio_catalogo:
+            if (el.obsequio or el.descuento_porcentaje or el.descuento_valor_centavos
+                    or el.promocion_id):
+                raise ReglaDeNegocio(
+                    f"{el.sku}: el precio no coincide con el catálogo. Actualiza "
+                    f"la pantalla y vuelve a cobrar.")
+            rebajas[i] = precio_catalogo - el.precio_unitario_centavos
+            el.precio_unitario_centavos = precio_catalogo
 
     # LAS PROMOCIONES LAS CALCULA EL SERVIDOR. De la caja sólo se toma qué
     # líneas entran —las que marcó—; cuánto se descuenta sale de la regla, sin
@@ -350,13 +383,7 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
             raise ReglaDeNegocio(f"No es el regalo de la promoción: {', '.join(fuera)}.")
     lineas_regalo: list = []
 
-    faltan = [el.sku for el in entrada.lineas
-              if Sku.parsear(el.sku).codigo not in variante_por_sku]
-    if faltan:
-        raise ReglaDeNegocio(
-            f"Estas referencias no están en el catálogo: {', '.join(faltan)}")
-
-    for entrada_linea in entrada.lineas:
+    for i, entrada_linea in enumerate(entrada.lineas):
         linea = venta.agregar_linea(
             sku=Sku.parsear(entrada_linea.sku),
             descripcion=entrada_linea.descripcion or entrada_linea.sku,
@@ -365,7 +392,20 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
                                    entrada.moneda),
             tasa_iva=Decimal(entrada_linea.tasa_iva),
         )
-        if entrada_linea.obsequio:
+        if i in rebajas:
+            venta.aplicar_descuento_linea(
+                linea.numero,
+                Descuento.valor(Dinero(rebajas[i] * entrada_linea.cantidad, entrada.moneda),
+                                motivo="Precio de caja por debajo del catálogo"),
+                tope_de_quien_aplica=tope, aplicado_por=usuario_id)
+        elif entrada_linea.obsequio:
+            # Regalar es un descuento del 100 %: solo lo firma quien tiene ese
+            # tope. Antes se «autorizaba» con el id de la misma cajera y
+            # siempre pasaba (auditoría nov-2026).
+            if tope < Decimal(100):
+                raise RequiereAutorizacion(
+                    "Regalar una prenda necesita un usuario con tope de descuento "
+                    "del 100 %.")
             venta.marcar_obsequio(linea.numero, autorizado_por=usuario_id)
         elif (regalo and entrada_linea.promocion_id == regalo["id"]
               and not a_mano(entrada_linea)):
