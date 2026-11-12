@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     # 30 s: si desactivas a alguien en Supabase, queda fuera en medio minuto
     # aunque su token siga vigente.
     auth_jwt_expiry_min: int = Field(default=720, alias="AUTH_JWT_EXPIRY_MIN")
+    # Secreto PROPIO del token de servicio de la Oficina Virtual (ver
+    # backend.core.security, «Token de servicio»). Distinto de AUTH_JWT_SECRET:
+    # quien lo tenga solo abre los endpoints que usa el motor, nunca una sesión
+    # de persona. Vacío = el token de servicio no se acepta.
+    oficina_servicio_secret: str = Field(default="", alias="OFICINA_SERVICIO_SECRET")
 
     # Dónde vive la app para el usuario. Se usa para armar el enlace de
     # recuperación de contraseña, que se manda por correo: tiene que apuntar al
@@ -117,6 +122,12 @@ class Settings(BaseSettings):
             criticos.append("AUTH_JWT_SECRET es el default placeholder — debes cambiarlo a un valor aleatorio (≥32 chars)")
         elif len(self.auth_jwt_secret) < 32:
             warnings.append(f"AUTH_JWT_SECRET tiene solo {len(self.auth_jwt_secret)} chars — recomendado ≥32 (openssl rand -hex 32)")
+
+        if self.oficina_servicio_secret and self.oficina_servicio_secret == self.auth_jwt_secret:
+            criticos.append("OFICINA_SERVICIO_SECRET no puede ser igual a AUTH_JWT_SECRET: "
+                            "el punto de tenerlo es que la Oficina NO tenga el secreto de las sesiones")
+        elif self.oficina_servicio_secret and len(self.oficina_servicio_secret) < 32:
+            warnings.append("OFICINA_SERVICIO_SECRET tiene menos de 32 chars (openssl rand -hex 32)")
 
         # WARNING — webhook secrets (no aborta, los endpoints tienen su propio gate)
         import os as _os
