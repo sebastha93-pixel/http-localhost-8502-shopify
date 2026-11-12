@@ -3,12 +3,13 @@ backend.core.security — JWT + bcrypt + dependency de usuario actual.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
@@ -123,19 +124,75 @@ def renovar_token_si_conviene(token: str) -> Optional[str]:
         return None
 
 
+# ── Token de servicio de la Oficina Virtual ──────────────────────────
+# Auditoría de seguridad 2026-11-08 (Oficina #26a). Antes el motor de la Oficina
+# tenía AUTH_JWT_SECRET (allá MDS_JWT_SECRET) y se firmaba su propio token con
+# «rol: admin». Con ese secreto se acuña la sesión de CUALQUIER persona del OS:
+# comprometer el motor (una dependencia, un prompt injection con herramientas,
+# una fuga de variables de Railway) era ser admin de producción, inventario y
+# facturación. Ahora el motor firma con OFICINA_SERVICIO_SECRET, un secreto
+# distinto, y ese token solo abre los endpoints que el motor de verdad usa, con
+# permisos explícitos. Cualquier otra ruta: 403.
+
+SERVICIO_SUB = "oficina-motor"
+SERVICIO_AUD = "male-os-servicio"
+SERVICIO_RUTAS: tuple[tuple[str, str], ...] = (
+    ("GET",  r"/api/produccion/costeo-real"),         # Jefe de Producción
+    ("POST", r"/api/produccion/rutas/[^/]+/notas"),   # nota_lote aprobada en el Despacho
+    ("GET",  r"/api/finanzas/resumen"),               # Director Financiero
+    ("GET",  r"/api/dashboard/overview"),             # Director Financiero
+    ("GET",  r"/api/melonn/pedidos"),                 # Jefe de Logística
+)
+SERVICIO_PERMISOS = {
+    "produccion_costos": ["ver"],
+    "produccion_remisiones": ["ver", "modificar"],
+}
+
+
+def usuario_de_servicio(token: str, metodo: str, ruta: str) -> Optional[CurrentUser]:
+    """El principal de servicio si el token es de la Oficina; None si no lo es.
+
+    403 si es un token de servicio válido pero pide una ruta fuera de la lista.
+    """
+    secreto = settings.oficina_servicio_secret
+    if not secreto:
+        return None
+    try:
+        payload = jwt.decode(token, secreto, algorithms=["HS256"], audience=SERVICIO_AUD,
+                             options={"require": ["exp", "sub", "aud"]})
+    except jwt.InvalidTokenError:
+        return None
+    if payload.get("sub") != SERVICIO_SUB:
+        return None
+    if not any(m == metodo and re.fullmatch(p, ruta) for m, p in SERVICIO_RUTAS):
+        raise HTTPException(status_code=403, detail="El token de servicio no abre esta ruta")
+    return CurrentUser(
+        id=SERVICIO_SUB, email="oficina@maledenim.com", nombre="Oficina Virtual (servicio)",
+        rol="user", cargo="Servicio", permisos=SERVICIO_PERMISOS,
+    )
+
+
 # ── Dependency para extraer el usuario actual ────────────────────────
 
 _bearer = HTTPBearer(auto_error=False)
 
 
-def get_current_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer)) -> CurrentUser:
+def get_current_user(request: Request,
+                     creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer)) -> CurrentUser:
     if creds is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="No autenticado",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    payload = decode_token(creds.credentials)
+    try:
+        payload = decode_token(creds.credentials)
+    except HTTPException:
+        # ¿token de servicio de la Oficina? (ver «Token de servicio» arriba)
+        servicio = usuario_de_servicio(creds.credentials, request.method, request.url.path)
+        if servicio is not None:
+            return servicio
+        raise
 
     # Verificar contra DB que el usuario sigue ACTIVO y con el mismo rol.
     # Esto cierra el gap de JWT cacheado por 2h después de desactivar/cambiar
