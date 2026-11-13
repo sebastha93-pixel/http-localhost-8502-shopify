@@ -1,12 +1,19 @@
 # ═══════════════════════════════════════════════════════════════════════════
 #  OYENTE DEL GRUPO DE PRODUCCION — instalador de una linea
 # ═══════════════════════════════════════════════════════════════════════════
-#  En el servidor MDS, PowerShell COMO ADMINISTRADOR:
+#  En el servidor MDS, PowerShell COMO ADMINISTRADOR (ya NO con "| iex"):
 #
-#      irm https://backend-production-21f0.up.railway.app/api/produccion/agente/instalar_oyente.ps1 | iex
+#      cd $env:TEMP
+#      irm https://backend-production-21f0.up.railway.app/api/produccion/agente/instalar_oyente.ps1 -OutFile instalar_oyente.ps1
+#      Get-FileHash .\instalar_oyente.ps1   # comparar con la huella que dio el dueno
+#      powershell -NoProfile -ExecutionPolicy Bypass -File .\instalar_oyente.ps1
 #
 #  Descarga el oyente, instala dependencias, deja una tarea de Windows que
 #  arranca con la maquina, y pide el codigo de pareo para vincular el numero.
+#
+#  AUDITORIA 2026-11 (informe 15 #26): oyente.js y package.json solo se
+#  instalan con una firma valida de la llave del dueno (la misma del agente de
+#  impresion), y la carpeta queda solo para Administradores y SYSTEM.
 #
 #  NO pregunta por el grupo: eso se elige desde el OS y el oyente lo consulta
 #  en cada latido. Asi no hay que volver a esta maquina para cambiarlo.
@@ -18,6 +25,19 @@ $ErrorActionPreference = "Stop"
 # no corre ni el shim de npm.
 try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force } catch { }
 $BASE    = "https://backend-production-21f0.up.railway.app"
+$LlavePublica = '<RSAKeyValue><Modulus>xCD3/J8JttDmmoP9sjmfiRR01bsJ9UXA5nbRIP+zekvUx9sR7d9b9Pf4IfRD01udoBUbBwNBirlEw53EnNJp33kDZ0DzlLCtkPmelfW7epITmKORmtZT61jcl++QfeP5RuwptMxL8PPS19CjBYEpNvB6G69TLppivaAvv0o2qPNELohQOLPvwC1vVqbhG+GqagNM8SLzcb1/Dh8Q1I9hk7KPUVeiX9HqIEkF2TqH6N64Kq8iXR+b2q88lwm0AecL1nP6o6E8m+p47SbKimm4gZ7LLLBp2odd3cwZC5EjvDzTaajxiOVPajOEXVDVqjaU7M8HukAGjUzAHkZ32ruNfVF1/OLtEYmkqcTm+WW9m7xoKTZGhIjDSsNxcL3DfeLF9i2e9NiR7t2hxoUcafH1RaQGyEJmExCzljNi+i6mpFvGLYvyaCUvHegBBrR4UR1N3yTutzFL96LNx0UqPt5mJYdwwkhKL34dH4zFJFkAr4vseg7HyO8Rj8fOAkoZSJG1</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
+
+# RSA PKCS#1 v1.5 sobre SHA-256, como en instalar.ps1 (tools/firmar_agente.sh).
+function Test-Firma([byte[]]$Datos, [string]$FirmaB64) {
+  try {
+    $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+    $rsa.FromXmlString($LlavePublica)
+    $firma = [Convert]::FromBase64String($FirmaB64.Trim())
+    return [bool]$rsa.VerifyData($Datos, $firma,
+      [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+      [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+  } catch { return $false }
+}
 $carpeta = "C:\male-oyente-grupo"
 $tarea   = "MALE Oyente Grupo Produccion"
 
@@ -69,12 +89,31 @@ if (-not $g) {
 }
 Write-Host "$g" -ForegroundColor Green
 
-# 2 · Carpeta y archivos, bajados del backend (misma via que el agente de impresion)
+# 2 · Carpeta solo para Administradores y SYSTEM, y archivos FIRMADOS
+#     Antes heredaba los permisos de C:\ (cualquier usuario modifica): quien
+#     escribiera aqui corria como SYSTEM y leia el .env con el secreto.
+if ((Test-Path $carpeta) -and ((Get-Item -Force $carpeta).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+  Write-Host "$carpeta es un enlace, no una carpeta. Borralo y reintenta." -ForegroundColor Red
+  return
+}
 New-Item -ItemType Directory -Force -Path $carpeta | Out-Null
+& icacls $carpeta /inheritance:r /grant:r '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' /remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /Q | Out-Null
+& icacls $carpeta /setowner '*S-1-5-32-544' /T /C /Q | Out-Null
 Set-Location $carpeta
 foreach ($f in @("oyente.js", "package.json")) {
-  Invoke-WebRequest -Uri "$BASE/api/produccion/agente/$f" -OutFile "$carpeta\$f" -UseBasicParsing
-  Write-Host "bajado $f" -ForegroundColor Green
+  $tmp  = "$carpeta\$f.descarga"
+  $tmpF = "$carpeta\$f.firma"
+  Invoke-WebRequest -Uri "$BASE/api/produccion/agente/$f" -OutFile $tmp -UseBasicParsing
+  Invoke-WebRequest -Uri "$BASE/api/produccion/agente/$f.firma" -OutFile $tmpF -UseBasicParsing
+  $ok = Test-Firma ([IO.File]::ReadAllBytes($tmp)) ([IO.File]::ReadAllText($tmpF))
+  Remove-Item -Force $tmpF -ErrorAction SilentlyContinue
+  if (-not $ok) {
+    Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+    Write-Host "La firma de $f NO es valida. No se instala nada." -ForegroundColor Red
+    return
+  }
+  Move-Item -Force $tmp "$carpeta\$f"
+  Write-Host "bajado $f (firma verificada)" -ForegroundColor Green
 }
 
 # 3 · Dependencias

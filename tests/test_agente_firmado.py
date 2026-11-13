@@ -27,7 +27,7 @@ from backend.api import produccion
 from backend.core.security import CurrentUser
 
 DIST = produccion._AGENTE_DIST
-FIRMADOS = ["agente_impresion.ps1", "instalar.ps1"]
+FIRMADOS = ["agente_impresion.ps1", "instalar.ps1", "oyente.js", "package.json", "instalar_oyente.ps1"]
 # DigestInfo DER de SHA-256 (RFC 8017, 9.2): lo que va dentro de la firma PKCS#1 v1.5.
 _DIGEST_INFO_SHA256 = bytes.fromhex("3031300d060960864801650304020105000420")
 
@@ -172,3 +172,78 @@ def test_los_tres_post_pasan_por_la_compuerta(ruta):
     rutas = {r.path: r for r in produccion.router.routes if "POST" in getattr(r, "methods", set())}
     fn = rutas[f"/api/produccion{ruta}"].endpoint
     assert "_exigir_agente_o_modificar(user)" in inspect.getsource(fn)
+
+
+# ── Oyente del grupo: se actualiza solo cada 15 min como SYSTEM ─────────────
+
+import shutil
+import subprocess
+
+
+def _bloque_firma_oyente() -> str:
+    js = _leer("oyente.js", "r")
+    m = re.search(r"// <firma>.*?\n(.*?)// </firma>", js, re.S)
+    assert m, "oyente.js perdió el bloque <firma>"
+    return m.group(1)
+
+
+def test_el_oyente_trae_pegada_la_misma_llave():
+    pem = re.search(r"-----BEGIN PUBLIC KEY-----(.*?)-----END PUBLIC KEY-----",
+                    _bloque_firma_oyente(), re.S).group(1)
+    der = base64.b64decode("".join(pem.split()))
+    n, e = LLAVE
+    # El módulo y el exponente de llave_publica.xml van dentro del DER.
+    assert n.to_bytes(384, "big") in der and e.to_bytes(3, "big") in der
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="sin node")
+def test_firmaValida_del_oyente_acepta_lo_firmado_y_rechaza_lo_demas(tmp_path):
+    js = _bloque_firma_oyente() + """
+const fs = require("fs");
+const [, , datos, firma, otraFirma] = process.argv;
+const b = fs.readFileSync(datos);
+const f = fs.readFileSync(firma, "utf8");
+const m = Buffer.from(b); m[100] ^= 1;
+console.log(JSON.stringify([
+  firmaValida(b, f),
+  firmaValida(m, f),
+  firmaValida(b, fs.readFileSync(otraFirma, "utf8")),
+  firmaValida(b, "basura"),
+  firmaValida(b, ""),
+  firmaValida(b, undefined),
+]));
+"""
+    prueba = tmp_path / "prueba.js"
+    prueba.write_text(js)
+    r = subprocess.run(["node", str(prueba), os.path.join(DIST, "oyente.js"),
+                        os.path.join(DIST, "oyente.js.firma"),
+                        os.path.join(DIST, "package.json.firma")],
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "[true,false,false,false,false,false]"
+
+
+def test_la_autoactualizacion_exige_firma_antes_de_escribir():
+    js = _leer("oyente.js", "r")
+    cuerpo = js[js.index("async function buscarActualizacion"):]
+    cuerpo = cuerpo[:cuerpo.index("\n}\n")]
+    i_firma = cuerpo.index("firmaValida(bytes")
+    assert "oyente.js.firma" in cuerpo
+    assert i_firma < cuerpo.index("writeFileSync(tmp")
+    assert i_firma < cuerpo.index("renameSync(tmp")
+
+
+def test_el_oyente_blinda_su_carpeta_por_sid():
+    js = _leer("oyente.js", "r")
+    assert "blindarCarpeta();" in js
+    for sid in ("*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "/inheritance:r"):
+        assert sid in js
+
+
+def test_el_instalador_del_oyente_verifica_firma_y_no_usa_iex():
+    ps1 = _leer("instalar_oyente.ps1", "r")
+    codigo = "\n".join(l for l in ps1.splitlines() if not l.lstrip().startswith(("#", "Write-Host")))
+    assert "| iex" not in codigo and "Invoke-Expression" not in codigo
+    assert "Test-Firma" in codigo and ".firma" in codigo and "/inheritance:r" in codigo
+    m = re.search(r"\$LlavePublica = '([^']+)'", ps1)
+    assert m and _llave(m.group(1)) == LLAVE
