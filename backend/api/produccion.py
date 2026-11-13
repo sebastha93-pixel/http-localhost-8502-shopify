@@ -3140,6 +3140,20 @@ def remision_pwg(
 # no lo toca y "agente caído" se detecta de verdad.
 _EMAIL_AGENTE = "impresion@maledenim.com"
 
+
+def _exigir_agente_o_modificar(user: CurrentUser) -> None:
+    """Marcar algo como impreso o lanzar hojas de prueba cambia la cola real.
+
+    Antes bastaba el permiso «ver»: cualquiera que pudiera mirar la cola podía
+    sacar una remisión de ella sin que saliera papel (auditoría 2026-11,
+    informe 15 #9). Ahora solo el agente o quien tenga «modificar».
+    """
+    if (user.email or "").lower() == _EMAIL_AGENTE:
+        return
+    if any(tiene_permiso(user, m, "modificar") for m in ("produccion_remisiones", "produccion_cortador")):
+        return
+    raise HTTPException(403, "Solo el agente de impresión o quien tenga permiso de modificar")
+
 # Primera versión del agente que sabe hablar IPP con la RICOH. Un agente
 # anterior manda al puerto 9100, donde esa máquina DESCARTA todo, y acto seguido
 # marca la remisión como impresa: el papel no sale y nadie se entera. Para que
@@ -3294,8 +3308,9 @@ def impresion_estado(
 @router.post("/impresion/{rem_id}/impresa")
 def impresion_marcar_impresa(
     rem_id: str,
-    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ):
+    _exigir_agente_o_modificar(user)
     return {"ok": svc.marcar_remision_impresa(rem_id)}
 
 
@@ -3386,8 +3401,9 @@ def impresion_trabajo_contenido(
 @router.post("/impresion/trabajos/{trabajo_id}/impreso")
 def impresion_trabajo_impreso(
     trabajo_id: str,
-    _: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
+    user: CurrentUser = Depends(require_permission_any(("produccion_remisiones", "produccion_cortador"), "ver")),
 ):
+    _exigir_agente_o_modificar(user)
     return {"ok": svc.marcar_trabajo_impreso(trabajo_id)}
 
 
@@ -3432,11 +3448,15 @@ def impresion_trabajo_crear(
 # Sin secretos (las credenciales/IPs viven en config.json, en el PC).
 _AGENTE_DIST = os.path.join(os.path.dirname(os.path.dirname(__file__)), "agente_dist")
 _AGENTE_ARCHIVOS = {
-    "agente_impresion.ps1": "text/plain; charset=utf-8",
-    "INSTALAR_ARRANQUE_AUTOMATICO.bat": "text/plain; charset=utf-8",
-    # Instalador de una linea: se eleva solo y deja la tarea siempre viva.
-    #   irm <BASE>/api/produccion/agente/instalar.ps1 | iex
-    "instalar.ps1": "text/plain; charset=utf-8",
+    # El agente y su instalador van FIRMADOS (auditoría 2026-11, informe 15
+    # #26): el PC del MDS verifica cada .firma con la llave pública que ya
+    # tiene guardada antes de instalar. Firmar: tools/firmar_agente.sh (la
+    # llave privada vive solo en el Mac del dueño, nunca aquí).
+    # Ya no se instala con "| iex": se baja instalar.ps1 como archivo.
+    "agente_impresion.ps1":       "text/plain; charset=utf-8",
+    "agente_impresion.ps1.firma": "text/plain; charset=utf-8",
+    "instalar.ps1":               "text/plain; charset=utf-8",
+    "instalar.ps1.firma":         "text/plain; charset=utf-8",
     # Oyente del grupo de WhatsApp. Se sirve igual que el agente de impresión
     # para que instalarlo sea UNA línea en el servidor y no copiar carpetas:
     #   irm <BASE>/api/produccion/agente/instalar_oyente.ps1 | iex
@@ -3475,6 +3495,7 @@ def impresion_prueba(
 ):
     """Encola trabajos de PRUEBA para verificar las tres impresoras físicas
     (SAT/Honeywell/RICOH) sin tocar datos reales. El agente local los imprime."""
+    _exigir_agente_o_modificar(user)
     try:
         trabajos = svc.encolar_prueba_impresion(
             sat=body.sat, honeywell=body.honeywell, ricoh=body.ricoh,
