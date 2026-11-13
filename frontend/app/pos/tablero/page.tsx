@@ -14,18 +14,32 @@
  *
  * NO PIDE CAJA. Por eso no va envuelto en `ConLaCaja`, como el Panel.
  *
+ * ES LA ENTRADA DEL ADMINISTRADOR AL POS (Sebastián, 2026-11-13). A quien
+ * administra no se le pregunta «¿qué caja es este equipo?»: llega aquí, y
+ * «Abrir» en una tienda deja el equipo trabajando como una caja de ESA
+ * tienda —Venta, Cambios, Stock, Cierre y Panel pasan a ser de ella— y lo
+ * lleva a su Panel.
+ *
  * SIN COLORES POR TIENDA. El POS es monocromo y tres grises pegados no se
  * distinguen en una tablet con reflejo. Las tiendas se comparan en filas con
  * la MISMA escala: la barra más alta de la pantalla es la hora (o el día) en
  * que más se vendió en cualquiera de ellas.
  */
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth-provider";
 import { Panel as Marco } from "@/components/pos/marco";
 import { Rail } from "@/components/pos/rail";
 import { formatear } from "@/lib/pos/dinero";
 import {
+  cajaDeEsteEquipo,
+  cambiarCajaDelEquipo,
+  recordarCajaDeTienda,
+} from "@/lib/pos/caja-del-equipo";
+import {
+  listarCajas,
   tableroDeTiendas,
+  type CajaDelPos,
   type Tablero,
   type TiendaDelTablero,
 } from "@/lib/pos/api";
@@ -40,6 +54,34 @@ export default function PantallaTablero() {
   const [datos, setDatos] = useState<Tablero | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [actualizado, setActualizado] = useState<Date | null>(null);
+
+  // ABRIR UNA TIENDA. Las cajas salen del servidor (un administrador las ve
+  // todas); la que este equipo es ahora, de `localStorage`, y por eso se lee
+  // en un efecto: el servidor no la conoce y pintarla antes de hidratar
+  // daría dos pantallas distintas.
+  const router = useRouter();
+  const [cajas, setCajas] = useState<CajaDelPos[]>([]);
+  const [cajaEquipo, setCajaEquipo] = useState("");
+  const [abriendo, setAbriendo] = useState<string | null>(null);
+  useEffect(() => {
+    setCajaEquipo(cajaDeEsteEquipo());
+    // Sin la lista no hay botones de «Abrir», pero el tablero sigue sirviendo.
+    listarCajas().then(setCajas).catch(() => setCajas([]));
+  }, []);
+
+  const abrir = useCallback(async (c: CajaDelPos) => {
+    setAbriendo(c.caja_id);
+    const actual = cajaDeEsteEquipo();
+    if (actual !== c.caja_id) {
+      // Igual que el Panel al cambiar de tienda: se anota qué caja era el
+      // equipo en la tienda de la que sale, para devolverlo a ESA.
+      const previa = cajas.find((x) => x.caja_id === actual);
+      if (previa) recordarCajaDeTienda(previa.tienda_id, previa.caja_id);
+      await cambiarCajaDelEquipo(c.caja_id);
+    }
+    recordarCajaDeTienda(c.tienda_id, c.caja_id);
+    router.push("/pos/panel");
+  }, [cajas, router]);
 
   const cargar = useCallback(async () => {
     try {
@@ -150,7 +192,10 @@ export default function PantallaTablero() {
             <div className="grid shrink-0 grid-cols-1 gap-3 lg:grid-cols-3">
               {tiendas.map((t) => (
                 <TarjetaTienda key={t.id} t={t} total={total.ventas}
-                               hoy={datos.hoy} contraQue={contraQue} />
+                               hoy={datos.hoy} contraQue={contraQue}
+                               cajas={cajas.filter((c) => c.tienda_id === t.id)}
+                               cajaEquipo={cajaEquipo} abriendo={abriendo}
+                               onAbrir={(c) => { void abrir(c); }} />
               ))}
             </div>
 
@@ -234,9 +279,15 @@ export default function PantallaTablero() {
 
 /** Una tienda: cuánto, contra antes, con qué se pagó y quién vendió. */
 function TarjetaTienda({
-  t, total, hoy, contraQue,
+  t, total, hoy, contraQue, cajas, cajaEquipo, abriendo, onAbrir,
 }: {
   t: TiendaDelTablero; total: number; hoy: string; contraQue: string;
+  /** Las cajas de ESTA tienda. Vacío si no se pudo traer la lista. */
+  cajas: CajaDelPos[];
+  /** La caja con la que este equipo trabaja ahora; vacío si ninguna. */
+  cajaEquipo: string;
+  abriendo: string | null;
+  onAbrir: (c: CajaDelPos) => void;
 }) {
   const parte = total ? Math.round((t.ventas_centavos * 100) / total) : 0;
   const abierta = t.turnos_abiertos.length > 0;
@@ -306,6 +357,39 @@ function TarjetaTienda({
                filas={t.cajeras.map((c) => [
                  `${c.nombre} · ${c.transacciones} venta${c.transacciones === 1 ? "" : "s"}`,
                  formatear(c.ventas_centavos)])} />
+      )}
+
+      {/* ABRIR LA TIENDA. `mt-auto`: los botones quedan al pie aunque una
+          tarjeta tenga menos renglones que la de al lado. Con varias cajas
+          se elige cuál —Florida tiene dos mostradores y cada una lleva su
+          arqueo—; con una, no se pregunta. */}
+      {cajas.length > 0 && (
+        <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-[var(--pos-divider)]/60 pt-3">
+          {[...cajas].sort((x, y) => x.caja_id.localeCompare(y.caja_id)).map((c) => {
+            const esEsta = c.caja_id === cajaEquipo;
+            return (
+              <button
+                key={c.caja_id}
+                type="button"
+                disabled={abriendo !== null}
+                onClick={() => onAbrir(c)}
+                className={`pos-btn h-10 min-w-0 flex-1 px-3 text-[13px] ${
+                  esEsta ? "pos-btn-primario" : "pos-btn-sec"}`}
+              >
+                {abriendo === c.caja_id
+                  ? "Abriendo…"
+                  : cajas.length > 1 ? `Abrir ${c.caja_nombre}` : `Abrir ${t.nombre}`}
+              </button>
+            );
+          })}
+          {/* Dicho con letras y no en un `title`: en una tableta no hay
+              cursor que pasar por encima. */}
+          <p className="tabular w-full text-[12px] text-[var(--pos-600)]">
+            {cajas.some((c) => c.caja_id === cajaEquipo)
+              ? "Este equipo está trabajando en esta tienda."
+              : "Abre Venta, Cambios, Stock, Cierre y Panel de esta tienda."}
+          </p>
+        </div>
       )}
     </Marco>
   );

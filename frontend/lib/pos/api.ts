@@ -681,7 +681,13 @@ export async function tableroDeTiendas(
   if (f.desde) p.set("desde", f.desde);
   if (f.hasta) p.set("hasta", f.hasta);
   const q = p.toString();
-  return api.get<Tablero>(`/api/retail/tablero${q ? `?${q}` : ""}`);
+  try {
+    return await api.get<Tablero>(`/api/retail/tablero${q ? `?${q}` : ""}`);
+  } catch (e) {
+    // Sin esto, a quien no es administrador la pantalla le decía
+    // «[object Object]» en vez de «es sólo para administradores».
+    return traducir(e);
+  }
 }
 
 // ── La tirilla ──────────────────────────────────────────────────────────────
