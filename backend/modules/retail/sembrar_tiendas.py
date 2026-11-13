@@ -82,11 +82,13 @@ TIENDAS = [
         # LA FERIA (Sebastián, 2026-11-03): un punto de venta propio, atendido
         # desde un iPad. Contabilidad (2026-11-05) la montó en Siigo como
         # «PLAZA DE WEIN»: bodega 4091 (código 7) y centro de costos 67648
-        # (código 18). El vendedor es el de Florida.
+        # (código 18). El vendedor es el usuario de Siigo «Feria La Plaza de
+        # Wein» (903): con el de Florida (937) la primera factura, TPFE-1477,
+        # llegó a Siigo como si fuera de Florida (2026-11-13).
         **_EMPRESA,
         "id": "feria", "nombre": "Feria",
         "siigo_bodega_id": 4091, "siigo_centro_costo_id": 67648,
-        "siigo_vendedor_id": 937,
+        "siigo_vendedor_id": 903,
         "siigo_nc_documento_id": 11817,
         "direccion": "Feria", "telefono": "3122851520",
         # En una feria no se para una venta por un conteo atrasado.

@@ -179,19 +179,21 @@ def test_florida_queda_con_los_datos_de_su_tirilla(base_vacia):
 
 
 def test_la_feria_factura_con_lo_que_monto_contabilidad_en_siigo(base_vacia):
-    """«Plaza de Wein» en Siigo: comprobante 4 (TPFE), bodega 4091 y centro
-    de costos 67648. Sin bodega, Siigo descontaría de cualquiera."""
+    """«Plaza de Wein» en Siigo: comprobante 4 (TPFE), bodega 4091, centro
+    de costos 67648 y vendedor 903. Sin bodega, Siigo descontaría de
+    cualquiera; con el vendedor de Florida, la factura parece de Florida."""
     from backend.modules.retail.sembrar_tiendas import sembrar
 
     sembrar(URL, aplicar=True)
     assert _leer_sync(base_vacia, """
         SELECT c.activa, c.siigo_documento_id, c.autorizacion_prefijo,
-               t.siigo_bodega_id, u.siigo_bodega_id, t.siigo_centro_costo_id
+               t.siigo_bodega_id, u.siigo_bodega_id, t.siigo_centro_costo_id,
+               t.siigo_vendedor_id
           FROM retail.cajas c
           JOIN retail.tiendas t ON t.id = c.tienda_id
           JOIN retail.ubicaciones u ON u.tienda_id = t.id
          WHERE c.id = 'feria_caja1'""")[0] == (
-        True, 27153, "TPFE", 4091, 4091, 67648)
+        True, 27153, "TPFE", 4091, 4091, 67648, 903)
 
 
 # ── Qué ve cada tienda ──────────────────────────────────────────────────────
