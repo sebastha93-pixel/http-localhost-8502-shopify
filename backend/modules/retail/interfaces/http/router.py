@@ -1857,6 +1857,82 @@ async def panel_del_dia(
     )
 
 
+# ── El tablero de las tiendas ───────────────────────────────────────────────
+
+class TiendaDelTableroSalida(BaseModel):
+    id: str
+    nombre: str
+    ventas_centavos: int
+    transacciones: int
+    ticket_promedio_centavos: int
+    unidades: int
+    descuentos_centavos: int
+    anuladas: int
+    monto_anulado_centavos: int
+    devoluciones: int
+    monto_devuelto_centavos: int
+    ventas_anterior_centavos: int
+    transacciones_anterior: int
+    ultima_venta: str = ""
+    turnos_abiertos: List[dict] = []
+    medios: List[dict] = []
+    cajeras: List[dict] = []
+
+
+class TableroSalida(BaseModel):
+    hoy: str
+    desde: str
+    hasta: str
+    anterior_desde: str
+    anterior_hasta: str
+    anterior_cortado: bool
+    tiendas: List[TiendaDelTableroSalida]
+    serie_por: str
+    serie: List[dict] = []
+    mas_vendidos: List[dict] = []
+
+
+@router.get("/tablero", response_model=TableroSalida)
+async def tablero_de_las_tiendas(
+    desde: Optional[str] = Query(None, max_length=10),
+    hasta: Optional[str] = Query(None, max_length=10),
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Cómo van TODAS las tiendas, lado a lado. Sólo para administradores.
+
+    El Panel es de una tienda y lo ve quien trabaja en ella. Esto cruza las
+    tiendas —cuánto vendió cada una, con qué medio y quién—: es información
+    de quien administra el negocio, no de una caja. Lo decide el servidor; la
+    pantalla sólo esconde el enlace.
+    """
+    if usuario.rol != "admin":
+        raise HTTPException(403, {
+            "error": "solo_administrador",
+            "mensaje": "El tablero de las tiendas es sólo para "
+                       "administradores."})
+    from backend.modules.retail.application.consultas.tablero_tiendas import (
+        TableroTiendas,
+    )
+
+    try:
+        async with uow as t:
+            tb = await TableroTiendas(t.sesion).ejecutar(desde=desde, hasta=hasta)
+    except ReglaDeNegocio as e:
+        raise HTTPException(400, {"error": "regla_de_negocio",
+                                  "mensaje": str(e)})
+
+    return TableroSalida(
+        hoy=tb.hoy, desde=tb.desde, hasta=tb.hasta,
+        anterior_desde=tb.anterior_desde, anterior_hasta=tb.anterior_hasta,
+        anterior_cortado=tb.anterior_cortado,
+        tiendas=[TiendaDelTableroSalida(
+            **{k: v for k, v in x.__dict__.items()},
+            ticket_promedio_centavos=x.ticket_promedio_centavos)
+            for x in tb.tiendas],
+        serie_por=tb.serie_por, serie=tb.serie, mas_vendidos=tb.mas_vendidos)
+
+
 # ── La tirilla ──────────────────────────────────────────────────────────────
 
 class LineaTirillaSalida(BaseModel):

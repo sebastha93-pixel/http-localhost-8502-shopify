@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuth } from "@/components/auth-provider";
 
 /**
  * Rail de navegación — 92px, seis secciones.
@@ -27,8 +28,15 @@ const SECCIONES = [
   { href: "/pos/impresion", label: "Papel", icono: ImpresoraIcono, listo: true },
 ];
 
+//  SÓLO PARA EL ADMINISTRADOR: el tablero cruza todas las tiendas y el
+//  servidor se lo niega a los demás. Enseñarle a una asesora un botón que la
+//  lleva a un «no puedes» es ruido.
+const TIENDAS = { href: "/pos/tablero", label: "Tiendas", icono: TiendaIcono, listo: true };
+
 export function Rail({ cajera }: { cajera: string }) {
   const ruta = usePathname();
+  const { user } = useAuth();
+  const secciones = user?.rol === "admin" ? [...SECCIONES, TIENDAS] : SECCIONES;
 
   // BLANCO Y SIN BORDE (handoff v2). Antes era una franja del color del fondo
   // separada por una línea; ahora es una superficie propia, y lo que la separa
@@ -43,7 +51,7 @@ export function Rail({ cajera }: { cajera: string }) {
       <span className="titular mb-6 text-[15px] tracking-tight">M&apos;D</span>
 
       <ul className="flex w-full flex-col items-center gap-1">
-        {SECCIONES.map((s) => {
+        {secciones.map((s) => {
           const activo = ruta.startsWith(s.href);
           const Icono = s.icono;
           const contenido = (
@@ -96,6 +104,16 @@ const props = {
   stroke: "currentColor", strokeWidth: 1.5,
   strokeLinecap: "round" as const, strokeLinejoin: "round" as const,
 };
+/** La tienda de Lucide (`store`): las tiendas, todas. */
+function TiendaIcono() {
+  return (
+    <svg {...props} aria-hidden>
+      <path d="M3 9 4.5 3h15L21 9" />
+      <path d="M3 9a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0" />
+      <path d="M5 12v9h14v-9M10 21v-5h4v5" />
+    </svg>
+  );
+}
 function BolsaIcono() {
   return (
     <svg {...props} aria-hidden>
