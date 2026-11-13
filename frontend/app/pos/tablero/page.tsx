@@ -110,10 +110,14 @@ export default function PantallaTablero() {
       descuentos: s.descuentos + t.descuentos_centavos,
       anuladas: s.anuladas + t.anuladas,
       anulado: s.anulado + t.monto_anulado_centavos,
-      cambios: s.cambios + t.cambios,
-      enCambios: s.enCambios + t.monto_cambios_centavos,
-      reembolsos: s.reembolsos + t.reembolsos,
-      reembolsado: s.reembolsado + t.monto_reembolsado_centavos,
+      // `?? …`: la pantalla se publica unos minutos antes que el servidor.
+      // Mientras el servidor viejo no manda la separación, todo lo que entró
+      // por «Cambios» se cuenta como cambio —que es lo que casi siempre es—
+      // en vez de pintar «NaN».
+      cambios: s.cambios + (t.cambios ?? t.devoluciones),
+      enCambios: s.enCambios + (t.monto_cambios_centavos ?? t.monto_devuelto_centavos),
+      reembolsos: s.reembolsos + (t.reembolsos ?? 0),
+      reembolsado: s.reembolsado + (t.monto_reembolsado_centavos ?? 0),
     }),
     { ventas: 0, anterior: 0, transacciones: 0, unidades: 0, descuentos: 0,
       anuladas: 0, anulado: 0, cambios: 0, enCambios: 0, reembolsos: 0,
@@ -366,8 +370,8 @@ function TarjetaTienda({
           : "Sin ventas en este periodo"}
         {t.descuentos_centavos > 0 && ` · ${formatear(t.descuentos_centavos)} en descuentos`}
         {t.anuladas > 0 && ` · ${t.anuladas} anulada${t.anuladas === 1 ? "" : "s"} (${formatear(t.monto_anulado_centavos)})`}
-        {t.cambios > 0 && ` · ${t.cambios} cambio${t.cambios === 1 ? "" : "s"} (${formatear(t.monto_cambios_centavos)})`}
-        {t.reembolsos > 0 && ` · ${t.reembolsos} devoluci${t.reembolsos === 1 ? "ón" : "ones"} en dinero (${formatear(t.monto_reembolsado_centavos)})`}
+        {(t.cambios ?? 0) > 0 && ` · ${t.cambios} cambio${t.cambios === 1 ? "" : "s"} (${formatear(t.monto_cambios_centavos)})`}
+        {(t.reembolsos ?? 0) > 0 && ` · ${t.reembolsos} devoluci${t.reembolsos === 1 ? "ón" : "ones"} en dinero (${formatear(t.monto_reembolsado_centavos)})`}
       </p>
 
       {t.medios.length > 0 && (
@@ -587,13 +591,16 @@ const REEMBOLSOS: Record<string, string> = {
 
 /** Cuáles son: los cambios y devoluciones, y las ventas anuladas. */
 function Detalle({ datos }: { datos: Tablero }) {
+  // `?? []`: ver la nota de arriba sobre el servidor que aún no las manda.
+  const devoluciones = datos.detalle_devoluciones ?? [];
+  const anuladas = datos.detalle_anuladas ?? [];
   const celda = "px-3 py-2";
   const cabeza = "kicker text-left text-[var(--pos-600)]";
   return (
     <Marco className="flex shrink-0 flex-col gap-5 p-6">
       <div className="flex flex-col gap-2">
         <h2 className="titular text-[17px] font-semibold">Cambios y devoluciones</h2>
-        {datos.detalle_devoluciones.length === 0 ? (
+        {devoluciones.length === 0 ? (
           <p className="text-[13px] text-[var(--pos-600)]">Ninguno en este periodo.</p>
         ) : (
           <div className="overflow-x-auto">
@@ -611,7 +618,7 @@ function Detalle({ datos }: { datos: Tablero }) {
                 </tr>
               </thead>
               <tbody>
-                {datos.detalle_devoluciones.map((d, i) => (
+                {devoluciones.map((d, i) => (
                   <tr key={i} className="border-t border-[var(--pos-divider)]/60">
                     <td className="tabular py-2 pr-3">{horaDe(d.cuando, datos.hoy)}</td>
                     <td className={celda}>{d.tienda}</td>
@@ -638,7 +645,7 @@ function Detalle({ datos }: { datos: Tablero }) {
 
       <div className="flex flex-col gap-2">
         <h2 className="titular text-[17px] font-semibold">Ventas anuladas</h2>
-        {datos.detalle_anuladas.length === 0 ? (
+        {anuladas.length === 0 ? (
           <p className="text-[13px] text-[var(--pos-600)]">Ninguna en este periodo.</p>
         ) : (
           <div className="overflow-x-auto">
@@ -654,7 +661,7 @@ function Detalle({ datos }: { datos: Tablero }) {
                 </tr>
               </thead>
               <tbody>
-                {datos.detalle_anuladas.map((a, i) => (
+                {anuladas.map((a, i) => (
                   <tr key={i} className="border-t border-[var(--pos-divider)]/60">
                     <td className="tabular py-2 pr-3">{horaDe(a.cuando, datos.hoy)}</td>
                     <td className={celda}>{a.tienda}</td>
