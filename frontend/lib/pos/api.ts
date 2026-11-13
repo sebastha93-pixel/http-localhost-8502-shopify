@@ -643,8 +643,15 @@ export interface TiendaDelTablero {
   descuentos_centavos: number;
   anuladas: number;
   monto_anulado_centavos: number;
+  /** Todo lo que entró por «Cambios»: `cambios` + `reembolsos`. */
   devoluciones: number;
   monto_devuelto_centavos: number;
+  /** Crédito de tienda: se llevó otra prenda, de la caja no salió nada. */
+  cambios: number;
+  monto_cambios_centavos: number;
+  /** Lo que sí se devolvió, en efectivo o al medio de pago original. */
+  reembolsos: number;
+  monto_reembolsado_centavos: number;
   /** Lo mismo en el periodo anterior (cortado a esta hora si incluye hoy). */
   ventas_anterior_centavos: number;
   transacciones_anterior: number;
@@ -670,6 +677,16 @@ export interface Tablero {
   mas_vendidos: {
     referencia: string; nombre: string; color: string; unidades: number;
     valor_centavos: number; tiendas: Record<string, number>;
+  }[];
+  /** El detalle detrás de las cifras, lo más reciente primero. */
+  detalle_devoluciones: {
+    cuando: string; tienda_id: string; tienda: string; numero_venta: string;
+    motivo: string; reembolso: string; total_centavos: number;
+    unidades: number; quien: string;
+  }[];
+  detalle_anuladas: {
+    cuando: string; tienda_id: string; tienda: string; numero: string;
+    total_centavos: number; motivo: string; quien: string;
   }[];
 }
 

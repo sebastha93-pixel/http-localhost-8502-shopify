@@ -1871,6 +1871,10 @@ class TiendaDelTableroSalida(BaseModel):
     monto_anulado_centavos: int
     devoluciones: int
     monto_devuelto_centavos: int
+    cambios: int = 0
+    monto_cambios_centavos: int = 0
+    reembolsos: int = 0
+    monto_reembolsado_centavos: int = 0
     ventas_anterior_centavos: int
     transacciones_anterior: int
     ultima_venta: str = ""
@@ -1890,6 +1894,8 @@ class TableroSalida(BaseModel):
     serie_por: str
     serie: List[dict] = []
     mas_vendidos: List[dict] = []
+    detalle_devoluciones: List[dict] = []
+    detalle_anuladas: List[dict] = []
 
 
 @router.get("/tablero", response_model=TableroSalida)
@@ -1930,7 +1936,9 @@ async def tablero_de_las_tiendas(
             **{k: v for k, v in x.__dict__.items()},
             ticket_promedio_centavos=x.ticket_promedio_centavos)
             for x in tb.tiendas],
-        serie_por=tb.serie_por, serie=tb.serie, mas_vendidos=tb.mas_vendidos)
+        serie_por=tb.serie_por, serie=tb.serie, mas_vendidos=tb.mas_vendidos,
+        detalle_devoluciones=tb.detalle_devoluciones,
+        detalle_anuladas=tb.detalle_anuladas)
 
 
 # ── La tirilla ──────────────────────────────────────────────────────────────

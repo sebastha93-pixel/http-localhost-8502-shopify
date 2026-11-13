@@ -54,6 +54,7 @@ export default function PantallaTablero() {
   const [datos, setDatos] = useState<Tablero | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [actualizado, setActualizado] = useState<Date | null>(null);
+  const [verDetalle, setVerDetalle] = useState(false);
 
   // ABRIR UNA TIENDA. Las cajas salen del servidor (un administrador las ve
   // todas); la que este equipo es ahora, de `localStorage`, y por eso se lee
@@ -109,11 +110,18 @@ export default function PantallaTablero() {
       descuentos: s.descuentos + t.descuentos_centavos,
       anuladas: s.anuladas + t.anuladas,
       anulado: s.anulado + t.monto_anulado_centavos,
-      devoluciones: s.devoluciones + t.devoluciones,
-      devuelto: s.devuelto + t.monto_devuelto_centavos,
+      // `?? …`: la pantalla se publica unos minutos antes que el servidor.
+      // Mientras el servidor viejo no manda la separación, todo lo que entró
+      // por «Cambios» se cuenta como cambio —que es lo que casi siempre es—
+      // en vez de pintar «NaN».
+      cambios: s.cambios + (t.cambios ?? t.devoluciones),
+      enCambios: s.enCambios + (t.monto_cambios_centavos ?? t.monto_devuelto_centavos),
+      reembolsos: s.reembolsos + (t.reembolsos ?? 0),
+      reembolsado: s.reembolsado + (t.monto_reembolsado_centavos ?? 0),
     }),
     { ventas: 0, anterior: 0, transacciones: 0, unidades: 0, descuentos: 0,
-      anuladas: 0, anulado: 0, devoluciones: 0, devuelto: 0 },
+      anuladas: 0, anulado: 0, cambios: 0, enCambios: 0, reembolsos: 0,
+      reembolsado: 0 },
   );
   const esHoy = Boolean(datos && datos.desde === datos.hoy && datos.hasta === datos.hoy);
   const contraQue = datos ? textoDelAnterior(datos) : "";
@@ -158,7 +166,9 @@ export default function PantallaTablero() {
 
         {datos && (
           <>
-            <div className="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4">
+            {/* Una columna en pantallas angostas: a dos, en un celular, el
+                total de ventas se cortaba («$1.923…»). */}
+            <div className="grid shrink-0 grid-cols-1 gap-3 min-[560px]:grid-cols-2 lg:grid-cols-4">
               <Tarjeta
                 titulo={esHoy ? "Ventas hoy · todas" : "Ventas del periodo · todas"}
                 valor={formatear(total.ventas)}
@@ -179,15 +189,30 @@ export default function PantallaTablero() {
                       total.descuentos ? `${formatear(total.descuentos)} en descuentos` : "sin descuentos"}`
                   : "—"}
               />
+              {/* UN CAMBIO NO ES PLATA DEVUELTA. Casi todo lo que entra por
+                  «Cambios» queda como crédito de tienda; decir «$924.420
+                  devuelto» hacía leer plata que nunca salió de la caja. Lo
+                  que sí se devolvió en dinero va aparte, y es lo que alerta.
+                  Se toca para ver cuáles son: una cifra sin su lista sólo
+                  deja la pregunta. */}
               <Tarjeta
-                titulo="Anuladas y devoluciones"
-                valor={`${total.anuladas} · ${total.devoluciones}`}
-                pie={total.anuladas || total.devoluciones
-                  ? `${formatear(total.anulado)} anulado · ${formatear(total.devuelto)} devuelto`
-                  : "ninguna"}
-                alerta={total.anuladas > 0}
+                titulo="Anuladas y cambios"
+                valor={`${total.anuladas} · ${total.cambios}`}
+                pie={[
+                  total.anuladas ? `${formatear(total.anulado)} anulado` : "ninguna anulada",
+                  total.cambios ? `${formatear(total.enCambios)} en cambios` : "ningún cambio",
+                  total.reembolsos
+                    ? `${total.reembolsos} devoluci${total.reembolsos === 1 ? "ón" : "ones"} en dinero (${formatear(total.reembolsado)})`
+                    : "",
+                ].filter(Boolean).join(" · ")}
+                alerta={total.anuladas > 0 || total.reembolsos > 0}
+                abierto={verDetalle}
+                onAbrir={total.anuladas + total.cambios + total.reembolsos > 0
+                  ? () => setVerDetalle((v) => !v) : undefined}
               />
             </div>
+
+            {verDetalle && <Detalle datos={datos} />}
 
             <div className="grid shrink-0 grid-cols-1 gap-3 lg:grid-cols-3">
               {tiendas.map((t) => (
@@ -345,7 +370,8 @@ function TarjetaTienda({
           : "Sin ventas en este periodo"}
         {t.descuentos_centavos > 0 && ` · ${formatear(t.descuentos_centavos)} en descuentos`}
         {t.anuladas > 0 && ` · ${t.anuladas} anulada${t.anuladas === 1 ? "" : "s"} (${formatear(t.monto_anulado_centavos)})`}
-        {t.devoluciones > 0 && ` · ${t.devoluciones} devoluci${t.devoluciones === 1 ? "ón" : "ones"} (${formatear(t.monto_devuelto_centavos)})`}
+        {(t.cambios ?? 0) > 0 && ` · ${t.cambios} cambio${t.cambios === 1 ? "" : "s"} (${formatear(t.monto_cambios_centavos)})`}
+        {(t.reembolsos ?? 0) > 0 && ` · ${t.reembolsos} devoluci${t.reembolsos === 1 ? "ón" : "ones"} en dinero (${formatear(t.monto_reembolsado_centavos)})`}
       </p>
 
       {t.medios.length > 0 && (
@@ -517,18 +543,139 @@ function Rangos({
 }
 
 function Tarjeta({
-  titulo, valor, pie, alerta,
+  titulo, valor, pie, alerta, abierto, onAbrir,
 }: {
   titulo: string; valor: string; pie: string; alerta?: boolean;
+  /** Con `onAbrir` la tarjeta es un botón que despliega su detalle. */
+  abierto?: boolean; onAbrir?: () => void;
 }) {
-  return (
-    <Marco className="flex flex-col gap-1 p-6">
+  const cuerpo = (
+    <>
       <span className="kicker text-[var(--pos-700)]">{titulo}</span>
       <span className={`titular text-[28px] font-bold leading-none ${
         alerta ? "text-[var(--pos-accent)]" : ""}`}>
         {valor}
       </span>
       <span className="tabular text-[12px] text-[var(--pos-600)]">{pie}</span>
+      {onAbrir && (
+        <span className="tabular mt-1 text-[12px] font-medium text-[var(--pos-800)] underline">
+          {abierto ? "Ocultar detalle" : "Ver detalle"}
+        </span>
+      )}
+    </>
+  );
+  if (!onAbrir) {
+    return <Marco className="flex flex-col gap-1 p-6">{cuerpo}</Marco>;
+  }
+  return (
+    <Marco className="flex overflow-hidden">
+      <button type="button" onClick={onAbrir} aria-expanded={Boolean(abierto)}
+              // `!`: el sistema centra todo `button` del POS (pos.css); esta
+              // tarjeta se lee como las de al lado, alineada a la izquierda.
+              className="!flex w-full flex-col !items-start !justify-start gap-1 p-6 text-left hover:bg-[var(--pos-100)]">
+        {cuerpo}
+      </button>
+    </Marco>
+  );
+}
+
+const MOTIVOS: Record<string, string> = {
+  talla: "Talla", defecto: "Defecto", no_le_gusto: "No le gustó",
+  cambio_modelo: "Cambio de modelo",
+};
+const REEMBOLSOS: Record<string, string> = {
+  credito_tienda: "Cambio (crédito de tienda)",
+  efectivo: "Devolución en efectivo",
+  metodo_original: "Devolución al medio de pago",
+};
+
+/** Cuáles son: los cambios y devoluciones, y las ventas anuladas. */
+function Detalle({ datos }: { datos: Tablero }) {
+  // `?? []`: ver la nota de arriba sobre el servidor que aún no las manda.
+  const devoluciones = datos.detalle_devoluciones ?? [];
+  const anuladas = datos.detalle_anuladas ?? [];
+  const celda = "px-3 py-2";
+  const cabeza = "kicker text-left text-[var(--pos-600)]";
+  return (
+    <Marco className="flex shrink-0 flex-col gap-5 p-6">
+      <div className="flex flex-col gap-2">
+        <h2 className="titular text-[17px] font-semibold">Cambios y devoluciones</h2>
+        {devoluciones.length === 0 ? (
+          <p className="text-[13px] text-[var(--pos-600)]">Ninguno en este periodo.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-[13px]">
+              <thead>
+                <tr className={cabeza}>
+                  <th className="py-2 pr-3 font-normal">Cuándo</th>
+                  <th className={`${celda} font-normal`}>Tienda</th>
+                  <th className={`${celda} font-normal`}>Factura</th>
+                  <th className={`${celda} font-normal`}>Motivo</th>
+                  <th className={`${celda} font-normal`}>Qué fue</th>
+                  <th className={`${celda} text-right font-normal`}>Prendas</th>
+                  <th className={`${celda} text-right font-normal`}>Valor</th>
+                  <th className="py-2 pl-3 font-normal">Quién</th>
+                </tr>
+              </thead>
+              <tbody>
+                {devoluciones.map((d, i) => (
+                  <tr key={i} className="border-t border-[var(--pos-divider)]/60">
+                    <td className="tabular py-2 pr-3">{horaDe(d.cuando, datos.hoy)}</td>
+                    <td className={celda}>{d.tienda}</td>
+                    <td className={`tabular ${celda}`}>{d.numero_venta}</td>
+                    <td className={celda}>{MOTIVOS[d.motivo] ?? d.motivo}</td>
+                    {/* Lo que SÍ sacó plata va en negrita: es lo que hay
+                        que alcanzar a ver entre una lista de cambios. */}
+                    <td className={`${celda} ${d.reembolso === "credito_tienda" ? "" : "font-semibold"}`}>
+                      {REEMBOLSOS[d.reembolso] ?? d.reembolso}
+                    </td>
+                    <td className={`tabular ${celda} text-right`}>{d.unidades}</td>
+                    <td className={`tabular ${celda} text-right`}>{formatear(d.total_centavos)}</td>
+                    <td className="py-2 pl-3">{d.quien}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="tabular text-[12px] text-[var(--pos-600)]">
+          En un cambio la clienta se lleva otra prenda: de la caja no sale plata.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <h2 className="titular text-[17px] font-semibold">Ventas anuladas</h2>
+        {anuladas.length === 0 ? (
+          <p className="text-[13px] text-[var(--pos-600)]">Ninguna en este periodo.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[520px] text-[13px]">
+              <thead>
+                <tr className={cabeza}>
+                  <th className="py-2 pr-3 font-normal">Cuándo</th>
+                  <th className={`${celda} font-normal`}>Tienda</th>
+                  <th className={`${celda} font-normal`}>Venta</th>
+                  <th className={`${celda} font-normal`}>Motivo</th>
+                  <th className={`${celda} text-right font-normal`}>Valor</th>
+                  <th className="py-2 pl-3 font-normal">Quién anuló</th>
+                </tr>
+              </thead>
+              <tbody>
+                {anuladas.map((a, i) => (
+                  <tr key={i} className="border-t border-[var(--pos-divider)]/60">
+                    <td className="tabular py-2 pr-3">{horaDe(a.cuando, datos.hoy)}</td>
+                    <td className={celda}>{a.tienda}</td>
+                    <td className={`tabular ${celda}`}>{a.numero}</td>
+                    <td className={celda}>{a.motivo || "—"}</td>
+                    <td className={`tabular ${celda} text-right`}>{formatear(a.total_centavos)}</td>
+                    <td className="py-2 pl-3">{a.quien || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </Marco>
   );
 }
