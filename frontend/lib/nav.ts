@@ -41,7 +41,9 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: "Devoluciones",  href: "/devoluciones",  permiso: "devoluciones",  desc: "Retornos y cambios" },
       { label: "Postventa",     href: "/postventa",     permiso: "postventa",     desc: "Cambios, devoluciones y garantías con IA" },
       { label: "Cierre de caja", href: "/postventa/caja", permiso: "postventa",    desc: "Excedentes cobrados que el POS no ve" },
-      { label: "Punto de venta", href: "/pos/venta",     permiso: "retail",       desc: "Vender en las tiendas" },
+      // Por la PUERTA (`/pos`), no directo a la venta: es la que decide a dónde
+      // va cada quien —la asesora a su caja, el administrador al tablero—.
+      { label: "Punto de venta", href: "/pos",           permiso: "retail",       desc: "Vender en las tiendas" },
       { label: "Incidencias",   href: "/incidencias",   permiso: "incidencias",   desc: "Casos abiertos" },
       { label: "Histórico",     href: "/historico",     permiso: "historico",     desc: "Movimientos pasados" },
     ],

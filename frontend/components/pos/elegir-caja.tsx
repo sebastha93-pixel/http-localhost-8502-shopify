@@ -9,6 +9,8 @@
  * reenviado por error no puede mandar a vender contra el stock ajeno.
  */
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/components/auth-provider";
 import { Panel } from "@/components/pos/marco";
 import { listarCajas, type CajaDelPos, type ContextoCaja } from "@/lib/pos/api";
 import {
@@ -84,7 +86,19 @@ export function ElegirCaja({ caja, alElegir }: {
   };
   const [cajas, setCajas] = useState<CajaDelPos[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const pregunta = estado.fase === "sin_caja" || estado.fase === "cambiar";
+  // AL ADMINISTRADOR NO SE LE PREGUNTA QUÉ CAJA ES (Sebastián, 2026-11-13).
+  // Su equipo no es una caja: la tienda la elige en el tablero, y ahí se le
+  // devuelve desde cualquier pantalla que la necesite. El caso «cambiar»
+  // —abrió el enlace de OTRA caja— sí se le pregunta, como a todos: ahí hay
+  // una caja en uso que se perdería sin avisar.
+  const { user } = useAuth();
+  const router = useRouter();
+  const alTablero = user?.rol === "admin" && estado.fase === "sin_caja";
+  useEffect(() => {
+    if (alTablero) router.replace("/pos/tablero");
+  }, [alTablero, router]);
+  const pregunta = !alTablero
+    && (estado.fase === "sin_caja" || estado.fase === "cambiar");
 
   useEffect(() => {
     if (!pregunta) return;

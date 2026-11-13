@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { cajaDeEsteEquipo } from "@/lib/pos/caja-del-equipo";
 
 /**
  * Rail de navegación — 92px, seis secciones.
@@ -30,13 +32,28 @@ const SECCIONES = [
 
 //  SÓLO PARA EL ADMINISTRADOR: el tablero cruza todas las tiendas y el
 //  servidor se lo niega a los demás. Enseñarle a una asesora un botón que la
-//  lleva a un «no puedes» es ruido.
+//  lleva a un «no puedes» es ruido. Va PRIMERO: es por donde él entra.
+//  La única sección que no es de ninguna tienda: el papel es del equipo.
+const SIN_CAJA = "/pos/impresion";
 const TIENDAS = { href: "/pos/tablero", label: "Tiendas", icono: TiendaIcono, listo: true };
 
 export function Rail({ cajera }: { cajera: string }) {
   const ruta = usePathname();
   const { user } = useAuth();
-  const secciones = user?.rol === "admin" ? [...SECCIONES, TIENDAS] : SECCIONES;
+  const esAdmin = user?.rol === "admin";
+  // El administrador entra por el tablero y puede no haber abierto ninguna
+  // tienda todavía: Venta, Stock o Cierre no son de ninguna, y un enlace que
+  // lo devuelve al tablero sin decir por qué enseña a desconfiar del rail.
+  // Se apagan hasta que elija tienda. En un efecto: `localStorage` no existe
+  // en el servidor. Arranca en `true` para no apagarle el rail a la cajera
+  // durante el primer pintado.
+  const [hayCaja, setHayCaja] = useState(true);
+  useEffect(() => setHayCaja(Boolean(cajaDeEsteEquipo())), [ruta]);
+  const sinTienda = esAdmin && !hayCaja;
+  const secciones = esAdmin
+    ? [TIENDAS, ...SECCIONES.map((s) => ({
+        ...s, listo: s.listo && !(sinTienda && s.href !== SIN_CAJA) }))]
+    : SECCIONES;
 
   // BLANCO Y SIN BORDE (handoff v2). Antes era una franja del color del fondo
   // separada por una línea; ahora es una superficie propia, y lo que la separa
@@ -73,7 +90,9 @@ export function Rail({ cajera }: { cajera: string }) {
               ) : (
                 <span
                   className={`${clases} cursor-not-allowed opacity-40`}
-                  title="Todavía no está construida"
+                  title={sinTienda
+                    ? "Abre primero una tienda en Tiendas"
+                    : "Todavía no está construida"}
                   aria-disabled="true"
                 >
                   {contenido}

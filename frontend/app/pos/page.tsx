@@ -14,9 +14,15 @@
  * tiene dos mostradores y eso es una propiedad de la tableta, no de la
  * persona: se pregunta una vez y se recuerda. Donde sólo hay una caja no se
  * pregunta nada.
+ *
+ * EL ADMINISTRADOR NO ENTRA A UNA CAJA: entra a ver las tiendas (Sebastián,
+ * 2026-11-13). A quien administra no se le pregunta «¿qué caja es este
+ * equipo?» —no es ninguna—: cae en el tablero, y desde ahí abre la tienda
+ * que quiera.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/components/auth-provider";
 import { Panel } from "@/components/pos/marco";
 import { ElegirCaja } from "@/components/pos/elegir-caja";
 import { useCajaDelEquipo } from "@/lib/pos/caja-del-equipo";
@@ -24,6 +30,8 @@ import { listarCajas, type CajaDelPos } from "@/lib/pos/api";
 
 export default function PuertaDelPos() {
   const router = useRouter();
+  const { user } = useAuth();
+  const esAdmin = user?.rol === "admin";
   const caja = useCajaDelEquipo();
   const [cajas, setCajas] = useState<CajaDelPos[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +40,11 @@ export default function PuertaDelPos() {
   const decidido = useRef(false);
 
   useEffect(() => {
+    if (esAdmin) router.replace("/pos/tablero");
+  }, [esAdmin, router]);
+
+  useEffect(() => {
+    if (esAdmin) return;
     let vivo = true;
     listarCajas()
       .then((c) => { if (vivo) setCajas(c); })
@@ -42,12 +55,12 @@ export default function PuertaDelPos() {
         }
       });
     return () => { vivo = false; };
-  }, []);
+  }, [esAdmin]);
 
   const entrar = useCallback(() => router.replace("/pos/venta"), [router]);
 
   useEffect(() => {
-    if (!cajas || decidido.current) return;
+    if (esAdmin || !cajas || decidido.current) return;
     if (caja.estado.fase === "cargando" || caja.estado.fase === "cambiar") return;
 
     const guardada = caja.estado.fase === "lista" ? caja.estado.caja : "";
@@ -70,9 +83,9 @@ export default function PuertaDelPos() {
       void caja.elegir(cajas[0].caja_id).then(entrar);
     }
     // Con varias, se pinta el selector de abajo.
-  }, [cajas, caja, entrar]);
+  }, [esAdmin, cajas, caja, entrar]);
 
-  if (error) {
+  if (error && !esAdmin) {
     return (
       <Centro>
         <p className="titular text-[18px]">No se pudo abrir el punto de venta</p>
@@ -83,7 +96,7 @@ export default function PuertaDelPos() {
     );
   }
 
-  if (!cajas) {
+  if (esAdmin || !cajas) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <p className="text-[13px]" style={{ color: "var(--pos-600)" }}>
