@@ -24,6 +24,12 @@ entran $299.800: sumar lo entregado inflaría el efectivo por cada vuelto.
 **Las devoluciones se muestran, no se restan.** «Ventas» aquí es lo mismo que
 en el Panel y en el cierre: lo cobrado en ventas no anuladas. Restarlas daría
 un tercer número que no cuadra con ninguno de los otros dos.
+
+**Un CAMBIO no es plata devuelta.** Casi todo lo que entra por «Cambios» queda
+como crédito de tienda: la clienta se lleva otra prenda y de la caja no sale
+nada. Sumarlo bajo «devuelto» hacía leer $924.420 que nunca salieron
+(Sebastián, 2026-11-13). Se separan: `cambios` es crédito de tienda;
+`reembolsos` es lo que sí se devolvió, en efectivo o al medio original.
 """
 from __future__ import annotations
 
@@ -50,6 +56,10 @@ ZONA = "America/Bogota"
 #  Cuántas referencias caben en «lo más vendido» sin volverse un informe.
 TOPE_VENDIDOS = 10
 
+#  Cuántos renglones de detalle (cambios, anuladas) viajan. En un día son un
+#  puñado; en un año serían cientos, y eso ya es un informe.
+TOPE_DETALLE = 100
+
 
 @dataclass
 class TiendaDelTablero:
@@ -61,8 +71,13 @@ class TiendaDelTablero:
     descuentos_centavos: int = 0
     anuladas: int = 0
     monto_anulado_centavos: int = 0
+    #  Todo lo que entró por «Cambios», y sus dos partes (ver la cabecera).
     devoluciones: int = 0
     monto_devuelto_centavos: int = 0
+    cambios: int = 0
+    monto_cambios_centavos: int = 0
+    reembolsos: int = 0
+    monto_reembolsado_centavos: int = 0
     #  Lo mismo, en el periodo anterior (ver la cabecera: cortado a esta hora).
     ventas_anterior_centavos: int = 0
     transacciones_anterior: int = 0
@@ -99,6 +114,14 @@ class Tablero:
     #  [{referencia, nombre, color, unidades, valor_centavos,
     #    tiendas: {tienda_id: unidades}}]
     mas_vendidos: List[dict] = field(default_factory=list)
+    #  El detalle detrás de las cifras, lo más reciente primero (tope
+    #  `TOPE_DETALLE`). Sin datos de la clienta: esto responde «qué pasó y
+    #  quién lo hizo», no «a quién».
+    #  [{cuando, tienda_id, tienda, numero_venta, motivo, reembolso,
+    #    total_centavos, unidades, quien}]
+    detalle_devoluciones: List[dict] = field(default_factory=list)
+    #  [{cuando, tienda_id, tienda, numero, total_centavos, motivo, quien}]
+    detalle_anuladas: List[dict] = field(default_factory=list)
 
 
 class TableroTiendas:
@@ -201,17 +224,27 @@ class TableroTiendas:
             t.ventas_anterior_centavos = int(f["ventas"])
             t.transacciones_anterior = int(f["transacciones"])
 
+        dia_devolucion = ("(d.creada_en AT TIME ZONE "
+                          f"coalesce(ti.zona_horaria, '{ZONA}'))")
         for f in (await self._s.execute(text(f"""
-            SELECT d.tienda_id, count(*) AS n, coalesce(sum(d.total), 0) AS total
+            SELECT d.tienda_id, count(*) AS n, coalesce(sum(d.total), 0) AS total,
+                   count(*) FILTER (WHERE d.reembolso = 'credito_tienda') AS cambios,
+                   coalesce(sum(d.total)
+                            FILTER (WHERE d.reembolso = 'credito_tienda'), 0)
+                       AS monto_cambios
               FROM retail.devoluciones d
               JOIN retail.tiendas ti ON ti.id = d.tienda_id
-             WHERE (d.creada_en AT TIME ZONE coalesce(ti.zona_horaria, '{ZONA}'))
-                   ::date BETWEEN :d1 AND :d2
+             WHERE {dia_devolucion}::date BETWEEN :d1 AND :d2
              GROUP BY d.tienda_id
         """), params)).mappings():
             t = de(f["tienda_id"])
             t.devoluciones = int(f["n"])
             t.monto_devuelto_centavos = int(f["total"])
+            t.cambios = int(f["cambios"])
+            t.monto_cambios_centavos = int(f["monto_cambios"])
+            t.reembolsos = t.devoluciones - t.cambios
+            t.monto_reembolsado_centavos = (
+                t.monto_devuelto_centavos - t.monto_cambios_centavos)
 
         # El vuelto se le quita al efectivo UNA vez por venta: por eso se
         # agrupa primero por venta y después se suma.
@@ -332,6 +365,40 @@ class TableroTiendas:
             refs.values(),
             key=lambda r: (-r["unidades"], -r["valor_centavos"], r["referencia"]),
         )[:TOPE_VENDIDOS]
+
+        tablero.detalle_devoluciones = [{
+            "cuando": f["cuando"], "tienda_id": f["tienda_id"],
+            "tienda": f["tienda"], "numero_venta": f["numero_venta"],
+            "motivo": f["motivo"], "reembolso": f["reembolso"],
+            "total_centavos": int(f["total"]), "unidades": int(f["unidades"]),
+            "quien": f["quien"],
+        } for f in (await self._s.execute(text(f"""
+            SELECT to_char({dia_devolucion}, 'YYYY-MM-DD HH24:MI') AS cuando,
+                   d.tienda_id, ti.nombre AS tienda, d.numero_venta, d.motivo,
+                   d.reembolso, d.total, d.unidades,
+                   coalesce(pp.nombre, d.usuario_id) AS quien
+              FROM retail.devoluciones d
+              JOIN retail.tiendas ti ON ti.id = d.tienda_id
+              LEFT JOIN retail.permisos_pos pp ON pp.usuario_id = d.usuario_id
+             WHERE {dia_devolucion}::date BETWEEN :d1 AND :d2
+             ORDER BY d.creada_en DESC LIMIT :tope
+        """), {**params, "tope": TOPE_DETALLE})).mappings()]
+
+        tablero.detalle_anuladas = [{
+            "cuando": f["cuando"], "tienda_id": f["tienda_id"],
+            "tienda": f["tienda"], "numero": f["numero"],
+            "total_centavos": int(f["total"]),
+            "motivo": f["motivo_anulacion"] or "", "quien": f["quien"] or "",
+        } for f in (await self._s.execute(text(f"""
+            SELECT to_char({dia_venta}, 'YYYY-MM-DD HH24:MI') AS cuando,
+                   v.tienda_id, ti.nombre AS tienda, v.numero, v.total,
+                   v.motivo_anulacion,
+                   coalesce(pp.nombre, v.anulada_por) AS quien
+            {desde_ventas}
+              LEFT JOIN retail.permisos_pos pp ON pp.usuario_id = v.anulada_por
+             WHERE {periodo} AND v.estado = 'anulada'
+             ORDER BY v.cerrada_en DESC LIMIT :tope
+        """), {**params, "tope": TOPE_DETALLE})).mappings()]
 
         # La que más vende, primero. El empate lo decide el nombre para que el
         # orden no baile entre una recarga y la siguiente.

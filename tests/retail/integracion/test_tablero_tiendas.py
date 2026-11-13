@@ -285,3 +285,69 @@ def test_lo_mas_vendido_dice_en_que_tienda_se_vendio(entorno):
     assert [(m["referencia"], m["unidades"]) for m in vendidos] == [
         ("92611-1", 3), ("93100-2", 1)]
     assert vendidos[0]["tiendas"] == {"florida": 1, "arrayanes": 2}
+
+
+# ── Cambios, devoluciones y anuladas ────────────────────────────────────────
+
+async def _devolver(motor, n: int, *, venta: int, tienda: str, total: int,
+                    reembolso: str, cuando: datetime, motivo: str = "talla"):
+    """La devolución escrita directamente, como `_vender`: se prueba la
+    lectura. La de efectivo lleva turno porque el esquema lo exige."""
+    async with motor.begin() as c:
+        await c.execute(text("""
+            INSERT INTO retail.devoluciones
+                (id,venta_id,numero_venta,tienda_id,caja_id,sesion_id,
+                 usuario_id,motivo,reembolso,total,unidades,creada_en)
+            VALUES (:i,:v,:num,:t,:caja,:s,'maria',:mot,:r,:tot,1,:ts)
+        """), {"i": "01JQ8X4T5N8P%03dR8S9V0W1X2Y" % n, "v": _venta_id(venta),
+               "num": f"{tienda[:3].upper()}-{venta}", "t": tienda,
+               "caja": f"{tienda}_caja1",
+               "s": SESIONES[tienda] if reembolso == "efectivo" else None,
+               "mot": motivo, "r": reembolso, "tot": total, "ts": cuando})
+
+
+def test_un_cambio_no_es_plata_devuelta(entorno):
+    """Crédito de tienda: la clienta se lleva otra prenda y de la caja no sale
+    nada. Contarlo como «devuelto» hacía leer plata que nunca salió."""
+    c, motor, _ = entorno
+    rato = _hace_un_rato()
+    _correr(_vender(motor, 1, tienda="florida", cuando=rato - timedelta(days=3),
+                    total=17490000, pagos=[("datafono", 17490000)]))
+    _correr(_vender(motor, 2, tienda="florida", cuando=rato - timedelta(days=3),
+                    total=5000000, pagos=[("efectivo", 5000000)]))
+    _correr(_devolver(motor, 1, venta=1, tienda="florida", total=17490000,
+                      reembolso="credito_tienda", cuando=rato))
+    _correr(_devolver(motor, 2, venta=2, tienda="florida", total=5000000,
+                      reembolso="efectivo", cuando=rato + timedelta(seconds=1),
+                      motivo="defecto"))
+
+    d = _tablero(c)
+    flo = _tienda(d, "florida")
+    assert (flo["cambios"], flo["monto_cambios_centavos"]) == (1, 17490000)
+    assert (flo["reembolsos"], flo["monto_reembolsado_centavos"]) == (1, 5000000)
+    # El total de lo que entró por «Cambios» sigue siendo la suma de los dos.
+    assert (flo["devoluciones"], flo["monto_devuelto_centavos"]) == (2, 22490000)
+
+    # El detalle: lo más reciente primero, con quién lo hizo y sin la clienta.
+    assert [(x["numero_venta"], x["reembolso"], x["motivo"], x["total_centavos"],
+             x["quien"], x["tienda"]) for x in d["detalle_devoluciones"]] == [
+        ("FLO-2", "efectivo", "defecto", 5000000, "María Pérez", "Florida"),
+        ("FLO-1", "credito_tienda", "talla", 17490000, "María Pérez", "Florida"),
+    ]
+    assert set(d["detalle_devoluciones"][0]) == {
+        "cuando", "tienda_id", "tienda", "numero_venta", "motivo", "reembolso",
+        "total_centavos", "unidades", "quien"}
+
+
+def test_el_detalle_de_anuladas_trae_el_motivo(entorno):
+    c, motor, _ = entorno
+    _correr(_vender(motor, 1, tienda="arrayanes", cuando=_hace_un_rato(),
+                    total=5000000, pagos=[("datafono", 5000000)],
+                    estado="anulada"))
+    d = _tablero(c)
+    assert [(x["numero"], x["tienda"], x["total_centavos"], x["motivo"])
+            for x in d["detalle_anuladas"]] == [
+        ("ARR-1", "Arrayanes", 5000000, "prueba")]
+    # Una venta de ayer anulada no aparece en el detalle de hoy.
+    assert _tablero(c, desde="2020-01-01", hasta="2020-01-02")[
+        "detalle_anuladas"] == []
