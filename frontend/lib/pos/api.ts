@@ -631,6 +631,59 @@ export async function panelDelDia(
   return api.get<Panel>(`/api/retail/panel?${p}`);
 }
 
+// ── El tablero de las tiendas ───────────────────────────────────────────────
+
+export interface TiendaDelTablero {
+  id: string;
+  nombre: string;
+  ventas_centavos: number;
+  transacciones: number;
+  ticket_promedio_centavos: number;
+  unidades: number;
+  descuentos_centavos: number;
+  anuladas: number;
+  monto_anulado_centavos: number;
+  devoluciones: number;
+  monto_devuelto_centavos: number;
+  /** Lo mismo en el periodo anterior (cortado a esta hora si incluye hoy). */
+  ventas_anterior_centavos: number;
+  transacciones_anterior: number;
+  /** `AAAA-MM-DD HH:MM`, hora de la tienda. Vacío si no vendió. */
+  ultima_venta: string;
+  turnos_abiertos: { caja: string; abierta_por: string; desde: string }[];
+  /** El efectivo, neto del vuelto. */
+  medios: { nombre: string; tipo: string; centavos: number }[];
+  cajeras: { nombre: string; ventas_centavos: number; transacciones: number }[];
+}
+
+export interface Tablero {
+  /** El día DE LAS TIENDAS (Colombia), no el del navegador. */
+  hoy: string;
+  desde: string;
+  hasta: string;
+  anterior_desde: string;
+  anterior_hasta: string;
+  anterior_cortado: boolean;
+  tiendas: TiendaDelTablero[];
+  serie_por: "hora" | "dia";
+  serie: { etiqueta: string; tiendas: Record<string, number> }[];
+  mas_vendidos: {
+    referencia: string; nombre: string; color: string; unidades: number;
+    valor_centavos: number; tiendas: Record<string, number>;
+  }[];
+}
+
+/** Todas las tiendas, lado a lado. Sólo responde a un administrador. */
+export async function tableroDeTiendas(
+  f: { desde?: string; hasta?: string } = {},
+): Promise<Tablero> {
+  const p = new URLSearchParams();
+  if (f.desde) p.set("desde", f.desde);
+  if (f.hasta) p.set("hasta", f.hasta);
+  const q = p.toString();
+  return api.get<Tablero>(`/api/retail/tablero${q ? `?${q}` : ""}`);
+}
+
 // ── La tirilla ──────────────────────────────────────────────────────────────
 
 export interface LineaTirilla {
