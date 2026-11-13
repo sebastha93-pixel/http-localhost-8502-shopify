@@ -3457,14 +3457,18 @@ _AGENTE_ARCHIVOS = {
     "agente_impresion.ps1.firma": "text/plain; charset=utf-8",
     "instalar.ps1":               "text/plain; charset=utf-8",
     "instalar.ps1.firma":         "text/plain; charset=utf-8",
-    # Oyente del grupo de WhatsApp. Se sirve igual que el agente de impresión
-    # para que instalarlo sea UNA línea en el servidor y no copiar carpetas:
-    #   irm <BASE>/api/produccion/agente/instalar_oyente.ps1 | iex
+    # Oyente del grupo de WhatsApp. Se sirve igual que el agente de impresión;
+    # el instalador se baja como archivo (ver su encabezado), ya no con "| iex".
     # Son scripts sin secretos: el secreto lo pide el instalador y queda solo
     # en el .env del servidor, nunca en un archivo público.
-    "instalar_oyente.ps1": "text/plain; charset=utf-8",
-    "oyente.js":           "text/plain; charset=utf-8",
-    "package.json":        "application/json; charset=utf-8",
+    # También firmados: el oyente corre como SYSTEM y se actualiza solo cada
+    # 15 minutos, así que solo acepta un oyente.js con firma válida.
+    "instalar_oyente.ps1":       "text/plain; charset=utf-8",
+    "instalar_oyente.ps1.firma": "text/plain; charset=utf-8",
+    "oyente.js":                 "text/plain; charset=utf-8",
+    "oyente.js.firma":           "text/plain; charset=utf-8",
+    "package.json":              "application/json; charset=utf-8",
+    "package.json.firma":        "text/plain; charset=utf-8",
 }
 
 

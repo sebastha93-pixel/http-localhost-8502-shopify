@@ -107,6 +107,37 @@ function log(...a) {
  * Solo entonces se reemplaza y el proceso SALE: la tarea de Windows lo levanta
  * a los pocos minutos con el código nuevo.
  */
+// <firma> — tests/test_agente_firmado.py ejecuta este bloque tal cual.
+// AUDITORÍA 2026-11 (informe 15 #26): el oyente corre como SYSTEM y se
+// actualiza solo cada 15 minutos. Sin firma, tomar el backend de Railway era
+// meterle código al servidor de la oficina en un cuarto de hora. Ahora solo
+// acepta un oyente.js firmado con la llave del dueño (RSA-3072, PKCS#1 v1.5,
+// SHA-256; se firma con tools/firmar_agente.sh y la llave privada vive solo en
+// su Mac). Es la misma llave que verifica el agente de impresión.
+const crypto = require("crypto");
+const LLAVE_PUBLICA = `-----BEGIN PUBLIC KEY-----
+MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAxCD3/J8JttDmmoP9sjmf
+iRR01bsJ9UXA5nbRIP+zekvUx9sR7d9b9Pf4IfRD01udoBUbBwNBirlEw53EnNJp
+33kDZ0DzlLCtkPmelfW7epITmKORmtZT61jcl++QfeP5RuwptMxL8PPS19CjBYEp
+NvB6G69TLppivaAvv0o2qPNELohQOLPvwC1vVqbhG+GqagNM8SLzcb1/Dh8Q1I9h
+k7KPUVeiX9HqIEkF2TqH6N64Kq8iXR+b2q88lwm0AecL1nP6o6E8m+p47SbKimm4
+gZ7LLLBp2odd3cwZC5EjvDzTaajxiOVPajOEXVDVqjaU7M8HukAGjUzAHkZ32ruN
+fVF1/OLtEYmkqcTm+WW9m7xoKTZGhIjDSsNxcL3DfeLF9i2e9NiR7t2hxoUcafH1
+RaQGyEJmExCzljNi+i6mpFvGLYvyaCUvHegBBrR4UR1N3yTutzFL96LNx0UqPt5m
+JYdwwkhKL34dH4zFJFkAr4vseg7HyO8Rj8fOAkoZSJG1AgMBAAE=
+-----END PUBLIC KEY-----`;
+function firmaValida(bytes, firmaB64) {
+  try {
+    const firma = Buffer.from(String(firmaB64 || "").trim(), "base64");
+    if (firma.length !== 384) return false;
+    return crypto.verify("sha256", bytes,
+      { key: LLAVE_PUBLICA, padding: crypto.constants.RSA_PKCS1_PADDING }, firma);
+  } catch (_) {
+    return false;
+  }
+}
+// </firma>
+
 const SELLO = "OYENTE DEL GRUPO DE PRODUCCIÓN";
 const MIN_BYTES_VALIDO = 5000;
 const REVISAR_VERSION_MIN = Number(process.env.REVISAR_VERSION_MIN || 15);
@@ -115,16 +146,24 @@ async function buscarActualizacion() {
   try {
     const r = await fetch(`${OS_URL}/api/produccion/agente/oyente.js`);
     if (!r.ok) return;
-    const nuevo = await r.text();
+    // Los BYTES, no el texto: la firma es sobre el archivo exacto.
+    const bytes = Buffer.from(await r.arrayBuffer());
+    const nuevo = bytes.toString("utf8");
     const propio = fs.readFileSync(__filename, "utf8");
     if (nuevo === propio) return;                       // ya estamos al día
+
+    const rf = await fetch(`${OS_URL}/api/produccion/agente/oyente.js.firma`);
+    if (!rf.ok || !firmaValida(bytes, await rf.text())) {
+      log("versión nueva DESCARTADA: no trae una firma válida del dueño");
+      return;
+    }
 
     if (nuevo.length < MIN_BYTES_VALIDO || !nuevo.includes(SELLO)) {
       log(`versión nueva descartada: no parece el oyente (${nuevo.length} bytes)`);
       return;
     }
     const tmp = path.join(__dirname, "oyente.js.nuevo");
-    fs.writeFileSync(tmp, nuevo);
+    fs.writeFileSync(tmp, bytes);
     try {
       require("child_process").execFileSync(process.execPath, ["--check", tmp],
                                             { stdio: "pipe" });
@@ -443,6 +482,32 @@ if (!tomarCerrojo()) {
   log("ya hay otro oyente corriendo; salgo sin hacer nada");
   process.exit(0);
 }
+
+/**
+ * Carpeta solo para Administradores y SYSTEM (auditoría 2026-11, #26).
+ *
+ * C:\male-oyente-grupo heredaba los permisos de C:\, donde cualquier usuario
+ * puede modificar. La tarea SYSTEM corre arrancar.ps1 y este oyente.js desde
+ * aquí: quien pudiera escribir en la carpeta escalaba a SYSTEM, y además leía
+ * el .env (GRUPO_WA_SECRET) y la sesión de WhatsApp. Lo hace el propio oyente
+ * porque ya corre como SYSTEM: así no hay que volver al servidor a reinstalar.
+ * Por SID y no por nombre: en un Windows en español los grupos se llaman distinto.
+ */
+function blindarCarpeta() {
+  if (process.platform !== "win32") return;
+  const { execFileSync } = require("child_process");
+  try {
+    execFileSync("icacls", [__dirname, "/inheritance:r",
+      "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F",
+      "/remove:g", "*S-1-1-0", "*S-1-5-11", "*S-1-5-32-545", "/Q"], { stdio: "pipe" });
+    execFileSync("icacls", [__dirname, "/setowner", "*S-1-5-32-544", "/T", "/C", "/Q"],
+      { stdio: "pipe" });
+    log("carpeta blindada: solo Administradores y SYSTEM");
+  } catch (e) {
+    log(`no pude blindar la carpeta: ${e.message}`);
+  }
+}
+blindarCarpeta();
 
 arrancar().catch((e) => {
   console.error("no pude arrancar:", e.message);
