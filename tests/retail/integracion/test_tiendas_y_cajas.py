@@ -196,6 +196,22 @@ def test_la_feria_factura_con_lo_que_monto_contabilidad_en_siigo(base_vacia):
         True, 27153, "TPFE", 4091, 4091, 67648, 903)
 
 
+def test_la_caja_de_la_feria_trae_su_resolucion(base_vacia):
+    """Sin resolución la tirilla no es factura ni lleva QR: el POS sólo la
+    presenta como fiscal si hay una autorización que ampare ese número. La de
+    TPFE va del 1477 al 5000 (XML de la DIAN de TPFE-1479)."""
+    from datetime import date
+
+    from backend.modules.retail.sembrar_tiendas import sembrar
+
+    sembrar(URL, aplicar=True)
+    assert _leer_sync(base_vacia, """
+        SELECT autorizacion_numero, autorizacion_prefijo, autorizacion_desde,
+               autorizacion_hasta, autorizacion_aprobada, autorizacion_meses
+          FROM retail.cajas WHERE id = 'feria_caja1'""")[0] == (
+        "18764118209870", "TPFE", 1477, 5000, date(2026, 11, 5), 24)
+
+
 # ── Qué ve cada tienda ──────────────────────────────────────────────────────
 
 def test_la_lista_trae_las_cajas_activas(entorno):
