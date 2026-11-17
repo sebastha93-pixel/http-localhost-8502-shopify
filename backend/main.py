@@ -151,6 +151,15 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"   ⚠️  Scheduler no arrancó: {e}")
 
+        # Vigía de la base (17-nov-2026): si Supabase deja de responder, avisa por
+        # correo a los ~6 min. Ese día estuvo caída 2,5 h sin que nadie supiera.
+        try:
+            from backend.services import vigia_base as _vigia
+            _vigia.arrancar()
+            print(f"   🚨 Vigía de la base · revisa cada {_vigia.INTERVALO_SEG}s")
+        except Exception as e:
+            print(f"   ⚠️  Vigía de la base no arrancó: {e}")
+
         # Inventario de tienda para postventa. Solo el lider: si lo corrieran
         # los 4 workers serian 4 recorridas simultaneas del catalogo de Siigo.
         try:
