@@ -136,8 +136,13 @@ def construir_factura(*, venta: dict, lineas: List[dict], pagos: List[dict],
                       bodega_id: Optional[int] = None,
                       centro_costo_id: Optional[int] = None,
                       estampar: bool = False,
-                      enviar_correo: bool = False) -> dict:
+                      enviar_correo: bool = False,
+                      nota: Optional[str] = None) -> dict:
     """El cuerpo de `POST /invoices`. No emite nada.
+
+    `nota` se añade a la observación DESPUÉS de la marca del POS: la marca es
+    por lo que se reencuentra la factura (`buscar_por_marca` busca que esté
+    contenida), así que tiene que seguir entera y al principio.
 
     `lineas`: sku, descripcion, cantidad, precio_unitario y descuento_monto en
     CENTAVOS CON IVA, y `tasa_iva`.
@@ -237,7 +242,8 @@ def construir_factura(*, venta: dict, lineas: List[dict], pagos: List[dict],
         "seller": int(vendedor_id),
         "items": items,
         "payments": payments,
-        "observations": marca_de(venta["id"], venta["numero"]),
+        "observations": (marca_de(venta["id"], venta["numero"])
+                         + (f" · {nota}" if nota else "")),
         "_resumen": {
             "total_pos": float(total_pos),
             "total_siigo": float(total_siigo),
