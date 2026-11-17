@@ -132,10 +132,18 @@ CAJAS = [
      "autorizacion_aprobada": date(2026, 10, 8), "autorizacion_meses": 24},
     # Factura con el comprobante 4 de Siigo, «Factura de venta plaza de Wein»
     # (prefijo TPFE, id 27153), el que indicó contabilidad el 2026-11-05.
-    # Sin el número de su resolución todavía: la tirilla sale sin él.
+    # SU RESOLUCIÓN SALE DEL XML DE LA DIAN, no de una pantalla: el bloque
+    # `InvoiceControl` de TPFE-1479 (`GET /invoices/{id}/xml`) trae la
+    # autorización, la vigencia 2026-11-05 → 2028-11-05 y el rango 1477–5000.
+    # Sin estos datos la tirilla de la feria no se presentaba como factura ni
+    # llevaba QR (2026-11-17): el POS sólo lo pinta si hay resolución que
+    # ampare ESE número.
     {"id": "feria_caja1", "tienda_id": "feria", "nombre": "Caja Feria",
      "prefijo_factura": "FERPOS", "siigo_documento_id": 27153,
-     "autorizacion_prefijo": "TPFE"},
+     "autorizacion_prefijo": "TPFE",
+     "autorizacion_numero": "18764118209870", "autorizacion_desde": 1477,
+     "autorizacion_hasta": 5000,
+     "autorizacion_aprobada": date(2026, 11, 5), "autorizacion_meses": 24},
 ]
 
 UBICACIONES = [
