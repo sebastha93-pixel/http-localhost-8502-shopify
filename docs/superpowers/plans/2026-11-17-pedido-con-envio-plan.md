@@ -9,20 +9,37 @@ elegir hasta la etapa 5.
 
 Rutas: `R` = `backend/modules/retail/`, `F` = `frontend/`.
 
-## Etapa 0 — Lo que sólo se sabe probando en Melonn (antes de construir)
+## Etapa 0 — Lo que sólo se sabe probando en Melonn — HECHA, 2026-11-17
 
-Un pedido creado por API **retenido** (`hold_fulfullment_after_processing:
-true`) y cancelado a los pocos minutos (`request-cancellation`). No despacha
-nada y no factura nada. Con Sebastián enterado.
+Pedido `PRUEBA-POS-1` (Melonn `M1794944965087455`): 1 unidad de 25626-1T16,
+creado a las 14:49:25 y cancelado a las 14:50:28. No despachó ni facturó.
+Script: `~/Proyectos/MALE-DENIM-OS/auditoria-railway-oct2026/prueba_melonn_pos.py`.
 
-- [ ] Crear en Melonn un pedido de 1 unidad de una prenda con existencia, a una
-      dirección de la oficina, número `PRUEBA-POS-1`, etiqueta `POS`, retenido.
-- [ ] Mirar si **Shopify baja la existencia** de ese SKU (antes / después / tras
-      cancelar). Decide si el POS tiene que ajustar Shopify o no.
-- [ ] Mirar qué devuelve Melonn al crearlo (campos, estado inicial) y cómo se
-      ve en el `GET sell-orders/PRUEBA-POS-1` y en el webhook que llega al OS.
-- [ ] Cancelarlo y confirmar el estado final.
-- [ ] Anotar si Melonn le mandó algo al teléfono/correo del destinatario.
+- [x] **Shopify SÍ baja su existencia sola.** Antes: Melonn 10, Shopify 10. A
+      los 28 s de crearlo Melonn decía 9; a los 45 s Shopify decía 9 (en la
+      ubicación «Melonn Sabaneta»). Al cancelar, los dos volvieron a 10 en
+      menos de 40 s. **El POS no tiene que tocar el inventario de Shopify.**
+- [x] **`external_order_id` es obligatorio** (400 «body must have required
+      property 'external_order_id'»). Se manda numérico y que no sea un pedido
+      de Shopify (ver la nota de `shopify_enricher` en la etapa 3).
+- [x] Crear responde `201` con `sell_order.internal_order_number` (el M-id),
+      `external_order_number` y `external_order_id`.
+- [x] El `GET sell-orders/{número}` de un pedido creado por API SÍ trae el
+      detalle: `line_items`, `shipping_info` (Melonn normaliza la dirección),
+      `buyer`, `melonn_tracking_link`, paquetes con promesas (despacho ese
+      mismo día 11 p. m., entrega a los 2 días) y `payment_on_delivery_amount`
+      nulo (prepagado).
+- [x] **Las etiquetas no vuelven** (`tags: []` aunque se mandaron `POS` y
+      `PRUEBA`): no sirven para reconocer un pedido del POS. Se reconoce por
+      el número.
+- [x] **«Retenido» no se nota en el estado:** quedó en `2 · All items reserved
+      - ready for fulfillment` a los 40 s, igual que uno normal. No contar con
+      la retención para ganar tiempo: un pedido creado puede empezar a
+      alistarse ya.
+- [x] Cancelar (`request-cancellation`) → `200` y estado `15 · Canceled` en
+      menos de 35 s.
+- [ ] Si Melonn le avisa algo a la clienta (SMS/correo): no se pudo ver desde
+      aquí. Se mira en el pedido real de la etapa 5.
 
 ## Etapa 1 — Cimientos en el servidor (sin cambio visible) — HECHA en la rama, 2026-11-17
 
