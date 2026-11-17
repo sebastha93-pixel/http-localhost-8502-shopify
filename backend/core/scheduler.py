@@ -42,7 +42,13 @@ REFRESH_INTERVAL_SECONDS = REFRESH_LIGHT_SECONDS  # tick principal
 
 INITIAL_DELAY_SECONDS = 30
 
+# Cola de webhooks de Melonn (2026-11-17): el webhook solo anota el pedido y este
+# hilo la vacía con UN guardado del caché por pasada. Antes cada webhook
+# reescribía el caché entero (>1 MB) y varios por segundo tumbaron la base.
+COLA_WEBHOOKS_SECONDS = int(os.environ.get("MELONN_COLA_SEC", 30))
+
 _thread: Optional[threading.Thread] = None
+_cola_thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
 
 # Estado expuesto para health-check
@@ -207,14 +213,62 @@ def _loop():
     log.info("Scheduler detenido.")
 
 
+def _procesar_cola_webhooks_una_vez() -> None:
+    """Una pasada de la cola: fusiona los pedidos que avisó Melonn, guarda el
+    caché una vez y archiva los entregados."""
+    if time.time() < _cooldown_until:
+        return  # Melonn devolvió 429: no gastar más cuota
+    _SRC = Path(__file__).resolve().parent.parent.parent / "src"
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+    import melonn_client as mc
+    r = mc.procesar_cola_webhooks()
+    if r.get("procesados") or r.get("fallidos") or r.get("omitido"):
+        last_run["cola_webhooks"] = {
+            "at": datetime.now(timezone.utc).isoformat(),
+            "procesados": r.get("procesados"), "fallidos": r.get("fallidos"),
+            "pendientes": r.get("pendientes"), "omitido": r.get("omitido"),
+        }
+    # Archivar entregados (antes lo hacía el webhook releyendo el caché entero).
+    entregados = r.get("entregados") or []
+    if entregados:
+        try:
+            from backend.services import archivo as archivo_svc
+            for ped in entregados:
+                try:
+                    archivo_svc.archivar_si_entregado(ped)
+                except Exception as e:
+                    log.warning(f"[cola-webhooks] no se pudo archivar "
+                                f"{ped.get('orden_tienda')}: {str(e)[:120]}")
+        except Exception as e:
+            log.warning(f"[cola-webhooks] archivo no disponible: {str(e)[:120]}")
+
+
+def _cola_loop():
+    log.info(f"Cola de webhooks Melonn · se vacía cada {COLA_WEBHOOKS_SECONDS}s")
+    if _stop_event.wait(15):
+        return
+    while not _stop_event.is_set():
+        try:
+            _procesar_cola_webhooks_una_vez()
+        except Exception as e:
+            log.warning(f"[cola-webhooks] la pasada falló: {str(e)[:180]}")
+        if _stop_event.wait(COLA_WEBHOOKS_SECONDS):
+            break
+
+
 def start() -> threading.Thread:
     """Arranca el scheduler en un daemon thread. Idempotente."""
-    global _thread
+    global _thread, _cola_thread
     if _thread is not None and _thread.is_alive():
         return _thread
     _stop_event.clear()
     _thread = threading.Thread(target=_loop, daemon=True, name="scheduler")
     _thread.start()
+    if _cola_thread is None or not _cola_thread.is_alive():
+        _cola_thread = threading.Thread(target=_cola_loop, daemon=True,
+                                        name="melonn-cola-webhooks")
+        _cola_thread.start()
     return _thread
 
 
@@ -316,5 +370,6 @@ def status() -> dict:
         "light_interval_seconds": REFRESH_LIGHT_SECONDS,
         "full_interval_seconds": REFRESH_FULL_SECONDS,
         "cooldown_remaining_seconds": cooldown_remaining,
+        "cola_webhooks_viva": _cola_thread is not None and _cola_thread.is_alive(),
         "last_run": last_run,
     }

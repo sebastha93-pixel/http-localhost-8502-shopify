@@ -1414,6 +1414,37 @@ def refrescar_un_pedido(identificador: str) -> dict:
     if not identificador:
         return {"ok": False, "error": "Sin identificador"}
 
+    nuevo, error = _detalle_normalizado(identificador)
+    if not nuevo:
+        return {"ok": False, "error": error}
+
+    # Mezclar con caché actual
+    hit = _cache_leer(ignorar_ttl=True)
+    if not hit:
+        # NO escribir. Antes se guardaba [nuevo] "raro pero válido", y BORRABA el
+        # tablero entero: cuando el caché queda ilegible —el caso típico es que
+        # cambió `config_hash` en un deploy— el primer webhook que llegaba dejaba
+        # el caché con UN pedido. Pasó en producción el 2026-08-01: 1.208 pedidos
+        # → 3, y Sebastián vio Envíos en cero.
+        # El pedido no se pierde: el refresh del listado lo vuelve a traer.
+        log.warning("[webhook] caché ilegible o vacío — NO lo sobrescribo con un "
+                    "solo pedido; lanzo el refresh del listado completo")
+        try:
+            _refresh_background()
+        except Exception as e:
+            log.warning(f"[webhook] no pude lanzar el refresh: {str(e)[:120]}")
+        return {"ok": True, "accion": "sin_cache_refresh_lanzado",
+                "orden": nuevo.get("orden_tienda")}
+
+    pedidos, _ft, _ts, fuente = hit
+    accion, _p = _aplicar_en_lista(pedidos, nuevo)
+    _cache_guardar(pedidos, fuente=fuente or "webhook")
+    return {"ok": True, "encontrado": accion == "actualizado", "accion": accion,
+            "orden": nuevo.get("orden_tienda")}
+
+
+def _detalle_normalizado(identificador: str) -> tuple:
+    """(pedido normalizado, "") desde el detalle de Melonn, o (None, error)."""
     # Normalizar candidatos: probar el ID tal cual, sin "M", y como string
     candidatos = []
     raw = str(identificador).strip()
@@ -1437,63 +1468,10 @@ def refrescar_un_pedido(identificador: str) -> dict:
             continue
 
     if not detail:
-        return {"ok": False, "error": f"Pedido no encontrado en Melonn: {identificador}", "candidatos": candidatos}
+        return None, f"Pedido no encontrado en Melonn: {identificador}"
 
     # Normalizar el detail al schema interno del caché.
     # Reusamos la lógica del list normalizer si el detail tiene los campos.
-    def _merge_webhook(viejo: dict, actualizado: dict) -> dict:
-        """Fusiona una actualización de webhook sobre el pedido en caché sin
-        borrar los campos enriquecidos desde Shopify (cliente/ciudad/producto/
-        guía). Regla: el webhook solo pisa un campo enriquecido si trae valor;
-        si viene vacío, se conserva el del caché."""
-        ENRIQUECIDOS = {
-            "tienda", "nombre_comprador", "telefono_comprador",
-            "ciudad_destino", "region_destino", "email_comprador",
-            "sku", "producto", "variante", "imagen_producto",
-            "precio_unitario", "cantidad", "line_items",
-            "fecha_despacho", "fecha_promesa", "fecha_entrega",
-            # OJO: esta lista se había quedado atrás respecto a
-            # _CAMPOS_ENRIQUECIDOS. Le faltaba `fecha_despacho_confiable`, así
-            # que un webhook la borraba y el pedido volvía a calificar para
-            # re-consulta — realimentando el bucle que arreglamos hoy. Y le
-            # faltaban las promesas, que son caras de traer.
-            "fecha_despacho_confiable",
-            # El despacho observado NO se puede recalcular: la transición ya
-            # pasó. Un webhook que lo borre lo pierde para siempre.
-            "fecha_despacho_observada", "fecha_despacho_origen",
-            "fecha_entrega_origen", "_portal_entrega_intentado",
-            "promesa_entrega_min", "promesa_entrega_max", "intentos_entrega",
-            "_detalle_melonn_intentado_en",
-            "guia_real", "carrier_real", "link_guia", "external_order_id",
-        }
-        def _vacio(v):
-            if v is None:
-                return True
-            if isinstance(v, str):
-                return not v.strip()
-            if isinstance(v, (int, float)):
-                return v == 0
-            if isinstance(v, (list, dict)):
-                return len(v) == 0
-            return False
-        merged = dict(viejo)
-        for k, v in actualizado.items():
-            if k in ENRIQUECIDOS and _vacio(v):
-                continue  # no borrar dato enriquecido con un vacío del webhook
-            merged[k] = v
-        # EL DESPACHO LLEGA POR ACÁ, NO POR EL SYNC (corregido 2026-07-31).
-        # La detección se puso primero solo en _heredar_enriquecidos y en 14 h
-        # no anotó NADA: el webhook de Melonn actualiza el caché en tiempo real,
-        # así que cuando el sync horario corría, el estado "anterior" del caché
-        # ya era el nuevo y la transición era invisible. Este es el único punto
-        # donde el cambio se ve llegar. Se deja también en el sync como respaldo
-        # por si los webhooks se caen (ya ha pasado).
-        try:
-            _marcar_despacho_observado(merged, viejo)
-        except Exception as e:
-            log.warning(f"[despacho] no pude evaluar la transición: {str(e)[:120]}")
-        return merged
-
     try:
         nuevo = _normalizar(detail)
     except Exception:
@@ -1507,27 +1485,12 @@ def refrescar_un_pedido(identificador: str) -> dict:
             "estado_melonn_code": _estado_de(detail)[0],
             "_raw": True,
         }
+    return nuevo, ""
 
-    # Mezclar con caché actual
-    hit = _cache_leer(ignorar_ttl=True)
-    if not hit:
-        # NO escribir. Antes se guardaba [nuevo] "raro pero válido", y BORRABA el
-        # tablero entero: cuando el caché queda ilegible —el caso típico es que
-        # cambió `config_hash` en un deploy— el primer webhook que llegaba dejaba
-        # el caché con UN pedido. Pasó en producción el 2026-08-01: 1.208 pedidos
-        # → 3, y Sebastián vio Envíos en cero.
-        # El pedido no se pierde: el refresh del listado lo vuelve a traer.
-        log.warning("[webhook] caché ilegible o vacío — NO lo sobrescribo con un "
-                    "solo pedido; lanzo el refresh del listado completo")
-        try:
-            _refresh_background()
-        except Exception as e:
-            log.warning(f"[webhook] no pude lanzar el refresh: {str(e)[:120]}")
-        return {"ok": True, "accion": "sin_cache_refresh_lanzado",
-                "orden": nuevo.get("orden_tienda")}
 
-    pedidos, _ft, _ts, fuente = hit
-    encontrado = False
+def _aplicar_en_lista(pedidos: list, nuevo: dict) -> tuple:
+    """Fusiona `nuevo` sobre su pedido en `pedidos` (o lo agrega). Modifica la
+    lista en el sitio. Devuelve ("actualizado"|"creado", pedido resultante)."""
     nuevo_om = (nuevo.get("orden_melonn") or "").lstrip("Mm")
     nuevo_ot = nuevo.get("orden_tienda") or ""
     for i, p in enumerate(pedidos):
@@ -1541,16 +1504,211 @@ def refrescar_un_pedido(identificador: str) -> dict:
             # cambio de estado. Preservamos lo enriquecido si el webhook viene
             # vacío en ese campo.
             pedidos[i] = _merge_webhook(p, nuevo)
-            encontrado = True
-            break
+            return "actualizado", pedidos[i]
+    pedidos.append(nuevo)
+    return "creado", nuevo
 
-    accion = "actualizado"
-    if not encontrado:
-        pedidos.append(nuevo)
-        accion = "creado"
 
-    _cache_guardar(pedidos, fuente=fuente or "webhook")
-    return {"ok": True, "encontrado": encontrado, "accion": accion, "orden": nuevo.get("orden_tienda")}
+def _merge_webhook(viejo: dict, actualizado: dict) -> dict:
+    """Fusiona una actualización de webhook sobre el pedido en caché sin
+    borrar los campos enriquecidos desde Shopify (cliente/ciudad/producto/
+    guía). Regla: el webhook solo pisa un campo enriquecido si trae valor;
+    si viene vacío, se conserva el del caché."""
+    ENRIQUECIDOS = {
+        "tienda", "nombre_comprador", "telefono_comprador",
+        "ciudad_destino", "region_destino", "email_comprador",
+        "sku", "producto", "variante", "imagen_producto",
+        "precio_unitario", "cantidad", "line_items",
+        "fecha_despacho", "fecha_promesa", "fecha_entrega",
+        # OJO: esta lista se había quedado atrás respecto a
+        # _CAMPOS_ENRIQUECIDOS. Le faltaba `fecha_despacho_confiable`, así
+        # que un webhook la borraba y el pedido volvía a calificar para
+        # re-consulta — realimentando el bucle que arreglamos hoy. Y le
+        # faltaban las promesas, que son caras de traer.
+        "fecha_despacho_confiable",
+        # El despacho observado NO se puede recalcular: la transición ya
+        # pasó. Un webhook que lo borre lo pierde para siempre.
+        "fecha_despacho_observada", "fecha_despacho_origen",
+        "fecha_entrega_origen", "_portal_entrega_intentado",
+        "promesa_entrega_min", "promesa_entrega_max", "intentos_entrega",
+        "_detalle_melonn_intentado_en",
+        "guia_real", "carrier_real", "link_guia", "external_order_id",
+    }
+    def _vacio(v):
+        if v is None:
+            return True
+        if isinstance(v, str):
+            return not v.strip()
+        if isinstance(v, (int, float)):
+            return v == 0
+        if isinstance(v, (list, dict)):
+            return len(v) == 0
+        return False
+    merged = dict(viejo)
+    for k, v in actualizado.items():
+        if k in ENRIQUECIDOS and _vacio(v):
+            continue  # no borrar dato enriquecido con un vacío del webhook
+        merged[k] = v
+    # EL DESPACHO LLEGA POR ACÁ, NO POR EL SYNC (corregido 2026-07-31).
+    # La detección se puso primero solo en _heredar_enriquecidos y en 14 h
+    # no anotó NADA: el webhook de Melonn actualiza el caché en tiempo real,
+    # así que cuando el sync horario corría, el estado "anterior" del caché
+    # ya era el nuevo y la transición era invisible. Este es el único punto
+    # donde el cambio se ve llegar. Se deja también en el sync como respaldo
+    # por si los webhooks se caen (ya ha pasado).
+    try:
+        _marcar_despacho_observado(merged, viejo)
+    except Exception as e:
+        log.warning(f"[despacho] no pude evaluar la transición: {str(e)[:120]}")
+    return merged
+
+
+# ── Cola de webhooks (2026-11-17) ─────────────────────────────────────────────
+#
+# POR QUÉ: cada webhook leía el caché ENTERO desde Supabase (~1.200 pedidos en un
+# JSON de más de 1 MB), le cambiaba un pedido y lo volvía a escribir ENTERO.
+# Melonn manda varios webhooks por segundo; el 17-nov a las 8:54 esas escrituras
+# empezaron a pasarse del statement timeout y a las 8:57 la base dejó de aceptar
+# conexiones: el OS y el POS de las tiendas quedaron caídos 2,5 horas.
+#
+# AHORA: el webhook solo ANOTA el pedido en una cola local (SQLite en el disco del
+# contenedor, compartido por los 4 workers; no toca Supabase). El worker líder la
+# vacía cada ~30 s: pide a Melonn el detalle de cada pedido (una vez por pedido
+# aunque haya llegado diez veces), los fusiona y guarda el caché UNA vez. De
+# varias escrituras de 1 MB por segundo a, como mucho, dos por minuto.
+#
+# Si la cola se pierde (redeploy), no se pierde el dato: el barrido horario
+# contra el listado de Melonn es la red de seguridad, igual que con un webhook
+# perdido.
+
+_COLA_PATH = _DB_PATH.parent / "melonn_cola_webhooks.db"
+_COLA_LOCK = threading.Lock()
+_MAX_INTENTOS_COLA = 5
+
+
+def _cola_conn():
+    _COLA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    c = sqlite3.connect(str(_COLA_PATH), timeout=10)
+    c.row_factory = sqlite3.Row
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("CREATE TABLE IF NOT EXISTS cola ("
+              "identificador TEXT PRIMARY KEY, evento TEXT, recibido_en TEXT NOT NULL, "
+              "entregado INTEGER NOT NULL DEFAULT 0, intentos INTEGER NOT NULL DEFAULT 0)")
+    return c
+
+
+def encolar_webhook(identificador: str, evento: str = "") -> dict:
+    """Anota el pedido para la próxima pasada. Rápido y sin tocar Supabase.
+
+    Si la cola no se puede escribir, cae al camino viejo (refrescar ya) para no
+    perder el webhook."""
+    ident = str(identificador or "").strip()
+    if not ident:
+        return {"ok": False, "error": "Sin identificador"}
+    ev = str(evento or "").upper()
+    entregado = 1 if ("DELIVER" in ev or "COLLECT" in ev or "ENTREG" in ev) else 0
+    try:
+        with _cola_conn() as c:
+            c.execute(
+                "INSERT INTO cola (identificador, evento, recibido_en, entregado) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(identificador) DO UPDATE SET "
+                "evento=excluded.evento, recibido_en=excluded.recibido_en, "
+                # un "entregado" no se borra porque después llegue otro evento
+                "entregado=MAX(cola.entregado, excluded.entregado)",
+                (ident, ev[:80], datetime.utcnow().isoformat(), entregado))
+        return {"ok": True, "accion": "encolado", "orden": ident}
+    except Exception as e:
+        log.warning(f"[cola-webhooks] no pude encolar {ident}: {e} — refresco directo")
+        return refrescar_un_pedido(ident)
+
+
+def pendientes_cola_webhooks() -> int:
+    try:
+        with _cola_conn() as c:
+            return int(c.execute("SELECT COUNT(*) FROM cola").fetchone()[0])
+    except Exception:
+        return -1
+
+
+def procesar_cola_webhooks(max_items: int = 200) -> dict:
+    """Vacía la cola: detalle de cada pedido, una sola fusión y UN guardado.
+
+    Devuelve {procesados, guardado, entregados: [pedido…], pendientes, ...}.
+    `entregados` son los pedidos ya fusionados cuyo evento fue de entrega, para
+    que quien llama los archive (antes lo hacía el webhook releyendo el caché)."""
+    out = {"procesados": 0, "guardado": False, "entregados": [], "fallidos": 0,
+           "pendientes": 0, "omitido": ""}
+    if not _COLA_LOCK.acquire(blocking=False):
+        out["omitido"] = "otra_pasada_en_curso"
+        return out
+    try:
+        with _cola_conn() as c:
+            filas = [dict(r) for r in c.execute(
+                "SELECT identificador, evento, recibido_en, entregado, intentos FROM cola "
+                "ORDER BY recibido_en LIMIT ?", (int(max_items),)).fetchall()]
+        if not filas:
+            return out
+        if cuota_agotada():
+            out["omitido"] = "cuota_melonn_agotada"
+            out["pendientes"] = pendientes_cola_webhooks()
+            return out
+
+        hit = _cache_leer(ignorar_ttl=True)
+        if not hit:
+            # Mismo criterio que el webhook directo: con el caché ilegible no se
+            # escribe una lista parcial; el refresh completo trae todo.
+            log.warning("[cola-webhooks] caché ilegible — lanzo el refresh completo y "
+                        "vacío la cola (el listado trae estos pedidos)")
+            try:
+                _refresh_background()
+            except Exception as e:
+                log.warning(f"[cola-webhooks] no pude lanzar el refresh: {str(e)[:120]}")
+            with _cola_conn() as c:
+                c.executemany("DELETE FROM cola WHERE identificador=? AND recibido_en=?",
+                              [(f["identificador"], f["recibido_en"]) for f in filas])
+            out["omitido"] = "cache_ilegible_refresh_lanzado"
+            return out
+
+        pedidos, _ft, _ts, fuente = hit
+        hechos, fallidos = [], []
+        for f in filas:
+            try:
+                nuevo, error = _detalle_normalizado(f["identificador"])
+            except Exception as e:
+                nuevo, error = None, str(e)[:120]
+            if not nuevo:
+                fallidos.append((f, error))
+                continue
+            _accion, ped = _aplicar_en_lista(pedidos, nuevo)
+            hechos.append(f)
+            if f.get("entregado"):
+                out["entregados"].append(ped)
+
+        if hechos:
+            _cache_guardar(pedidos, fuente=fuente or "webhook")
+            out["guardado"] = True
+        with _cola_conn() as c:
+            # Se borra solo si no volvió a llegar mientras se procesaba (mismo
+            # recibido_en); si llegó de nuevo, queda para la próxima pasada.
+            c.executemany("DELETE FROM cola WHERE identificador=? AND recibido_en=?",
+                          [(f["identificador"], f["recibido_en"]) for f in hechos])
+            for f, error in fallidos:
+                if int(f.get("intentos") or 0) + 1 >= _MAX_INTENTOS_COLA:
+                    log.warning(f"[cola-webhooks] {f['identificador']} descartado tras "
+                                f"{_MAX_INTENTOS_COLA} intentos: {error}")
+                    c.execute("DELETE FROM cola WHERE identificador=?", (f["identificador"],))
+                else:
+                    c.execute("UPDATE cola SET intentos=intentos+1 WHERE identificador=?",
+                              (f["identificador"],))
+        out["procesados"] = len(hechos)
+        out["fallidos"] = len(fallidos)
+        out["pendientes"] = pendientes_cola_webhooks()
+        if hechos:
+            log.info(f"[cola-webhooks] {len(hechos)} pedidos fusionados en un solo guardado"
+                     f"{f' · {len(fallidos)} fallidos' if fallidos else ''}")
+        return out
+    finally:
+        _COLA_LOCK.release()
 
 
 def limpiar_cache():
