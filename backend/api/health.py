@@ -75,6 +75,19 @@ def health_scheduler_resume(_: CurrentUser = Depends(require_role("admin"))) -> 
     return {"ok": True, **scheduler.status()}
 
 
+@router.get("/health/base")
+def health_base() -> dict:
+    """¿La base de datos responde? Prueba en vivo + estado del vigía.
+
+    Público a propósito (como /health): sirve para un monitor externo. No
+    expone datos, solo si responde y en cuánto. El estado del vigía solo es
+    real en el worker líder; los demás devuelven vigia.vivo=false."""
+    from backend.services import vigia_base
+    ok, detalle, ms = vigia_base.probar(timeout=8)
+    return {"ok": ok, "detalle": detalle if ok else "no_responde", "latencia_ms": ms,
+            "vigia": vigia_base.estado()}
+
+
 @router.get("/health/bot-scheduler")
 def health_bot_scheduler() -> dict:
     """Estado del cron del bot scraper de guías."""
