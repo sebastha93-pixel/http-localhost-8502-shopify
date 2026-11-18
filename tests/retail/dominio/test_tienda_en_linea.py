@@ -57,9 +57,15 @@ def test_consultar_solo_acepta_el_sku_exacto_y_publicado(monkeypatch):
 
 
 def test_si_shopify_contesta_con_error_no_se_inventa_una_respuesta(monkeypatch):
-    import backend.services.clientes as clientes
-    monkeypatch.setattr(clientes, "_shopify_graphql",
-                        lambda q, v=None: {"errors": [{"message": "throttled"}]})
+    # UN MÓDULO FALSO, no el de verdad: `backend.services.clientes` es del ERP
+    # y arrastra a Supabase, que la tanda de dominio (sin base, sin red) no
+    # tiene instalado. Con el import real esta prueba pasaba en el Mac y
+    # fallaba en GitHub (2026-11-18).
+    import sys
+    import types
+    falso = types.ModuleType("backend.services.clientes")
+    falso._shopify_graphql = lambda q, v=None: {"errors": [{"message": "throttled"}]}
+    monkeypatch.setitem(sys.modules, "backend.services.clientes", falso)
     with pytest.raises(t.TiendaEnLineaNoDisponible):
         t.consultar(["92633-1T6"])
     with pytest.raises(t.TiendaEnLineaNoDisponible):
