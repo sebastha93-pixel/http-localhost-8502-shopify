@@ -73,6 +73,17 @@ class PagoEntrada(BaseModel):
     referencia: Optional[str] = None
 
 
+class EntregaEntrada(BaseModel):
+    """A dónde va una venta con envío. Lo justo para entregarla."""
+
+    destinatario: str = Field(min_length=3, max_length=120)
+    telefono: str = Field(min_length=7, max_length=20)
+    direccion: str = Field(min_length=5, max_length=200)
+    complemento: str = Field("", max_length=120)
+    ciudad: str = Field(min_length=2, max_length=80)
+    departamento: str = Field(min_length=2, max_length=80)
+
+
 class VentaEntrada(BaseModel):
     """La venta completa, tal como la armó el dispositivo."""
 
@@ -90,6 +101,10 @@ class VentaEntrada(BaseModel):
     # llega igual en los dos casos, y sin esto TODAS las ventas parecen hechas
     # con conexión — incluidas las que se cobraron sin poder ver el stock.
     origen: str = "en_linea"
+    # `envio`: la prenda no está en la tienda; sale de la bodega de la tienda
+    # en línea y se le manda a la clienta. Exige `entrega`. Ver `envio.py`.
+    canal: str = "mostrador"
+    entrega: Optional[EntregaEntrada] = None
     lineas: List[LineaEntrada]
     pagos: List[PagoEntrada]
 
@@ -181,11 +196,15 @@ async def cerrar_venta(
             await _exigir_misma_tienda(
                 t, tienda_id=entrada.tienda_id, caja_id=entrada.caja_id,
                 ubicacion_id=entrada.ubicacion_id)
+            # De dónde sale la prenda: del estante de la tienda, o —si es
+            # una venta con envío— de la bodega de la tienda en línea.
+            ubicacion_salida, entrega = await _resolver_envio(t, entrada)
         venta, variante_por_sku = await _armar(entrada, uow, usuario.id)
         await _exigir_numero_arrendado(uow, venta)
         resultado = await CerrarVenta(uow, reloj=RelojDelSistema()).ejecutar(
             venta, variante_por_sku=variante_por_sku,
-            ubicacion_id=entrada.ubicacion_id, usuario_id=usuario.id)
+            ubicacion_id=ubicacion_salida, usuario_id=usuario.id,
+            entrega=entrega)
     except RequiereAutorizacion as e:
         # Ya no hay diálogo de PIN que abrir: la vía es que entre alguien con
         # un tope mayor. La bandera se conserva para que la pantalla lo diga
@@ -979,6 +998,8 @@ class ContextoCaja(BaseModel):
     caja_nombre: str
     base_caja_centavos: int
     ubicacion_id: Optional[str] = None
+    # ¿Esta tienda puede vender con envío a domicilio? (migración 0042)
+    vende_con_envio: bool = False
     # EL ENCABEZADO DE LA TIRILLA. Viaja aquí —y no sólo en el endpoint de la
     # tirilla— para que el dispositivo lo tenga guardado ANTES de quedarse sin
     # red. Sin esto, una venta offline se cierra pero no se puede imprimir: la
@@ -1029,6 +1050,7 @@ async def contexto_caja(
     fila = (await sesion.execute(_t("""
         SELECT c.id AS caja_id, c.nombre AS caja_nombre,
                t.id AS tienda_id, t.nombre AS tienda_nombre, t.base_caja,
+               t.vende_con_envio,
                coalesce(t.razon_social, t.nombre) AS razon_social,
                coalesce(t.nit, '')        AS nit,
                coalesce(t.direccion, '')  AS direccion,
@@ -1051,6 +1073,7 @@ async def contexto_caja(
         caja_id=fila["caja_id"], caja_nombre=fila["caja_nombre"],
         base_caja_centavos=int(fila["base_caja"]),
         ubicacion_id=fila["ubicacion"],
+        vende_con_envio=bool(fila["vende_con_envio"]),
         razon_social=fila["razon_social"], nit=fila["nit"],
         direccion=fila["direccion"], telefono=fila["telefono"],
         mensaje_tirilla=fila["mensaje_tirilla"],
@@ -1161,6 +1184,56 @@ async def _exigir_tienda_de_la_persona(t, usuario: CurrentUser,
     raise ReglaDeNegocio(
         "No estás asignada a esta tienda, así que no puedes abrir turno en "
         "ella. Pídele a un administrador que te asigne en Permisos del POS.")
+
+
+async def _resolver_envio(t, entrada: "VentaEntrada"):
+    """`(ubicación de salida, entrega)` de la venta.
+
+    Una venta de mostrador devuelve lo de siempre: la ubicación que mandó el
+    dispositivo y ninguna entrega. Una CON ENVÍO se valida aquí, en el
+    servidor: que la tienda pueda vender así, que venga a dónde mandarla y que
+    no sea una venta cobrada sin red (sin red no se puede saber si la prenda
+    existe en la tienda en línea).
+    """
+    from sqlalchemy import text as _t
+    from backend.modules.retail.envio import (
+        CANAL_ENVIO, CANAL_MOSTRADOR, UBICACION_EN_LINEA,
+    )
+
+    if entrada.canal == CANAL_MOSTRADOR:
+        return entrada.ubicacion_id, None
+    if entrada.canal != CANAL_ENVIO:
+        raise ReglaDeNegocio(f"No conozco el canal de venta {entrada.canal!r}.")
+    if entrada.origen != "en_linea":
+        raise ReglaDeNegocio(
+            "Una venta con envío no se puede cobrar sin conexión: no hay "
+            "cómo saber si la prenda está disponible en la tienda en línea.")
+    if entrada.entrega is None:
+        raise ReglaDeNegocio(
+            "Falta a dónde enviar el pedido: quién recibe, celular, "
+            "dirección, ciudad y departamento.")
+    fila = (await t.sesion.execute(_t("""
+        SELECT ti.vende_con_envio,
+               (SELECT u.activa FROM retail.ubicaciones u WHERE u.id = :u)
+                   AS bodega_activa
+          FROM retail.tiendas ti WHERE ti.id = :t
+    """), {"t": entrada.tienda_id, "u": UBICACION_EN_LINEA})).mappings().first()
+    if fila is None or not fila["vende_con_envio"]:
+        raise ReglaDeNegocio(
+            "Esta tienda no tiene habilitada la venta con envío a domicilio.")
+    if not fila["bodega_activa"]:
+        raise ReglaDeNegocio(
+            "No está configurada la bodega de la tienda en línea: la venta "
+            "con envío no se puede registrar.")
+    e = entrada.entrega
+    limpio = {k: (getattr(e, k) or "").strip() for k in (
+        "destinatario", "telefono", "direccion", "complemento", "ciudad",
+        "departamento")}
+    faltan = [k for k, v in limpio.items() if not v and k != "complemento"]
+    if faltan:
+        raise ReglaDeNegocio(
+            "Faltan datos de la entrega: " + ", ".join(faltan) + ".")
+    return UBICACION_EN_LINEA, limpio
 
 
 async def _exigir_misma_tienda(t, *, tienda_id: str, caja_id: str,

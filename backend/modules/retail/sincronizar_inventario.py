@@ -167,6 +167,10 @@ def _una_tienda(c, u, productos: List[dict], usuario_id: str,
           JOIN retail.ventas v ON v.id = l.venta_id
          WHERE v.tienda_id = :t AND v.estado = 'cerrada'
            AND v.estado_fiscal IN ('pendiente', 'enviando')
+           -- Lo vendido CON ENVÍO no salió de este estante: salió de la
+           -- bodega de la tienda en línea. Restarlo aquí le quitaría a la
+           -- tienda una prenda que sigue colgada.
+           AND v.canal <> 'envio'
          GROUP BY l.sku
     """), {"t": u["tienda_id"]}).mappings()}
 

@@ -64,8 +64,16 @@ class CerrarVenta:
         ubicacion_id: str,
         reservas: Optional[dict] = None,
         usuario_id: str,
+        entrega: Optional[dict] = None,
     ) -> ResultadoCierre:
         """`reservas` mapea sku → id de reserva, cuando el carrito reservó.
+
+        `entrega` (destinatario, telefono, direccion, complemento, ciudad,
+        departamento) hace de ésta una VENTA CON ENVÍO: la prenda no sale del
+        estante de la tienda sino de la bodega de la tienda en línea, y queda
+        un despacho por crear. `ubicacion_id` tiene que ser esa bodega; lo
+        decide quien llama (el router), que es quien valida que la tienda
+        pueda vender así.
 
         Sin reservas (una venta que llegó de un dispositivo offline) el stock
         se descuenta igual: la prenda ya se entregó. Puede quedar negativo, se
@@ -94,6 +102,10 @@ class CerrarVenta:
 
             # 2
             await t.ventas.guardar(venta, variante_por_sku=variante_por_sku)
+            if entrega is not None:
+                # Con la venta, en la MISMA transacción: una venta con envío
+                # sin su despacho es una prenda cobrada que nadie va a mandar.
+                await self._registrar_despacho(t, venta, entrega)
             # Después de guardar: el uso del saldo apunta a la venta. Si no
             # alcanza, revienta aquí y la transacción entera se deshace.
             await self._consumir_saldos(t, venta)
@@ -258,6 +270,27 @@ class CerrarVenta:
                 ON CONFLICT (saldo_id, venta_id) DO UPDATE
                    SET monto = retail.saldo_usos.monto + :n
             """), {"i": s["id"], "v": venta.id, "n": neto.centavos})
+
+    @staticmethod
+    async def _registrar_despacho(t, venta: Venta, entrega: dict) -> None:
+        from sqlalchemy import text
+
+        await t.sesion.execute(text(
+            "UPDATE retail.ventas SET canal = 'envio' WHERE id = :v"),
+            {"v": venta.id})
+        await t.sesion.execute(text("""
+            INSERT INTO retail.despachos
+                (venta_id, destinatario, telefono, direccion, complemento,
+                 ciudad, departamento)
+            VALUES (:v, :destinatario, :telefono, :direccion, :complemento,
+                    :ciudad, :departamento)
+        """), {"v": venta.id,
+               "destinatario": entrega["destinatario"],
+               "telefono": entrega["telefono"],
+               "direccion": entrega["direccion"],
+               "complemento": entrega.get("complemento") or "",
+               "ciudad": entrega["ciudad"],
+               "departamento": entrega["departamento"]})
 
     @staticmethod
     async def _exigir_referencias(t, venta) -> None:

@@ -52,6 +52,7 @@ from backend.modules.retail.application.comandos.drenar_outbox import (
     Aplazar,
     RechazoDefinitivo,
 )
+from backend.modules.retail.envio import CANAL_ENVIO, SQL_BODEGA_DE_LA_VENTA
 from backend.modules.retail.infrastructure.siigo.factura_venta import (
     CONSUMIDOR_FINAL,
     FacturaInvalida,
@@ -270,10 +271,14 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
                       "(RETAIL_FISCAL_MODO)")
 
     venta_id = payload["venta_id"]
-    v = (await t.sesion.execute(text("""
+    # LA BODEGA ES LA DE LA VENTA, no siempre la de la tienda: lo vendido con
+    # envío sale de la bodega de la tienda en línea (`envio.py`). Comprobante,
+    # vendedor y centro de costos siguen siendo los de la tienda que cobró.
+    v = (await t.sesion.execute(text(f"""
         SELECT v.id, v.numero, v.total, v.vuelto, v.estado, v.cerrada_en,
-               v.tienda_id, v.caja_id, v.sesion_id,
-               c.siigo_documento_id, ti.siigo_vendedor_id, ti.siigo_bodega_id,
+               v.tienda_id, v.caja_id, v.sesion_id, v.canal,
+               c.siigo_documento_id, ti.siigo_vendedor_id,
+               {SQL_BODEGA_DE_LA_VENTA} AS siigo_bodega_id,
                ti.siigo_centro_costo_id, ti.zona_horaria,
                cl.id AS cliente_id, cl.numero_documento AS cliente_documento,
                cl.correo AS cliente_correo
@@ -578,7 +583,9 @@ async def _armar(t, v, io: SiigoIO, *, documento_id: int, fecha: str,
             centro_costo_id=v["siigo_centro_costo_id"], estampar=estampar,
             # La entrega de la factura: a quien dejó correo, Siigo se la manda.
             enviar_correo=bool(estampar and con_clienta
-                               and (v["cliente_correo"] or "").strip()))
+                               and (v["cliente_correo"] or "").strip()),
+            nota=("Entrega a domicilio" if v["canal"] == CANAL_ENVIO
+                  else None))
     except FacturaInvalida as e:
         raise RechazoDefinitivo(str(e)) from e
 

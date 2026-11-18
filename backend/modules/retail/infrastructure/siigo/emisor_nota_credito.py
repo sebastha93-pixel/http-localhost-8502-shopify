@@ -25,6 +25,7 @@ from typing import Optional
 
 from sqlalchemy import text
 
+from backend.modules.retail.envio import SQL_BODEGA_DE_LA_VENTA
 from backend.modules.retail.application.comandos.drenar_outbox import (
     Aplazar,
     RechazoDefinitivo,
@@ -85,9 +86,14 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
                       "(RETAIL_FISCAL_MODO)")
 
     venta_id = payload["venta_id"]
-    v = (await t.sesion.execute(text("""
+    # Anular devuelve la prenda A DONDE ESTABA: al estante de la tienda, o
+    # —si era una venta con envío que no alcanzó a salir— a la bodega de la
+    # tienda en línea. (El CAMBIO es otra cosa: ahí la clienta trae la prenda
+    # a una tienda, y entra a esa tienda; ver `emisor_nota_credito_cambio`.)
+    v = (await t.sesion.execute(text(f"""
         SELECT v.id, v.numero, v.estado, v.anulada_en, v.tienda_id, v.caja_id,
-               v.sesion_id, ti.siigo_nc_documento_id, ti.siigo_bodega_id,
+               v.sesion_id, ti.siigo_nc_documento_id,
+               {SQL_BODEGA_DE_LA_VENTA} AS siigo_bodega_id,
                ti.zona_horaria
           FROM retail.ventas v JOIN retail.tiendas ti ON ti.id = v.tienda_id
          WHERE v.id = :v
