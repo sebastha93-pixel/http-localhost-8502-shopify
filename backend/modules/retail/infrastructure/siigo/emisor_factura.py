@@ -19,7 +19,23 @@ Reintentar a ciegas es la forma de emitir dos. Por eso son tres pasos y no uno:
 
 Si al volver hay un «voy a enviar» sin resultado, lo primero es BUSCAR la
 factura en Siigo por su marca (`observations`). Si está, se adopta. Sólo si no
-está se vuelve a enviar.
+está se vuelve a enviar — Y NO DE INMEDIATO.
+
+DOS TRAMPAS QUE YA COSTARON 41 FACTURAS DE MÁS (15 ventas, del 15-oct al
+17-nov de 2026, todas aceptadas por la DIAN; medido el 2026-11-18):
+
+  · `date_end` de `GET /invoices` NO INCLUYE SU DÍA. Buscar «del día de la
+    venta al día de la venta» devuelve vacío siempre: la búsqueda existía y
+    estaba ciega. Y la factura que Siigo no alcanza a mandar a la DIAN ese
+    día queda con la fecha del día en que por fin sale. Por eso se busca por
+    fecha de CREACIÓN (`created_start`), que no depende de ninguna de las dos.
+
+  · SIIGO PUEDE CREAR LA FACTURA MINUTOS DESPUÉS DE QUE SE CORTÓ EL ENVÍO.
+    El 17-nov, con Siigo lento, las facturas aparecieron entre 1 y 19 minutos
+    después del envío que las creó. Buscar al minuto y no encontrar NO prueba
+    que no llegó. Por eso, tras un envío sin respuesta, durante
+    `MINUTOS_SIN_REENVIAR` sólo se busca; se reenvía cuando ya pasó ese tiempo
+    y sigue sin aparecer.
 
 CREADA EN SIIGO NO ES FACTURA TODAVÍA. Una factura electrónica existe cuando
 la DIAN la valida y le pone el CUFE; antes de eso es un borrador con número.
@@ -75,6 +91,19 @@ MODOS = ("apagado", "prueba", "produccion")
 #  Cuánto se espera a la DIAN antes de pedir que alguien mire. Lo normal son
 #  segundos; horas ya es que algo se quedó atascado entre Siigo y la DIAN.
 HORAS_SIN_VALIDAR = 6
+
+
+#  Tras un envío sin respuesta, cuánto se espera —sólo buscando— antes de
+#  volver a enviar. El 17-nov de 2026 la factura más demorada apareció 19
+#  minutos después de su envío; esto es más del doble.
+MINUTOS_SIN_REENVIAR = 45
+#  Cada cuánto se vuelve a buscar mientras tanto.
+MINUTOS_ENTRE_BUSQUEDAS = 3
+
+
+def _ahora() -> datetime:
+    """El reloj de la espera antes de reenviar. Aparte, para poder probarla."""
+    return datetime.now(timezone.utc)
 
 
 def modo() -> str:
@@ -226,15 +255,25 @@ class SiigoIO:
     async def existe_cliente(self, identificacion: str) -> bool:
         return await self.sucursal_de_cliente(identificacion) is not None
 
-    async def buscar_por_marca(self, *, documento_id: int, fecha: str,
-                               marca: str,
-                               hasta: Optional[str] = None) -> Optional[dict]:
+    async def buscar_por_marca(self, *, documento_id: int, desde: str,
+                               marca: str) -> Optional[dict]:
+        """La factura de este comprobante que lleva `marca`, creada desde el
+        día `desde` (el de la venta). `None` si no está.
+
+        POR FECHA DE CREACIÓN, no por la fecha de la factura: `date_end` no
+        incluye su día y Siigo le cambia la fecha a la que manda tarde a la
+        DIAN (ver la cabecera). Un día de margen hacia atrás, porque la hora
+        de creación la pone Siigo con su reloj.
+        """
+        desde_creacion = (datetime.strptime(desde[:10], "%Y-%m-%d").date()
+                          - timedelta(days=1)).isoformat()
+
         def ir():
             from backend.services.siigo import siigo_get
-            for pagina in range(1, 21):
+            for pagina in range(1, 31):
                 r = siigo_get("/invoices", {
-                    "document_id": documento_id, "date_start": fecha,
-                    "date_end": hasta or fecha, "page": pagina,
+                    "document_id": documento_id,
+                    "created_start": desde_creacion, "page": pagina,
                     "page_size": 100})
                 filas = r.get("results", []) if isinstance(r, dict) else []
                 for f in filas:
@@ -292,7 +331,8 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
         raise RechazoDefinitivo(f"no existe la venta {venta_id}")
 
     doc = (await t.sesion.execute(text("""
-        SELECT id, estado, numero, documento_externo_id, creado_en
+        SELECT id, estado, numero, documento_externo_id, creado_en,
+               payload_snapshot->>'_enviado_en' AS enviado_en
           FROM retail.documentos_fiscales
          WHERE venta_id = :v AND tipo = 'factura_electronica'
          ORDER BY creado_en DESC LIMIT 1
@@ -337,14 +377,28 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
 
     creada = None
     if doc and doc["estado"] == "enviando":
-        # Hubo un envío sin resultado. ANTES de reenviar se mira si llegó:
-        # pudo haber llegado cualquier día entre la venta y hoy.
+        # Hubo un envío sin resultado. ANTES de reenviar se mira si llegó.
         creada = await io.buscar_por_marca(documento_id=documento_id,
-                                           fecha=dia_venta.isoformat(),
-                                           hasta=fecha, marca=marca)
+                                           desde=dia_venta.isoformat(),
+                                           marca=marca)
         if creada:
             log.warning("[retail-fiscal] %s ya estaba en Siigo: se adopta, "
                         "no se reenvía", v["numero"])
+        else:
+            # NO ESTÁ… TODAVÍA. Siigo puede crearla minutos después de que se
+            # cortó el envío: mientras no pase el plazo, sólo se busca. Vale
+            # igual para la venta anulada: concluir «nunca llegó» antes de
+            # tiempo dejaría en Siigo una factura sin nota crédito.
+            falta = _minutos_para_reenviar(doc)
+            if falta > 0:
+                log.warning("[retail-fiscal] %s: envío sin respuesta y aún no "
+                            "aparece en Siigo; se busca %d min más antes de "
+                            "reenviar", v["numero"], round(falta))
+                raise Aplazar(
+                    f"{v['numero']}: el envío a Siigo quedó sin respuesta; se "
+                    f"sigue buscando la factura ({round(falta)} min más) antes "
+                    "de volver a enviarla",
+                    minutos=min(falta, MINUTOS_ENTRE_BUSQUEDAS))
 
     if creada is None and anulada:
         # El envío nunca llegó a Siigo y la venta ya no existe: no se manda.
@@ -372,7 +426,8 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
                SET estado = 'enviando', payload_snapshot = EXCLUDED.payload_snapshot,
                    intentos = retail.documentos_fiscales.intentos + 1
         """), {"i": doc_id, "v": venta_id,
-               "p": json.dumps({**cuerpo, "_resumen": resumen, "_modo": en_modo})})
+               "p": json.dumps({**cuerpo, "_resumen": resumen, "_modo": en_modo,
+                                "_enviado_en": _ahora().isoformat()})})
         await t.sesion.execute(text(
             "UPDATE retail.ventas SET estado_fiscal = 'enviando' WHERE id = :v"),
             {"v": venta_id})
@@ -412,6 +467,22 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
     return await _esperar_dian(t, v, io, en_modo=en_modo, siigo_id=siigo_id,
                                numero=numero, desde=datetime.now(timezone.utc),
                                ya_leida=creada)
+
+
+def _minutos_para_reenviar(doc) -> float:
+    """Cuánto falta para poder volver a enviar un documento que quedó en
+    «enviando». Cero o menos: ya se puede.
+
+    Cuenta desde el ÚLTIMO envío (`_enviado_en`, que se anota con cada uno).
+    Los documentos de antes de que existiera esa marca cuentan desde que se
+    crearon, que fue su primer envío.
+    """
+    from backend.core.fechas import parse_iso_utc
+    ultimo = parse_iso_utc(doc.get("enviado_en")) or doc["creado_en"]
+    if ultimo.tzinfo is None:
+        ultimo = ultimo.replace(tzinfo=timezone.utc)
+    pasados = (_ahora() - ultimo).total_seconds() / 60
+    return MINUTOS_SIN_REENVIAR - pasados
 
 
 def _numero_de(factura: dict) -> str:
