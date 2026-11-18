@@ -43,8 +43,10 @@ Script: `~/Proyectos/MALE-DENIM-OS/auditoria-railway-oct2026/prueba_melonn_pos.p
 
 ## Etapa 1 — Cimientos en el servidor (sin cambio visible) — HECHA en la rama, 2026-11-17
 
-770 pruebas del POS pasan (10 nuevas en `test_venta_con_envio.py`). Falta: aplicar la
-migración 0042 en producción y fusionar (con el visto bueno de Sebastián).
+770 pruebas del POS pasan (10 nuevas en `test_venta_con_envio.py`). **PUBLICADA el 2026-11-17 a las 11:28 p. m.** (migración 0042 aplicada con las
+tiendas cerradas, PR #141 fusionado, despliegue correcto). Primera venta con el código nuevo:
+FERPOS-2538 → TPFE-1519, emitida en 5 s al primer intento. Las 1.462 ventas son `mostrador` y
+ninguna tienda tiene `vende_con_envio`.
 
 Migración aditiva (aplicarla en producción antes de fusionar):
 
