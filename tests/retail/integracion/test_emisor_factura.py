@@ -144,8 +144,8 @@ class SiigoFalso:
     async def existe_cliente(self, identificacion):
         return identificacion in self.clientes
 
-    async def buscar_por_marca(self, *, documento_id, fecha, marca, hasta=None):
-        self.buscadas.append((fecha, hasta))
+    async def buscar_por_marca(self, *, documento_id, desde, marca):
+        self.buscadas.append(desde)
         return next((f for f in self.en_siigo
                      if marca in f["observations"]), None)
 
@@ -273,6 +273,9 @@ def _drenar(siigo, *, dentro_de=timedelta(minutes=1)):
         crear_manejador as manejador_nc,
     )
 
+    from unittest import mock
+    from backend.modules.retail.infrastructure.siigo import emisor_factura
+
     async def ir():
         m = crear_motor(URL)
         try:
@@ -283,7 +286,11 @@ def _drenar(siigo, *, dentro_de=timedelta(minutes=1)):
             ).ejecutar(ahora=datetime.now(timezone.utc) + dentro_de, limite=20)
         finally:
             await m.dispose()
-    return _correr(ir())
+    # El reloj de «cuánto hace que se envió» corre con el del drenaje: si la
+    # prueba dice «tres horas después», para el emisor también pasaron.
+    with mock.patch.object(emisor_factura, "_ahora",
+                           lambda: datetime.now(timezone.utc) + dentro_de):
+        return _correr(ir())
 
 
 def _estado(motor):
@@ -351,6 +358,86 @@ def test_si_nunca_llego_el_reintento_si_la_envia(entorno):
     assert _drenar(siigo, dentro_de=timedelta(hours=3)).procesados == 1
     assert len(siigo.enviadas) == 2          # el que falló y el bueno
     assert len(siigo.en_siigo) == 1          # y UNA sola factura
+
+
+def test_si_siigo_la_crea_TARDE_no_se_reenvia_antes_de_tiempo(entorno):
+    """LO QUE PASÓ EL 2026-11-17. Siigo lento: el envío se corta a los 60 s,
+    a los dos minutos se busca la factura y NO está — pero Siigo la crea
+    minutos después. Reenviar apenas «no está» sacó hasta seis facturas de
+    una venta. Mientras no pase el plazo, sólo se busca."""
+    siigo = SiigoFalso()
+    siigo.al_crear = "sin_respuesta"
+    assert _drenar(siigo).reintentos == 1
+    siigo.al_crear = "ok"
+
+    # A los pocos minutos todavía no aparece: NO se reenvía, y esperar no
+    # gasta ninguno de los ocho intentos.
+    for minutos in (2, 5, 20, 40):
+        r = _drenar(siigo, dentro_de=timedelta(minutes=minutos))
+        assert (r.procesados, r.reintentos, r.fallidos) == (0, 0, 0), r.errores
+        assert len(siigo.enviadas) == 1, f"reenvió a los {minutos} min"
+    assert _estado(entorno) == ("enviando", ("pendiente", 1), [("enviando", None)])
+    nota = _leer(entorno, "SELECT ultimo_error FROM retail.outbox")[0][0]
+    assert "se sigue buscando la factura" in nota
+
+    # Siigo por fin la crea, con la marca del envío que se había cortado.
+    siigo.en_siigo.append({
+        "id": "siigo-tarde", "name": "FV-6-11452", "prefix": "TARR",
+        "number": 11452, "observations": siigo.enviadas[0]["observations"],
+        "stamp": {"status": "Draft", "cufe": None},
+        "_cuerpo": siigo.enviadas[0]})
+    r = _drenar(siigo, dentro_de=timedelta(minutes=43))
+    assert r.procesados == 1, r.errores
+    assert len(siigo.enviadas) == 1 and len(siigo.en_siigo) == 1
+    assert _estado(entorno)[2] == [("emitido", "TARR-11452")]
+
+
+def test_pasado_el_plazo_sin_aparecer_si_se_reenvia(entorno):
+    """El plazo no es para siempre: si de verdad nunca llegó, la venta no
+    puede quedarse sin factura."""
+    from backend.modules.retail.infrastructure.siigo import emisor_factura
+    siigo = SiigoFalso()
+    siigo.al_crear = "sin_respuesta"
+    _drenar(siigo)
+    siigo.al_crear = "ok"
+    justo_antes = emisor_factura.MINUTOS_SIN_REENVIAR - 1
+    _drenar(siigo, dentro_de=timedelta(minutes=justo_antes))
+    assert len(siigo.enviadas) == 1
+    r = _drenar(siigo, dentro_de=timedelta(
+        minutes=emisor_factura.MINUTOS_SIN_REENVIAR + 2))
+    assert r.procesados == 1, r.errores
+    assert len(siigo.enviadas) == 2 and len(siigo.en_siigo) == 1
+
+
+def test_el_plazo_cuenta_desde_el_ULTIMO_envio(entorno):
+    """Cada envío sin respuesta abre su propio plazo: el segundo también
+    puede estar creándose tarde."""
+    siigo = SiigoFalso()
+    siigo.al_crear = "sin_respuesta"
+    _drenar(siigo)                                        # envío 1, minuto 0
+    _drenar(siigo, dentro_de=timedelta(minutes=50))       # envío 2, minuto 50
+    assert len(siigo.enviadas) == 2
+    siigo.al_crear = "ok"
+    _drenar(siigo, dentro_de=timedelta(minutes=70))       # 20 min del segundo
+    assert len(siigo.enviadas) == 2, "reenvió a los 20 min del segundo envío"
+    r = _drenar(siigo, dentro_de=timedelta(minutes=100))
+    assert r.procesados == 1 and len(siigo.enviadas) == 3
+
+
+def test_anulada_con_el_envio_perdido_espera_antes_de_darla_por_no_llegada(
+        entorno, monkeypatch):
+    """La venta se anula con la factura «enviando». Decir «nunca llegó» a los
+    dos minutos dejaría en Siigo, si llega tarde, una factura sin nota
+    crédito. Se espera el mismo plazo, y si aparece, se anula con nota."""
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    siigo = SiigoFalso()
+    siigo.al_crear = "sin_respuesta"
+    _drenar(siigo)
+    _anular()
+    siigo.al_crear = "ok"
+    _drenar(siigo, dentro_de=timedelta(minutes=5))
+    assert _docs(entorno) == [("factura_electronica", "enviando", None)]
+    assert len(siigo.enviadas) == 1
 
 
 # ── Cuando Siigo dice que no ────────────────────────────────────────────────
