@@ -94,22 +94,28 @@ Pruebas (base local, `SiigoFalso`):
 - [x] Anular una venta con envío en el mismo turno: nota crédito con bodega 32.
 - [x] La sincronización no descuenta de la tienda una venta con envío pendiente.
 
-## Etapa 2 — Catálogo y precio de la web
+## Etapa 2 — Catálogo y precio de la web — HECHA en la rama `feat/pos-pedido-con-envio-2`, 2026-11-17
 
-- [ ] `infrastructure/tienda_en_linea.py`: buscar en Shopify por texto o SKU →
+785 pruebas del POS pasan (15 nuevas de esta etapa, más 6 del lector de Shopify). Probado contra la
+tienda real con la llave del servidor: consultar 1,3 s, buscar 0,4 s. Notas de lo que quedó:
+la existencia es la de la sucursal de Shopify que refleja a Melonn (`gid://shopify/Location/99023749440`,
+«Melonn Sabaneta»), no la suma de sucursales; un precio enviado POR ENCIMA del de la web se rechaza
+(«el precio cambió»); la prenda nueva entra `activa=false` con el precio de lista.
+
+- [x] `infrastructure/tienda_en_linea.py`: buscar en Shopify por texto o SKU →
       variantes con `sku`, título, talla, `price` (lo que cobra la web HOY),
       `compareAtPrice`, `inventoryQuantity`. Reutiliza
       `backend.services.clientes._shopify_graphql`. Nunca revienta: sin Shopify
       devuelve vacío y la pantalla lo dice.
-- [ ] `GET /catalogo/en-linea?q=`: sólo para tiendas con `vende_con_envio`.
-- [ ] En `_armar`, con `canal='envio'`: el precio de referencia es el de la web
+- [x] `GET /catalogo/en-linea?q=`: sólo para tiendas con `vende_con_envio`.
+- [x] En `_armar`, con `canal='envio'`: el precio de referencia es el de la web
       en ese momento (se vuelve a consultar al cobrar, junto con la
       existencia), no `variantes.precio_con_iva`; no cuenta contra el tope de
       la cajera; un descuento adicional de ella sí. Las promociones de tienda
       (`retail.promociones`) no se aplican.
-- [ ] Si la prenda no está en `retail.variantes`, se crea al venderla (SKU,
+- [x] Si la prenda no está en `retail.variantes`, se crea al venderla (SKU,
       referencia, talla, nombre, precio) como hace `sincronizar_inventario`.
-- [ ] Sin existencia en Shopify al cobrar → 400 con mensaje para la vendedora.
+- [x] Sin existencia en Shopify al cobrar → 400 con mensaje para la vendedora.
 
 Pruebas: precio de promoción de la web aceptado sin gastar tope; descuento
 encima sí lo gasta; promoción de tienda ignorada; prenda nueva se crea; sin

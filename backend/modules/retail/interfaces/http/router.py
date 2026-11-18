@@ -289,8 +289,15 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
         venta.asignar_cliente(entrada.cliente_id)
 
     skus = [l.sku for l in entrada.lineas]
+    # UNA VENTA CON ENVÍO SE COMPRUEBA CONTRA LA TIENDA EN LÍNEA, AHORA: que
+    # la prenda exista allá, que haya existencia y a cuánto está hoy. Lo que
+    # vio la vendedora al buscar pudo cambiar mientras la clienta decidía.
+    en_linea = (await _comprobar_en_linea(entrada.lineas)
+                if entrada.canal == "envio" else None)
     async with uow as t:
         from sqlalchemy import text as _t
+        if en_linea is not None:
+            await _asegurar_variantes(t, en_linea)
         filas = (await t.sesion.execute(_t("""
             SELECT id, sku, precio_con_iva, tasa_iva
               FROM retail.variantes WHERE sku = ANY(:skus)
@@ -304,7 +311,12 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
             SELECT coalesce(tope_descuento_pct, 0) FROM retail.permisos_pos
              WHERE usuario_id = :u AND activo
         """), {"u": usuario_id})).scalar() or 0))
-        promos = await _promociones_vigentes(t.sesion, entrada.tienda_id)
+        # LAS PROMOCIONES DE LA TIENDA NO VIAJAN CON EL ENVÍO (Sebastián,
+        # 2026-11-17): lo que se manda a domicilio lleva el precio de la web
+        # de ese día y nada más. Sin promociones vigentes, una línea que
+        # llegue marcada con una se rechaza más abajo.
+        promos = ([] if en_linea is not None
+                  else await _promociones_vigentes(t.sesion, entrada.tienda_id))
     # Se indexa por el SKU NORMALIZADO (Sku.parsear → strip+upper), el mismo que
     # usa CerrarVenta para el lookup (linea.sku.codigo). Antes se indexaba por el
     # SKU crudo de la BD y el guardián comparaba crudo: si un SKU guardado tenía
@@ -319,6 +331,27 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
     if faltan:
         raise ReglaDeNegocio(
             f"Estas referencias no están en el catálogo: {', '.join(faltan)}")
+
+    if en_linea is not None:
+        # EL PRECIO DE REFERENCIA ES EL DE LA WEB DE HOY, no el del catálogo
+        # de la tienda: es el que la clienta vería comprando ella misma, con
+        # la promoción de la web si la hay. Por eso NO cuenta como descuento
+        # de quien cobra. Lo que la vendedora baje POR DEBAJO de ahí sí: pasa
+        # por la misma regla de siempre, unas líneas más abajo.
+        if any(el.promocion_id for el in entrada.lineas):
+            raise ReglaDeNegocio(
+                "Las promociones de la tienda no aplican a una venta con "
+                "envío: lleva el precio de la tienda en línea. Quita la "
+                "promoción y vuelve a cobrar.")
+        for el in entrada.lineas:
+            codigo = Sku.parsear(el.sku).codigo
+            precio_web = en_linea[codigo]["precio_centavos"]
+            if el.precio_unitario_centavos > precio_web:
+                raise ReglaDeNegocio(
+                    f"{el.sku}: el precio cambió en la tienda en línea, ahora "
+                    f"está en ${precio_web // 100:,}. Quítala del carrito y "
+                    f"vuelve a agregarla.".replace(",", "."))
+            catalogo[codigo] = (precio_web, catalogo[codigo][1])
 
     # EL PRECIO Y EL IVA LOS RESPALDA EL CATÁLOGO (auditoría nov-2026). Antes se
     # cobraba el `precio_unitario_centavos` que mandaba el dispositivo sin
@@ -476,6 +509,77 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
                              es_efectivo=p.es_efectivo, referencia=p.referencia)
 
     return venta, variante_por_sku
+
+
+async def _comprobar_en_linea(lineas) -> dict:
+    """`{SKU: variante de la tienda en línea}` para las líneas de una venta
+    con envío, ya comprobado que existen y que hay existencia para todas.
+
+    FALLA CERRADO: si la tienda en línea no contesta, no se vende. Cobrar sin
+    haber comprobado es cobrar una prenda que quizá nadie puede despachar.
+    """
+    import asyncio
+
+    from backend.modules.retail.infrastructure import tienda_en_linea
+
+    pedido: Dict[str, int] = {}
+    for el in lineas:
+        codigo = Sku.parsear(el.sku).codigo
+        pedido[codigo] = pedido.get(codigo, 0) + int(el.cantidad)
+    try:
+        hay = await asyncio.to_thread(tienda_en_linea.consultar, list(pedido))
+    except tienda_en_linea.TiendaEnLineaNoDisponible:
+        raise ReglaDeNegocio(
+            "No se pudo consultar la tienda en línea, así que no se puede "
+            "confirmar que la prenda esté disponible. Intenta de nuevo en un "
+            "momento; la venta no se registró.")
+    for codigo, cantidad in pedido.items():
+        v = hay.get(codigo)
+        if v is None or v["precio_centavos"] <= 0:
+            raise ReglaDeNegocio(
+                f"{codigo} no está en la tienda en línea: no se puede vender "
+                f"con envío.")
+        if v["disponible"] < cantidad:
+            queda = (f"sólo queda{'n' if v['disponible'] != 1 else ''} "
+                     f"{v['disponible']}" if v["disponible"] else "ya no queda")
+            raise ReglaDeNegocio(
+                f"{codigo}: {queda} en la tienda en línea. La venta no se "
+                f"registró.")
+    return hay
+
+
+async def _asegurar_variantes(t, en_linea: dict) -> None:
+    """Crea en el catálogo del POS lo que se va a vender con envío y todavía
+    no está: el POS sólo carga lo que tiene existencia en una tienda.
+
+    Entra APAGADA (`activa = false`), como las que llegan con una factura
+    vieja de Siigo: existe para que la venta la nombre, pero no aparece en el
+    buscador del mostrador ofreciendo una prenda que la tienda no tiene. Si un
+    día llega a una tienda, la sincronización la enciende y la pone al día.
+    """
+    from sqlalchemy import text as _t
+
+    from backend.modules.retail.cargar_catalogo import _id_de
+    from backend.modules.retail.catalogo_desde_siigo import ref_talla
+
+    ya = {Sku.parsear(f).codigo for f in (await t.sesion.execute(_t(
+        "SELECT sku FROM retail.variantes WHERE upper(sku) = ANY(:s)"),
+        {"s": list(en_linea)})).scalars()}
+    nuevas = [v for codigo, v in en_linea.items() if codigo not in ya]
+    for v in nuevas:
+        ref, talla = ref_talla(v["sku"])
+        await t.sesion.execute(_t("""
+            INSERT INTO retail.variantes
+                (id, sku, referencia, talla, color, nombre, precio_con_iva,
+                 activa)
+            VALUES (:id, :sku, :ref, :talla, '', :nom, :p, false)
+            ON CONFLICT (sku) DO NOTHING
+        """), {"id": _id_de(v["sku"]), "sku": v["sku"],
+               "ref": ref or v["sku"], "talla": talla or v["talla"] or "U",
+               "nom": (v["nombre"] or v["sku"]).upper(),
+               "p": v["precio_lista_centavos"]})
+    if nuevas:
+        await t.commit()
 
 
 async def _promociones_vigentes(sesion, tienda_id: str) -> list:
@@ -1928,6 +2032,45 @@ async def panel_del_dia(
         por_fit=[f.__dict__ for f in p.por_fit],
         por_dia=[d.__dict__ for d in p.por_dia],
     )
+
+
+# ── Lo que se puede vender con envío ────────────────────────────────────────
+
+@router.get("/catalogo/en-linea")
+async def catalogo_en_linea(
+    tienda_id: str = Query(),
+    q: str = Query("", max_length=80),
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Lo que la tienda en línea tiene para vender AHORA: prenda, tallas,
+    precio de hoy y cuántas hay en la bodega que despacha. Es de donde elige
+    la vendedora cuando la venta es con envío a domicilio.
+    """
+    import asyncio
+
+    from sqlalchemy import text as _t
+
+    from backend.modules.retail.infrastructure import tienda_en_linea
+
+    async with uow as t:
+        await _exigir_tienda(t, usuario, tienda_id)
+        puede = (await t.sesion.execute(_t(
+            "SELECT vende_con_envio FROM retail.tiendas WHERE id = :t"),
+            {"t": tienda_id})).scalar()
+    if not puede:
+        raise HTTPException(400, {
+            "error": "sin_envio",
+            "mensaje": "Esta tienda no tiene habilitada la venta con envío "
+                       "a domicilio."})
+    try:
+        productos = await asyncio.to_thread(tienda_en_linea.buscar, q)
+    except tienda_en_linea.TiendaEnLineaNoDisponible:
+        raise HTTPException(503, {
+            "error": "tienda_en_linea_no_disponible",
+            "mensaje": "La tienda en línea no contestó. Intenta de nuevo en "
+                       "un momento."})
+    return {"productos": productos}
 
 
 # ── El tablero de las tiendas ───────────────────────────────────────────────
