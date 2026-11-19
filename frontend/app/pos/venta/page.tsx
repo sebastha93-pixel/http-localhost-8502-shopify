@@ -37,6 +37,8 @@ import { ApiError } from "@/lib/api";
 import { useCajaDelEquipo } from "@/lib/pos/caja-del-equipo";
 import { corregirEscaneo } from "@/lib/pos/escaneo";
 import {
+  catalogoEnLinea,
+  type Entrega,
   cerrarVenta,
   listarCatalogo,
   SobreElTope,
@@ -71,6 +73,7 @@ import { armarTirillaLocal } from "@/lib/pos/tirilla-local";
 import { arrancarCola, sincronizar, usarNumerador } from "@/lib/pos/sincronizacion";
 import { ivaDe } from "@/lib/pos/dinero";
 import type { LineaCarrito } from "@/lib/pos/carrito";
+import { comoReferencias, ENTREGA_VACIA } from "@/lib/pos/envio";
 
 // Ni la caja ni el turno se cablean en variables. La caja la aprende el equipo
 // de su enlace (`caja-del-equipo.ts`); la tienda y el inventario salen de ella
@@ -240,6 +243,14 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
   // no la va a crear, y el equipo tiene que poder elegir otra.
   const [cajaDesconocida, setCajaDesconocida] = useState(false);
   const { user } = useAuth();
+  // ── Venta con envío a domicilio ──
+  // Una venta es TODA de mostrador o TODA con envío (diseño, 2026-11-13): el
+  // interruptor no se mueve con prendas en el carrito.
+  const [conEnvio, setConEnvio] = useState(false);
+  // La entrega vive aquí y no en el cobro: un fallo al cobrar devuelve al
+  // carrito, y volver a teclear la dirección delante de la clienta no.
+  const [entrega, setEntrega] = useState<Entrega>(ENTREGA_VACIA);
+  const [buscandoEnLinea, setBuscandoEnLinea] = useState(false);
   const ventaId = useRef<string>(nuevoUlid());
   const buscadorRef = useRef<HTMLInputElement>(null);
 
@@ -352,6 +363,14 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
   const agregar = useCallback((r: Referencia, t: Talla) => {
     setLineas((prev) => {
       const i = prev.findIndex((l) => l.sku === t.sku);
+      // De la tienda en línea no se vende más de lo que hay: no hay prenda en
+      // la mano que desmienta al sistema. (El servidor lo vuelve a mirar.)
+      if (r.precio_lista_centavos !== undefined && t.disponible <= (i >= 0 ? prev[i].cantidad : 0)) {
+        setAviso(t.disponible <= 0
+          ? `La talla ${t.talla} está agotada en la tienda en línea.`
+          : `De la talla ${t.talla} sólo hay ${t.disponible} en la tienda en línea.`);
+        return prev;
+      }
       if (i >= 0) {
         const copia = [...prev];
         copia[i] = { ...copia[i], cantidad: copia[i].cantidad + 1 };
@@ -373,8 +392,53 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
   }, []);
 
   // ── Catálogo ───────────────────────────────────────────────────────────
+  // ── Catálogo de la tienda en línea (venta con envío) ───────────────────
+  //
+  // SÓLO CON RED Y SIN COPIA LOCAL: la existencia de la web cambia a cada
+  // minuto, y vender desde una foto vieja es venderle a la clienta lo que
+  // Melonn ya no tiene.
   useEffect(() => {
-    if (!configurado || !turno || !UBICACION) return;
+    if (!conEnvio || !TIENDA) return;
+    let vigente = true;
+    const q = consulta.trim();
+    if (q.length < 2) {
+      setReferencias([]);
+      return;
+    }
+    const temporizador = setTimeout(async () => {
+      setBuscandoEnLinea(true);
+      try {
+        const refs = comoReferencias(await catalogoEnLinea(TIENDA, q));
+        if (!vigente) return;
+        setReferencias(refs);
+        // El lector también sirve aquí: un SKU exacto con existencia entra solo.
+        const leido = q.toUpperCase();
+        if (leido.length >= 6) {
+          const casan = coincidencias(refs, leido).filter((c) => c.t.disponible > 0);
+          if (casan.length === 1) {
+            agregar(casan[0].r, casan[0].t);
+            setConsulta("");
+          }
+        }
+      } catch (e) {
+        if (!vigente) return;
+        setReferencias([]);
+        setAviso(e instanceof TypeError
+          ? "Sin conexión no se puede vender con envío: la existencia de la "
+            + "tienda en línea sólo se sabe preguntando."
+          : e instanceof Error ? e.message : "No se pudo consultar la tienda en línea.");
+      } finally {
+        if (vigente) setBuscandoEnLinea(false);
+      }
+    }, 350);
+    return () => {
+      vigente = false;
+      clearTimeout(temporizador);
+    };
+  }, [conEnvio, consulta, TIENDA, agregar]);
+
+  useEffect(() => {
+    if (!configurado || !turno || !UBICACION || conEnvio) return;
     let vigente = true;
     const temporizador = setTimeout(async () => {
       // PRIMERO LO QUE YA ESTÁ EN LA CAJA. Si lo leído es exactamente una
@@ -456,7 +520,18 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
       vigente = false;
       clearTimeout(temporizador);
     };
-  }, [consulta, categoria, configurado, turno, agregar, UBICACION]);
+  }, [consulta, categoria, configurado, turno, agregar, UBICACION, conEnvio]);
+
+  /** Prender o apagar la venta con envío. Con prendas en el carrito no se
+   *  puede (el botón está apagado); al cambiar, la búsqueda empieza limpia. */
+  function cambiarModo(envio: boolean) {
+    if (lineas.length) return;
+    setConEnvio(envio);
+    setConsulta("");
+    setReferencias([]);
+    setAviso(null);
+    if (!envio) setEntrega(ENTREGA_VACIA);
+  }
 
   // El foco vive en el buscador para que el lector escriba sin un clic — pero
   // lo SUELTA cuando hay un diálogo encima, o el motivo del descuento termina
@@ -523,13 +598,15 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
   // «La segunda a $1.000» se aplica SOLA sobre lo que hay en el carrito.
   // `lineas` sigue siendo lo que la cajera puso; `conPromo` es lo que se
   // cobra, se muestra y se manda.
+  // CON ENVÍO NO HAY PROMOCIONES DE TIENDA: lleva el precio de la web de ese
+  // día, y nada más (Sebastián, 2026-11-17). El servidor las rechaza igual.
   const conPromo = useMemo(
-    () => conPromocion(lineas, contexto?.promociones?.length
+    () => conEnvio ? lineas : conPromocion(lineas, contexto?.promociones?.length
       ? contexto.promociones : contexto?.promocion),
-    [lineas, contexto?.promociones, contexto?.promocion]);
+    [conEnvio, lineas, contexto?.promociones, contexto?.promocion]);
   const regalo = useMemo(
-    () => regaloPendiente(conPromo, contexto?.promociones),
-    [conPromo, contexto?.promociones]);
+    () => conEnvio ? null : regaloPendiente(conPromo, contexto?.promociones),
+    [conEnvio, conPromo, contexto?.promociones]);
 
   // ── Totales ────────────────────────────────────────────────────────────
   const totales = useMemo(() => {
@@ -653,7 +730,39 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
           ...(l.promocionId ? { promocion_id: l.promocionId } : {}),
         })),
       pagos,
+      ...(conEnvio ? {
+        canal: "envio",
+        entrega: {
+          destinatario: entrega.destinatario.trim(),
+          telefono: entrega.telefono.replace(/\D/g, "").slice(-10),
+          direccion: entrega.direccion.trim(),
+          complemento: entrega.complemento.trim(),
+          ciudad: entrega.ciudad.trim(),
+          departamento: entrega.departamento.trim(),
+        },
+      } : {}),
     };
+
+    if (conEnvio) {
+      // CON ENVÍO NO HAY VENTA SIN RED, NI COLA. La existencia y el precio
+      // se comprueban en la web al cobrar; sin conexión no hay cómo. Y no se
+      // deja en la cola local: si se mandara sola más tarde, la clienta ya se
+      // habría ido creyendo que no se hizo. Reintentar es seguro: el mismo
+      // `venta_id` no crea dos ventas.
+      try {
+        const t = await cerrarVenta(cuerpo);
+        setTicket(t);
+        setFase("cerrada");
+      } catch (e) {
+        setAviso(e instanceof TypeError
+          ? "No hubo conexión para cerrar la venta con envío. Revisa internet "
+            + "y vuelve a cobrar: si ya alcanzó a entrar, no se repite."
+          : e instanceof SobreElTope ? e.mensaje
+          : e instanceof Error ? e.message : "No se pudo cerrar la venta.");
+        setFase("vendiendo");
+      }
+      return;
+    }
 
     try {
       await encolar({
@@ -745,9 +854,23 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
       window.history.replaceState(null, "", window.location.pathname);
     }
     setTirillaLocal(null);
+    // El modo se queda: la vendedora de la feria suele hacer varias con envío
+    // seguidas. La dirección, no: es de la clienta anterior.
+    setEntrega(ENTREGA_VACIA);
     ventaId.current = nuevoUlid();
     setFase("vendiendo");
   }
+
+  // Quien recibe casi siempre es la clienta: se propone su nombre y celular
+  // al entrar a cobrar, si todavía no se escribió nada.
+  useEffect(() => {
+    if (fase !== "cobrando" || !conEnvio || !cliente) return;
+    setEntrega((e) => ({
+      ...e,
+      destinatario: e.destinatario || cliente.nombre,
+      telefono: e.telefono || (cliente.telefono ?? ""),
+    }));
+  }, [fase, conEnvio, cliente]);
 
   useEffect(() => {
     function alTeclado(e: KeyboardEvent) {
@@ -818,7 +941,7 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
   if (fase === "cerrada" && ticket) {
     return (
       <TicketCerrado ticket={ticket} onNueva={nuevaVenta}
-                     tirillaLocal={tirillaLocal} />
+                     tirillaLocal={tirillaLocal} conEnvio={conEnvio} />
     );
   }
 
@@ -923,14 +1046,23 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
             min-content y hacía desbordar las tarjetas. */}
         <div className="pos-cuerpo min-h-0 flex-1">
           <section className="flex min-w-0 flex-col gap-3 overflow-hidden p-6">
+            {contexto?.vende_con_envio && (
+              <InterruptorEnvio
+                activo={conEnvio}
+                bloqueado={lineas.length > 0}
+                onCambiar={cambiarModo}
+              />
+            )}
             <div className="pos-input flex h-11 items-center gap-2.5 px-3">
               <LupaIcono />
               <input
                 ref={buscadorRef}
                 value={consulta}
                 onChange={(e) => setConsulta(corregirEscaneo(e.target.value))}
-                placeholder="Buscar por nombre o referencia"
-                aria-label="Buscar producto"
+                placeholder={conEnvio
+                  ? "Buscar en la tienda en línea: nombre o referencia"
+                  : "Buscar por nombre o referencia"}
+                aria-label={conEnvio ? "Buscar en la tienda en línea" : "Buscar producto"}
                 autoComplete="off"
                 spellCheck={false}
                 // `h-full`: la caja se ve de 44px pero el input medía 22 y el
@@ -941,7 +1073,7 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
               />
             </div>
 
-            <div className="flex flex-wrap gap-2">
+            {!conEnvio && <div className="flex flex-wrap gap-2">
               {["Todo", ...categorias].map((c) => {
                 const activo = categoria === c;
                 return (
@@ -969,9 +1101,18 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
                   </button>
                 );
               })}
-            </div>
+            </div>}
 
-            <RejillaReferencias referencias={referencias} onElegir={agregar} />
+            <RejillaReferencias
+              referencias={referencias}
+              onElegir={agregar}
+              enLinea={conEnvio}
+              vacio={!conEnvio ? undefined
+                : buscandoEnLinea ? "Buscando en la tienda en línea…"
+                : consulta.trim().length < 2
+                  ? "Escribe el nombre o la referencia de la prenda (al menos 2 letras)."
+                  : "No está en la tienda en línea."}
+            />
           </section>
 
           <aside className="min-h-0 p-6 pl-0">
@@ -986,6 +1127,8 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
                   emiteFactura={Boolean(contexto?.tiene_resolucion)}
                   saldoInicial={saldoInicial}
                   clienteId={cliente?.id ?? null}
+                  entrega={conEnvio ? entrega : null}
+                  onEntrega={setEntrega}
                   onCancelar={() => setFase("vendiendo")}
                   onConfirmar={cobrar}
                 />
@@ -1057,6 +1200,49 @@ function SinVender({ titulo, children, onOtraCaja }: {
           Elegir otra caja
         </button>
       </Panel>
+    </div>
+  );
+}
+
+/** «Con envío a domicilio». Grande y con texto, no un interruptor de
+ *  sistema: es la decisión que cambia de dónde sale la prenda, quién la
+ *  despacha y qué se le promete a la clienta. */
+function InterruptorEnvio({ activo, bloqueado, onCambiar }: {
+  activo: boolean;
+  bloqueado: boolean;
+  onCambiar: (envio: boolean) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <div role="radiogroup" aria-label="Tipo de venta"
+           className="inline-flex rounded-[var(--pos-r-pill)] border border-[var(--pos-divider)] bg-[var(--pos-surface)] p-1">
+        {[
+          { valor: false, texto: "En la tienda" },
+          { valor: true, texto: "Con envío a domicilio" },
+        ].map((o) => (
+          <button
+            key={o.texto}
+            type="button"
+            role="radio"
+            aria-checked={activo === o.valor}
+            disabled={bloqueado && activo !== o.valor}
+            onClick={() => onCambiar(o.valor)}
+            className="h-11 rounded-[var(--pos-r-pill)] px-4 text-[14px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            style={activo === o.valor
+              ? { background: "var(--pos-accent)", color: "var(--pos-surface)" }
+              : { color: "var(--pos-700)" }}
+          >
+            {o.texto}
+          </button>
+        ))}
+      </div>
+      <p className="text-[12px] leading-snug" style={{ color: "var(--pos-600)" }}>
+        {bloqueado
+          ? "Una venta es toda en la tienda o toda con envío: vacía el carrito para cambiar."
+          : activo
+            ? "Se vende lo de la tienda en línea, al precio de la web, y lo despacha Melonn sin costo de envío."
+            : null}
+      </p>
     </div>
   );
 }

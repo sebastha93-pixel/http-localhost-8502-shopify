@@ -89,6 +89,10 @@ class TiendaDelTablero:
     medios: List[dict] = field(default_factory=list)
     #  [{nombre, ventas_centavos, transacciones}]
     cajeras: List[dict] = field(default_factory=list)
+    #  De lo vendido, cuánto fue con envío a domicilio (ya está incluido en
+    #  `ventas_centavos`/`transacciones`, no se suma aparte).
+    con_envio: int = 0
+    monto_con_envio_centavos: int = 0
 
     @property
     def ticket_promedio_centavos(self) -> int:
@@ -122,6 +126,9 @@ class Tablero:
     detalle_devoluciones: List[dict] = field(default_factory=list)
     #  [{cuando, tienda_id, tienda, numero, total_centavos, motivo, quien}]
     detalle_anuladas: List[dict] = field(default_factory=list)
+    #  Pedidos con envío que necesitan a la oficina — DE CUALQUIER FECHA, no
+    #  sólo del periodo: uno de anteayer sin resolver sigue siendo de hoy.
+    despachos_por_resolver: int = 0
 
 
 class TableroTiendas:
@@ -187,7 +194,12 @@ class TableroTiendas:
                    coalesce(sum(v.total) FILTER (WHERE v.estado = 'anulada'), 0)
                        AS anulado,
                    to_char(max({dia_venta}) FILTER (WHERE v.estado = 'cerrada'),
-                           'YYYY-MM-DD HH24:MI') AS ultima
+                           'YYYY-MM-DD HH24:MI') AS ultima,
+                   count(*) FILTER (WHERE v.estado = 'cerrada'
+                                      AND v.canal = 'envio') AS con_envio,
+                   coalesce(sum(v.total) FILTER (WHERE v.estado = 'cerrada'
+                                                   AND v.canal = 'envio'), 0)
+                       AS monto_con_envio
             {desde_ventas} WHERE {periodo}
              GROUP BY v.tienda_id
         """), params)).mappings():
@@ -198,6 +210,8 @@ class TableroTiendas:
             t.anuladas = int(f["anuladas"])
             t.monto_anulado_centavos = int(f["anulado"])
             t.ultima_venta = f["ultima"] or ""
+            t.con_envio = int(f["con_envio"])
+            t.monto_con_envio_centavos = int(f["monto_con_envio"])
 
         for f in (await self._s.execute(text(f"""
             SELECT v.tienda_id, coalesce(sum(l.cantidad), 0) AS unidades
@@ -404,4 +418,9 @@ class TableroTiendas:
         # orden no baile entre una recarga y la siguiente.
         tablero.tiendas = sorted(
             tiendas.values(), key=lambda t: (-t.ventas_centavos, t.nombre))
+        from backend.modules.retail.envio import SQL_DESPACHO_REQUIERE_ATENCION
+        tablero.despachos_por_resolver = int((await self._s.execute(text(f"""
+            SELECT count(*) FROM retail.despachos d
+             WHERE {SQL_DESPACHO_REQUIERE_ATENCION}
+        """))).scalar() or 0)
         return tablero

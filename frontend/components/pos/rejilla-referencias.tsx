@@ -23,15 +23,22 @@ import type { Referencia, Talla } from "@/lib/pos/api";
 export function RejillaReferencias({
   referencias,
   onElegir,
+  enLinea = false,
+  vacio = "Sin referencias para ese filtro.",
 }: {
   referencias: Referencia[];
   onElegir: (r: Referencia, t: Talla) => void;
+  /** Lo que se muestra viene de la TIENDA EN LÍNEA (venta con envío). Ahí la
+   *  talla en cero NO se vende: no hay una prenda en la mano que desmienta
+   *  al sistema, y Melonn no puede despachar lo que no tiene. */
+  enLinea?: boolean;
+  vacio?: string;
 }) {
   if (!referencias.length) {
     return (
       <div className="flex flex-1 items-center justify-center">
         <p className="text-[13px]" style={{ color: "var(--pos-muted)" }}>
-          Sin referencias para ese filtro.
+          {vacio}
         </p>
       </div>
     );
@@ -48,11 +55,18 @@ export function RejillaReferencias({
         <article key={r.referencia} className="blueprint p-4">
           <h3 className="titular text-[15px]">{r.nombre}</h3>
 
-          <div className="mt-2 flex items-baseline justify-between">
-            <span className="font-mono text-[12px]" style={{ color: "var(--pos-600)" }}>
+          <div className="mt-2 flex items-baseline justify-between gap-2">
+            <span className="whitespace-nowrap font-mono text-[12px]" style={{ color: "var(--pos-600)" }}>
               {r.referencia}
             </span>
-            <span className="tabular text-[13px] font-semibold">
+            {/* El tachado de la web va ENCIMA del precio, no al lado: en la
+                tarjeta angosta del iPad, al lado partía la referencia. */}
+            <span className="flex flex-col items-end tabular text-[13px] font-semibold leading-tight">
+              {enLinea && (r.precio_lista_centavos ?? 0) > r.precio_con_iva_centavos && (
+                <s className="text-[11px] font-normal" style={{ color: "var(--pos-muted)" }}>
+                  {formatear(r.precio_lista_centavos ?? 0)}
+                </s>
+              )}
               {formatear(r.precio_con_iva_centavos)}
             </span>
           </div>
@@ -77,6 +91,24 @@ export function RejillaReferencias({
           >
             {r.tallas.map((t) => {
               const agotada = t.disponible <= 0;
+              if (enLinea) {
+                return (
+                  <button
+                    key={t.sku}
+                    onClick={() => onElegir(r, t)}
+                    disabled={agotada}
+                    aria-label={`Talla ${t.talla}${agotada
+                      ? ", agotada en la tienda en línea"
+                      : `, ${t.disponible} disponibles para envío`}`}
+                    className="flex h-11 w-full flex-col items-center justify-center rounded-[var(--pos-r-sm)] border border-[var(--pos-divider)] text-[14px] leading-none transition-colors duration-[var(--pos-transicion)] hover:border-[var(--pos-accent)] hover:bg-[var(--pos-100)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--pos-divider)] disabled:hover:bg-transparent"
+                  >
+                    <span>{t.talla}</span>
+                    <span className="mt-0.5 text-[10px] tabular" style={{ color: "var(--pos-600)" }}>
+                      {agotada ? "agotada" : `${t.disponible} disp.`}
+                    </span>
+                  </button>
+                );
+              }
               return (
                 // LA TALLA EN CERO SE PUEDE VENDER. El inventario del sistema
                 // es el de Siigo, y Siigo no siempre va al día: la prenda que

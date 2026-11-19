@@ -2097,6 +2097,9 @@ class TiendaDelTableroSalida(BaseModel):
     turnos_abiertos: List[dict] = []
     medios: List[dict] = []
     cajeras: List[dict] = []
+    #  De lo vendido, cuánto fue con envío a domicilio (ya incluido arriba).
+    con_envio: int = 0
+    monto_con_envio_centavos: int = 0
 
 
 class TableroSalida(BaseModel):
@@ -2112,6 +2115,8 @@ class TableroSalida(BaseModel):
     mas_vendidos: List[dict] = []
     detalle_devoluciones: List[dict] = []
     detalle_anuladas: List[dict] = []
+    #  Pedidos con envío que necesitan a la oficina, de cualquier fecha.
+    despachos_por_resolver: int = 0
 
 
 @router.get("/tablero", response_model=TableroSalida)
@@ -2154,7 +2159,8 @@ async def tablero_de_las_tiendas(
             for x in tb.tiendas],
         serie_por=tb.serie_por, serie=tb.serie, mas_vendidos=tb.mas_vendidos,
         detalle_devoluciones=tb.detalle_devoluciones,
-        detalle_anuladas=tb.detalle_anuladas)
+        detalle_anuladas=tb.detalle_anuladas,
+        despachos_por_resolver=tb.despachos_por_resolver)
 
 
 # ── La tirilla ──────────────────────────────────────────────────────────────
@@ -2167,6 +2173,14 @@ class LineaTirillaSalida(BaseModel):
     descuento_centavos: int
     descuento_motivo: Optional[str] = None
     total_centavos: int
+
+
+class EntregaTirillaSalida(BaseModel):
+    destinatario: str
+    direccion: str
+    complemento: str = ""
+    ciudad: str
+    departamento: str
 
 
 class ImpuestoTirillaSalida(BaseModel):
@@ -2195,6 +2209,8 @@ class TirillaSalida(BaseModel):
     cajera_nombre: str
     cliente_nombre: Optional[str] = None
     cliente_documento: Optional[str] = None
+    #  Sólo en una venta con envío a domicilio.
+    entrega: Optional[EntregaTirillaSalida] = None
     lineas: List[LineaTirillaSalida]
     pagos: List[PagoTirillaSalida]
     # Presentados como en la tirilla real de Siigo: «Subtotal» es la base
@@ -2263,6 +2279,7 @@ async def tirilla(
         numero=d.numero, fecha=d.fecha, caja_nombre=d.caja_nombre,
         cajera_nombre=d.cajera_nombre, cliente_nombre=d.cliente_nombre,
         cliente_documento=d.cliente_documento,
+        entrega=EntregaTirillaSalida(**d.entrega) if d.entrega else None,
         lineas=[LineaTirillaSalida(
             sku=l.sku, descripcion=l.descripcion, cantidad=l.cantidad,
             precio_unitario_centavos=l.precio_unitario_centavos,
@@ -2482,6 +2499,10 @@ class VentaDelTurno(BaseModel):
     factura: Optional[str] = None
     caja: Optional[str] = None
     anulable: Optional[bool] = None
+    #  `envio` = vendida con envío a domicilio desde la tienda en línea (en
+    #  pantalla: «Shopify»), y cómo va su despacho.
+    canal: str = "mostrador"
+    despacho: Optional[str] = None
 
 
 class VentasDelDia(BaseModel):
@@ -2512,8 +2533,13 @@ async def ventas_del_dia(
         """), {"u": usuario.id, "t": tienda_id})).scalar()
         filas = (await t.sesion.execute(_t("""
             SELECT v.id, v.numero, v.total, v.estado, v.estado_fiscal,
-                   v.motivo_anulacion, ca.nombre AS caja,
-                   s.estado = 'abierta' AS anulable,
+                   v.motivo_anulacion, ca.nombre AS caja, v.canal,
+                   dp.estado AS despacho,
+                   -- Lo que ya salió de la bodega tampoco se anula aquí:
+                   -- es cambio o devolución.
+                   s.estado = 'abierta'
+                       AND coalesce(dp.estado, '') NOT IN ('despachado', 'entregado')
+                       AS anulable,
                    to_char(v.cerrada_en AT TIME ZONE coalesce(ti.zona_horaria,
                            'America/Bogota'), 'HH24:MI') AS hora,
                    coalesce((SELECT sum(l.cantidad) FROM retail.venta_lineas l
@@ -2528,6 +2554,7 @@ async def ventas_del_dia(
               JOIN retail.sesiones_caja s ON s.id = v.sesion_id
               LEFT JOIN retail.cajas ca ON ca.id = v.caja_id
               LEFT JOIN retail.clientes c ON c.id = v.cliente_id
+              LEFT JOIN retail.despachos dp ON dp.venta_id = v.id
              WHERE v.tienda_id = :t AND v.cerrada_en IS NOT NULL
                AND v.origen <> 'siigo_pos'
                AND (v.cerrada_en AT TIME ZONE coalesce(ti.zona_horaria,
@@ -2543,7 +2570,8 @@ async def ventas_del_dia(
         estado=f["estado"], estado_fiscal=f["estado_fiscal"],
         cliente_nombre=f["cliente"] or None,
         motivo_anulacion=f["motivo_anulacion"], factura=f["factura"],
-        caja=f["caja"], anulable=bool(f["anulable"])) for f in filas])
+        caja=f["caja"], anulable=bool(f["anulable"]), canal=f["canal"],
+        despacho=f["despacho"]) for f in filas])
 
 
 @router.get("/caja/ventas", response_model=List[VentaDelTurno])
@@ -2563,7 +2591,7 @@ async def ventas_del_turno(
     async with uow as t:
         filas = (await t.sesion.execute(_t("""
             SELECT v.id, v.numero, v.total, v.estado, v.estado_fiscal,
-                   v.motivo_anulacion,
+                   v.motivo_anulacion, v.canal, dp.estado AS despacho,
                    to_char(v.cerrada_en AT TIME ZONE coalesce(ti.zona_horaria,
                            'America/Bogota'), 'HH24:MI') AS hora,
                    coalesce((SELECT sum(l.cantidad) FROM retail.venta_lineas l
@@ -2572,6 +2600,7 @@ async def ventas_del_turno(
               FROM retail.ventas v
               JOIN retail.tiendas ti ON ti.id = v.tienda_id
               LEFT JOIN retail.clientes c ON c.id = v.cliente_id
+              LEFT JOIN retail.despachos dp ON dp.venta_id = v.id
              WHERE v.sesion_id = :s AND v.cerrada_en IS NOT NULL
              ORDER BY v.cerrada_en DESC
         """), {"s": sesion_id})).mappings().all()
@@ -2581,7 +2610,12 @@ async def ventas_del_turno(
         total_centavos=int(f["total"]), unidades=int(f["unidades"]),
         estado=f["estado"], estado_fiscal=f["estado_fiscal"],
         cliente_nombre=f["cliente"] or None,
-        motivo_anulacion=f["motivo_anulacion"]) for f in filas]
+        motivo_anulacion=f["motivo_anulacion"], canal=f["canal"],
+        despacho=f["despacho"],
+        # La caja tampoco anula lo que ya salió de la bodega.
+        anulable=(None if f["despacho"] is None
+                  else f["despacho"] not in ("despachado", "entregado")))
+        for f in filas]
 
 
 # ── Devoluciones y cambios (vista 5 del handoff) ────────────────────────────
@@ -3459,13 +3493,16 @@ async def despachos_de_las_tiendas(
     alguien haga algo. Trae a quién y a dónde va —hace falta para resolver—,
     así que es sólo para administradores."""
     from sqlalchemy import text as _t
+    from backend.modules.retail.envio import (
+        MINUTOS_PENDIENTE_SIN_SALIR, SQL_DESPACHO_REQUIERE_ATENCION,
+    )
 
     if usuario.rol != "admin":
         raise HTTPException(403, {
             "error": "solo_administrador",
             "mensaje": "Los pedidos con envío los ve la oficina."})
     async with uow as t:
-        filas = (await t.sesion.execute(_t("""
+        filas = (await t.sesion.execute(_t(f"""
             SELECT d.venta_id, v.numero, v.tienda_id, v.total, v.estado_fiscal,
                    to_char(v.cerrada_en AT TIME ZONE coalesce(ti.zona_horaria, 'America/Bogota'),
                            'YYYY-MM-DD HH24:MI') AS vendida_en,
@@ -3476,6 +3513,7 @@ async def despachos_de_las_tiendas(
                    -- la cola, una venta cobrada cuyo pedido no ha salido se
                    -- muestra como problema: o lo dice el despacho, o el
                    -- trabajo se rindió, o lleva demasiado rato pendiente.
+                   {SQL_DESPACHO_REQUIERE_ATENCION} AS atencion,
                    coalesce(
                        d.ultimo_error,
                        (SELECT 'El pedido a Melonn se rindió tras varios intentos: '
@@ -3486,8 +3524,10 @@ async def despachos_de_las_tiendas(
                                           'cancelar_despacho_melonn')
                          ORDER BY o.id DESC LIMIT 1),
                        CASE WHEN d.estado = 'pendiente'
-                                 AND d.creado_en < now() - interval '20 minutes'
-                            THEN 'Lleva más de 20 minutos sin pedirse a Melonn'
+                                 AND d.creado_en < now() - interval
+                                     '{MINUTOS_PENDIENTE_SIN_SALIR} minutes'
+                            THEN 'Lleva más de {MINUTOS_PENDIENTE_SIN_SALIR} '
+                                 'minutos sin pedirse a Melonn'
                        END) AS ultimo_error,
                    (SELECT f.numero FROM retail.documentos_fiscales f
                      WHERE f.venta_id = v.id AND f.tipo = 'factura_electronica'
@@ -3502,9 +3542,7 @@ async def despachos_de_las_tiendas(
              LIMIT 500
         """))).mappings().all()
     orden = {"pendiente": 0, "en_melonn": 1, "despachado": 2}
-    filas = [dict(f, atencion=(f["estado"] == "no_creado"
-                               or f["ultimo_error"] is not None))
-             for f in filas]
+    filas = [dict(f) for f in filas]
     if abiertos:
         filas = [f for f in filas if f["atencion"] or f["estado"] in orden]
     # Estable: dentro de cada grupo queda lo más reciente primero.

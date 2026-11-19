@@ -51,6 +51,9 @@ export interface Referencia {
   precio_con_iva_centavos: number;
   tasa_iva: string;
   tallas: Talla[];
+  /** Sólo en lo que viene de la tienda en línea (venta con envío): el precio
+   *  tachado de la web, cuando está en rebaja. */
+  precio_lista_centavos?: number;
 }
 
 export interface Catalogo {
@@ -157,6 +160,120 @@ export async function listarCatalogo(
   if (q) p.set("q", q);
   if (categoria && categoria !== "Todo") p.set("categoria", categoria);
   return api.get<Catalogo>(`/api/retail/catalogo/referencias?${p}`);
+}
+
+// ── Venta con envío a domicilio ─────────────────────────────────────────────
+
+/** Una talla de la tienda en línea, con el precio de la web HOY y lo que hay
+ *  en la bodega que despacha (Melonn). */
+export interface VarianteEnLinea {
+  sku: string;
+  nombre: string;
+  talla: string;
+  precio_centavos: number;
+  precio_lista_centavos: number;
+  disponible: number;
+  activo: boolean;
+}
+
+export interface ProductoEnLinea {
+  nombre: string;
+  variantes: VarianteEnLinea[];
+}
+
+/** Lo que se puede vender con envío. Sólo con red: la existencia de la web
+ *  cambia a cada minuto y una copia vieja vendería lo que ya no hay. */
+export async function catalogoEnLinea(
+  tiendaId: string, q: string,
+): Promise<ProductoEnLinea[]> {
+  const p = new URLSearchParams({ tienda_id: tiendaId, q });
+  try {
+    return (await api.get<{ productos: ProductoEnLinea[] }>(
+      `/api/retail/catalogo/en-linea?${p}`)).productos;
+  } catch (e) {
+    return traducir(e);
+  }
+}
+
+/** A quién y a dónde se lleva una venta con envío. */
+export interface Entrega {
+  destinatario: string;
+  telefono: string;
+  direccion: string;
+  complemento: string;
+  ciudad: string;
+  departamento: string;
+}
+
+export type EstadoDespacho =
+  | "pendiente" | "en_melonn" | "despachado" | "entregado"
+  | "no_creado" | "cancelado";
+
+/** Cómo se dice cada estado del despacho en pantalla. */
+export const NOMBRE_DESPACHO: Record<EstadoDespacho, string> = {
+  pendiente: "Por enviar a Melonn",
+  en_melonn: "En Melonn",
+  despachado: "Despachado",
+  entregado: "Entregado",
+  no_creado: "No se pudo crear",
+  cancelado: "Cancelado",
+};
+
+export interface Despacho {
+  venta_id: string;
+  numero: string;
+  tienda_id: string;
+  vendida_en: string;
+  total_centavos: number;
+  estado: EstadoDespacho;
+  requiere_atencion: boolean;
+  destinatario: string;
+  telefono: string;
+  direccion: string;
+  complemento: string;
+  ciudad: string;
+  departamento: string;
+  prendas: string[];
+  melonn_numero: string | null;
+  melonn_estado: string | null;
+  seguimiento_url: string | null;
+  ultimo_error: string | null;
+  resolucion: string | null;
+  estado_fiscal: string;
+  factura: string | null;
+}
+
+/** Los pedidos con envío, para la oficina. Sólo administradores. */
+export async function despachosDeLasTiendas(abiertos: boolean): Promise<Despacho[]> {
+  try {
+    return await api.get<Despacho[]>(
+      `/api/retail/despachos${abiertos ? "?abiertos=true" : ""}`);
+  } catch (e) {
+    return traducir(e);
+  }
+}
+
+/** Cancela un pedido con envío desde la oficina, aunque el turno ya cerró.
+ *  `resolucion` = cómo se le devolvió la plata (no pasa por la caja). */
+export async function cancelarPedidoConEnvio(
+  ventaId: string, motivo: string, resolucion: string,
+): Promise<Anulacion> {
+  try {
+    return await api.post<Anulacion>(
+      `/api/retail/despachos/${ventaId}/cancelar`, { motivo, resolucion });
+  } catch (e) {
+    return traducir(e);
+  }
+}
+
+/** Vuelve a pedirle el despacho a Melonn (no duplica: el servidor pregunta
+ *  antes de crear). */
+export async function reintentarPedidoConEnvio(ventaId: string): Promise<void> {
+  try {
+    await api.post(`/api/retail/despachos/${ventaId}/reintentar`, {});
+  } catch (e) {
+    return traducir(e);
+  }
 }
 
 export async function cerrarVenta(cuerpo: unknown): Promise<Ticket> {
@@ -305,6 +422,9 @@ export interface ContextoCaja {
   /** La segunda prenda (para pantallas anteriores) y TODAS las vigentes. */
   promocion?: import("./promo").Promocion | null;
   promociones?: import("./promo").Promocion[];
+  /** Esta tienda puede vender con envío a domicilio desde la tienda en línea.
+   *  Opcional: una copia guardada antes de existir no lo trae. */
+  vende_con_envio?: boolean;
 }
 
 export interface MedioPago {
@@ -661,6 +781,9 @@ export interface TiendaDelTablero {
   /** El efectivo, neto del vuelto. */
   medios: { nombre: string; tipo: string; centavos: number }[];
   cajeras: { nombre: string; ventas_centavos: number; transacciones: number }[];
+  /** De lo vendido, cuánto fue con envío (ya incluido arriba). */
+  con_envio?: number;
+  monto_con_envio_centavos?: number;
 }
 
 export interface Tablero {
@@ -688,6 +811,8 @@ export interface Tablero {
     cuando: string; tienda_id: string; tienda: string; numero: string;
     total_centavos: number; motivo: string; quien: string;
   }[];
+  /** Pedidos con envío que necesitan a la oficina, de cualquier fecha. */
+  despachos_por_resolver?: number;
 }
 
 /** Todas las tiendas, lado a lado. Sólo responde a un administrador. */
@@ -739,6 +864,8 @@ export interface Tirilla {
   cajera_nombre: string;
   cliente_nombre: string | null;
   cliente_documento: string | null;
+  /** Sólo en una venta con envío: a quién y a dónde (sin el celular). */
+  entrega?: Omit<Entrega, "telefono"> | null;
   lineas: LineaTirilla[];
   pagos: PagoTirilla[];
   /** Presentados como en la tirilla real de Siigo: «Subtotal» es la base
@@ -826,8 +953,11 @@ export interface VentaDelTurno {
   /** Sólo en la lista del panel. */
   factura?: string | null;
   caja?: string | null;
-  /** `false`: su turno ya cerró y no se anula desde aquí. */
+  /** `false`: su turno ya cerró —o ya salió de la bodega— y no se anula. */
   anulable?: boolean | null;
+  /** `envio` = vendida con envío desde la tienda en línea («Shopify»). */
+  canal?: "mostrador" | "envio";
+  despacho?: EstadoDespacho | null;
 }
 
 /** Las ventas de HOY de una tienda, para quien la supervisa desde el panel. */

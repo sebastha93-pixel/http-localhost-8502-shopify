@@ -166,19 +166,32 @@ Pruebas: `tests/retail/integracion/test_despacho_melonn.py` (36) y
 Pendiente de la etapa 5 (pedido real): confirmar contra Melonn el `POST` sin
 retención y la cancelación, que aquí sólo corrieron contra el falso.
 
-## Etapa 4 — Pantallas
+## Etapa 4 — Pantallas — HECHA en la rama `feat/pos-pedido-con-envio-4`, 2026-11-19
 
-- [ ] Venta: interruptor «Con envío a domicilio» (sólo si la tienda lo tiene);
-      con él puesto el buscador consulta la web; el carrito no mezcla.
-- [ ] Cobro: bloque de entrega obligatorio (quién recibe, celular, dirección,
-      complemento, ciudad, departamento). Con el interruptor puesto no hay modo
-      fuera de línea: sin red no se puede vender con envío, y se dice.
-- [ ] Tirilla (servidor y `tirilla.tsx`): «Entrega a domicilio», dirección,
-      «sin costo de envío».
-- [ ] Panel y lista de ventas: marca «Shopify» y estado del despacho.
-- [ ] Tablero: por tienda, ventas y plata «con envío»; aviso de despachos sin
-      crear; y la lista de la oficina con «Cancelar pedido con envío».
-- [ ] Probar en ancho de iPad.
+(La etapa 3 se publicó el 2026-11-18, PR #145.)
+
+- [x] Venta: «En la tienda / Con envío a domicilio» (sólo si la tienda tiene
+      `vende_con_envio`); bloqueado con prendas en el carrito. Con envío el
+      buscador consulta la tienda en línea (`catalogoEnLinea`), la talla
+      agotada no se puede tocar y no se agrega más de lo disponible; sin
+      promociones de tienda.
+- [x] Cobro: bloque de entrega arriba (`bloque-entrega.tsx`); sin entrega
+      completa no se confirma. Con envío no hay cola fuera de línea: sin red
+      se avisa y se reintenta con el mismo `venta_id` (no duplica).
+- [x] Tirilla: «ENTREGA A DOMICILIO · sin costo de envío», quién recibe y la
+      dirección (sin el celular). Probada imprimiendo a PDF con Chrome.
+- [x] Panel, cierre y ventas del turno: etiqueta «Shopify · <estado del
+      despacho>»; lo que ya salió no se ofrece para anular.
+- [x] Tablero: «N con envío ($…)» por tienda y aviso arriba de pedidos por
+      resolver. Pantalla nueva `/pos/despachos` («Envíos» en el menú, sólo
+      admin) con cancelar (motivo + cómo se devolvió la plata) y reintentar.
+- [x] Probado en una demo local a 1024×768 (iPad apaisado), con Shopify y
+      Melonn simulados: buscar, agregar, tope de existencia, entrega, cobro,
+      tirilla, la cola creando el pedido, la lista de la oficina y cancelar.
+
+Encontrado en la demo y corregido: la tasa de IVA de lo de la tienda en
+línea iba como `0.19` y la caja decía «IVA incluido $303» en una prenda de
+$159.900; el precio tachado partía la referencia en la tarjeta angosta.
 
 ## Etapa 5 — Pedido real y encendido
 

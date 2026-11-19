@@ -9,7 +9,10 @@ import {
   type MedioPago,
   type SaldoAFavor,
   type TarjetaRegalo,
+  type Entrega,
 } from "@/lib/pos/api";
+import { BloqueEntrega } from "@/components/pos/bloque-entrega";
+import { faltaEnLaEntrega } from "@/lib/pos/envio";
 
 /**
  * Cobro, con pago mixto.
@@ -48,6 +51,8 @@ export function PanelCobro({
   emiteFactura = false,
   saldoInicial,
   clienteId,
+  entrega = null,
+  onEntrega,
   onCancelar,
   onConfirmar,
 }: {
@@ -63,6 +68,10 @@ export function PanelCobro({
   /** La clienta de la venta. Si tiene saldos a favor salen SOLOS: ya se
    *  identificó al ponerla en la venta, no se le vuelve a pedir la cédula. */
   clienteId?: string | null;
+  /** Sólo en una venta con envío: a quién y a dónde. Vive en la pantalla de
+   *  venta, no aquí, para que un fallo al cobrar no la borre. */
+  entrega?: Entrega | null;
+  onEntrega?: (e: Entrega) => void;
   onCancelar: () => void;
   onConfirmar: (
     pagos: {
@@ -86,6 +95,7 @@ export function PanelCobro({
   const [saldo, setSaldo] = useState<SaldoAFavor | null>(null);
   const [saldoError, setSaldoError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
+  const faltaEntrega = entrega ? faltaEnLaEntrega(entrega).length > 0 : false;
 
   // LOS SALDOS DE ESTA CLIENTA. Los trae el servidor por la clienta de la
   // venta —sólo los suyos y sólo los que tienen plata— y el primero entra ya
@@ -242,6 +252,10 @@ export function PanelCobro({
       >
         ← Volver al ticket · Esc
       </button>
+
+      {entrega && onEntrega && (
+        <BloqueEntrega entrega={entrega} onCambio={onEntrega} />
+      )}
 
       <div className="mb-4">
         <div className="kicker">
@@ -493,7 +507,8 @@ export function PanelCobro({
         )}
 
         <button
-          disabled={montoInvalido || excedenteInvalido || faltaReferencia || saldoInvalido || enviando}
+          disabled={montoInvalido || excedenteInvalido || faltaReferencia || saldoInvalido
+                    || enviando || (cubre && faltaEntrega)}
           onClick={cubre ? confirmar : agregar}
           className="w-full pos-btn pos-btn-primario py-3.5 text-[13.5px] disabled:cursor-not-allowed"
         >
@@ -513,6 +528,11 @@ export function PanelCobro({
           <p className="mt-2 text-center text-[12px] text-[var(--pos-600)]">
             A ese saldo le quedan {formatear(saldoDisponible)}: cobra esa parte
             con él y el resto con otro medio.
+          </p>
+        )}
+        {cubre && faltaEntrega && (
+          <p className="mt-2 text-center text-[12px] text-[var(--pos-600)]">
+            Completa la entrega para poder cobrar.
           </p>
         )}
         {faltaReferencia && !montoInvalido && !esSaldo && (
