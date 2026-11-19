@@ -123,41 +123,48 @@ Pruebas: precio de promoción de la web aceptado sin gastar tope; descuento
 encima sí lo gasta; promoción de tienda ignorada; prenda nueva se crea; sin
 existencia se rechaza; Shopify caído → mensaje claro, no un 500.
 
-## Etapa 3 — El despacho en Melonn
+## Etapa 3 — El despacho en Melonn — HECHA en la rama `feat/pos-pedido-con-envio-3`, 2026-11-18
 
-- [ ] Cliente: `crear_pedido_d2c` de UN solo intento (el `_post` actual
-      reintenta en timeout y duplicaría) y `pedir_cancelacion`. Ante 5xx o
-      timeout: «no sé si se creó» → preguntar con `GET sell-orders/{número}`
-      antes de reenviar.
-- [ ] Trabajo de cola `crear_despacho_melonn`, encolado al cerrar la venta
-      junto al de la factura. No espera a la factura: ya está pagado.
-      Idempotente por `external_order_number` = número de la venta. Cuota
-      agotada → `Aplazar`; rechazo de Melonn (sin existencia, dirección
-      inválida) → `despachos.estado='no_creado'` con el motivo, sin reintentar
-      a ciegas.
-- [ ] Estado del despacho: se actualiza con lo que el OS ya recibe de Melonn
-      (webhook y barrido), cruzando por `external_order_number`.
-- [ ] El pedido se crea **prepagado**: sin monto ni tipo de contra entrega y
-      sin marcar B2B. Con contra entrega entraría a la cartera COD del OS, y
-      `cartera_cod._numeros_orden` (`\d{4,}`) leería «FLPOS-99501» como el
-      pedido web 99501. Con B2B desaparecería de todas las pantallas.
-- [ ] En `src/melonn_client._normalizar` (2319, alimenta barrido y webhook):
-      si el número es de una caja (`^[A-Z]+POS-\d+$`) se marca `origen="pos"`
-      y se vacía `external_order_id`, para que no entre al lote `ids=` de
-      Shopify (`shopify_enricher.py:146`), donde un id no numérico podría
-      tumbar el lote de pedidos web de verdad.
-- [ ] `_enriquecer_desde_melonn` (3266): para los del POS, pedir primero el
-      número sin `#` (hoy gasta una petición de cuota en un 404).
-- [ ] `cartera_cod._numeros_orden`: ignorar números de caja.
-- [ ] «Cancelar pedido con envío» (oficina, administrador): pide la
-      cancelación en Melonn si existe, emite la nota crédito contra la bodega
-      32 aunque el turno esté cerrado, no mueve inventario de la tienda y
-      registra cómo se le devolvió la plata.
-- [ ] `GET /despachos`: la lista para la oficina, con los `no_creado` primero.
+(La etapa 2 se publicó el 2026-11-18, PR #142.)
 
-Pruebas con un Melonn falso: creado; ya existía (no duplica); 500 y luego
-existe; 500 y no existe (reintenta); rechazo; cuota agotada; cancelación con
-turno cerrado.
+- [x] `melonn/despacho.py` · `MelonnIO`: `leer_pedido` (404 → `None`; lo demás
+      lanza), `crear_pedido` de UN intento y `pedir_cancelacion`. Lectura
+      probada contra el Melonn real (PRUEBA-POS-1 cancelado y un número que no
+      existe).
+- [x] Trabajo `crear_despacho_melonn`, encolado al cerrar la venta en la misma
+      transacción. Pregunta antes de crear; un envío sin respuesta espera 45
+      min sólo preguntando (la lección de Siigo del 18-nov); rechazo →
+      `no_creado` con el motivo; sin cuota → espera sin gastar intentos.
+- [x] Prepagado y D2C; `external_order_id` = `999` + 10 dígitos del número.
+- [x] `melonn_client._normalizar`: `origen="pos"` y `external_order_id` vacío;
+      el detalle del POS se pide sin «#»; `cartera_cod._numeros_orden` ignora
+      los números de caja.
+- [x] Cancelar. Desde la caja (turno abierto) y desde la oficina
+      (`POST /despachos/{venta}/cancelar`, administrador, turno cerrado o no,
+      sin tocar el arqueo, con `resolucion`). ANTES de anular se le pide a
+      Melonn que no despache: si ya salió, no contesta o no deja, la venta NO
+      se anula. Después, `cancelar_despacho_melonn` verifica en la cola que
+      quedó cancelado (y cancela el que Melonn haya creado tarde).
+- [x] `GET /despachos`: la lista de la oficina, lo que hay que resolver primero.
+
+Decisiones tomadas al construir (distintas de lo escrito arriba):
+
+- **El estado no sale del tablero de logística del OS** sino de preguntarle a
+  Melonn pedido por pedido cada 30 min (`refrescar_despachos`, tras cada
+  pasada de la cola). El tablero deja por fuera entregados y cancelados, que
+  son justo los finales que importan. Cuesta unas pocas peticiones al día.
+- **La caja también puede anular** una venta con envío de su turno (no sólo
+  la oficina), con la misma comprobación en Melonn.
+- **Si Melonn cancela por su cuenta**, el despacho vuelve a `no_creado` con
+  el aviso: la clienta pagó y no le va a llegar.
+- No hay «reintentar despacho» tras un `no_creado` (p. ej. dirección mal
+  escrita): hoy la salida es cancelar y volver a vender. Verlo en la etapa 4.
+
+Pruebas: `tests/retail/integracion/test_despacho_melonn.py` (36) y
+`tests/test_melonn_pedidos_del_pos.py` (5). `tests/retail`: 831 pasan.
+
+Pendiente de la etapa 5 (pedido real): confirmar contra Melonn el `POST` sin
+retención y la cancelación, que aquí sólo corrieron contra el falso.
 
 ## Etapa 4 — Pantallas
 

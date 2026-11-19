@@ -291,6 +291,12 @@ class CerrarVenta:
                "complemento": entrega.get("complemento") or "",
                "ciudad": entrega["ciudad"],
                "departamento": entrega["departamento"]})
+        # El despacho se pide a Melonn desde la cola, en la MISMA transacción
+        # que la venta: o quedan las dos cosas, o ninguna. No espera a la
+        # factura —la venta ya se cobró—.
+        await t.outbox.encolar(
+            tipo="crear_despacho_melonn", agregado_tipo="venta",
+            agregado_id=venta.id, payload={"venta_id": venta.id})
 
     @staticmethod
     async def _exigir_referencias(t, venta) -> None:

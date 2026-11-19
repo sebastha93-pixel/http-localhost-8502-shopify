@@ -43,7 +43,18 @@ from backend.modules.retail.infrastructure.siigo.cruce_anticipo import (  # noqa
     cruzar_anticipo,
 )
 
+from backend.modules.retail.infrastructure.melonn.despacho import (  # noqa: E402
+    TIPO as TIPO_DESPACHO,
+    TIPO_CANCELAR as TIPO_CANCELAR_DESPACHO,
+    crear_despacho,
+    verificar_cancelacion,
+)
+
 MANEJADORES = {
+    #  El pedido a Melonn de una venta con envío a domicilio.
+    TIPO_DESPACHO: crear_despacho,
+    #  Tras cancelarla: comprobar que Melonn no la va a despachar.
+    TIPO_CANCELAR_DESPACHO: verificar_cancelacion,
     TIPO_CASO_DEVOLUCION: abrir_caso_postventa,
     TIPO_FACTURA: emitir_factura,
     TIPO_NOTA_CREDITO: emitir_nota_credito,

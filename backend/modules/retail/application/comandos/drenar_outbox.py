@@ -119,7 +119,11 @@ class DrenarOutbox:
                    SET estado = 'pendiente',
                        ultimo_error = coalesce(ultimo_error, '') || :nota
                  WHERE estado = 'procesando'
-                   AND creado_en < :limite
+                   -- CUÁNDO SE TOMÓ, no cuándo se creó: `_tomar` deja su hora
+                   -- en `proximo_intento_en`. Con `creado_en`, todo trabajo
+                   -- viejo se «rescataba» mientras otra pasada lo procesaba
+                   -- y corrían dos manejadores a la vez.
+                   AND proximo_intento_en < :limite
              RETURNING id
             """), {"nota": f" [rescatado tras {VARADO_MINUTOS} min en procesando]",
                    "limite": ahora - timedelta(minutes=VARADO_MINUTOS)})).rowcount
@@ -147,7 +151,10 @@ class DrenarOutbox:
                        FOR UPDATE SKIP LOCKED
                 )
                 UPDATE retail.outbox o
-                   SET estado = 'procesando'
+                   SET estado = 'procesando',
+                       -- La hora en que se tomó: es lo que mira el rescate.
+                       -- Al terminar, bien o mal, quien lo procesa la pisa.
+                       proximo_intento_en = :ahora
                   FROM lote
                  WHERE o.id = lote.id
              RETURNING o.id, o.tipo, o.agregado_tipo, o.agregado_id,

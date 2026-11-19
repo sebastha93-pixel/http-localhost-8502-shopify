@@ -2316,6 +2316,16 @@ def _sub_estado_logistico(estado: str, codigo: int = 0, es_cod: bool = False) ->
     return "otro"
 
 
+#  El número de una venta del POS con envío a domicilio (`FERPOS-2538`,
+#  `ARRPOS-44446`). Melonn no devuelve los `tags`, así que el pedido del POS
+#  se reconoce por su número — que es su `external_order_number`.
+_RE_NUMERO_DE_CAJA = re.compile(r"^[A-Z]+POS-\d+$")
+
+
+def es_pedido_del_pos(orden_tienda) -> bool:
+    return bool(_RE_NUMERO_DE_CAJA.match(str(orden_tienda or "").strip().lstrip("#")))
+
+
 def _normalizar(raw: dict) -> dict:
     """
     Normaliza un pedido del endpoint GET /sell-orders (list).
@@ -2343,11 +2353,20 @@ def _normalizar(raw: dict) -> dict:
     _tipo  = int(pay_type.get("code", 0)) if isinstance(pay_type, dict) else 0
     es_cod = _monto > 0 or _tipo > 0
 
+    orden_tienda = str(raw.get("external_order_number") or "").lstrip("#")
+    # UN PEDIDO DEL POS NO ES UN PEDIDO DE SHOPIFY. Su `external_order_id` es
+    # un número que el POS inventa porque Melonn lo exige; si se dejara, el
+    # enriquecedor lo metería en el lote `ids=` hacia Shopify
+    # (`shopify_enricher._fetch_shopify_orders`) buscando un pedido que no
+    # existe. Se vacía aquí, que es por donde pasan el barrido y el webhook.
+    del_pos = es_pedido_del_pos(orden_tienda)
+
     return {
         # ── Identificadores ──────────────────────────────────────────────────
         "orden_melonn":           str(raw.get("internal_order_number") or raw.get("id") or ""),
-        "orden_tienda":           str(raw.get("external_order_number") or "").lstrip("#"),
-        "external_order_id":      str(raw.get("external_order_id") or ""),
+        "orden_tienda":           orden_tienda,
+        "external_order_id":      "" if del_pos else str(raw.get("external_order_id") or ""),
+        "origen":                 "pos" if del_pos else "",
         # ── Estado ───────────────────────────────────────────────────────────
         "estado_melonn":          estado,
         "estado_melonn_code":     estado_code,
@@ -3269,6 +3288,10 @@ def _enriquecer_desde_melonn(pedidos: list, max_pedidos: int = 30) -> list:
         detail = None
         base_ext = ext.lstrip("#")
         candidatos = [quote(f"#{base_ext}", safe=""), base_ext] if base_ext else []
+        if es_pedido_del_pos(base_ext):
+            # El del POS se guarda SIN «#»: pedirlo primero con él gastaba una
+            # petición de la cuota en un 404 seguro.
+            candidatos = [quote(base_ext, safe="")]
         for ident in candidatos:
             try:
                 # ?fields=sell_order_promises añade sell_order_promise_info (Melonn

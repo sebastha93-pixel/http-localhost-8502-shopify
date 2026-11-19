@@ -241,11 +241,44 @@ def test_lo_que_lleva_poco_en_procesando_NO_se_rescata(uow):
     assert _drenar(u, {"saludar": _ok}).rescatados == 0
 
 
-async def _varar(u, creado_en):
+def test_un_trabajo_VIEJO_recien_tomado_no_se_rescata(uow):
+    """EL HUECO QUE HABÍA (2026-11-18): el rescate miraba cuándo se CREÓ el
+    trabajo, no cuándo se tomó. Un trabajo de hace una hora —una factura que
+    esperaba un dato de la clienta, un pedido a Melonn sin cuota— se
+    «rescataba» en el instante en que otra pasada lo veía procesándose, y
+    corrían dos manejadores a la vez: dos facturas, dos pedidos."""
+    u, motor = uow
+    _correr(_encolar(u, "saludar"))
+    _correr(_varar(u, tomado_en=AHORA - timedelta(seconds=20),
+                   creado_en=AHORA - timedelta(hours=1)))
+    r = _drenar(u, {"saludar": _ok})
+    assert r.rescatados == 0
+    assert _leer(motor, "SELECT estado FROM retail.outbox").estado == "procesando"
+
+
+def test_al_tomar_un_trabajo_queda_anotado_cuando(uow):
+    """Lo que hace posible lo anterior: tomarlo deja su hora."""
+    u, motor = uow
+    _correr(_encolar(u, "saludar"))
+    _correr(_varar(u, tomado_en=AHORA - timedelta(hours=1)))   # varado de verdad
+    visto = {}
+
+    async def mirar(t, payload):
+        visto["fila"] = (await t.sesion.execute(text(
+            "SELECT estado, proximo_intento_en FROM retail.outbox"))).first()
+    _drenar(u, {"saludar": mirar})
+    assert visto["fila"].estado == "procesando"
+    assert visto["fila"].proximo_intento_en == AHORA
+
+
+async def _varar(u, tomado_en, creado_en=None):
+    """Deja el trabajo como lo deja `_tomar`: `procesando`, con la hora en que
+    se tomó en `proximo_intento_en`."""
     async with u as t:
         await t.sesion.execute(text(
-            "UPDATE retail.outbox SET estado='procesando', creado_en=:c"),
-            {"c": creado_en})
+            "UPDATE retail.outbox SET estado='procesando', "
+            "       proximo_intento_en=:t, creado_en=coalesce(:c, :t)"),
+            {"t": tomado_en, "c": creado_en})
         await t.commit()
 
 
