@@ -745,3 +745,70 @@ def test_si_melonn_nunca_confirma_la_cancelacion_queda_el_aviso(vendida):
         _drenar(melonn, dentro_de=timedelta(hours=horas))
     assert "no ha confirmado la cancelación" in _despacho(vendida)[4]
     assert _verificador(vendida)[0] == "procesado"
+
+
+# ── Etapa 4: lo que el servidor les da a las pantallas ─────────────────────
+
+def test_la_tirilla_dice_a_donde_va_y_sin_el_celular(vendida):
+    r = _como("user").get(f"/api/retail/ventas/{VENTA_ENVIO}/tirilla")
+    assert r.status_code == 200, r.text
+    assert r.json()["entrega"] == {
+        "destinatario": "Laura Gómez", "direccion": "Calle 10 # 43-21",
+        "complemento": "Apto 502", "ciudad": "Medellín",
+        "departamento": "Antioquia"}
+    assert "3001234567" not in r.text
+
+
+def test_la_tirilla_de_mostrador_no_trae_entrega(vendida):
+    from tests.retail.integracion.test_emisor_factura import VENTA
+    r = _como("user").get(f"/api/retail/ventas/{VENTA}/tirilla")
+    assert r.status_code == 200 and r.json()["entrega"] is None
+
+
+def test_las_listas_de_ventas_marcan_el_envio_y_su_despacho(
+        vendida, melonn_de_los_endpoints):
+    from tests.retail.integracion.test_emisor_factura import SESION, VENTA
+    _drenar(melonn_de_los_endpoints)
+    c = _como("user")
+    turno = {v["venta_id"]: v for v in c.get(
+        f"/api/retail/caja/ventas?sesion_id={SESION}").json()}
+    assert (turno[VENTA_ENVIO]["canal"], turno[VENTA_ENVIO]["despacho"]) == (
+        "envio", "en_melonn")
+    assert turno[VENTA_ENVIO]["anulable"] is True
+    assert (turno[VENTA]["canal"], turno[VENTA]["despacho"]) == ("mostrador", None)
+
+    _ejecutar(vendida, "UPDATE retail.despachos SET estado = 'despachado'")
+    panel = {v["venta_id"]: v for v in c.get(
+        "/api/retail/panel/ventas?tienda_id=arrayanes").json()["ventas"]}
+    assert panel[VENTA_ENVIO]["despacho"] == "despachado"
+    assert panel[VENTA_ENVIO]["anulable"] is False      # ya salió
+    assert panel[VENTA]["anulable"] is True
+    turno = {v["venta_id"]: v for v in c.get(
+        f"/api/retail/caja/ventas?sesion_id={SESION}").json()}
+    assert turno[VENTA_ENVIO]["anulable"] is False
+
+
+def test_el_tablero_cuenta_el_envio_y_lo_que_hay_que_resolver(
+        vendida, melonn_de_los_endpoints):
+    from tests.retail.integracion.test_emisor_factura import PRECIO
+    melonn = melonn_de_los_endpoints
+    melonn.al_crear = "rechazo"
+    _drenar(melonn)
+    r = _como("admin").get("/api/retail/tablero")
+    assert r.status_code == 200, r.text
+    t = r.json()
+    [arr] = [x for x in t["tiendas"] if x["id"] == "arrayanes"]
+    assert arr["con_envio"] == 1 and arr["monto_con_envio_centavos"] == PRECIO
+    assert arr["transacciones"] == 2                   # mostrador + envío
+    assert t["despachos_por_resolver"] == 1
+
+
+def test_anulada_antes_de_pedirse_no_queda_como_problema(vendida, melonn_de_los_endpoints):
+    melonn = melonn_de_los_endpoints
+    assert _anular_en_caja().status_code == 200
+    _drenar(melonn)
+    _drenar(melonn, dentro_de=timedelta(hours=2))
+    assert _despacho(vendida)[4] is None
+    assert _como("admin").get("/api/retail/tablero").json()["despachos_por_resolver"] == 0
+    [d] = _como("admin").get("/api/retail/despachos").json()
+    assert d["requiere_atencion"] is False and d["estado"] == "cancelado"

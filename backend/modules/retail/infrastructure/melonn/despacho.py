@@ -384,7 +384,9 @@ async def _crear(t, payload: dict, io: MelonnIO) -> Optional[str]:
         await t.sesion.execute(text("""
             UPDATE retail.despachos
                SET estado = 'cancelado', melonn_estado = NULL,
-                   ultimo_error = 'la venta se anuló antes de pedir el despacho',
+                   ultimo_error = NULL,
+                   resolucion = coalesce(resolucion,
+                                         'anulada antes de pedir el despacho'),
                    actualizado_en = now()
              WHERE venta_id = :v AND estado = 'pendiente'
         """), {"v": venta_id})

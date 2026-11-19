@@ -71,6 +71,11 @@ class Tirilla:
     cliente_nombre: Optional[str]
     cliente_documento: Optional[str]
 
+    #  Sólo en una venta con envío: a quién y a dónde va. Sin el celular: el
+    #  papel se lo lleva la clienta y no hace falta imprimirle su número.
+    #  {destinatario, direccion, complemento, ciudad, departamento}
+    entrega: Optional[dict] = None
+
     lineas: List[LineaTirilla] = field(default_factory=list)
     pagos: List[PagoTirilla] = field(default_factory=list)
 
@@ -232,6 +237,11 @@ class ArmarTirilla:
 
         resolucion = _resolucion(v, doc["numero"] if doc else None)
 
+        entrega = (await self._s.execute(text("""
+            SELECT destinatario, direccion, complemento, ciudad, departamento
+              FROM retail.despachos WHERE venta_id = :i
+        """), {"i": venta_id})).mappings().first()
+
         tirilla = Tirilla(
             razon_social=v["razon_social"], nit=v["nit"],
             direccion=v["direccion"], telefono=v["telefono"],
@@ -244,6 +254,7 @@ class ArmarTirilla:
             cliente_documento=(
                 f"{cliente['tipo_documento']} {cliente['numero_documento']}"
                 if cliente else None),
+            entrega=dict(entrega) if entrega else None,
             lineas=[LineaTirilla(
                 sku=l["sku"], descripcion=l["descripcion"],
                 cantidad=int(l["cantidad"]),
