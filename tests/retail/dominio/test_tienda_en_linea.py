@@ -82,3 +82,20 @@ def test_buscar_pone_arriba_lo_que_se_puede_vender(monkeypatch):
         ]}})
     assert [p["nombre"] for p in t.buscar("jean")] == ["Con existencia", "Agotado"]
     assert t.buscar("j") == []          # una letra no es una búsqueda
+
+
+def test_buscar_le_pide_a_shopify_solo_lo_que_tiene_existencia(monkeypatch):
+    """MEDIDO EL 2026-11-19 contra la tienda: «jean» devolvía 25 productos
+    publicados y NINGUNO con existencia en Melonn —el catálogo viejo, activo y
+    en cero, sale primero—. La vendedora habría visto sólo «agotada». Con
+    `inventory_total:>0` los 25 tienen existencia."""
+    pedidas = []
+
+    def pedir(consulta, variables):
+        pedidas.append(variables)
+        return {"products": {"nodes": []}}
+    monkeypatch.setattr(t, "_pedir", pedir)
+    t.buscar("jean bota")
+    assert "inventory_total:>0" in pedidas[0]["q"]
+    assert "status:active" in pedidas[0]["q"]
+    assert pedidas[0]["q"].startswith("jean bota")
