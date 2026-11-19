@@ -148,7 +148,10 @@ def buscar(texto: str, limite: int = 12) -> List[dict]:
     if len(texto) < 2:
         return []
     datos = _pedir(_POR_TEXTO, {
-        "q": f"{texto} status:active", "loc": _sucursal(),
+        # `inventory_total:>0`: sin él, el catálogo viejo —publicado y en
+        # cero— llena los resultados (medido 2026-11-19: «jean» daba 25
+        # productos y ninguno con existencia).
+        "q": f"{texto} status:active inventory_total:>0", "loc": _sucursal(),
         "n": max(1, min(int(limite), 25))})
     salida = []
     for p in ((datos.get("products") or {}).get("nodes") or []):
