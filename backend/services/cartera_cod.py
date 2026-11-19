@@ -84,7 +84,14 @@ def _numeros_orden(valor) -> list[str]:
     juntas quedan con el número pegado. Sin partirlos, esos pedidos nunca
     cruzaban y se contaban como 'entregado sin facturar' siendo mentira.
     """
-    return re.findall(r"\d{4,}", str(valor or ""))
+    texto = str(valor or "")
+    # EL NÚMERO DE UNA CAJA NO ES UN PEDIDO WEB. «FLPOS-99501» (una venta del
+    # POS con envío a domicilio) se leía como el pedido 99501 de Shopify, y
+    # habría cruzado con la factura de otra clienta. Esos pedidos van
+    # prepagados: no tienen nada que hacer en la cartera de contra entrega.
+    if re.fullmatch(r"#?[A-Z]+POS-\d+", texto.strip()):
+        return []
+    return re.findall(r"\d{4,}", texto)
 
 
 # ═══════════════════════════════════════════════════════════════════════
