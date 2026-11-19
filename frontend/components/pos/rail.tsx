@@ -36,6 +36,9 @@ const SECCIONES = [
 //  La única sección que no es de ninguna tienda: el papel es del equipo.
 const SIN_CAJA = "/pos/impresion";
 const TIENDAS = { href: "/pos/tablero", label: "Tiendas", icono: TiendaIcono, listo: true };
+//  Los pedidos con envío a domicilio de todas las tiendas: lo que la oficina
+//  resuelve (Melonn no lo recibió, cancelar, reintentar). También sólo admin.
+const ENVIOS = { href: "/pos/despachos", label: "Envíos", icono: CamionIcono, listo: true };
 
 export function Rail({ cajera }: { cajera: string }) {
   const ruta = usePathname();
@@ -51,7 +54,7 @@ export function Rail({ cajera }: { cajera: string }) {
   useEffect(() => setHayCaja(Boolean(cajaDeEsteEquipo())), [ruta]);
   const sinTienda = esAdmin && !hayCaja;
   const secciones = esAdmin
-    ? [TIENDAS, ...SECCIONES.map((s) => ({
+    ? [TIENDAS, ENVIOS, ...SECCIONES.map((s) => ({
         ...s, listo: s.listo && !(sinTienda && s.href !== SIN_CAJA) }))]
     : SECCIONES;
 
@@ -130,6 +133,17 @@ function TiendaIcono() {
       <path d="M3 9 4.5 3h15L21 9" />
       <path d="M3 9a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0" />
       <path d="M5 12v9h14v-9M10 21v-5h4v5" />
+    </svg>
+  );
+}
+/** El camión de Lucide (`truck`): lo que sale a domicilio. */
+function CamionIcono() {
+  return (
+    <svg {...props} aria-hidden>
+      <path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2" />
+      <path d="M15 18H9M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.62l-3.48-4.35A1 1 0 0 0 17.52 8H14" />
+      <circle cx="17" cy="18" r="2" />
+      <circle cx="7" cy="18" r="2" />
     </svg>
   );
 }

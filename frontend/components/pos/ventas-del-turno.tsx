@@ -15,7 +15,7 @@
 import { useState } from "react";
 import { Panel } from "@/components/pos/marco";
 import { formatear } from "@/lib/pos/dinero";
-import type { VentaDelTurno } from "@/lib/pos/api";
+import { NOMBRE_DESPACHO, type VentaDelTurno } from "@/lib/pos/api";
 
 export function VentasDelTurno({
   ventas,
@@ -73,6 +73,14 @@ export function VentasDelTurno({
                       ?? (v.estado_fiscal === "rechazado"
                         ? "sin factura · Siigo la rechazó"
                         : "factura en camino")}
+                  </span>
+                )}
+                {v.canal === "envio" && (
+                  // «SHOPIFY» porque así la llama la tienda: es lo que se
+                  // vende de la tienda en línea, con envío a domicilio.
+                  <span className="pos-tag pos-tag-acento whitespace-nowrap text-[11px]"
+                        title="Vendida con envío a domicilio desde la tienda en línea">
+                    Shopify{v.despacho ? ` · ${NOMBRE_DESPACHO[v.despacho]}` : ""}
                   </span>
                 )}
                 {v.cliente_nombre && (

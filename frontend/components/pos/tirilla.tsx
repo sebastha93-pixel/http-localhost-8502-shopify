@@ -143,6 +143,25 @@ export function Tirilla({ datos }: { datos: Datos }) {
         </>
       ) : null}
 
+      {datos.entrega && (
+        // A dónde va, para que la clienta lo revise antes de irse: una
+        // dirección mal escrita se corrige aquí, no cuando Melonn devuelva el
+        // paquete. Sin el celular: no hace falta imprimírselo.
+        <>
+          <div className="t-sep" />
+          <div className="t-centro t-fuerte">ENTREGA A DOMICILIO</div>
+          <div className="t-centro t-chico">Sin costo de envío · la despacha Melonn</div>
+          <div className="t-fila"><span>Recibe</span><span>{datos.entrega.destinatario}</span></div>
+          <div className="t-chico">
+            {datos.entrega.direccion}
+            {datos.entrega.complemento ? ` · ${datos.entrega.complemento}` : ""}
+          </div>
+          <div className="t-chico">
+            {datos.entrega.ciudad}, {datos.entrega.departamento}
+          </div>
+        </>
+      )}
+
       {datos.anulada && (
         <div className="t-anulada t-centro t-fuerte">*** ANULADA ***</div>
       )}

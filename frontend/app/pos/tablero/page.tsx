@@ -27,6 +27,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useAuth } from "@/components/auth-provider";
 import { Panel as Marco } from "@/components/pos/marco";
 import { Rail } from "@/components/pos/rail";
@@ -162,6 +163,20 @@ export default function PantallaTablero() {
         )}
         {!datos && !error && (
           <p className="text-[13px] text-[var(--pos-600)]">Cargando…</p>
+        )}
+
+        {datos && (datos.despachos_por_resolver ?? 0) > 0 && (
+          // ARRIBA DE TODO: son clientas que ya pagaron y a las que algo no
+          // les está llegando. No es una cifra del periodo; es una tarea.
+          <Link href="/pos/despachos"
+                className="flex max-w-[640px] items-center justify-between gap-4 rounded-[var(--pos-r-sm)] border-l-2 border-[var(--pos-accent)] bg-[var(--pos-accent)]/10 py-3 pl-4 pr-3 text-[14px] text-[var(--pos-900)]">
+            <span>
+              <b>{datos.despachos_por_resolver} pedido{datos.despachos_por_resolver === 1 ? "" : "s"} con envío
+              por resolver</b> — Melonn no lo{datos.despachos_por_resolver === 1 ? "" : "s"} recibió
+              o algo quedó pendiente.
+            </span>
+            <span className="shrink-0 font-semibold">Ver →</span>
+          </Link>
         )}
 
         {datos && (
@@ -368,6 +383,7 @@ function TarjetaTienda({
         {t.ultima_venta
           ? `Última venta: ${horaDe(t.ultima_venta, hoy)}`
           : "Sin ventas en este periodo"}
+        {(t.con_envio ?? 0) > 0 && ` · ${t.con_envio} con envío (${formatear(t.monto_con_envio_centavos ?? 0)})`}
         {t.descuentos_centavos > 0 && ` · ${formatear(t.descuentos_centavos)} en descuentos`}
         {t.anuladas > 0 && ` · ${t.anuladas} anulada${t.anuladas === 1 ? "" : "s"} (${formatear(t.monto_anulado_centavos)})`}
         {(t.cambios ?? 0) > 0 && ` · ${t.cambios} cambio${t.cambios === 1 ? "" : "s"} (${formatear(t.monto_cambios_centavos)})`}

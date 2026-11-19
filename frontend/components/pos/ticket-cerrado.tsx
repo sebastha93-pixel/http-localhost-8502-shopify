@@ -37,9 +37,13 @@ export function TicketCerrado({
   ticket,
   onNueva,
   tirillaLocal,
+  conEnvio = false,
 }: {
   ticket: Ticket;
   onNueva: () => void;
+  /** Venta con envío: se le dice a la vendedora qué sigue (lo pide la caja
+   *  a Melonn sola) para que se lo diga a la clienta. */
+  conEnvio?: boolean;
   /** Armada en el dispositivo cuando no hubo red. Si viene, NO se le pregunta
    *  al servidor: preguntar sin conexión sólo gasta el tiempo del timeout y
    *  acaba en el mismo sitio, con la clienta esperando el papel. */
@@ -155,6 +159,12 @@ export function TicketCerrado({
       <div className="max-w-[420px] pt-2 text-center md:pt-16">
         <h1 className="titular text-[26px] tracking-wide">VENTA CERRADA</h1>
         <p className="mt-1 tabular text-[13px] text-[var(--pos-700)]">{ticket.numero}</p>
+        {conEnvio && (
+          <p className="mx-auto mt-3 max-w-[360px] rounded-[var(--pos-r-sm)] border border-[var(--pos-accent)]/40 bg-[var(--pos-accent)]/10 px-3 py-2 text-[13px] leading-snug text-[var(--pos-900)]">
+            <b>Con envío a domicilio.</b> El pedido se le pasa a Melonn en un
+            momento, sin costo de envío. Cómo va se ve en las ventas del turno.
+          </p>
+        )}
 
         <div className="mt-6 tabular text-[40px] font-semibold tabular-nums">
           {formatear(ticket.total_centavos)}
