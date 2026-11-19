@@ -30,7 +30,10 @@ from typing import Optional
 from sqlalchemy import text
 
 from backend.modules.retail.domain.shared.dinero import Dinero
-from backend.modules.retail.domain.venta.errores import ReglaDeNegocio
+from backend.modules.retail.domain.venta.errores import (
+    ReglaDeNegocio,
+    RequiereAutorizacion,
+)
 
 __all__ = ["AnularVenta", "ResultadoAnulacion"]
 
@@ -50,6 +53,79 @@ class AnularVenta:
     def __init__(self, uow) -> None:
         self._uow = uow
 
+    async def comprobar(self, *, venta_id: str, usuario_id: str,
+                        desde_oficina: bool = False) -> None:
+        """Lanza lo mismo que lanzaría `ejecutar`, SIN CAMBIAR NADA.
+
+        Para quien tiene que hacer algo irreversible ANTES de anular: una
+        venta con envío primero le pide a Melonn que no la despache, y eso no
+        se puede pedir para una anulación que después se va a rechazar (turno
+        cerrado, sin permiso). Antes pasaba: quedaba la venta cobrada y su
+        pedido cancelado.
+        """
+        async with self._uow as t:
+            venta, fila = await self._cargar(t, venta_id, usuario_id)
+            self._exigir(venta, fila, desde_oficina)
+
+    @staticmethod
+    async def _cargar(t, venta_id: str, usuario_id: str):
+        venta = await t.ventas.obtener(venta_id)
+        if venta is None:
+            raise ReglaDeNegocio(f"No existe la venta {venta_id}.")
+
+        # La ubicación NO está en `ventas`: sale del asiento de inventario
+        # que dejó la venta. Es la fuente correcta —la prenda vuelve a
+        # DONDE SALIÓ— y no a una ubicación deducida de la tienda, que
+        # sería otra cosa el día que una caja despache desde bodega.
+        fila = (await t.sesion.execute(text("""
+            SELECT v.sesion_id, v.estado_fiscal, v.canal, v.estado,
+                   d.estado AS despacho,
+                   s.estado AS estado_sesion,
+                   coalesce(p.puede_anular_venta, false) AS puede,
+                   (SELECT m.ubicacion_id
+                      FROM retail.movimientos_inventario m
+                     WHERE m.referencia_id = v.id AND m.delta < 0
+                     LIMIT 1) AS ubicacion_id
+              FROM retail.ventas v
+              JOIN retail.sesiones_caja s ON s.id = v.sesion_id
+              LEFT JOIN retail.despachos d ON d.venta_id = v.id
+              LEFT JOIN retail.permisos_pos p
+                     ON p.usuario_id = :u AND p.activo
+             WHERE v.id = :i
+        """), {"i": venta_id, "u": usuario_id})).mappings().first()
+        return venta, fila
+
+    @staticmethod
+    def _exigir(venta, fila, desde_oficina: bool) -> None:
+        """Todo lo que impide anular. Sin efectos."""
+        if fila["estado"] != "cerrada":
+            raise ReglaDeNegocio(
+                f"Sólo se anula una venta cerrada. Ésta está {fila['estado']}; "
+                f"un borrador simplemente se descarta.")
+        if desde_oficina and fila["despacho"] is None:
+            raise ReglaDeNegocio(
+                "Esa venta no es con envío a domicilio: se anula desde su "
+                "caja, en su turno.")
+        # LO QUE YA SALIÓ NO SE CANCELA. La prenda va en camino o ya está
+        # en manos de la clienta: eso es un cambio o una devolución.
+        if fila["despacho"] in ("despachado", "entregado"):
+            raise ReglaDeNegocio(
+                "Ese pedido ya salió de la bodega. No se anula: cuando la "
+                "clienta lo reciba se hace el cambio o la devolución.")
+        # INV-V11: sólo del turno EN CURSO. Una venta de ayer no se anula
+        # desde la caja: su plata ya se contó en un arqueo cerrado y
+        # firmado, y tocarla ahora descuadra un turno que ya cuadró.
+        if fila["estado_sesion"] == "cerrada" and not desde_oficina:
+            raise ReglaDeNegocio(
+                "Esa venta es de un turno ya cerrado. Su plata está en un "
+                "arqueo firmado; para deshacerla hace falta una nota "
+                "crédito, no una anulación de caja."
+            )
+        if not (desde_oficina or fila["puede"]):
+            raise RequiereAutorizacion(
+                "Anular una venta necesita permiso. Pide que entre alguien "
+                "que lo tenga, con su correo y contraseña.")
+
     async def ejecutar(self, *, venta_id: str, motivo: str, usuario_id: str,
                        ahora: datetime, desde_oficina: bool = False,
                        resolucion: Optional[str] = None) -> ResultadoAnulacion:
@@ -61,50 +137,8 @@ class AnularVenta:
         (`melonn.despacho.cancelar_en_melonn`).
         """
         async with self._uow as t:
-            venta = await t.ventas.obtener(venta_id)
-            if venta is None:
-                raise ReglaDeNegocio(f"No existe la venta {venta_id}.")
-
-            # La ubicación NO está en `ventas`: sale del asiento de inventario
-            # que dejó la venta. Es la fuente correcta —la prenda vuelve a
-            # DONDE SALIÓ— y no a una ubicación deducida de la tienda, que
-            # sería otra cosa el día que una caja despache desde bodega.
-            fila = (await t.sesion.execute(text("""
-                SELECT v.sesion_id, v.estado_fiscal, v.canal,
-                       d.estado AS despacho,
-                       s.estado AS estado_sesion,
-                       coalesce(p.puede_anular_venta, false) AS puede,
-                       (SELECT m.ubicacion_id
-                          FROM retail.movimientos_inventario m
-                         WHERE m.referencia_id = v.id AND m.delta < 0
-                         LIMIT 1) AS ubicacion_id
-                  FROM retail.ventas v
-                  JOIN retail.sesiones_caja s ON s.id = v.sesion_id
-                  LEFT JOIN retail.despachos d ON d.venta_id = v.id
-                  LEFT JOIN retail.permisos_pos p
-                         ON p.usuario_id = :u AND p.activo
-                 WHERE v.id = :i
-            """), {"i": venta_id, "u": usuario_id})).mappings().first()
-
-            # INV-V11: sólo del turno EN CURSO. Una venta de ayer no se anula
-            # desde la caja: su plata ya se contó en un arqueo cerrado y
-            # firmado, y tocarla ahora descuadra un turno que ya cuadró.
-            if desde_oficina and fila["despacho"] is None:
-                raise ReglaDeNegocio(
-                    "Esa venta no es con envío a domicilio: se anula desde su "
-                    "caja, en su turno.")
-            # LO QUE YA SALIÓ NO SE CANCELA. La prenda va en camino o ya está
-            # en manos de la clienta: eso es un cambio o una devolución.
-            if fila["despacho"] in ("despachado", "entregado"):
-                raise ReglaDeNegocio(
-                    "Ese pedido ya salió de la bodega. No se anula: cuando la "
-                    "clienta lo reciba se hace el cambio o la devolución.")
-            if fila["estado_sesion"] == "cerrada" and not desde_oficina:
-                raise ReglaDeNegocio(
-                    "Esa venta es de un turno ya cerrado. Su plata está en un "
-                    "arqueo firmado; para deshacerla hace falta una nota "
-                    "crédito, no una anulación de caja."
-                )
+            venta, fila = await self._cargar(t, venta_id, usuario_id)
+            self._exigir(venta, fila, desde_oficina)
 
             evento = venta.anular(motivo=motivo, usuario_id=usuario_id,
                                   puede_anular=(desde_oficina or bool(fila["puede"])),

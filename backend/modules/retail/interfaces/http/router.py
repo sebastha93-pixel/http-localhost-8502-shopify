@@ -3316,9 +3316,12 @@ async def anular_venta(
     from datetime import datetime, timezone
     from backend.modules.retail.application.comandos.anular_venta import AnularVenta
 
-    # Si es con envío: primero que Melonn no la despache.
-    await _que_melonn_no_lo_despache(uow, venta_id, entrada.motivo)
     try:
+        # PRIMERO se comprueba que la anulación se puede hacer; sólo entonces,
+        # si es con envío, se le pide a Melonn que no la despache. Al revés
+        # quedaba el pedido cancelado y la venta cobrada.
+        await AnularVenta(uow).comprobar(venta_id=venta_id, usuario_id=usuario.id)
+        await _que_melonn_no_lo_despache(uow, venta_id, entrada.motivo)
         r = await AnularVenta(uow).ejecutar(
             venta_id=venta_id, motivo=entrada.motivo, usuario_id=usuario.id,
             ahora=datetime.now(timezone.utc))
@@ -3403,8 +3406,10 @@ async def cancelar_pedido_con_envio(
         raise HTTPException(403, {
             "error": "solo_administrador",
             "mensaje": "Cancelar un pedido con envío es cosa de la oficina."})
-    await _que_melonn_no_lo_despache(uow, venta_id, entrada.motivo)
     try:
+        await AnularVenta(uow).comprobar(venta_id=venta_id, usuario_id=usuario.id,
+                                         desde_oficina=True)
+        await _que_melonn_no_lo_despache(uow, venta_id, entrada.motivo)
         r = await AnularVenta(uow).ejecutar(
             venta_id=venta_id, motivo=entrada.motivo, usuario_id=usuario.id,
             ahora=datetime.now(timezone.utc), desde_oficina=True,
@@ -3466,9 +3471,24 @@ async def despachos_de_las_tiendas(
                            'YYYY-MM-DD HH24:MI') AS vendida_en,
                    d.estado, d.destinatario, d.telefono, d.direccion,
                    d.complemento, d.ciudad, d.departamento, d.melonn_numero,
-                   d.melonn_estado, d.seguimiento_url, d.ultimo_error,
-                   d.resolucion,
-                   (d.estado = 'no_creado' OR d.ultimo_error IS NOT NULL) AS atencion,
+                   d.melonn_estado, d.seguimiento_url, d.resolucion,
+                   -- LA RED DE SEGURIDAD. Pase lo que pase con el trabajo de
+                   -- la cola, una venta cobrada cuyo pedido no ha salido se
+                   -- muestra como problema: o lo dice el despacho, o el
+                   -- trabajo se rindió, o lleva demasiado rato pendiente.
+                   coalesce(
+                       d.ultimo_error,
+                       (SELECT 'El pedido a Melonn se rindió tras varios intentos: '
+                               || left(coalesce(o.ultimo_error, ''), 200)
+                          FROM retail.outbox o
+                         WHERE o.agregado_id = d.venta_id AND o.estado = 'fallido'
+                           AND o.tipo IN ('crear_despacho_melonn',
+                                          'cancelar_despacho_melonn')
+                         ORDER BY o.id DESC LIMIT 1),
+                       CASE WHEN d.estado = 'pendiente'
+                                 AND d.creado_en < now() - interval '20 minutes'
+                            THEN 'Lleva más de 20 minutos sin pedirse a Melonn'
+                       END) AS ultimo_error,
                    (SELECT f.numero FROM retail.documentos_fiscales f
                      WHERE f.venta_id = v.id AND f.tipo = 'factura_electronica'
                        AND f.estado = 'emitido' LIMIT 1) AS factura,
@@ -3478,15 +3498,17 @@ async def despachos_de_las_tiendas(
               FROM retail.despachos d
               JOIN retail.ventas v ON v.id = d.venta_id
               JOIN retail.tiendas ti ON ti.id = v.tienda_id
-             WHERE (NOT :abiertos OR d.estado IN ('pendiente', 'en_melonn',
-                                                  'despachado', 'no_creado')
-                    OR d.ultimo_error IS NOT NULL)
-             ORDER BY (d.estado = 'no_creado' OR d.ultimo_error IS NOT NULL) DESC,
-                      CASE d.estado WHEN 'pendiente' THEN 0 WHEN 'en_melonn' THEN 1
-                                    WHEN 'despachado' THEN 2 ELSE 3 END,
-                      v.cerrada_en DESC
-             LIMIT 300
-        """), {"abiertos": abiertos})).mappings().all()
+             ORDER BY v.cerrada_en DESC
+             LIMIT 500
+        """))).mappings().all()
+    orden = {"pendiente": 0, "en_melonn": 1, "despachado": 2}
+    filas = [dict(f, atencion=(f["estado"] == "no_creado"
+                               or f["ultimo_error"] is not None))
+             for f in filas]
+    if abiertos:
+        filas = [f for f in filas if f["atencion"] or f["estado"] in orden]
+    # Estable: dentro de cada grupo queda lo más reciente primero.
+    filas.sort(key=lambda f: (not f["atencion"], orden.get(f["estado"], 3)))
     return [DespachoSalida(
         venta_id=f["venta_id"], numero=f["numero"], tienda_id=f["tienda_id"],
         vendida_en=f["vendida_en"], total_centavos=int(f["total"]),
@@ -3498,6 +3520,66 @@ async def despachos_de_las_tiendas(
         melonn_estado=f["melonn_estado"], seguimiento_url=f["seguimiento_url"],
         ultimo_error=f["ultimo_error"], resolucion=f["resolucion"],
         estado_fiscal=f["estado_fiscal"], factura=f["factura"]) for f in filas]
+
+
+@router.post("/despachos/{venta_id}/reintentar")
+async def reintentar_pedido_a_melonn(
+    venta_id: str,
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Vuelve a poner en la cola el pedido a Melonn de una venta con envío que
+    no salió —Melonn lo rechazó (ya hay existencia), o el trabajo se rindió—.
+
+    No hay riesgo de pedir dos: el manejador siempre pregunta antes de crear y
+    respeta el plazo tras un envío sin respuesta. Sólo administradores.
+    """
+    from datetime import datetime, timezone
+    from sqlalchemy import text as _t
+
+    if usuario.rol != "admin":
+        raise HTTPException(403, {
+            "error": "solo_administrador",
+            "mensaje": "Reintentar un pedido con envío es cosa de la oficina."})
+    async with uow as t:
+        fila = (await t.sesion.execute(_t("""
+            SELECT d.estado, v.estado AS venta, v.numero
+              FROM retail.despachos d JOIN retail.ventas v ON v.id = d.venta_id
+             WHERE d.venta_id = :v FOR UPDATE OF d
+        """), {"v": venta_id})).mappings().first()
+        if fila is None:
+            raise HTTPException(404, {"error": "sin_despacho",
+                                      "mensaje": "Esa venta no es con envío."})
+        if fila["venta"] != "cerrada" or fila["estado"] not in ("pendiente", "no_creado"):
+            raise HTTPException(400, {
+                "error": "regla_de_negocio",
+                "mensaje": f"El pedido está «{fila['estado']}»: no hay nada que "
+                           "reintentar."})
+        # `melonn_estado` y `actualizado_en` NO se tocan: si hubo un envío sin
+        # respuesta hace poco, su plazo de espera sigue valiendo.
+        await t.sesion.execute(_t("""
+            UPDATE retail.despachos SET estado = 'pendiente', ultimo_error = NULL
+             WHERE venta_id = :v
+        """), {"v": venta_id})
+        revivido = (await t.sesion.execute(_t("""
+            UPDATE retail.outbox
+               SET estado = 'pendiente', intentos = 0, proximo_intento_en = now(),
+                   ultimo_error = 'reintentado desde la oficina'
+             WHERE id = (SELECT id FROM retail.outbox
+                          WHERE tipo = 'crear_despacho_melonn' AND agregado_id = :v
+                            AND estado IN ('fallido', 'procesado', 'pendiente')
+                          ORDER BY id DESC LIMIT 1)
+        """), {"v": venta_id})).rowcount
+        if not revivido:
+            await t.outbox.encolar(
+                tipo="crear_despacho_melonn", agregado_tipo="venta",
+                agregado_id=venta_id, payload={"venta_id": venta_id})
+        await t.auditoria.registrar(
+            evento="despacho.reintentado", ocurrido_en=datetime.now(timezone.utc),
+            usuario_id=usuario.id, agregado_tipo="venta", agregado_id=venta_id,
+            payload={"numero": fila["numero"], "estaba": fila["estado"]})
+        await t.commit()
+    return {"ok": True, "numero": fila["numero"]}
 
 
 # ── Auditoría ───────────────────────────────────────────────────────────────

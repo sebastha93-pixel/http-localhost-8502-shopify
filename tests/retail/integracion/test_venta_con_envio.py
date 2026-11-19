@@ -79,6 +79,7 @@ class MelonnFalso:
         self.cancelaciones = []
         self.al_cancelar = "ok"     # ok | rechazo
         self.justo_antes_de_contestar = None   # corrutina: «mientras se pedía…»
+        self.justo_despues_de_leer = None      # corrutina: «mientras preguntaba…»
 
     async def leer_pedido(self, numero):
         from backend.modules.retail.infrastructure.melonn import despacho as d
@@ -89,6 +90,8 @@ class MelonnFalso:
             raise d.MelonnOcupado("Melonn HTTP 429")
         if self.al_leer == "caido":
             raise RuntimeError("Melonn HTTP 500")
+        if self.justo_despues_de_leer:
+            await self.justo_despues_de_leer()
         return self.pedidos.get(numero)
 
     def _guardar(self, cuerpo):

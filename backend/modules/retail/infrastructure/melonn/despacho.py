@@ -124,7 +124,12 @@ class MelonnIO:
             if mc._es_cuota_agotada(r):
                 mc._marcar_cuota_agotada()
                 raise CuotaAgotada("cuota diaria de Melonn agotada")
-            raise MelonnOcupado(f"Melonn HTTP {r.status_code}")
+            # UN 503 AL ESCRIBIR NO ES «NO SALIÓ». Una pasarela puede
+            # devolverlo después de que Melonn aceptó el pedido: sube como
+            # cualquier 5xx («no se sabe»). El 429 sí es seguro, y al
+            # preguntar (GET) los dos son sólo «más tarde».
+            if r.status_code == 429 or metodo == "GET":
+                raise MelonnOcupado(f"Melonn HTTP {r.status_code}")
         return r
 
     @staticmethod
@@ -140,8 +145,17 @@ class MelonnIO:
                 return None
             if r.status_code != 200:
                 raise RuntimeError(f"Melonn HTTP {r.status_code}: {r.text[:200]}")
-            dato = r.json() if r.content else None
-            return dato if isinstance(dato, dict) and dato else None
+            # UN 200 RARO TAMPOCO ES «NO EXISTE». Vacío, una lista, un `{}`:
+            # con eso el POS crearía un pedido que quizá ya está, o anularía
+            # creyendo que Melonn no tiene nada.
+            try:
+                dato = r.json() if r.content else None
+            except ValueError:
+                dato = None
+            if not (isinstance(dato, dict) and dato.get("internal_order_number")):
+                raise RuntimeError(
+                    f"Melonn respondió 200 sin pedido: {str(r.text)[:120]}")
+            return dato
         return await asyncio.to_thread(ir)
 
     async def crear_pedido(self, cuerpo: dict) -> dict:
@@ -301,6 +315,35 @@ async def _anotar_en_melonn(t, venta_id: str, pedido: dict) -> bool:
     return r.rowcount == 1
 
 
+async def _avisar(t, venta_id: str, mensaje: str) -> None:
+    """Deja a la vista de la oficina por qué un despacho no avanza, y LO
+    CONFIRMA: lo que sigue suele ser una excepción, que deshace lo no
+    confirmado."""
+    await t.sesion.execute(text("""
+        UPDATE retail.despachos SET ultimo_error = :e WHERE venta_id = :v
+    """), {"v": venta_id, "e": mensaje[:500]})
+    await t.commit()
+
+
+async def _preguntar(t, io: MelonnIO, venta_id: str, numero: str) -> Optional[dict]:
+    """`leer_pedido`, sabiendo que PREGUNTAR NUNCA GASTA INTENTOS. Si Melonn
+    no deja preguntar —sin cuota, ocupado, caído, la llave mala— el trabajo
+    se aplaza las veces que haga falta y el motivo queda a la vista. Antes un
+    Melonn caído dos horas agotaba los ocho intentos y dejaba una venta
+    cobrada sin pedido y sin aviso."""
+    try:
+        return await io.leer_pedido(numero)
+    except CuotaAgotada as e:
+        await _avisar(t, venta_id, "Melonn sin cuota por hoy: se pide apenas vuelva")
+        raise Aplazar(f"{numero}: {e}", minutos=MINUTOS_SI_NO_HAY_CUOTA) from e
+    except Exception as e:  # noqa: BLE001
+        await _avisar(t, venta_id,
+                      f"No se ha podido hablar con Melonn ({type(e).__name__}: "
+                      f"{str(e)[:160]}): se sigue intentando")
+        raise Aplazar(f"{numero}: no se pudo preguntar a Melonn ({e})",
+                      minutos=MINUTOS_ENTRE_PREGUNTAS) from e
+
+
 async def _crear(t, payload: dict, io: MelonnIO) -> Optional[str]:
     venta_id = payload["venta_id"]
     d = (await t.sesion.execute(text("""
@@ -317,12 +360,7 @@ async def _crear(t, payload: dict, io: MelonnIO) -> Optional[str]:
     numero = d["numero"]
 
     # 1 · ¿YA EXISTE? Siempre antes de crear, haya o no un envío anterior.
-    try:
-        existente = await io.leer_pedido(numero)
-    except CuotaAgotada as e:
-        raise Aplazar(f"{numero}: {e}", minutos=MINUTOS_SI_NO_HAY_CUOTA) from e
-    except MelonnOcupado as e:
-        raise Aplazar(f"{numero}: {e}", minutos=MINUTOS_ENTRE_PREGUNTAS) from e
+    existente = await _preguntar(t, io, venta_id, numero)
     if existente and _de_melonn(existente)["codigo"] == CODIGO_CANCELADO:
         # Existe, pero Melonn lo tiene cancelado: no se va a despachar y con
         # el mismo número no se puede pedir otro. A la oficina.
@@ -332,7 +370,7 @@ async def _crear(t, payload: dict, io: MelonnIO) -> Optional[str]:
                SET estado = 'no_creado', melonn_numero = :n, melonn_estado = :e,
                    ultimo_error = 'Melonn tiene este pedido CANCELADO',
                    actualizado_en = now()
-             WHERE venta_id = :v
+             WHERE venta_id = :v AND estado = 'pendiente'
         """), {"v": venta_id, "n": m["numero"] or None, "e": m["estado"]})
         return f"{numero} está cancelado en Melonn: lo resuelve la oficina"
     if existente:
@@ -348,23 +386,11 @@ async def _crear(t, payload: dict, io: MelonnIO) -> Optional[str]:
                SET estado = 'cancelado', melonn_estado = NULL,
                    ultimo_error = 'la venta se anuló antes de pedir el despacho',
                    actualizado_en = now()
-             WHERE venta_id = :v
+             WHERE venta_id = :v AND estado = 'pendiente'
         """), {"v": venta_id})
         return f"{numero} anulada antes de pedir el despacho: no se pide"
 
-    # 2 · Hubo un envío sin respuesta y todavía no aparece: se espera.
-    if d["melonn_estado"] == "enviando":
-        enviado = d["actualizado_en"]
-        if enviado.tzinfo is None:
-            enviado = enviado.replace(tzinfo=timezone.utc)
-        falta = MINUTOS_SIN_REENVIAR - (_ahora() - enviado).total_seconds() / 60
-        if falta > 0:
-            raise Aplazar(
-                f"{numero}: el pedido a Melonn quedó sin respuesta; se sigue "
-                f"preguntando ({round(falta)} min más) antes de volver a pedirlo",
-                minutos=min(falta, MINUTOS_ENTRE_PREGUNTAS))
-
-    # 3 · Se arma, se deja escrito «voy a enviar» y se envía UNA vez.
+    # 2 · Se arma el pedido.
     lineas = (await t.sesion.execute(text("""
         SELECT sku, sum(cantidad) AS cantidad FROM retail.venta_lineas
          WHERE venta_id = :v GROUP BY sku ORDER BY sku
@@ -373,14 +399,44 @@ async def _crear(t, payload: dict, io: MelonnIO) -> Optional[str]:
         cuerpo = construir_pedido(numero_venta=numero, lineas=list(lineas),
                                   despacho=dict(d))
     except ValueError as e:
-        raise RechazoDefinitivo(str(e)) from e
+        await t.sesion.execute(text("""
+            UPDATE retail.despachos
+               SET estado = 'no_creado', ultimo_error = :e, actualizado_en = now()
+             WHERE venta_id = :v AND estado = 'pendiente'
+        """), {"v": venta_id, "e": str(e)[:500]})
+        return f"{numero} no se puede pedir: {e}"
 
-    await t.sesion.execute(text("""
+    # 3 · «VOY A ENVIAR», EN UN SOLO PASO Y SÓLO UNO LO LOGRA. El UPDATE es a
+    #     la vez la marca y el permiso: lo gana quien encuentre el despacho
+    #     todavía pendiente y sin un envío reciente. Dos manejadores a la vez
+    #     (dos pasadas de la cola), una anulación que entró mientras se
+    #     preguntaba, o un envío sin respuesta de hace menos de
+    #     `MINUTOS_SIN_REENVIAR`: en los tres casos da cero filas y NO se envía.
+    ahora = _ahora()
+    ganado = (await t.sesion.execute(text("""
         UPDATE retail.despachos
            SET melonn_estado = 'enviando', actualizado_en = :ahora
-         WHERE venta_id = :v
-    """), {"v": venta_id, "ahora": _ahora()})
+         WHERE venta_id = :v AND estado = 'pendiente'
+           AND (melonn_estado IS DISTINCT FROM 'enviando'
+                OR actualizado_en < :limite)
+    """), {"v": venta_id, "ahora": ahora,
+           "limite": ahora - timedelta(minutes=MINUTOS_SIN_REENVIAR)})).rowcount
     await t.commit()                      # ANTES de enviar
+    if not ganado:
+        sigue = (await t.sesion.execute(text("""
+            SELECT estado, melonn_estado, actualizado_en FROM retail.despachos
+             WHERE venta_id = :v
+        """), {"v": venta_id})).mappings().first()
+        if sigue["estado"] != "pendiente":
+            return f"el despacho pasó a «{sigue['estado']}» mientras se pedía"
+        enviado = sigue["actualizado_en"]
+        if enviado.tzinfo is None:
+            enviado = enviado.replace(tzinfo=timezone.utc)
+        falta = max(MINUTOS_SIN_REENVIAR - (ahora - enviado).total_seconds() / 60, 1)
+        raise Aplazar(
+            f"{numero}: el pedido a Melonn quedó sin respuesta; se sigue "
+            f"preguntando ({round(falta)} min más) antes de volver a pedirlo",
+            minutos=min(falta, MINUTOS_ENTRE_PREGUNTAS))
 
     try:
         creado = await io.crear_pedido(cuerpo)
@@ -390,27 +446,44 @@ async def _crear(t, payload: dict, io: MelonnIO) -> Optional[str]:
             UPDATE retail.despachos
                SET estado = 'no_creado', melonn_estado = NULL,
                    ultimo_error = :e, actualizado_en = now()
-             WHERE venta_id = :v
+             WHERE venta_id = :v AND estado = 'pendiente'
         """), {"v": venta_id, "e": str(e)[:500]})
         log.error("[retail-envio] Melonn NO recibió %s: %s", numero, e)
         return f"Melonn no recibió {numero}: {str(e)[:200]}"
     except (CuotaAgotada, MelonnOcupado) as e:
         # No salió nada hacia Melonn: no hay envío del que dudar.
         await t.sesion.execute(text("""
-            UPDATE retail.despachos SET melonn_estado = NULL
-             WHERE venta_id = :v
-        """), {"v": venta_id})
+            UPDATE retail.despachos
+               SET melonn_estado = NULL,
+                   ultimo_error = 'Melonn no recibió la petición (' || :e ||
+                                  '): se pide de nuevo en unos minutos'
+             WHERE venta_id = :v AND estado = 'pendiente'
+        """), {"v": venta_id, "e": str(e)[:120]})
         await t.commit()
         raise Aplazar(f"{numero}: {e}", minutos=(
             MINUTOS_SI_NO_HAY_CUOTA if isinstance(e, CuotaAgotada)
             else MINUTOS_ENTRE_PREGUNTAS)) from e
-    # Cualquier otra cosa (timeout, 5xx) sube tal cual: el trabajo se
-    # reintenta y, como quedó «enviando», primero pregunta y espera.
+    except Exception as e:  # noqa: BLE001 — timeout, 5xx: NO SE SABE
+        # Queda «enviando» (ya confirmado): el reintento pregunta y espera.
+        # Y queda dicho, para que si el trabajo se rinde alguien lo vea.
+        await _avisar(t, venta_id,
+                      f"El pedido a Melonn quedó sin respuesta "
+                      f"({type(e).__name__}): se verifica antes de repetirlo")
+        raise
 
     if not await _anotar_en_melonn(t, venta_id, creado):
+        # No se pudo anotar: el despacho ya no está «pendiente». ¿Por qué?
+        ahora_esta = (await t.sesion.execute(text(
+            "SELECT estado FROM retail.despachos WHERE venta_id = :v"),
+            {"v": venta_id})).scalar()
+        if ahora_esta != "cancelado":
+            # Otro manejador llegó primero y lo dejó anotado: el pedido es el
+            # mismo. «No lo pude anotar» NO es «lo cancelaron».
+            return f"{numero} pedido a Melonn (ya estaba «{ahora_esta}»)"
         # LO CANCELARON MIENTRAS SE PEDÍA. El pedido acaba de nacer en Melonn
-        # para una venta que ya no existe: se le pide la cancelación ya, y el
-        # verificador (que encoló quien canceló) confirma que quedó.
+        # para una venta que ya no existe: se pide su cancelación ya, y se
+        # encola un verificador NUEVO —el de quien canceló pudo haber pasado
+        # antes de que este pedido existiera—.
         log.error("[retail-envio] %s se canceló mientras se pedía a Melonn: "
                   "se pide su cancelación", numero)
         try:
@@ -424,6 +497,9 @@ async def _crear(t, payload: dict, io: MelonnIO) -> Optional[str]:
              WHERE venta_id = :v
         """), {"v": venta_id, "n": _de_melonn(creado)["numero"] or None,
                "e": CANCELACION_PEDIDA})
+        await t.outbox.encolar(
+            tipo=TIPO_CANCELAR, agregado_tipo="venta", agregado_id=venta_id,
+            payload={"venta_id": venta_id})
         return f"{numero} se canceló mientras se pedía: se pidió cancelarlo en Melonn"
     log.info("[retail-envio] %s → Melonn %s", numero,
              _de_melonn(creado)["numero"] or "(sin número aún)")
@@ -467,13 +543,19 @@ async def verificar_cancelacion(t, payload: dict) -> Optional[str]:
     return await _verificar_cancelacion(t, payload, MelonnIO())
 
 
+#  Cuánto se le insiste a Melonn para que confirme una cancelación antes de
+#  dejarle el problema, por escrito, a la oficina.
+HORAS_ESPERANDO_CANCELACION = 6
+
+
 async def _verificar_cancelacion(t, payload: dict, io: MelonnIO) -> Optional[str]:
     """Después de cancelar una venta con envío: comprobar que en Melonn quedó
     cancelado de verdad. Cubre lo que el momento de cancelar no puede ver —
     el pedido que Melonn creó tarde, o la cancelación que Melonn no cumplió."""
     venta_id = payload["venta_id"]
     d = (await t.sesion.execute(text("""
-        SELECT d.estado, d.melonn_estado, d.actualizado_en, v.numero
+        SELECT d.estado, d.melonn_estado, d.actualizado_en, v.numero,
+               v.anulada_en
           FROM retail.despachos d JOIN retail.ventas v ON v.id = d.venta_id
          WHERE d.venta_id = :v
     """), {"v": venta_id})).mappings().first()
@@ -481,27 +563,24 @@ async def _verificar_cancelacion(t, payload: dict, io: MelonnIO) -> Optional[str
         return "el despacho no está cancelado: nada que verificar"
     numero = d["numero"]
 
+    def _aware(cuando):
+        return cuando if cuando.tzinfo else cuando.replace(tzinfo=timezone.utc)
+
     async def anotar(estado: Optional[str], error: Optional[str]) -> None:
+        # No toca `actualizado_en`: es el reloj de «desde cuándo se espera».
         await t.sesion.execute(text("""
-            UPDATE retail.despachos
-               SET melonn_estado = :e, ultimo_error = :err, actualizado_en = now()
+            UPDATE retail.despachos SET melonn_estado = :e, ultimo_error = :err
              WHERE venta_id = :v
         """), {"v": venta_id, "e": estado, "err": error})
 
-    try:
-        pedido = await io.leer_pedido(numero)
-    except CuotaAgotada as e:
-        raise Aplazar(f"{numero}: {e}", minutos=MINUTOS_SI_NO_HAY_CUOTA) from e
-    except MelonnOcupado as e:
-        raise Aplazar(f"{numero}: {e}", minutos=MINUTOS_ENTRE_PREGUNTAS) from e
+    pedido = await _preguntar(t, io, venta_id, numero)
+    minutos = (_ahora() - _aware(d["actualizado_en"])).total_seconds() / 60
 
     if not pedido:
-        # No está. ¿Puede aparecer tarde? Sólo si hubo un envío hace poco.
-        desde = d["actualizado_en"]
-        if desde.tzinfo is None:
-            desde = desde.replace(tzinfo=timezone.utc)
-        falta = MINUTOS_SIN_REENVIAR - (_ahora() - desde).total_seconds() / 60
-        if d["melonn_estado"] == CANCELACION_PEDIDA and falta > 0:
+        # No está. PERO PUEDE APARECER: un envío de hace poco —lo diga o no
+        # `melonn_estado`, que otro pudo haber pisado— todavía puede crearse.
+        falta = MINUTOS_SIN_REENVIAR - minutos
+        if falta > 0:
             raise Aplazar(f"{numero}: aún no aparece en Melonn; se vuelve a "
                           f"mirar", minutos=min(falta, MINUTOS_ENTRE_PREGUNTAS * 3))
         await anotar(None, None)
@@ -519,6 +598,15 @@ async def _verificar_cancelacion(t, payload: dict, io: MelonnIO) -> Optional[str
         log.error("[retail-envio] %s cancelado en el POS pero Melonn lo "
                   "despachó (%s)", numero, m["estado"])
         return f"{numero}: Melonn lo despachó a pesar de la cancelación"
+    if minutos > HORAS_ESPERANDO_CANCELACION * 60:
+        # Horas pidiéndolo y sigue vivo. No se insiste para siempre en
+        # silencio: que alguien lo mire en Melonn.
+        await anotar(m["estado"],
+                     f"Melonn no ha confirmado la cancelación en "
+                     f"{HORAS_ESPERANDO_CANCELACION} h (lo tiene «{m['estado']}»): "
+                     f"revisar en Melonn que no salga")
+        log.error("[retail-envio] %s: Melonn no confirma la cancelación", numero)
+        return f"{numero}: Melonn no confirma la cancelación; a la oficina"
     if clase == "en_bodega":
         # Sigue vivo en Melonn (se creó tarde, o la cancelación no entró).
         try:
@@ -526,6 +614,12 @@ async def _verificar_cancelacion(t, payload: dict, io: MelonnIO) -> Optional[str
         except RechazoDeMelonn as e:
             await anotar(m["estado"], f"Melonn no dejó cancelarlo: {str(e)[:300]}")
             return f"{numero}: Melonn no dejó cancelarlo"
+        except Exception as e:  # noqa: BLE001 — pedir tampoco gasta intentos
+            await _avisar(t, venta_id,
+                          f"No se ha podido hablar con Melonn para cancelar "
+                          f"({type(e).__name__}): se sigue intentando")
+            raise Aplazar(f"{numero}: no se pudo pedir la cancelación ({e})",
+                          minutos=MINUTOS_ENTRE_PREGUNTAS) from e
     await anotar(CANCELACION_PEDIDA, None)
     await t.commit()
     raise Aplazar(f"{numero}: cancelación pedida a Melonn; esperando que la "
@@ -567,6 +661,14 @@ async def refrescar_despachos(uow, io: Optional[MelonnIO] = None, *,
             break                                   # mañana será otro día
         except Exception as e:  # noqa: BLE001 — uno que falla no frena al resto
             log.warning("[retail-envio] no se pudo consultar %s: %s", f["numero"], e)
+            # Se le corre el turno: si no, el que siempre falla se queda entre
+            # los más viejos y tapa a los demás.
+            async with uow as t:
+                await t.sesion.execute(text(
+                    "UPDATE retail.despachos SET actualizado_en = now() "
+                    "WHERE venta_id = :v AND estado IN ('en_melonn', 'despachado')"),
+                    {"v": f["venta_id"]})
+                await t.commit()
             continue
         vistos += 1
         if not pedido:
@@ -595,11 +697,13 @@ async def refrescar_despachos(uow, io: Optional[MelonnIO] = None, *,
             await t.sesion.execute(text("""
                 UPDATE retail.despachos
                    SET estado = :e, melonn_estado = coalesce(:me, melonn_estado),
+                       melonn_numero = coalesce(melonn_numero, :mn),
                        seguimiento_url = coalesce(:s, seguimiento_url),
                        ultimo_error = :err, actualizado_en = now()
                  WHERE venta_id = :v AND estado IN ('en_melonn', 'despachado')
             """), {"v": f["venta_id"], "e": nuevo, "err": error,
                    "me": m["estado"] if m else None,
+                   "mn": (m["numero"] or None) if m else None,
                    "s": m["seguimiento"] if m else None})
             await t.commit()
     return vistos

@@ -221,7 +221,7 @@ def test_si_no_se_puede_preguntar_no_se_pide(vendida):
     """«No pude preguntar» no es «no existe»: con Melonn caído no se crea."""
     melonn = MelonnFalso()
     melonn.al_leer = "caido"
-    assert _drenar(melonn).reintentos == 1
+    _drenar(melonn)
     assert melonn.enviados == [] and _despacho(vendida)[0] == "pendiente"
 
 
@@ -551,3 +551,197 @@ def test_una_novedad_de_entrega_se_avisa(vendida):
     _refrescar(melonn, dentro_de=timedelta(minutes=40))
     estado, _, _, _, error = _despacho(vendida)
     assert estado == "despachado" and "no pudo entregar" in error
+
+
+# ── Lo que encontró la revisión (2026-11-18) ────────────────────────────────
+
+def _sql(motor, sql, **p):
+    """Para los ganchos del Melonn falso: algo que pasa «mientras tanto»."""
+    async def ir():
+        from sqlalchemy import text
+        async with motor.begin() as cn:
+            await cn.execute(text(sql), {"v": VENTA_ENVIO, **p})
+    return ir
+
+
+def test_melonn_caido_dos_horas_no_deja_la_venta_sin_pedido_y_en_silencio(vendida):
+    """ANTES: ocho preguntas fallidas agotaban el trabajo. Quedaba una venta
+    cobrada, sin pedido, sin error y sin nadie reintentando."""
+    melonn = MelonnFalso()
+    melonn.al_leer = "caido"
+    for minutos in (1, 5, 10, 20, 40, 70, 100, 130, 160, 190):
+        r = _drenar(melonn, dentro_de=timedelta(minutes=minutos))
+        assert r.fallidos == 0
+    # Preguntar no gasta intentos, y la oficina VE que algo pasa.
+    assert _trabajo(vendida)[:2] == ("pendiente", 0)
+    assert "No se ha podido hablar con Melonn" in _despacho(vendida)[4]
+
+    melonn.al_leer = "ok"
+    _drenar(melonn, dentro_de=timedelta(minutes=200))
+    assert len(melonn.enviados) == 1
+    assert _despacho(vendida)[0] == "en_melonn" and _despacho(vendida)[4] is None
+
+
+def test_si_el_trabajo_se_rinde_la_oficina_lo_ve_y_puede_reintentar(
+        vendida, melonn_de_los_endpoints):
+    melonn = melonn_de_los_endpoints
+    melonn.al_crear = "sin_respuesta"
+    for vuelta in range(8):                    # ocho envíos sin respuesta
+        _drenar(melonn, dentro_de=timedelta(hours=vuelta * 2))
+    assert len(melonn.enviados) == 8 and _trabajo(vendida)[0] == "fallido"
+    assert _despacho(vendida)[0] == "pendiente"
+
+    [d] = _como("admin").get("/api/retail/despachos?abiertos=true").json()
+    assert d["requiere_atencion"] is True and d["ultimo_error"]
+
+    melonn.al_crear = "ok"
+    assert _como("user").post(
+        f"/api/retail/despachos/{VENTA_ENVIO}/reintentar").status_code == 403
+    r = _como("admin").post(f"/api/retail/despachos/{VENTA_ENVIO}/reintentar")
+    assert r.status_code == 200, r.text
+    # El plazo tras el último envío sin respuesta se sigue respetando.
+    _drenar(melonn, dentro_de=timedelta(hours=14, minutes=5))
+    assert len(melonn.enviados) == 8
+    _drenar(melonn, dentro_de=timedelta(hours=15))
+    assert len(melonn.enviados) == 9 and _despacho(vendida)[0] == "en_melonn"
+
+
+def test_un_pedido_que_lleva_rato_sin_salir_pide_atencion(vendida):
+    """La red de seguridad: pase lo que pase con el trabajo, un despacho que
+    sigue «pendiente» veinte minutos después se muestra como problema."""
+    _ejecutar(vendida, "UPDATE retail.despachos SET creado_en = now() - interval '25 minutes'")
+    [d] = _como("admin").get("/api/retail/despachos?abiertos=true").json()
+    assert d["requiere_atencion"] is True and "sin pedirse" in d["ultimo_error"]
+
+
+def test_una_anulacion_que_se_rechaza_no_le_cancela_nada_a_melonn(
+        vendida, melonn_de_los_endpoints):
+    """ANTES: primero se cancelaba en Melonn y después se miraba si quien
+    anulaba podía. Con el turno cerrado (o sin permiso) quedaba la venta
+    cobrada y su pedido cancelado."""
+    melonn = melonn_de_los_endpoints
+    _drenar(melonn)
+    preguntas = len(melonn.preguntas)
+    _cerrar_turno(vendida)
+    r = _anular_en_caja()
+    assert r.status_code == 400 and "turno ya cerrado" in r.json()["detail"]["mensaje"]
+    assert melonn.cancelaciones == [] and len(melonn.preguntas) == preguntas
+    assert _venta(vendida) == "cerrada" and _despacho(vendida)[0] == "en_melonn"
+
+
+def test_sin_permiso_de_anular_tampoco_se_toca_melonn(vendida, melonn_de_los_endpoints):
+    melonn = melonn_de_los_endpoints
+    _drenar(melonn)
+    _ejecutar(vendida, "UPDATE retail.permisos_pos SET puede_anular_venta = false")
+    r = _anular_en_caja()
+    assert r.status_code == 403
+    assert melonn.cancelaciones == [] and _despacho(vendida)[0] == "en_melonn"
+
+
+def test_dos_manejadores_a_la_vez_no_piden_dos(vendida):
+    """Mientras éste preguntaba, otro ya dejó escrito «voy a enviar»."""
+    melonn = MelonnFalso()
+    melonn.justo_despues_de_leer = _sql(vendida, """
+        UPDATE retail.despachos SET melonn_estado = 'enviando', actualizado_en = now()
+         WHERE venta_id = :v""")
+    r = _drenar(melonn)
+    assert melonn.enviados == [] and r.fallidos == 0
+    assert _trabajo(vendida)[:2] == ("pendiente", 0)
+
+
+def test_anulada_mientras_se_preguntaba_ya_no_se_pide(vendida):
+    melonn = MelonnFalso()
+    melonn.justo_despues_de_leer = _sql(vendida, """
+        UPDATE retail.despachos SET estado = 'cancelado',
+               melonn_estado = 'cancelación pedida' WHERE venta_id = :v""")
+    _drenar(melonn)
+    assert melonn.enviados == []
+    assert _despacho(vendida)[:3] == ("cancelado", None, "cancelación pedida")
+
+
+def test_si_otro_manejador_ya_lo_anoto_no_se_le_cancela_el_pedido_bueno(vendida):
+    """«No lo pude anotar» no significa «lo cancelaron»."""
+    melonn = MelonnFalso()
+    melonn.justo_antes_de_contestar = _sql(vendida, """
+        UPDATE retail.despachos SET estado = 'en_melonn', melonn_numero = 'M-OTRO'
+         WHERE venta_id = :v""")
+    _drenar(melonn)
+    assert melonn.cancelaciones == []
+    assert _despacho(vendida)[:2] == ("en_melonn", "M-OTRO")
+
+
+def test_cancelada_mientras_se_pedia_deja_un_verificador_nuevo(vendida):
+    melonn = MelonnFalso()
+    melonn.justo_antes_de_contestar = _sql(vendida, """
+        UPDATE retail.despachos SET estado = 'cancelado',
+               melonn_estado = 'cancelación pedida' WHERE venta_id = :v""")
+    _drenar(melonn)
+    assert _verificador(vendida)[0] == "pendiente"
+    _drenar(melonn, dentro_de=timedelta(minutes=5))
+    assert _despacho(vendida)[2] == "Canceled"
+
+
+def test_el_verificador_no_cierra_mientras_un_pedido_pueda_aparecer(vendida):
+    """Aunque `melonn_estado` no diga «cancelación pedida» (otro lo pisó):
+    dentro del plazo no se da por hecho que Melonn no tiene nada."""
+    _ejecutar(vendida, """
+        UPDATE retail.despachos SET estado = 'cancelado', melonn_estado = 'enviando',
+               actualizado_en = now() WHERE venta_id = :v""", {"v": VENTA_ENVIO})
+    _ejecutar(vendida, """
+        INSERT INTO retail.outbox (tipo, agregado_tipo, agregado_id, payload,
+                                   estado, intentos, max_intentos)
+        VALUES ('cancelar_despacho_melonn', 'venta', :v,
+                jsonb_build_object('venta_id', CAST(:v AS text)), 'pendiente', 0, 8)""",
+        {"v": VENTA_ENVIO})
+    _drenar(MelonnFalso(), dentro_de=timedelta(minutes=2))
+    assert _verificador(vendida)[0] == "pendiente"
+
+
+def test_un_rechazo_tardio_no_pisa_la_cancelacion(vendida):
+    melonn = MelonnFalso()
+    melonn.al_crear = "rechazo"
+    melonn.justo_despues_de_leer = None
+    original = melonn.crear_pedido
+
+    async def cancelan_y_rechaza(cuerpo):
+        await _sql(vendida, "UPDATE retail.despachos SET estado = 'cancelado' "
+                            "WHERE venta_id = :v")()
+        return await original(cuerpo)
+    melonn.crear_pedido = cancelan_y_rechaza
+    _drenar(melonn)
+    assert _despacho(vendida)[0] == "cancelado"
+
+
+def test_el_verificador_tampoco_se_rinde_por_no_poder_preguntar(
+        vendida, melonn_de_los_endpoints):
+    melonn = melonn_de_los_endpoints
+    _drenar(melonn)
+    assert _anular_en_caja().status_code == 200
+    melonn.al_leer = "caido"
+    for minutos in (2, 10, 30, 60, 120, 180, 240, 300, 330, 350):
+        _drenar(melonn, dentro_de=timedelta(minutes=minutos))
+    assert _verificador(vendida)[0] == "pendiente"
+    assert "No se ha podido hablar con Melonn" in _despacho(vendida)[4]
+
+
+def test_si_melonn_nunca_confirma_la_cancelacion_queda_el_aviso(vendida):
+    melonn = MelonnFalso()
+    _drenar(melonn)
+    _ejecutar(vendida, """
+        UPDATE retail.despachos SET estado = 'cancelado',
+               melonn_estado = 'cancelación pedida', actualizado_en = now()
+         WHERE venta_id = :v""", {"v": VENTA_ENVIO})
+    _ejecutar(vendida, """
+        INSERT INTO retail.outbox (tipo, agregado_tipo, agregado_id, payload,
+                                   estado, intentos, max_intentos)
+        VALUES ('cancelar_despacho_melonn', 'venta', :v,
+                jsonb_build_object('venta_id', CAST(:v AS text)), 'pendiente', 0, 8)""",
+        {"v": VENTA_ENVIO})
+
+    async def no_hace_caso(numero, motivo):      # Melonn recibe y no cancela
+        melonn.cancelaciones.append((numero, motivo))
+    melonn.pedir_cancelacion = no_hace_caso
+    for horas in (0.1, 1, 3, 5, 7):
+        _drenar(melonn, dentro_de=timedelta(hours=horas))
+    assert "no ha confirmado la cancelación" in _despacho(vendida)[4]
+    assert _verificador(vendida)[0] == "procesado"
