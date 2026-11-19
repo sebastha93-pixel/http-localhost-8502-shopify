@@ -8,9 +8,27 @@ tienda que cobró. Ver la migración 0042 y
 """
 from __future__ import annotations
 
+import os
+
 __all__ = ["CANAL_MOSTRADOR", "CANAL_ENVIO", "UBICACION_EN_LINEA",
            "SQL_BODEGA_DE_LA_VENTA", "SQL_DESPACHO_REQUIERE_ATENCION",
-           "MINUTOS_PENDIENTE_SIN_SALIR"]
+           "MINUTOS_PENDIENTE_SIN_SALIR", "puede_vender_con_envio"]
+
+
+def puede_vender_con_envio(*, habilitada: bool, tienda_id: str, rol: str) -> bool:
+    """¿Esta persona puede vender con envío en esta tienda?
+
+    Sí si la tienda está habilitada (`tiendas.vende_con_envio`), que es el
+    encendido para todas. Y, MIENTRAS SE PRUEBA, sí para un administrador en
+    las tiendas de `RETAIL_ENVIO_SOLO_ADMIN` (ids separados por coma): así el
+    primer pedido real se hace desde la oficina sin que las vendedoras vean el
+    botón (Sebastián, 2026-11-19). Vacía o sin definir, no cambia nada.
+    """
+    if habilitada:
+        return True
+    prueba = {x.strip() for x in os.environ.get("RETAIL_ENVIO_SOLO_ADMIN", "").split(",")
+              if x.strip()}
+    return rol == "admin" and tienda_id in prueba
 
 CANAL_MOSTRADOR = "mostrador"
 CANAL_ENVIO = "envio"

@@ -198,7 +198,7 @@ async def cerrar_venta(
                 ubicacion_id=entrada.ubicacion_id)
             # De dónde sale la prenda: del estante de la tienda, o —si es
             # una venta con envío— de la bodega de la tienda en línea.
-            ubicacion_salida, entrega = await _resolver_envio(t, entrada)
+            ubicacion_salida, entrega = await _resolver_envio(t, entrada, usuario)
         venta, variante_por_sku = await _armar(entrada, uow, usuario.id)
         await _exigir_numero_arrendado(uow, venta)
         resultado = await CerrarVenta(uow, reloj=RelojDelSistema()).ejecutar(
@@ -1137,7 +1137,7 @@ class ContextoCaja(BaseModel):
 async def contexto_caja(
     caja_id: str = Query(),
     sesion=Depends(sesion_lectura),
-    _: CurrentUser = Depends(require_permission("retail", "ver")),
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
 ):
     """Los nombres de la tienda y la caja, y la base configurada.
 
@@ -1151,6 +1151,7 @@ async def contexto_caja(
     que el número esté oculto, es que para responder hay que tocar la plata.
     """
     from sqlalchemy import text as _t
+    from backend.modules.retail.envio import puede_vender_con_envio
     fila = (await sesion.execute(_t("""
         SELECT c.id AS caja_id, c.nombre AS caja_nombre,
                t.id AS tienda_id, t.nombre AS tienda_nombre, t.base_caja,
@@ -1177,7 +1178,9 @@ async def contexto_caja(
         caja_id=fila["caja_id"], caja_nombre=fila["caja_nombre"],
         base_caja_centavos=int(fila["base_caja"]),
         ubicacion_id=fila["ubicacion"],
-        vende_con_envio=bool(fila["vende_con_envio"]),
+        vende_con_envio=puede_vender_con_envio(
+            habilitada=bool(fila["vende_con_envio"]), tienda_id=fila["tienda_id"],
+            rol=usuario.rol),
         razon_social=fila["razon_social"], nit=fila["nit"],
         direccion=fila["direccion"], telefono=fila["telefono"],
         mensaje_tirilla=fila["mensaje_tirilla"],
@@ -1290,7 +1293,7 @@ async def _exigir_tienda_de_la_persona(t, usuario: CurrentUser,
         "ella. Pídele a un administrador que te asigne en Permisos del POS.")
 
 
-async def _resolver_envio(t, entrada: "VentaEntrada"):
+async def _resolver_envio(t, entrada: "VentaEntrada", usuario: CurrentUser):
     """`(ubicación de salida, entrega)` de la venta.
 
     Una venta de mostrador devuelve lo de siempre: la ubicación que mandó el
@@ -1301,7 +1304,7 @@ async def _resolver_envio(t, entrada: "VentaEntrada"):
     """
     from sqlalchemy import text as _t
     from backend.modules.retail.envio import (
-        CANAL_ENVIO, CANAL_MOSTRADOR, UBICACION_EN_LINEA,
+        CANAL_ENVIO, CANAL_MOSTRADOR, UBICACION_EN_LINEA, puede_vender_con_envio,
     )
 
     if entrada.canal == CANAL_MOSTRADOR:
@@ -1322,7 +1325,9 @@ async def _resolver_envio(t, entrada: "VentaEntrada"):
                    AS bodega_activa
           FROM retail.tiendas ti WHERE ti.id = :t
     """), {"t": entrada.tienda_id, "u": UBICACION_EN_LINEA})).mappings().first()
-    if fila is None or not fila["vende_con_envio"]:
+    if fila is None or not puede_vender_con_envio(
+            habilitada=bool(fila["vende_con_envio"]),
+            tienda_id=entrada.tienda_id, rol=usuario.rol):
         raise ReglaDeNegocio(
             "Esta tienda no tiene habilitada la venta con envío a domicilio.")
     if not fila["bodega_activa"]:
@@ -2051,6 +2056,7 @@ async def catalogo_en_linea(
 
     from sqlalchemy import text as _t
 
+    from backend.modules.retail.envio import puede_vender_con_envio
     from backend.modules.retail.infrastructure import tienda_en_linea
 
     async with uow as t:
@@ -2058,6 +2064,8 @@ async def catalogo_en_linea(
         puede = (await t.sesion.execute(_t(
             "SELECT vende_con_envio FROM retail.tiendas WHERE id = :t"),
             {"t": tienda_id})).scalar()
+    puede = puede_vender_con_envio(habilitada=bool(puede), tienda_id=tienda_id,
+                                   rol=usuario.rol)
     if not puede:
         raise HTTPException(400, {
             "error": "sin_envio",

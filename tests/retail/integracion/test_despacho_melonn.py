@@ -812,3 +812,40 @@ def test_anulada_antes_de_pedirse_no_queda_como_problema(vendida, melonn_de_los_
     assert _como("admin").get("/api/retail/tablero").json()["despachos_por_resolver"] == 0
     [d] = _como("admin").get("/api/retail/despachos").json()
     assert d["requiere_atencion"] is False and d["estado"] == "cancelado"
+
+
+# ── Probar con envío sólo los administradores (etapa 5) ─────────────────────
+
+def _contexto(c):
+    return c.get("/api/retail/caja/contexto?caja_id=arrayanes_caja1").json()
+
+
+def test_en_prueba_solo_admin_las_vendedoras_no_ven_ni_venden_con_envio(
+        entorno, monkeypatch):
+    """La tienda NO está habilitada, pero está en la lista de prueba: para
+    una vendedora es como si no existiera la venta con envío."""
+    monkeypatch.setenv("RETAIL_ENVIO_SOLO_ADMIN", "arrayanes")
+    c = _como("user")
+    assert _contexto(c)["vende_con_envio"] is False
+    assert c.get("/api/retail/catalogo/en-linea?tienda_id=arrayanes&q=jean"
+                 ).status_code == 400
+    r = _vender_con_envio(entorno)
+    assert r.status_code == 400 and "no tiene habilitada" in r.text
+
+
+def test_en_prueba_solo_admin_el_administrador_si(entorno, monkeypatch):
+    monkeypatch.setenv("RETAIL_ENVIO_SOLO_ADMIN", "florida, arrayanes")
+    c = _como("admin")
+    assert _contexto(c)["vende_con_envio"] is True
+    assert c.get("/api/retail/catalogo/en-linea?tienda_id=arrayanes&q=jean"
+                 ).status_code == 200
+    r = _vender_con_envio(entorno)
+    assert r.status_code == 200, r.text
+    assert _despacho(entorno)[0] == "pendiente"
+
+
+def test_sin_la_lista_de_prueba_ni_el_administrador_vende_con_envio(entorno, monkeypatch):
+    monkeypatch.delenv("RETAIL_ENVIO_SOLO_ADMIN", raising=False)
+    c = _como("admin")
+    assert _contexto(c)["vende_con_envio"] is False
+    assert _vender_con_envio(entorno).status_code == 400
