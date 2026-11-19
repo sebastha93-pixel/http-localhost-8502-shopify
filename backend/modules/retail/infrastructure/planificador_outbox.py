@@ -100,6 +100,17 @@ async def _una_pasada() -> None:
     for e in r.errores:
         log.warning("[retail-outbox] %s", e)
 
+    # De paso: cómo van los despachos que Melonn tiene en curso. Va DESPUÉS
+    # de la cola y con su propio `try`: un Melonn caído no puede dejar sin
+    # drenar las facturas de la pasada siguiente.
+    try:
+        from backend.modules.retail.infrastructure.melonn.despacho import (
+            refrescar_despachos,
+        )
+        await refrescar_despachos(uow)
+    except Exception as e:  # noqa: BLE001
+        log.warning("[retail-envio] no se pudieron refrescar los despachos: %s", e)
+
 
 def _bucle() -> None:
     if _parar.wait(RETRASO_INICIAL):

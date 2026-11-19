@@ -22,70 +22,15 @@ from tests.retail.integracion.test_emisor_factura import (  # noqa: F401
 )
 from tests.retail.integracion.test_venta_con_envio import (  # noqa: F401
     VENTA_ENVIO,
+    MelonnFalso,
     _habilitar,
+    _stock,
     _vender_con_envio,
+    melonn_de_los_endpoints,
     web,
 )
 
 pytestmark = pytest.mark.skipif(not URL, reason="Sin RETAIL_TEST_DATABASE_URL")
-
-
-class MelonnFalso:
-    """Lo que Melonn hace mal, a pedido."""
-
-    def __init__(self):
-        self.pedidos = {}           # número de la venta → pedido que SÍ existe
-        self.enviados = []          # cuerpos que llegaron a `crear_pedido`
-        self.preguntas = []
-        self.al_crear = "ok"        # ok | rechazo | sin_respuesta | crea_y_muere | cuota | ocupado
-        self.al_leer = "ok"         # ok | cuota | ocupado | caido
-        self.cancelaciones = []
-
-    async def leer_pedido(self, numero):
-        from backend.modules.retail.infrastructure.melonn import despacho as d
-        self.preguntas.append(numero)
-        if self.al_leer == "cuota":
-            raise d.CuotaAgotada("cuota diaria de Melonn agotada")
-        if self.al_leer == "ocupado":
-            raise d.MelonnOcupado("Melonn HTTP 429")
-        if self.al_leer == "caido":
-            raise RuntimeError("Melonn HTTP 500")
-        return self.pedidos.get(numero)
-
-    def _guardar(self, cuerpo):
-        n = cuerpo["external_order_number"]
-        # COMO EL GET (medido 2026-11-17): el pedido suelto, estado con `id` y
-        # el nombre repetido.
-        self.pedidos[n] = {
-            "internal_order_number": f"M17949449650{len(self.pedidos):05d}",
-            "external_order_number": n,
-            "state": {"id": 2, "name": "All items reserved - ready for fulfillment" * 2},
-            "melonn_tracking_link": f"https://rastreo.melonn.com/{n}"}
-        return self.pedidos[n]
-
-    async def crear_pedido(self, cuerpo):
-        from backend.modules.retail.infrastructure.melonn import despacho as d
-        if self.al_crear == "cuota":
-            raise d.CuotaAgotada("cuota diaria de Melonn agotada")
-        if self.al_crear == "ocupado":
-            raise d.MelonnOcupado("Melonn HTTP 429")
-        self.enviados.append(cuerpo)
-        if self.al_crear == "rechazo":
-            raise d.RechazoDeMelonn("HTTP 400: No stock available for sku 92611-1T10")
-        if self.al_crear == "sin_respuesta":
-            raise RuntimeError("timeout")
-        p = self._guardar(cuerpo)
-        if self.al_crear == "crea_y_muere":
-            raise RuntimeError("se cortó después de crear")
-        # COMO EL POST: envuelto en `sell_order` y sin estado.
-        return {"sell_order": {"internal_order_number": p["internal_order_number"],
-                               "external_order_number": p["external_order_number"],
-                               "external_order_id": cuerpo["external_order_id"]}}
-
-    async def pedir_cancelacion(self, numero, motivo):
-        self.cancelaciones.append((numero, motivo))
-        if numero in self.pedidos:
-            self.pedidos[numero]["state"] = {"id": 15, "name": "Canceled"}
 
 
 def _drenar(melonn, *, dentro_de=timedelta(minutes=1), siigo=None):
@@ -94,7 +39,9 @@ def _drenar(melonn, *, dentro_de=timedelta(minutes=1), siigo=None):
     from backend.modules.retail.infrastructure.persistencia.unidad_de_trabajo import (
         UnidadDeTrabajoSQL, crear_fabrica, crear_motor,
     )
-    from backend.modules.retail.infrastructure.siigo import emisor_factura
+    from backend.modules.retail.infrastructure.siigo import (
+        emisor_factura, emisor_nota_credito,
+    )
 
     async def ir():
         m = crear_motor(URL)
@@ -103,7 +50,10 @@ def _drenar(melonn, *, dentro_de=timedelta(minutes=1), siigo=None):
                 UnidadDeTrabajoSQL(crear_fabrica(m)),
                 {"emitir_documento_fiscal":
                      emisor_factura.crear_manejador(siigo or SiigoFalso()),
-                 "crear_despacho_melonn": despacho.crear_manejador(melonn)},
+                 "emitir_nota_credito": emisor_nota_credito.crear_manejador(
+                     siigo or SiigoFalso()),
+                 "crear_despacho_melonn": despacho.crear_manejador(melonn),
+                 "cancelar_despacho_melonn": despacho.crear_verificador(melonn)},
             ).ejecutar(ahora=datetime.now(timezone.utc) + dentro_de, limite=20)
         finally:
             await m.dispose()
@@ -312,3 +262,292 @@ def test_el_id_externo_es_siempre_el_mismo_para_la_misma_venta():
     assert id_externo("FERPOS-2538") == id_externo("FERPOS-2538")
     assert id_externo("FERPOS-2538") != id_externo("FERPOS-2539")
     assert len(id_externo("FERPOS-2538")) == 13
+
+
+# ── Cancelar: que no llegue un paquete cuya plata ya se devolvió ────────────
+
+def _anular_en_caja():
+    from tests.retail.integracion.test_emisor_factura import _CLIENTE
+    return _CLIENTE["c"].post(f"/api/retail/ventas/{VENTA_ENVIO}/anular",
+                              json={"motivo": "la clienta se arrepintió"})
+
+
+def _venta(motor):
+    return _leer(motor, "SELECT estado FROM retail.ventas WHERE id = :v",
+                 {"v": VENTA_ENVIO})[0][0]
+
+
+def _verificador(motor):
+    return tuple(_leer(motor, """
+        SELECT estado, ultimo_error FROM retail.outbox
+         WHERE tipo = 'cancelar_despacho_melonn'""")[0])
+
+
+def test_anular_en_la_caja_le_pide_a_melonn_que_no_la_despache(
+        vendida, melonn_de_los_endpoints):
+    melonn = melonn_de_los_endpoints
+    _drenar(melonn)                                   # ya está en Melonn
+    assert _despacho(vendida)[0] == "en_melonn"
+
+    r = _anular_en_caja()
+    assert r.status_code == 200, r.text
+    assert melonn.cancelaciones and melonn.cancelaciones[0][0] == _numero(vendida)
+    assert _venta(vendida) == "anulada"
+    estado, _, m_estado, _, _ = _despacho(vendida)
+    assert (estado, m_estado) == ("cancelado", "cancelación pedida")
+    assert _stock(vendida, "bodega:en_linea") == 0    # la prenda volvió
+
+    # El verificador confirma que Melonn lo dejó cancelado.
+    _drenar(melonn, dentro_de=timedelta(minutes=2))
+    assert _despacho(vendida)[2] == "Canceled"
+    assert _verificador(vendida)[0] == "procesado"
+
+
+def test_si_melonn_ya_la_despacho_no_se_anula(vendida, melonn_de_los_endpoints):
+    melonn = melonn_de_los_endpoints
+    _drenar(melonn)
+    melonn.pedidos[_numero(vendida)]["state"] = {"id": 7, "name": "Shipped - in transit"}
+    r = _anular_en_caja()
+    assert r.status_code == 409 and r.json()["detail"]["error"] == "ya_salio"
+    assert _venta(vendida) == "cerrada" and melonn.cancelaciones == []
+    assert _despacho(vendida)[0] == "en_melonn"
+
+
+@pytest.mark.parametrize("falla", ["caido", "cuota", "ocupado"])
+def test_si_melonn_no_contesta_no_se_anula(vendida, melonn_de_los_endpoints, falla):
+    """Devolver la plata sin saber si el paquete sale es el peor resultado."""
+    melonn = melonn_de_los_endpoints
+    _drenar(melonn)
+    melonn.al_leer = falla
+    r = _anular_en_caja()
+    assert r.status_code == 503 and r.json()["detail"]["error"] == "melonn_no_responde"
+    assert _venta(vendida) == "cerrada" and _despacho(vendida)[0] == "en_melonn"
+
+
+def test_si_melonn_no_deja_cancelar_no_se_anula(vendida, melonn_de_los_endpoints):
+    melonn = melonn_de_los_endpoints
+    _drenar(melonn)
+    melonn.al_cancelar = "rechazo"
+    r = _anular_en_caja()
+    assert r.status_code == 409
+    assert r.json()["detail"]["error"] == "melonn_no_deja_cancelar"
+    assert _venta(vendida) == "cerrada"
+
+
+def test_anulada_antes_de_pedirse_nunca_llega_a_melonn(vendida, melonn_de_los_endpoints):
+    melonn = melonn_de_los_endpoints
+    assert _anular_en_caja().status_code == 200
+    assert _despacho(vendida)[0] == "cancelado"
+    _drenar(melonn)
+    _drenar(melonn, dentro_de=timedelta(hours=2))
+    assert melonn.enviados == []
+    # Pasado el plazo sin que aparezca nada, el verificador da por cerrado.
+    assert _verificador(vendida)[0] == "procesado"
+    assert _despacho(vendida)[2] is None
+
+
+def test_cancelada_MIENTRAS_se_pedia_se_cancela_tambien_en_melonn(vendida):
+    """La carrera: el pedido va en camino hacia Melonn y en ese instante
+    alguien anula la venta. El pedido nace para una venta que ya no existe."""
+    melonn = MelonnFalso()
+
+    async def alguien_la_cancela():
+        from sqlalchemy import text
+        async with vendida.begin() as cn:
+            await cn.execute(text("""
+                UPDATE retail.despachos SET estado = 'cancelado',
+                       melonn_estado = 'cancelación pedida' WHERE venta_id = :v"""),
+                {"v": VENTA_ENVIO})
+    melonn.justo_antes_de_contestar = alguien_la_cancela
+    _drenar(melonn)
+    assert len(melonn.enviados) == 1
+    assert melonn.cancelaciones and melonn.cancelaciones[0][0] == _numero(vendida)
+    estado, m_numero, m_estado, _, _ = _despacho(vendida)
+    assert (estado, m_estado) == ("cancelado", "cancelación pedida")
+    assert m_numero.startswith("M1794944965")        # queda el rastro
+
+
+def test_el_verificador_cancela_el_pedido_que_melonn_creo_tarde(vendida):
+    melonn = MelonnFalso()
+    melonn.al_crear = "sin_respuesta"
+    _drenar(melonn)                                   # envío sin respuesta
+    _ejecutar(vendida, """
+        UPDATE retail.despachos SET estado = 'cancelado',
+               melonn_estado = 'cancelación pedida' WHERE venta_id = :v""",
+        {"v": VENTA_ENVIO})
+    _ejecutar(vendida, """
+        INSERT INTO retail.outbox (tipo, agregado_tipo, agregado_id, payload,
+                                   estado, intentos, max_intentos)
+        VALUES ('cancelar_despacho_melonn', 'venta', :v,
+                jsonb_build_object('venta_id', CAST(:v AS text)), 'pendiente', 0, 8)""",
+        {"v": VENTA_ENVIO})
+    _drenar(melonn, dentro_de=timedelta(minutes=2))   # todavía no aparece
+    assert _verificador(vendida)[0] == "pendiente"
+
+    melonn._guardar(melonn.enviados[0])               # Melonn lo crea tarde
+    _drenar(melonn, dentro_de=timedelta(minutes=12))
+    assert [c[0] for c in melonn.cancelaciones] == [_numero(vendida)]
+    _drenar(melonn, dentro_de=timedelta(minutes=16))
+    assert _despacho(vendida)[2] == "Canceled"
+    assert _verificador(vendida)[0] == "procesado"
+
+
+def test_si_melonn_lo_despacho_a_pesar_de_cancelar_se_grita(vendida, melonn_de_los_endpoints):
+    melonn = melonn_de_los_endpoints
+    _drenar(melonn)
+    assert _anular_en_caja().status_code == 200
+    # Melonn dijo que sí… y lo despachó igual.
+    melonn.pedidos[_numero(vendida)]["state"] = {"id": 7, "name": "Shipped - in transit"}
+    _drenar(melonn, dentro_de=timedelta(minutes=2))
+    assert "MELONN LO DESPACHÓ" in _despacho(vendida)[4]
+
+
+# ── La oficina ──────────────────────────────────────────────────────────────
+
+def _como(rol):
+    from backend.core.security import CurrentUser, get_current_user
+    from tests.retail.integracion.test_emisor_factura import _CLIENTE
+    c = _CLIENTE["c"]
+    c.app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        id="sebastian" if rol == "admin" else "maria", email="x@male.com",
+        nombre="Oficina", rol=rol, permisos={"retail": ["ver", "modificar"]})
+    return c
+
+
+def _cancelar_desde_oficina(c, venta=VENTA_ENVIO):
+    return c.post(f"/api/retail/despachos/{venta}/cancelar", json={
+        "motivo": "Melonn no tenía la prenda",
+        "resolucion": "Se le devolvió por transferencia a Bancolombia"})
+
+
+def _cerrar_turno(motor):
+    from tests.retail.integracion.test_emisor_factura import SESION
+    _ejecutar(motor, "UPDATE retail.sesiones_caja SET estado = 'cerrada', "
+                     "cerrada_por = 'maria', cerrada_en = now() WHERE id = :i",
+              {"i": SESION})
+
+
+def test_la_oficina_cancela_aunque_el_turno_este_cerrado(
+        vendida, melonn_de_los_endpoints, monkeypatch):
+    """Melonn no pudo despachar y la caja cerró ayer. Se anula la venta, sale
+    la nota crédito contra la bodega de la tienda en línea, y el arqueo
+    —firmado— no se toca: la plata se devuelve por fuera."""
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    melonn, siigo = melonn_de_los_endpoints, SiigoFalso()
+    melonn.al_crear = "rechazo"
+    _drenar(melonn, siigo=siigo)                      # factura sí, despacho no
+    assert _despacho(vendida)[0] == "no_creado"
+    _cerrar_turno(vendida)
+    movimientos = _leer(vendida, "SELECT count(*) FROM retail.movimientos_caja")[0][0]
+
+    r = _cancelar_desde_oficina(_como("admin"))
+    assert r.status_code == 200, r.text
+    assert r.json()["exige_nota_credito"] is True
+    assert _venta(vendida) == "anulada"
+    assert _leer(vendida, "SELECT count(*) FROM retail.movimientos_caja")[0][0] == movimientos
+    assert _stock(vendida, "bodega:en_linea") == 0
+    assert _stock(vendida, "tienda:arrayanes") == 7
+    resuelto = _leer(vendida, "SELECT estado, resuelto_por, resolucion "
+                              "FROM retail.despachos")[0]
+    assert tuple(resuelto) == ("cancelado", "sebastian",
+                               "Se le devolvió por transferencia a Bancolombia")
+
+    _drenar(melonn, siigo=siigo, dentro_de=timedelta(minutes=5))
+    [nc] = siigo.nc_enviadas
+    assert {i["warehouse"] for i in nc["items"]} == {32}
+
+
+def test_cancelar_desde_la_oficina_es_solo_de_administradores(vendida):
+    r = _cancelar_desde_oficina(_como("user"))
+    assert r.status_code == 403 and r.json()["detail"]["error"] == "solo_administrador"
+    assert _venta(vendida) == "cerrada"
+
+
+def test_la_oficina_no_anula_por_aqui_una_venta_de_mostrador(vendida):
+    from tests.retail.integracion.test_emisor_factura import VENTA
+    r = _cancelar_desde_oficina(_como("admin"), venta=VENTA)
+    assert r.status_code == 400 and "no es con envío" in r.json()["detail"]["mensaje"]
+
+
+def test_lo_que_ya_salio_no_lo_cancela_ni_la_oficina(vendida, melonn_de_los_endpoints):
+    _drenar(melonn_de_los_endpoints)
+    _ejecutar(vendida, "UPDATE retail.despachos SET estado = 'despachado'")
+    r = _cancelar_desde_oficina(_como("admin"))
+    assert r.status_code == 400 and "ya salió" in r.json()["detail"]["mensaje"]
+    assert _venta(vendida) == "cerrada"
+
+
+def test_la_lista_de_la_oficina_pone_primero_lo_que_hay_que_resolver(
+        vendida, melonn_de_los_endpoints):
+    melonn = melonn_de_los_endpoints
+    melonn.al_crear = "rechazo"
+    _drenar(melonn)
+    r = _como("admin").get("/api/retail/despachos?abiertos=true")
+    assert r.status_code == 200, r.text
+    [d] = r.json()
+    assert d["numero"] == _numero(vendida) and d["estado"] == "no_creado"
+    assert d["requiere_atencion"] is True and "No stock" in d["ultimo_error"]
+    assert d["prendas"] == ["92611-1T10 ×1"]
+    assert (d["destinatario"], d["ciudad"]) == ("Laura Gómez", "Medellín")
+    assert d["tienda_id"] == "arrayanes" and d["total_centavos"] > 0
+
+    assert _como("user").get("/api/retail/despachos").status_code == 403
+
+
+# ── Cómo va el despacho ─────────────────────────────────────────────────────
+
+def _refrescar(melonn, *, dentro_de):
+    from backend.modules.retail.infrastructure.melonn import despacho
+    from backend.modules.retail.infrastructure.persistencia.unidad_de_trabajo import (
+        UnidadDeTrabajoSQL, crear_fabrica, crear_motor,
+    )
+
+    async def ir():
+        m = crear_motor(URL)
+        try:
+            return await despacho.refrescar_despachos(
+                UnidadDeTrabajoSQL(crear_fabrica(m)), melonn)
+        finally:
+            await m.dispose()
+    with mock.patch.object(despacho, "_ahora",
+                           lambda: datetime.now(timezone.utc) + dentro_de):
+        return _correr(ir())
+
+
+def test_el_despacho_avanza_con_lo_que_dice_melonn(vendida):
+    melonn = MelonnFalso()
+    _drenar(melonn)
+    numero = _numero(vendida)
+    # Recién pedido: no se le pregunta todavía.
+    assert _refrescar(melonn, dentro_de=timedelta(minutes=5)) == 0
+
+    melonn.pedidos[numero]["state"] = {"id": 7, "name": "Shipped - in transit"}
+    assert _refrescar(melonn, dentro_de=timedelta(minutes=40)) == 1
+    assert _despacho(vendida)[:3] == ("despachado", melonn.pedidos[numero][
+        "internal_order_number"], "Shipped - in transit")
+
+    melonn.pedidos[numero]["state"] = {"id": 8, "name": "Delivered to buyer"}
+    _refrescar(melonn, dentro_de=timedelta(minutes=80))
+    assert _despacho(vendida)[0] == "entregado"
+    # Entregado es final: no se vuelve a preguntar.
+    antes = len(melonn.preguntas)
+    _refrescar(melonn, dentro_de=timedelta(hours=5))
+    assert len(melonn.preguntas) == antes
+
+
+def test_si_melonn_lo_cancela_por_su_cuenta_va_a_la_oficina(vendida):
+    melonn = MelonnFalso()
+    _drenar(melonn)
+    melonn.pedidos[_numero(vendida)]["state"] = {"id": 15, "name": "Canceled"}
+    _refrescar(melonn, dentro_de=timedelta(minutes=40))
+    estado, _, _, _, error = _despacho(vendida)
+    assert estado == "no_creado" and "MELONN CANCELÓ" in error
+
+
+def test_una_novedad_de_entrega_se_avisa(vendida):
+    melonn = MelonnFalso()
+    _drenar(melonn)
+    melonn.pedidos[_numero(vendida)]["state"] = {"id": 20, "name": "Delivery not posible"}
+    _refrescar(melonn, dentro_de=timedelta(minutes=40))
+    estado, _, _, _, error = _despacho(vendida)
+    assert estado == "despachado" and "no pudo entregar" in error

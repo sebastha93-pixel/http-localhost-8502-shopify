@@ -3316,6 +3316,8 @@ async def anular_venta(
     from datetime import datetime, timezone
     from backend.modules.retail.application.comandos.anular_venta import AnularVenta
 
+    # Si es con envío: primero que Melonn no la despache.
+    await _que_melonn_no_lo_despache(uow, venta_id, entrada.motivo)
     try:
         r = await AnularVenta(uow).ejecutar(
             venta_id=venta_id, motivo=entrada.motivo, usuario_id=usuario.id,
@@ -3334,6 +3336,168 @@ async def anular_venta(
         unidades_devueltas=r.unidades_devueltas,
         exige_nota_credito=r.exige_nota_credito,
     )
+
+
+# ── Pedidos con envío a domicilio: la oficina ───────────────────────────────
+
+async def _que_melonn_no_lo_despache(uow, venta_id: str, motivo: str) -> None:
+    """ANTES de anular una venta con envío: pedirle a Melonn que no la
+    despache. Si Melonn dice que ya salió, o no contesta, la venta NO se anula
+    — devolver la plata y que además llegue el paquete es el peor resultado.
+
+    Una venta de mostrador pasa de largo: no tiene despacho.
+    """
+    from sqlalchemy import text as _t
+    from backend.modules.retail.infrastructure.melonn import despacho as _d
+
+    async with uow as t:
+        fila = (await t.sesion.execute(_t("""
+            SELECT d.estado, v.numero
+              FROM retail.despachos d JOIN retail.ventas v ON v.id = d.venta_id
+             WHERE d.venta_id = :v
+        """), {"v": venta_id})).mappings().first()
+    if fila is None or fila["estado"] not in ("pendiente", "en_melonn", "no_creado"):
+        return                      # el comando dice el resto (ya salió, etc.)
+    try:
+        await _d.cancelar_en_melonn(_d.io_por_defecto(), fila["numero"],
+                                    f"Cancelada en el POS: {motivo}")
+    except _d.YaSalio as e:
+        raise HTTPException(409, {
+            "error": "ya_salio",
+            "mensaje": f"{e}. Ya no se puede cancelar: cuando la clienta lo "
+                       "reciba se hace el cambio o la devolución."})
+    except _d.RechazoDeMelonn as e:
+        raise HTTPException(409, {
+            "error": "melonn_no_deja_cancelar",
+            "mensaje": f"Melonn no dejó cancelar el pedido: {str(e)[:200]}"})
+    except Exception as e:  # noqa: BLE001 — sin cuota, caído, lento
+        raise HTTPException(503, {
+            "error": "melonn_no_responde",
+            "mensaje": "No se pudo confirmar con Melonn que el pedido no va a "
+                       "salir, así que no se canceló. Intenta de nuevo en unos "
+                       f"minutos. ({type(e).__name__})"})
+
+
+class CancelarDespachoEntrada(BaseModel):
+    motivo: str = Field(min_length=5, max_length=200)
+    #  Cómo se le devolvió (o se le va a devolver) la plata a la clienta, o
+    #  por qué prenda se le cambió. Queda escrito: no pasa por la caja.
+    resolucion: str = Field(min_length=5, max_length=500)
+
+
+@router.post("/despachos/{venta_id}/cancelar", response_model=AnulacionSalida)
+async def cancelar_pedido_con_envio(
+    venta_id: str,
+    entrada: CancelarDespachoEntrada,
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "modificar")),
+):
+    """Cancela un pedido con envío desde la oficina, aunque su turno ya esté
+    cerrado: Melonn no lo despacha, la venta se anula, la factura recibe su
+    nota crédito contra la bodega de la tienda en línea y el arqueo de la caja
+    no se toca. Sólo administradores."""
+    from datetime import datetime, timezone
+    from backend.modules.retail.application.comandos.anular_venta import AnularVenta
+
+    if usuario.rol != "admin":
+        raise HTTPException(403, {
+            "error": "solo_administrador",
+            "mensaje": "Cancelar un pedido con envío es cosa de la oficina."})
+    await _que_melonn_no_lo_despache(uow, venta_id, entrada.motivo)
+    try:
+        r = await AnularVenta(uow).ejecutar(
+            venta_id=venta_id, motivo=entrada.motivo, usuario_id=usuario.id,
+            ahora=datetime.now(timezone.utc), desde_oficina=True,
+            resolucion=entrada.resolucion)
+    except ReglaDeNegocio as e:
+        raise HTTPException(400, {"error": "regla_de_negocio", "mensaje": str(e)})
+    return AnulacionSalida(
+        venta_id=r.venta_id, numero=r.numero,
+        total_revertido_centavos=r.total_revertido_centavos,
+        unidades_devueltas=r.unidades_devueltas,
+        exige_nota_credito=r.exige_nota_credito)
+
+
+class DespachoSalida(BaseModel):
+    venta_id: str
+    numero: str
+    tienda_id: str
+    vendida_en: str
+    total_centavos: int
+    estado: str
+    #  Hay algo que alguien tiene que mirar: Melonn no lo recibió, lo canceló,
+    #  no pudo entregar…
+    requiere_atencion: bool
+    destinatario: str
+    telefono: str
+    direccion: str
+    complemento: str
+    ciudad: str
+    departamento: str
+    prendas: List[str]
+    melonn_numero: Optional[str] = None
+    melonn_estado: Optional[str] = None
+    seguimiento_url: Optional[str] = None
+    ultimo_error: Optional[str] = None
+    resolucion: Optional[str] = None
+    estado_fiscal: str
+    factura: Optional[str] = None
+
+
+@router.get("/despachos", response_model=List[DespachoSalida])
+async def despachos_de_las_tiendas(
+    abiertos: bool = Query(False),
+    uow=Depends(unidad_de_trabajo),
+    usuario: CurrentUser = Depends(require_permission("retail", "ver")),
+):
+    """Los pedidos con envío, para la oficina: primero los que necesitan que
+    alguien haga algo. Trae a quién y a dónde va —hace falta para resolver—,
+    así que es sólo para administradores."""
+    from sqlalchemy import text as _t
+
+    if usuario.rol != "admin":
+        raise HTTPException(403, {
+            "error": "solo_administrador",
+            "mensaje": "Los pedidos con envío los ve la oficina."})
+    async with uow as t:
+        filas = (await t.sesion.execute(_t("""
+            SELECT d.venta_id, v.numero, v.tienda_id, v.total, v.estado_fiscal,
+                   to_char(v.cerrada_en AT TIME ZONE coalesce(ti.zona_horaria, 'America/Bogota'),
+                           'YYYY-MM-DD HH24:MI') AS vendida_en,
+                   d.estado, d.destinatario, d.telefono, d.direccion,
+                   d.complemento, d.ciudad, d.departamento, d.melonn_numero,
+                   d.melonn_estado, d.seguimiento_url, d.ultimo_error,
+                   d.resolucion,
+                   (d.estado = 'no_creado' OR d.ultimo_error IS NOT NULL) AS atencion,
+                   (SELECT f.numero FROM retail.documentos_fiscales f
+                     WHERE f.venta_id = v.id AND f.tipo = 'factura_electronica'
+                       AND f.estado = 'emitido' LIMIT 1) AS factura,
+                   ARRAY(SELECT l.sku || ' ×' || sum(l.cantidad)
+                           FROM retail.venta_lineas l WHERE l.venta_id = v.id
+                          GROUP BY l.sku ORDER BY l.sku) AS prendas
+              FROM retail.despachos d
+              JOIN retail.ventas v ON v.id = d.venta_id
+              JOIN retail.tiendas ti ON ti.id = v.tienda_id
+             WHERE (NOT :abiertos OR d.estado IN ('pendiente', 'en_melonn',
+                                                  'despachado', 'no_creado')
+                    OR d.ultimo_error IS NOT NULL)
+             ORDER BY (d.estado = 'no_creado' OR d.ultimo_error IS NOT NULL) DESC,
+                      CASE d.estado WHEN 'pendiente' THEN 0 WHEN 'en_melonn' THEN 1
+                                    WHEN 'despachado' THEN 2 ELSE 3 END,
+                      v.cerrada_en DESC
+             LIMIT 300
+        """), {"abiertos": abiertos})).mappings().all()
+    return [DespachoSalida(
+        venta_id=f["venta_id"], numero=f["numero"], tienda_id=f["tienda_id"],
+        vendida_en=f["vendida_en"], total_centavos=int(f["total"]),
+        estado=f["estado"], requiere_atencion=bool(f["atencion"]),
+        destinatario=f["destinatario"], telefono=f["telefono"],
+        direccion=f["direccion"], complemento=f["complemento"],
+        ciudad=f["ciudad"], departamento=f["departamento"],
+        prendas=list(f["prendas"] or []), melonn_numero=f["melonn_numero"],
+        melonn_estado=f["melonn_estado"], seguimiento_url=f["seguimiento_url"],
+        ultimo_error=f["ultimo_error"], resolucion=f["resolucion"],
+        estado_fiscal=f["estado_fiscal"], factura=f["factura"]) for f in filas]
 
 
 # ── Auditoría ───────────────────────────────────────────────────────────────

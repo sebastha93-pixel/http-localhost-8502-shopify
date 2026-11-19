@@ -67,6 +67,81 @@ class WebFalsa:
                 if texto.lower() in (v["nombre"] + v["sku"]).lower()]
 
 
+class MelonnFalso:
+    """Lo que Melonn hace mal, a pedido."""
+
+    def __init__(self):
+        self.pedidos = {}           # número de la venta → pedido que SÍ existe
+        self.enviados = []          # cuerpos que llegaron a `crear_pedido`
+        self.preguntas = []
+        self.al_crear = "ok"        # ok | rechazo | sin_respuesta | crea_y_muere | cuota | ocupado
+        self.al_leer = "ok"         # ok | cuota | ocupado | caido
+        self.cancelaciones = []
+        self.al_cancelar = "ok"     # ok | rechazo
+        self.justo_antes_de_contestar = None   # corrutina: «mientras se pedía…»
+
+    async def leer_pedido(self, numero):
+        from backend.modules.retail.infrastructure.melonn import despacho as d
+        self.preguntas.append(numero)
+        if self.al_leer == "cuota":
+            raise d.CuotaAgotada("cuota diaria de Melonn agotada")
+        if self.al_leer == "ocupado":
+            raise d.MelonnOcupado("Melonn HTTP 429")
+        if self.al_leer == "caido":
+            raise RuntimeError("Melonn HTTP 500")
+        return self.pedidos.get(numero)
+
+    def _guardar(self, cuerpo):
+        n = cuerpo["external_order_number"]
+        # COMO EL GET (medido 2026-11-17): el pedido suelto, estado con `id` y
+        # el nombre repetido.
+        self.pedidos[n] = {
+            "internal_order_number": f"M17949449650{len(self.pedidos):05d}",
+            "external_order_number": n,
+            "state": {"id": 2, "name": "All items reserved - ready for fulfillment" * 2},
+            "melonn_tracking_link": f"https://rastreo.melonn.com/{n}"}
+        return self.pedidos[n]
+
+    async def crear_pedido(self, cuerpo):
+        from backend.modules.retail.infrastructure.melonn import despacho as d
+        if self.al_crear == "cuota":
+            raise d.CuotaAgotada("cuota diaria de Melonn agotada")
+        if self.al_crear == "ocupado":
+            raise d.MelonnOcupado("Melonn HTTP 429")
+        self.enviados.append(cuerpo)
+        if self.al_crear == "rechazo":
+            raise d.RechazoDeMelonn("HTTP 400: No stock available for sku 92611-1T10")
+        if self.al_crear == "sin_respuesta":
+            raise RuntimeError("timeout")
+        p = self._guardar(cuerpo)
+        if self.al_crear == "crea_y_muere":
+            raise RuntimeError("se cortó después de crear")
+        if self.justo_antes_de_contestar:
+            await self.justo_antes_de_contestar()
+        # COMO EL POST: envuelto en `sell_order` y sin estado.
+        return {"sell_order": {"internal_order_number": p["internal_order_number"],
+                               "external_order_number": p["external_order_number"],
+                               "external_order_id": cuerpo["external_order_id"]}}
+
+    async def pedir_cancelacion(self, numero, motivo):
+        from backend.modules.retail.infrastructure.melonn import despacho as d
+        if self.al_cancelar == "rechazo":
+            raise d.RechazoDeMelonn("HTTP 409: Order can not be canceled")
+        self.cancelaciones.append((numero, motivo))
+        if numero in self.pedidos:
+            self.pedidos[numero]["state"] = {"id": 15, "name": "Canceled"}
+
+
+@pytest.fixture(autouse=True)
+def melonn_de_los_endpoints(monkeypatch):
+    """Ninguna prueba le habla al Melonn de verdad: anular una venta con envío
+    le pregunta a Melonn antes, y esa pregunta cae aquí."""
+    from backend.modules.retail.infrastructure.melonn import despacho
+    falso = MelonnFalso()
+    monkeypatch.setattr(despacho, "io_por_defecto", lambda: falso)
+    return falso
+
+
 @pytest.fixture(autouse=True)
 def web(monkeypatch):
     """Ninguna prueba le pregunta a Shopify de verdad."""

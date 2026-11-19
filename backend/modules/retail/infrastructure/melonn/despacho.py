@@ -34,7 +34,7 @@ import asyncio
 import hashlib
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import quote
 
@@ -47,11 +47,17 @@ from backend.modules.retail.application.comandos.drenar_outbox import (
 
 log = logging.getLogger("retail.envio")
 
-__all__ = ["TIPO", "crear_despacho", "crear_manejador", "MelonnIO",
-           "RechazoDeMelonn", "CuotaAgotada", "MelonnOcupado",
-           "construir_pedido", "MINUTOS_SIN_REENVIAR"]
+__all__ = ["TIPO", "TIPO_CANCELAR", "crear_despacho", "crear_manejador",
+           "verificar_cancelacion", "crear_verificador", "MelonnIO",
+           "RechazoDeMelonn", "CuotaAgotada", "MelonnOcupado", "YaSalio",
+           "construir_pedido", "cancelar_en_melonn", "refrescar_despachos",
+           "io_por_defecto", "MINUTOS_SIN_REENVIAR"]
 
 TIPO = "crear_despacho_melonn"
+TIPO_CANCELAR = "cancelar_despacho_melonn"
+
+#  Lo que queda escrito en `melonn_estado` mientras Melonn confirma.
+CANCELACION_PEDIDA = "cancelación pedida"
 
 #  El envío estándar de Melonn, local y nacional.
 METODO_ENVIO = "MEL-15"
@@ -80,6 +86,15 @@ class CuotaAgotada(Exception):
 
 class MelonnOcupado(Exception):
     """429/503 pasajero: Melonn no recibió la petición. No se envió nada."""
+
+
+class YaSalio(Exception):
+    """El pedido ya va en camino o ya se entregó: no se puede cancelar."""
+
+
+def io_por_defecto() -> "MelonnIO":
+    """La puerta a Melonn que usan los endpoints. Aparte, para las pruebas."""
+    return MelonnIO()
 
 
 # ── La puerta a Melonn ──────────────────────────────────────────────────────
@@ -220,9 +235,28 @@ async def crear_despacho(t, payload: dict) -> Optional[str]:
     return await _crear(t, payload, MelonnIO())
 
 
-#  Estados de Melonn que ya no son «lo tiene Melonn» (códigos del detalle,
-#  los mismos que usa `melonn_client`). 15 = cancelado (medido 2026-11-17).
-CODIGO_CANCELADO = 15
+#  Los códigos de estado de Melonn, los mismos de `src/melonn_client.py`
+#  (`CODIGOS_*`). Se repiten aquí —son seis números— para que el módulo retail
+#  no tenga que cargar el cliente del OS sólo para clasificar.
+CODIGO_CANCELADO = 15                    # medido 2026-11-17
+_CODIGOS_ENTREGADO = {6, 8}
+_CODIGOS_EN_CAMINO = {7, 20}             # 20 = la transportadora no pudo entregar
+_CODIGOS_CANCELANDO = {16, 17, 18, 19}   # en proceso de cancelación / devolución
+_CODIGO_NOVEDAD = 20
+_CODIGO_INVALIDO = 9                     # «Received - invalid fixable»
+
+
+def _clase(codigo: int) -> str:
+    """entregado | en_camino | cancelado | cancelando | en_bodega."""
+    if codigo in _CODIGOS_ENTREGADO:
+        return "entregado"
+    if codigo in _CODIGOS_EN_CAMINO:
+        return "en_camino"
+    if codigo == CODIGO_CANCELADO:
+        return "cancelado"
+    if codigo in _CODIGOS_CANCELANDO:
+        return "cancelando"
+    return "en_bodega"
 
 
 def _de_melonn(pedido: dict) -> dict:
@@ -253,15 +287,18 @@ def _de_melonn(pedido: dict) -> dict:
     }
 
 
-async def _anotar_en_melonn(t, venta_id: str, pedido: dict) -> None:
+async def _anotar_en_melonn(t, venta_id: str, pedido: dict) -> bool:
+    """Deja el despacho «en_melonn». SÓLO si sigue pendiente: si lo cancelaron
+    mientras se pedía, no se pisa la cancelación. Devuelve si lo anotó."""
     m = _de_melonn(pedido)
-    await t.sesion.execute(text("""
+    r = await t.sesion.execute(text("""
         UPDATE retail.despachos
            SET estado = 'en_melonn', melonn_numero = :n, melonn_estado = :e,
                seguimiento_url = :s, ultimo_error = NULL, actualizado_en = now()
-         WHERE venta_id = :v
+         WHERE venta_id = :v AND estado = 'pendiente'
     """), {"v": venta_id, "n": m["numero"] or None, "e": m["estado"],
            "s": m["seguimiento"]})
+    return r.rowcount == 1
 
 
 async def _crear(t, payload: dict, io: MelonnIO) -> Optional[str]:
@@ -370,7 +407,199 @@ async def _crear(t, payload: dict, io: MelonnIO) -> Optional[str]:
     # Cualquier otra cosa (timeout, 5xx) sube tal cual: el trabajo se
     # reintenta y, como quedó «enviando», primero pregunta y espera.
 
-    await _anotar_en_melonn(t, venta_id, creado)
+    if not await _anotar_en_melonn(t, venta_id, creado):
+        # LO CANCELARON MIENTRAS SE PEDÍA. El pedido acaba de nacer en Melonn
+        # para una venta que ya no existe: se le pide la cancelación ya, y el
+        # verificador (que encoló quien canceló) confirma que quedó.
+        log.error("[retail-envio] %s se canceló mientras se pedía a Melonn: "
+                  "se pide su cancelación", numero)
+        try:
+            await io.pedir_cancelacion(numero, "Venta cancelada en el POS")
+        except Exception as e:  # noqa: BLE001 — el verificador insiste
+            log.error("[retail-envio] no se pudo cancelar %s en Melonn: %s",
+                      numero, e)
+        await t.sesion.execute(text("""
+            UPDATE retail.despachos
+               SET melonn_numero = :n, melonn_estado = :e, actualizado_en = now()
+             WHERE venta_id = :v
+        """), {"v": venta_id, "n": _de_melonn(creado)["numero"] or None,
+               "e": CANCELACION_PEDIDA})
+        return f"{numero} se canceló mientras se pedía: se pidió cancelarlo en Melonn"
     log.info("[retail-envio] %s → Melonn %s", numero,
              _de_melonn(creado)["numero"] or "(sin número aún)")
     return f"{numero} pedido a Melonn"
+
+
+# ── Cancelar ────────────────────────────────────────────────────────────────
+
+async def cancelar_en_melonn(io: MelonnIO, numero: str, motivo: str) -> str:
+    """ANTES de devolverle la plata a la clienta: que Melonn no lo despache.
+
+    Devuelve `no_estaba`, `ya_cancelado` o `pedida`. Lanza `YaSalio` si ya va
+    en camino o se entregó —eso no se cancela: se hace cambio o devolución— y
+    deja subir cualquier fallo de Melonn: si no se puede preguntar, NO se
+    cancela la venta (se le devolvería la plata y además le llegaría el
+    paquete).
+    """
+    pedido = await io.leer_pedido(numero)
+    if not pedido:
+        return "no_estaba"
+    m = _de_melonn(pedido)
+    clase = _clase(m["codigo"])
+    if clase in ("entregado", "en_camino"):
+        raise YaSalio(f"Melonn ya lo tiene «{m['estado']}»")
+    if clase in ("cancelado", "cancelando"):
+        return "ya_cancelado"
+    await io.pedir_cancelacion(numero, motivo)
+    return "pedida"
+
+
+def crear_verificador(io: Optional[MelonnIO] = None):
+    io = io or MelonnIO()
+
+    async def manejador(t, payload: dict) -> Optional[str]:
+        return await _verificar_cancelacion(t, payload, io)
+    return manejador
+
+
+async def verificar_cancelacion(t, payload: dict) -> Optional[str]:
+    """El que se registra en `MANEJADORES`."""
+    return await _verificar_cancelacion(t, payload, MelonnIO())
+
+
+async def _verificar_cancelacion(t, payload: dict, io: MelonnIO) -> Optional[str]:
+    """Después de cancelar una venta con envío: comprobar que en Melonn quedó
+    cancelado de verdad. Cubre lo que el momento de cancelar no puede ver —
+    el pedido que Melonn creó tarde, o la cancelación que Melonn no cumplió."""
+    venta_id = payload["venta_id"]
+    d = (await t.sesion.execute(text("""
+        SELECT d.estado, d.melonn_estado, d.actualizado_en, v.numero
+          FROM retail.despachos d JOIN retail.ventas v ON v.id = d.venta_id
+         WHERE d.venta_id = :v
+    """), {"v": venta_id})).mappings().first()
+    if d is None or d["estado"] != "cancelado":
+        return "el despacho no está cancelado: nada que verificar"
+    numero = d["numero"]
+
+    async def anotar(estado: Optional[str], error: Optional[str]) -> None:
+        await t.sesion.execute(text("""
+            UPDATE retail.despachos
+               SET melonn_estado = :e, ultimo_error = :err, actualizado_en = now()
+             WHERE venta_id = :v
+        """), {"v": venta_id, "e": estado, "err": error})
+
+    try:
+        pedido = await io.leer_pedido(numero)
+    except CuotaAgotada as e:
+        raise Aplazar(f"{numero}: {e}", minutos=MINUTOS_SI_NO_HAY_CUOTA) from e
+    except MelonnOcupado as e:
+        raise Aplazar(f"{numero}: {e}", minutos=MINUTOS_ENTRE_PREGUNTAS) from e
+
+    if not pedido:
+        # No está. ¿Puede aparecer tarde? Sólo si hubo un envío hace poco.
+        desde = d["actualizado_en"]
+        if desde.tzinfo is None:
+            desde = desde.replace(tzinfo=timezone.utc)
+        falta = MINUTOS_SIN_REENVIAR - (_ahora() - desde).total_seconds() / 60
+        if d["melonn_estado"] == CANCELACION_PEDIDA and falta > 0:
+            raise Aplazar(f"{numero}: aún no aparece en Melonn; se vuelve a "
+                          f"mirar", minutos=min(falta, MINUTOS_ENTRE_PREGUNTAS * 3))
+        await anotar(None, None)
+        return f"{numero} no está en Melonn: nada que cancelar"
+
+    m = _de_melonn(pedido)
+    clase = _clase(m["codigo"])
+    if clase == "cancelado":
+        await anotar(m["estado"], None)
+        return f"{numero} quedó cancelado en Melonn"
+    if clase in ("entregado", "en_camino"):
+        await anotar(m["estado"],
+                     "MELONN LO DESPACHÓ a pesar de la cancelación: hay que "
+                     "recuperar el paquete o cobrarlo")
+        log.error("[retail-envio] %s cancelado en el POS pero Melonn lo "
+                  "despachó (%s)", numero, m["estado"])
+        return f"{numero}: Melonn lo despachó a pesar de la cancelación"
+    if clase == "en_bodega":
+        # Sigue vivo en Melonn (se creó tarde, o la cancelación no entró).
+        try:
+            await io.pedir_cancelacion(numero, "Venta cancelada en el POS")
+        except RechazoDeMelonn as e:
+            await anotar(m["estado"], f"Melonn no dejó cancelarlo: {str(e)[:300]}")
+            return f"{numero}: Melonn no dejó cancelarlo"
+    await anotar(CANCELACION_PEDIDA, None)
+    await t.commit()
+    raise Aplazar(f"{numero}: cancelación pedida a Melonn; esperando que la "
+                  f"confirme", minutos=MINUTOS_ENTRE_PREGUNTAS)
+
+
+# ── Cómo va el despacho ─────────────────────────────────────────────────────
+
+#  Cada cuánto se le pregunta a Melonn por un despacho en curso. Media hora:
+#  son pocos pedidos al día y la cuota (10.000) sobra, pero no es un rastreo
+#  en vivo — para eso está el enlace de seguimiento.
+MINUTOS_ENTRE_REFRESCOS = 30
+
+
+async def refrescar_despachos(uow, io: Optional[MelonnIO] = None, *,
+                              limite: int = 5) -> int:
+    """Pone al día los despachos que Melonn tiene en curso: en bodega → en
+    camino → entregado. Devuelve cuántos miró.
+
+    SE PREGUNTA PEDIDO POR PEDIDO, no al tablero de logística del OS: ese
+    tablero deja por fuera justo los entregados y los cancelados, que son los
+    dos finales que aquí importan.
+    """
+    io = io or MelonnIO()
+    async with uow as t:
+        filas = (await t.sesion.execute(text("""
+            SELECT d.venta_id, d.estado, v.numero
+              FROM retail.despachos d JOIN retail.ventas v ON v.id = d.venta_id
+             WHERE d.estado IN ('en_melonn', 'despachado')
+               AND d.actualizado_en < :corte
+             ORDER BY d.actualizado_en LIMIT :n
+        """), {"corte": _ahora() - timedelta(minutes=MINUTOS_ENTRE_REFRESCOS),
+               "n": limite})).mappings().all()
+    vistos = 0
+    for f in filas:
+        try:
+            pedido = await io.leer_pedido(f["numero"])
+        except CuotaAgotada:
+            break                                   # mañana será otro día
+        except Exception as e:  # noqa: BLE001 — uno que falla no frena al resto
+            log.warning("[retail-envio] no se pudo consultar %s: %s", f["numero"], e)
+            continue
+        vistos += 1
+        if not pedido:
+            nuevo, error, m = f["estado"], "Melonn ya no encuentra este pedido", None
+        else:
+            m = _de_melonn(pedido)
+            clase = _clase(m["codigo"])
+            error = None
+            if clase == "entregado":
+                nuevo = "entregado"
+            elif clase == "en_camino":
+                nuevo = "despachado"
+                if m["codigo"] == _CODIGO_NOVEDAD:
+                    error = "La transportadora no pudo entregar: revisar en Melonn"
+            elif clase == "cancelado":
+                # Nadie lo canceló desde el POS y Melonn lo tiene cancelado:
+                # la clienta pagó y no le va a llegar. A la oficina.
+                nuevo, error = "no_creado", "MELONN CANCELÓ este pedido"
+            elif clase == "cancelando":
+                nuevo, error = f["estado"], f"Melonn lo tiene «{m['estado']}»: revisar"
+            else:
+                nuevo = "en_melonn"
+                if m["codigo"] == _CODIGO_INVALIDO:
+                    error = "Melonn lo recibió con un dato inválido: revisar allá"
+        async with uow as t:
+            await t.sesion.execute(text("""
+                UPDATE retail.despachos
+                   SET estado = :e, melonn_estado = coalesce(:me, melonn_estado),
+                       seguimiento_url = coalesce(:s, seguimiento_url),
+                       ultimo_error = :err, actualizado_en = now()
+                 WHERE venta_id = :v AND estado IN ('en_melonn', 'despachado')
+            """), {"v": f["venta_id"], "e": nuevo, "err": error,
+                   "me": m["estado"] if m else None,
+                   "s": m["seguimiento"] if m else None})
+            await t.commit()
+    return vistos
