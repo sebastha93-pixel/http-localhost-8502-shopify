@@ -1202,6 +1202,84 @@ def test_las_dos_promociones_viajan_en_el_contexto(tienda):
     assert (diez["porcentaje"], diez["excluidas"]) == (10.0, ["12345-1"])
 
 
+# ── Porcentaje POR REFERENCIA: la Black Week (2026-11-20) ───────────────────
+# Cada referencia con su descuento y cada tienda con su lista: en Florida la
+# 95613-1 va al 70 % y en Arrayanes puede ir al 50 %.
+
+def _black(t, porcentajes, tiendas=("arrayanes",), id_="black_arr"):
+    import json as _json
+    with t["motor"].begin() as c:
+        c.execute(text("""
+            INSERT INTO retail.promociones
+                (id, nombre, tipo, porcentajes, tiendas, desde, hasta)
+            VALUES (:id, 'Black Week', 'porcentaje_por_referencia',
+                    CAST(:p AS jsonb), :t,
+                    now() - interval '1 day', now() + interval '1 day')
+        """), {"id": id_, "p": _json.dumps(porcentajes), "t": list(tiendas)})
+
+
+def test_black_week_cada_referencia_con_su_porcentaje(tienda):
+    """El 70 % pasa aunque la asesora tenga tope de 10 %: es de la tienda."""
+    _black(tienda, {"95613-1": 70, "26602-1": 30})
+    r = _vender_lineas(tienda, [
+        {"sku": "95613-1T12", "cantidad": 1, "precio_unitario_centavos": 14_990_000,
+         "promocion_id": "black_arr"},
+        {"sku": "26602-1T6", "cantidad": 2, "precio_unitario_centavos": 12_990_000,
+         "promocion_id": "black_arr"}],
+        pagos=[{"medio_pago_id": "efectivo_arrayanes",
+                "monto_centavos": 4_497_000 + 18_186_000, "es_efectivo": True}])
+    assert r.status_code == 200, r.text
+    assert r.json()["total_centavos"] == 4_497_000 + 18_186_000
+    assert _todas(tienda, """SELECT sku, descuento_monto, descuento_motivo, autorizado_por
+        FROM retail.venta_lineas ORDER BY orden""") == [
+        ("95613-1T12", 10_493_000, "Black Week 70 %", "promocion:black_arr"),
+        ("26602-1T6", 7_794_000, "Black Week 30 %", "promocion:black_arr")]
+
+
+def test_black_week_lo_que_no_esta_en_la_lista_no_lleva_descuento(tienda):
+    _black(tienda, {"95613-1": 70})
+    r = _vender_lineas(tienda, [
+        {"sku": "26602-1T6", "cantidad": 1, "precio_unitario_centavos": 12_990_000,
+         "promocion_id": "black_arr"}])
+    assert r.status_code == 400 and "no tiene descuento en Black Week" in r.text
+
+
+def test_black_week_es_de_su_tienda(tienda):
+    """La lista de Florida no aplica en Arrayanes."""
+    _black(tienda, {"95613-1": 70}, tiendas=("florida",), id_="black_flo")
+    r = _vender_lineas(tienda, [
+        {"sku": "95613-1T12", "cantidad": 1, "precio_unitario_centavos": 14_990_000,
+         "promocion_id": "black_flo"}])
+    assert r.status_code == 400 and "ya no está vigente" in r.text
+
+
+def test_black_week_viaja_en_el_contexto_con_sus_porcentajes(tienda):
+    _black(tienda, {"95613-1": 70, "26602-1": 10})
+    d = tienda["c"].get("/api/retail/caja/contexto",
+                        params={"caja_id": "arrayanes_caja1"}).json()
+    [p] = d["promociones"]
+    assert (p["tipo"], p["porcentajes"]) == (
+        "porcentaje_por_referencia", {"95613-1": 70.0, "26602-1": 10.0})
+
+
+def test_con_black_week_y_porcentaje_general_cada_prenda_va_a_una(tienda):
+    """La de la lista lleva su porcentaje; el general es para lo demás."""
+    _black(tienda, {"95613-1": 70})
+    _diez(tienda)
+    r = _vender_lineas(tienda, [
+        {"sku": "95613-1T12", "cantidad": 1, "precio_unitario_centavos": 14_990_000,
+         "promocion_id": "diez_todo"}])
+    assert r.status_code == 400 and "Black Week" in r.text
+    r = _vender_lineas(tienda, [
+        {"sku": "95613-1T12", "cantidad": 1, "precio_unitario_centavos": 14_990_000,
+         "promocion_id": "black_arr"},
+        {"sku": "26602-1T6", "cantidad": 1, "precio_unitario_centavos": 12_990_000,
+         "promocion_id": "diez_todo"}],
+        pagos=[{"medio_pago_id": "efectivo_arrayanes",
+                "monto_centavos": 4_497_000 + 11_691_000, "es_efectivo": True}])
+    assert r.status_code == 200, r.text
+
+
 # ── El regalo por monto: la pañoleta desde $149.900 ─────────────────────────
 # En el fixture no hay P004: hace de pañoleta la 26602-1 ($129.900).
 

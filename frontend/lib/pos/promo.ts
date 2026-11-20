@@ -15,7 +15,8 @@ export interface Promocion {
   id: string;
   nombre: string;
   /** `segunda_a_precio` (la segunda a $1.000), `porcentaje` (10 % en todo)
-   *  o `regalo_por_monto` (la pañoleta desde $149.900). */
+   *  `regalo_por_monto` (la pañoleta desde $149.900) o
+   *  `porcentaje_por_referencia` (cada referencia con su %, la Black Week). */
   tipo: string;
   precio_centavos: number;
   porcentaje?: number | null;
@@ -24,6 +25,9 @@ export interface Promocion {
   referencias: string[];
   /** Las que NO llevan el porcentaje: las rebajadas. */
   excluidas?: string[];
+  /** `porcentaje_por_referencia` (la Black Week): `{"93634-1": 70}`. Lo
+   *  que no está en la lista no lleva descuento. */
+  porcentajes?: Record<string, number>;
   hasta: string;
 }
 
@@ -49,8 +53,12 @@ export function conPromocion(
   const segunda = vigentes.find((p) => p.tipo === "segunda_a_precio");
   const pct = vigentes.find((p) => p.tipo === "porcentaje" && p.porcentaje);
   const regalo = vigentes.find((p) => p.tipo === "regalo_por_monto" && p.minimo_centavos);
+  const porRef = vigentes.find((p) => p.tipo === "porcentaje_por_referencia" && p.porcentajes);
+  const pctDe = new Map(Object.entries(porRef?.porcentajes ?? {})
+    .map(([r, v]) => [r.toUpperCase(), Number(v)] as const)
+    .filter(([, v]) => v > 0 && v < 100));
   const limpias = lineas.map((l) => ({ ...l, descuentoValor: undefined, promocionId: undefined }));
-  if (!segunda && !pct && !regalo) return limpias;
+  if (!segunda && !pct && !regalo && !porRef) return limpias;
   const refsRegalo = new Set((regalo?.referencias ?? []).map((r) => r.toUpperCase()));
   const esRegalo = (l: LineaCarrito) => refsRegalo.has(referenciaDe(l.sku));
 
@@ -81,7 +89,14 @@ export function conPromocion(
                descuentoMotivo: d ? segunda!.nombre : l.descuentoMotivo };
     }
     const ref = referenciaDe(l.sku);
-    if (pct && !l.descuentoPct && !refs.has(ref) && !excluidas.has(ref)
+    // La Black Week antes que el porcentaje general, como en el servidor.
+    const suyo = pctDe.get(ref);
+    if (porRef && suyo && !l.descuentoPct && !refs.has(ref) && !(regalo && esRegalo(l))) {
+      const d = Math.round((l.precioConIva * l.cantidad * suyo) / 100);
+      return { ...l, promocionId: porRef.id, descuentoValor: d || undefined,
+               descuentoMotivo: `${porRef.nombre} ${suyo} %` };
+    }
+    if (pct && !l.descuentoPct && !refs.has(ref) && !excluidas.has(ref) && !suyo
         && !(regalo && esRegalo(l))) {
       const d = Math.round((l.precioConIva * l.cantidad * (pct.porcentaje ?? 0)) / 100);
       return { ...l, promocionId: pct.id, descuentoValor: d || undefined,

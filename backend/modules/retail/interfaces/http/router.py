@@ -409,19 +409,38 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
             [(l.sku, l.cantidad, l.precio_unitario_centavos) for l in suyas
              if not a_mano(l)],
             int(segunda["precio_centavos"]))
+    # Porcentaje POR REFERENCIA (la Black Week, 2026-11-20): cada referencia
+    # con su descuento. Va antes que el porcentaje general: una prenda de la
+    # lista lleva SU porcentaje y el general es para lo demás.
+    por_ref = next((p for p in promos if p["tipo"] == "porcentaje_por_referencia"), None)
+    pct_por_ref = {str(k).upper(): Decimal(str(v))
+                   for k, v in ((por_ref or {}).get("porcentajes") or {}).items()}
     promo_pct: dict = {}
     for l in marcadas:
         p = por_id[l.promocion_id]
-        if p["tipo"] != "porcentaje" or a_mano(l):
+        if p["tipo"] not in ("porcentaje", "porcentaje_por_referencia") or a_mano(l):
             continue
         ref = referencia_de(l.sku)
-        excluidas = {r.upper() for r in p.get("excluidas") or []}
-        if ref in refs_segunda or ref in excluidas:
+        if ref in refs_segunda:
             raise ReglaDeNegocio(
-                f"{l.sku} no lleva {p['nombre']}: "
-                + ("está en la segunda prenda." if ref in refs_segunda
-                   else "es una prenda rebajada."))
-        promo_pct[l.sku] = p
+                f"{l.sku} no lleva {p['nombre']}: está en la segunda prenda.")
+        if p["tipo"] == "porcentaje_por_referencia":
+            pct = pct_por_ref.get(ref)
+            if not pct or not (Decimal(0) < pct < Decimal(100)):
+                raise ReglaDeNegocio(
+                    f"{l.sku} no tiene descuento en {p['nombre']}. Actualiza "
+                    f"la pantalla y vuelve a cobrar.")
+            promo_pct[l.sku] = (p, pct, f"{p['nombre']} {pct.normalize():f} %")
+            continue
+        excluidas = {r.upper() for r in p.get("excluidas") or []}
+        if ref in excluidas:
+            raise ReglaDeNegocio(
+                f"{l.sku} no lleva {p['nombre']}: es una prenda rebajada.")
+        if ref in pct_por_ref:
+            raise ReglaDeNegocio(
+                f"{l.sku} no lleva {p['nombre']}: tiene su descuento de "
+                f"{por_ref['nombre']}. Actualiza la pantalla y vuelve a cobrar.")
+        promo_pct[l.sku] = (p, Decimal(str(p["porcentaje"])), p["nombre"])
 
     # El regalo por monto (la pañoleta desde $149.900, 2026-10-22): UNA unidad
     # de lo que se regala queda en $0 si lo que se paga por lo demás llega al
@@ -471,11 +490,10 @@ async def _armar(entrada: VentaEntrada, uow, usuario_id: str) -> tuple:
                 tope_de_quien_aplica=Decimal(100),
                 aplicado_por=f"promocion:{segunda['id']}")
         elif entrada_linea.promocion_id and entrada_linea.sku in promo_pct:
-            p = promo_pct.pop(entrada_linea.sku)
+            p, pct, motivo = promo_pct.pop(entrada_linea.sku)
             venta.aplicar_descuento_linea(
                 linea.numero,
-                Descuento.porcentaje(Decimal(str(p["porcentaje"])),
-                                     motivo=p["nombre"]),
+                Descuento.porcentaje(pct, motivo=motivo),
                 tope_de_quien_aplica=Decimal(100),
                 aplicado_por=f"promocion:{p['id']}")
         elif entrada_linea.descuento_porcentaje or entrada_linea.descuento_valor_centavos:
@@ -588,7 +606,7 @@ async def _promociones_vigentes(sesion, tienda_id: str) -> list:
     from sqlalchemy import text as _t
     filas = (await sesion.execute(_t("""
         SELECT DISTINCT ON (tipo) id, nombre, tipo, precio_centavos, porcentaje,
-               minimo_centavos, referencias, excluidas, hasta
+               minimo_centavos, referencias, excluidas, porcentajes, hasta
           FROM retail.promociones
          WHERE activa AND now() >= desde AND now() < hasta
            AND (cardinality(tiendas) = 0 OR :t = ANY(tiendas))
@@ -1203,6 +1221,8 @@ def _promo_para_caja(p: Optional[dict]) -> Optional[dict]:
             "minimo_centavos": int(p["minimo_centavos"]) if p.get("minimo_centavos") else None,
             "referencias": list(p["referencias"] or []),
             "excluidas": list(p.get("excluidas") or []),
+            "porcentajes": {str(k): float(v)
+                            for k, v in (p.get("porcentajes") or {}).items()},
             "hasta": p["hasta"].isoformat()}
 
 
