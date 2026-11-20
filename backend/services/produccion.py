@@ -6328,7 +6328,7 @@ def generar_zpl_trabajo(t: dict) -> str:
     # ^MMC activa el CORTADOR (ambas impresoras lo tienen).
     modo = "^MTT" + ("^MMC" if p.get("cortar", True) else "")
 
-    def _sticker_col(x: int, dato: str) -> str:
+    def _sticker_col(x: int, dato: str, texto: str = "") -> str:
         """Un sticker según el boceto de Sebastián (2026-07-22):
         MALE DENIM arriba · QR centrado en el cuerpo · ref+talla debajo.
         Todo dentro de la franja central (margen 5 mm por lado).
@@ -6343,13 +6343,21 @@ def generar_zpl_trabajo(t: dict) -> str:
         return (
             f"^FO{bx},6^FB{banda},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
             f"^FO{qr_x},30^BQN,2,4^FDQA,{dato}^FS"
-            f"^FO{bx},152^FB{banda},1,0,C,0^A0N,20,20^FD{dato}^FS")
+            f"^FO{bx},152^FB{banda},1,0,C,0^A0N,20,20^FD{texto or dato}^FS")
 
     if t.get("tipo") == "sticker_codigo":
         # Dato del código calcado del sticker real: REF + 'T' + talla (26534-1T14).
         # El rollo trae ZPL_STK_COLS stickers por fila → una fila imprime hasta N.
         stickers: list[str] = []
-        for talla, qty in sorted((p.get("tallas") or {}).items(),
+        texto = ""
+        if p.get("sin_talla"):
+            # Sticker LIBRE (2026-11-20, segundas por precio): no es una
+            # referencia con curva. El QR lleva el código tal cual (sin 'T' +
+            # talla), se repite `copias` veces y debajo va `texto` si viene
+            # (p. ej. QR 'SEGUNDA-40000' · leyenda 'SEGUNDA 40.000').
+            stickers = [codigo] * max(0, int(p.get("copias") or 0))
+            texto = _zpl_escape(p.get("texto") or "")
+        for talla, qty in sorted(({} if p.get("sin_talla") else p.get("tallas") or {}).items(),
                                  key=lambda kv: _orden_talla(kv[0])):
             stickers += [f"{codigo}T{_zpl_escape(str(talla))}"] * max(0, int(qty or 0))
         filas = []
@@ -6357,7 +6365,7 @@ def generar_zpl_trabajo(t: dict) -> str:
         for i in range(0, len(stickers), n):
             grupo = stickers[i:i + n]
             cuerpo = "".join(
-                _sticker_col(ZPL_STK_X0 + j * ZPL_STK_COL_PASO, d)
+                _sticker_col(ZPL_STK_X0 + j * ZPL_STK_COL_PASO, d, texto)
                 for j, d in enumerate(grupo))
             filas.append(
                 "^XA^CI28" + modo +
