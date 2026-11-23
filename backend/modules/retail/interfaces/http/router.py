@@ -635,6 +635,10 @@ class TallaSalida(BaseModel):
     codigo_barras: Optional[str] = None
     talla: str
     disponible: int
+    #  El precio de ESTA talla: no todas las de una referencia valen lo mismo
+    #  (la T16 de la 12608-1, $149.900 contra $139.900; 2026-11-23).
+    precio_con_iva_centavos: Optional[int] = None
+    tasa_iva: Optional[str] = None
 
 
 class ReferenciaSalida(BaseModel):
@@ -680,7 +684,9 @@ async def listar_referencias(
                 tallas=[
                     TallaSalida(variante_id=t.variante_id, sku=t.sku,
                                 codigo_barras=t.codigo_barras,
-                                talla=t.talla, disponible=t.disponible)
+                                talla=t.talla, disponible=t.disponible,
+                                precio_con_iva_centavos=t.precio_con_iva_centavos,
+                                tasa_iva=t.tasa_iva)
                     for t in r.tallas
                 ],
             )

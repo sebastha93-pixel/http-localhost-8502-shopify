@@ -39,6 +39,10 @@ export interface Talla {
   codigo_barras?: string | null;
   talla: string;
   disponible: number;
+  /** El precio de ESTA talla, con IVA. Una referencia no siempre cuesta lo
+   *  mismo en todas: la 12608-1 vale $139.900 y su T16 $149.900. */
+  precio_con_iva_centavos?: number;
+  tasa_iva?: string;
 }
 
 /** Una referencia con sus tallas — la forma que pide la rejilla del diseño. */

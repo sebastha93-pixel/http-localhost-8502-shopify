@@ -383,8 +383,11 @@ function PantallaVenta({ CAJA, onOtraCaja }: {
           descripcion: r.nombre,
           talla: t.talla,
           cantidad: 1,
-          precioConIva: r.precio_con_iva_centavos,
-          tasaIva: Number(r.tasa_iva),
+          // El de LA TALLA, no el de la referencia: con el de la referencia
+          // la T16 de la 12608-1 salía a $139.900 en vez de $149.900 y el
+          // servidor rechazaba el cobro (2026-11-23).
+          precioConIva: t.precio_con_iva_centavos || r.precio_con_iva_centavos,
+          tasaIva: Number(t.tasa_iva ?? r.tasa_iva),
           disponible: t.disponible,
         },
       ];
