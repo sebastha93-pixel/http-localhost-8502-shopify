@@ -89,6 +89,21 @@ def test_la_talla_agotada_de_una_referencia_que_si_hay_sale_en_cero(cliente):
     assert {t["talla"]: t["disponible"] for t in ref["tallas"]} == {"6": 2, "8": 0}
 
 
+def test_cada_talla_trae_SU_precio(cliente):
+    """La 12608-1 vale $139.900 y su T16 $149.900 (2026-11-23). La caja ponía
+    a todas el precio de la referencia y el servidor rechazaba el cobro."""
+    from backend.modules.retail.sincronizar_inventario import sincronizar
+    t16 = _p("12608-1T16", arrayanes=1)
+    t16["prices"] = [{"price_list": [{"value": 149900}]}]
+    t4 = _p("12608-1T4", arrayanes=1)
+    t4["prices"] = [{"price_list": [{"value": 139900}]}]
+    sincronizar(URL, aplicar=True, precios_de_lista=lambda c: {}, productos=[t4, t16])
+    [ref] = _catalogo(cliente)
+    assert {t["talla"]: t["precio_con_iva_centavos"] for t in ref["tallas"]} == {
+        "4": 13_990_000, "16": 14_990_000}
+    assert all(t["tasa_iva"] == ref["tasa_iva"] for t in ref["tallas"])
+
+
 def test_buscando_una_referencia_agotada_SE_VE_y_se_ve_que_no_hay(cliente):
     """Quien busca por código tiene que encontrarla en cero, no concluir que
     no existe."""
