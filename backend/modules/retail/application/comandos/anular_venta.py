@@ -82,6 +82,8 @@ class AnularVenta:
                    d.estado AS despacho,
                    s.estado AS estado_sesion,
                    coalesce(p.puede_anular_venta, false) AS puede,
+                   EXISTS (SELECT 1 FROM retail.devoluciones dv
+                            WHERE dv.venta_id = v.id) AS tiene_devoluciones,
                    (SELECT m.ubicacion_id
                       FROM retail.movimientos_inventario m
                      WHERE m.referencia_id = v.id AND m.delta < 0
@@ -112,6 +114,17 @@ class AnularVenta:
             raise ReglaDeNegocio(
                 "Ese pedido ya salió de la bodega. No se anula: cuando la "
                 "clienta lo reciba se hace el cambio o la devolución.")
+        # UNA VENTA CON CAMBIO O DEVOLUCIÓN NO SE ANULA. Anular devuelve TODAS
+        # las líneas y TODO lo cobrado, sin restar lo que la devolución ya
+        # devolvió: 2 jeans por $300.000, cambio de 1 que deja $150.000 de
+        # saldo, anular → salían $300.000 del arqueo, entraban 2 prendas y el
+        # saldo seguía vivo. Lo que queda se deshace con otra devolución, que
+        # sí lleva la cuenta de lo ya devuelto (auditoría dic-2026, T2).
+        if fila["tiene_devoluciones"]:
+            raise ReglaDeNegocio(
+                "Esa venta ya tuvo un cambio o una devolución, así que no se "
+                "anula entera. Para deshacer lo que queda, haz una devolución "
+                "de las prendas restantes.")
         # INV-V11: sólo del turno EN CURSO. Una venta de ayer no se anula
         # desde la caja: su plata ya se contó en un arqueo cerrado y
         # firmado, y tocarla ahora descuadra un turno que ya cuadró.
