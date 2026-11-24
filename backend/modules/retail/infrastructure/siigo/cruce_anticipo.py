@@ -40,7 +40,10 @@ from backend.modules.retail.application.comandos.drenar_outbox import (
     Aplazar,
     RechazoDefinitivo,
 )
+from backend.modules.retail.infrastructure.siigo import emisor_factura
 from backend.modules.retail.infrastructure.siigo.emisor_factura import (
+    MINUTOS_ENTRE_BUSQUEDAS,
+    MINUTOS_SIN_REENVIAR,
     RechazoDeSiigo,
     SiigoIO,
     _zona,
@@ -160,7 +163,7 @@ async def _cruzar(t, payload: dict, io: SiigoIO) -> Optional[str]:
 
     ids = {"s": payload["saldo_id"], "v": payload["venta_id"]}
     u = (await t.sesion.execute(text("""
-        SELECT u.monto, u.cruce_estado, u.cruce_numero, s.codigo,
+        SELECT u.monto, u.cruce_estado, u.cruce_numero, u.cruzado_en, s.codigo,
                v.numero AS venta, v.estado AS estado_venta, v.tienda_id,
                v.caja_id, v.sesion_id, ti.zona_horaria,
                f.estado AS f_estado, f.numero AS f_numero,
@@ -206,6 +209,17 @@ async def _cruzar(t, payload: dict, io: SiigoIO) -> Optional[str]:
         if creado:
             log.warning("[retail-fiscal] el cruce de %s ya estaba en Siigo: "
                         "se adopta, no se reenvía", u["codigo"])
+        else:
+            # Como la factura: 45 min sólo buscando antes de reenviar. Un
+            # asiento repetido cruza dos veces y deja la factura con saldo a
+            # favor (auditoría dic-2026, T4).
+            falta = _minutos_para_reenviar_cruce(u["cruzado_en"])
+            if falta > 0:
+                raise Aplazar(
+                    f"el cruce de {u['codigo']} quedó sin respuesta de Siigo; "
+                    f"se sigue buscando ({round(falta)} min más) antes de "
+                    "volver a enviarlo",
+                    minutos=min(falta, MINUTOS_ENTRE_BUSQUEDAS))
 
     if creado is None:
         factura = await io.leer_factura(u["f_id"])
@@ -230,8 +244,15 @@ async def _cruzar(t, payload: dict, io: SiigoIO) -> Optional[str]:
             await t.commit()
             raise RechazoDefinitivo(str(e)) from e
 
-        # SE CONFIRMA ANTES DE ENVIAR, igual que la factura.
-        await _anotar(t, ids, estado="enviando", error=None)
+        # SE CONFIRMA ANTES DE ENVIAR, igual que la factura. Mientras está
+        # «enviando», `cruzado_en` guarda CUÁNDO se envió (la espera antes de
+        # reenviar cuenta desde ahí); al cruzarse se sobrescribe con la hora
+        # del cruce. Así no hace falta una columna nueva en la base del POS.
+        await t.sesion.execute(text("""
+            UPDATE retail.saldo_usos
+               SET cruce_estado = 'enviando', cruce_error = NULL, cruzado_en = :ts
+             WHERE saldo_id = :s AND venta_id = :v
+        """), {**ids, "ts": emisor_factura._ahora()})
         await t.commit()
         try:
             creado = await io.crear_asiento(cuerpo)
@@ -259,6 +280,18 @@ async def _cruzar(t, payload: dict, io: SiigoIO) -> Optional[str]:
     log.info("[retail-fiscal] %s: %s cruzada con %s → %s", u["codigo"],
              u["n_numero"], u["f_numero"], numero)
     return f"{u['n_numero']} cruzada con {u['f_numero']}: {numero}"
+
+
+def _minutos_para_reenviar_cruce(enviado_en) -> float:
+    """Cuánto falta para poder reenviar un cruce que quedó «enviando». Sin
+    marca de envío (los anteriores a este cambio) se puede reenviar ya, que
+    es lo que hacían antes."""
+    if enviado_en is None:
+        return 0.0
+    if enviado_en.tzinfo is None:
+        enviado_en = enviado_en.replace(tzinfo=timezone.utc)
+    pasados = (emisor_factura._ahora() - enviado_en).total_seconds() / 60
+    return MINUTOS_SIN_REENVIAR - pasados
 
 
 async def _anotar(t, ids: dict, *, estado: str, error: Optional[str]) -> None:

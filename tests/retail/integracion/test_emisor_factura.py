@@ -1086,3 +1086,66 @@ def test_la_factura_que_sale_TARDE_lleva_la_fecha_de_hoy_no_la_de_la_venta(entor
     hoy = datetime.now(ZoneInfo("America/Bogota")).date().isoformat()
     assert siigo.enviadas[0]["date"] == hoy
     assert all(p["due_date"] == hoy for p in siigo.enviadas[0]["payments"])
+
+
+# ── Auditoría dic-2026: T3 y T4 en la nota crédito de una anulación ─────────
+
+def test_la_nota_credito_que_sale_TARDE_lleva_la_fecha_de_hoy(entorno, monkeypatch):
+    """T3. Una venta anulada de noche cuya nota crédito sale al otro día iba
+    con la fecha de la anulación, y Siigo rechaza un documento de ayer."""
+    from zoneinfo import ZoneInfo
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    siigo = SiigoFalso()
+    _drenar(siigo)
+    _anular()
+    _ejecutar(entorno, "UPDATE retail.ventas "
+                       "SET anulada_en = anulada_en - interval '2 days'")
+    assert _drenar(siigo, dentro_de=timedelta(minutes=5)).procesados == 1
+    hoy = datetime.now(ZoneInfo("America/Bogota")).date().isoformat()
+    assert siigo.nc_enviadas[0]["date"] == hoy
+
+
+def test_la_nota_credito_creada_TARDE_no_se_reenvia_antes_de_tiempo(entorno, monkeypatch):
+    """T4. Antes se reenviaba al minuto si Siigo todavía no la mostraba: el
+    mismo mecanismo que dejó 41 facturas repetidas. Ahora espera como la
+    factura, sólo buscando."""
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    siigo = SiigoFalso()
+    _drenar(siigo)
+    _anular()
+    siigo.al_crear_nc = "sin_respuesta"
+    assert _drenar(siigo, dentro_de=timedelta(minutes=5)).reintentos == 1
+    siigo.al_crear_nc = "ok"
+
+    for minutos in (8, 20, 40):
+        r = _drenar(siigo, dentro_de=timedelta(minutes=minutos))
+        assert (r.procesados, r.reintentos, r.fallidos) == (0, 0, 0), r.errores
+        assert len(siigo.nc_enviadas) == 1, f"reenvió a los {minutos} min"
+    nota = _leer(entorno, "SELECT ultimo_error FROM retail.outbox "
+                          "WHERE tipo = 'emitir_nota_credito'")[0][0]
+    assert "se sigue buscando" in nota
+
+    # Siigo por fin la crea, con la marca del envío que se había cortado.
+    siigo.nc_en_siigo.append({
+        "id": "nc-tarde", "name": "NC-1-7600", "prefix": None,
+        "observations": siigo.nc_enviadas[0]["observations"],
+        "stamp": {"status": "Draft"}})
+    r = _drenar(siigo, dentro_de=timedelta(minutes=46))
+    assert r.procesados == 1, r.errores
+    assert len(siigo.nc_enviadas) == 1 and len(siigo.nc_en_siigo) == 1
+    assert _docs(entorno)[1] == ("nota_credito", "emitido", "NC-1-7600")
+
+
+def test_la_nota_credito_que_nunca_llego_si_se_reenvia_pasado_el_plazo(entorno, monkeypatch):
+    monkeypatch.setenv("RETAIL_FISCAL_MODO", "produccion")
+    from backend.modules.retail.infrastructure.siigo import emisor_factura
+    siigo = SiigoFalso()
+    _drenar(siigo)
+    _anular()
+    siigo.al_crear_nc = "sin_respuesta"
+    _drenar(siigo, dentro_de=timedelta(minutes=5))
+    siigo.al_crear_nc = "ok"
+    r = _drenar(siigo, dentro_de=timedelta(
+        minutes=5 + emisor_factura.MINUTOS_SIN_REENVIAR + 2))
+    assert r.procesados == 1, r.errores
+    assert len(siigo.nc_enviadas) == 2 and len(siigo.nc_en_siigo) == 1

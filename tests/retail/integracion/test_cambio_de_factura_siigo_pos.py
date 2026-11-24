@@ -740,6 +740,8 @@ class _SiigoDeMentira:
         self.enviadas.append(cuerpo)
         if self.al_crear == "rechazo":
             raise RechazoDeSiigo('HTTP 400: {"Code":"invalid_total_payments"}')
+        if self.al_crear == "sin_respuesta":
+            raise RuntimeError("timeout")
         nc = {"id": f"nc-{len(self.enviadas)}", "name": f"NC-1-{7600 + len(self.enviadas)}",
               "observations": cuerpo["observations"], "date": cuerpo["date"],
               "customer": cuerpo["customer"],
@@ -768,6 +770,8 @@ class _SiigoDeMentira:
 
     async def crear_asiento(self, cuerpo):
         self.asientos_enviados.append(cuerpo)
+        if self.al_cruzar == "sin_respuesta":
+            raise RuntimeError("timeout")
         a = {"id": f"cc-{len(self.asientos_enviados)}",
              "name": f"CC-1-{5700 + len(self.asientos_enviados)}",
              "observations": cuerpo["observations"]}
@@ -1026,6 +1030,53 @@ def test_si_el_envio_del_cruce_se_corta_NO_se_cruza_dos_veces(tienda, monkeypatc
     _drenar_nc(siigo, monkeypatch, dentro_de=600)
     assert len(siigo.asientos_enviados) == 1               # se adoptó
     assert _uno(tienda, "SELECT cruce_numero FROM retail.saldo_usos") == "CC-1-5701"
+
+
+def _drenar_con_reloj(siigo, monkeypatch, *, dentro_de):
+    """Como `_drenar_nc`, pero el reloj de «cuánto hace que se envió» corre
+    con el del drenaje: si la prueba dice «30 minutos después», para el
+    emisor también pasaron."""
+    from datetime import datetime, timedelta, timezone
+    from backend.modules.retail.infrastructure.siigo import emisor_factura
+    monkeypatch.setattr(emisor_factura, "_ahora",
+                        lambda: datetime.now(timezone.utc) + timedelta(minutes=dentro_de))
+    return _drenar_nc(siigo, monkeypatch, dentro_de=dentro_de)
+
+
+def test_la_nota_credito_del_cambio_NO_se_reenvia_antes_de_tiempo(tienda, monkeypatch):
+    """Auditoría dic-2026, T4. Se reenviaba al minuto si Siigo todavía no la
+    mostraba: el mecanismo que dejó 41 facturas repetidas."""
+    _con_credito(tienda, {"26602-1T6": 1})
+    siigo = _SiigoDeMentira()
+    siigo.al_crear = "sin_respuesta"
+    _drenar_con_reloj(siigo, monkeypatch, dentro_de=1)
+    assert len(siigo.enviadas) == 1 and siigo.en_siigo == []
+    siigo.al_crear = "ok"
+    for minutos in (10, 30):
+        _drenar_con_reloj(siigo, monkeypatch, dentro_de=minutos)
+        assert len(siigo.enviadas) == 1, f"reenvió a los {minutos} min"
+    # Pasado el plazo sin aparecer, sí se reenvía: no se queda sin nota.
+    _drenar_con_reloj(siigo, monkeypatch, dentro_de=50)
+    assert len(siigo.enviadas) == 2 and len(siigo.en_siigo) == 1
+
+
+def test_el_cruce_sin_respuesta_NO_se_reenvia_antes_de_tiempo(tienda, monkeypatch):
+    """T4 en el cruce: un asiento repetido cruza dos veces y deja la factura
+    con saldo a favor."""
+    _con_credito(tienda, {"26602-1T6": 1})
+    _compra_facturada(tienda)
+    siigo = _SiigoDeMentira()
+    siigo.al_cruzar = "sin_respuesta"
+    _drenar_con_reloj(siigo, monkeypatch, dentro_de=1)      # sale la nota
+    _drenar_con_reloj(siigo, monkeypatch, dentro_de=5)      # primer envío
+    assert len(siigo.asientos_enviados) == 1 and siigo.asientos == []
+    siigo.al_cruzar = "ok"
+    for minutos in (10, 30):
+        _drenar_con_reloj(siigo, monkeypatch, dentro_de=minutos)
+        assert len(siigo.asientos_enviados) == 1, f"reenvió a los {minutos} min"
+    _drenar_con_reloj(siigo, monkeypatch, dentro_de=55)
+    assert len(siigo.asientos_enviados) == 2 and len(siigo.asientos) == 1
+    assert _uno(tienda, "SELECT cruce_estado FROM retail.saldo_usos") == "cruzado"
 
 
 def test_una_factura_que_ya_cruzaron_a_mano_NO_se_vuelve_a_cruzar(tienda, monkeypatch):

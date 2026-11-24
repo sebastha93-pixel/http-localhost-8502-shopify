@@ -26,10 +26,13 @@ from backend.modules.retail.application.comandos.drenar_outbox import (
     Aplazar,
     RechazoDefinitivo,
 )
+from backend.modules.retail.infrastructure.siigo import emisor_factura
 from backend.modules.retail.infrastructure.siigo.emisor_factura import (
     HORAS_SIN_VALIDAR,
+    MINUTOS_ENTRE_BUSQUEDAS,
     RechazoDeSiigo,
     SiigoIO,
+    _minutos_para_reenviar,
     _zona,
     modo,
 )
@@ -110,7 +113,8 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
 
     doc_id = doc_id_de(devolucion_id)
     doc = (await t.sesion.execute(text("""
-        SELECT id, estado, numero, documento_externo_id, creado_en
+        SELECT id, estado, numero, documento_externo_id, creado_en,
+               payload_snapshot->>'_enviado_en' AS enviado_en
           FROM retail.documentos_fiscales WHERE id = :i
     """), {"i": doc_id})).mappings().first()
     if doc and doc["estado"] == "emitido":
@@ -138,6 +142,17 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
             log.warning("[retail-fiscal] la nota crédito del cambio de %s ya "
                         "estaba en Siigo: se adopta, no se reenvía",
                         d["numero_venta"])
+        else:
+            # Como la factura: 45 min sólo buscando antes de reenviar. Antes se
+            # reenviaba al minuto y podía quedar repetida (auditoría dic-2026,
+            # T4).
+            falta = _minutos_para_reenviar(doc)
+            if falta > 0:
+                raise Aplazar(
+                    f"la nota crédito del cambio de {d['numero_venta']} quedó "
+                    f"sin respuesta de Siigo; se sigue buscando "
+                    f"({round(falta)} min más) antes de volver a enviarla",
+                    minutos=min(falta, MINUTOS_ENTRE_BUSQUEDAS))
 
     if creada is None:
         devueltas = {r["sku"]: int(r["n"]) for r in (await t.sesion.execute(text("""
@@ -167,7 +182,8 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
                    intentos = retail.documentos_fiscales.intentos + 1
         """), {"i": doc_id, "v": d["venta_id"],
                "p": json.dumps({**cuerpo, "_modo": en_modo,
-                                "_devolucion": devolucion_id})})
+                                "_devolucion": devolucion_id,
+                                "_enviado_en": emisor_factura._ahora().isoformat()})})
         # SE CONFIRMA ANTES DE ENVIAR, igual que la factura.
         await t.commit()
 
