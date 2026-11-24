@@ -271,6 +271,33 @@ def test_al_tomar_un_trabajo_queda_anotado_cuando(uow):
     assert visto["fila"].proximo_intento_en == AHORA
 
 
+def test_lo_que_otra_pasada_rescato_mientras_tanto_NO_se_procesa_dos_veces(uow):
+    """Auditoría dic-2026, T8. El lote entero queda con la misma hora de toma.
+    Si el primer trabajo se demora (Siigo lento), otra pasada rescata y
+    procesa el SEGUNDO; cuando ésta llega a él, antes lo procesaba otra vez:
+    una factura repetida. Ahora lo vuelve a reclamar y, como ya no es suyo,
+    lo suelta."""
+    from backend.modules.retail.application.comandos.drenar_outbox import DrenarOutbox
+    u, motor = uow
+    _correr(_encolar(u, "lento", agregado_id="A"))
+    _correr(_encolar(u, "contar", agregado_id="B"))
+    llamadas = {"contar": 0, "lento": 0}
+
+    async def contar(t, payload):
+        llamadas["contar"] += 1
+
+    async def lento(t, payload):
+        llamadas["lento"] += 1
+        if llamadas["lento"] == 1:
+            # Mientras éste «tarda 20 minutos», corre otra pasada.
+            await DrenarOutbox(u, {"lento": lento, "contar": contar}).ejecutar(
+                ahora=AHORA + timedelta(minutes=20))
+
+    r = _drenar(u, {"lento": lento, "contar": contar})
+    assert llamadas["contar"] == 1, "el segundo trabajo se procesó dos veces"
+    assert r.perdidos == 1
+
+
 async def _varar(u, tomado_en, creado_en=None):
     """Deja el trabajo como lo deja `_tomar`: `procesando`, con la hora en que
     se tomó en `proximo_intento_en`."""

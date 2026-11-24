@@ -30,6 +30,7 @@ los otros diecinueve es una cola que no avanza.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Awaitable, Callable, Dict, List, Optional
@@ -71,6 +72,9 @@ class ResumenDrenaje:
     #  para que no se lean como errores en el panel: no lo son.
     sin_manejador: int = 0
     rescatados: int = 0
+    #  Tomados por esta pasada pero que otra rescató y se llevó mientras
+    #  tanto: se sueltan sin procesar.
+    perdidos: int = 0
     errores: List[str] = field(default_factory=list)
 
 
@@ -100,11 +104,43 @@ class DrenarOutbox:
         resumen = ResumenDrenaje()
         resumen.rescatados = await self._rescatar_varados(ahora)
 
-        for trabajo in await self._tomar(ahora, limite):
+        trabajos = await self._tomar(ahora, limite)
+        inicio = time.monotonic()
+        for trabajo in trabajos:
             resumen.tomados += 1
+            # CADA TRABAJO SE VUELVE A RECLAMAR JUSTO ANTES DE PROCESARLO. El
+            # lote entero queda con la misma hora de toma; si Siigo está lento
+            # (13 timeouts en 18 min el 17-nov) y el lote pasa de
+            # VARADO_MINUTOS, otra pasada rescataba los que faltaban, los
+            # tomaba, y los dos procesos los corrían a la vez: una factura
+            # repetida. Si otra pasada ya lo tomó, éste lo suelta. Y al
+            # reclamarlo se le pone SU hora, así que el rescate sólo lo ve
+            # varado si ESE trabajo pasa de 15 min (auditoría dic-2026, T8).
+            # En segundos enteros: el rescate mide en minutos, y así el primer
+            # trabajo conserva exactamente la hora de toma.
+            ahora_trabajo = ahora + timedelta(
+                seconds=int(time.monotonic() - inicio))
+            if not await self._reclamar(trabajo, tomado_en=ahora,
+                                        ahora=ahora_trabajo):
+                resumen.perdidos += 1
+                continue
             await self._procesar(trabajo, ahora, resumen)
 
         return resumen
+
+    async def _reclamar(self, trabajo: dict, *, tomado_en: datetime,
+                        ahora: datetime) -> bool:
+        """True si el trabajo sigue siendo de ESTA pasada (y lo renueva)."""
+        async with self._uow as t:
+            sigue = (await t.sesion.execute(text("""
+                UPDATE retail.outbox SET proximo_intento_en = :ahora
+                 WHERE id = :i AND estado = 'procesando'
+                   AND proximo_intento_en = :tomado
+             RETURNING id
+            """), {"i": trabajo["id"], "ahora": ahora,
+                   "tomado": tomado_en})).first()
+            await t.commit()
+        return sigue is not None
 
     # ── Paso 0 · rescatar lo varado ─────────────────────────────────────────
 
