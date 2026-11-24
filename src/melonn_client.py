@@ -599,7 +599,7 @@ CODIGOS_PROCESO_INTERNO = {3, 4, 10, 12, 22, 25, 27}
 #   En preparación   → 1,2,5,23,24,28,39 "En bodega de Melonn, todavía NO salió"
 #   En tránsito      → 7           "Con la transportadora, en la calle"
 #   Entregado        → 6, 8        "Picked-up by buyer" / "Delivered to buyer"
-#   Novedades ext.   → 20 + NOMBRE (código no confirmado en API docs)
+#   Novedades ext.   → 13 (sin stock), 20 + NOMBRE (código no confirmado en API docs)
 #
 # CORREGIDO 2026-07-31. `en_transito` incluía 5 (Packed), 24 (Prepared for
 # dispatch) y 28 (Ready For Packing) — estados de BODEGA. Se metieron ahí a
@@ -623,7 +623,12 @@ CODIGOS_PENDIENTE_DESPACHO = {26, 29}
 CODIGOS_EN_PREPARACION     = {1, 2, 5, 23, 24, 28, 39}
 CODIGOS_EN_TRANSITO        = {7}
 CODIGOS_ENTREGADO          = {6, 8}
-CODIGOS_NOVEDAD            = {20}
+# 13 = "on stand by - not able to fulfil - no stock": la orden pide algo que no
+# hay en la bodega de Melonn. No sale hasta que alguien repone o cancela, así
+# que es una novedad (gestión humana), no un hold de "Autorizar" (26/29). Estaba
+# fuera de TODOS los conjuntos: del 17 al 20-nov-2026 esos pedidos no salieron
+# en ninguna pestaña y la salud de logística estuvo en rojo (auditoría L1).
+CODIGOS_NOVEDAD            = {13, 20}
 CODIGOS_ACTIVOS            = (
     CODIGOS_PENDIENTE_DESPACHO
     | CODIGOS_EN_PREPARACION
@@ -655,6 +660,16 @@ ESTADOS_EXCLUIR = {
 # También se detectan por nombre como fallback para variantes futuras
 ESTADOS_NOVEDAD_EXTERNA = {
     "Delivery not posible",   # 20 — transportadora no pudo entregar
+    # Familia "on stand by - not able to fulfil": Melonn no puede alistar. El
+    # "no stock" es el 13 (visto en producción el 17-nov-2026); los otros dos
+    # tienen código sin confirmar, así que entran por NOMBRE para que no repitan
+    # el hueco del 13. metricas.NOVEDADES_VISIBLES ya los lista como novedad.
+    "on stand by - not able to fulfil - no stock",            # 13
+    "on stand by - not able to fulfil - expired promises",
+    "on stand by - not able to fulfil - SM restriction",
+    "En espera - sin stock",
+    "En espera - promesas vencidas",
+    "Restricción método de envío",
 }
 
 # Entregados COD — códigos 6 y 8
@@ -2276,7 +2291,7 @@ def _sub_estado_logistico(estado: str, codigo: int = 0, es_cod: bool = False) ->
       pendiente_despacho → 26, 29   esperando que el seller libere
       en_preparacion     → 1,2,5,23,24,28,39  en la bodega de Melonn, NO salió
       en_transito        → 7        con la transportadora, en la calle
-      novedad            → 20 + novedades externas por nombre
+      novedad            → 13, 20 + novedades externas por nombre
       entregado          → 6, 8
 
     OJO: "en_transito" es SOLO el 7. Antes incluía 5/24/28 (estados de bodega) y
