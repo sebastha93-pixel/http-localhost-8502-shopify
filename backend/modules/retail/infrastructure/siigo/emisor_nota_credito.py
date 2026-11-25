@@ -30,10 +30,13 @@ from backend.modules.retail.application.comandos.drenar_outbox import (
     Aplazar,
     RechazoDefinitivo,
 )
+from backend.modules.retail.infrastructure.siigo import emisor_factura
 from backend.modules.retail.infrastructure.siigo.emisor_factura import (
     HORAS_SIN_VALIDAR,
+    MINUTOS_ENTRE_BUSQUEDAS,
     RechazoDeSiigo,
     SiigoIO,
+    _minutos_para_reenviar,
     _zona,
     modo,
 )
@@ -130,7 +133,8 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
                       f"nota crédito en Siigo")
 
     doc = (await t.sesion.execute(text("""
-        SELECT id, estado, numero, documento_externo_id, creado_en
+        SELECT id, estado, numero, documento_externo_id, creado_en,
+               payload_snapshot->>'_enviado_en' AS enviado_en
           FROM retail.documentos_fiscales
          WHERE venta_id = :v AND tipo = 'nota_credito'
            AND right(id::text, 3) = 'NCR'
@@ -147,16 +151,40 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
             numero=doc["numero"], factura_numero=factura["numero"],
             desde=doc["creado_en"])
 
-    cuando = v["anulada_en"] or datetime.now(timezone.utc)
-    fecha = cuando.astimezone(_zona(v["zona_horaria"])).date().isoformat()
+    # LA FECHA ES LA DE HOY, NO LA DE LA ANULACIÓN. Siigo rechaza un
+    # documento con fecha de ayer («Invalid date»): una venta anulada de noche
+    # cuya factura salió al otro día dejaba su nota crédito rechazada para
+    # siempre. Es la misma regla de la factura y de la nota del cambio
+    # (auditoría dic-2026, T3).
+    zona = _zona(v["zona_horaria"])
+    hoy = datetime.now(timezone.utc).astimezone(zona).date()
+    dia_anulacion = (v["anulada_en"] or datetime.now(timezone.utc)) \
+        .astimezone(zona).date()
+    fecha = max(dia_anulacion, hoy).isoformat()
     marca = marca_nc_de(v["id"], v["numero"])
 
     creada = None
     if doc and doc["estado"] == "enviando":
-        creada = await io.buscar_nc_por_marca(desde=fecha, marca=marca)
+        # Se busca desde el día MÁS VIEJO en que pudo crearse: el envío
+        # anterior pudo salir con la fecha de ayer.
+        desde = min(dia_anulacion,
+                    doc["creado_en"].astimezone(zona).date()).isoformat()
+        creada = await io.buscar_nc_por_marca(desde=desde, marca=marca)
         if creada:
             log.warning("[retail-fiscal] la nota crédito de %s ya estaba en "
                         "Siigo: se adopta, no se reenvía", v["numero"])
+        else:
+            # NO ESTÁ… TODAVÍA. Siigo puede crearla minutos después de que se
+            # cortó el envío. Antes se reenviaba al minuto: el mismo
+            # mecanismo que dejó 41 facturas repetidas. Ahora espera como la
+            # factura: 45 min sólo buscando (auditoría dic-2026, T4).
+            falta = _minutos_para_reenviar(doc)
+            if falta > 0:
+                raise Aplazar(
+                    f"la nota crédito de {v['numero']} quedó sin respuesta de "
+                    f"Siigo; se sigue buscando ({round(falta)} min más) antes "
+                    "de volver a enviarla",
+                    minutos=min(falta, MINUTOS_ENTRE_BUSQUEDAS))
 
     if creada is None:
         # La factura se lee de SIIGO, no de lo que el POS cree que mandó: la
@@ -179,7 +207,8 @@ async def _emitir(t, payload: dict, io: SiigoIO) -> Optional[str]:
                SET estado = 'enviando', payload_snapshot = EXCLUDED.payload_snapshot,
                    intentos = retail.documentos_fiscales.intentos + 1
         """), {"i": doc_id, "v": venta_id,
-               "p": json.dumps({**cuerpo, "_modo": en_modo})})
+               "p": json.dumps({**cuerpo, "_modo": en_modo,
+                                "_enviado_en": emisor_factura._ahora().isoformat()})})
         # SE CONFIRMA ANTES DE ENVIAR, igual que la factura.
         await t.commit()
 

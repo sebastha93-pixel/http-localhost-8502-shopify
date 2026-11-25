@@ -36,6 +36,7 @@ export function DialogoDescuento({
 }) {
   const [pct, setPct] = useState<number>(RAPIDOS[0]);
   const [otro, setOtro] = useState("");
+  const [soloEnteros, setSoloEnteros] = useState(false);
   const [motivo, setMotivo] = useState("");
 
   const monto = porcentaje(base, pct);
@@ -67,16 +68,22 @@ export function DialogoDescuento({
         ))}
       </div>
 
-      {/* ENTERO, de 1 a 100. Siigo sólo acepta el descuento como porcentaje
+      {/* ENTERO, de 1 a 99. Siigo sólo acepta el descuento como porcentaje
           entero: un 12,5 % saldría en la factura como el precio ya rebajado,
-          sin mostrar el descuento. */}
+          sin mostrar el descuento. Y un 100 % hecho a mano es un obsequio:
+          la venta pasaba y su factura quedaba rechazada para siempre.
+          «12,5» o «12.5» cuenta como 12. Antes se borraba la coma, quedaba
+          «125» y el tope lo volvía 100 % (auditoría dic-2026, T7). */}
       <label className="mt-3 flex items-center gap-2 tabular text-[12px] text-[var(--pos-600)]">
         <span>Otro porcentaje</span>
         <input
           value={otro}
           onChange={(e) => {
-            const limpio = e.target.value.replace(/\D/g, "").slice(0, 3);
-            const n = Math.min(Number(limpio || 0), 100);
+            const crudo = e.target.value;
+            const entero = crudo.split(/[.,]/)[0];
+            setSoloEnteros(entero !== crudo);
+            const limpio = entero.replace(/\D/g, "").slice(0, 2);
+            const n = Number(limpio || 0);
             setOtro(limpio ? String(n) : "");
             if (n > 0) setPct(n);
           }}
@@ -87,6 +94,11 @@ export function DialogoDescuento({
         />
         <span>%</span>
       </label>
+      {soloEnteros && (
+        <p className="mt-1 tabular text-[11px] text-[var(--pos-600)]">
+          Solo porcentajes enteros: quedó en {otro || "0"} %.
+        </p>
+      )}
 
       <label className="mt-4 block kicker">
         MOTIVO (OBLIGATORIO)

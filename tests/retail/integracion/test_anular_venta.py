@@ -257,6 +257,32 @@ def test_no_se_anula_una_venta_de_un_turno_YA_CERRADO(entorno):
     assert "nota crédito" in r.json()["detail"]["mensaje"].lower()
 
 
+def test_no_se_anula_una_venta_que_ya_tuvo_una_devolucion(entorno):
+    """Anular devuelve TODO lo cobrado y TODAS las prendas, sin restar lo que
+    ya devolvió la devolución: la plata y la prenda salían dos veces."""
+    c, motor, entrar_como = entorno
+    r = c.post("/api/retail/devoluciones", json={
+        "devolucion_id": "01JQ8X4T5N7D009R8S9V0W1X2Y", "venta_id": VENTA,
+        "seleccion": {"92611-1T10": 1}, "motivo": "talla",
+        "reembolso": "efectivo"})
+    assert r.status_code == 200, r.text
+    stock_antes = _leer(motor, "SELECT cantidad FROM retail.stock_ubicacion "
+                               " WHERE ubicacion_id=:u AND variante_id=:v",
+                        {"u": UBICACION, "v": VARIANTE}).cantidad
+
+    entrar_como("laura", "Laura M.")
+    r = _anular(c)
+    assert r.status_code == 400
+    assert "devolución" in r.json()["detail"]["mensaje"].lower()
+
+    # Nada se movió: la venta sigue viva y el stock igual.
+    assert _leer(motor, "SELECT estado FROM retail.ventas WHERE id=:i",
+                 {"i": VENTA}).estado == "cerrada"
+    assert _leer(motor, "SELECT cantidad FROM retail.stock_ubicacion "
+                        " WHERE ubicacion_id=:u AND variante_id=:v",
+                 {"u": UBICACION, "v": VARIANTE}).cantidad == stock_antes
+
+
 def test_una_venta_que_no_existe(entorno):
     c, _, entrar_como = entorno
     entrar_como("laura", "Laura M.")
