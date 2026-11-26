@@ -44,3 +44,13 @@ def test_sin_ajuste_queda_igual():
     zpl = svc.generar_zpl_trabajo(_trabajo(
         codigo_referencia="26640-1", tallas={"10": 1}))
     assert ",30^BQN" in zpl and ",152^FB" in zpl
+
+
+def test_ajuste_por_elemento_se_suma_a_dy():
+    zpl = svc.generar_zpl_trabajo(_trabajo(
+        codigo_referencia="SEGUNDA-40000", sin_talla=True, copias=1,
+        dy=34, dy_marca=16, dy_qr=8))
+    m = svc.ZPL_STK_X0 + svc.ZPL_STK_MARGEN
+    assert f"^FO{m},56^" in zpl          # marca 6+34+16
+    assert ",72^BQN" in zpl              # QR 30+34+8
+    assert f"^FO{m},186^" in zpl         # leyenda 152+34

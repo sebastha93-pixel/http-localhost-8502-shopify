@@ -6337,6 +6337,12 @@ def generar_zpl_trabajo(t: dict) -> str:
         except Exception:
             return 0
     dx, dy = _dots(p.get("dx")), _dots(p.get("dy"))
+    # Ajuste extra POR ELEMENTO (se suma a `dy`): el ^BQ del PC42E-T pinta el
+    # QR ~1,5 mm más abajo que su ^FO, así que la marca necesita bajar más que
+    # el QR y la leyenda (foto 2026-11-26: MALE DENIM cortado arriba).
+    dy_marca = dy + _dots(p.get("dy_marca"))
+    dy_qr    = dy + _dots(p.get("dy_qr"))
+    dy_texto = dy + _dots(p.get("dy_texto"))
 
     def _sticker_col(x: int, dato: str, texto: str = "") -> str:
         """Un sticker según el boceto de Sebastián (2026-07-22):
@@ -6352,9 +6358,9 @@ def generar_zpl_trabajo(t: dict) -> str:
         qr_nucleo = 21 * 4   # 84 dots ≈ 10.5 mm — mag 4 con el alto de 26 mm
         qr_x = x + (ZPL_STK_COL_ANCHO - qr_nucleo) // 2
         return (
-            f"^FO{bx},{max(0, 6 + dy)}^FB{banda},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
-            f"^FO{qr_x},{max(0, 30 + dy)}^BQN,2,4^FDQA,{dato}^FS"
-            f"^FO{bx},{max(0, 152 + dy)}^FB{banda},1,0,C,0^A0N,20,20^FD{texto or dato}^FS")
+            f"^FO{bx},{max(0, 6 + dy_marca)}^FB{banda},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
+            f"^FO{qr_x},{max(0, 30 + dy_qr)}^BQN,2,4^FDQA,{dato}^FS"
+            f"^FO{bx},{max(0, 152 + dy_texto)}^FB{banda},1,0,C,0^A0N,20,20^FD{texto or dato}^FS")
 
     if t.get("tipo") == "sticker_codigo":
         # Dato del código calcado del sticker real: REF + 'T' + talla (26534-1T14).
