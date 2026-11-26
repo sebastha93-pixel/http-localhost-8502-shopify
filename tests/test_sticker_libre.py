@@ -70,3 +70,14 @@ def test_lista_con_referencia_y_precio():
     m = svc.ZPL_STK_X0 + svc.ZPL_STK_MARGEN
     assert f"^FO{m},174^" in zpl and f"^FO{m},192^" in zpl  # ref y precio
     assert "REPOSICION" not in zpl
+
+
+def test_layout_precio_grande():
+    zpl = svc.generar_zpl_trabajo(_trabajo(
+        codigo_referencia="REPOSICION",
+        layout={"marca": [56, 18], "qr": [64], "ref": [166, 16], "precio": [181, 30, 30]},
+        items=[{"dato": "26630-1T8", "precio": "$149.900", "qty": 1}]))
+    assert ",56^FB" in zpl and "^A0N,18,18^FDMALE DENIM^FS" in zpl
+    assert ",64^BQN,2,4^FDQA,26630-1T8^FS" in zpl
+    assert "^A0N,16,16^FD26630-1T8^FS" in zpl
+    assert ",181^FB240,1,0,C,0^A0N,30,30^FD$149.900^FS" in zpl

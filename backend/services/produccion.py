@@ -6343,6 +6343,7 @@ def generar_zpl_trabajo(t: dict) -> str:
     dy_marca = dy + _dots(p.get("dy_marca"))
     dy_qr    = dy + _dots(p.get("dy_qr"))
     dy_texto = dy + _dots(p.get("dy_texto"))
+    lay = p.get("layout") if isinstance(p.get("layout"), dict) else None
 
     def _sticker_col(x: int, dato: str, texto: str = "", precio: str = "") -> str:
         """Un sticker según el boceto de Sebastián (2026-07-22):
@@ -6357,6 +6358,27 @@ def generar_zpl_trabajo(t: dict) -> str:
         # el núcleo, no sobre el campo (foto 2026-07-23: el QR caía a la izq.).
         qr_nucleo = 21 * 4   # 84 dots ≈ 10.5 mm — mag 4 con el alto de 26 mm
         qr_x = x + (ZPL_STK_COL_ANCHO - qr_nucleo) // 2
+        if precio and lay:
+            # Diseño con PRECIO GRANDE para el cliente (2026-11-26). `layout`
+            # trae posiciones ABSOLUTAS (dots) y tamaños por elemento, ya
+            # calibrados contra el rollo: {"marca":[y,alto], "qr":[y],
+            # "ref":[y,alto], "precio":[y,alto,ancho]}. El precio usa todo el
+            # ancho del sticker (no la franja) para poder crecer.
+            def _l(k, i, d):
+                try:
+                    return max(0, min(400, int((lay.get(k) or [])[i])))
+                except Exception:
+                    return d
+            ancho = ZPL_STK_COL_ANCHO - 16
+            ph = _l("precio", 1, 28)
+            return (
+                f"^FO{bx},{_l('marca', 0, 56)}^FB{banda},1,0,C,0"
+                f"^A0N,{_l('marca', 1, 18)},{_l('marca', 1, 18)}^FDMALE DENIM^FS"
+                f"^FO{qr_x},{_l('qr', 0, 64)}^BQN,2,4^FDQA,{dato}^FS"
+                f"^FO{bx},{_l('ref', 0, 166)}^FB{banda},1,0,C,0"
+                f"^A0N,{_l('ref', 1, 16)},{_l('ref', 1, 16)}^FD{texto or dato}^FS"
+                f"^FO{x + 8},{_l('precio', 0, 181)}^FB{ancho},1,0,C,0"
+                f"^A0N,{ph},{_l('precio', 2, ph)}^FD{precio}^FS")
         cabeza = (
             f"^FO{bx},{max(0, 6 + dy_marca)}^FB{banda},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
             f"^FO{qr_x},{max(0, 30 + dy_qr)}^BQN,2,4^FDQA,{dato}^FS")
