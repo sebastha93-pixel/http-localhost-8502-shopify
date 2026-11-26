@@ -81,3 +81,14 @@ def test_layout_precio_grande():
     assert ",64^BQN,2,4^FDQA,26630-1T8^FS" in zpl
     assert "^A0N,16,16^FD26630-1T8^FS" in zpl
     assert ",181^FB240,1,0,C,0^A0N,30,30^FD$149.900^FS" in zpl
+
+
+def test_layout_referencia_y_precio_en_un_renglon():
+    zpl = svc.generar_zpl_trabajo(_trabajo(
+        codigo_referencia="REPOSICION",
+        layout={"marca": [56, 26], "qr": [72], "linea": [184, 22, 20]},
+        items=[{"dato": "26630-1T10", "precio": "$149.900", "qty": 1}]))
+    assert "^A0N,26,26^FDMALE DENIM^FS" in zpl
+    assert ",72^BQN,2,4^FDQA,26630-1T10^FS" in zpl
+    assert ",184^FB240,1,0,C,0^A0N,22,20^FD26630-1T10 $149.900^FS" in zpl
+    assert zpl.count("$149.900") == 1

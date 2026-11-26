@@ -6371,6 +6371,17 @@ def generar_zpl_trabajo(t: dict) -> str:
                     return d
             ancho = ZPL_STK_COL_ANCHO - 16
             ph = _l("precio", 1, 28)
+            if lay.get("linea"):
+                # Referencia y precio en UN renglón a todo el ancho, del
+                # tamaño de la marca (pedido de Sebastián, 2026-11-26):
+                # "linea": [y, alto, ancho].
+                lh = _l("linea", 1, 22)
+                return (
+                    f"^FO{bx},{_l('marca', 0, 56)}^FB{banda},1,0,C,0"
+                    f"^A0N,{_l('marca', 1, 22)},{_l('marca', 1, 22)}^FDMALE DENIM^FS"
+                    f"^FO{qr_x},{_l('qr', 0, 72)}^BQN,2,4^FDQA,{dato}^FS"
+                    f"^FO{x + 8},{_l('linea', 0, 184)}^FB{ancho},1,0,C,0"
+                    f"^A0N,{lh},{_l('linea', 2, lh)}^FD{texto or dato} {precio}^FS")
             return (
                 f"^FO{bx},{_l('marca', 0, 56)}^FB{banda},1,0,C,0"
                 f"^A0N,{_l('marca', 1, 18)},{_l('marca', 1, 18)}^FDMALE DENIM^FS"
