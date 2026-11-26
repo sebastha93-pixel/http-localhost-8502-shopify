@@ -6344,7 +6344,7 @@ def generar_zpl_trabajo(t: dict) -> str:
     dy_qr    = dy + _dots(p.get("dy_qr"))
     dy_texto = dy + _dots(p.get("dy_texto"))
 
-    def _sticker_col(x: int, dato: str, texto: str = "") -> str:
+    def _sticker_col(x: int, dato: str, texto: str = "", precio: str = "") -> str:
         """Un sticker según el boceto de Sebastián (2026-07-22):
         MALE DENIM arriba · QR centrado en el cuerpo · ref+talla debajo.
         Todo dentro de la franja central (margen 5 mm por lado).
@@ -6357,32 +6357,51 @@ def generar_zpl_trabajo(t: dict) -> str:
         # el núcleo, no sobre el campo (foto 2026-07-23: el QR caía a la izq.).
         qr_nucleo = 21 * 4   # 84 dots ≈ 10.5 mm — mag 4 con el alto de 26 mm
         qr_x = x + (ZPL_STK_COL_ANCHO - qr_nucleo) // 2
-        return (
+        cabeza = (
             f"^FO{bx},{max(0, 6 + dy_marca)}^FB{banda},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
-            f"^FO{qr_x},{max(0, 30 + dy_qr)}^BQN,2,4^FDQA,{dato}^FS"
+            f"^FO{qr_x},{max(0, 30 + dy_qr)}^BQN,2,4^FDQA,{dato}^FS")
+        if precio:
+            # Dos renglones bajo el QR (referencia + precio), 2026-11-26. Van
+            # más apretados y en 18 para caber antes del fin de la etiqueta.
+            return cabeza + (
+                f"^FO{bx},{max(0, 140 + dy_texto)}^FB{banda},1,0,C,0^A0N,18,18^FD{texto or dato}^FS"
+                f"^FO{bx},{max(0, 158 + dy_texto)}^FB{banda},1,0,C,0^A0N,18,18^FD{precio}^FS")
+        return cabeza + (
             f"^FO{bx},{max(0, 152 + dy_texto)}^FB{banda},1,0,C,0^A0N,20,20^FD{texto or dato}^FS")
 
     if t.get("tipo") == "sticker_codigo":
         # Dato del código calcado del sticker real: REF + 'T' + talla (26534-1T14).
         # El rollo trae ZPL_STK_COLS stickers por fila → una fila imprime hasta N.
-        stickers: list[str] = []
+        # Cada sticker: (dato del QR, leyenda, precio).
+        stickers: list[tuple] = []
         texto = ""
-        if p.get("sin_talla"):
+        if p.get("items"):
+            # LISTA (reposición de tiendas, 2026-11-26): cada ítem trae su
+            # código tal cual, su cantidad y, si aplica, leyenda y precio.
+            for it in p.get("items") or []:
+                d = _zpl_escape(str(it.get("dato") or ""))
+                if not d:
+                    continue
+                stickers += [(d, _zpl_escape(str(it.get("texto") or "")),
+                              _zpl_escape(str(it.get("precio") or "")))] \
+                    * max(0, int(it.get("qty") or 0))
+        elif p.get("sin_talla"):
             # Sticker LIBRE (2026-11-20, segundas por precio): no es una
             # referencia con curva. El QR lleva el código tal cual (sin 'T' +
             # talla), se repite `copias` veces y debajo va `texto` si viene
             # (p. ej. QR 'SEGUNDA-40000' · leyenda 'SEGUNDA 40.000').
-            stickers = [codigo] * max(0, int(p.get("copias") or 0))
             texto = _zpl_escape(p.get("texto") or "")
-        for talla, qty in sorted(({} if p.get("sin_talla") else p.get("tallas") or {}).items(),
+            stickers = [(codigo, texto, "")] * max(0, int(p.get("copias") or 0))
+        libre = bool(p.get("items") or p.get("sin_talla"))
+        for talla, qty in sorted(({} if libre else p.get("tallas") or {}).items(),
                                  key=lambda kv: _orden_talla(kv[0])):
-            stickers += [f"{codigo}T{_zpl_escape(str(talla))}"] * max(0, int(qty or 0))
+            stickers += [(f"{codigo}T{_zpl_escape(str(talla))}", "", "")] * max(0, int(qty or 0))
         filas = []
         n = ZPL_STK_COLS
         for i in range(0, len(stickers), n):
             grupo = stickers[i:i + n]
             cuerpo = "".join(
-                _sticker_col(ZPL_STK_X0 + j * ZPL_STK_COL_PASO, d, texto)
+                _sticker_col(ZPL_STK_X0 + j * ZPL_STK_COL_PASO, *d)
                 for j, d in enumerate(grupo))
             filas.append(
                 "^XA^CI28" + modo +
