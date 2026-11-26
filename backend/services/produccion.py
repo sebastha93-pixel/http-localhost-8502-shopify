@@ -6328,11 +6328,22 @@ def generar_zpl_trabajo(t: dict) -> str:
     # ^MMC activa el CORTADOR (ambas impresoras lo tienen).
     modo = "^MTT" + ("^MMC" if p.get("cortar", True) else "")
 
+    # Calibración fina por trabajo (dots, 8 = 1 mm): `dx` corre todo a la
+    # derecha y `dy` hacia abajo (negativos = izquierda / arriba). Sirve para
+    # alinear con pruebas sin redeploy cuando cambia el rollo o el sensor.
+    def _dots(v) -> int:
+        try:
+            return max(-120, min(120, int(v or 0)))
+        except Exception:
+            return 0
+    dx, dy = _dots(p.get("dx")), _dots(p.get("dy"))
+
     def _sticker_col(x: int, dato: str, texto: str = "") -> str:
         """Un sticker según el boceto de Sebastián (2026-07-22):
         MALE DENIM arriba · QR centrado en el cuerpo · ref+talla debajo.
         Todo dentro de la franja central (margen 5 mm por lado).
         El ^BQ del PC42E-T rinde ~92 dots a mag 4 (incluye zona quieta)."""
+        x = max(0, x + dx)
         bx = x + ZPL_STK_MARGEN
         banda = ZPL_STK_COL_ANCHO - 2 * ZPL_STK_MARGEN
         # ^BQ real del PC42E-T: el NÚCLEO (21 módulos × mag) se pinta desde el
@@ -6341,9 +6352,9 @@ def generar_zpl_trabajo(t: dict) -> str:
         qr_nucleo = 21 * 4   # 84 dots ≈ 10.5 mm — mag 4 con el alto de 26 mm
         qr_x = x + (ZPL_STK_COL_ANCHO - qr_nucleo) // 2
         return (
-            f"^FO{bx},6^FB{banda},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
-            f"^FO{qr_x},30^BQN,2,4^FDQA,{dato}^FS"
-            f"^FO{bx},152^FB{banda},1,0,C,0^A0N,20,20^FD{texto or dato}^FS")
+            f"^FO{bx},{max(0, 6 + dy)}^FB{banda},1,0,C,0^A0N,22,22^FDMALE DENIM^FS"
+            f"^FO{qr_x},{max(0, 30 + dy)}^BQN,2,4^FDQA,{dato}^FS"
+            f"^FO{bx},{max(0, 152 + dy)}^FB{banda},1,0,C,0^A0N,20,20^FD{texto or dato}^FS")
 
     if t.get("tipo") == "sticker_codigo":
         # Dato del código calcado del sticker real: REF + 'T' + talla (26534-1T14).
