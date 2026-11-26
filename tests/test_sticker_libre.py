@@ -54,3 +54,19 @@ def test_ajuste_por_elemento_se_suma_a_dy():
     assert f"^FO{m},56^" in zpl          # marca 6+34+16
     assert ",72^BQN" in zpl              # QR 30+34+8
     assert f"^FO{m},186^" in zpl         # leyenda 152+34
+
+
+def test_lista_con_referencia_y_precio():
+    zpl = svc.generar_zpl_trabajo(_trabajo(
+        codigo_referencia="REPOSICION", dy=34, dy_marca=16, dy_qr=8,
+        items=[{"dato": "26630-1T8", "precio": "$149.900", "qty": 4},
+               {"dato": "66638TM", "precio": "$99.900", "qty": 2}]))
+    assert zpl.count("^FDQA,26630-1T8^FS") == 4
+    assert zpl.count("^FDQA,66638TM^FS") == 2
+    assert zpl.count("^FD26630-1T8^FS") == 4               # referencia visible
+    assert zpl.count("^FD$149.900^FS") == 4
+    assert zpl.count("^FD$99.900^FS") == 2
+    assert zpl.count("^XA") == 2                            # 6 stickers = 2 filas
+    m = svc.ZPL_STK_X0 + svc.ZPL_STK_MARGEN
+    assert f"^FO{m},174^" in zpl and f"^FO{m},192^" in zpl  # ref y precio
+    assert "REPOSICION" not in zpl
